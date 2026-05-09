@@ -2,8 +2,23 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import * as templateService from '@/lib/services/templates';
-import { maizzleRender } from '@/lib/maizzle-render';
 import { renderCampaignScreenshotFromHtml } from '@/lib/esp/screenshot-render';
+import { isV2Template, parseV2Template } from '@/lib/email/types';
+import { renderEmailTemplate } from '@/lib/email/render';
+
+/**
+ * Compile any supported template format to email-safe HTML.
+ *  - v2 JSON  → react-email render
+ *  - Pure HTML → returned as-is
+ */
+async function compileToHtml(content: string): Promise<string> {
+  if (isV2Template(content)) {
+    const tpl = parseV2Template(content);
+    if (!tpl) throw new Error('Invalid v2 template JSON');
+    return renderEmailTemplate(tpl);
+  }
+  return content;
+}
 
 function sanitizeFileName(value: string): string {
   const trimmed = value.trim().toLowerCase();
@@ -34,10 +49,7 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const compiledHtml = await maizzleRender.renderTemplate(template.content, {
-      prettify: false,
-      css: false,
-    });
+    const compiledHtml = await compileToHtml(template.content);
 
     const screenshot = await renderCampaignScreenshotFromHtml({
       html: compiledHtml,

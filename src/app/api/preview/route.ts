@@ -1,34 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PATHS } from '@/lib/paths';
 import { requireAuth } from '@/lib/api-auth';
 import * as templateService from '@/lib/services/templates';
 import * as accountEmailService from '@/lib/services/account-emails';
-import { maizzleRender } from '@/lib/maizzle-render';
-import crypto from 'crypto';
-import { readdir, stat } from 'fs/promises';
-import { existsSync } from 'fs';
-import path from 'path';
-
-// ── Server-side in-memory LRU cache ──
-
-const PREVIEW_CACHE_VERSION = process.env.PREVIEW_CACHE_VERSION || '2026-02-22.3';
-const MAX_MEMORY_CACHE_ENTRIES = 200;
-
-// In production, engine components don't change at runtime — use a long TTL.
-// In dev, a 30s TTL catches component edits without the per-request cost of a full stat walk.
-const ENGINE_SIGNATURE_TTL_MS = process.env.NODE_ENV === 'production' ? 300_000 : 30_000;
-const ENGINE_SIGNATURE_PATHS = [
-  path.join(PATHS.engine.root, 'src', 'components'),
-  path.join(PATHS.engine.root, 'src', 'layouts'),
-];
-
-let engineSignatureCache: { value: string; computedAt: number } = {
-  value: '',
-  computedAt: 0,
-};
-
-// In-memory LRU cache — avoids disk I/O on every preview request
-const memoryCache = new Map<string, string>();
+import { isV2Template, parseV2Template } from '@/lib/email/types';
+import { renderEmailTemplate } from '@/lib/email/render';
 
 // ── Helpers ──
 
@@ -55,73 +30,21 @@ function applyPreviewValues(
   return output;
 }
 
-async function getEngineSignature(): Promise<string> {
-  const now = Date.now();
-  if (
-    engineSignatureCache.value &&
-    now - engineSignatureCache.computedAt < ENGINE_SIGNATURE_TTL_MS
-  ) {
-    return engineSignatureCache.value;
+/**
+ * Compile any template content into rendered HTML.
+ *  - v2 JSON  → react-email render
+ *  - Pure HTML → returned as-is
+ *
+ * Legacy Maizzle <x-base> templates are no longer supported; they fall through
+ * to the HTML pass-through path and render unmodified (raw markup visible).
+ */
+async function compileToHtml(content: string): Promise<string> {
+  if (isV2Template(content)) {
+    const tpl = parseV2Template(content);
+    if (!tpl) throw new Error('Invalid v2 template JSON');
+    return renderEmailTemplate(tpl);
   }
-
-  let latestMtime = 0;
-  const stack = [...ENGINE_SIGNATURE_PATHS];
-
-  while (stack.length) {
-    const current = stack.pop();
-    if (!current || !existsSync(current)) continue;
-
-    let entries: import('fs').Dirent[];
-    try {
-      entries = await readdir(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      const fullPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        stack.push(fullPath);
-        continue;
-      }
-      try {
-        const s = await stat(fullPath);
-        if (s.mtimeMs > latestMtime) latestMtime = s.mtimeMs;
-      } catch {
-        continue;
-      }
-    }
-  }
-
-  const value = String(Math.floor(latestMtime));
-  engineSignatureCache = { value, computedAt: now };
-  return value;
-}
-
-function getCacheKey(html: string, engineSignature: string): string {
-  return crypto
-    .createHash('md5')
-    .update(`${PREVIEW_CACHE_VERSION}:${engineSignature}:${html}`)
-    .digest('hex');
-}
-
-function getCachedPreview(cacheKey: string): string | null {
-  const cached = memoryCache.get(cacheKey);
-  if (cached) {
-    // Move to end (LRU refresh)
-    memoryCache.delete(cacheKey);
-    memoryCache.set(cacheKey, cached);
-  }
-  return cached ?? null;
-}
-
-function setCachedPreview(cacheKey: string, html: string) {
-  // LRU eviction — delete oldest entries when at capacity
-  if (memoryCache.size >= MAX_MEMORY_CACHE_ENTRIES) {
-    const firstKey = memoryCache.keys().next().value;
-    if (firstKey) memoryCache.delete(firstKey);
-  }
-  memoryCache.set(cacheKey, html);
+  return content;
 }
 
 // ── POST /api/preview — Editor preview ──
@@ -132,35 +55,18 @@ export async function POST(req: NextRequest) {
 
   try {
     const { html, previewValues } = await req.json();
-
     if (!html) {
       return NextResponse.json({ error: 'No HTML provided' }, { status: 400 });
     }
 
-    const resolvedHtml = applyPreviewValues(
-      html,
+    const rendered = await compileToHtml(html);
+    const resolved = applyPreviewValues(
+      rendered,
       previewValues && typeof previewValues === 'object'
-        ? previewValues as Record<string, string>
+        ? (previewValues as Record<string, string>)
         : undefined,
     );
-
-    // Check in-memory cache (engine signature is cached with long TTL, avoiding stat walk)
-    const engineSig = await getEngineSignature();
-    const cacheKey = getCacheKey(resolvedHtml, engineSig);
-    const cached = getCachedPreview(cacheKey);
-    if (cached) {
-      return NextResponse.json({ html: cached });
-    }
-
-    // Compile via persistent worker — skip CSS processing for preview.
-    // Components already use inline styles; PostCSS/Tailwind is only needed for export.
-    const result = await maizzleRender.renderTemplate(resolvedHtml, {
-      prettify: false,
-      css: false,
-    });
-
-    setCachedPreview(cacheKey, result);
-    return NextResponse.json({ html: result });
+    return NextResponse.json({ html: resolved });
   } catch (err: any) {
     console.error('Preview error:', err);
     return NextResponse.json(
@@ -222,34 +128,11 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'No template content' }, { status: 404 });
     }
 
-    const resolvedHtml = applyPreviewValues(html, previewValues);
+    const rendered = await compileToHtml(html);
+    const resolved = applyPreviewValues(rendered, previewValues);
 
-    // Check in-memory cache
-    const engineSig = await getEngineSignature();
-    const cacheKey = getCacheKey(resolvedHtml, engineSig);
-    const cached = getCachedPreview(cacheKey);
-    if (cached) {
-      if (wantsHtml) {
-        return new NextResponse(cached, {
-          status: 200,
-          headers: {
-            'Content-Type': 'text/html; charset=utf-8',
-            'Cache-Control': 'no-store',
-          },
-        });
-      }
-      return NextResponse.json({ html: cached });
-    }
-
-    // Compile via persistent worker — skip CSS processing for preview.
-    const result = await maizzleRender.renderTemplate(resolvedHtml, {
-      prettify: false,
-      css: false,
-    });
-
-    setCachedPreview(cacheKey, result);
     if (wantsHtml) {
-      return new NextResponse(result, {
+      return new NextResponse(resolved, {
         status: 200,
         headers: {
           'Content-Type': 'text/html; charset=utf-8',
@@ -257,7 +140,7 @@ export async function GET(req: NextRequest) {
         },
       });
     }
-    return NextResponse.json({ html: result });
+    return NextResponse.json({ html: resolved });
   } catch (err: any) {
     console.error('Preview GET error:', err);
     return NextResponse.json(
@@ -267,17 +150,10 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// ── DELETE /api/preview — Clear cache ──
+// ── DELETE /api/preview — No-op kept for backwards compatibility ──
 
 export async function DELETE() {
   const { error } = await requireAuth();
   if (error) return error;
-
-  try {
-    memoryCache.clear();
-    engineSignatureCache = { value: '', computedAt: 0 };
-    return NextResponse.json({ cleared: true });
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
-  }
+  return NextResponse.json({ cleared: true });
 }

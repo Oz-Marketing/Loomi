@@ -14,75 +14,99 @@ function escapeHtml(value: string) {
     .replace(/'/g, '&#39;');
 }
 
-/** Rich component-based starter for visual (Drag & Drop) mode */
+/** Rich block-based starter for visual (Drag & Drop) mode — emits v2 JSON. */
 function visualStarter(title: string) {
-  return `---
-title: ${title}
-rooftop: preview
----
-
-<x-base>
-
-  <x-core.header />
-
-  <x-core.hero
-    headline="Your Headline Goes Here"
-    subheadline="Add a brief description that captures your audience's attention and encourages them to keep reading."
-    fallback-bg="#1a1a2e"
-    headline-color="#ffffff"
-    subheadline-color="#e0e0e0"
-    hero-height="420px"
-    text-align="center"
-    content-valign="middle"
-    primary-button-text="Get Started"
-    primary-button-url="#"
-    primary-button-bg-color="#4f46e5"
-    primary-button-text-color="#ffffff"
-    primary-button-radius="8px"
-  />
-
-  <x-core.spacer size="40" />
-
-  <x-core.copy
-    greeting="Hi {{contact.first_name}},"
-    body="Thank you for being a valued member of our community. We're excited to share some updates with you."
-    align="center"
-    padding="20px 40px"
-  />
-
-  <x-core.spacer size="24" />
-
-  <x-core.features
-    section-title="What We Offer"
-    feature1="Quality Service"
-    feature1-desc="We pride ourselves on delivering exceptional quality in everything we do."
-    feature2="Expert Team"
-    feature2-desc="Our experienced team is here to help you achieve your goals."
-    feature3="Fast Results"
-    feature3-desc="Get the results you need quickly and efficiently."
-    variant="icon"
-    accent-color="#4f46e5"
-    padding="20px 40px"
-  />
-
-  <x-core.spacer size="24" />
-
-  <x-core.cta
-    button-text="Learn More"
-    button-url="#"
-    button-bg-color="#4f46e5"
-    button-text-color="#ffffff"
-    button-radius="8px"
-    section-padding="20px 40px"
-    align="center"
-  />
-
-  <x-core.spacer size="40" />
-
-  <x-core.footer />
-
-</x-base>
-`;
+  const id = (suffix: string) => `b-${suffix}-${Math.random().toString(36).slice(2, 8)}`;
+  const template = {
+    version: '2',
+    subject: title,
+    preheader: '',
+    settings: {
+      bodyBg: '#f5f5f5',
+      contentBg: '#ffffff',
+      contentWidth: 600,
+      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
+      textColor: '#1a1a1a',
+    },
+    blocks: [
+      {
+        id: id('hero'),
+        type: 'section',
+        props: {
+          bgColor: '#1a1a2e',
+          paddingTop: 64,
+          paddingBottom: 64,
+          paddingLeft: 40,
+          paddingRight: 40,
+          align: 'center',
+        },
+        children: [
+          {
+            id: id('h1'),
+            type: 'heading',
+            props: {
+              text: 'Your Headline Goes Here',
+              level: 1,
+              color: '#ffffff',
+              fontSize: 36,
+              fontWeight: 700,
+              align: 'center',
+              marginBottom: 12,
+            },
+          },
+          {
+            id: id('sub'),
+            type: 'text',
+            props: {
+              text: "Add a brief description that captures your audience's attention.",
+              color: '#e0e0e0',
+              fontSize: 16,
+              align: 'center',
+              marginBottom: 24,
+            },
+          },
+          {
+            id: id('cta'),
+            type: 'button',
+            props: {
+              text: 'Get Started',
+              url: '#',
+              bgColor: '#4f46e5',
+              textColor: '#ffffff',
+              align: 'center',
+              borderRadiusTopLeft: 8,
+              borderRadiusTopRight: 8,
+              borderRadiusBottomRight: 8,
+              borderRadiusBottomLeft: 8,
+            },
+          },
+        ],
+      },
+      {
+        id: id('body'),
+        type: 'section',
+        props: { paddingTop: 40, paddingBottom: 40, paddingLeft: 40, paddingRight: 40 },
+        children: [
+          {
+            id: id('greeting'),
+            type: 'heading',
+            props: { text: 'Hi {{contact.first_name}},', level: 2, fontSize: 22, marginBottom: 16 },
+          },
+          {
+            id: id('body-text'),
+            type: 'text',
+            props: {
+              text: 'Thank you for being a valued member of our community. Replace this with your message.',
+              fontSize: 15,
+              lineHeight: '1.6',
+              marginBottom: 0,
+            },
+          },
+        ],
+      },
+    ],
+  };
+  return JSON.stringify(template, null, 2);
 }
 
 /** Custom raw-HTML starter for code (HTML) editing mode */

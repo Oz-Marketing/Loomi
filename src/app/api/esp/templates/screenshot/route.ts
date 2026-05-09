@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import { renderCampaignScreenshotFromHtml } from '@/lib/esp/screenshot-render';
-import { maizzleRender } from '@/lib/maizzle-render';
+import { isV2Template, parseV2Template } from '@/lib/email/types';
+import { renderEmailTemplate } from '@/lib/email/render';
 
 function sanitizeFileName(value: string): string {
   const trimmed = value.trim().toLowerCase();
@@ -13,14 +14,6 @@ function sanitizeFileName(value: string): string {
   return safe || 'template';
 }
 
-function isMaizzleSource(source: string): boolean {
-  const normalized = source.trimStart();
-  return (
-    (/^---\r?\n[\s\S]*?\r?\n---/.test(normalized) && /<x-base\b/i.test(normalized)) ||
-    /<x-core\./i.test(normalized) ||
-    /<x-base\b/i.test(normalized)
-  );
-}
 
 /**
  * GET /api/esp/templates/screenshot?accountKey=xxx&templateId=yyy
@@ -63,11 +56,10 @@ export async function GET(req: NextRequest) {
 
   try {
     if (source) {
-      if (isMaizzleSource(source)) {
-        resolvedHtml = await maizzleRender.renderTemplate(source, {
-          prettify: false,
-          css: false,
-        });
+      if (isV2Template(source)) {
+        const tpl = parseV2Template(source);
+        if (!tpl) throw new Error('Invalid v2 template JSON');
+        resolvedHtml = await renderEmailTemplate(tpl);
       } else {
         // HTML/code templates: source is the freshest representation.
         resolvedHtml = source;

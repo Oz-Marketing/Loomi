@@ -8,7 +8,7 @@ This file is the source of truth for Loomi Studio AI assistants. Update this fil
 
 Loomi Studio is an internal email production platform built by Oz Marketing. Teams use it to design, manage, and deploy branded email templates across dealership and business accounts.
 
-The platform is built with Next.js 14, uses Maizzle (Tailwind CSS for email) for template rendering, and integrates with ESP providers through a provider-agnostic adapter layer.
+The platform is built with Next.js 14, uses [react-email](https://react.email/) (`@react-email/components` + `@react-email/render`) for template rendering, and integrates with ESP providers through a provider-agnostic adapter layer.
 
 Current production providers include:
 - GoHighLevel (OAuth)
@@ -20,7 +20,7 @@ Current production providers include:
 
 - **Dashboard** (`/`) - Stats, activity, and account-aware analytics.
 - **Templates** (`/templates`) - Browse OEM templates and open the visual/code editor.
-- **Sections** (`/components`) - Reusable email components with live preview editing.
+- **Sections** (`/components`) - _Legacy Maizzle component management page; deprecated in v2 and now returns empty results. The visual editor's block library lives in code at `src/lib/email/components/`._
 - **Emails** (`/emails`) - Account email instances (draft, active, archived), organized by folders.
 - **Accounts** (`/accounts`) - Manage account records, branding, and integrations.
 - **Settings** (`/settings`) - Accounts, users, integrations, custom values, knowledge, appearance.
@@ -62,152 +62,126 @@ Developers and admins can switch between admin view and assigned account views. 
 ### Overview
 The template editor is the core tool for creating and editing email templates. It has two modes:
 
-- **Visual mode (Drag & Drop)** — Component-driven editing. Templates are stored as structured data: a `ParsedTemplate` with `frontmatter`, `baseProps`, and an ordered array of `components`. Each component has a `type` and `props` (key-value string pairs).
-- **Code mode** — Raw email HTML editing with a Monaco code editor. It supports both fully custom email-safe HTML and Maizzle component scaffolds. `<x-base>` and `<x-core.{type}>` are supported when you want Loomi components, but they are optional in HTML-first workflows.
+- **Visual mode (Drag & Drop)** — Block-based editing. Templates are stored as **v2 JSON** with a top-level `settings` object and an ordered array of `blocks`. Containers (`section`, `columns`) hold child blocks via a `children` array. Each block has a stable `id`, a `type`, and a `props` object (typed values: numbers, strings, booleans, nested objects).
+- **Code mode** — Raw email-safe HTML editing with a Monaco code editor. Pure HTML only — the legacy Maizzle `<x-base>` / `<x-core.*>` scaffold has been removed.
 
-### Template Structure
+### Template Structure (v2 JSON)
 
-Component-scaffold example:
-
+```json
+{
+  "version": "2",
+  "subject": "Your Subject Line",
+  "preheader": "Preview text shown in inbox",
+  "settings": {
+    "bodyBg": "#f5f5f5",
+    "contentBg": "#ffffff",
+    "contentWidth": 600,
+    "fontFamily": "-apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+    "textColor": "#1a1a1a"
+  },
+  "blocks": [
+    {
+      "id": "b-hero-1",
+      "type": "section",
+      "props": { "bgColor": "#0a0a0a", "paddingTop": 64, "paddingBottom": 64, "paddingLeft": 40, "paddingRight": 40 },
+      "children": [
+        { "id": "b-h-1", "type": "heading", "props": { "text": "Welcome aboard.", "level": 1, "color": "#fff", "fontSize": 36 } }
+      ]
+    },
+    { "id": "b-cta-1", "type": "button", "props": { "text": "Get Started", "url": "https://example.com", "bgColor": "#1a1a1a" } }
+  ]
+}
 ```
----
-subject: Your Subject Line
-previewText: Preview text shown in inbox
----
-<x-base body-bg="#ffffff" body-width="600px" font-family="Arial, sans-serif">
-  <x-core.header logo-url="{{custom_values.logo_url}}" />
-  <x-core.hero headline="Welcome" />
-  <x-core.spacer size="32px" />
-  <x-core.copy body="Your message here" />
-  <x-core.cta button-text="Click Here" button-url="https://example.com" />
-  <x-core.footer />
-</x-base>
-```
 
-**Frontmatter** (YAML between `---`):
+**Top-level fields:**
+- `version` — Always `"2"` for the current format
 - `subject` — Email subject line
-- `previewText` — Preview/preheader text
+- `preheader` — Inbox preview text
+- `settings` — Email-wide defaults (see below)
+- `blocks` — Ordered array of root-level blocks
 
-**BaseProps** (attributes on `<x-base>`):
-- `body-bg` — Email body background color (default: `#ffffff`)
-- `body-width` — Max content width (default: `600px`)
-- `font-family` — Primary font stack (default: `Arial, sans-serif`)
-- `font-color` — Default text color
+**Settings object:**
+- `bodyBg` — Body background (around the centered email container)
+- `contentBg` — Inner email container background
+- `contentWidth` — Max content width in pixels (default 600)
+- `fontFamily` — Default font stack
+- `textColor` — Default body text color
 
-**Components** — Ordered list of `<x-core.{type}>` tags with props as attributes.
-
-Code mode can also contain fully custom email HTML when the design should not be constrained to Loomi's visual component system or does not need to round-trip back into visual editing.
+**Block fields:**
+- `id` — Stable unique id (used for selection / undo / drag identity)
+- `type` — One of the block types in the catalog below
+- `props` — Per-type props (typed values, never YAML strings)
+- `children` — Optional, only for container types (`section`, `columns`)
 
 ### Compilation
-Templates are compiled through Maizzle (PostHTML + Tailwind CSS for email). The visual editor uses a fast "preview mode" that skips full CSS processing for instant feedback. Export/publish uses the full pipeline with CSS inlining and purging.
+Templates are rendered server-side via `@react-email/render`. The renderer maps each block's `type` + `props` to a JSX component from `src/lib/email/components/` and calls `render(<EmailDocument template={...} />)`. The output is email-safe HTML with inline styles, table-based layout, and MSO conditionals where needed. The visual editor canvas renders the same React components live in the browser (no iframe round-trip).
 
 ---
 
-## Component Catalog
+## Component Catalog (v2)
 
-The following components are available in the visual editor. Each has a `type` name used in code and a set of configurable props.
+The visual editor exposes ten block types. Containers hold child blocks; the rest are leaf content blocks.
 
-### Structural Components (always use these)
+### Containers
 
-#### `header` — Header
-Logo bar at the top of every email.
-- **Key props:** `logo-url` (image), `logo-alt` (text), `link-url` (URL), `bg-color`, `align`, `logo-width`, `padding`
-- **Best practice:** Always use `{{custom_values.logo_url}}` for logo, `{{custom_values.website_url}}` for link, `{{location.name}}` for alt text.
+#### `section`
+Full-width content row that holds child blocks. The most common layout primitive.
+- **Background:** `bgColor`, `bgImage`, `bgSize` (cover/contain/auto), `bgPosition`, `bgRepeat`
+- **Border:** `borderWidth`, `borderStyle` (solid/dashed/dotted/double), `borderColor`
+- **Border radius (4 corners):** `borderRadiusTopLeft`, `borderRadiusTopRight`, `borderRadiusBottomRight`, `borderRadiusBottomLeft`
+- **Layout:** `align` (left/center/right), `gap` (vertical space between children), `minHeight`
+- **Padding (4 sides):** `paddingTop`, `paddingRight`, `paddingBottom`, `paddingLeft`
 
-#### `footer` — Footer
-Business info, social links, legal text, and unsubscribe.
-- **Key props:** `logo-url` (image), `logo-width`, `bg-color` (default: `#111111`), `dealer-name`, `text-color`, `dealer-name-color`, `phone-color`
-- **Social URLs:** `facebook-url`, `instagram-url`, `youtube-url`, `linkedin-url`, `tiktok-url`, `x-url`
-- **Best practice:** Always use template variables: `{{custom_values.logo_url}}`, `{{location.name}}`. Social URLs pull from account custom values.
+#### `columns`
+Grid layout — 2 or 3 side-by-side columns. Each column is a section block in `children`. Stacks vertically on mobile.
+- **Layout:** `columnCount` (2 | 3), `valign` (top/middle/bottom), `gap` (horizontal between columns), `stackOnMobile` (default true)
+- **Background / Border / Border radius / Min height:** same as `section`
+- **Padding:** same as `section`
 
-#### `spacer` — Spacer
-Vertical spacing between components.
-- **Key props:** `size` (default: `48px`), `bg-color` (default: `#ffffff`)
-- **Best practice:** Use between content sections. Common sizes: `24px`, `32px`, `48px`.
+### Content blocks
 
-#### `divider` — Divider
-Horizontal line separator.
-- **Key props:** `color` (default: `#e5e7eb`), `thickness` (default: `1px`), `style` (solid/dashed/dotted), `bg-color`, `padding`
+#### `heading`
+H1–H6 heading.
+- **Content:** `text`, `level` (1–6), `align`
+- **Typography:** `color`, `fontSize`, `fontWeight` (400/500/600/700/800), `fontFamily`, `lineHeight`, `letterSpacing`, `textTransform`
+- **Margin (4 sides):** `marginTop`, `marginRight`, `marginBottom`, `marginLeft`
 
-### Content Components
+#### `text`
+Paragraph block.
+- **Content:** `text`, `allowHtml` (when true, the text is rendered as raw HTML — useful for inline merge tags / links)
+- **Typography:** same as `heading`
+- **Margin:** same as `heading`
 
-#### `hero` — Hero Banner
-Full-width hero with background image, headline, subheadline, and up to 2 CTAs.
-- **Key text props:** `eyebrow`, `headline` (required), `subheadline`
-- **Key color props:** `eyebrow-color`, `headline-color`, `subheadline-color`
-- **Background:** `bg-image` (image URL), `fallback-bg` (color), `overlay-opacity` (0-100)
-- **Primary button:** `primary-button-text`, `primary-button-url`, `primary-button-bg-color`, `primary-button-text-color`, `primary-button-radius`, `primary-button-padding`
-- **Secondary button:** `secondary-button-text`, `secondary-button-url`, `secondary-button-bg-color`, `secondary-button-text-color`, `secondary-button-border-style`, `secondary-button-border-width`, `secondary-button-border-color`
-- **Layout:** `hero-height` (default: `500px`), `text-align`, `content-valign`, `content-padding`
-- **Best practice:** Use a high-impact headline (5-8 words). Primary button should be the main CTA. Secondary button is optional.
+#### `image`
+Single image, optionally wrapped in a link.
+- **Content:** `src`, `alt`, `linkUrl`
+- **Layout:** `align`, `width` (px), `height` (px), `maxWidth`
+- **Border radius (4 corners):** same as `section`
 
-#### `copy` — Copy Block
-Text paragraph section with optional greeting.
-- **Key props:** `greeting` (default: `Hi {{contact.first_name}},`), `body` (required, textarea), `greeting-color`, `body-color`, `line-height`, `bg-color`, `align`, `padding`
-- **Best practice:** Keep body text 2-3 sentences. Use `{{contact.first_name}}` in greeting for personalization.
+#### `button`
+Call-to-action button. Email-safe via react-email's `<Button>` (renders as `<a>` with bulletproof MSO).
+- **Content:** `text`, `url`
+- **Style:** `bgColor`, `textColor`, `borderColor`, `borderWidth`, plus 4-corner `borderRadius{Corner}`
+- **Layout:** `align`, `fullWidth`
+- **Padding (4 sides):** `paddingTop`, `paddingRight`, `paddingBottom`, `paddingLeft`
+- **Typography:** `fontSize`, `fontWeight`, `fontFamily`, `letterSpacing`, `textTransform`
 
-#### `cta` — Button
-Standalone call-to-action button with optional phone line.
-- **Key props:** `button-text`, `button-url`, `button-bg-color`, `button-text-color`, `button-radius`, `button-padding`, `button-font-size`, `button-font-weight`, `button-letter-spacing`, `button-text-transform`
-- **Phone line:** `show-phone` (toggle), `phone-text`, `phone-color`, `phone-link-color`
-- **Layout:** `section-bg-color`, `align`, `section-padding`
-- **Best practice:** Button text should be an action verb, 2-5 words (e.g., "Schedule Service", "Shop Now", "Learn More").
+#### `logo`
+Logo image, sized for header use. Same props as `image` but with a `width` default of 140px.
 
-#### `image` — Image
-Full-width or sized image block.
-- **Key props:** `image` (required, image URL), `alt` (alt text), `width` (default: `600px`), `max-height`, `radius`, `padding`
-- **Best practice:** Always set alt text. Use placeholder image URL when generating.
+#### `spacer`
+Vertical empty space.
+- **Layout:** `height` (px), `bgColor`
 
-#### `split` — Split Section
-Two-column layout: image on one side, text + CTAs on the other.
-- **Key text props:** `eyebrow`, `headline` (required), `description`
-- **Key color props:** `eyebrow-color`, `headline-color`, `description-color`
-- **Image:** `image` (required), `image-alt`, `image-fit`, `image-position`, `overlay-opacity`
-- **Background:** `bg-color`, `text-bg-color`
-- **Primary button:** `primary-button-text`, `primary-button-url`, `primary-button-bg-color`, `primary-button-text-color`
-- **Secondary button:** `secondary-button-text`, `secondary-button-url`
-- **Layout:** `text-align`, `content-valign`, `content-padding`
-- **Best practice:** Great for product showcases, service highlights, or feature spotlights.
+#### `divider`
+Horizontal rule.
+- **Style:** `color`, `thickness`, `style` (solid/dashed/dotted)
+- **Layout:** `width` (% or px), `align`, `marginTop`, `marginBottom`
 
-#### `features` — Features Grid
-2x2 grid of feature cards with icons or images.
-- **Key props:** `section-title`, `title-color`, `text-color`, `bg-color`, `card-bg-color`, `accent-color`, `variant` (icon/image), `card-radius`
-- **Repeatable items (up to 4):** `feature1` through `feature4` (title), `feature{n}-desc` (description), `feature{n}-icon` (icon URL), `feature{n}-image` (image URL)
-- **Best practice:** Use 3-4 features with concise titles and 1-sentence descriptions.
-
-#### `vehicle-card` — Vehicle Card
-Customer's vehicle info card with optional stats.
-- **Key props:** `card-label`, `vehicle-year`, `vehicle-make`, `vehicle-model`
-- **Stats:** `show-stats`, `stat-1-label`, `stat-1-value`, `stat-2-label`, `stat-2-value`
-- **Colors:** `label-color`, `vehicle-color`, `stat-label-color`, `stat-value-color`, `bg-color`, `accent-color`
-- **Best practice:** Use template variables: `{{contact.vehicle_year}}`, `{{contact.vehicle_make}}`, `{{contact.vehicle_model}}`.
-
-#### `image-overlay` — Image Overlay
-Image with text and CTA overlay.
-- **Key props:** `heading`, `description`, `heading-color`, `image` (required), `overlay` (light/medium/dark/heavy)
-- **Button:** `button-text`, `button-url`, `button-bg-color`, `button-text-color`
-- **Layout:** `align`, `content-padding`
-
-#### `image-card-overlay` — Image Card Overlay
-Background image with a floating card containing text and CTA.
-- **Key props:** `eyebrow`, `headline`, `body`, `background-image` (required), `card-background`
-- **Colors:** `eyebrow-color`, `headline-color`, `body-color`
-- **Button:** `cta-text`, `cta-url`, `cta-bg-color`, `cta-text-color`
-- **Layout:** `card-align`, `card-max-width`, `card-padding`, `card-radius`
-
-#### `countdown-stat` — Countdown Stat
-Urgency/countdown display for time-limited offers.
-- **Key props:** `label` (default: `Offer Ends In`), `value` (required, default: `3 DAYS`), `caption`
-- **Colors:** `value-color`, `label-color`, `caption-color`, `bg-color`
-- **Layout:** `align`, `radius`, `padding`
-- **Best practice:** Use for promotions with deadlines. Keep the value bold and short.
-
-#### `testimonial` — Testimonial
-Customer review/testimonial quote block.
-- **Key props:** `quote` (required), `author`, `source` (e.g., "Google Review")
-- **Colors:** `quote-color`, `author-color`, `source-color`, `bg-color`, `accent-color`
-- **Layout:** `align`, `radius`, `padding`
-- **Best practice:** Keep quotes 1-2 sentences. Include author name and source for credibility.
+#### `social`
+Row of social media icons.
+- **Content:** `links` (array of `{ platform, url, iconUrl?, label? }`) — supported platforms: facebook, instagram, twitter, youtube, linkedin, tiktok
+- **Layout:** `iconSize`, `spacing`, `align`, `variant` (color/mono-light/mono-dark)
 
 ---
 
@@ -223,32 +197,30 @@ Before generating a full email, ask the user for details if ANY of these are unc
 
 If the user provides a clear, specific request (e.g., "Build a service reminder email with a 15% oil change discount"), generate immediately without asking.
 
-### Component ordering conventions
-A well-structured email follows this order:
-1. `header` — Always first
-2. `hero` or `image` — Visual hook (optional but recommended)
-3. `spacer` — Breathing room
-4. `copy` — Main message body
-5. Content components as needed (`split`, `features`, `vehicle-card`, `testimonial`, `countdown-stat`, etc.)
-6. `spacer` — Before CTA
-7. `cta` — Primary call to action
-8. `spacer` — Before footer
-9. `footer` — Always last
+### Block ordering conventions
+A well-structured email typically follows this rough order:
+1. `logo` (or a `section` containing the logo) — Brand identity at the top
+2. Hero `section` — Headline + tagline + primary CTA, often with a dark `bgColor` or `bgImage`
+3. Body `section`(s) — Greeting, main message, supporting content
+4. CTA `button` — Primary action (can live in its own section or inside the body section)
+5. Footer `section` — Business info, social icons, unsubscribe link
+
+You can intersperse `spacer` and `divider` blocks for breathing room. Use `columns` (Grid) when you need a side-by-side layout (e.g., feature highlights, two product callouts).
 
 ### Applying account branding
 When account branding is available in the context:
-- **Primary color** → Use for main CTA button backgrounds (`button-bg-color`, `primary-button-bg-color`)
-- **Secondary color** → Use for secondary buttons or accent elements
-- **Accent color** → Use for highlights, borders, or small decorative elements
-- **Background color** → Use for section backgrounds if the brand uses a non-white base
-- **Text color** → Use for body text color if not standard dark gray
-- **Brand fonts** → Reference in baseProps `font-family` if email-safe (Arial, Helvetica, Georgia, Verdana, etc.)
-- When no branding is available, use safe defaults: `#111111` (dark text), `#ffffff` (white backgrounds), `#4b5563` (gray secondary text)
+- **Primary color** → Use for main CTA `button.bgColor` and section accents
+- **Secondary color** → Secondary buttons, accent borders
+- **Accent color** → Highlights, dividers, eyebrow text
+- **Background color** → Section `bgColor` if the brand uses a non-white base
+- **Text color** → `heading.color` / `text.color` overrides if not standard dark
+- **Brand fonts** → `fontFamily` on heading/text/button (use email-safe stacks: Arial, Helvetica, Georgia, Verdana, Tahoma; or `-apple-system, …` system stack)
+- When no branding is available, use safe defaults: `#1a1a1a` (dark text), `#ffffff` (white backgrounds), `#71717a` (muted text), `#3a3a3a` (body text)
 
 ### Image handling
-- For ALL image props (`bg-image`, `image`, `feature{n}-image`, `feature{n}-icon`, `logo-url`), use the placeholder image URL unless the user provides specific images
+- For all image props (`src`, `bgImage`), use the placeholder image URL unless the user provides specific images
 - Placeholder: `https://loomistorage.sfo3.digitaloceanspaces.com/media/_admin/69fa3adf4ae444edaadd1d0d7fee4b87/image placeholder.png`
-- For logos, always use `{{custom_values.logo_url}}`
+- For logos, prefer `{{custom_values.logo_url}}` so each account's logo renders automatically
 - Tell the user they can replace placeholder images with their own from the media library
 
 ### Template variable usage
@@ -259,30 +231,30 @@ When account branding is available in the context:
 - **System:** `{{unsubscribe_link}}`
 
 ### Email best practices
-- **Width:** Always 600px (set in baseProps `body-width`)
-- **Fonts:** Use email-safe font stacks: Arial, Helvetica, Georgia, Verdana, Tahoma
+- **Width:** Default 600px content; override with `settings.contentWidth` if needed
+- **Fonts:** Use email-safe stacks via the `fontFamily` dropdown (System Default / Arial / Helvetica / Verdana / Georgia / etc.)
 - **Colors:** Ensure text has sufficient contrast against backgrounds (WCAG AA minimum)
 - **CTAs:** One primary CTA per email. Make it prominent and action-oriented.
 - **Copy:** Keep email body concise — 50-150 words for promotional, up to 250 for newsletters
 - **Subject lines:** 6-10 words, no spam triggers, create curiosity or urgency
 - **Preview text:** 40-90 characters, complements subject line
 
-### Email types and typical structures
+### Email types and typical block structures
 
 **Service Reminder:**
-header → hero (vehicle/service image) → spacer → copy (personalized greeting + service message) → vehicle-card → spacer → cta (schedule service) → spacer → footer
+logo → section (hero with vehicle/service image bg, headline) → section (greeting heading + body text + button) → section (footer with social + unsubscribe)
 
-**Promotional/Sale:**
-header → hero (bold offer headline + CTA) → spacer → copy (offer details) → countdown-stat (deadline) → spacer → features (benefits) → spacer → cta (shop now) → spacer → footer
+**Promotional / Sale:**
+logo → section (bold offer headline on dark bgColor + button) → section (offer details + deadline emphasis) → columns (3 benefit callouts) → section (CTA button) → section (footer)
 
 **Newsletter:**
-header → hero (newsletter title) → spacer → copy (intro) → split (featured article) → spacer → features (more articles) → spacer → cta (read more) → spacer → footer
+logo → section (newsletter title heading) → section (intro text) → columns (2-col featured story + image) → section (additional links via text/button) → section (footer)
 
 **Welcome:**
-header → hero (welcome message) → spacer → copy (introduction + what to expect) → spacer → features (key benefits/features) → spacer → cta (get started) → spacer → footer
+logo → section (welcome heading + body text) → section (3 onboarding steps as headings + text) → section (primary CTA button) → section (footer)
 
-**Testimonial/Social Proof:**
-header → image (product/service photo) → spacer → copy (intro message) → testimonial → spacer → cta (take action) → spacer → footer
+**Testimonial / Social Proof:**
+logo → image (product/service photo) → section (intro text + quoted text block) → section (CTA button) → section (footer)
 
 ---
 
@@ -357,7 +329,7 @@ The variable catalog is managed as ESP variables and injected dynamically.
 ## Common Questions
 
 ### How do I create an email?
-Open the template editor from Templates, choose visual or code mode, add components (visual) or write Maizzle HTML (code), then save and optionally publish to your ESP.
+Open the template editor from Templates, choose visual or code mode, drag blocks onto the canvas (visual) or write email-safe HTML (code), then save and optionally publish to your ESP.
 
 ### How do I add a new account?
 Create the account in Accounts, save business/branding data, then connect an ESP from Integrations.
@@ -382,7 +354,7 @@ Custom value sync depends on provider capability and connection state. Values ca
 - **Styling:** Tailwind CSS + CSS variables
 - **Database:** PostgreSQL via Prisma
 - **Auth:** NextAuth credentials flow
-- **Rendering:** Maizzle for email template compilation
+- **Rendering:** react-email (`@react-email/components` + `@react-email/render`) for email template compilation
 - **AI:** Anthropic Claude API integration
 - **Integrations:** Provider-agnostic ESP adapter architecture
 - **Secrets:** ESP token encryption requires `ESP_TOKEN_SECRET`; OAuth state signing requires `ESP_OAUTH_STATE_SECRET` (with `ESP_TOKEN_SECRET` fallback)

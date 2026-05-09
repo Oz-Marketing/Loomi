@@ -2,9 +2,19 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import * as templateService from '@/lib/services/templates';
-import { maizzleRender } from '@/lib/maizzle-render';
 import { resolveAdapterAndCredentials, isResolveError } from '@/lib/esp/route-helpers';
 import { prisma } from '@/lib/prisma';
+import { isV2Template, parseV2Template } from '@/lib/email/types';
+import { renderEmailTemplate } from '@/lib/email/render';
+
+async function compileToHtml(content: string): Promise<string> {
+  if (isV2Template(content)) {
+    const tpl = parseV2Template(content);
+    if (!tpl) throw new Error('Invalid v2 template JSON');
+    return renderEmailTemplate(tpl);
+  }
+  return content;
+}
 
 /**
  * POST /api/templates/clone-to-accounts
@@ -34,11 +44,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Template not found' }, { status: 404 });
     }
 
-    // Compile Maizzle source → final HTML
-    const compiledHtml = await maizzleRender.renderTemplate(template.content, {
-      prettify: false,
-      purge: { safelist: ['*loomi-*'] },
-    });
+    // Compile any-format source → final HTML (v2 / pure HTML / legacy scaffold)
+    const compiledHtml = await compileToHtml(template.content);
 
     // Create an ESP template for each account
     const created: string[] = [];

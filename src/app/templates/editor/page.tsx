@@ -58,6 +58,9 @@ import {
   type RepeatableGroup,
 } from "@/lib/component-schemas";
 import { parseTemplate, type ParsedTemplate } from "@/lib/template-parser";
+import { isVisualEditableTemplate, isV2Template, parseV2Template, type EmailTemplate } from "@/lib/email/types";
+import { serializeTemplate as serializeTemplateUnified } from "@/lib/template-serializer";
+import { V2EditorShell } from "@/lib/email/editor/V2EditorShell";
 import {
   buildPreviewVariableMap,
   findMissingPreviewVariables,
@@ -6307,108 +6310,38 @@ function injectLiveBaseStyle(
   }
 }
 
-// Preview serializer — injects hidden div markers for click-to-select
-// Uses <div data-loomi="N" style="display:none"> because Maizzle/PostHTML strips HTML comments
+/**
+ * Preview serializer. With the Maizzle removal, both v2 templates and any
+ * residual non-v2 callers route through the unified serializer — the legacy
+ * hidden-div-marker injection (used to wire click-to-select onto Maizzle's
+ * post-rendered HTML) is gone.
+ *
+ * The `hiddenComponents` parameter is kept for call-site compatibility but
+ * is unused — the v2 visual editor handles selection / hide via React state.
+ */
 function serializeTemplateForPreview(
   template: ParsedTemplate,
-  hiddenComponents: Set<number>,
+  _hiddenComponents: Set<number>,
 ): string {
-  const lines: string[] = [];
-  lines.push("---");
-  for (const [key, value] of Object.entries(template.frontmatter)) {
-    if (
-      typeof value === "string" &&
-      (value.includes(":") || value.includes("{") || value.includes('"'))
-    ) {
-      lines.push(`${key}: "${value}"`);
-    } else {
-      lines.push(`${key}: ${value}`);
-    }
-  }
-  lines.push("---");
-  lines.push("");
-  if (Object.keys(template.baseProps).length <= 2) {
-    const inlineStr = Object.entries(template.baseProps)
-      .map(([k, v]) => `${k}="${escapeTemplateAttrValue(String(v ?? ""))}"`)
-      .join(" ");
-    lines.push(`<x-base ${inlineStr}>`);
-  } else {
-    lines.push(`<x-base`);
-    for (const [k, v] of Object.entries(template.baseProps)) {
-      lines.push(`  ${k}="${escapeTemplateAttrValue(String(v ?? ""))}"`);
-    }
-    lines.push(`>`);
-  }
-
-  // Build indexed component list preserving original indices
-  template.components.forEach((comp, i) => {
-    if (hiddenComponents.has(i)) return;
-    const previewProps = { ...comp.props };
-    if (comp.type === "image" && !String(previewProps.image || "").trim()) {
-      previewProps.image = PREVIEW_IMAGE_ICON_PLACEHOLDER;
-    }
-    const compWithIndex = {
-      ...comp,
-      props: { ...previewProps, "component-index": String(i) },
-    };
-    lines.push("");
-    lines.push(`  <div data-loomi="${i}" style="display:none"></div>`);
-    lines.push(...serializeComponent(compWithIndex, "  "));
-  });
-  lines.push(`  <div data-loomi="end" style="display:none"></div>`);
-
-  lines.push("");
-  lines.push("</x-base>");
-  lines.push("");
-  return lines.join("\n");
+  return serializeTemplateUnified(template);
 }
 
-// Post-process compiled HTML to convert hidden div markers into data-loomi attributes on <tr> elements
+/**
+ * No-op. Previously post-processed Maizzle-rendered HTML to add `data-loomi`
+ * attributes to <tr> elements so iframe clicks could be mapped back to a
+ * component index. The v2 editor doesn't use an iframe preview, so this
+ * isn't needed anymore.
+ */
 function injectLoomiAttributes(html: string): string {
-  // Find all <div data-loomi="N" ...> markers
-  const markerRegex = /<div data-loomi="(\d+|end)"[^>]*><\/div>/gi;
-  const markers: { id: string; start: number; end: number }[] = [];
-  let match;
-  while ((match = markerRegex.exec(html)) !== null) {
-    markers.push({
-      id: match[1],
-      start: match.index,
-      end: match.index + match[0].length,
-    });
-  }
-  if (markers.length === 0) return html;
-
-  // Process sections between consecutive markers in reverse order to preserve positions
-  let result = html;
-  for (let i = markers.length - 1; i >= 0; i--) {
-    const marker = markers[i];
-    if (marker.id === "end") {
-      // Remove end markers
-      result = result.slice(0, marker.start) + result.slice(marker.end);
-      continue;
-    }
-
-    const sectionStart = marker.end;
-    const nextMarker = markers[i + 1];
-    const sectionEnd = nextMarker ? nextMarker.start : result.length;
-
-    // Inject data-loomi into all <tr tags within this section
-    const section = result.slice(sectionStart, sectionEnd);
-    const modified = section.replace(
-      /<tr(\s|>)/gi,
-      `<tr data-loomi="${marker.id}"$1`,
-    );
-
-    // Replace section with annotated version and remove the marker div
-    result =
-      result.slice(0, marker.start) + modified + result.slice(sectionEnd);
-  }
-
-  return result;
+  return html;
 }
 
 // Client-side serializer
 function serializeTemplateClient(template: ParsedTemplate): string {
+  if (template.frontmatter?.version === "2") {
+    return serializeTemplateUnified(template);
+  }
+
   const lines: string[] = [];
   lines.push("---");
   for (const [key, value] of Object.entries(template.frontmatter)) {
@@ -6452,8 +6385,8 @@ function serializeTemplateClient(template: ParsedTemplate): string {
 }
 
 function hasVisualTemplateScaffold(raw: string): boolean {
-  const source = raw.trimStart();
-  return /^---\r?\n[\s\S]*?\r?\n---/.test(source) && /<x-base\b/i.test(source);
+  // Recognizes v2 JSON templates AND the legacy <x-base> scaffold as visual-editable.
+  return isVisualEditableTemplate(raw);
 }
 
 export default function TemplateEditorPage() {
@@ -7247,7 +7180,8 @@ export default function TemplateEditorPage() {
           parsedData.frontmatter ? parsedData : parseTemplate(raw),
         );
         setParsed(parsedWithFontDefaults);
-        if (!isHtmlOnlyBuilder) {
+        // v2 JSON templates are inherently visual — force visual mode regardless of URL param.
+        if (!isHtmlOnlyBuilder || isV2Template(raw)) {
           setEditorMode("visual");
         }
         const previewCode = serializeTemplateForPreview(
@@ -9534,22 +9468,36 @@ export default function TemplateEditorPage() {
                   setIsEditingTitle(false);
                 }}
                 autoFocus
-                className="max-w-[min(44rem,64vw)] rounded-xl border border-[var(--primary)] bg-[var(--background)]/80 px-4 py-1.5 text-center text-lg font-bold text-[var(--foreground)] shadow-[0_0_0_1px_rgba(99,102,241,0.18)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20"
+                className="max-w-[min(44rem,64vw)] rounded-xl border border-[var(--primary)] bg-[var(--background)]/80 px-4 py-1.5 text-center text-2xl font-bold text-[var(--foreground)] shadow-[0_0_0_1px_rgba(99,102,241,0.18)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20"
               />
             ) : (
-              <div className="group/title flex items-center justify-center gap-1.5 min-w-0">
-                <h2 className="text-lg font-bold capitalize truncate max-w-[40rem]">{designLabel}</h2>
-                <button
-                  onClick={() => {
-                    setEditTitleValue(espMode ? (espTemplateName || parsed?.frontmatter?.title || designLabel) : (parsed?.frontmatter?.title || designLabel));
+              <h2
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setEditTitleValue(
+                    espMode
+                      ? espTemplateName || parsed?.frontmatter?.title || designLabel
+                      : parsed?.frontmatter?.title || designLabel,
+                  );
+                  setIsEditingTitle(true);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setEditTitleValue(
+                      espMode
+                        ? espTemplateName || parsed?.frontmatter?.title || designLabel
+                        : parsed?.frontmatter?.title || designLabel,
+                    );
                     setIsEditingTitle(true);
-                  }}
-                  className="p-1 rounded text-[var(--muted-foreground)] opacity-0 group-hover/title:opacity-100 hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-all"
-                  title="Rename template"
-                >
-                  <PencilSquareIcon className="w-3.5 h-3.5" />
-                </button>
-              </div>
+                  }
+                }}
+                title="Click to rename"
+                className="text-2xl font-bold capitalize truncate max-w-[40rem] mx-auto cursor-text rounded-md px-3 py-1 hover:bg-[var(--muted)] focus:outline-none focus:bg-[var(--muted)] focus:ring-1 focus:ring-[var(--primary)]/30 transition-colors"
+              >
+                {designLabel}
+              </h2>
             )}
             <p className="text-xs text-[var(--muted-foreground)] truncate">
               {editorMode === "code"
@@ -9571,7 +9519,7 @@ export default function TemplateEditorPage() {
           {/* Ask Loomi */}
           <button
             onClick={() => setShowAiAssistant((prev) => !prev)}
-            className={`group relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all duration-200 ${
+            className={`group relative flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold border transition-all duration-200 ${
               showAiAssistant
                 ? "ai-ed-btn-active"
                 : "ai-ed-btn-inactive"
@@ -9579,7 +9527,7 @@ export default function TemplateEditorPage() {
             title="Open AI assistant"
           >
             <SparklesIcon
-              className={`w-3.5 h-3.5 transition-transform ${showAiAssistant ? "scale-110" : "group-hover:scale-110 group-hover:rotate-6"}`}
+              className={`w-4 h-4 transition-transform ${showAiAssistant ? "scale-110" : "group-hover:scale-110 group-hover:rotate-6"}`}
             />
             Ask Loomi
           </button>
@@ -9592,17 +9540,17 @@ export default function TemplateEditorPage() {
               setShowSendTest(true);
             }}
             disabled={!previewHtml}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[var(--muted)] hover:bg-[var(--accent)] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-[var(--muted)] hover:bg-[var(--accent)] disabled:opacity-40 transition-colors"
             title="Send compiled HTML as test email"
           >
-            <EnvelopeIcon className="w-3.5 h-3.5" />
+            <EnvelopeIcon className="w-4 h-4" />
             Send Test
           </button>
           {/* Save Template */}
           <button
             onClick={handleOpenSaveTemplate}
             disabled={saving}
-            className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
             title="Save template"
           >
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50" fill="currentColor" className="w-4 h-4"><path d="M 7 4 C 5.3545455 4 4 5.3545455 4 7 L 4 43 C 4 44.645455 5.3545455 46 7 46 L 43 46 C 44.645455 46 46 44.645455 46 43 L 46 13.199219 A 1.0001 1.0001 0 0 0 45.707031 12.492188 L 37.507812 4.2929688 A 1.0001 1.0001 0 0 0 36.800781 4 L 7 4 z M 7 6 L 12 6 L 12 18 C 12 19.645455 13.354545 21 15 21 L 34 21 C 35.645455 21 37 19.645455 37 18 L 37 6.6132812 L 44 13.613281 L 44 43 C 44 43.554545 43.554545 44 43 44 L 38 44 L 38 29 C 38 27.354545 36.645455 26 35 26 L 15 26 C 13.354545 26 12 27.354545 12 29 L 12 44 L 7 44 C 6.4454545 44 6 43.554545 6 43 L 6 7 C 6 6.4454545 6.4454545 6 7 6 z M 14 6 L 35 6 L 35 18 C 35 18.554545 34.554545 19 34 19 L 15 19 C 14.445455 19 14 18.554545 14 18 L 14 6 z M 29 8 A 1.0001 1.0001 0 0 0 28 9 L 28 16 A 1.0001 1.0001 0 0 0 29 17 L 32 17 A 1.0001 1.0001 0 0 0 33 16 L 33 9 A 1.0001 1.0001 0 0 0 32 8 L 29 8 z M 30 10 L 31 10 L 31 15 L 30 15 L 30 10 z M 15 28 L 35 28 C 35.554545 28 36 28.445455 36 29 L 36 44 L 14 44 L 14 29 C 14 28.445455 14.445455 28 15 28 z"/></svg>
@@ -9611,15 +9559,35 @@ export default function TemplateEditorPage() {
           {/* History (clock icon only) */}
           <button
             onClick={handleOpenHistory}
-            className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+            className="p-2 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
             title="Version History"
           >
-            <ClockIcon className="w-4 h-4" />
+            <ClockIcon className="w-5 h-5" />
           </button>
         </div>
       </div>
 
       {/* Main split pane */}
+      {isV2Template(code) && editorMode === "visual" ? (
+        <div className="flex-1 min-h-0 border border-[var(--border)] rounded-xl overflow-hidden bg-[var(--card)]">
+          <V2EditorShell
+            template={(parseV2Template(code) as EmailTemplate) ?? { version: "2", subject: "", preheader: "", settings: { bodyBg: "#f5f5f5", contentBg: "#ffffff", contentWidth: 600, fontFamily: "Helvetica, Arial, sans-serif", textColor: "#1a1a1a" }, blocks: [] }}
+            onChange={(next) => handleCodeChange(JSON.stringify(next, null, 2))}
+            previewContacts={previewContacts}
+            selectedContactId={selectedPreviewContactId}
+            onSelectContact={setSelectedPreviewContactId}
+            onReloadContacts={loadPreviewContacts}
+            contactsLoading={previewContactsLoading}
+            previewValues={previewVariableMap}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            onCopyHtml={() => handleCopyHtml("compiled")}
+            copied={copied}
+          />
+        </div>
+      ) : (
       <div ref={splitPaneRef} className="flex gap-4 flex-1 min-h-0">
         {/* Left panel — Editor */}
         <div
@@ -11023,6 +10991,7 @@ export default function TemplateEditorPage() {
           </div>
         )}
       </div>
+      )}
 
       {/* History Modal */}
       {showHistory && (

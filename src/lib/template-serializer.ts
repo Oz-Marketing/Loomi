@@ -1,75 +1,75 @@
 import type { ParsedTemplate, ParsedComponent } from './template-parser';
+import type { Block, EmailTemplate, BlockType } from './email/types';
+import { DEFAULT_SETTINGS } from './email/types';
 
+/**
+ * Serialize a ParsedTemplate back to v2 JSON. Legacy Maizzle scaffold output
+ * is no longer supported — pure HTML or v2 only.
+ */
 export function serializeTemplate(template: ParsedTemplate): string {
-  const lines: string[] = [];
-
-  // 1. Frontmatter
-  lines.push('---');
-  // Serialize frontmatter preserving order
-  for (const [key, value] of Object.entries(template.frontmatter)) {
-    if (typeof value === 'string' && (value.includes(':') || value.includes('{') || value.includes('"'))) {
-      lines.push(`${key}: "${value}"`);
-    } else {
-      lines.push(`${key}: ${value}`);
-    }
-  }
-  lines.push('---');
-  lines.push('');
-
-  // 2. <x-base> opening
-  const basePropStr = serializeAttributes(template.baseProps);
-  lines.push(`<x-base ${basePropStr}>`);
-
-  // 3. Components (inject component-index for scoped responsive CSS)
-  for (let i = 0; i < template.components.length; i++) {
-    const comp = template.components[i];
-    const compWithIndex: ParsedComponent = {
-      ...comp,
-      props: { ...comp.props, 'component-index': String(i) },
-    };
-    lines.push('');
-    lines.push(serializeComponent(compWithIndex));
-  }
-
-  // 4. Close </x-base>
-  lines.push('');
-  lines.push('</x-base>');
-  lines.push('');
-
-  return lines.join('\n');
+  const tpl: EmailTemplate = {
+    version: '2',
+    subject: template.frontmatter.subject || '',
+    preheader: template.frontmatter.preheader || '',
+    settings: {
+      bodyBg: template.baseProps['body-bg'] || DEFAULT_SETTINGS.bodyBg,
+      contentBg: template.baseProps['content-bg'] || DEFAULT_SETTINGS.contentBg,
+      contentWidth:
+        parseInt(template.baseProps['content-width'] || '600', 10) ||
+        DEFAULT_SETTINGS.contentWidth,
+      fontFamily: template.baseProps['font-family'] || DEFAULT_SETTINGS.fontFamily,
+      textColor: template.baseProps['text-color'] || DEFAULT_SETTINGS.textColor,
+    },
+    blocks: template.components.map(componentToBlock),
+  };
+  return JSON.stringify(tpl, null, 2);
 }
 
-function serializeComponent(comp: ParsedComponent): string {
-  const propEntries = Object.entries(comp.props);
-
-  if (propEntries.length <= 2) {
-    // Short form - single line
-    const attrStr = propEntries.map(([k, v]) => `${k}="${v}"`).join(' ');
-    if (comp.content) {
-      return `  <x-core.${comp.type} ${attrStr}>${comp.content}</x-core.${comp.type}>`;
-    }
-    return `  <x-core.${comp.type} ${attrStr} />`;
+function componentToBlock(component: ParsedComponent): Block {
+  const block: Block = {
+    id: component.id || generateId(),
+    type: component.type as BlockType,
+    props: parseProps(component.props),
+  };
+  if (Array.isArray(component.children) && component.children.length > 0) {
+    block.children = component.children.map(componentToBlock);
   }
-
-  // Multi-line form
-  const lines = [`  <x-core.${comp.type}`];
-  for (const [key, value] of propEntries) {
-    lines.push(`    ${key}="${value}"`);
-  }
-
-  if (comp.content) {
-    lines[lines.length - 1] += '>';
-    lines.push(`    ${comp.content}`);
-    lines.push(`  </x-core.${comp.type}>`);
-  } else {
-    lines.push('  />');
-  }
-
-  return lines.join('\n');
+  return block;
 }
 
-function serializeAttributes(attrs: Record<string, string>): string {
-  return Object.entries(attrs)
-    .map(([k, v]) => `${k}="${v}"`)
-    .join(' ');
+/**
+ * Reverse the parser's stringify step: coerce string-typed props back to
+ * numbers / booleans / objects where the original v2 prop had richer types.
+ */
+function parseProps(props: Record<string, string>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(props)) {
+    out[key] = coerceValue(raw);
+  }
+  return out;
+}
+
+function coerceValue(raw: string): unknown {
+  if (raw === '') return raw;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+
+  if (/^-?\d+(\.\d+)?$/.test(raw)) {
+    const n = Number(raw);
+    if (!Number.isNaN(n)) return n;
+  }
+
+  if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return raw;
+    }
+  }
+
+  return raw;
+}
+
+function generateId(): string {
+  return `b-${Math.random().toString(36).slice(2, 10)}`;
 }

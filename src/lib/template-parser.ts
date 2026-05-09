@@ -1,82 +1,86 @@
-import { parse as parseYaml } from 'yaml';
+import { isV2Template, parseV2Template, type Block, type EmailTemplate } from './email/types';
 
 export interface ParsedComponent {
-  type: string;          // e.g., "hero", "spacer", "copy"
+  type: string;
   props: Record<string, string>;
-  content?: string;      // inner HTML content for non-self-closing components
-  raw?: string;          // original raw tag for reference
+  content?: string;
+  raw?: string;
+  /** v2 only: stable id for the block */
+  id?: string;
+  /** v2 only: nested blocks (currently only used by Section / Columns) */
+  children?: ParsedComponent[];
 }
 
 export interface ParsedTemplate {
   frontmatter: Record<string, string>;
   baseProps: Record<string, string>;
   components: ParsedComponent[];
-  raw: string;           // original file content
+  raw: string;
 }
 
+/**
+ * Parse a template into the editor's working data shape.
+ * v2 JSON only — legacy Maizzle <x-base> scaffold is no longer supported.
+ */
 export function parseTemplate(fileContent: string): ParsedTemplate {
-  const raw = fileContent;
-
-  // 1. Extract frontmatter
-  const fmMatch = fileContent.match(/^---\n([\s\S]*?)\n---/);
-  const frontmatter = fmMatch ? parseYaml(fmMatch[1]) : {};
-
-  // 2. Get body (after frontmatter)
-  const body = fmMatch ? fileContent.slice(fmMatch[0].length).trim() : fileContent.trim();
-
-  // 3. Extract <x-base> props
-  const baseMatch = body.match(/<x-base\s+([\s\S]*?)>/);
-  const baseProps = baseMatch ? parseAttributes(baseMatch[1]) : {};
-
-  // 4. Extract components
-  const components: ParsedComponent[] = [];
-
-  // Match both self-closing and open/close component tags
-  // Self-closing: <x-core.name prop="value" />
-  // Open/close: <x-core.name prop="value">content</x-core.name>
-  const allComponentRegex = /<x-core\.(\w[\w-]*)([\s\S]*?)(?:\/>|>([\s\S]*?)<\/x-core\.\1>)/g;
-
-  let match;
-  while ((match = allComponentRegex.exec(body)) !== null) {
-    const type = match[1];
-    const attrString = match[2].trim();
-    const content = match[3]?.trim() || undefined;
-    const props = parseAttributes(attrString);
-
-    components.push({
-      type,
-      props,
-      content,
-      raw: match[0],
-    });
+  if (isV2Template(fileContent)) {
+    const tpl = parseV2Template(fileContent);
+    if (tpl) return v2ToParsed(tpl, fileContent);
   }
+  // Non-v2 content (pure HTML, plain text, etc.) — return an empty parsed shape
+  // so the editor falls back to code mode rather than crashing.
+  return { frontmatter: {}, baseProps: {}, components: [], raw: fileContent };
+}
+
+// ── v2 → ParsedTemplate ────────────────────────────────────────────
+
+function v2ToParsed(tpl: EmailTemplate, raw: string): ParsedTemplate {
+  const frontmatter: Record<string, string> = { version: '2' };
+  if (tpl.subject) frontmatter.subject = tpl.subject;
+  if (tpl.preheader) frontmatter.preheader = tpl.preheader;
+
+  const baseProps: Record<string, string> = {
+    'body-bg': tpl.settings.bodyBg,
+    'content-bg': tpl.settings.contentBg,
+    'content-width': String(tpl.settings.contentWidth),
+    'font-family': tpl.settings.fontFamily,
+    'text-color': tpl.settings.textColor,
+  };
+
+  const components = tpl.blocks.map(blockToComponent);
 
   return { frontmatter, baseProps, components, raw };
 }
 
-function decodeAttributeEntities(value: string): string {
-  return value
-    .replace(/&quot;/gi, '"')
-    .replace(/&#34;/gi, '"')
-    .replace(/&apos;/gi, "'")
-    .replace(/&#39;/gi, "'")
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&amp;/gi, '&');
+function blockToComponent(block: Block): ParsedComponent {
+  const props = stringifyProps(block.props);
+  const result: ParsedComponent = {
+    type: block.type,
+    props,
+    id: block.id,
+  };
+  if (Array.isArray(block.children) && block.children.length > 0) {
+    result.children = block.children.map(blockToComponent);
+  }
+  return result;
 }
 
-function parseAttributes(attrString: string): Record<string, string> {
-  const props: Record<string, string> = {};
-  if (!attrString) return props;
-
-  // Match key="value" or key='value' pairs, handling multiline (supports m: prefix for mobile overrides)
-  const attrRegex = /([\w][\w:-]*)=(?:"([^"]*?)"|'([^']*?)')/g;
-  let match;
-  while ((match = attrRegex.exec(attrString)) !== null) {
-    const key = match[1];
-    const value = match[2] !== undefined ? match[2] : match[3];
-    props[key] = decodeAttributeEntities(value);
+/**
+ * Convert v2 props (which can be any shape) to flat string-keyed props for
+ * the editor model. Objects/arrays get JSON-stringified into a single
+ * key so the original data round-trips on save.
+ */
+function stringifyProps(props: Record<string, unknown>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(props)) {
+    if (value == null) continue;
+    if (typeof value === 'string') {
+      out[key] = value;
+    } else if (typeof value === 'number' || typeof value === 'boolean') {
+      out[key] = String(value);
+    } else {
+      out[key] = JSON.stringify(value);
+    }
   }
-
-  return props;
+  return out;
 }

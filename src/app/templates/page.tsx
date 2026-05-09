@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import { isVisualEditableTemplate } from '@/lib/email/types';
 import {
   PlusIcon,
   XMarkIcon,
@@ -141,8 +142,8 @@ function getLatestRenderableHtml(template: Pick<EspTemplateRecord, 'source' | 'h
 }
 
 function hasVisualTemplateScaffold(raw: string | null | undefined): boolean {
-  const source = (raw || '').trimStart();
-  return /^---\r?\n[\s\S]*?\r?\n---/.test(source) && /<x-base\b/i.test(source);
+  // Recognizes v2 JSON and legacy <x-base> scaffold as visual-editable.
+  return isVisualEditableTemplate(raw);
 }
 
 function getTemplateTypeLabel(template: Pick<EspTemplateRecord, 'editorType' | 'source'>): 'HTML' | 'Drag & Drop' {

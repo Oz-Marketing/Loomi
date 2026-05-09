@@ -73,16 +73,10 @@ const toolsNavItem: NavItem = {
 };
 
 // Campaigns group — nests the core campaign-building surfaces underneath.
-// Sections is admin-only (dev/super_admin/admin) and not included in sub-account navs.
 const campaignsGroupOverview: NavItem = {
   href: '/campaigns',
   label: 'Overview',
   icon: ChartBarSquareIcon,
-};
-const campaignsGroupSections: NavItem = {
-  href: '/components',
-  label: 'Sections',
-  icon: SectionsIcon as IconComponent,
 };
 const campaignsGroupTemplates: NavItem = {
   href: '/templates',
@@ -101,7 +95,6 @@ const campaignsNavAdmin: NavItem = {
   icon: PaperAirplaneIcon,
   children: [
     campaignsGroupOverview,
-    campaignsGroupSections,
     campaignsGroupTemplates,
     campaignsGroupFlows,
   ],

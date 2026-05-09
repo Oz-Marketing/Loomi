@@ -2,7 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import * as templateService from '@/lib/services/templates';
-import { maizzleRender } from '@/lib/maizzle-render';
+import { isV2Template, parseV2Template } from '@/lib/email/types';
+import { renderEmailTemplate } from '@/lib/email/render';
+
+async function compileToHtml(content: string, opts: { pretty?: boolean } = {}): Promise<string> {
+  if (isV2Template(content)) {
+    const tpl = parseV2Template(content);
+    if (!tpl) throw new Error('Invalid v2 template JSON');
+    return renderEmailTemplate(tpl, { pretty: opts.pretty ?? true });
+  }
+  // Pure HTML — return as-is (legacy x-base scaffold no longer supported)
+  return content;
+}
 
 /**
  * POST /api/templates/export
@@ -45,11 +56,7 @@ export async function POST(req: NextRequest) {
       }
 
       try {
-        const html = await maizzleRender.renderTemplate(template.content, {
-          prettify: true,
-          purge: true,
-          timeout: 30_000,
-        });
+        const html = await compileToHtml(template.content, { pretty: true });
         files.push({ name: `${design}.html`, html });
       } catch (err: any) {
         errors.push({ name: design, error: err?.message || 'Build failed' });

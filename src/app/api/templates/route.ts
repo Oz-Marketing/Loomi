@@ -5,6 +5,7 @@ import { parseTemplate } from '@/lib/template-parser';
 import { serializeTemplate } from '@/lib/template-serializer';
 import { getStarterTemplate } from '@/lib/template-starters';
 import * as templateService from '@/lib/services/templates';
+import { isVisualEditableTemplate } from '@/lib/email/types';
 
 function extractFrontmatterTitle(content: string): string | undefined {
   const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
@@ -16,8 +17,7 @@ function extractFrontmatterTitle(content: string): string | undefined {
 }
 
 function hasVisualTemplateScaffold(content: string): boolean {
-  const source = content.trimStart();
-  return /^---\r?\n[\s\S]*?\r?\n---/.test(source) && /<x-base\b/i.test(source);
+  return isVisualEditableTemplate(content);
 }
 
 export async function GET(req: NextRequest) {

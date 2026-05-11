@@ -5,7 +5,6 @@ import {
   Body,
   Container,
   Preview,
-  Font,
 } from '@react-email/components';
 import type { Block, EmailSettings, EmailTemplate } from './types';
 import { BLOCK_COMPONENTS } from './components';

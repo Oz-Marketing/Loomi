@@ -5,7 +5,6 @@ import {
   Bars3BottomLeftIcon,
   Bars3Icon,
   Bars3BottomRightIcon,
-  Bars3CenterLeftIcon,
   ChevronUpIcon,
   ChevronDownIcon,
   LinkIcon as LinkChainIcon,

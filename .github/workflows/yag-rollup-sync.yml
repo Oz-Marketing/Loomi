@@ -1,8 +1,10 @@
 name: YAG Rollup Sync
 
 on:
-  schedule:
-    - cron: '*/5 * * * *' # heartbeat; schedule is resolved from YAG rollup config
+  # Scheduled heartbeat disabled — YAG rollup not currently in use. Re-enable
+  # by uncommenting the schedule block below if/when sync becomes active again.
+  # schedule:
+  #   - cron: '*/5 * * * *' # heartbeat; schedule is resolved from YAG rollup config
   workflow_dispatch:
     inputs:
       full_sync:

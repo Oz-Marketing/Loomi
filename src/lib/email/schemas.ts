@@ -88,6 +88,17 @@ const SOCIAL_VARIANT_OPTIONS = [
   { label: 'Black', value: 'mono-dark' },
 ];
 
+const COLUMN_COUNT_OPTIONS = [
+  { label: '2 columns', value: 2 },
+  { label: '3 columns', value: 3 },
+];
+
+const VALIGN_OPTIONS = [
+  { label: 'Top', value: 'top' },
+  { label: 'Middle', value: 'middle' },
+  { label: 'Bottom', value: 'bottom' },
+];
+
 // ── Schemas ──
 
 export const SECTION_SCHEMA: BlockSchema = {
@@ -104,6 +115,35 @@ export const SECTION_SCHEMA: BlockSchema = {
     { key: 'paddingBottom', label: 'Padding Bottom', type: 'number', default: 32, half: true, group: 'spacing' },
     { key: 'paddingLeft', label: 'Padding Left', type: 'number', default: 32, half: true, group: 'spacing' },
     { key: 'paddingRight', label: 'Padding Right', type: 'number', default: 32, half: true, group: 'spacing' },
+  ],
+};
+
+export const COLUMNS_SCHEMA: BlockSchema = {
+  type: 'columns',
+  label: 'Columns',
+  icon: 'columns',
+  description: 'Multi-column row for placing blocks side by side.',
+  acceptsChildren: true,
+  defaults: {
+    columnCount: 2,
+    gap: 16,
+    valign: 'top',
+    paddingTop: 16,
+    paddingBottom: 16,
+    paddingLeft: 16,
+    paddingRight: 16,
+    stackOnMobile: true,
+  },
+  props: [
+    { key: 'columnCount', label: 'Columns', type: 'select', options: COLUMN_COUNT_OPTIONS, default: 2, half: true, group: 'layout' },
+    { key: 'gap', label: 'Gap', type: 'number', default: 16, half: true, group: 'layout' },
+    { key: 'valign', label: 'Vertical Align', type: 'select', options: VALIGN_OPTIONS, default: 'top', half: true, group: 'layout' },
+    { key: 'stackOnMobile', label: 'Stack on Mobile', type: 'toggle', default: true, half: true, group: 'layout' },
+    { key: 'bgColor', label: 'Background', type: 'color', group: 'background' },
+    { key: 'paddingTop', label: 'Padding Top', type: 'number', default: 16, half: true, group: 'spacing' },
+    { key: 'paddingBottom', label: 'Padding Bottom', type: 'number', default: 16, half: true, group: 'spacing' },
+    { key: 'paddingLeft', label: 'Padding Left', type: 'number', default: 16, half: true, group: 'spacing' },
+    { key: 'paddingRight', label: 'Padding Right', type: 'number', default: 16, half: true, group: 'spacing' },
   ],
 };
 
@@ -263,6 +303,7 @@ export const SOCIAL_SCHEMA: BlockSchema = {
 
 export const BLOCK_SCHEMAS: Record<BlockType, BlockSchema> = {
   section: SECTION_SCHEMA,
+  columns: COLUMNS_SCHEMA,
   heading: HEADING_SCHEMA,
   text: TEXT_SCHEMA,
   image: IMAGE_SCHEMA,
@@ -280,6 +321,7 @@ export const ALL_BLOCK_SCHEMAS: BlockSchema[] = [
   IMAGE_SCHEMA,
   BUTTON_SCHEMA,
   SECTION_SCHEMA,
+  COLUMNS_SCHEMA,
   DIVIDER_SCHEMA,
   SPACER_SCHEMA,
   SOCIAL_SCHEMA,

@@ -20,7 +20,7 @@ import { OutlinePanel } from './OutlinePanel';
 import { FormattingToolbar } from './FormattingToolbar';
 import { ActionBar, type PreviewWidth } from './ActionBar';
 import { Squares2X2Icon, Cog6ToothIcon } from '@heroicons/react/24/outline';
-import type { Block, BlockType, EmailTemplate } from '../types';
+import type { BlockType, EmailTemplate } from '../types';
 import type { PreviewContact } from '@/lib/preview-variables';
 
 interface V2EditorShellProps {

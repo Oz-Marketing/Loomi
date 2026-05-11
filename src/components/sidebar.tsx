@@ -24,7 +24,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
-import { SectionsIcon, FlowIcon } from '@/components/icon-map';
+import { FlowIcon } from '@/components/icon-map';
 import { MetaLogoIcon } from '@/components/icons/meta-logo';
 import { AccountSwitcher } from '@/components/account-switcher';
 import { DevImpersonate } from '@/components/dev-impersonate';

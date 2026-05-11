@@ -32,7 +32,6 @@ import {
   ClockIcon,
   UserCircleIcon,
   SparklesIcon,
-  PencilSquareIcon,
   PaperAirplaneIcon,
   ExclamationTriangleIcon,
   EnvelopeIcon,
@@ -96,14 +95,6 @@ const PREVIEW_ZOOM_MIN = 50;
 const PREVIEW_ZOOM_MAX = 200;
 const PREVIEW_ZOOM_STEP = 10;
 const ICON_UPLOAD_SIZE_PX = 256;
-const PREVIEW_IMAGE_ICON_PLACEHOLDER = `data:image/svg+xml;utf8,${encodeURIComponent(
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700">
-    <rect width="1200" height="700" fill="#f3f4f6"/>
-    <rect x="430" y="190" width="340" height="260" rx="36" fill="none" stroke="#9ca3af" stroke-width="22"/>
-    <circle cx="690" cy="270" r="32" fill="none" stroke="#9ca3af" stroke-width="22"/>
-    <path d="M485 395l95-95c15-15 40-15 55 0l55 55 40-40c15-15 40-15 55 0l80 80" fill="none" stroke="#9ca3af" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
-  </svg>`,
-)}`;
 
 async function rasterizeSvgToPngFile(
   svgMarkup: string,

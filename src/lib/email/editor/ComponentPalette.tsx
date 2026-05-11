@@ -1,6 +1,5 @@
 'use client';
 
-import * as React from 'react';
 import { useDraggable } from '@dnd-kit/core';
 import { ComponentIcon } from '@/components/icon-map';
 import { componentSchemas } from '@/lib/component-schemas';

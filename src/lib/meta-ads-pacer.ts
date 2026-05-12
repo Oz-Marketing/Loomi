@@ -190,6 +190,77 @@ export async function fetchOverview(accountKeys: string[], period: string) {
     .sort((a, b) => a.dealer.localeCompare(b.dealer));
 }
 
+export interface YearMonthSummary {
+  period: string; // YYYY-MM
+  budget: number; // baseBudgetGoal + addedBudgetGoal
+  actual: number; // sum of pacerActual across ads in this month
+}
+
+/**
+ * Build per-month budget vs. actual-spend rows for a single account across a
+ * calendar year. Months with no plan data return zeros so the caller can
+ * render a complete 12-row table.
+ */
+export async function fetchYearSummary(
+  accountKeys: string[],
+  year: number,
+): Promise<YearMonthSummary[]> {
+  const periods = Array.from({ length: 12 }, (_, i) => {
+    const m = String(i + 1).padStart(2, '0');
+    return `${year}-${m}`;
+  });
+
+  if (accountKeys.length === 0) {
+    return periods.map((period) => ({ period, budget: 0, actual: 0 }));
+  }
+
+  const plans = await prisma.metaAdsPacerPlan.findMany({
+    where: { accountKey: { in: accountKeys } },
+    select: { id: true },
+  });
+  const planIds = plans.map((p) => p.id);
+  if (planIds.length === 0) {
+    return periods.map((period) => ({ period, budget: 0, actual: 0 }));
+  }
+
+  const [budgets, ads] = await Promise.all([
+    prisma.metaAdsPacerPeriodBudget.findMany({
+      where: { planId: { in: planIds }, period: { in: periods } },
+      select: { period: true, baseBudgetGoal: true, addedBudgetGoal: true },
+    }),
+    prisma.metaAdsPacerAd.findMany({
+      where: { planId: { in: planIds }, period: { in: periods } },
+      select: { period: true, pacerActual: true },
+    }),
+  ]);
+
+  const budgetByPeriod = new Map<string, number>();
+  for (const b of budgets) {
+    const base = Number(b.baseBudgetGoal ?? 0);
+    const added = Number(b.addedBudgetGoal ?? 0);
+    budgetByPeriod.set(
+      b.period,
+      (budgetByPeriod.get(b.period) ?? 0) +
+        (isNaN(base) ? 0 : base) +
+        (isNaN(added) ? 0 : added),
+    );
+  }
+
+  const actualByPeriod = new Map<string, number>();
+  for (const a of ads) {
+    if (a.pacerActual == null) continue;
+    const n = Number(a.pacerActual);
+    if (isNaN(n)) continue;
+    actualByPeriod.set(a.period, (actualByPeriod.get(a.period) ?? 0) + n);
+  }
+
+  return periods.map((period) => ({
+    period,
+    budget: budgetByPeriod.get(period) ?? 0,
+    actual: actualByPeriod.get(period) ?? 0,
+  }));
+}
+
 /** Lists periods that have at least one ad or one budget row. */
 export async function listPeriods(planId: string) {
   const [adGroups, budgets] = await Promise.all([

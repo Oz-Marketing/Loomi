@@ -4,6 +4,7 @@
  * it so both views always show the same numbers for the same ad.
  */
 
+import { toIso } from '@/components/ui/date-picker';
 import { calcDays, calcElapsed, num } from './helpers';
 import type { PacerAd, PacingStatus } from './types';
 
@@ -124,7 +125,7 @@ export function buildAdCalc(ad: PacerAd): AdCalc {
   );
   const daysLate = isLate ? calcDays(ad.flightStart, ad.liveDate) - 1 : 0;
 
-  const todayIso = ad.pacerTodayDate ?? new Date().toISOString().slice(0, 10);
+  const todayIso = ad.pacerTodayDate ?? toIso(new Date());
   const endIso = ad.pacerEndDate ?? ad.flightEnd;
   const pacer = buildPacerCalc(ad, todayIso, endIso);
 

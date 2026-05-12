@@ -4,6 +4,7 @@
  * `YYYY-MM-DD` to mirror `<input type="date">`.
  */
 
+import { toIso } from '@/components/ui/date-picker';
 import { randomUUID } from './random-id';
 import type { PacerAd } from './types';
 
@@ -50,6 +51,9 @@ export function calcElapsed(start: string | null, end: string | null): number {
 
 /** Walk back n business days from an ISO date (used for Due Date auto-calc). */
 export function subtractBusinessDays(dateStr: string, n: number): string {
+  // Walks in local time so the returned ISO matches the calendar day the
+  // user sees in their browser; using toISOString() here would silently roll
+  // forward a day for users east of UTC.
   const d = new Date(dateStr + 'T00:00:00');
   let remaining = n;
   while (remaining > 0) {
@@ -57,7 +61,7 @@ export function subtractBusinessDays(dateStr: string, n: number): string {
     const dow = d.getDay();
     if (dow !== 0 && dow !== 6) remaining--;
   }
-  return d.toISOString().slice(0, 10);
+  return toIso(d);
 }
 
 /** Default Due Date = 2 business days before flight start. */

@@ -16,38 +16,15 @@ interface CopyFromBody {
 }
 
 /**
- * Shift an ISO date (YYYY-MM-DD) to the equivalent day in `toPeriod` (YYYY-MM).
- * Days that don't exist in the target month (e.g. Jan 31 → Feb) clamp to the
- * last day of the target month. Returns null if input is malformed.
- */
-function shiftDate(iso: string | null, toPeriod: string): string | null {
-  if (!iso) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return null;
-  const [, , dayStr] = iso.split('-');
-  const day = Number(dayStr);
-  if (!day) return null;
-
-  const [ty, tm] = toPeriod.split('-').map(Number);
-  if (!ty || !tm) return null;
-
-  const lastDayOfTarget = new Date(ty, tm, 0).getDate();
-  const clampedDay = Math.min(day, lastDayOfTarget);
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${ty}-${pad(tm)}-${pad(clampedDay)}`;
-}
-
-/**
  * Duplicate ads from one period into another.
  *
  * Per-field handling for the copy:
  *  - Preserved as-is: name, owner, designer, account rep, action needed,
  *    recurring, co-op, budget type, budget source, creative link, client name,
- *    design status, design due date.
- *  - Date-shifted to the equivalent day of the target month: flightStart,
- *    flightEnd, liveDate, creativeDueDate, dueDate.
- *  - Reset to defaults: adStatus ("Working on it"), internalApproval,
- *    clientApproval, dateCompleted, allocation, pacerActual, pacerDailyBudget,
- *    pacerTodayDate, pacerEndDate.
+ *    digital details, design status, ad status, internal/client approval.
+ *  - Reset to null: every date (flightStart, flightEnd, liveDate,
+ *    creativeDueDate, dueDate, dateCompleted) and every budget/pacer field
+ *    (allocation, pacerActual, pacerDailyBudget, pacerTodayDate, pacerEndDate).
  *  - Dropped: design notes, activity log.
  *
  * Optionally accepts `adIds` to restrict the copy to a subset of source ads;
@@ -109,7 +86,8 @@ export async function POST(
           planId: plan.id,
           position: existing + i,
           period: to,
-          // Preserved
+          // Preserved (statuses + approvals carry over so the team doesn't
+          // re-mark every row — only dates and money reset).
           name: src.name,
           ownerUserId: src.ownerUserId,
           designerUserId: src.designerUserId,
@@ -123,17 +101,17 @@ export async function POST(
           clientName: src.clientName,
           digitalDetails: src.digitalDetails,
           designStatus: src.designStatus,
-          // Date-shifted to the target month
-          flightStart: shiftDate(src.flightStart, to),
-          flightEnd: shiftDate(src.flightEnd, to),
-          liveDate: shiftDate(src.liveDate, to),
-          creativeDueDate: shiftDate(src.creativeDueDate, to),
-          dueDate: shiftDate(src.dueDate, to),
-          // Reset
+          adStatus: src.adStatus,
+          internalApproval: src.internalApproval,
+          clientApproval: src.clientApproval,
+          // All dates blanked — copies start with no schedule
+          flightStart: null,
+          flightEnd: null,
+          liveDate: null,
+          creativeDueDate: null,
+          dueDate: null,
           dateCompleted: null,
-          adStatus: 'Working on it',
-          internalApproval: 'Pending Approval',
-          clientApproval: 'Pending Approval',
+          // Budget + pacer fields blanked
           allocation: null,
           pacerActual: null,
           pacerDailyBudget: null,

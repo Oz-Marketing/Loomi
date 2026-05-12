@@ -84,6 +84,6 @@ export interface PeriodSummary {
 
 export type PacingStatus = 'on-track' | 'overpacing' | 'underpacing' | 'no-data';
 
-export type PacerInnerTab = 'pacer' | 'summary';
+export type PacerInnerTab = 'pacer' | 'summary' | 'compare';
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';

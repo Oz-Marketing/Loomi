@@ -199,7 +199,11 @@ export async function POST(req: NextRequest) {
         const nextName = remote.name?.trim() || 'Untitled';
         const nextSubject = remote.subject?.trim() || null;
         const nextPreviewText = remote.previewText?.trim() || null;
-        const nextHtml = remote.html || '';
+        // GHL's list endpoint (and some other ESP list endpoints) return template
+        // metadata only — no HTML body. Treat an empty remote.html as "no data
+        // from remote, preserve local" so sync doesn't wipe a previously
+        // populated html column.
+        const nextHtml = remote.html && remote.html.length > 0 ? remote.html : existing.html;
         const nextStatus = remote.status || existing.status || 'active';
         const nextEditorType = remote.editorType || null;
         const nextThumbnailUrl = remote.thumbnailUrl || null;

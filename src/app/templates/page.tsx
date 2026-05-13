@@ -1920,6 +1920,12 @@ export default function TemplatesPage() {
           : {},
       );
       closeMoveModal();
+      // Clear bulk-select state so the just-moved templates can't be re-included
+      // in a subsequent bulk action (e.g. user clicks Move, then Delete on new
+      // selections — the previously-selected IDs would otherwise still be
+      // included). Mirrors handleBulkDelete's cleanup.
+      setSelectMode(false);
+      setSelectedIds(new Set());
       toast.success(`Moved ${moveTemplateIds.length} template${moveTemplateIds.length === 1 ? '' : 's'}`);
     } catch {
       toast.error('Failed to move templates');

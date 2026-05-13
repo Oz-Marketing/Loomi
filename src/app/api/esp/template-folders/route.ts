@@ -2,13 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { resolveAdapterAndCredentials, isResolveError } from '@/lib/esp/route-helpers';
 import {
-  readEspTemplateFolderStore,
-  writeEspTemplateFolderStore,
   getAccountFolders,
   getAccountAssignments,
   createAccountFolder,
-  folderExistsForAccount,
 } from '@/lib/esp-template-folders-store';
+import { prisma } from '@/lib/prisma';
 import { createTemplateFolder as createGhlFolder } from '@/lib/esp/adapters/ghl/templates';
 
 function canAccessAccount(
@@ -35,11 +33,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
-  const store = readEspTemplateFolderStore();
-  return NextResponse.json({
-    folders: getAccountFolders(store, accountKey),
-    assignments: getAccountAssignments(store, accountKey),
-  });
+  const [folders, assignments] = await Promise.all([
+    getAccountFolders(accountKey),
+    getAccountAssignments(accountKey),
+  ]);
+  return NextResponse.json({ folders, assignments });
 }
 
 export async function POST(req: NextRequest) {
@@ -65,18 +63,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Folder name is required' }, { status: 400 });
     }
 
-    const store = readEspTemplateFolderStore();
-
     // If parentId is a local folder ID, resolve its remoteId for GHL
     let remoteParentId: string | null = null;
     if (parentId) {
-      if (!folderExistsForAccount(store, accountKey, parentId)) {
+      const parentFolder = await prisma.espTemplateFolder.findFirst({
+        where: { id: parentId, accountKey },
+        select: { remoteId: true },
+      });
+      if (!parentFolder) {
         return NextResponse.json({ error: 'Parent folder not found' }, { status: 404 });
       }
-      const parentFolder = store.folders.find(
-        (f) => f.id === parentId && f.accountKey === accountKey,
-      );
-      remoteParentId = parentFolder?.remoteId ?? null;
+      remoteParentId = parentFolder.remoteId;
     }
 
     // Try to create folder in GHL first
@@ -97,9 +94,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const folder = createAccountFolder(store, accountKey, name, parentId, remoteId);
-    writeEspTemplateFolderStore(store);
-
+    const folder = await createAccountFolder(accountKey, name, parentId, remoteId);
     return NextResponse.json({ folder }, { status: 201 });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

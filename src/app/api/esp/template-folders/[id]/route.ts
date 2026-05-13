@@ -2,14 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { resolveAdapterAndCredentials, isResolveError } from '@/lib/esp/route-helpers';
 import {
-  readEspTemplateFolderStore,
-  writeEspTemplateFolderStore,
   getAccountFolders,
   getAccountAssignments,
   updateAccountFolder,
   deleteAccountFolder,
   folderExistsForAccount,
 } from '@/lib/esp-template-folders-store';
+import { prisma } from '@/lib/prisma';
 import {
   updateTemplateFolder as updateGhlFolder,
   deleteTemplateFolder as deleteGhlFolder,
@@ -50,20 +49,20 @@ export async function PATCH(
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
 
-    const store = readEspTemplateFolderStore();
     if (parentId === id) {
       return NextResponse.json({ error: 'Folder cannot be its own parent' }, { status: 400 });
     }
-    if (parentId && !folderExistsForAccount(store, accountKey, parentId)) {
+    if (parentId && !(await folderExistsForAccount(accountKey, parentId))) {
       return NextResponse.json({ error: 'Parent folder not found' }, { status: 404 });
     }
 
-    // Find the local folder to get its remoteId
-    const localFolder = store.folders.find(
-      (f) => f.id === id && f.accountKey === accountKey,
-    );
+    // Look up the local folder to get its remoteId for the GHL sync
+    const localFolder = await prisma.espTemplateFolder.findFirst({
+      where: { id, accountKey },
+      select: { remoteId: true },
+    });
 
-    // Update on GHL if this folder has a remoteId and name is changing
+    // Update on GHL if this folder has a remoteId and the name is changing
     if (localFolder?.remoteId && name) {
       const resolved = await resolveAdapterAndCredentials(accountKey, {});
       if (!isResolveError(resolved) && resolved.adapter.provider === 'ghl') {
@@ -81,7 +80,7 @@ export async function PATCH(
       }
     }
 
-    const updated = updateAccountFolder(store, accountKey, id, {
+    const updated = await updateAccountFolder(accountKey, id, {
       ...(name !== undefined ? { name } : {}),
       ...(parentId !== undefined ? { parentId } : {}),
     });
@@ -89,7 +88,6 @@ export async function PATCH(
       return NextResponse.json({ error: 'Folder not found' }, { status: 404 });
     }
 
-    writeEspTemplateFolderStore(store);
     return NextResponse.json({ folder: updated });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
@@ -113,14 +111,12 @@ export async function DELETE(
   }
 
   try {
-    const store = readEspTemplateFolderStore();
+    // Look up the local folder to get its remoteId for the GHL delete
+    const localFolder = await prisma.espTemplateFolder.findFirst({
+      where: { id, accountKey },
+      select: { remoteId: true },
+    });
 
-    // Find the local folder to get its remoteId
-    const localFolder = store.folders.find(
-      (f) => f.id === id && f.accountKey === accountKey,
-    );
-
-    // Delete from GHL if this folder has a remoteId
     if (localFolder?.remoteId) {
       const resolved = await resolveAdapterAndCredentials(accountKey, {});
       if (!isResolveError(resolved) && resolved.adapter.provider === 'ghl') {
@@ -137,17 +133,16 @@ export async function DELETE(
       }
     }
 
-    const { deletedIds } = deleteAccountFolder(store, accountKey, id);
+    const { deletedIds } = await deleteAccountFolder(accountKey, id);
     if (deletedIds.length === 0) {
       return NextResponse.json({ error: 'Folder not found' }, { status: 404 });
     }
 
-    writeEspTemplateFolderStore(store);
-    return NextResponse.json({
-      deletedIds,
-      folders: getAccountFolders(store, accountKey),
-      assignments: getAccountAssignments(store, accountKey),
-    });
+    const [folders, assignments] = await Promise.all([
+      getAccountFolders(accountKey),
+      getAccountAssignments(accountKey),
+    ]);
+    return NextResponse.json({ deletedIds, folders, assignments });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

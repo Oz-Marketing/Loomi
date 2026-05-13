@@ -1,8 +1,4 @@
-import { randomUUID } from 'crypto';
-import fs from 'fs';
-import path from 'path';
-
-const DATA_FILE = path.join(process.cwd(), 'src', 'data', 'esp-template-folders.json');
+import { prisma } from '@/lib/prisma';
 
 export interface EspTemplateFolder {
   id: string;
@@ -15,198 +11,152 @@ export interface EspTemplateFolder {
   updatedAt: string;
 }
 
-export interface EspTemplateFolderStore {
-  folders: EspTemplateFolder[];
-  assignments: Record<string, Record<string, string>>;
+interface FolderRow {
+  id: string;
+  accountKey: string;
+  name: string;
+  parentId: string | null;
+  remoteId: string | null;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
-const EMPTY_STORE: EspTemplateFolderStore = {
-  folders: [],
-  assignments: {},
-};
+function toFolder(row: FolderRow): EspTemplateFolder {
+  return {
+    id: row.id,
+    accountKey: row.accountKey,
+    name: row.name,
+    parentId: row.parentId,
+    remoteId: row.remoteId,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
 
-function ensureDir(): void {
-  const dir = path.dirname(DATA_FILE);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
+export async function getAccountFolders(accountKey: string): Promise<EspTemplateFolder[]> {
+  const rows = await prisma.espTemplateFolder.findMany({
+    where: { accountKey },
+    orderBy: { name: 'asc' },
+  });
+  return rows.map(toFolder);
+}
+
+export async function getAccountAssignments(accountKey: string): Promise<Record<string, string>> {
+  const rows = await prisma.espTemplate.findMany({
+    where: { accountKey, folderId: { not: null } },
+    select: { id: true, folderId: true },
+  });
+  const map: Record<string, string> = {};
+  for (const r of rows) {
+    if (r.folderId) map[r.id] = r.folderId;
   }
+  return map;
 }
 
-function parseStore(raw: unknown): EspTemplateFolderStore {
-  if (!raw || typeof raw !== 'object') return { ...EMPTY_STORE };
-  const source = raw as Partial<EspTemplateFolderStore>;
-  const folders = Array.isArray(source.folders)
-    ? source.folders.filter((folder): folder is EspTemplateFolder => (
-      !!folder
-      && typeof folder.id === 'string'
-      && typeof folder.accountKey === 'string'
-      && typeof folder.name === 'string'
-      && (typeof folder.parentId === 'string' || folder.parentId === null)
-      && typeof folder.createdAt === 'string'
-      && typeof folder.updatedAt === 'string'
-    ))
-    : [];
-  const assignments: Record<string, Record<string, string>> = {};
-  if (source.assignments && typeof source.assignments === 'object') {
-    for (const [accountKey, value] of Object.entries(source.assignments)) {
-      if (!value || typeof value !== 'object') continue;
-      const accountAssignments: Record<string, string> = {};
-      for (const [templateId, folderId] of Object.entries(value)) {
-        if (typeof folderId === 'string') {
-          accountAssignments[templateId] = folderId;
-        }
-      }
-      assignments[accountKey] = accountAssignments;
-    }
-  }
-  return { folders, assignments };
-}
-
-export function readEspTemplateFolderStore(): EspTemplateFolderStore {
-  ensureDir();
-  if (!fs.existsSync(DATA_FILE)) return { ...EMPTY_STORE };
-  try {
-    const parsed = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
-    return parseStore(parsed);
-  } catch {
-    return { ...EMPTY_STORE };
-  }
-}
-
-export function writeEspTemplateFolderStore(store: EspTemplateFolderStore): void {
-  ensureDir();
-  fs.writeFileSync(DATA_FILE, JSON.stringify(store, null, 2), 'utf-8');
-}
-
-export function getAccountFolders(store: EspTemplateFolderStore, accountKey: string): EspTemplateFolder[] {
-  return store.folders
-    .filter((folder) => folder.accountKey === accountKey)
-    .sort((a, b) => a.name.localeCompare(b.name));
-}
-
-export function getAccountAssignments(
-  store: EspTemplateFolderStore,
+export async function findFolderByRemoteId(
   accountKey: string,
-): Record<string, string> {
-  return { ...(store.assignments[accountKey] || {}) };
+  remoteId: string,
+): Promise<EspTemplateFolder | null> {
+  const row = await prisma.espTemplateFolder.findFirst({
+    where: { accountKey, remoteId },
+  });
+  return row ? toFolder(row) : null;
 }
 
-export function createAccountFolder(
-  store: EspTemplateFolderStore,
+export async function folderExistsForAccount(
+  accountKey: string,
+  folderId: string,
+): Promise<boolean> {
+  const count = await prisma.espTemplateFolder.count({
+    where: { id: folderId, accountKey },
+  });
+  return count > 0;
+}
+
+export async function createAccountFolder(
   accountKey: string,
   name: string,
   parentId: string | null,
   remoteId?: string | null,
-): EspTemplateFolder {
-  const now = new Date().toISOString();
-  const folder: EspTemplateFolder = {
-    id: randomUUID().replace(/-/g, ''),
-    accountKey,
-    name,
-    parentId,
-    ...(remoteId ? { remoteId } : {}),
-    createdAt: now,
-    updatedAt: now,
-  };
-  store.folders.push(folder);
-  return folder;
+): Promise<EspTemplateFolder> {
+  const row = await prisma.espTemplateFolder.create({
+    data: {
+      accountKey,
+      name,
+      parentId,
+      remoteId: remoteId ?? null,
+    },
+  });
+  return toFolder(row);
 }
 
-/** Find a local folder by its GHL remote ID. */
-export function findFolderByRemoteId(
-  store: EspTemplateFolderStore,
-  accountKey: string,
-  remoteId: string,
-): EspTemplateFolder | null {
-  return store.folders.find(
-    (f) => f.accountKey === accountKey && f.remoteId === remoteId,
-  ) ?? null;
-}
-
-export function updateAccountFolder(
-  store: EspTemplateFolderStore,
+export async function updateAccountFolder(
   accountKey: string,
   folderId: string,
   updates: { name?: string; parentId?: string | null },
-): EspTemplateFolder | null {
-  const index = store.folders.findIndex((folder) => folder.id === folderId && folder.accountKey === accountKey);
-  if (index === -1) return null;
-  const existing = store.folders[index];
-  const next: EspTemplateFolder = {
-    ...existing,
-    ...(updates.name !== undefined ? { name: updates.name } : {}),
-    ...(updates.parentId !== undefined ? { parentId: updates.parentId } : {}),
-    updatedAt: new Date().toISOString(),
-  };
-  store.folders[index] = next;
-  return next;
+): Promise<EspTemplateFolder | null> {
+  const existing = await prisma.espTemplateFolder.findFirst({
+    where: { id: folderId, accountKey },
+  });
+  if (!existing) return null;
+
+  const data: { name?: string; parentId?: string | null } = {};
+  if (updates.name !== undefined) data.name = updates.name;
+  if (updates.parentId !== undefined) data.parentId = updates.parentId;
+
+  const updated = await prisma.espTemplateFolder.update({
+    where: { id: folderId },
+    data,
+  });
+  return toFolder(updated);
 }
 
-function collectDescendantIds(store: EspTemplateFolderStore, accountKey: string, folderId: string): Set<string> {
-  const ids = new Set<string>([folderId]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const folder of store.folders) {
-      if (folder.accountKey !== accountKey) continue;
-      if (!folder.parentId) continue;
-      if (ids.has(folder.parentId) && !ids.has(folder.id)) {
-        ids.add(folder.id);
-        changed = true;
-      }
-    }
-  }
-  return ids;
-}
-
-export function deleteAccountFolder(
-  store: EspTemplateFolderStore,
+/**
+ * Delete a folder and all of its descendants for the given account. Any
+ * EspTemplate rows whose folderId references a deleted folder get their
+ * folderId set to null via the onDelete: SetNull relation in the schema.
+ */
+export async function deleteAccountFolder(
   accountKey: string,
   folderId: string,
-): { deletedIds: string[] } {
-  const deletedIds = Array.from(collectDescendantIds(store, accountKey, folderId));
-  if (deletedIds.length === 0) return { deletedIds: [] };
+): Promise<{ deletedIds: string[] }> {
+  const root = await prisma.espTemplateFolder.findFirst({
+    where: { id: folderId, accountKey },
+    select: { id: true },
+  });
+  if (!root) return { deletedIds: [] };
 
-  const deletedSet = new Set(deletedIds);
-  store.folders = store.folders.filter((folder) => {
-    if (folder.accountKey !== accountKey) return true;
-    return !deletedSet.has(folder.id);
+  const allIds: string[] = [folderId];
+  let frontier: string[] = [folderId];
+  while (frontier.length > 0) {
+    const children = await prisma.espTemplateFolder.findMany({
+      where: { accountKey, parentId: { in: frontier } },
+      select: { id: true },
+    });
+    const childIds = children.map((c) => c.id);
+    if (childIds.length === 0) break;
+    allIds.push(...childIds);
+    frontier = childIds;
+  }
+
+  await prisma.espTemplateFolder.deleteMany({
+    where: { id: { in: allIds } },
   });
 
-  const accountAssignments = store.assignments[accountKey] || {};
-  for (const [templateId, assignedFolderId] of Object.entries(accountAssignments)) {
-    if (deletedSet.has(assignedFolderId)) {
-      delete accountAssignments[templateId];
-    }
-  }
-  store.assignments[accountKey] = accountAssignments;
-
-  return { deletedIds };
+  return { deletedIds: allIds };
 }
 
-export function assignTemplatesToFolder(
-  store: EspTemplateFolderStore,
+export async function assignTemplatesToFolder(
   accountKey: string,
   templateIds: string[],
   folderId: string | null,
-): Record<string, string> {
-  const nextAssignments = { ...(store.assignments[accountKey] || {}) };
-  for (const templateId of templateIds) {
-    if (!templateId) continue;
-    if (!folderId) {
-      delete nextAssignments[templateId];
-    } else {
-      nextAssignments[templateId] = folderId;
-    }
+): Promise<Record<string, string>> {
+  const filtered = templateIds.filter((id) => typeof id === 'string' && id.length > 0);
+  if (filtered.length > 0) {
+    await prisma.espTemplate.updateMany({
+      where: { id: { in: filtered }, accountKey },
+      data: { folderId },
+    });
   }
-  store.assignments[accountKey] = nextAssignments;
-  return nextAssignments;
-}
-
-export function folderExistsForAccount(
-  store: EspTemplateFolderStore,
-  accountKey: string,
-  folderId: string,
-): boolean {
-  return store.folders.some((folder) => folder.accountKey === accountKey && folder.id === folderId);
+  return getAccountAssignments(accountKey);
 }

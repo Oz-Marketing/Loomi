@@ -119,6 +119,7 @@ model Account {
   audiences               Audience[]
   loomiFlows              LoomiFlow[]
   espTemplates            EspTemplate[]
+  espTemplateFolders      EspTemplateFolder[]
   mediaAssets             MediaAsset[]
   metaAdsPacerPlan        MetaAdsPacerPlan?
   metaAdsPacerAccountNotes MetaAdsPacerAccountNote[]
@@ -545,6 +546,8 @@ model EspTemplate {
   status       String    @default("draft")
   editorType   String? // 'visual' | 'code'
   thumbnailUrl String?
+  folderId     String?
+  folder       EspTemplateFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
   lastSyncedAt DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -552,6 +555,25 @@ model EspTemplate {
   @@unique([accountKey, provider, remoteId])
   @@index([accountKey])
   @@index([provider])
+  @@index([folderId])
+}
+
+model EspTemplateFolder {
+  id         String   @id @default(cuid())
+  accountKey String
+  account    Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  name       String
+  parentId   String?
+  parent     EspTemplateFolder?  @relation("FolderParent", fields: [parentId], references: [id], onDelete: SetNull)
+  children   EspTemplateFolder[] @relation("FolderParent")
+  remoteId   String? // GHL remote folder ID (set when synced from ESP)
+  templates  EspTemplate[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([accountKey])
+  @@index([parentId])
+  @@unique([accountKey, remoteId])
 }
 
 // ─────────────────────────────────────────────────────

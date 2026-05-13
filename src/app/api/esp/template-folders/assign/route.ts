@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import {
-  readEspTemplateFolderStore,
-  writeEspTemplateFolderStore,
   assignTemplatesToFolder,
   folderExistsForAccount,
   getAccountAssignments,
@@ -44,17 +42,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'templateIds are required' }, { status: 400 });
     }
 
-    const store = readEspTemplateFolderStore();
-    if (folderId && !folderExistsForAccount(store, accountKey, folderId)) {
+    if (folderId && !(await folderExistsForAccount(accountKey, folderId))) {
       return NextResponse.json({ error: 'Target folder not found' }, { status: 404 });
     }
 
-    assignTemplatesToFolder(store, accountKey, templateIds, folderId);
-    writeEspTemplateFolderStore(store);
-
-    return NextResponse.json({
-      assignments: getAccountAssignments(store, accountKey),
-    });
+    const assignments = await assignTemplatesToFolder(accountKey, templateIds, folderId);
+    return NextResponse.json({ assignments: assignments ?? (await getAccountAssignments(accountKey)) });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

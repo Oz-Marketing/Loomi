@@ -80,7 +80,10 @@ export function isValidPeriod(period: string): boolean {
 
 /** Pull the budget + ads for a single period. */
 export async function fetchPeriodPlan(planId: string, period: string) {
-  const [budget, ads] = await Promise.all([
+  // Pull the parent plan so we can surface the account's markup override
+  // (Account.markup) alongside the period data. The calculator needs it
+  // to translate Client Budget inputs into actual spend.
+  const [budget, ads, plan] = await Promise.all([
     prisma.metaAdsPacerPeriodBudget.findUnique({
       where: { planId_period: { planId, period } },
     }),
@@ -92,10 +95,15 @@ export async function fetchPeriodPlan(planId: string, period: string) {
         activityLog: { orderBy: { createdAt: 'asc' } },
       },
     }),
+    prisma.metaAdsPacerPlan.findUnique({
+      where: { id: planId },
+      select: { account: { select: { markup: true } } },
+    }),
   ]);
   return {
     baseBudgetGoal: budget?.baseBudgetGoal ?? null,
     addedBudgetGoal: budget?.addedBudgetGoal ?? null,
+    markup: plan?.account?.markup ?? null,
     ads: ads.map((ad) => ({
       ...ad,
       activityLog: ad.activityLog.map(attachUrl),

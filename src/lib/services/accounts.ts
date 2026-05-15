@@ -131,6 +131,9 @@ export async function updateAccount(
     branding: string;
     customValues: string;
     accountRepId: string | null;
+    // Pacer markup rate override. `null` clears the override and the
+    // Meta Ads Pacer calculator falls back to its global default.
+    markup: number | null;
   }>,
 ) {
   return prisma.account.update({ where: { key }, data });

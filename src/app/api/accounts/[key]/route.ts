@@ -87,7 +87,7 @@ export async function PATCH(
     }
 
     // Build update payload, converting objects to JSON strings for DB storage
-    const updatePayload: Record<string, string | null | undefined> = {};
+    const updatePayload: Record<string, string | number | null | undefined> = {};
 
     // Simple string fields
     const stringFields = ['dealer', 'category', 'oem', 'email', 'phone', 'salesPhone', 'servicePhone', 'partsPhone', 'address', 'city', 'state', 'postalCode', 'website', 'timezone'] as const;
@@ -100,8 +100,22 @@ export async function PATCH(
 
     // Account rep (nullable foreign key — not a simple string field)
     if ('accountRepId' in body) {
-      (updatePayload as Record<string, string | null | undefined>).accountRepId =
-        body.accountRepId ? String(body.accountRepId) : null;
+      updatePayload.accountRepId = body.accountRepId
+        ? String(body.accountRepId)
+        : null;
+    }
+
+    // Markup rate (nullable Float). Empty string / null / non-numeric
+    // input clears the override so the Pacer falls back to the global
+    // default. We accept either a number or a numeric string from the form.
+    if ('markup' in body) {
+      const raw = body.markup;
+      if (raw === '' || raw === null || raw === undefined) {
+        updatePayload.markup = null;
+      } else {
+        const parsed = typeof raw === 'number' ? raw : Number(raw);
+        updatePayload.markup = Number.isFinite(parsed) ? parsed : null;
+      }
     }
 
     // JSON-serialized fields — deep merge with existing

@@ -98,6 +98,11 @@ model Account {
   logos        String? // JSON: { light, dark, white?, black? }
   branding     String? // JSON: { colors: { primary, secondary, ... }, fonts: { heading, body } }
   customValues String? // JSON: Record<string, { name, value }>
+  // Markup rate used by Meta Ads Pacer budget math: actual spend =
+  // client gross × markup. Falls back to the global default (0.77) when
+  // null. Settable per-account so stores with non-standard markups don't
+  // need code changes.
+  markup       Float?
   espProvider  String // active provider id (must match a registered adapter)
   accountRepId String?
   accountRep   User?    @relation(fields: [accountRepId], references: [id], onDelete: SetNull)

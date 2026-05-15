@@ -230,6 +230,10 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   const [bizWebsite, setBizWebsite] = useState('');
   const [bizTimezone, setBizTimezone] = useState('');
   const [accountRepId, setAccountRepId] = useState<string | null>(null);
+  // Per-account override for the Pacer markup rate. Empty string = use
+  // the global default (0.77). Stored as a free-form string for the input
+  // and parsed at save time so we can distinguish "" (unset) from "0".
+  const [markup, setMarkup] = useState<string>('');
   const [allUsers, setAllUsers] = useState<{ id: string; name: string; title?: string | null; email: string; avatarUrl?: string | null; role?: string; accountKeys?: string[] }[]>([]);
 
   // ── Branding fields ──
@@ -302,6 +306,11 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     setBizTimezone(resolveAccountTimezone(accountData));
     setStorefrontImage(accountData.storefrontImage || accountData.customValues?.storefront_image?.value || '');
     setAccountRepId(accountData.accountRepId ?? null);
+    setMarkup(
+      typeof accountData.markup === 'number' && Number.isFinite(accountData.markup)
+        ? String(accountData.markup)
+        : '',
+    );
     // Logos
     setLogoLight(accountData.logos?.light || '');
     setLogoDark(accountData.logos?.dark || '');
@@ -827,6 +836,9 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
         },
         customValues: Object.keys(customValuesToSave).length > 0 ? customValuesToSave : undefined,
         accountRepId: accountRepId || null,
+        // Markup: empty string clears the override on the server.
+        // Numeric string passes through as-is (parsed server-side).
+        markup: markup.trim() === '' ? null : markup,
         _deleteManaged: deleteManaged, // Tell backend to delete cleared Loomi-managed values in the connected ESP
       };
 
@@ -1356,6 +1368,40 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                       />
                     </div>
                   )}
+                </div>
+
+                <div>
+                  <div className="mb-1.5 flex items-center gap-1.5">
+                    <label className={labelClass} style={{ marginBottom: 0 }}>
+                      Pacer Markup Rate
+                    </label>
+                    <span className="relative inline-flex items-center group">
+                      <QuestionMarkCircleIcon className="w-4 h-4 text-[var(--muted-foreground)]/80 hover:text-[var(--foreground)] transition-colors cursor-help" />
+                      <span className="absolute bottom-full left-1/2 z-[70] mb-1 hidden -translate-x-1/2 group-hover:block group-focus-within:block">
+                        <span className="relative block w-64 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 shadow-xl">
+                          <span className="block text-[11px] leading-4 text-[var(--foreground)]">
+                            Used by the Meta Ads Pacer budget calculator:
+                            actual spend = client billed × markup.
+                          </span>
+                          <span className="mt-1 block text-[10px] leading-4 text-[var(--muted-foreground)]">
+                            Leave blank to use the platform default (0.77).
+                          </span>
+                          <span className="absolute left-1/2 top-full -translate-x-1/2 w-0 h-0 border-x-[6px] border-x-transparent border-t-[7px] border-t-[var(--background)]" />
+                        </span>
+                      </span>
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={markup}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v === '' || /^\d*\.?\d*$/.test(v)) setMarkup(v);
+                    }}
+                    placeholder="0.77"
+                    className={`${inputClass} max-w-[160px]`}
+                  />
                 </div>
 
                 <div>

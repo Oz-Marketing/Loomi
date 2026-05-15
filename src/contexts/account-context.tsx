@@ -78,6 +78,10 @@ export interface AccountData {
     email: string;
     avatarUrl?: string | null;
   } | null;
+  // Per-account markup override for the Meta Ads Pacer calculator.
+  // When null/undefined, the calculator falls back to the global default
+  // (0.77). Actual spend = client gross × markup.
+  markup?: number | null;
 }
 
 export type AccountType =

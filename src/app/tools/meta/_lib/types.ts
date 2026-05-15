@@ -74,6 +74,10 @@ export interface PacerPlan {
   period: string;
   baseBudgetGoal: string | null;
   addedBudgetGoal: string | null;
+  // Per-account markup override (Account.markup). `null` → use the
+  // platform default (MARKUP constant in the calculator). Drives the
+  // gross↔actual conversion in the Budget Calculator's Client Budget mode.
+  markup: number | null;
   ads: PacerAd[];
 }
 

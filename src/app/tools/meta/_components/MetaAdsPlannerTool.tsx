@@ -39,6 +39,7 @@ import {
   CalculatorIcon,
   MagnifyingGlassIcon,
   ScaleIcon,
+  LockClosedIcon,
 } from '@heroicons/react/24/outline';
 import { useSession } from 'next-auth/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -185,6 +186,10 @@ interface PacerPlan {
   period: string;
   baseBudgetGoal: string | null;
   addedBudgetGoal: string | null;
+  // Per-account markup override (Account.markup). `null` → use the
+  // global MARKUP default. Drives the Budget Calculator's Client Budget
+  // mode (gross × markup = actual spend).
+  markup: number | null;
   ads: PacerAd[];
 }
 interface PeriodSummary {
@@ -834,6 +839,38 @@ function MetricBox({
       {sub && (
         <div className="text-[11px] text-[var(--muted-foreground)] mt-0.5">{sub}</div>
       )}
+    </div>
+  );
+}
+
+// Tighter than MetricBox — single-line label + value, no sub text. Used
+// in the Budget Calculator's stat strip where vertical space is
+// precious (5+ stats in one row above a scrollable ad list).
+function CompactStat({
+  label,
+  value,
+  color,
+  title,
+}: {
+  label: string;
+  value: string;
+  color?: string;
+  title?: string;
+}) {
+  return (
+    <div
+      className="bg-[var(--muted)]/40 px-2.5 py-1.5"
+      title={title}
+    >
+      <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] truncate">
+        {label}
+      </div>
+      <div
+        className="text-sm font-bold tabular-nums leading-tight"
+        style={{ color: color ?? 'var(--foreground)' }}
+      >
+        {value}
+      </div>
     </div>
   );
 }
@@ -3825,12 +3862,16 @@ function CopyPlanModal({
  * field. If any ad in the source already has an allocation, prompts before
  * overwriting.
  */
-type AllocationMode = 'even' | 'amount' | 'percent' | 'off';
+type AllocationMode = 'even' | 'amount' | 'percent' | 'off' | 'client';
 
 interface AdAllocSpec {
   mode: AllocationMode;
   amount: string; // when mode === 'amount'
   percent: string; // when mode === 'percent'
+  // when mode === 'client': the gross/billable amount the user types.
+  // computeAllocations multiplies it by the effective markup to produce
+  // the actual-spend value written on Apply.
+  clientAmount: string;
   included: boolean; // when false the row is ignored — its current allocation stays put
 }
 
@@ -3838,61 +3879,60 @@ const DEFAULT_SPEC: AdAllocSpec = {
   mode: 'even',
   amount: '',
   percent: '',
+  clientAmount: '',
   included: true,
 };
 
 /**
- * Builds the per-ad allocation map for the Budget Calculator. Skipped rows
- * (`included === false`) are left out of the result so the parent doesn't
- * overwrite their existing allocation; their saved allocation still counts
- * against the total so "even" distribution among included rows respects
- * the leftover budget. Mode "off" snaps the new allocation to whatever's
- * already been spent — that's how you wind down an ad mid-flight without
- * stealing money from rows you're keeping live.
+ * Builds the per-ad allocation map for the Budget Calculator.
+ *
+ * Priority order per row:
+ *   1. Status "Off" / "Completed Run" → locked; allocation snaps to
+ *      `pacerActual` (the Pacer page's tracked spend). Its unspent
+ *      portion (alloc − pacerActual) feeds the redistribution pool.
+ *   2. Mode "off" → same lock behavior (explicit user choice).
+ *   3. Mode "amount" → explicit actual-spend dollar value.
+ *   4. Mode "client" → gross/billable dollars × `markup` = actual spend.
+ *      Used when the rep is given a client-facing number instead of the
+ *      internal actual-spend number.
+ *   5. Mode "percent" → percentage of `pool`. In mid-flight the pool is
+ *      Remaining-to-Split (Initial − Locked Spend − Excluded Preserved);
+ *      in setup mode the pool is just the Total Budget.
+ *   6. Mode "even" → skipped here; user must click Spread to convert it
+ *      to amount mode at that moment.
+ * Excluded rows (`included === false`) are left out entirely — the parent
+ * preserves their existing allocation on Apply.
  */
 function computeAllocations(
   ads: PacerAd[],
-  totalBudget: number,
+  pool: number,
+  markup: number,
   specs: Record<string, AdAllocSpec>,
 ): Record<string, number> {
   const out: Record<string, number> = {};
-  let locked = 0;
-  let evenCount = 0;
-
-  // First pass — handle locked rows (excluded, off, amount, percent) and
-  // tally how much of the total budget is reserved.
   for (const ad of ads) {
     const spec = specs[ad.id] ?? DEFAULT_SPEC;
-    if (!spec.included) {
-      // Excluded rows keep their existing allocation; subtract it from the
-      // pool so even-mode rows split only what's truly left.
-      locked += num(ad.allocation) ?? 0;
+    if (!spec.included) continue;
+
+    const statusDonor =
+      ad.adStatus === 'Off' || ad.adStatus === 'Completed Run';
+    if (statusDonor) {
+      out[ad.id] = num(ad.pacerActual) ?? 0;
       continue;
     }
+
     if (spec.mode === 'off') {
-      const v = num(ad.pacerActual) ?? 0;
-      out[ad.id] = v;
-      locked += v;
+      out[ad.id] = num(ad.pacerActual) ?? 0;
     } else if (spec.mode === 'amount') {
-      const v = num(spec.amount) ?? 0;
-      out[ad.id] = v;
-      locked += v;
+      out[ad.id] = num(spec.amount) ?? 0;
+    } else if (spec.mode === 'client') {
+      const gross = num(spec.clientAmount) ?? 0;
+      out[ad.id] = gross * markup;
     } else if (spec.mode === 'percent') {
       const pct = num(spec.percent) ?? 0;
-      const v = (totalBudget * pct) / 100;
-      out[ad.id] = v;
-      locked += v;
-    } else {
-      evenCount++;
+      out[ad.id] = (pool * pct) / 100;
     }
-  }
-
-  // Second pass — split the remainder across included "even" rows.
-  const remainder = Math.max(0, totalBudget - locked);
-  const perEven = evenCount > 0 ? remainder / evenCount : 0;
-  for (const ad of ads) {
-    const spec = specs[ad.id] ?? DEFAULT_SPEC;
-    if (spec.included && spec.mode === 'even') out[ad.id] = perEven;
+    // even mode: skipped — user must click Spread to assign values.
   }
   return out;
 }
@@ -3907,15 +3947,27 @@ function BudgetCalculatorModal({
   onApply: (allocationsById: Record<string, number>) => void;
 }) {
   const [source, setSource] = useState<'base' | 'added'>('base');
+  // Setup = fresh planning (clean slate, no spent column).
+  // Mid-flight = adjusting allocations after some spend has happened (shows
+  // spent per row, exposes "Off — lock at spent" to wind ads down and free
+  // their remaining budget for the rest).
+  const [calcMode, setCalcMode] = useState<'setup' | 'midflight'>('setup');
 
   const sourceAds = useMemo(
     () => plan.ads.filter((a) => a.budgetSource === source),
     [plan.ads, source],
   );
+  // Effective markup — per-account override (Account.markup) when set,
+  // otherwise the global default. Used here to convert the gross client
+  // goal into the actual-spend default, and below for Client Budget mode.
+  const effectiveMarkup =
+    plan.markup != null && Number.isFinite(plan.markup) && plan.markup > 0
+      ? plan.markup
+      : MARKUP;
   const goal =
     source === 'base' ? num(plan.baseBudgetGoal) : num(plan.addedBudgetGoal);
   const defaultBudget =
-    goal != null ? Math.round(goal * MARKUP * 100) / 100 : 0;
+    goal != null ? Math.round(goal * effectiveMarkup * 100) / 100 : 0;
 
   // Per-source budget input (string, free-form). Falls back to the source's
   // actual-spend budget when blank.
@@ -3927,41 +3979,159 @@ function BudgetCalculatorModal({
   const totalBudget =
     budgetInput.trim() === '' ? defaultBudget : num(budgetInput) ?? 0;
 
-  // Per-ad allocation specs, keyed by ad id. Seeded from each ad's existing
-  // `allocation` so rows the user has already filled in open in "Set amount"
-  // mode with that value pre-populated — preserving their work instead of
-  // forcing a from-scratch redistribution. Every row starts "included" so the
-  // Apply button writes its computed allocation; users opt out by unchecking.
-  const [specs, setSpecs] = useState<Record<string, AdAllocSpec>>(() => {
-    const seed: Record<string, AdAllocSpec> = {};
-    for (const ad of plan.ads) {
-      const existing = num(ad.allocation);
-      if (existing != null && existing > 0) {
-        seed[ad.id] = {
+  // (Per-row "Already Spent" inputs live on each AdAllocSpec; the pool
+  // total is summed below in `totalSpent`.)
+
+  // Per-ad allocation specs, keyed by ad id.
+  // * Setup mode: pre-fill existing allocations in "Set amount" mode so
+  //   you can edit the existing plan.
+  // * Mid-flight mode: blank slate — every row defaults to even mode (no
+  //   pre-fill) because you're redistributing the leftover pool, not
+  //   editing the previous plan. The existing allocation per ad still
+  //   shows as the "Allocated $X" carryover text in the row body.
+  const seedSpecsForMode = useCallback(
+    (mode: 'setup' | 'midflight'): Record<string, AdAllocSpec> => {
+      // Mid-flight: blank slate — donor detection happens at compute time
+      // (via adStatus), so no per-row seeding is needed here. Every row
+      // defaults to even mode for receivers; donors are auto-handled by
+      // computeAllocations regardless of mode.
+      if (mode === 'midflight') return {};
+      // Setup: pre-fill existing allocations in amount mode so the user
+      // can edit the plan in place.
+      const seed: Record<string, AdAllocSpec> = {};
+      for (const ad of plan.ads) {
+        const existing = num(ad.allocation);
+        if (existing != null && existing > 0) {
+          seed[ad.id] = {
+            mode: 'amount',
+            amount: existing.toFixed(2),
+            percent: '',
+            clientAmount: '',
+            included: true,
+          };
+        }
+      }
+      return seed;
+    },
+    [plan.ads],
+  );
+  const [specs, setSpecs] = useState<Record<string, AdAllocSpec>>(() =>
+    seedSpecsForMode(calcMode),
+  );
+
+  // Frozen snapshot of allocations at modal open — feeds "Initially
+  // Allocated." Lazy useState initializer = computed once, never overwritten.
+  const [initialAllocations] = useState<Map<string, number>>(() => {
+    const m = new Map<string, number>();
+    for (const ad of plan.ads) m.set(ad.id, num(ad.allocation) ?? 0);
+    return m;
+  });
+
+  // Helpers — donor = ad status is Off / Completed Run (it's finalized,
+  // locked at pacerActual on Apply). Receiver = anything else, the active
+  // ads that can absorb the freed budget.
+  const isDonor = (a: PacerAd) =>
+    a.adStatus === 'Off' || a.adStatus === 'Completed Run';
+
+  // Source pool summary — computed before allocations so the percent-mode
+  // math in computeAllocations bases off the actual redistribution pool
+  // (Remaining to Split), not the gross Total Budget.
+  // * Initially Allocated = what these ads were set to when the modal opened.
+  // * Locked Spend         = sum of pacerActual for status-locked ads
+  //                         (Off / Completed Run). Pulled from the Pacer
+  //                         page; not editable here.
+  // * Excluded Preserved  = sum of existing allocations for unchecked rows
+  //                         (they stay untouched on Apply, so their dollars
+  //                         are reserved out of the pool).
+  // * Remaining to Split  = Mid-flight: Initial − Locked Spend − Excluded.
+  //                         Setup mode: just the Total Budget.
+  const initiallyAllocated = sourceAds.reduce(
+    (s, a) => s + (initialAllocations.get(a.id) ?? 0),
+    0,
+  );
+  const lockedSpend =
+    calcMode === 'midflight'
+      ? sourceAds.reduce(
+          (s, a) => (isDonor(a) ? s + (num(a.pacerActual) ?? 0) : s),
+          0,
+        )
+      : 0;
+  const excludedPreserved =
+    calcMode === 'midflight'
+      ? sourceAds.reduce((s, a) => {
+          const spec = specs[a.id] ?? DEFAULT_SPEC;
+          return spec.included ? s : s + (num(a.allocation) ?? 0);
+        }, 0)
+      : 0;
+  const remainingToSplit =
+    calcMode === 'midflight'
+      ? Math.max(0, initiallyAllocated - lockedSpend - excludedPreserved)
+      : totalBudget;
+
+  // Allocations — uses remainingToSplit (not totalBudget) as the base for
+  // percent-mode rows, so "Set 75%" means 75% of the redistribution pool
+  // the user is actually distributing, not 75% of the gross ceiling.
+  // effectiveMarkup (declared above) powers the Client Budget mode.
+  const allocations = useMemo(
+    () => computeAllocations(sourceAds, remainingToSplit, effectiveMarkup, specs),
+    [sourceAds, remainingToSplit, effectiveMarkup, specs],
+  );
+
+  // Active-row commitments — what the user has explicitly typed for
+  // receivers (amount/percent/off). Donor rows are auto-locked via
+  // status and already reflected in lockedSpend. Excluded rows preserve
+  // their existing allocation. Even-mode receiver rows skip here — they
+  // only get a value once the user clicks Spread.
+  const enteredSoFar = sourceAds.reduce((s, a) => {
+    const spec = specs[a.id] ?? DEFAULT_SPEC;
+    if (!spec.included) return s;
+    if (isDonor(a)) return s;
+    const v = allocations[a.id];
+    return v == null ? s : s + v;
+  }, 0);
+  const stillToAllocate = remainingToSplit - enteredSoFar;
+  const overAllocated = stillToAllocate < -0.005;
+  // overBudget reuses the same semantic as before so the existing Apply
+  // guard ("can't apply when over") still kicks in.
+  const overBudget = overAllocated;
+
+  // Spread state — only included, non-donor, even-mode rows are
+  // candidates for the remainder. Donors are locked at pacerActual and
+  // must not be overwritten by the spread.
+  const evenRowsForSpread = sourceAds.filter((a) => {
+    const spec = specs[a.id] ?? DEFAULT_SPEC;
+    if (isDonor(a)) return false;
+    return spec.included && spec.mode === 'even';
+  });
+  const spreadPool = Math.max(0, stillToAllocate);
+  // Mid-flight mode gates Spread on there being at least one donor (an
+  // ad with status Off or Completed Run that contributed to the pool).
+  // Without a donor, there's nothing being freed and the pool is just
+  // the existing allocations. Setup mode has no donor concept, so
+  // Spread is always available there.
+  const spentGateOk = calcMode !== 'midflight' || lockedSpend > 0;
+  const canSpread =
+    evenRowsForSpread.length > 0 && spreadPool > 0.005 && spentGateOk;
+  const perEvenPreview = canSpread ? spreadPool / evenRowsForSpread.length : 0;
+
+  const handleSpread = () => {
+    if (!canSpread) return;
+    setSpecs((prev) => {
+      const next = { ...prev };
+      for (const ad of evenRowsForSpread) {
+        const existing = next[ad.id] ?? DEFAULT_SPEC;
+        next[ad.id] = {
+          ...existing,
           mode: 'amount',
-          amount: existing.toFixed(2),
+          amount: perEvenPreview.toFixed(2),
           percent: '',
+          clientAmount: existing.clientAmount,
           included: true,
         };
       }
-    }
-    return seed;
-  });
-
-  const allocations = useMemo(
-    () => computeAllocations(sourceAds, totalBudget, specs),
-    [sourceAds, totalBudget, specs],
-  );
-  // Allocated total mirrors what the calculator will write — excluded rows
-  // contribute their current allocation (preserved on Apply) so the header
-  // metric matches the dollars actually committed to this source.
-  const allocatedTotal = sourceAds.reduce((s, a) => {
-    const spec = specs[a.id] ?? DEFAULT_SPEC;
-    if (!spec.included) return s + (num(a.allocation) ?? 0);
-    return s + (allocations[a.id] ?? 0);
-  }, 0);
-  const remaining = totalBudget - allocatedTotal;
-  const overBudget = remaining < -0.005;
+      return next;
+    });
+  };
 
   // Any included "Set amount" row whose value sits below its already-spent
   // amount blocks Apply — you can't allocate less than you've already paid.
@@ -3974,6 +4144,22 @@ function BudgetCalculatorModal({
     return v < spent - 0.005;
   });
 
+  // Switching modes re-seeds the row state from scratch:
+  // * → Setup:      restore the existing-allocation pre-fills so the user
+  //                 can edit the plan.
+  // * → Mid-flight: clear all pre-fills so the rows default to even mode,
+  //                 ready to absorb the post-spent remainder.
+  // The first mount also runs this once with `calcMode === 'setup'`, which
+  // matches the useState initializer — no-op effectively.
+  const didInitSpecsRef = useRef(false);
+  useEffect(() => {
+    if (!didInitSpecsRef.current) {
+      didInitSpecsRef.current = true;
+      return;
+    }
+    setSpecs(seedSpecsForMode(calcMode));
+  }, [calcMode, seedSpecsForMode]);
+
   const updateSpec = (adId: string, patch: Partial<AdAllocSpec>) =>
     setSpecs((prev) => ({
       ...prev,
@@ -3981,6 +4167,7 @@ function BudgetCalculatorModal({
         mode: prev[adId]?.mode ?? 'even',
         amount: prev[adId]?.amount ?? '',
         percent: prev[adId]?.percent ?? '',
+        clientAmount: prev[adId]?.clientAmount ?? '',
         included: prev[adId]?.included ?? true,
         ...patch,
       },
@@ -3994,17 +4181,18 @@ function BudgetCalculatorModal({
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  // Count of rows the Apply button will actually write to (i.e. included).
+  // Count of rows the Apply button will actually write to — only rows
+  // with a computed allocation (amount/percent/off). Even-mode rows are
+  // skipped until the user spreads them, so they don't count here.
   const includedCount = sourceAds.filter(
-    (a) => (specs[a.id] ?? DEFAULT_SPEC).included,
+    (a) => allocations[a.id] != null,
   ).length;
 
   const handleApply = () => {
-    // Only ask about overwrite for included rows that already have an
-    // allocation — excluded rows are explicitly being left alone.
+    // Only ask about overwrite for rows that will actually be written AND
+    // already have an allocation. Even-mode rows are skipped on Apply.
     const adsWithExisting = sourceAds.filter((a) => {
-      const spec = specs[a.id] ?? DEFAULT_SPEC;
-      if (!spec.included) return false;
+      if (allocations[a.id] == null) return false;
       const existing = num(a.allocation);
       return existing != null && existing > 0;
     });
@@ -4028,19 +4216,17 @@ function BudgetCalculatorModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="glass-modal w-full max-w-3xl rounded-xl p-5 max-h-[90vh] flex flex-col"
+        className="glass-modal w-full max-w-3xl rounded-xl p-5 max-h-[95vh] flex flex-col"
       >
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-base font-bold text-[var(--foreground)]">
               Budget Calculator
             </h3>
-            <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-              Spread a total budget across the {source === 'base' ? 'Base' : 'Added'}{' '}
-              ads in this period. Existing row allocations are pre-filled. Use the
-              row checkbox to leave an ad untouched, or set the mode to{' '}
-              <span className="font-semibold">Off — lock at spent</span> to wind
-              down mid-flight and free its remaining budget for others.
+            <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+              {calcMode === 'setup'
+                ? `Plan a fresh allocation across the ${source === 'base' ? 'Base' : 'Added'} ads.`
+                : `Reallocate after spending. Donors (Off / Completed Run) auto-lock at Pacer spend; their freed budget redistributes to active ads.`}
             </p>
           </div>
           <button
@@ -4053,33 +4239,69 @@ function BudgetCalculatorModal({
           </button>
         </div>
 
-        {/* Source tabs */}
-        <div className="flex rounded-lg border border-[var(--border)] bg-[var(--input)] overflow-hidden mb-4 self-start">
+        {/* Mode + Source tabs — paired on one row so they don't each
+            consume a full strip's worth of vertical space. */}
+        <div className="flex items-center flex-wrap gap-2 mb-3">
+        <div className="flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-1 self-start">
+          {(
+            [
+              { key: 'setup', label: 'Initial Setup' },
+              { key: 'midflight', label: 'Mid-flight Reallocation' },
+            ] as const
+          ).map((m) => {
+            const active = calcMode === m.key;
+            return (
+              <button
+                key={m.key}
+                type="button"
+                onClick={() => setCalcMode(m.key)}
+                className={`px-3 py-1 text-[11px] font-medium rounded transition-colors ${
+                  active
+                    ? 'bg-[var(--primary)] text-white'
+                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                {m.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Source tabs (Base / Added) — sit on the same row as Mode
+            tabs to save vertical space. Active fill uses each source's
+            accent color (Base = blue, Added = green). */}
+        <div className="flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-1 self-start">
           {(['base', 'added'] as const).map((s) => {
             const active = source === s;
+            const count = plan.ads.filter((a) => a.budgetSource === s).length;
             const accent = s === 'base' ? COLORS.base : COLORS.added;
             return (
               <button
                 key={s}
                 type="button"
                 onClick={() => setSource(s)}
-                className="px-4 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-colors"
-                style={{
-                  background: active ? `${accent}33` : 'transparent',
-                  color: active ? accent : 'var(--muted-foreground)',
-                  borderRight:
-                    s === 'base' ? '1px solid var(--border)' : 'none',
-                }}
+                className={`px-3 py-1 text-[11px] font-medium rounded transition-colors ${
+                  active
+                    ? 'text-white'
+                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+                style={active ? { background: accent } : undefined}
               >
-                {s === 'base' ? 'Base' : 'Added'} ({plan.ads.filter((a) => a.budgetSource === s).length})
+                {s === 'base' ? 'Base' : 'Added'} ({count})
               </button>
             );
           })}
         </div>
+        </div>
 
-        {/* Total budget + summary */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
-          <Field label="Total Budget (Actual Spend)">
+        {/* Total budget input + compact stat strip — one tight row each
+            to keep the modal header short, so the ad list below has more
+            room. Detailed sub-text is dropped here (tooltip on hover). */}
+        <div className="flex items-center gap-3 mb-2">
+          <label className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] whitespace-nowrap">
+            Total Budget
+          </label>
+          <div className="flex-1 max-w-[200px]">
             <DollarInput
               value={budgetInput}
               onChange={(v) =>
@@ -4087,37 +4309,109 @@ function BudgetCalculatorModal({
               }
               placeholder={defaultBudget > 0 ? defaultBudget.toFixed(2) : '0.00'}
             />
-            {defaultBudget > 0 && budgetInput.trim() === '' && (
-              <p className="text-[10px] text-[var(--muted-foreground)] mt-1">
-                Defaulting to {fmt(defaultBudget)} from the {source === 'base' ? 'Base' : 'Added'} budget goal
-              </p>
-            )}
-          </Field>
-          <MetricBox
-            label="Allocated"
-            value={fmt(allocatedTotal)}
-            sub={`of ${fmt(totalBudget)}`}
+          </div>
+          {defaultBudget > 0 && budgetInput.trim() === '' && (
+            <span className="text-[10px] text-[var(--muted-foreground)] italic">
+              defaulting to {fmt(defaultBudget)} from goal
+            </span>
+          )}
+        </div>
+
+        {/* Compact stat strip — Mid-flight: 5 cells (Initial, Locked Spend,
+            Remaining, Entered, Still). Setup: 2 cells (Entered, Still). */}
+        <div
+          className={`grid gap-px mb-3 rounded-lg bg-[var(--border)] overflow-hidden ${
+            calcMode === 'midflight'
+              ? 'grid-cols-2 md:grid-cols-5'
+              : 'grid-cols-2'
+          }`}
+        >
+          {calcMode === 'midflight' && (
+            <>
+              <CompactStat
+                label="Initial"
+                value={fmt(initiallyAllocated)}
+                title={`${sourceAds.length} ${source === 'base' ? 'Base' : 'Added'} ad${sourceAds.length === 1 ? '' : 's'}`}
+              />
+              <CompactStat
+                label="Locked Spend"
+                value={fmt(lockedSpend)}
+                title={
+                  lockedSpend > 0
+                    ? 'Pacer spend on Off / Completed Run ads (locked at this value on Apply)'
+                    : 'No locked ads yet — mark an ad Off or Completed Run'
+                }
+              />
+              <CompactStat
+                label="Remaining"
+                value={fmt(remainingToSplit)}
+                title={
+                  excludedPreserved > 0
+                    ? `${fmt(initiallyAllocated)} − ${fmt(lockedSpend)} locked − ${fmt(excludedPreserved)} preserved`
+                    : lockedSpend > 0
+                      ? `${fmt(initiallyAllocated)} − ${fmt(lockedSpend)} locked`
+                      : 'Nothing freed yet'
+                }
+              />
+            </>
+          )}
+          <CompactStat
+            label="Entered"
+            value={fmt(enteredSoFar)}
+            title={`Out of ${fmt(remainingToSplit)} to split`}
             color={
-              overBudget
+              overAllocated
                 ? COLORS.error
-                : remaining < 0.005
+                : stillToAllocate < 0.005
                   ? COLORS.success
                   : COLORS.warn
             }
           />
-          <MetricBox
-            label={remaining >= 0 ? 'Remaining' : 'Over budget by'}
-            value={fmt(Math.abs(remaining))}
-            sub={
-              overBudget
-                ? 'reduce locked rows or raise total'
-                : remaining < 0.005
-                  ? 'fully allocated'
-                  : 'splits across unlocked rows'
+          <CompactStat
+            label={overAllocated ? 'Over' : 'Unallocated'}
+            value={fmt(Math.abs(stillToAllocate))}
+            title={
+              overAllocated
+                ? 'Reduce locked rows or raise total'
+                : stillToAllocate < 0.005
+                  ? 'Fully allocated'
+                  : evenRowsForSpread.length > 0
+                    ? `${evenRowsForSpread.length} row${evenRowsForSpread.length === 1 ? '' : 's'} waiting for Spread`
+                    : 'Not assigned to any ad'
             }
-            color={overBudget ? COLORS.error : undefined}
+            color={overAllocated ? COLORS.error : undefined}
           />
         </div>
+
+        {/* Spread button — only shows when there's a positive remainder
+            AND at least one included even-mode row to absorb it. Click
+            converts those rows to amount mode at the computed per-row
+            share. No auto-recalc afterward. */}
+        {canSpread && (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-1.5 mb-2">
+            <div className="text-[11px] text-[var(--muted-foreground)] min-w-0 truncate">
+              <span className="font-semibold text-[var(--foreground)]">
+                {fmt(spreadPool)}
+              </span>{' '}
+              across{' '}
+              <span className="font-semibold text-[var(--foreground)]">
+                {evenRowsForSpread.length}
+              </span>{' '}
+              row{evenRowsForSpread.length === 1 ? '' : 's'} ={' '}
+              <span className="font-semibold text-[var(--foreground)]">
+                {fmt(perEvenPreview)}
+              </span>{' '}
+              each
+            </div>
+            <button
+              type="button"
+              onClick={handleSpread}
+              className="px-3 py-1 text-[11px] font-semibold rounded-md bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 transition-colors whitespace-nowrap"
+            >
+              Spread remainder
+            </button>
+          </div>
+        )}
 
         {/* Ad list */}
         <div className="themed-scrollbar overflow-y-auto -mx-2 px-2 flex-1 min-h-0">
@@ -4140,6 +4434,13 @@ function BudgetCalculatorModal({
                   ad.budgetType === 'Daily' && flightDays > 0
                     ? allocated / flightDays
                     : null;
+                // Donor rows are auto-handled (status Off / Completed Run)
+                // — their allocation locks at pacerActual regardless of mode.
+                // The mode/value controls are inert for these.
+                const adIsDonor =
+                  calcMode === 'midflight' &&
+                  (ad.adStatus === 'Off' ||
+                    ad.adStatus === 'Completed Run');
                 // Block applying an allocation below what's already been spent;
                 // the input flag turns red and the modal-level Apply disables.
                 const underSpent =
@@ -4182,103 +4483,178 @@ function BudgetCalculatorModal({
                         {flightDays > 0 ? ` · ${flightDays} days` : ''}
                       </div>
                       <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
-                        Spent <span className="font-semibold">{fmt(currentSpent)}</span>
-                        {currentAllocation > 0 && (
+                        {currentAllocation > 0 ? (
                           <>
-                            {' · '}Allocated{' '}
-                            <span className="font-semibold">{fmt(currentAllocation)}</span>
+                            Allocated{' '}
+                            <span className="font-semibold">
+                              {fmt(currentAllocation)}
+                            </span>
                           </>
+                        ) : (
+                          <span className="italic">no allocation yet</span>
                         )}
                       </div>
-                    </div>
-                    <select
-                      value={spec.mode}
-                      disabled={!spec.included}
-                      onChange={(e) =>
-                        updateSpec(ad.id, {
-                          mode: e.target.value as AllocationMode,
-                        })
-                      }
-                      className={`${inputClass} text-[11px] py-1.5 disabled:opacity-50`}
-                    >
-                      <option value="even">Distribute evenly</option>
-                      <option value="amount">Set amount</option>
-                      <option value="percent">Set %</option>
-                      <option value="off">Off — lock at spent</option>
-                    </select>
-                    <div>
-                      {spec.included && spec.mode === 'amount' && (
-                        <div>
-                          <DollarInput
-                            value={spec.amount}
-                            onChange={(v) => updateSpec(ad.id, { amount: v })}
-                            placeholder="0.00"
-                          />
-                          {underSpent && (
-                            <p
-                              className="text-[10px] mt-0.5"
-                              style={{ color: COLORS.error }}
-                            >
-                              Below {fmt(currentSpent)} already spent
-                            </p>
-                          )}
-                        </div>
-                      )}
-                      {spec.included && spec.mode === 'percent' && (
-                        <div className="relative">
-                          <input
-                            type="text"
-                            inputMode="decimal"
-                            value={spec.percent}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              if (v === '' || /^\d*\.?\d*$/.test(v)) {
-                                updateSpec(ad.id, { percent: v });
-                              }
-                            }}
-                            placeholder="0"
-                            className={`${inputClass} pr-7`}
-                          />
-                          <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--muted-foreground)] pointer-events-none">
-                            %
+                      {calcMode === 'midflight' && (
+                        <div className="mt-1.5 text-[10px] text-[var(--muted-foreground)]">
+                          Spent{' '}
+                          <span className="font-semibold text-[var(--foreground)] tabular-nums">
+                            {fmt(currentSpent)}
                           </span>
-                        </div>
-                      )}
-                      {spec.included && spec.mode === 'even' && (
-                        <div className="text-[10px] text-[var(--muted-foreground)] italic px-2 py-1.5">
-                          shares remainder
-                        </div>
-                      )}
-                      {spec.included && spec.mode === 'off' && (
-                        <div className="text-[10px] text-[var(--muted-foreground)] italic px-2 py-1.5">
-                          locked at {fmt(currentSpent)}
-                        </div>
-                      )}
-                      {!spec.included && (
-                        <div className="text-[10px] text-[var(--muted-foreground)] italic px-2 py-1.5">
-                          left as-is
+                          <span className="ml-1 italic">(from Pacer)</span>
                         </div>
                       )}
                     </div>
-                    <div className="text-right">
+                    {adIsDonor ? (
                       <div
-                        className="text-sm font-bold"
-                        style={{
-                          color: !spec.included
-                            ? 'var(--muted-foreground)'
-                            : ad.budgetSource === 'base'
-                              ? COLORS.base
-                              : COLORS.added,
-                        }}
+                        className="flex items-center gap-1 px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--muted)]/60 text-[11px] text-[var(--muted-foreground)]"
+                        title={`Locked — status is ${ad.adStatus}. Allocation locks at Pacer spend on Apply.`}
                       >
-                        {fmt(spec.included ? allocated : currentAllocation)}
+                        <LockClosedIcon className="w-3 h-3 flex-shrink-0" />
+                        <span>Locked</span>
                       </div>
-                      {dailyRate != null && spec.included && (
-                        <div className="text-[10px] text-[var(--muted-foreground)]">
-                          {fmt(dailyRate)}/day · {flightDays}d
+                    ) : (
+                      <select
+                        value={spec.mode}
+                        disabled={!spec.included}
+                        onChange={(e) =>
+                          updateSpec(ad.id, {
+                            mode: e.target.value as AllocationMode,
+                          })
+                        }
+                        className={`${inputClass} text-[11px] py-1.5 disabled:opacity-50`}
+                      >
+                        <option value="even">Distribute evenly</option>
+                        <option value="amount">Set amount</option>
+                        <option value="client">Client Budget (gross)</option>
+                        <option value="percent">Set %</option>
+                        {calcMode === 'midflight' && (
+                          <option value="off">Off — lock at spent</option>
+                        )}
+                      </select>
+                    )}
+                    <div>
+                      {adIsDonor ? (
+                        <div className="text-[10px] text-[var(--muted-foreground)] italic px-2 py-1.5">
+                          {fmt(currentSpent)} locked
                         </div>
+                      ) : (
+                        <>
+                          {spec.included && spec.mode === 'amount' && (
+                            <div>
+                              <DollarInput
+                                value={spec.amount}
+                                onChange={(v) => updateSpec(ad.id, { amount: v })}
+                                placeholder="0.00"
+                              />
+                              {underSpent && (
+                                <p
+                                  className="text-[10px] mt-0.5"
+                                  style={{ color: COLORS.error }}
+                                >
+                                  Below {fmt(currentSpent)} already spent
+                                </p>
+                              )}
+                            </div>
+                          )}
+                          {spec.included && spec.mode === 'percent' && (
+                            <div className="relative">
+                              <input
+                                type="text"
+                                inputMode="decimal"
+                                value={spec.percent}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  if (v === '' || /^\d*\.?\d*$/.test(v)) {
+                                    updateSpec(ad.id, { percent: v });
+                                  }
+                                }}
+                                placeholder="0"
+                                className={`${inputClass} pr-7`}
+                              />
+                              <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--muted-foreground)] pointer-events-none">
+                                %
+                              </span>
+                            </div>
+                          )}
+                          {spec.included && spec.mode === 'client' && (
+                            <div>
+                              <DollarInput
+                                value={spec.clientAmount}
+                                onChange={(v) =>
+                                  updateSpec(ad.id, { clientAmount: v ?? '' })
+                                }
+                                placeholder="0.00"
+                              />
+                              {spec.clientAmount.trim() !== '' && (
+                                <p className="text-[10px] mt-0.5 text-[var(--muted-foreground)]">
+                                  × {effectiveMarkup} ={' '}
+                                  <span className="font-semibold text-[var(--foreground)]">
+                                    {fmt(
+                                      (num(spec.clientAmount) ?? 0) *
+                                        effectiveMarkup,
+                                    )}
+                                  </span>{' '}
+                                  actual
+                                </p>
+                              )}
+                            </div>
+                          )}
+                          {spec.included && spec.mode === 'even' && (
+                            <div className="text-[10px] text-[var(--muted-foreground)] italic px-2 py-1.5">
+                              waiting for Spread
+                            </div>
+                          )}
+                          {spec.included && spec.mode === 'off' && (
+                            <div className="text-[10px] text-[var(--muted-foreground)] italic px-2 py-1.5">
+                              locked at {fmt(currentSpent)}
+                            </div>
+                          )}
+                          {!spec.included && (
+                            <div className="text-[10px] text-[var(--muted-foreground)] italic px-2 py-1.5">
+                              left as-is
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
+                    {adIsDonor && spec.included ? (
+                      <div className="text-right">
+                        <div
+                          className="text-sm font-bold"
+                          style={{ color: COLORS.success }}
+                        >
+                          {fmt(currentAllocation - currentSpent)}
+                        </div>
+                        <div className="text-[10px] text-[var(--muted-foreground)]">
+                          available
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="text-right">
+                        <div
+                          className="text-sm font-bold"
+                          style={{
+                            color:
+                              !spec.included || spec.mode === 'even'
+                                ? 'var(--muted-foreground)'
+                                : ad.budgetSource === 'base'
+                                  ? COLORS.base
+                                  : COLORS.added,
+                          }}
+                        >
+                          {!spec.included
+                            ? fmt(currentAllocation)
+                            : spec.mode === 'even'
+                              ? '—'
+                              : fmt(allocated)}
+                        </div>
+                        {dailyRate != null && spec.included && (
+                          <div className="text-[10px] text-[var(--muted-foreground)]">
+                            {fmt(dailyRate)}/day · {flightDays}d
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -4524,7 +4900,46 @@ function AdPlannerPanel({
       destructive: true,
     });
     if (!ok) return;
-    Array.from(selectedAdIds).forEach((id) => removeAd(id));
+
+    // Calling removeAd(id) in a forEach loop creates N separate onChange
+    // calls, each reading `plan.ads` from the stale closure — React batches
+    // them and the last call wins, leaving N-1 ads still alive. Snapshot
+    // the removed rows once, then do a single batched state update.
+    const idSet = selectedAdIds;
+    const removedItems: Array<{ ad: PacerAd; idx: number }> = [];
+    plan.ads.forEach((ad, idx) => {
+      if (idSet.has(ad.id)) removedItems.push({ ad, idx });
+    });
+    if (removedItems.length === 0) {
+      clearSelection();
+      return;
+    }
+
+    onChange({
+      ...plan,
+      ads: plan.ads.filter((a) => !idSet.has(a.id)),
+    });
+    if (editor?.mode === 'edit' && idSet.has(editor.adId)) setEditor(null);
+
+    // Per-row undo toasts, same UX as single-row delete — undo uses
+    // planRef.current so each one splices into the latest state.
+    for (const { ad: removed, idx } of removedItems) {
+      toast.success(`Removed "${removed.name || 'Untitled Ad'}"`, {
+        duration: 6000,
+        action: {
+          label: 'Undo',
+          onClick: () => {
+            const current = planRef.current;
+            if (current.ads.some((a) => a.id === removed.id)) return;
+            const next = [...current.ads];
+            const insertAt = Math.min(idx, next.length);
+            next.splice(insertAt, 0, removed);
+            onChange({ ...current, ads: next });
+          },
+        },
+      });
+    }
+
     clearSelection();
   };
 
@@ -5218,6 +5633,11 @@ function PacerRow({
 
   const isPastRun = calc.endsBeforeToday;
   const isMarkedCompleted = ad.adStatus === 'Completed Run';
+  const isMarkedOff = ad.adStatus === 'Off';
+  // Off / Completed Run freeze pacing math: spend is final, no further
+  // projection or daily-adjustment makes sense. Past-flight ads without an
+  // explicit status fall through to the "Mark as completed" prompt.
+  const showCompletedSummary = isMarkedCompleted || isMarkedOff;
 
   // Color the recommended-vs-current daily comparison
   const dailyDelta = calc.recDaily - calc.dailyBudget;
@@ -5357,16 +5777,17 @@ function PacerRow({
         </Field>
       </div>
 
-      {/* Past-due states replace the projection grid. Marked "Completed Run"
-          shows a structured summary; otherwise we surface a static
-          "Completed run — spent $X" banner prompting the user to finalize
-          the status. */}
-      {isPastRun && isMarkedCompleted ? (
+      {/* Stopped / past-due states replace the projection grid. Off or
+          Completed Run freezes the math at the entered actuals; past-flight
+          ads without an explicit status get a banner prompting the user to
+          mark the status. */}
+      {showCompletedSummary ? (
         <PacerCompletedSummary
           ad={ad}
           calc={calc}
           isLifetime={isLifetime}
           effectiveEnd={effectiveEnd}
+          variant={isMarkedOff ? 'off' : 'completed'}
         />
       ) : isPastRun ? (
         <div
@@ -5581,11 +6002,13 @@ function PacerCompletedSummary({
   calc,
   isLifetime,
   effectiveEnd,
+  variant = 'completed',
 }: {
   ad: PacerAd;
   calc: ReturnType<typeof buildPacerCalc>;
   isLifetime: boolean;
   effectiveEnd: string | null;
+  variant?: 'completed' | 'off';
 }) {
   const variance = calc.budget > 0 ? calc.spent - calc.budget : null;
   const variancePct =
@@ -5600,26 +6023,37 @@ function PacerCompletedSummary({
         : variance > 0
           ? COLORS.error
           : COLORS.warn;
+  const isOff = variant === 'off';
+  const headerColor = isOff ? COLORS.warn : COLORS.success;
+  const headerBg = isOff ? 'rgba(245,158,11,0.08)' : 'rgba(34,197,94,0.08)';
+  const headerLabel = isOff ? 'Ad turned off' : 'Run complete';
+  const dateLabel = isOff
+    ? effectiveEnd
+      ? `Was scheduled through ${fmtDate(effectiveEnd)}`
+      : null
+    : effectiveEnd
+      ? `Ran through ${fmtDate(effectiveEnd)}`
+      : null;
   return (
     <div>
       <div
         className="rounded-lg border px-4 py-3 mb-3 flex items-center justify-between gap-3 flex-wrap"
-        style={{ borderColor: COLORS.success, background: 'rgba(34,197,94,0.08)' }}
+        style={{ borderColor: headerColor, background: headerBg }}
       >
         <div>
           <div
             className="text-[10px] font-bold uppercase tracking-wider"
-            style={{ color: COLORS.success }}
+            style={{ color: headerColor }}
           >
-            Run complete
+            {headerLabel}
           </div>
           <div className="text-base font-bold text-[var(--foreground)] mt-0.5">
             Final spend {fmt(calc.spent)}
           </div>
         </div>
-        {effectiveEnd && (
+        {dateLabel && (
           <div className="text-[10px] text-[var(--muted-foreground)] text-right">
-            Ran through {fmtDate(effectiveEnd)}
+            {dateLabel}
           </div>
         )}
       </div>
@@ -5829,6 +6263,34 @@ function SummaryPanel({ plan }: { plan: PacerPlan }) {
   return (
     <div className="glass-section-card rounded-xl px-5 py-4">
       <SectionLabel icon={<TableCellsIcon className="w-3 h-3" />} text="Summary Table" />
+      {(baseGoal != null || addedGoal != null) && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5">
+            <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+              Base Budget
+            </div>
+            <div className="text-lg font-bold tabular-nums" style={{ color: COLORS.base }}>
+              {baseGoal != null ? fmt(baseGoal) : '—'}
+            </div>
+          </div>
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5">
+            <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+              Added Budget
+            </div>
+            <div className="text-lg font-bold tabular-nums" style={{ color: COLORS.added }}>
+              {addedGoal != null ? fmt(addedGoal) : '—'}
+            </div>
+          </div>
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5">
+            <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+              Combined Total
+            </div>
+            <div className="text-lg font-bold tabular-nums text-[var(--foreground)]">
+              {combinedGoal != null ? fmt(combinedGoal) : '—'}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-xs">
           <thead>
@@ -6020,14 +6482,382 @@ function SummaryPanel({ plan }: { plan: PacerPlan }) {
   );
 }
 
-// ─── Compare panel (monthly over/under for the calendar year) ─────────────
+// ─── Over/Under Spend panel ────────────────────────────────────────────────
 interface YearMonthRow {
   period: string;
   budget: number;
   actual: number;
 }
 
+interface MonthAd {
+  id: string;
+  name: string;
+  budgetSource: 'base' | 'added';
+  allocation: number;
+  actual: number;
+}
+
+interface MonthPlanData {
+  baseBudgetGoal: number;
+  addedBudgetGoal: number;
+  ads: MonthAd[];
+}
+
+function daysInPeriod(period: string): number {
+  if (!isValidPeriod(period)) return 30;
+  const [y, m] = period.split('-').map(Number);
+  return new Date(y, m, 0).getDate();
+}
+
+function daysElapsedInPeriod(period: string): number {
+  if (!isValidPeriod(period)) return 0;
+  const [y, m] = period.split('-').map(Number);
+  const today = new Date();
+  const monthStart = new Date(y, m - 1, 1);
+  const monthEnd = new Date(y, m, 0);
+  if (today < monthStart) return 0;
+  if (today > monthEnd) return monthEnd.getDate();
+  return today.getDate();
+}
+
 function ComparePanel({ accountKey }: { accountKey: string | null }) {
+  const [view, setView] = useState<'month' | 'year'>('month');
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-4 mb-6 flex-wrap">
+        <h2 className="m-0 flex items-center gap-2 text-base font-bold tracking-tight text-[var(--foreground)]">
+          <ScaleIcon className="w-4 h-4" />
+          {accountKey ? 'Over/Under Spend' : 'Over/Under Spend — all accounts'}
+        </h2>
+        <div className="flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-1">
+          {(['month', 'year'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setView(v)}
+              className={`px-3 py-1 text-[11px] font-medium rounded transition-colors ${
+                view === v
+                  ? 'bg-[var(--primary)] text-white'
+                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              {v === 'month' ? 'Month' : 'Year'}
+            </button>
+          ))}
+        </div>
+      </div>
+      {view === 'month' ? (
+        <OverUnderMonthView accountKey={accountKey} />
+      ) : (
+        <OverUnderYearView accountKey={accountKey} />
+      )}
+    </div>
+  );
+}
+
+function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
+  const [period, setPeriod] = useState<string>(() => currentPeriod());
+  const [data, setData] = useState<MonthPlanData | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [accountTotalOverride, setAccountTotalOverride] = useState<string>('');
+
+  // Reset override when month or account changes — last month's number
+  // shouldn't bleed into this month's view.
+  useEffect(() => {
+    setAccountTotalOverride('');
+  }, [period, accountKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setData(null);
+    setLoadError(null);
+
+    const url = accountKey
+      ? `/api/meta-ads-pacer/${accountKey}?period=${period}`
+      : `/api/meta-ads-pacer/year-summary?year=${period.slice(0, 4)}`;
+
+    fetch(url)
+      .then(async (r) => {
+        if (!r.ok) {
+          const text = await r.text().catch(() => '');
+          throw new Error(`HTTP ${r.status} ${text.slice(0, 200)}`);
+        }
+        return r.json();
+      })
+      .then((json) => {
+        if (cancelled) return;
+        if (accountKey) {
+          const ads = Array.isArray(json?.ads) ? json.ads : [];
+          setData({
+            baseBudgetGoal: num(json?.baseBudgetGoal) ?? 0,
+            addedBudgetGoal: num(json?.addedBudgetGoal) ?? 0,
+            ads: ads.map(
+              (a: {
+                id: string;
+                name?: string | null;
+                budgetSource?: string;
+                allocation?: string | null;
+                pacerActual?: string | null;
+              }) => ({
+                id: a.id,
+                name: a.name || 'Untitled Ad',
+                budgetSource: a.budgetSource === 'added' ? 'added' : 'base',
+                allocation: num(a.allocation) ?? 0,
+                actual: num(a.pacerActual) ?? 0,
+              }),
+            ),
+          });
+        } else {
+          // All-accounts mode — fall back to the year-summary aggregate
+          // for the selected month. No per-ad breakdown available here.
+          const months: YearMonthRow[] = Array.isArray(json?.months) ? json.months : [];
+          const row = months.find((m) => m.period === period);
+          setData({
+            baseBudgetGoal: row?.budget ?? 0,
+            addedBudgetGoal: 0,
+            ads: row
+              ? [
+                  {
+                    id: 'aggregate',
+                    name: 'All tracked ads (aggregate)',
+                    budgetSource: 'base',
+                    allocation: row.budget,
+                    actual: row.actual,
+                  },
+                ]
+              : [],
+          });
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.error('[meta-ads-pacer] over/under month load failed', err);
+        setLoadError(err instanceof Error ? err.message : 'Failed to load');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey, period]);
+
+  const totalBudget = data ? data.baseBudgetGoal + data.addedBudgetGoal : 0;
+  const trackedTotal = data ? data.ads.reduce((s, a) => s + a.actual, 0) : 0;
+  const overrideValue = num(accountTotalOverride);
+  const useOverride = overrideValue != null && accountTotalOverride.trim() !== '';
+  const effectiveActual = useOverride ? overrideValue : trackedTotal;
+  const daysIn = daysInPeriod(period);
+  const daysElapsed = daysElapsedInPeriod(period);
+  const shouldHaveSpent =
+    daysIn > 0 ? totalBudget * (daysElapsed / daysIn) : 0;
+  const variance = effectiveActual - totalBudget;
+  const varianceVsExpected = effectiveActual - shouldHaveSpent;
+  const isPastMonth = daysElapsed >= daysIn && daysIn > 0;
+
+  const varianceColor = (v: number) =>
+    Math.abs(v) < 0.005
+      ? COLORS.success
+      : v > 0
+        ? COLORS.error
+        : COLORS.warn;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+        <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--card)] p-1">
+          <button
+            type="button"
+            onClick={() => setPeriod((p) => shiftPeriod(p, -1))}
+            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
+            aria-label="Previous month"
+          >
+            <ChevronLeftIcon className="w-4 h-4" />
+          </button>
+          <span className="text-xs font-bold px-3 min-w-[8rem] text-center">
+            {fmtPeriodLong(period)}
+          </span>
+          <button
+            type="button"
+            onClick={() => setPeriod((p) => shiftPeriod(p, 1))}
+            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
+            aria-label="Next month"
+          >
+            <ChevronRightIcon className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setPeriod(currentPeriod())}
+            className="ml-1 px-2 py-1 text-[10px] font-medium rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
+          >
+            Today
+          </button>
+        </div>
+        <div className="text-[10px] text-[var(--muted-foreground)]">
+          {daysElapsed} of {daysIn} day{daysIn === 1 ? '' : 's'} elapsed
+        </div>
+      </div>
+
+      {loadError ? (
+        <div className="glass-section-card rounded-xl text-center py-12 px-6">
+          <ExclamationTriangleIcon className="w-8 h-8 mx-auto mb-3 text-red-400" />
+          <p className="text-sm text-[var(--foreground)] font-medium mb-1">
+            Could not load monthly over/under.
+          </p>
+          <p className="text-xs text-[var(--muted-foreground)]">{loadError}</p>
+        </div>
+      ) : data == null ? (
+        <div className="text-center py-12 text-[var(--muted-foreground)] text-sm">
+          Loading…
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {/* Per-ad spend block */}
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] overflow-hidden">
+            <div className="px-4 py-2.5 bg-[var(--muted)] border-b border-[var(--border)] text-[10px] font-bold uppercase tracking-wider text-[var(--muted-foreground)]">
+              Spend by ad
+            </div>
+            {data.ads.length === 0 ? (
+              <div className="px-4 py-6 text-center text-xs text-[var(--muted-foreground)]">
+                No ads in {fmtPeriodLong(period)}.
+              </div>
+            ) : (
+              <>
+                <div className="divide-y divide-[var(--border)]">
+                  {data.ads.map((ad) => (
+                    <div
+                      key={ad.id}
+                      className="flex items-center justify-between gap-3 px-4 py-2.5"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-medium text-[var(--foreground)] truncate">
+                          {ad.name}
+                        </div>
+                        {ad.id !== 'aggregate' && (
+                          <div className="text-[10px] mt-0.5">
+                            <span
+                              style={{
+                                color:
+                                  ad.budgetSource === 'base'
+                                    ? COLORS.base
+                                    : COLORS.added,
+                              }}
+                            >
+                              {ad.budgetSource === 'base' ? 'Base' : 'Added'}
+                            </span>
+                            <span className="text-[var(--muted-foreground)]">
+                              {' · allocated '}
+                              {ad.allocation > 0 ? fmt(ad.allocation) : '—'}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-right tabular-nums">
+                        <div className="text-sm font-semibold text-[var(--foreground)]">
+                          {fmt(ad.actual)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-[var(--muted)]/40 border-t-2 border-[var(--border)]">
+                  <div className="text-xs font-bold uppercase tracking-wider text-[var(--foreground)]">
+                    Tracked total
+                  </div>
+                  <div className="text-sm font-bold tabular-nums text-[var(--foreground)]">
+                    {fmt(trackedTotal)}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Account-total override + reference figures */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] mb-1.5">
+                Account total this month (optional)
+              </div>
+              <DollarInput
+                value={accountTotalOverride}
+                onChange={setAccountTotalOverride}
+                placeholder="paste from Meta Ads Manager"
+              />
+              <p className="text-[10px] text-[var(--muted-foreground)] mt-1.5">
+                Leave blank to use the tracked total above. Fill in to compare
+                the real account number against budget.
+              </p>
+            </div>
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                    Client Budget
+                  </div>
+                  <div className="text-base font-bold tabular-nums text-[var(--foreground)]">
+                    {fmt(totalBudget)}
+                  </div>
+                  {accountKey && (
+                    <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
+                      Base {fmt(data.baseBudgetGoal)} + Added{' '}
+                      {fmt(data.addedBudgetGoal)}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                    {isPastMonth ? 'Full budget target' : 'Should have spent'}
+                  </div>
+                  <div className="text-base font-bold tabular-nums text-[var(--foreground)]">
+                    {fmt(shouldHaveSpent)}
+                  </div>
+                  {!isPastMonth && totalBudget > 0 && (
+                    <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
+                      pro-rated {daysElapsed}/{daysIn} days
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Variance summary */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Variance vs full budget
+              </div>
+              <div
+                className="text-lg font-bold tabular-nums"
+                style={{ color: varianceColor(variance) }}
+              >
+                {`${variance >= 0 ? '+' : '-'}${fmt(Math.abs(variance))}`}
+              </div>
+              <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
+                {useOverride ? 'using account total' : 'using tracked total'}{' '}
+                {fmt(effectiveActual)} − {fmt(totalBudget)}
+              </div>
+            </div>
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Variance vs {isPastMonth ? 'target' : 'expected so far'}
+              </div>
+              <div
+                className="text-lg font-bold tabular-nums"
+                style={{ color: varianceColor(varianceVsExpected) }}
+              >
+                {`${varianceVsExpected >= 0 ? '+' : '-'}${fmt(Math.abs(varianceVsExpected))}`}
+              </div>
+              <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
+                {fmt(effectiveActual)} − {fmt(shouldHaveSpent)}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OverUnderYearView({ accountKey }: { accountKey: string | null }) {
   const initialYear = useMemo(() => new Date().getFullYear(), []);
   const [year, setYear] = useState<number>(initialYear);
   const [months, setMonths] = useState<YearMonthRow[] | null>(null);
@@ -6074,11 +6904,7 @@ function ComparePanel({ accountKey }: { accountKey: string | null }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between gap-4 mb-6 flex-wrap">
-        <h2 className="m-0 flex items-center gap-2 text-base font-bold tracking-tight text-[var(--foreground)]">
-          <ScaleIcon className="w-4 h-4" />
-          {accountKey ? 'Monthly over/under' : 'Monthly over/under — all accounts'}
-        </h2>
+      <div className="flex items-center justify-end gap-4 mb-4 flex-wrap">
         <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--card)] p-1">
           <button
             type="button"
@@ -6338,6 +7164,7 @@ function OverviewAccountRow({
                       'Status',
                       'Source',
                       'Type',
+                      'Client Budget',
                       'Allocation',
                       'Flight',
                       'Action',
@@ -6381,6 +7208,18 @@ function OverviewAccountRow({
                       </td>
                       <td className="px-2 py-2 text-[var(--muted-foreground)]">
                         {ad.budgetType}
+                      </td>
+                      <td
+                        className="px-2 py-2 font-semibold whitespace-nowrap"
+                        style={{ color: COLORS.daily }}
+                        title="Gross client-facing dollars (allocation grossed up by markup)"
+                      >
+                        {num(ad.allocation) != null && MARKUP > 0
+                          ? fmt(
+                              Math.round((num(ad.allocation)! / MARKUP) * 100) /
+                                100,
+                            )
+                          : '—'}
                       </td>
                       <td className="px-2 py-2 text-[var(--foreground)]">
                         {num(ad.allocation) != null ? fmt(num(ad.allocation)!) : '—'}
@@ -6620,6 +7459,11 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           period: planData.period ?? period,
           baseBudgetGoal: planData.baseBudgetGoal ?? null,
           addedBudgetGoal: planData.addedBudgetGoal ?? null,
+          markup:
+            typeof planData.markup === 'number' &&
+            Number.isFinite(planData.markup)
+              ? planData.markup
+              : null,
           ads: Array.isArray(planData.ads) ? planData.ads : [],
         });
         setPeriodSummaries(
@@ -6725,6 +7569,10 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         period: updated.period ?? period,
         baseBudgetGoal: updated.baseBudgetGoal ?? null,
         addedBudgetGoal: updated.addedBudgetGoal ?? null,
+        markup:
+          typeof updated.markup === 'number' && Number.isFinite(updated.markup)
+            ? updated.markup
+            : null,
         ads: Array.isArray(updated.ads) ? updated.ads : [],
       });
       lastSavedRef.current = JSON.stringify({
@@ -6890,9 +7738,10 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           </div>
         </div>
 
-        {/* Pacer page: Pacer | Summary | Compare sub-tabs in the header center,
-            styled like the platform's primary toggle. Summary + Pacer are
-            account-scoped; Compare also runs against the admin overview. */}
+        {/* Pacer page: Pacer | Summary | Over/Under Spend sub-tabs in the
+            header center, styled like the platform's primary toggle. Summary
+            + Pacer are account-scoped; Over/Under Spend also runs against the
+            admin overview. */}
         {mode === 'pacer' && (
           <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--card)] p-1">
             {activeKey && (
@@ -6933,7 +7782,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
               }`}
             >
               <ScaleIcon className="w-3.5 h-3.5" />
-              Compare
+              Over/Under Spend
             </button>
           </div>
         )}

@@ -7600,13 +7600,6 @@ function OverviewAccountRow({
         </div>
 
         <div className="flex items-center gap-5 flex-shrink-0">
-          <div onClick={(e) => e.stopPropagation()}>
-            <AccountNotesButton
-              count={notesCount}
-              onClick={() => setNotesOpen(true)}
-              ariaLabel={`Open notes for ${account.dealer}`}
-            />
-          </div>
           {baseTotal > 0 && (
             <div className="text-right">
               <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
@@ -7627,6 +7620,13 @@ function OverviewAccountRow({
               </div>
             </div>
           )}
+          <div onClick={(e) => e.stopPropagation()}>
+            <AccountNotesButton
+              count={notesCount}
+              onClick={() => setNotesOpen(true)}
+              ariaLabel={`Open notes for ${account.dealer}`}
+            />
+          </div>
           <button
             type="button"
             onClick={(e) => {

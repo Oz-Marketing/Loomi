@@ -41,6 +41,8 @@ import {
   ScaleIcon,
   LockClosedIcon,
   BoltIcon,
+  CheckCircleIcon,
+  MinusCircleIcon,
 } from '@heroicons/react/24/outline';
 import { useSession } from 'next-auth/react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -6755,8 +6757,25 @@ function PacerRow({
   // badge in the summary row, so both UI elements agree on the bucket.
   const health = useMemo(() => classifyPacerHealth(ad, calc), [ad, calc]);
 
-  // Compact one-line summary row. Always visible; clicking it (or the
-  // chevron) expands the full editor card below.
+  // Status indicator color — pulled from the same map AdStatusPill uses
+  // so the dot matches the status the user sees on the planner page.
+  const statusColor = AD_STATUS_COLORS[ad.adStatus]?.[0] ?? 'var(--muted-foreground)';
+  // Health icon picks the right semantic affordance per bucket — keeps
+  // the loudest verdict (health pill) visually distinct from the
+  // quieter status dot + budget-type suffix.
+  const HealthIcon =
+    health.state === 'on-track'
+      ? CheckCircleIcon
+      : health.state === 'stopped' || health.state === 'no-data'
+        ? MinusCircleIcon
+        : ExclamationTriangleIcon;
+  const healthMuted = health.state === 'stopped' || health.state === 'no-data';
+
+  // Compact one-line summary row. Four visual languages, one per signal:
+  //   - identity:   colored ad-dot + name
+  //   - status:     colored dot + plain text (workflow lifecycle)
+  //   - values:     budget number + /day or total suffix (carries type)
+  //   - verdict:    loud health pill with leading icon (the answer)
   const summaryRow = (
     <button
       type="button"
@@ -6776,54 +6795,61 @@ function PacerRow({
       <span className="text-sm font-semibold text-[var(--foreground)] truncate min-w-0 flex-1">
         {ad.name || 'Untitled Ad'}
       </span>
-      <span
-        className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded flex-shrink-0"
-        style={{
-          background: isLifetime ? 'rgba(167,139,250,0.18)' : 'rgba(56,189,248,0.18)',
-          color: typeColor,
-        }}
-      >
-        {ad.budgetType}
+      {/* Status: dot + plain text, no pill chrome (workflow state, not a
+          verdict — quieter than the health pill on the right). */}
+      <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)] whitespace-nowrap flex-shrink-0">
+        <span
+          className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+          style={{ background: statusColor }}
+        />
+        {ad.adStatus || 'No status'}
       </span>
-      <span className="flex-shrink-0">
-        <AdStatusPill status={ad.adStatus} />
-      </span>
-      {/* Spend snapshot inline: actual + (daily | total target) */}
+      {/* Actual spend — labelled so the bare number isn't ambiguous. */}
       <span className="hidden sm:inline-flex items-baseline gap-1 text-[11px] tabular-nums whitespace-nowrap flex-shrink-0">
         <span className="text-[var(--muted-foreground)]">Actual</span>
         <span className="text-[var(--foreground)] font-semibold">
           {calc.spent > 0 ? fmt(calc.spent) : '—'}
         </span>
       </span>
-      <span className="hidden md:inline-flex items-baseline gap-1 text-[11px] tabular-nums whitespace-nowrap flex-shrink-0">
-        <span className="text-[var(--muted-foreground)]">
-          {isLifetime ? 'Target' : 'Daily'}
-        </span>
-        <span style={{ color: typeColor }} className="font-semibold">
-          {isLifetime
-            ? calc.budget > 0
-              ? fmt(calc.budget)
-              : '—'
-            : calc.dailyBudget > 0
-              ? fmt(calc.dailyBudget)
-              : '—'}
-        </span>
-      </span>
-      {/* Health badge — colored by pacing classification, mirrors the
-          left accent stripe so eye + brain agree at a glance. */}
+      {/* Budget — suffix `/day` or ` total` carries the lifetime/daily
+          mode so the LIFETIME / DAILY pill is no longer needed. */}
       <span
-        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded flex-shrink-0"
+        className="hidden md:inline-flex items-baseline gap-1 text-[11px] tabular-nums whitespace-nowrap flex-shrink-0 font-semibold"
+        style={{ color: typeColor }}
+      >
+        {isLifetime ? (
+          calc.budget > 0 ? (
+            <>
+              {fmt(calc.budget)}
+              <span className="text-[10px] font-normal text-[var(--muted-foreground)]">
+                total
+              </span>
+            </>
+          ) : (
+            '—'
+          )
+        ) : calc.dailyBudget > 0 ? (
+          <>
+            {fmt(calc.dailyBudget)}
+            <span className="text-[10px] font-normal text-[var(--muted-foreground)]">
+              /day
+            </span>
+          </>
+        ) : (
+          '—'
+        )}
+      </span>
+      {/* Verdict pill — the loudest signal in the row. Solid colored
+          background + leading icon so the eye lands here first. */}
+      <span
+        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded flex-shrink-0"
         style={{
-          background:
-            health.state === 'stopped' || health.state === 'no-data'
-              ? 'rgba(255,255,255,0.06)'
-              : `${health.color}22`,
-          color:
-            health.state === 'stopped' || health.state === 'no-data'
-              ? 'var(--muted-foreground)'
-              : health.color,
+          background: healthMuted ? 'rgba(255,255,255,0.06)' : `${health.color}26`,
+          color: healthMuted ? 'var(--muted-foreground)' : health.color,
+          border: `1px solid ${healthMuted ? 'transparent' : `${health.color}55`}`,
         }}
       >
+        <HealthIcon className="w-3 h-3 flex-shrink-0" />
         {health.short}
       </span>
     </button>
@@ -6841,27 +6867,12 @@ function PacerRow({
       {!expanded ? null : (
         <div className="border-t border-[var(--border)] px-5 py-4 pl-6">
 
-      <div className="flex items-start justify-between mb-4 flex-wrap gap-3">
-        <div className="flex-1 min-w-0">
-          {/* Name + type + status already live in the summary row above.
-              Expanded view only adds the source pill (since it's hidden
-              in compact mode) and the flight dates on the right. */}
-          <div className="flex gap-2 items-center flex-wrap">
-            <span
-              className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
-              style={{
-                background: sourceTint(ad.budgetSource),
-                color: sourceColor(ad.budgetSource),
-              }}
-            >
-              {sourceLabel(ad.budgetSource)}
-            </span>
-          </div>
-        </div>
-
-        {/* Flight dates pulled out to the top-right in larger type so the
-            running window is always visible when reading the metrics. */}
-        {ad.flightStart && ad.flightEnd && (
+      {/* Name + type + status live in the summary row above. The
+          expanded header now carries only the flight window (right) —
+          source moved next to the Target Spend value below where it
+          belongs as funding context. */}
+      {ad.flightStart && ad.flightEnd && (
+        <div className="flex justify-end mb-4">
           <div className="text-right flex-shrink-0">
             <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
               Flight
@@ -6873,8 +6884,8 @@ function PacerRow({
               {calcDays(ad.flightStart, ad.flightEnd)} days
             </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Editable inputs row — actual, daily, target, today, end */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 mb-3.5">
@@ -6904,6 +6915,29 @@ function PacerRow({
         <Field label="Target Spend">
           <div className={`${readonlyClass} font-bold`} style={{ color: typeColor }}>
             {calc.budget > 0 ? fmt(calc.budget) : '—'}
+          </div>
+          {/* Source as inline funding context — colored dot + label
+              under the number. Split ads also surface the Base / Added
+              breakdown so the bucket allocation is visible without
+              chasing a pill across the row. */}
+          <div
+            className="flex items-center gap-1.5 mt-1 text-[10px] font-semibold uppercase tracking-wider"
+            style={{ color: sourceColor(ad.budgetSource) }}
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+              style={{ background: sourceColor(ad.budgetSource) }}
+            />
+            {sourceLabel(ad.budgetSource)}
+            {ad.budgetSource === 'split' && (() => {
+              const baseAmt = num(ad.splitBaseAmount) ?? 0;
+              const addedAmt = Math.max(0, calc.budget - baseAmt);
+              return (
+                <span className="text-[var(--muted-foreground)] font-normal normal-case tracking-normal">
+                  · Base {fmt(baseAmt)} / Added {fmt(addedAmt)}
+                </span>
+              );
+            })()}
           </div>
         </Field>
         <Field label="Today's Date">

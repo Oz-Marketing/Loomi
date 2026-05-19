@@ -5596,10 +5596,11 @@ function AccountNotesDrawer({
 
   if (typeof document === 'undefined') return null;
   return createPortal(
-    <div
-      className="fixed inset-0 z-50 animate-overlay-in"
-      onClick={onClose}
-    >
+    // Outer wrapper is a transparent click-target only — no background dim
+    // and no backdrop blur, so the rest of the page stays fully visible
+    // and usable while the drawer is open (matches the page-content-first
+    // feel the user wants for the notes log).
+    <div className="fixed inset-0 z-50" onClick={onClose}>
       <div
         onClick={(e) => e.stopPropagation()}
         className="frost-heavy fixed right-3 top-3 bottom-3 w-[420px] max-w-[calc(100vw-1.5rem)] rounded-2xl flex flex-col animate-slide-in-right overflow-hidden"

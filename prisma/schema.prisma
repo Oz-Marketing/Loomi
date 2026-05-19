@@ -39,6 +39,7 @@ model User {
   metaPacerDesignNotesAuthored MetaAdsPacerDesignNote[]  @relation("MetaPacerDesignNoteAuthor")
   metaPacerActivityAuthored    MetaAdsPacerActivityLog[] @relation("MetaPacerActivityAuthor")
   metaPacerAccountNotes        MetaAdsPacerAccountNote[] @relation("MetaPacerAccountNoteAuthor")
+  metaPacerBudgetLogs          MetaAdsPacerBudgetLog[]   @relation("MetaPacerBudgetLogAuthor")
   notifications                Notification[]
   notificationPreferences      NotificationPreference[]
 }
@@ -120,6 +121,7 @@ model Account {
   mediaAssets             MediaAsset[]
   metaAdsPacerPlan        MetaAdsPacerPlan?
   metaAdsPacerAccountNotes MetaAdsPacerAccountNote[]
+  metaAdsPacerBudgetLogs   MetaAdsPacerBudgetLog[]
 
   @@index([accountRepId])
 }
@@ -733,6 +735,31 @@ model MetaAdsPacerAccountNote {
   createdAt    DateTime @default(now())
 
   @@index([accountKey, createdAt])
+}
+
+// Budget log — point-in-time snapshot of the pacer's spend + client
+// budget numbers, captured by reps as a record of when they checked or
+// adjusted budgets during the month. Scoped per-account + per-period
+// (YYYY-MM) so each month's checks live as their own thread.
+model MetaAdsPacerBudgetLog {
+  id                String   @id @default(cuid())
+  accountKey        String
+  account           Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  period            String // YYYY-MM
+  // Snapshot of the two key numbers at moment of logging (strings to
+  // mirror the rest of the pacer's money fields). Stored separately for
+  // base + added pools so reps can review pool-level changes over time.
+  baseSpend         String?
+  baseClientBudget  String?
+  addedSpend        String?
+  addedClientBudget String?
+  // Optional free-text context — "rebalanced after client call", etc.
+  note              String?
+  authorUserId      String?
+  author            User?    @relation("MetaPacerBudgetLogAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  createdAt         DateTime @default(now())
+
+  @@index([accountKey, period, createdAt])
 }
 
 // ─────────────────────────────────────────────────────

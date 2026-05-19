@@ -6700,8 +6700,6 @@ function PacerRow({
   index,
   onActualChange,
   onDailyBudgetChange,
-  onTodayChange,
-  onEndChange,
   expanded,
   onToggleExpanded,
 }: {
@@ -6709,32 +6707,19 @@ function PacerRow({
   index: number;
   onActualChange: (v: string | null) => void;
   onDailyBudgetChange: (v: string | null) => void;
-  onTodayChange: (v: string | null) => void;
-  onEndChange: (v: string | null) => void;
   expanded: boolean;
   onToggleExpanded: () => void;
 }) {
   const isLifetime = ad.budgetType === 'Lifetime';
   const typeColor = isLifetime ? COLORS.lifetime : COLORS.daily;
 
-  // Effective "today" defaults to actual today on first view, then persists to
-  // the ad so subsequent visits don't silently advance the cursor. Once
-  // `pacerTodayDate` is set, only the user can change it.
-  const defaultToday = useMemo(() => datePickerToIso(new Date()), []);
-  const effectiveToday = ad.pacerTodayDate ?? defaultToday;
-  const effectiveEnd = ad.pacerEndDate ?? ad.flightEnd;
+  // Today always = current date; end always = ad.flightEnd. The pacer
+  // used to support custom pacerTodayDate / pacerEndDate cursors but
+  // those just confused reps reviewing end-of-month — now the math
+  // always uses today's actual date and the immutable flight end.
+  const effectiveToday = useMemo(() => datePickerToIso(new Date()), []);
+  const effectiveEnd = ad.flightEnd;
   const calc = buildPacerCalc(ad, effectiveToday, effectiveEnd);
-
-  // One-shot: snapshot today into pacerTodayDate the first time this row
-  // mounts without a saved value. The autosave loop then persists it, so on
-  // future loads the pacer doesn't quietly roll the cursor forward.
-  const seededTodayRef = useRef(false);
-  useEffect(() => {
-    if (seededTodayRef.current) return;
-    if (ad.pacerTodayDate) return;
-    seededTodayRef.current = true;
-    onTodayChange(defaultToday);
-  }, [ad.pacerTodayDate, defaultToday, onTodayChange]);
 
   const isPastRun = calc.endsBeforeToday;
   const isMarkedCompleted = ad.adStatus === 'Completed Run';
@@ -6788,22 +6773,27 @@ function PacerRow({
       ) : (
         <ChevronRightIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)] flex-shrink-0" />
       )}
-      <div
-        className="w-2 h-2 rounded-sm flex-shrink-0"
-        style={{ background: AD_COLORS[index % AD_COLORS.length] }}
-      />
-      <span className="text-sm font-semibold text-[var(--foreground)] truncate min-w-0 flex-1">
-        {ad.name || 'Untitled Ad'}
-      </span>
-      {/* Status: dot + plain text, no pill chrome (workflow state, not a
-          verdict — quieter than the health pill on the right). */}
-      <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)] whitespace-nowrap flex-shrink-0">
-        <span
-          className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-          style={{ background: statusColor }}
+      {/* Identity zone — ad-dot + name + status all grouped on the left
+          so the status reads as adjacent context to the ad, not as a
+          separate column out near the metrics. */}
+      <div className="flex items-center gap-3 min-w-0 flex-1">
+        <div
+          className="w-2 h-2 rounded-sm flex-shrink-0"
+          style={{ background: AD_COLORS[index % AD_COLORS.length] }}
         />
-        {ad.adStatus || 'No status'}
-      </span>
+        <span className="text-sm font-semibold text-[var(--foreground)] truncate min-w-0">
+          {ad.name || 'Untitled Ad'}
+        </span>
+        {/* Status: dot + plain text, no pill chrome (workflow state, not
+            a verdict — quieter than the health pill on the right). */}
+        <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)] whitespace-nowrap flex-shrink-0">
+          <span
+            className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+            style={{ background: statusColor }}
+          />
+          {ad.adStatus || 'No status'}
+        </span>
+      </div>
       {/* Actual spend — labelled so the bare number isn't ambiguous. */}
       <span className="hidden sm:inline-flex items-baseline gap-1 text-[11px] tabular-nums whitespace-nowrap flex-shrink-0">
         <span className="text-[var(--muted-foreground)]">Actual</span>
@@ -6842,7 +6832,7 @@ function PacerRow({
       {/* Verdict pill — the loudest signal in the row. Solid colored
           background + leading icon so the eye lands here first. */}
       <span
-        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded flex-shrink-0"
+        className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md flex-shrink-0"
         style={{
           background: healthMuted ? 'rgba(255,255,255,0.06)' : `${health.color}26`,
           color: healthMuted ? 'var(--muted-foreground)' : health.color,
@@ -6867,12 +6857,53 @@ function PacerRow({
       {!expanded ? null : (
         <div className="border-t border-[var(--border)] px-5 py-4 pl-6">
 
-      {/* Name + type + status live in the summary row above. The
-          expanded header now carries only the flight window (right) —
-          source moved next to the Target Spend value below where it
-          belongs as funding context. */}
-      {ad.flightStart && ad.flightEnd && (
-        <div className="flex justify-end mb-4">
+      {/* Header row inside the expanded view — Target Spend (value +
+          type + source/split breakdown) on the left, Flight window on
+          the right. Replaces the old 5-column inputs grid Target Spend
+          field so all of the read-only context lives together up top,
+          and the inputs row below can focus on the two values reps
+          actually edit. */}
+      <div className="flex items-start justify-between gap-4 mb-5 flex-wrap">
+        <div className="flex-shrink-0">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+            Target Spend
+          </div>
+          <div className="flex items-baseline gap-1.5">
+            <span
+              className="text-base font-bold tabular-nums"
+              style={{ color: typeColor }}
+            >
+              {calc.budget > 0 ? fmt(calc.budget) : '—'}
+            </span>
+            <span className="text-[11px] text-[var(--muted-foreground)]">
+              {isLifetime ? 'total' : '/day target'}
+            </span>
+          </div>
+          {/* Source as inline funding context — colored dot + label
+              under the number. Split ads also surface the Base / Added
+              breakdown so the bucket allocation is visible right where
+              the budget lives. */}
+          <div
+            className="flex items-center gap-1.5 mt-1 text-[10px] font-semibold uppercase tracking-wider"
+            style={{ color: sourceColor(ad.budgetSource) }}
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+              style={{ background: sourceColor(ad.budgetSource) }}
+            />
+            {sourceLabel(ad.budgetSource)}
+            {ad.budgetSource === 'split' && (() => {
+              const baseAmt = num(ad.splitBaseAmount) ?? 0;
+              const addedAmt = Math.max(0, calc.budget - baseAmt);
+              return (
+                <span className="text-[var(--muted-foreground)] font-normal normal-case tracking-normal">
+                  · Base {fmt(baseAmt)} / Added {fmt(addedAmt)}
+                </span>
+              );
+            })()}
+          </div>
+        </div>
+        {ad.flightStart && ad.flightEnd && (
           <div className="text-right flex-shrink-0">
             <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
               Flight
@@ -6884,11 +6915,13 @@ function PacerRow({
               {calcDays(ad.flightStart, ad.flightEnd)} days
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {/* Editable inputs row — actual, daily, target, today, end */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 mb-3.5">
+      {/* Editable inputs row — just the two values reps actually edit.
+          Today's date always uses the current date and end date uses
+          the immutable flight end, so neither needs an input. */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-3.5">
         <Field label="Actual Spend">
           <DollarInput
             value={ad.pacerActual}
@@ -6911,59 +6944,6 @@ function PacerRow({
               placeholder="0.00"
             />
           )}
-        </Field>
-        <Field label="Target Spend">
-          <div className={`${readonlyClass} font-bold`} style={{ color: typeColor }}>
-            {calc.budget > 0 ? fmt(calc.budget) : '—'}
-          </div>
-          {/* Source as inline funding context — colored dot + label
-              under the number. Split ads also surface the Base / Added
-              breakdown so the bucket allocation is visible without
-              chasing a pill across the row. */}
-          <div
-            className="flex items-center gap-1.5 mt-1 text-[10px] font-semibold uppercase tracking-wider"
-            style={{ color: sourceColor(ad.budgetSource) }}
-          >
-            <span
-              className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-              style={{ background: sourceColor(ad.budgetSource) }}
-            />
-            {sourceLabel(ad.budgetSource)}
-            {ad.budgetSource === 'split' && (() => {
-              const baseAmt = num(ad.splitBaseAmount) ?? 0;
-              const addedAmt = Math.max(0, calc.budget - baseAmt);
-              return (
-                <span className="text-[var(--muted-foreground)] font-normal normal-case tracking-normal">
-                  · Base {fmt(baseAmt)} / Added {fmt(addedAmt)}
-                </span>
-              );
-            })()}
-          </div>
-        </Field>
-        <Field label="Today's Date">
-          <DatePicker
-            value={ad.pacerTodayDate ?? effectiveToday}
-            onChange={onTodayChange}
-            placeholder="Today"
-            presets={[TODAY_PRESET]}
-          />
-        </Field>
-        <Field label="End Date">
-          <DatePicker
-            value={ad.pacerEndDate ?? effectiveEnd}
-            onChange={onEndChange}
-            placeholder="Pick an end date"
-            presets={
-              ad.flightEnd
-                ? [
-                    {
-                      label: 'Flight end',
-                      single: () => ad.flightEnd!,
-                    },
-                  ]
-                : []
-            }
-          />
         </Field>
       </div>
 
@@ -7378,10 +7358,9 @@ function BudgetPacerPanel({
     if (plan.ads.length === 0) return;
     seededExpandedRef.current = true;
     const next = new Set<string>();
+    const today = datePickerToIso(new Date());
     plan.ads.forEach((ad) => {
-      const today = ad.pacerTodayDate ?? datePickerToIso(new Date());
-      const end = ad.pacerEndDate ?? ad.flightEnd;
-      const c = buildPacerCalc(ad, today, end);
+      const c = buildPacerCalc(ad, today, ad.flightEnd);
       const h = classifyPacerHealth(ad, c);
       if (h.state === 'over-budget' || h.state === 'overpacing') {
         next.add(ad.id);
@@ -7402,12 +7381,11 @@ function BudgetPacerPanel({
   // Bulk "Set all dailies to Rec." — applies recommended daily to every
   // visible non-lifetime, non-stopped ad that has a valid recDaily.
   const bulkSetDailies = async () => {
+    const today = datePickerToIso(new Date());
     const candidates = visibleAds.filter((ad) => {
       if (ad.budgetType !== 'Daily') return false;
       if (ad.adStatus === 'Off' || ad.adStatus === 'Completed Run') return false;
-      const today = ad.pacerTodayDate ?? datePickerToIso(new Date());
-      const end = ad.pacerEndDate ?? ad.flightEnd;
-      const c = buildPacerCalc(ad, today, end);
+      const c = buildPacerCalc(ad, today, ad.flightEnd);
       return c.daysLeft > 0 && c.budget > 0 && c.recDaily > 0;
     });
     if (candidates.length === 0) {
@@ -7425,9 +7403,7 @@ function BudgetPacerPanel({
       ...plan,
       ads: plan.ads.map((ad) => {
         if (!candidateIds.has(ad.id)) return ad;
-        const today = ad.pacerTodayDate ?? datePickerToIso(new Date());
-        const end = ad.pacerEndDate ?? ad.flightEnd;
-        const c = buildPacerCalc(ad, today, end);
+        const c = buildPacerCalc(ad, today, ad.flightEnd);
         return {
           ...ad,
           pacerDailyBudget: c.recDaily.toFixed(2),
@@ -7590,8 +7566,6 @@ function BudgetPacerPanel({
             index={plan.ads.findIndex((a) => a.id === ad.id)}
             onActualChange={(v) => updateAd({ ...ad, pacerActual: v })}
             onDailyBudgetChange={(v) => updateAd({ ...ad, pacerDailyBudget: v })}
-            onTodayChange={(v) => updateAd({ ...ad, pacerTodayDate: v })}
-            onEndChange={(v) => updateAd({ ...ad, pacerEndDate: v })}
             expanded={expandedIds.has(ad.id)}
             onToggleExpanded={() => toggleExpanded(ad.id)}
           />

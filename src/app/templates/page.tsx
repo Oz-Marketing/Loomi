@@ -15,7 +15,6 @@ import {
   AdjustmentsHorizontalIcon,
   CursorArrowRaysIcon,
   CodeBracketIcon,
-  ArrowLeftIcon,
   MagnifyingGlassIcon,
   EyeIcon,
   PencilSquareIcon,
@@ -217,9 +216,6 @@ function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) 
   const [templates, setTemplates] = useState<TemplateEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [showCreateChoice, setShowCreateChoice] = useState(false);
-  const [createStep, setCreateStep] = useState<'choice' | 'name'>('choice');
-  const [createMode, setCreateMode] = useState<'visual' | 'code' | null>(null);
-  const [newName, setNewName] = useState('');
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
   const [tagData, setTagData] = useState<TagData>({ tags: [], assignments: {} });
@@ -302,26 +298,40 @@ function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) 
 
   const filteredKeys = useMemo(() => filtered.map((t) => t.design), [filtered]);
 
-  const createTemplate = async () => {
-    if (!createMode || !newName.trim()) return;
+  // Pick a default name that won't collide with anything already in the
+  // library. Walks "Untitled Template", "Untitled Template 2", etc. so
+  // the rep lands in the editor with a clean default they can rename.
+  const nextUntitledName = (): string => {
+    const existing = new Set(
+      templates.map((t) => (t.name || formatDesign(t.design)).trim().toLowerCase()),
+    );
+    if (!existing.has('untitled template')) return 'Untitled Template';
+    for (let n = 2; n < 1000; n++) {
+      const candidate = `Untitled Template ${n}`;
+      if (!existing.has(candidate.toLowerCase())) return candidate;
+    }
+    // Fallback — astronomically unlikely to land here, but keep the
+    // function total.
+    return `Untitled Template ${Date.now()}`;
+  };
+
+  const createTemplate = async (mode: 'visual' | 'code') => {
+    if (saving) return;
     setSaving(true);
+    const defaultName = nextUntitledName();
     try {
       const res = await fetch('/api/templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ design: newName.trim(), mode: createMode }),
+        body: JSON.stringify({ design: defaultName, mode }),
       });
       const data = await res.json();
       if (!res.ok) { toast.error(data.error || 'Failed to create'); setSaving(false); return; }
-      toast.success('Template created');
       setShowCreateChoice(false);
-      setCreateStep('choice');
-      setCreateMode(null);
-      setNewName('');
-      await loadTemplates();
-      // Navigate to editor
+      // No loadTemplates() here — we're navigating straight to the
+      // editor, so refetching the list is wasted work.
       router.push(buildLibraryEditorHref(
-        { design: data.design, editorType: createMode },
+        { design: data.design, editorType: mode },
         { campaignDraft: isCampaignDraft },
       ));
     } catch { toast.error('Failed to create'); }
@@ -682,14 +692,7 @@ function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) 
               <AdjustmentsHorizontalIcon className="w-4 h-4" />
               Bulk Edit
             </button>
-            <PrimaryButton
-              onClick={() => {
-                setShowCreateChoice(true);
-                setCreateStep('choice');
-                setCreateMode(null);
-                setNewName('');
-              }}
-            >
+            <PrimaryButton onClick={() => setShowCreateChoice(true)}>
               <PlusIcon className="w-4 h-4" />
               Create Template
             </PrimaryButton>
@@ -697,105 +700,60 @@ function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) 
         </div>
       )}
 
-      {/* Create choice modal */}
+      {/* Create choice modal — single-step picker. Selecting a builder
+          creates the template immediately with a default "Untitled
+          Template" name and navigates to the editor, where the user
+          can rename it. */}
       {showCreateChoice && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in"
-          onClick={() => {
-            setShowCreateChoice(false);
-            setCreateStep('choice');
-            setCreateMode(null);
-          }}
+          onClick={() => !saving && setShowCreateChoice(false)}
         >
           <div className="glass-modal w-[480px]" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)]">
-              <div className="flex items-center gap-2">
-                {createStep === 'name' && (
-                  <button
-                    onClick={() => {
-                      setCreateStep('choice');
-                      setCreateMode(null);
-                    }}
-                    className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-                  >
-                    <ArrowLeftIcon className="w-4 h-4" />
-                  </button>
-                )}
-                <h3 className="text-base font-semibold">
-                  {createStep === 'choice' ? 'Create New Template' : 'Name Your Template'}
-                </h3>
-              </div>
+              <h3 className="text-base font-semibold">Create New Template</h3>
               <button
-                onClick={() => {
-                  setShowCreateChoice(false);
-                  setCreateStep('choice');
-                  setCreateMode(null);
-                }}
-                className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                onClick={() => !saving && setShowCreateChoice(false)}
+                disabled={saving}
+                className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50"
               >
                 <XMarkIcon className="w-5 h-5" />
               </button>
             </div>
             <div className="p-5">
-              {createStep === 'choice' ? (
-                <>
-                  <p className="text-sm text-[var(--muted-foreground)] mb-4">Choose how you&apos;d like to build your template:</p>
-                  <div className="grid grid-cols-2 gap-4">
-                    <button
-                      onClick={() => {
-                        setCreateMode('visual');
-                        setCreateStep('name');
-                      }}
-                      className="group flex flex-col items-center gap-3 p-6 rounded-xl border-2 border-[var(--border)] hover:border-[var(--primary)] bg-[var(--card)] hover:bg-[var(--primary)]/5 transition-all text-center"
-                    >
-                      <div className="w-12 h-12 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center group-hover:bg-[var(--primary)]/20 transition-colors">
-                        <CursorArrowRaysIcon className="w-6 h-6 text-[var(--primary)]" />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-semibold mb-1">Drag & Drop</h4>
-                        <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">Visual builder with sections</p>
-                      </div>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setCreateMode('code');
-                        setCreateStep('name');
-                      }}
-                      className="group flex flex-col items-center gap-3 p-6 rounded-xl border-2 border-[var(--border)] hover:border-[var(--primary)] bg-[var(--card)] hover:bg-[var(--primary)]/5 transition-all text-center"
-                    >
-                      <div className="w-12 h-12 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center group-hover:bg-[var(--primary)]/20 transition-colors">
-                        <CodeBracketIcon className="w-6 h-6 text-[var(--primary)]" />
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-semibold mb-1">HTML Editor</h4>
-                        <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">Write or paste raw HTML</p>
-                      </div>
-                    </button>
+              <p className="text-sm text-[var(--muted-foreground)] mb-4">Choose how you&apos;d like to build your template:</p>
+              <div className="grid grid-cols-2 gap-4">
+                <button
+                  onClick={() => createTemplate('visual')}
+                  disabled={saving}
+                  className="group flex flex-col items-center gap-3 p-6 rounded-xl border-2 border-[var(--border)] hover:border-[var(--primary)] bg-[var(--card)] hover:bg-[var(--primary)]/5 transition-all text-center disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <div className="w-12 h-12 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center group-hover:bg-[var(--primary)]/20 transition-colors">
+                    <CursorArrowRaysIcon className="w-6 h-6 text-[var(--primary)]" />
                   </div>
-                </>
-              ) : (
-                <div className="space-y-3">
-                  <p className="text-sm text-[var(--muted-foreground)]">
-                    Give your {createMode === 'code' ? 'HTML' : 'Drag & Drop'} template a name:
-                  </p>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={newName}
-                      onChange={(e) => setNewName(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && createTemplate()}
-                      placeholder="Template name (e.g. spring-sale)"
-                      className="flex-1 text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-[var(--foreground)]"
-                      autoFocus
-                    />
-                    <PrimaryButton
-                      onClick={createTemplate}
-                      disabled={saving || !newName.trim()}
-                    >
-                      {saving ? 'Creating...' : 'Create'}
-                    </PrimaryButton>
+                  <div>
+                    <h4 className="text-sm font-semibold mb-1">Drag &amp; Drop</h4>
+                    <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">Visual builder with sections</p>
                   </div>
-                </div>
+                </button>
+                <button
+                  onClick={() => createTemplate('code')}
+                  disabled={saving}
+                  className="group flex flex-col items-center gap-3 p-6 rounded-xl border-2 border-[var(--border)] hover:border-[var(--primary)] bg-[var(--card)] hover:bg-[var(--primary)]/5 transition-all text-center disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  <div className="w-12 h-12 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center group-hover:bg-[var(--primary)]/20 transition-colors">
+                    <CodeBracketIcon className="w-6 h-6 text-[var(--primary)]" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-semibold mb-1">HTML Editor</h4>
+                    <p className="text-[11px] text-[var(--muted-foreground)] leading-relaxed">Write or paste raw HTML</p>
+                  </div>
+                </button>
+              </div>
+              {saving && (
+                <p className="text-[11px] text-[var(--muted-foreground)] text-center mt-4">
+                  Creating template…
+                </p>
               )}
             </div>
           </div>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { requireRole } from '@/lib/api-auth';
+import { requireAuth, requireRole } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import { parseTemplate } from '@/lib/template-parser';
 import { serializeTemplate } from '@/lib/template-serializer';
@@ -21,18 +21,29 @@ function hasVisualTemplateScaffold(content: string): boolean {
 }
 
 export async function GET(req: NextRequest) {
-  const { error } = await requireRole(...MANAGEMENT_ROLES);
+  const { session, error } = await requireAuth();
   if (error) return error;
+
+  const role = session!.user.role;
+  const isClient = role === 'client';
 
   const design = req.nextUrl.searchParams.get('design');
   const format = req.nextUrl.searchParams.get('format'); // 'raw' for raw HTML
   const type = req.nextUrl.searchParams.get('type'); // 'lifecycle' | 'design'
+  // Clients only ever see published templates; management roles can opt in.
+  const publishedOnly = isClient
+    ? true
+    : req.nextUrl.searchParams.get('publishedOnly') === 'true';
 
   if (design) {
     // Read specific template by slug
     try {
       const template = await templateService.getTemplate(design);
       if (!template) {
+        return NextResponse.json({ error: 'Template not found' }, { status: 404 });
+      }
+      // Hide unpublished templates from client role even when targeted by slug.
+      if (isClient && !template.published) {
         return NextResponse.json({ error: 'Template not found' }, { status: 404 });
       }
 
@@ -47,8 +58,11 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // List all templates
-  const templates = await templateService.getTemplatesWithContent(type || undefined);
+  // List templates
+  const templates = await templateService.getTemplatesWithContent({
+    type: type || undefined,
+    publishedOnly,
+  });
   return NextResponse.json(
     templates.map((t) => ({
       id: t.id,
@@ -57,6 +71,9 @@ export async function GET(req: NextRequest) {
       editorType: hasVisualTemplateScaffold(t.content) ? 'visual' : 'code',
       type: t.type,
       category: t.category,
+      published: t.published,
+      publishedAt: t.publishedAt ? t.publishedAt.toISOString() : null,
+      publishedBy: t.publishedByUser?.name || null,
       updatedAt: t.updatedAt.toISOString(),
       createdBy: t.createdByUser?.name || null,
       createdByAvatar: t.createdByUser?.avatarUrl || null,

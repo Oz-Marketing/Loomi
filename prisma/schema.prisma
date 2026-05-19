@@ -28,9 +28,10 @@ model User {
   invites  UserInvite[]
   accounts Account[] // accounts where this user is the rep
 
-  templatesCreated Template[]                  @relation("TemplateCreatedBy")
-  templatesUpdated Template[]                  @relation("TemplateUpdatedBy")
-  templateVersions TemplateVersion[]           @relation("TemplateVersionCreatedBy")
+  templatesCreated   Template[]                  @relation("TemplateCreatedBy")
+  templatesUpdated   Template[]                  @relation("TemplateUpdatedBy")
+  templatesPublished Template[]                  @relation("TemplatePublishedBy")
+  templateVersions   TemplateVersion[]           @relation("TemplateVersionCreatedBy")
   dashboardLayouts DashboardLayoutPreference[]
 
   metaPacerOwnerAds            MetaAdsPacerAd[]          @relation("MetaPacerOwner")
@@ -274,23 +275,29 @@ model EspAccountProviderLink {
 // ─────────────────────────────────────────────────────
 
 model Template {
-  id              String   @id @default(cuid())
-  slug            String   @unique // "service-reminder", "modern-dark"
-  title           String // "Service Reminder", "Modern Dark"
-  type            String // "lifecycle" | "design"
-  category        String? // "service", "sales", "loyalty", etc.
-  content         String // full raw HTML template source
-  preheader       String?
-  createdByUserId String?
-  updatedByUserId String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  id                String    @id @default(cuid())
+  slug              String    @unique // "service-reminder", "modern-dark"
+  title             String // "Service Reminder", "Modern Dark"
+  type              String // "lifecycle" | "design"
+  category          String? // "service", "sales", "loyalty", etc.
+  content           String // full raw HTML template source
+  preheader         String?
+  published         Boolean   @default(false)
+  publishedAt       DateTime?
+  publishedByUserId String?
+  createdByUserId   String?
+  updatedByUserId   String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  createdByUser User?                   @relation("TemplateCreatedBy", fields: [createdByUserId], references: [id])
-  updatedByUser User?                   @relation("TemplateUpdatedBy", fields: [updatedByUserId], references: [id])
-  versions      TemplateVersion[]
-  tags          TemplateTagAssignment[]
-  emails        AccountEmail[]
+  createdByUser   User?                   @relation("TemplateCreatedBy", fields: [createdByUserId], references: [id])
+  updatedByUser   User?                   @relation("TemplateUpdatedBy", fields: [updatedByUserId], references: [id])
+  publishedByUser User?                   @relation("TemplatePublishedBy", fields: [publishedByUserId], references: [id])
+  versions        TemplateVersion[]
+  tags            TemplateTagAssignment[]
+  emails          AccountEmail[]
+
+  @@index([published])
 }
 
 model TemplateVersion {

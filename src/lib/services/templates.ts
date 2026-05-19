@@ -1,9 +1,23 @@
 import { prisma } from '@/lib/prisma';
 import { createVersion } from './template-versions';
 
-export async function getTemplates(type?: string) {
+interface TemplateListOptions {
+  type?: string;
+  publishedOnly?: boolean;
+}
+
+function buildWhere(options: TemplateListOptions = {}) {
+  const where: { type?: string; published?: boolean } = {};
+  if (options.type) where.type = options.type;
+  if (options.publishedOnly) where.published = true;
+  return Object.keys(where).length > 0 ? where : undefined;
+}
+
+export async function getTemplates(typeOrOptions?: string | TemplateListOptions) {
+  const options: TemplateListOptions =
+    typeof typeOrOptions === 'string' ? { type: typeOrOptions } : typeOrOptions || {};
   return prisma.template.findMany({
-    where: type ? { type } : undefined,
+    where: buildWhere(options),
     orderBy: { updatedAt: 'desc' },
     select: {
       id: true,
@@ -12,6 +26,8 @@ export async function getTemplates(type?: string) {
       type: true,
       category: true,
       preheader: true,
+      published: true,
+      publishedAt: true,
       createdAt: true,
       updatedAt: true,
       createdByUser: {
@@ -20,13 +36,18 @@ export async function getTemplates(type?: string) {
       updatedByUser: {
         select: { id: true, name: true, avatarUrl: true },
       },
+      publishedByUser: {
+        select: { id: true, name: true, avatarUrl: true },
+      },
     },
   });
 }
 
-export async function getTemplatesWithContent(type?: string) {
+export async function getTemplatesWithContent(typeOrOptions?: string | TemplateListOptions) {
+  const options: TemplateListOptions =
+    typeof typeOrOptions === 'string' ? { type: typeOrOptions } : typeOrOptions || {};
   return prisma.template.findMany({
-    where: type ? { type } : undefined,
+    where: buildWhere(options),
     orderBy: { updatedAt: 'desc' },
     select: {
       id: true,
@@ -36,12 +57,17 @@ export async function getTemplatesWithContent(type?: string) {
       type: true,
       category: true,
       preheader: true,
+      published: true,
+      publishedAt: true,
       createdAt: true,
       updatedAt: true,
       createdByUser: {
         select: { id: true, name: true, avatarUrl: true },
       },
       updatedByUser: {
+        select: { id: true, name: true, avatarUrl: true },
+      },
+      publishedByUser: {
         select: { id: true, name: true, avatarUrl: true },
       },
     },
@@ -112,6 +138,29 @@ export async function updateTemplate(
 
 export async function deleteTemplate(slug: string) {
   return prisma.template.delete({ where: { slug } });
+}
+
+export async function setPublished(slug: string, published: boolean, userId?: string) {
+  return prisma.template.update({
+    where: { slug },
+    data: {
+      published,
+      publishedAt: published ? new Date() : null,
+      publishedByUserId: published ? userId || null : null,
+    },
+  });
+}
+
+export async function setPublishedBulk(slugs: string[], published: boolean, userId?: string) {
+  if (slugs.length === 0) return { count: 0 };
+  return prisma.template.updateMany({
+    where: { slug: { in: slugs } },
+    data: {
+      published,
+      publishedAt: published ? new Date() : null,
+      publishedByUserId: published ? userId || null : null,
+    },
+  });
 }
 
 export async function cloneTemplate(sourceSlug: string, targetSlug?: string, userId?: string) {

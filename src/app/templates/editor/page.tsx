@@ -9483,7 +9483,7 @@ export default function TemplateEditorPage() {
     : null;
   const isDragDropLabel = templateTypeLabel === "Drag & Drop";
   const lineCount = code.split("\n").length;
-  const backHref = subHref(espMode ? "/templates" : isAccount ? "/emails" : "/templates/library");
+  const backHref = espMode ? subHref("/templates") : isAccount ? subHref("/emails") : "/templates";
   const handleBackClick = useCallback(() => {
     if (typeof window !== "undefined" && window.history.length > 1) {
       router.back();

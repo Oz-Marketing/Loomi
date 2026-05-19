@@ -31,7 +31,7 @@ export function LibraryPickerContent({ onSelect }: LibraryPickerContentProps) {
     let cancelled = false;
 
     Promise.all([
-      fetch('/api/templates').then(r => r.ok ? r.json() : []),
+      fetch('/api/templates?publishedOnly=true').then(r => r.ok ? r.json() : []),
       fetch('/api/template-tags').then(r => r.ok ? r.json() : { tags: [], assignments: [] }),
     ])
       .then(([tData, tagResult]) => {

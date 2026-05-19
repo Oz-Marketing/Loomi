@@ -43,6 +43,12 @@ export async function POST(req: NextRequest) {
     if (!template) {
       return NextResponse.json({ error: 'Template not found' }, { status: 404 });
     }
+    if (!template.published) {
+      return NextResponse.json(
+        { error: 'Template must be published before it can be pushed to sub-accounts' },
+        { status: 400 },
+      );
+    }
 
     // Compile any-format source → final HTML (v2 / pure HTML / legacy scaffold)
     const compiledHtml = await compileToHtml(template.content);

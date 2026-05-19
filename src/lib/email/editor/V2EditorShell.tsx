@@ -6,7 +6,9 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-  closestCenter,
+  pointerWithin,
+  rectIntersection,
+  type CollisionDetection,
   type DragEndEvent,
   type DragStartEvent,
   DragOverlay,
@@ -182,12 +184,30 @@ function DndShell(props: V2EditorShellProps) {
     setActiveDragId(String(event.active.id));
   };
 
+  const handleDragCancel = () => {
+    setActiveDragId(null);
+  };
+
+  // Collision detection: prefer pointerWithin (only registers a hit if
+  // the cursor is actually inside a droppable's rect), with
+  // rectIntersection as a fallback for the thin drop-gap strips. When
+  // the cursor is outside every droppable — i.e. dragged into the
+  // sidebar, action bar, or canvas gutter — neither returns a match,
+  // so `event.over` is null and the drop cancels cleanly. Replaces
+  // closestCenter, which always picked the nearest block no matter how
+  // far the cursor was.
+  const collisionDetection: CollisionDetection = (args) => {
+    const within = pointerWithin(args);
+    if (within.length > 0) return within;
+    return rectIntersection(args);
+  };
+
   const handleDragEnd = (event: DragEndEvent) => {
     setActiveDragId(null);
 
     const activeId = String(event.active.id);
     const overIdRaw = event.over ? String(event.over.id) : null;
-    if (!overIdRaw) return;
+    if (!overIdRaw) return; // pointer was outside any droppable — cancel
     if (activeId === overIdRaw) return;
 
     const isPaletteChip = activeId.startsWith('palette:');
@@ -196,6 +216,29 @@ function DndShell(props: V2EditorShellProps) {
     // Empty top-level canvas
     if (overIdRaw === 'canvas-empty') {
       if (chipType) insertBlock(chipType, { parentId: null, afterId: null });
+      return;
+    }
+
+    // Between-block drop gaps — explicit insertion points at the top of
+    // the canvas (`gap:start`) and after each top-level block
+    // (`gap:after:<id>`). Containers + atoms both land at the exact
+    // position; the indicator's location and the drop location agree by
+    // construction.
+    if (overIdRaw === 'gap:start') {
+      if (chipType) {
+        insertBlock(chipType, { parentId: null, afterId: null });
+      } else {
+        moveBlock(activeId, { parentId: null, afterId: null });
+      }
+      return;
+    }
+    if (overIdRaw.startsWith('gap:after:')) {
+      const afterId = overIdRaw.slice('gap:after:'.length);
+      if (chipType) {
+        insertBlock(chipType, { parentId: null, afterId });
+      } else {
+        moveBlock(activeId, { parentId: null, afterId });
+      }
       return;
     }
 
@@ -268,9 +311,10 @@ function DndShell(props: V2EditorShellProps) {
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={collisionDetection}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
     >
       <div className="flex w-full h-full min-h-0 gap-4">
         {/* Left sidebar: Palette OR Properties */}
@@ -312,6 +356,18 @@ function DndShell(props: V2EditorShellProps) {
         {/* Canvas area — action bar + canvas */}
         <CanvasArea {...props} />
       </div>
+
+      {/* Cancel hint — only shown while a drag is in flight. Reminds
+          reps that releasing outside the email body (or hitting Esc)
+          aborts the drop cleanly. */}
+      {activeDragId && (
+        <div
+          aria-live="polite"
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 px-3 py-1.5 rounded-full bg-[var(--foreground)]/85 text-[var(--background)] text-[11px] font-medium shadow-lg pointer-events-none"
+        >
+          Drop outside the email or press <kbd className="font-mono">Esc</kbd> to cancel
+        </div>
+      )}
 
       <DragOverlay>
         {activeDragId && activeDragId.startsWith('palette:') ? (

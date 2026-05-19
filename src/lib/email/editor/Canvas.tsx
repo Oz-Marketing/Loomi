@@ -8,6 +8,7 @@ import {
 import { useDroppable } from '@dnd-kit/core';
 import { useEditor } from './EditorContext';
 import { EditableBlock } from './EditableBlock';
+import { BlockDropGap } from './BlockDropGap';
 import { BLOCK_COMPONENTS } from '../components';
 import type { Block, EmailTemplate } from '../types';
 import type { PreviewWidth } from './ActionBar';
@@ -115,11 +116,20 @@ export function Canvas({ previewWidth = 'desktop', zoom = 100, previewValues }: 
                 <EmptyCanvas highlight={isEmptyOver} />
               </div>
             ) : (
-              template.blocks.map((block) => (
-                <EditableBlock key={block.id} block={block}>
-                  <RenderedBlock block={block} settings={template.settings} />
-                </EditableBlock>
-              ))
+              <>
+                {/* Drop gap above the first block — accepts drops AND
+                    surfaces the inline "+" Section/Grid quick-add. */}
+                <BlockDropGap position="start" />
+                {template.blocks.map((block) => (
+                  <React.Fragment key={block.id}>
+                    <EditableBlock block={block}>
+                      <RenderedBlock block={block} settings={template.settings} />
+                    </EditableBlock>
+                    {/* Gap below each block — same droppable + "+" pattern. */}
+                    <BlockDropGap position="after" afterId={block.id} />
+                  </React.Fragment>
+                ))}
+              </>
             )}
           </SortableContext>
         </PreviewSubstitutionContext.Provider>

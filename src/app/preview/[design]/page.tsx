@@ -357,7 +357,7 @@ export default function TemplatePreviewPage() {
       <div className="flex items-center gap-4 px-6 h-14 border-b border-[var(--border)] bg-[var(--card)] flex-shrink-0">
         {/* Left: Back + title */}
         <button
-          onClick={() => router.push('/templates/library')}
+          onClick={() => router.push('/templates')}
           className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
           title="Back to Library"
         >
@@ -478,7 +478,7 @@ export default function TemplatePreviewPage() {
             <p className="text-red-400 text-sm font-medium">Preview Error</p>
             <p className="text-xs text-zinc-400">{error}</p>
             <button
-              onClick={() => router.push('/templates/library')}
+              onClick={() => router.push('/templates')}
               className="mt-2 text-sm text-[var(--primary)] hover:underline"
             >
               Back to Library

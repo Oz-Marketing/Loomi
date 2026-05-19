@@ -3409,70 +3409,83 @@ function BudgetPanel({
         )}
       </div>
 
-      {/* Allocation bar */}
-      {goal != null && goal > 0 && (
-        <>
-          <div className="flex justify-between mb-1">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-              Allocation
-            </span>
-            <span
-              className="text-[10px] font-bold"
-              style={{ color: statusColor }}
-            >
-              {allocPct != null ? `${allocPct.toFixed(1)}%` : ''}
-            </span>
-          </div>
-          <div className="h-2 rounded-full overflow-hidden bg-[var(--muted)] flex mb-2">
-            {srcAds.map((a, i) => {
-              const alloc = num(a.allocation) ?? 0;
-              const budgetCap = goal * MARKUP;
-              const w = budgetCap > 0 ? Math.min((alloc / budgetCap) * 100, 100) : 0;
-              const pct = budgetCap > 0 ? (alloc / budgetCap) * 100 : 0;
-              return w > 0 ? (
-                <div
-                  key={a.id}
-                  title={`${a.name || 'Untitled Ad'}: ${fmt(alloc)} (${pct.toFixed(1)}% of budget)`}
-                  className="h-full transition-[width] duration-500"
-                  style={{
-                    width: `${w}%`,
-                    background: AD_COLORS[i % AD_COLORS.length],
-                    borderRight: '1px solid var(--background)',
-                  }}
-                />
-              ) : null;
-            })}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {srcAds
-              .filter((a) => (num(a.allocation) ?? 0) > 0)
-              .map((a, i) => {
-                const alloc = num(a.allocation) ?? 0;
-                const budgetCap = goal * MARKUP;
-                const pct = budgetCap > 0 ? (alloc / budgetCap) * 100 : 0;
+      {/* Allocation bar — shows only this pool's portion of each ad's
+          allocation. For split ads, that's `splitBaseAmount` (Base card)
+          or `allocation − splitBaseAmount` (Added card), so a single
+          $192.50 split ad with $92.50 to base appears as $92.50 on the
+          Base card and $100.00 on the Added card. */}
+      {goal != null && goal > 0 && (() => {
+        const budgetCap = goal * MARKUP;
+        const poolEntries = srcAds
+          .map((a, i) => {
+            const c = adContribution(a);
+            const portion = source === 'base' ? c.baseAllocation : c.addedAllocation;
+            return { ad: a, portion, colorIdx: i };
+          })
+          .filter((e) => e.portion > 0);
+        return (
+          <>
+            <div className="flex justify-between mb-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                Allocation
+              </span>
+              <span
+                className="text-[10px] font-bold"
+                style={{ color: statusColor }}
+              >
+                {allocPct != null ? `${allocPct.toFixed(1)}%` : ''}
+              </span>
+            </div>
+            <div className="h-2 rounded-full overflow-hidden bg-[var(--muted)] flex mb-2">
+              {poolEntries.map(({ ad, portion, colorIdx }) => {
+                const w = budgetCap > 0 ? Math.min((portion / budgetCap) * 100, 100) : 0;
+                const pct = budgetCap > 0 ? (portion / budgetCap) * 100 : 0;
+                const isSplit = ad.budgetSource === 'split';
+                return w > 0 ? (
+                  <div
+                    key={ad.id}
+                    title={`${ad.name || 'Untitled Ad'}${isSplit ? ` (split — ${source} portion)` : ''}: ${fmt(portion)} (${pct.toFixed(1)}% of budget)`}
+                    className="h-full transition-[width] duration-500"
+                    style={{
+                      width: `${w}%`,
+                      background: AD_COLORS[colorIdx % AD_COLORS.length],
+                      borderRight: '1px solid var(--background)',
+                    }}
+                  />
+                ) : null;
+              })}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {poolEntries.map(({ ad, portion, colorIdx }) => {
+                const pct = budgetCap > 0 ? (portion / budgetCap) * 100 : 0;
+                const isSplit = ad.budgetSource === 'split';
                 return (
                   <div
-                    key={a.id}
+                    key={ad.id}
                     className="flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]"
-                    title={`${pct.toFixed(1)}% of budget`}
+                    title={`${pct.toFixed(1)}% of budget${isSplit ? ' (split portion)' : ''}`}
                   >
                     <div
                       className="w-1.5 h-1.5 rounded-sm flex-shrink-0"
-                      style={{ background: AD_COLORS[i % AD_COLORS.length] }}
+                      style={{ background: AD_COLORS[colorIdx % AD_COLORS.length] }}
                     />
                     <span className="max-w-[110px] overflow-hidden text-ellipsis whitespace-nowrap text-[var(--foreground)]">
-                      {a.name || 'Untitled Ad'}
+                      {ad.name || 'Untitled Ad'}
+                      {isSplit && (
+                        <span className="text-[var(--muted-foreground)] ml-0.5">·split</span>
+                      )}
                     </span>
-                    <span>{fmt(alloc)}</span>
+                    <span>{fmt(portion)}</span>
                     <span className="text-[var(--muted-foreground)]">
                       ({pct.toFixed(1)}%)
                     </span>
                   </div>
                 );
               })}
-          </div>
-        </>
-      )}
+            </div>
+          </>
+        );
+      })()}
     </div>
   );
 }
@@ -5798,6 +5811,327 @@ function AccountNotesDrawer({
   );
 }
 
+// ─── Budget Log ───────────────────────────────────────────────────────────
+// Point-in-time snapshots of the pacer's actual-spend + client-budget
+// numbers per account + period. Reps log entries while reviewing the
+// monthly pacer to track when budgets were checked or adjusted.
+
+interface BudgetLogEntry {
+  id: string;
+  period: string;
+  baseSpend: string | null;
+  baseClientBudget: string | null;
+  addedSpend: string | null;
+  addedClientBudget: string | null;
+  note: string | null;
+  authorUserId: string | null;
+  createdAt: string;
+}
+
+function BudgetLogDrawer({
+  accountKey,
+  accountLabel,
+  period,
+  snapshot,
+  users,
+  currentUserId,
+  onClose,
+}: {
+  accountKey: string;
+  accountLabel: string;
+  period: string;
+  // Live snapshot computed by the parent at render time. The drawer
+  // captures these exact values when the user clicks Log.
+  snapshot: {
+    baseSpend: number;
+    baseClientBudget: number;
+    addedSpend: number;
+    addedClientBudget: number;
+  };
+  users: DirectoryUser[];
+  currentUserId: string | null;
+  onClose: () => void;
+}) {
+  const [entries, setEntries] = useState<BudgetLogEntry[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  const [posting, setPosting] = useState(false);
+  const userMap = useMemo(() => {
+    const m = new Map<string, DirectoryUser>();
+    for (const u of users) m.set(u.id, u);
+    return m;
+  }, [users]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/meta-ads-pacer/${accountKey}/budget-log?period=${period}`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<{ entries: BudgetLogEntry[] }>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setEntries(Array.isArray(data.entries) ? data.entries : []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Failed to load');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey, period]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const handleLog = async () => {
+    if (posting) return;
+    setPosting(true);
+    try {
+      const res = await fetch(`/api/meta-ads-pacer/${accountKey}/budget-log`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          period,
+          baseSpend: snapshot.baseSpend.toString(),
+          baseClientBudget: snapshot.baseClientBudget.toString(),
+          addedSpend: snapshot.addedSpend.toString(),
+          addedClientBudget: snapshot.addedClientBudget.toString(),
+          note: note.trim() || null,
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const created = (await res.json()) as BudgetLogEntry;
+      setEntries((prev) => [created, ...(prev ?? [])]);
+      setNote('');
+      toast.success('Budget logged');
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[pacer budget-log] post failed', err);
+      toast.error('Could not log budget');
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  const handleDelete = async (logId: string) => {
+    const prev = entries ?? [];
+    setEntries(prev.filter((e) => e.id !== logId));
+    try {
+      const res = await fetch(
+        `/api/meta-ads-pacer/${accountKey}/budget-log/${logId}`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[pacer budget-log] delete failed', err);
+      toast.error('Could not delete entry');
+      setEntries(prev);
+    }
+  };
+
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div className="fixed inset-0 z-50" onClick={onClose}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="frost-heavy fixed right-3 top-3 bottom-3 w-[460px] max-w-[calc(100vw-1.5rem)] rounded-2xl flex flex-col animate-slide-in-right overflow-hidden"
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)] flex-shrink-0">
+          <div className="min-w-0">
+            <h3 className="text-base font-bold text-[var(--foreground)] flex items-center gap-2">
+              <ClipboardDocumentListIcon className="w-4 h-4 flex-shrink-0" />
+              <span className="truncate">Budget Log — {accountLabel}</span>
+            </h3>
+            <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+              Snapshots for {fmtPeriodLong(period)}. Captures spend + client budget at the moment you log.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] flex-shrink-0"
+            aria-label="Close"
+          >
+            <XMarkIcon className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Log-current panel — shows the live snapshot we'd capture if
+            the user clicks Log right now, plus an optional note. */}
+        <div className="px-4 py-3 border-b border-[var(--border)] bg-[var(--primary)]/5 flex-shrink-0 space-y-2">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold">
+            Log current snapshot
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-[11px]">
+            <div className="rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1.5">
+              <div className="text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]" style={{ color: COLORS.base }}>
+                Base
+              </div>
+              <div className="text-[var(--foreground)] tabular-nums">
+                {fmt(snapshot.baseSpend)} <span className="text-[var(--muted-foreground)]">/ {fmt(snapshot.baseClientBudget)}</span>
+              </div>
+            </div>
+            <div className="rounded border border-[var(--border)] bg-[var(--card)] px-2 py-1.5">
+              <div className="text-[9px] uppercase tracking-wider text-[var(--muted-foreground)]" style={{ color: COLORS.added }}>
+                Added
+              </div>
+              <div className="text-[var(--foreground)] tabular-nums">
+                {fmt(snapshot.addedSpend)} <span className="text-[var(--muted-foreground)]">/ {fmt(snapshot.addedClientBudget)}</span>
+              </div>
+            </div>
+          </div>
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                handleLog();
+              }
+            }}
+            placeholder="Optional note (e.g. rebalanced after client call)…"
+            rows={2}
+            className={`${inputClass} w-full resize-none text-xs`}
+          />
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={handleLog}
+              disabled={posting}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-semibold rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
+            >
+              <CheckIcon className="w-3.5 h-3.5" />
+              {posting ? 'Logging…' : 'Log this budget'}
+            </button>
+          </div>
+        </div>
+
+        {/* History list */}
+        <div className="flex-1 min-h-0 overflow-y-auto themed-scrollbar px-4 py-3">
+          <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold mb-2">
+            History
+          </div>
+          {error ? (
+            <div className="text-xs text-[var(--muted-foreground)] py-4 text-center">
+              Could not load entries: {error}
+            </div>
+          ) : entries == null ? (
+            <div className="text-xs text-[var(--muted-foreground)] py-4 text-center">
+              Loading…
+            </div>
+          ) : entries.length === 0 ? (
+            <div className="text-xs text-[var(--muted-foreground)] italic py-4 text-center">
+              No entries yet for this month. Log the first one above.
+            </div>
+          ) : (
+            <ul className="space-y-2 list-none p-0 m-0">
+              {entries.map((entry) => {
+                const isMine =
+                  !!currentUserId && entry.authorUserId === currentUserId;
+                const author = entry.authorUserId
+                  ? userMap.get(entry.authorUserId)
+                  : null;
+                const stamp = new Date(entry.createdAt).toLocaleString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                });
+                const baseSpend = num(entry.baseSpend) ?? 0;
+                const baseBudget = num(entry.baseClientBudget) ?? 0;
+                const addedSpend = num(entry.addedSpend) ?? 0;
+                const addedBudget = num(entry.addedClientBudget) ?? 0;
+                return (
+                  <li
+                    key={entry.id}
+                    className={`rounded-lg border px-3 py-2 ${
+                      isMine
+                        ? 'border-[var(--primary)]/40 bg-[var(--primary)]/12'
+                        : 'border-[var(--border)] bg-[var(--card)]'
+                    }`}
+                  >
+                    <div className="flex justify-between items-start mb-2 gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {author && (
+                          <UserAvatar
+                            name={author.name}
+                            email={author.email}
+                            avatarUrl={author.avatarUrl}
+                            size={28}
+                            className={`w-7 h-7 rounded-full object-cover flex-shrink-0 border ${
+                              isMine
+                                ? 'border-[var(--primary)]/60'
+                                : 'border-[var(--border)]'
+                            }`}
+                          />
+                        )}
+                        <div className="flex flex-col min-w-0 leading-tight">
+                          <span
+                            className={`text-xs font-semibold truncate ${
+                              isMine ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'
+                            }`}
+                          >
+                            {author?.name ?? 'Unknown'}
+                          </span>
+                          <span className="text-[10px] text-[var(--muted-foreground)] truncate">
+                            {stamp}
+                          </span>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(entry.id)}
+                        className="text-[var(--muted-foreground)] hover:text-red-400 transition-colors flex-shrink-0"
+                        aria-label="Delete entry"
+                        title="Delete"
+                      >
+                        <TrashIcon className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px] mb-1.5">
+                      <div className="rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1.5">
+                        <div className="text-[9px] uppercase tracking-wider" style={{ color: COLORS.base }}>
+                          Base
+                        </div>
+                        <div className="text-[var(--foreground)] tabular-nums">
+                          {fmt(baseSpend)} <span className="text-[var(--muted-foreground)]">/ {fmt(baseBudget)}</span>
+                        </div>
+                      </div>
+                      <div className="rounded border border-[var(--border)] bg-[var(--background)] px-2 py-1.5">
+                        <div className="text-[9px] uppercase tracking-wider" style={{ color: COLORS.added }}>
+                          Added
+                        </div>
+                        <div className="text-[var(--foreground)] tabular-nums">
+                          {fmt(addedSpend)} <span className="text-[var(--muted-foreground)]">/ {fmt(addedBudget)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    {entry.note && (
+                      <p className="m-0 text-xs leading-relaxed text-[var(--foreground)] whitespace-pre-wrap break-words">
+                        {entry.note}
+                      </p>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // Small chat-bubble button that opens the account-level notes modal.
 // The count badge surfaces when there's at least one note so reps can
 // see at a glance which accounts have unread context.
@@ -6702,6 +7036,10 @@ function BudgetPacerPanel({
   currentUserId,
   onChange,
   totals,
+  accountKey,
+  accountLabel,
+  period,
+  users,
 }: {
   plan: PacerPlan;
   filters: PlanFilters;
@@ -6709,13 +7047,61 @@ function BudgetPacerPanel({
   currentUserId: string | null;
   onChange: (p: PacerPlan) => void;
   totals: { base: number; added: number; actual: number };
+  accountKey: string;
+  accountLabel: string;
+  period: string;
+  users: DirectoryUser[];
 }) {
+  const [budgetLogOpen, setBudgetLogOpen] = useState(false);
+
   const updateAd = (u: PacerAd) =>
     onChange({ ...plan, ads: plan.ads.map((a) => (a.id === u.id ? u : a)) });
 
   const visibleAds = useMemo(
     () => applyFilters(plan.ads, filters, currentUserId),
     [plan.ads, filters, currentUserId],
+  );
+
+  // Per-pool actual spend snapshot for the budget-log drawer. Recomputed
+  // each render so the snapshot the drawer captures is always live.
+  const poolSnapshot = useMemo(() => {
+    let baseSpend = 0;
+    let addedSpend = 0;
+    plan.ads.forEach((ad) => {
+      const c = adContribution(ad);
+      baseSpend += c.baseSpent;
+      addedSpend += c.addedSpent;
+    });
+    return {
+      baseSpend,
+      addedSpend,
+      baseClientBudget: num(plan.baseBudgetGoal) ?? 0,
+      addedClientBudget: num(plan.addedBudgetGoal) ?? 0,
+    };
+  }, [plan]);
+
+  const budgetLogButton = (
+    <button
+      type="button"
+      onClick={() => setBudgetLogOpen(true)}
+      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+      title="Open budget log"
+    >
+      <ClipboardDocumentListIcon className="w-3.5 h-3.5" />
+      Budget Log
+    </button>
+  );
+
+  const budgetLogDrawer = budgetLogOpen && (
+    <BudgetLogDrawer
+      accountKey={accountKey}
+      accountLabel={accountLabel}
+      period={period}
+      snapshot={poolSnapshot}
+      users={users}
+      currentUserId={currentUserId}
+      onClose={() => setBudgetLogOpen(false)}
+    />
   );
 
   if (plan.ads.length === 0) {
@@ -6726,11 +7112,14 @@ function BudgetPacerPanel({
             <ChartBarIcon className="w-4 h-4" />
             Spend Pacing
           </h2>
-          <PacerSpendTotals
-            base={totals.base}
-            added={totals.added}
-            actual={totals.actual}
-          />
+          <div className="flex items-center gap-4 flex-wrap">
+            <PacerSpendTotals
+              base={totals.base}
+              added={totals.added}
+              actual={totals.actual}
+            />
+            {budgetLogButton}
+          </div>
         </div>
         <div className="glass-section-card rounded-xl px-6 py-12 text-center">
           <ClipboardDocumentListIcon className="w-10 h-10 mx-auto mb-3 text-[var(--muted-foreground)]" />
@@ -6741,6 +7130,7 @@ function BudgetPacerPanel({
             Add ads in the Ad Planner tab and they'll appear here automatically.
           </div>
         </div>
+        {budgetLogDrawer}
       </div>
     );
   }
@@ -6754,11 +7144,14 @@ function BudgetPacerPanel({
             visibleAds.length !== plan.ads.length ? ` of ${plan.ads.length}` : ''
           } ad${plan.ads.length !== 1 ? 's' : ''})`}
         </h2>
-        <PacerSpendTotals
-          base={totals.base}
-          added={totals.added}
-          actual={totals.actual}
-        />
+        <div className="flex items-center gap-4 flex-wrap">
+          <PacerSpendTotals
+            base={totals.base}
+            added={totals.added}
+            actual={totals.actual}
+          />
+          {budgetLogButton}
+        </div>
       </div>
       <FilterStatus
         filters={filters}
@@ -6791,6 +7184,7 @@ function BudgetPacerPanel({
           />
         ))
       )}
+      {budgetLogDrawer}
     </div>
   );
 }
@@ -7232,16 +7626,12 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
   const effectiveActual = useOverride ? overrideValue : trackedTotal;
   const daysIn = daysInPeriod(period);
   const daysElapsed = daysElapsedInPeriod(period);
-  const isPastMonth = daysElapsed >= daysIn && daysIn > 0;
-  // "Should have spent" = the prorated actual-spend target for the month
-  // through today. For past months, that's the full target; for current,
-  // pro-rated by days elapsed.
-  const shouldHaveSpent = isPastMonth
-    ? budgetActual
-    : daysIn > 0
-      ? budgetActual * (daysElapsed / daysIn)
-      : 0;
-  // Single variance: actual vs prorated target.
+  // "Should have spent" intentionally drops day-based proration — this view
+  // is used at end-of-month for retrospective review, so the target is just
+  // the full actual-spend budget (client goal × markup). The day count is
+  // still shown above for context only.
+  const shouldHaveSpent = budgetActual;
+  // Single variance: actual vs target.
   const variance = effectiveActual - shouldHaveSpent;
 
   const varianceColor = (v: number) =>
@@ -7390,7 +7780,7 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                 </div>
                 <div>
                   <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                    {isPastMonth ? 'Should have spent (total)' : 'Should have spent'}
+                    Should have spent
                   </div>
                   <div
                     className="text-base font-bold tabular-nums"
@@ -7399,9 +7789,7 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                     {fmt(shouldHaveSpent)}
                   </div>
                   <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
-                    {isPastMonth
-                      ? `${fmt(budgetGross)} × ${effectiveMarkup}`
-                      : `${fmt(budgetActual)} × ${daysElapsed}/${daysIn} days`}
+                    {`${fmt(budgetGross)} × ${effectiveMarkup}`}
                   </div>
                 </div>
               </div>
@@ -8596,6 +8984,10 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                   currentUserId={currentUserId}
                   onChange={setPlan}
                   totals={totals}
+                  accountKey={activeKey}
+                  accountLabel={activeAccount?.dealer ?? activeKey}
+                  period={period}
+                  users={users}
                 />
               ) : pacerTab === 'compare' ? (
                 <ComparePanel accountKey={activeKey} />

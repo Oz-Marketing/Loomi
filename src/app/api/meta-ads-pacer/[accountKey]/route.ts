@@ -24,6 +24,7 @@ interface IncomingAd {
   coop?: string;
   budgetType?: string;
   budgetSource?: string;
+  splitBaseAmount?: string | null;
   flightStart?: string | null;
   flightEnd?: string | null;
   liveDate?: string | null;
@@ -171,6 +172,7 @@ export async function PUT(
         coop: ad.coop || 'No',
         budgetType: ad.budgetType || 'Daily',
         budgetSource: ad.budgetSource || 'base',
+        splitBaseAmount: nullable(ad.splitBaseAmount),
         flightStart: nullable(ad.flightStart),
         flightEnd: nullable(ad.flightEnd),
         liveDate: nullable(ad.liveDate),

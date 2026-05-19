@@ -153,7 +153,7 @@ export async function fetchOverview(accountKeys: string[], period: string) {
   const planByKey = new Map(plans.map((p) => [p.accountKey, p.id]));
   const planIds = plans.map((p) => p.id);
 
-  const [budgets, ads] = await Promise.all([
+  const [budgets, ads, noteCounts] = await Promise.all([
     planIds.length > 0
       ? prisma.metaAdsPacerPeriodBudget.findMany({
           where: { planId: { in: planIds }, period },
@@ -169,6 +169,13 @@ export async function fetchOverview(accountKeys: string[], period: string) {
           },
         })
       : Promise.resolve([]),
+    // Aggregate account-level note counts in one round-trip so the
+    // overview can render the chat badges without N follow-up fetches.
+    prisma.metaAdsPacerAccountNote.groupBy({
+      by: ['accountKey'],
+      where: { accountKey: { in: accountKeys } },
+      _count: { _all: true },
+    }),
   ]);
 
   const budgetByPlanId = new Map(budgets.map((b) => [b.planId, b]));
@@ -178,6 +185,9 @@ export async function fetchOverview(accountKeys: string[], period: string) {
     arr.push(ad);
     adsByPlanId.set(ad.planId, arr);
   }
+  const noteCountByKey = new Map(
+    noteCounts.map((row) => [row.accountKey, row._count._all]),
+  );
 
   return accounts
     .map((acct) => {
@@ -189,6 +199,7 @@ export async function fetchOverview(accountKeys: string[], period: string) {
         dealer: acct.dealer,
         baseBudgetGoal: budget?.baseBudgetGoal ?? null,
         addedBudgetGoal: budget?.addedBudgetGoal ?? null,
+        notesCount: noteCountByKey.get(acct.key) ?? 0,
         ads: acctAds.map((ad) => ({
           ...ad,
           activityLog: ad.activityLog.map(attachUrl),

@@ -46,7 +46,11 @@ export interface PacerAd {
   recurring: string;
   coop: string;
   budgetType: 'Daily' | 'Lifetime';
-  budgetSource: 'base' | 'added';
+  // "split" = allocation is divided between Base and Added pools.
+  // `splitBaseAmount` records how much of `allocation` is from Base; the
+  // remainder is from Added. pacerActual apportions proportionally.
+  budgetSource: 'base' | 'added' | 'split';
+  splitBaseAmount: string | null;
   flightStart: string | null;
   flightEnd: string | null;
   liveDate: string | null;

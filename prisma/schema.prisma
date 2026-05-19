@@ -38,6 +38,7 @@ model User {
   metaPacerAccountRepAds       MetaAdsPacerAd[]          @relation("MetaPacerAccountRep")
   metaPacerDesignNotesAuthored MetaAdsPacerDesignNote[]  @relation("MetaPacerDesignNoteAuthor")
   metaPacerActivityAuthored    MetaAdsPacerActivityLog[] @relation("MetaPacerActivityAuthor")
+  metaPacerAccountNotes        MetaAdsPacerAccountNote[] @relation("MetaPacerAccountNoteAuthor")
   notifications                Notification[]
   notificationPreferences      NotificationPreference[]
 }
@@ -118,6 +119,7 @@ model Account {
   espTemplates            EspTemplate[]
   mediaAssets             MediaAsset[]
   metaAdsPacerPlan        MetaAdsPacerPlan?
+  metaAdsPacerAccountNotes MetaAdsPacerAccountNote[]
 
   @@index([accountRepId])
 }
@@ -640,7 +642,12 @@ model MetaAdsPacerAd {
   recurring    String  @default("No") // Yes | No | Unknown
   coop         String  @default("No") // Yes | No | Unknown
   budgetType   String  @default("Daily") // Daily | Lifetime
-  budgetSource String  @default("base") // base | added
+  // base | added | split. When "split", the ad's allocation is divided
+  // between the two budget pools — splitBaseAmount goes to Base, the
+  // rest goes to Added. pacerActual splits proportionally to keep both
+  // pools' over/under math accurate.
+  budgetSource    String  @default("base")
+  splitBaseAmount String?
 
   // Dates (ISO yyyy-MM-dd strings to mirror <input type="date">)
   flightStart     String?
@@ -710,6 +717,22 @@ model MetaAdsPacerActivityLog {
   createdAt          DateTime       @default(now())
 
   @@index([adId, createdAt])
+}
+
+// Account-level chat log for the Meta Ads Pacer. Distinct from the
+// per-ad DesignNote / ActivityLog — these notes live on the account
+// itself so reps can capture context that applies to the whole pacing
+// view (variance explanations, client conversations, etc).
+model MetaAdsPacerAccountNote {
+  id           String   @id @default(cuid())
+  accountKey   String
+  account      Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  text         String
+  authorUserId String?
+  author       User?    @relation("MetaPacerAccountNoteAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  @@index([accountKey, createdAt])
 }
 
 // ─────────────────────────────────────────────────────

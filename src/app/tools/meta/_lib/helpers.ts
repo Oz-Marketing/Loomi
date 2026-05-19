@@ -115,6 +115,7 @@ export function makeAd(position: number, period: string): PacerAd {
     coop: 'No',
     budgetType: 'Daily',
     budgetSource: 'base',
+    splitBaseAmount: null,
     flightStart: null,
     flightEnd: null,
     liveDate: null,

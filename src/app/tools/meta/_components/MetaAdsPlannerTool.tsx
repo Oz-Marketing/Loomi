@@ -119,6 +119,88 @@ const AD_COLORS = [
 
 const MARKUP = 0.77;
 
+// Per-ad contribution to the Base / Added budget pools. For a regular
+// single-source ad, the full allocation + pacerActual goes to its source.
+// For a "split" ad, the allocation is divided per `splitBaseAmount` and
+// the pacerActual is apportioned proportionally — keeping both pools'
+// over/under math accurate when one ad is funded from both budgets.
+interface AdSourceContribution {
+  baseAllocation: number;
+  addedAllocation: number;
+  baseSpent: number;
+  addedSpent: number;
+}
+
+function adContribution(ad: {
+  allocation?: string | null;
+  pacerActual?: string | null;
+  budgetSource: 'base' | 'added' | 'split';
+  splitBaseAmount: string | null;
+}): AdSourceContribution {
+  const allocation = numUtil(ad.allocation) ?? 0;
+  const spent = numUtil(ad.pacerActual) ?? 0;
+  if (ad.budgetSource === 'split' && allocation > 0) {
+    const baseAlloc = Math.min(
+      Math.max(0, numUtil(ad.splitBaseAmount) ?? 0),
+      allocation,
+    );
+    const baseShare = baseAlloc / allocation;
+    return {
+      baseAllocation: baseAlloc,
+      addedAllocation: allocation - baseAlloc,
+      baseSpent: spent * baseShare,
+      addedSpent: spent * (1 - baseShare),
+    };
+  }
+  if (ad.budgetSource === 'added') {
+    return {
+      baseAllocation: 0,
+      addedAllocation: allocation,
+      baseSpent: 0,
+      addedSpent: spent,
+    };
+  }
+  return {
+    baseAllocation: allocation,
+    addedAllocation: 0,
+    baseSpent: spent,
+    addedSpent: 0,
+  };
+}
+
+// Lightweight number-parse helper used by adContribution before the
+// shared `num` import is in scope at this position. Mirrors the same
+// behavior — returns null on empty/non-numeric, number otherwise.
+function numUtil(s: string | null | undefined): number | null {
+  if (s == null) return null;
+  const trimmed = String(s).trim();
+  if (trimmed === '') return null;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : null;
+}
+
+// Display helpers for the three budget sources (Base / Added / Split).
+// Centralized so adding a new source later only touches one place, and
+// so the Split tint stays consistent with the lifetime/violet accent
+// used in the ad editor.
+function sourceLabel(s: 'base' | 'added' | 'split'): string {
+  return s === 'base' ? 'Base' : s === 'added' ? 'Added' : 'Split';
+}
+function sourceColor(s: 'base' | 'added' | 'split'): string {
+  return s === 'base'
+    ? COLORS.base
+    : s === 'added'
+      ? COLORS.added
+      : COLORS.lifetime;
+}
+function sourceTint(s: 'base' | 'added' | 'split'): string {
+  return s === 'base'
+    ? 'rgba(56,189,248,0.18)'
+    : s === 'added'
+      ? 'rgba(52,211,153,0.18)'
+      : 'rgba(167,139,250,0.22)';
+}
+
 // ─── Types ─────────────────────────────────────────────────────────────────
 interface DirectoryUser {
   id: string;
@@ -159,7 +241,12 @@ interface PacerAd {
   recurring: string;
   coop: string;
   budgetType: 'Daily' | 'Lifetime';
-  budgetSource: 'base' | 'added';
+  budgetSource: 'base' | 'added' | 'split';
+  // When budgetSource === 'split', this is the dollar portion of
+  // `allocation` drawn from the Base pool. The Added portion is the
+  // remainder (allocation − splitBaseAmount). pacerActual apportions
+  // proportionally so both pools' over/under math stays accurate.
+  splitBaseAmount: string | null;
   flightStart: string | null;
   flightEnd: string | null;
   liveDate: string | null;
@@ -328,6 +415,7 @@ function makeAd(position: number, period: string): PacerAd {
     coop: 'No',
     budgetType: 'Daily',
     budgetSource: 'base',
+    splitBaseAmount: null,
     flightStart: null,
     flightEnd: null,
     liveDate: null,
@@ -1064,15 +1152,26 @@ function BudgetSourceToggle({
   value,
   onChange,
 }: {
-  value: 'base' | 'added';
-  onChange: (v: 'base' | 'added') => void;
+  value: 'base' | 'added' | 'split';
+  onChange: (v: 'base' | 'added' | 'split') => void;
 }) {
+  const opts = ['base', 'added', 'split'] as const;
   return (
     <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--input)] overflow-hidden">
-      {(['base', 'added'] as const).map((t) => {
+      {opts.map((t, i) => {
         const active = value === t;
-        const tint = t === 'base' ? 'rgba(56,189,248,0.18)' : 'rgba(52,211,153,0.18)';
-        const fg = t === 'base' ? COLORS.base : COLORS.added;
+        const tint =
+          t === 'base'
+            ? 'rgba(56,189,248,0.18)'
+            : t === 'added'
+              ? 'rgba(52,211,153,0.18)'
+              : 'rgba(167,139,250,0.22)';
+        const fg =
+          t === 'base'
+            ? COLORS.base
+            : t === 'added'
+              ? COLORS.added
+              : COLORS.lifetime;
         return (
           <button
             key={t}
@@ -1082,10 +1181,15 @@ function BudgetSourceToggle({
             style={{
               background: active ? tint : 'transparent',
               color: active ? fg : 'var(--muted-foreground)',
-              borderRight: t === 'base' ? '1px solid var(--border)' : 'none',
+              borderRight: i < opts.length - 1 ? '1px solid var(--border)' : 'none',
             }}
+            title={
+              t === 'split'
+                ? 'Split — allocation drawn from both Base and Added budgets'
+                : undefined
+            }
           >
-            {t === 'base' ? 'Base' : 'Added'}
+            {t === 'base' ? 'Base' : t === 'added' ? 'Added' : 'Split'}
           </button>
         );
       })}
@@ -2034,14 +2138,11 @@ function AdSummaryRow({
           <span
             className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
             style={{
-              background:
-                ad.budgetSource === 'base'
-                  ? 'rgba(56,189,248,0.18)'
-                  : 'rgba(52,211,153,0.18)',
-              color: ad.budgetSource === 'base' ? COLORS.base : COLORS.added,
+              background: sourceTint(ad.budgetSource),
+              color: sourceColor(ad.budgetSource),
             }}
           >
-            {ad.budgetSource === 'base' ? 'Base' : 'Added'}
+            {sourceLabel(ad.budgetSource)}
           </span>
         </div>
       </td>
@@ -2050,7 +2151,7 @@ function AdSummaryRow({
       <td
         className="px-3 py-2 align-middle text-xs font-semibold whitespace-nowrap"
         style={{
-          color: ad.budgetSource === 'base' ? COLORS.base : COLORS.added,
+          color: sourceColor(ad.budgetSource),
         }}
       >
         {allocation != null ? fmt(allocation) : '—'}
@@ -2750,10 +2851,16 @@ function PlanAdForm({
               />
             </Field>
           </div>
-          <div className="mb-3">
+          <div className="mb-3 flex flex-wrap gap-3 items-end">
             <Field
               label="Actual Spend Amount"
-              color={ad.budgetSource === 'base' ? COLORS.base : COLORS.added}
+              color={
+                ad.budgetSource === 'base'
+                  ? COLORS.base
+                  : ad.budgetSource === 'added'
+                    ? COLORS.added
+                    : COLORS.lifetime
+              }
             >
               {/* Sized for ~$999,999.99 — wide enough for 6 digits + cents
                   without dominating the form like a full-width input. */}
@@ -2765,7 +2872,48 @@ function PlanAdForm({
                 />
               </div>
             </Field>
+            {ad.budgetSource === 'split' && (
+              <Field label="Base Portion" color={COLORS.base}>
+                <div className="w-[160px]">
+                  <DollarInput
+                    value={ad.splitBaseAmount}
+                    onChange={(v) =>
+                      onUpdate({ ...ad, splitBaseAmount: v ?? null })
+                    }
+                    placeholder="0.00"
+                  />
+                </div>
+              </Field>
+            )}
           </div>
+
+          {ad.budgetSource === 'split' && allocation > 0 && (
+            <div className="mb-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-2 text-[11px] text-[var(--muted-foreground)]">
+              {(() => {
+                const baseAlloc = Math.min(
+                  Math.max(0, num(ad.splitBaseAmount) ?? 0),
+                  allocation,
+                );
+                const addedAlloc = allocation - baseAlloc;
+                return (
+                  <>
+                    <span style={{ color: COLORS.base }} className="font-semibold">
+                      Base: {fmt(baseAlloc)}
+                    </span>
+                    {' · '}
+                    <span style={{ color: COLORS.added }} className="font-semibold">
+                      Added: {fmt(addedAlloc)}
+                    </span>
+                    {baseAlloc > allocation && (
+                      <span style={{ color: COLORS.error }} className="ml-2">
+                        Base Portion exceeds the total allocation
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+          )}
 
           {allocation > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
@@ -2777,7 +2925,13 @@ function PlanAdForm({
               <MetricBox
                 label="Actual Spend"
                 value={fmt(allocation)}
-                color={ad.budgetSource === 'base' ? COLORS.base : COLORS.added}
+                color={
+                  ad.budgetSource === 'base'
+                    ? COLORS.base
+                    : ad.budgetSource === 'added'
+                      ? COLORS.added
+                      : COLORS.lifetime
+                }
               />
             </div>
           )}
@@ -3148,8 +3302,16 @@ function BudgetPanel({
   onChange: (p: PacerPlan) => void;
 }) {
   const goal = num(plan[goalKey]);
-  const srcAds = plan.ads.filter((a) => a.budgetSource === source);
-  const totalAlloc = srcAds.reduce((s, a) => s + (num(a.allocation) ?? 0), 0);
+  // Include split ads here too — their per-source portion contributes
+  // to this pool's totals via adContribution. Pure-source ads only
+  // contribute to one side, but a split ad contributes to both.
+  const srcAds = plan.ads.filter(
+    (a) => a.budgetSource === source || a.budgetSource === 'split',
+  );
+  const totalAlloc = plan.ads.reduce((s, a) => {
+    const c = adContribution(a);
+    return s + (source === 'base' ? c.baseAllocation : c.addedAllocation);
+  }, 0);
   const grossAlloc = Math.round((totalAlloc / MARKUP) * 100) / 100;
   const remaining = goal != null ? goal * MARKUP - totalAlloc : null;
   const allocPct = goal != null && goal > 0 ? (totalAlloc / (goal * MARKUP)) * 100 : null;
@@ -3324,12 +3486,17 @@ function BudgetPanel({
 
 // ─── Total Account Allocation header ───────────────────────────────────────
 function TotalAllocationHeader({ plan }: { plan: PacerPlan }) {
-  const totalBase = plan.ads
-    .filter((a) => a.budgetSource === 'base')
-    .reduce((s, a) => s + (num(a.allocation) ?? 0), 0);
-  const totalAdded = plan.ads
-    .filter((a) => a.budgetSource === 'added')
-    .reduce((s, a) => s + (num(a.allocation) ?? 0), 0);
+  // Walk every ad once and sum via adContribution so split ads add to
+  // both pool totals proportionally.
+  const { totalBase, totalAdded } = plan.ads.reduce(
+    (acc, a) => {
+      const c = adContribution(a);
+      acc.totalBase += c.baseAllocation;
+      acc.totalAdded += c.addedAllocation;
+      return acc;
+    },
+    { totalBase: 0, totalAdded: 0 },
+  );
   const totalActual = totalBase + totalAdded;
   if (totalActual === 0) return null;
   const totalGross = Math.round((totalActual / MARKUP) * 100) / 100;
@@ -3614,7 +3781,7 @@ interface CopySourceAd {
   id: string;
   name: string;
   budgetType: string;
-  budgetSource: string;
+  budgetSource: 'base' | 'added' | 'split';
   flightStart: string | null;
   flightEnd: string | null;
 }
@@ -3806,7 +3973,7 @@ function CopyPlanModal({
                         <span>{ad.budgetType}</span>
                         <span>·</span>
                         <span>
-                          {ad.budgetSource === 'base' ? 'Base' : 'Added'}
+                          {sourceLabel(ad.budgetSource)}
                         </span>
                         {ad.flightStart && ad.flightEnd && (
                           <>
@@ -4045,16 +4212,32 @@ function BudgetCalculatorModal({
   //                         are reserved out of the pool).
   // * Remaining to Split  = Mid-flight: Initial − Locked Spend − Excluded.
   //                         Setup mode: just the Total Budget.
-  const initiallyAllocated = sourceAds.reduce(
-    (s, a) => s + (initialAllocations.get(a.id) ?? 0),
-    0,
+  // Split ads aren't shown in sourceAds (single-source rows only), but
+  // their per-source portion still belongs in the pool math. Pull them
+  // out separately and add their contribution to each total.
+  const splitAds = useMemo(
+    () => plan.ads.filter((a) => a.budgetSource === 'split'),
+    [plan.ads],
   );
+  const splitPortion = splitAds.reduce((s, a) => {
+    const c = adContribution(a);
+    return s + (source === 'base' ? c.baseAllocation : c.addedAllocation);
+  }, 0);
+  const splitLocked = splitAds.reduce((s, a) => {
+    if (!isDonor(a)) return s;
+    const c = adContribution(a);
+    return s + (source === 'base' ? c.baseSpent : c.addedSpent);
+  }, 0);
+
+  const initiallyAllocated =
+    sourceAds.reduce((s, a) => s + (initialAllocations.get(a.id) ?? 0), 0) +
+    splitPortion;
   const lockedSpend =
     calcMode === 'midflight'
       ? sourceAds.reduce(
           (s, a) => (isDonor(a) ? s + (num(a.pacerActual) ?? 0) : s),
           0,
-        )
+        ) + splitLocked
       : 0;
   const excludedPreserved =
     calcMode === 'midflight'
@@ -4637,9 +4820,7 @@ function BudgetCalculatorModal({
                             color:
                               !spec.included || spec.mode === 'even'
                                 ? 'var(--muted-foreground)'
-                                : ad.budgetSource === 'base'
-                                  ? COLORS.base
-                                  : COLORS.added,
+                                : sourceColor(ad.budgetSource),
                           }}
                         >
                           {!spec.included
@@ -5271,6 +5452,278 @@ const BULK_FIELD_LABELS: Record<BulkField, string> = {
   clientApproval: 'Client Status',
 };
 
+// ─── Account-level notes (chat log) ────────────────────────────────────────
+interface AccountNote {
+  id: string;
+  text: string;
+  createdAt: string;
+  authorUserId: string | null;
+}
+
+function AccountNotesModal({
+  accountKey,
+  accountLabel,
+  users,
+  onClose,
+  onCountChange,
+}: {
+  accountKey: string;
+  accountLabel: string;
+  users: DirectoryUser[];
+  onClose: () => void;
+  onCountChange?: (count: number) => void;
+}) {
+  const [notes, setNotes] = useState<AccountNote[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [text, setText] = useState('');
+  const [posting, setPosting] = useState(false);
+  const userMap = useMemo(() => {
+    const m = new Map<string, DirectoryUser>();
+    for (const u of users) m.set(u.id, u);
+    return m;
+  }, [users]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/meta-ads-pacer/${accountKey}/notes`)
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json() as Promise<{ notes: AccountNote[] }>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        const list = Array.isArray(data.notes) ? data.notes : [];
+        setNotes(list);
+        onCountChange?.(list.length);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Failed to load');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey, onCountChange]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const handlePost = async () => {
+    const trimmed = text.trim();
+    if (!trimmed || posting) return;
+    setPosting(true);
+    try {
+      const res = await fetch(`/api/meta-ads-pacer/${accountKey}/notes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: trimmed }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const note = (await res.json()) as AccountNote;
+      setNotes((prev) => {
+        const next = [...(prev ?? []), note];
+        onCountChange?.(next.length);
+        return next;
+      });
+      setText('');
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[pacer notes] post failed', err);
+      toast.error('Could not post note');
+    } finally {
+      setPosting(false);
+    }
+  };
+
+  const handleDelete = async (noteId: string) => {
+    const prev = notes ?? [];
+    // Optimistic update so the row vanishes immediately; rollback on error.
+    setNotes(prev.filter((n) => n.id !== noteId));
+    onCountChange?.(Math.max(0, prev.length - 1));
+    try {
+      const res = await fetch(
+        `/api/meta-ads-pacer/${accountKey}/notes/${noteId}`,
+        { method: 'DELETE' },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[pacer notes] delete failed', err);
+      toast.error('Could not delete note');
+      setNotes(prev);
+      onCountChange?.(prev.length);
+    }
+  };
+
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center p-4 sm:pt-12 bg-black/50 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="glass-modal w-full max-w-lg rounded-xl p-5 max-h-[85vh] flex flex-col"
+      >
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-base font-bold text-[var(--foreground)] flex items-center gap-2">
+              <ChatBubbleLeftRightIcon className="w-4 h-4" />
+              Notes — {accountLabel}
+            </h3>
+            <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+              Account-level chat log. Visible to anyone with pacer access.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
+            aria-label="Close"
+          >
+            <XMarkIcon className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto themed-scrollbar -mx-2 px-2 mb-3">
+          {error ? (
+            <div className="text-xs text-[var(--muted-foreground)] py-4 text-center">
+              Could not load notes: {error}
+            </div>
+          ) : notes == null ? (
+            <div className="text-xs text-[var(--muted-foreground)] py-4 text-center">
+              Loading…
+            </div>
+          ) : notes.length === 0 ? (
+            <div className="text-xs text-[var(--muted-foreground)] italic py-4 text-center">
+              No notes yet. Add the first one below.
+            </div>
+          ) : (
+            <ul className="space-y-2">
+              {notes.map((note) => {
+                const author = note.authorUserId
+                  ? userMap.get(note.authorUserId)
+                  : null;
+                const created = new Date(note.createdAt);
+                const stamp = created.toLocaleString('en-US', {
+                  month: 'short',
+                  day: 'numeric',
+                  year: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                });
+                return (
+                  <li
+                    key={note.id}
+                    className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 group"
+                  >
+                    <div className="flex items-baseline justify-between gap-2 mb-1">
+                      <div className="text-[11px] font-semibold text-[var(--foreground)]">
+                        {author?.name ?? 'Unknown'}
+                        {author?.title && (
+                          <span className="font-normal text-[var(--muted-foreground)]">
+                            {' · '}
+                            {author.title}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] text-[var(--muted-foreground)] whitespace-nowrap">
+                          {stamp}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(note.id)}
+                          className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-[var(--muted-foreground)] hover:text-red-400 transition-opacity"
+                          aria-label="Delete note"
+                          title="Delete"
+                        >
+                          <TrashIcon className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="text-xs text-[var(--foreground)] whitespace-pre-wrap break-words">
+                      {note.text}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+
+        <div className="border-t border-[var(--border)] pt-3">
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                handlePost();
+              }
+            }}
+            placeholder="Add a note… (⌘/Ctrl+Enter to post)"
+            rows={3}
+            className={`${inputClass} w-full resize-none text-xs`}
+          />
+          <div className="flex items-center justify-between gap-2 mt-2">
+            <span className="text-[10px] text-[var(--muted-foreground)]">
+              {text.trim().length > 0 ? `${text.trim().length} characters` : ''}
+            </span>
+            <button
+              type="button"
+              onClick={handlePost}
+              disabled={!text.trim() || posting}
+              className="px-3 py-1.5 text-[11px] font-semibold rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
+            >
+              {posting ? 'Posting…' : 'Post'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// Small chat-bubble button that opens the account-level notes modal.
+// The count badge surfaces when there's at least one note so reps can
+// see at a glance which accounts have unread context.
+function AccountNotesButton({
+  count,
+  onClick,
+  ariaLabel,
+}: {
+  count: number | null;
+  onClick: () => void;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      className="relative inline-flex items-center justify-center w-8 h-8 rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+    >
+      <ChatBubbleLeftRightIcon className="w-4 h-4" />
+      {count != null && count > 0 && (
+        <span
+          className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold flex items-center justify-center"
+          style={{ background: COLORS.daily, color: '#0a0a0a' }}
+        >
+          {count > 99 ? '99+' : count}
+        </span>
+      )}
+    </button>
+  );
+}
+
 function BulkEditModal({
   field,
   count,
@@ -5691,14 +6144,11 @@ function PacerRow({
             <span
               className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
               style={{
-                background:
-                  ad.budgetSource === 'base'
-                    ? 'rgba(56,189,248,0.18)'
-                    : 'rgba(52,211,153,0.18)',
-                color: ad.budgetSource === 'base' ? COLORS.base : COLORS.added,
+                background: sourceTint(ad.budgetSource),
+                color: sourceColor(ad.budgetSource),
               }}
             >
-              {ad.budgetSource === 'base' ? 'Base' : 'Added'}
+              {sourceLabel(ad.budgetSource)}
             </span>
           </div>
         </div>
@@ -6344,14 +6794,11 @@ function SummaryPanel({ plan }: { plan: PacerPlan }) {
                   <span
                     className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
                     style={{
-                      background:
-                        c.ad.budgetSource === 'base'
-                          ? 'rgba(56,189,248,0.18)'
-                          : 'rgba(52,211,153,0.18)',
-                      color: c.ad.budgetSource === 'base' ? COLORS.base : COLORS.added,
+                      background: sourceTint(c.ad.budgetSource),
+                      color: sourceColor(c.ad.budgetSource),
                     }}
                   >
-                    {c.ad.budgetSource === 'base' ? 'Base' : 'Added'}
+                    {sourceLabel(c.ad.budgetSource)}
                   </span>
                 </td>
                 <td className="px-2.5 py-2.5 text-[var(--muted-foreground)] whitespace-nowrap">
@@ -6492,7 +6939,11 @@ interface YearMonthRow {
 interface MonthAd {
   id: string;
   name: string;
-  budgetSource: 'base' | 'added';
+  budgetSource: 'base' | 'added' | 'split';
+  // When budgetSource === 'split', this is the dollar portion of
+  // `allocation` drawn from Base. The rest comes from Added. Spend
+  // apportions proportionally for the Over/Under math.
+  splitBaseAmount: string | null;
   allocation: number;
   actual: number;
 }
@@ -6500,6 +6951,10 @@ interface MonthAd {
 interface MonthPlanData {
   baseBudgetGoal: number;
   addedBudgetGoal: number;
+  // Per-account markup override; null = fall back to global MARKUP.
+  // Needed for the Over/Under math because pacerActual is in actual-spend
+  // dollars while the budget goals are gross client dollars.
+  markup: number | null;
   ads: MonthAd[];
 }
 
@@ -6591,17 +7046,28 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
           setData({
             baseBudgetGoal: num(json?.baseBudgetGoal) ?? 0,
             addedBudgetGoal: num(json?.addedBudgetGoal) ?? 0,
+            markup:
+              typeof json?.markup === 'number' && Number.isFinite(json.markup)
+                ? json.markup
+                : null,
             ads: ads.map(
               (a: {
                 id: string;
                 name?: string | null;
                 budgetSource?: string;
+                splitBaseAmount?: string | null;
                 allocation?: string | null;
                 pacerActual?: string | null;
               }) => ({
                 id: a.id,
                 name: a.name || 'Untitled Ad',
-                budgetSource: a.budgetSource === 'added' ? 'added' : 'base',
+                budgetSource:
+                  a.budgetSource === 'split'
+                    ? 'split'
+                    : a.budgetSource === 'added'
+                      ? 'added'
+                      : 'base',
+                splitBaseAmount: a.splitBaseAmount ?? null,
                 allocation: num(a.allocation) ?? 0,
                 actual: num(a.pacerActual) ?? 0,
               }),
@@ -6615,12 +7081,16 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
           setData({
             baseBudgetGoal: row?.budget ?? 0,
             addedBudgetGoal: 0,
+            // Year-summary endpoint doesn't surface a per-account markup
+            // (it's cross-account). Fall back to the global default.
+            markup: null,
             ads: row
               ? [
                   {
                     id: 'aggregate',
                     name: 'All tracked ads (aggregate)',
-                    budgetSource: 'base',
+                    budgetSource: 'base' as const,
+                    splitBaseAmount: null,
                     allocation: row.budget,
                     actual: row.actual,
                   },
@@ -6640,18 +7110,32 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
     };
   }, [accountKey, period]);
 
-  const totalBudget = data ? data.baseBudgetGoal + data.addedBudgetGoal : 0;
+  // Budget goals are stored gross; pacerActual is actual-spend. Convert
+  // budget through the account's effective markup so the comparison is
+  // apples-to-apples (everything in actual-spend dollars).
+  const effectiveMarkup =
+    data?.markup != null && Number.isFinite(data.markup) && data.markup > 0
+      ? data.markup
+      : MARKUP;
+  const budgetGross = data ? data.baseBudgetGoal + data.addedBudgetGoal : 0;
+  const budgetActual = budgetGross * effectiveMarkup;
   const trackedTotal = data ? data.ads.reduce((s, a) => s + a.actual, 0) : 0;
   const overrideValue = num(accountTotalOverride);
   const useOverride = overrideValue != null && accountTotalOverride.trim() !== '';
   const effectiveActual = useOverride ? overrideValue : trackedTotal;
   const daysIn = daysInPeriod(period);
   const daysElapsed = daysElapsedInPeriod(period);
-  const shouldHaveSpent =
-    daysIn > 0 ? totalBudget * (daysElapsed / daysIn) : 0;
-  const variance = effectiveActual - totalBudget;
-  const varianceVsExpected = effectiveActual - shouldHaveSpent;
   const isPastMonth = daysElapsed >= daysIn && daysIn > 0;
+  // "Should have spent" = the prorated actual-spend target for the month
+  // through today. For past months, that's the full target; for current,
+  // pro-rated by days elapsed.
+  const shouldHaveSpent = isPastMonth
+    ? budgetActual
+    : daysIn > 0
+      ? budgetActual * (daysElapsed / daysIn)
+      : 0;
+  // Single variance: actual vs prorated target.
+  const variance = effectiveActual - shouldHaveSpent;
 
   const varianceColor = (v: number) =>
     Math.abs(v) < 0.005
@@ -6710,9 +7194,10 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
         </div>
       ) : (
         <div className="space-y-4">
-          {/* Per-ad spend block */}
+          {/* Per-ad spend block — denser 2-column grid so 10+ ads stay
+              readable without a long scroll. Single-column on mobile. */}
           <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] overflow-hidden">
-            <div className="px-4 py-2.5 bg-[var(--muted)] border-b border-[var(--border)] text-[10px] font-bold uppercase tracking-wider text-[var(--muted-foreground)]">
+            <div className="px-3 py-2 bg-[var(--muted)] border-b border-[var(--border)] text-[10px] font-bold uppercase tracking-wider text-[var(--muted-foreground)]">
               Spend by ad
             </div>
             {data.ads.length === 0 ? (
@@ -6721,46 +7206,40 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
               </div>
             ) : (
               <>
-                <div className="divide-y divide-[var(--border)]">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-px gap-y-px bg-[var(--border)]">
                   {data.ads.map((ad) => (
                     <div
                       key={ad.id}
-                      className="flex items-center justify-between gap-3 px-4 py-2.5"
+                      className="flex items-center justify-between gap-2 px-3 py-1.5 bg-[var(--card)]"
                     >
                       <div className="min-w-0 flex-1">
-                        <div className="text-xs font-medium text-[var(--foreground)] truncate">
+                        <div className="text-[11px] font-medium text-[var(--foreground)] truncate leading-tight">
                           {ad.name}
                         </div>
                         {ad.id !== 'aggregate' && (
-                          <div className="text-[10px] mt-0.5">
+                          <div className="text-[9px] leading-tight">
                             <span
-                              style={{
-                                color:
-                                  ad.budgetSource === 'base'
-                                    ? COLORS.base
-                                    : COLORS.added,
-                              }}
+                              className="font-semibold"
+                              style={{ color: sourceColor(ad.budgetSource) }}
                             >
-                              {ad.budgetSource === 'base' ? 'Base' : 'Added'}
+                              {sourceLabel(ad.budgetSource)}
                             </span>
                             <span className="text-[var(--muted-foreground)]">
-                              {' · allocated '}
+                              {' · '}
                               {ad.allocation > 0 ? fmt(ad.allocation) : '—'}
                             </span>
                           </div>
                         )}
                       </div>
-                      <div className="text-right tabular-nums">
-                        <div className="text-sm font-semibold text-[var(--foreground)]">
-                          {fmt(ad.actual)}
-                        </div>
+                      <div className="text-sm font-semibold text-[var(--foreground)] tabular-nums whitespace-nowrap">
+                        {fmt(ad.actual)}
                       </div>
                     </div>
                   ))}
                 </div>
-                <div className="flex items-center justify-between gap-3 px-4 py-2.5 bg-[var(--muted)]/40 border-t-2 border-[var(--border)]">
-                  <div className="text-xs font-bold uppercase tracking-wider text-[var(--foreground)]">
-                    Tracked total
+                <div className="flex items-center justify-between gap-3 px-3 py-2 bg-[var(--muted)]/40 border-t-2 border-[var(--border)]">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--foreground)]">
+                    Tracked total · {data.ads.length} ad{data.ads.length === 1 ? '' : 's'}
                   </div>
                   <div className="text-sm font-bold tabular-nums text-[var(--foreground)]">
                     {fmt(trackedTotal)}
@@ -6793,7 +7272,7 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                     Client Budget
                   </div>
                   <div className="text-base font-bold tabular-nums text-[var(--foreground)]">
-                    {fmt(totalBudget)}
+                    {fmt(budgetGross)}
                   </div>
                   {accountKey && (
                     <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
@@ -6804,51 +7283,53 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                 </div>
                 <div>
                   <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                    {isPastMonth ? 'Full budget target' : 'Should have spent'}
+                    {isPastMonth ? 'Should have spent (total)' : 'Should have spent'}
                   </div>
-                  <div className="text-base font-bold tabular-nums text-[var(--foreground)]">
+                  <div
+                    className="text-base font-bold tabular-nums"
+                    style={{ color: COLORS.daily }}
+                  >
                     {fmt(shouldHaveSpent)}
                   </div>
-                  {!isPastMonth && totalBudget > 0 && (
-                    <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
-                      pro-rated {daysElapsed}/{daysIn} days
-                    </div>
-                  )}
+                  <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
+                    {isPastMonth
+                      ? `${fmt(budgetGross)} × ${effectiveMarkup}`
+                      : `${fmt(budgetActual)} × ${daysElapsed}/${daysIn} days`}
+                  </div>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Variance summary */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                Variance vs full budget
-              </div>
-              <div
-                className="text-lg font-bold tabular-nums"
-                style={{ color: varianceColor(variance) }}
-              >
-                {`${variance >= 0 ? '+' : '-'}${fmt(Math.abs(variance))}`}
-              </div>
-              <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
-                {useOverride ? 'using account total' : 'using tracked total'}{' '}
-                {fmt(effectiveActual)} − {fmt(totalBudget)}
-              </div>
+          {/* Variance — actual spend vs the prorated should-have-spent
+              target. Positive = overspent; negative = underspent. */}
+          <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+            <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+              Variance vs Should Have Spent
             </div>
-            <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                Variance vs {isPastMonth ? 'target' : 'expected so far'}
-              </div>
-              <div
-                className="text-lg font-bold tabular-nums"
-                style={{ color: varianceColor(varianceVsExpected) }}
-              >
-                {`${varianceVsExpected >= 0 ? '+' : '-'}${fmt(Math.abs(varianceVsExpected))}`}
-              </div>
-              <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
-                {fmt(effectiveActual)} − {fmt(shouldHaveSpent)}
-              </div>
+            <div
+              className="text-2xl font-bold tabular-nums"
+              style={{ color: varianceColor(variance) }}
+            >
+              {`${variance >= 0 ? '+' : '-'}${fmt(Math.abs(variance))}`}
+              <span className="ml-2 text-xs font-normal text-[var(--muted-foreground)]">
+                {variance > 0.005
+                  ? 'overspent'
+                  : variance < -0.005
+                    ? 'underspent'
+                    : 'on target'}
+              </span>
+            </div>
+            <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
+              {useOverride ? 'account total' : 'tracked total'}{' '}
+              <span className="font-semibold text-[var(--foreground)]">
+                {fmt(effectiveActual)}
+              </span>{' '}
+              −{' '}
+              <span className="font-semibold text-[var(--foreground)]">
+                {fmt(shouldHaveSpent)}
+              </span>{' '}
+              should have spent
             </div>
           </div>
         </div>
@@ -7049,6 +7530,9 @@ interface OverviewAccount {
   dealer: string;
   baseBudgetGoal: string | null;
   addedBudgetGoal: string | null;
+  // Server-side aggregated count of account-level pacer notes — drives
+  // the chat badge on the overview row without an extra round-trip.
+  notesCount: number;
   ads: PacerAd[];
 }
 
@@ -7059,6 +7543,7 @@ function OverviewAccountRow({
   onOpenAccount,
   filters,
   currentUserId,
+  users,
 }: {
   account: OverviewAccount;
   expanded: boolean;
@@ -7066,7 +7551,13 @@ function OverviewAccountRow({
   onOpenAccount: () => void;
   filters: PlanFilters;
   currentUserId: string | null;
+  users: DirectoryUser[];
 }) {
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [notesCount, setNotesCount] = useState<number>(account.notesCount);
+  useEffect(() => {
+    setNotesCount(account.notesCount);
+  }, [account.notesCount]);
   const visibleAds = useMemo(
     () => applyFilters(account.ads, filters, currentUserId),
     [account.ads, filters, currentUserId],
@@ -7109,6 +7600,13 @@ function OverviewAccountRow({
         </div>
 
         <div className="flex items-center gap-5 flex-shrink-0">
+          <div onClick={(e) => e.stopPropagation()}>
+            <AccountNotesButton
+              count={notesCount}
+              onClick={() => setNotesOpen(true)}
+              ariaLabel={`Open notes for ${account.dealer}`}
+            />
+          </div>
           {baseTotal > 0 && (
             <div className="text-right">
               <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
@@ -7195,15 +7693,11 @@ function OverviewAccountRow({
                         <span
                           className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
                           style={{
-                            background:
-                              ad.budgetSource === 'base'
-                                ? 'rgba(56,189,248,0.18)'
-                                : 'rgba(52,211,153,0.18)',
-                            color:
-                              ad.budgetSource === 'base' ? COLORS.base : COLORS.added,
+                            background: sourceTint(ad.budgetSource),
+                            color: sourceColor(ad.budgetSource),
                           }}
                         >
-                          {ad.budgetSource === 'base' ? 'Base' : 'Added'}
+                          {sourceLabel(ad.budgetSource)}
                         </span>
                       </td>
                       <td className="px-2 py-2 text-[var(--muted-foreground)]">
@@ -7240,6 +7734,16 @@ function OverviewAccountRow({
           )}
         </div>
       )}
+
+      {notesOpen && (
+        <AccountNotesModal
+          accountKey={account.accountKey}
+          accountLabel={account.dealer}
+          users={users}
+          onClose={() => setNotesOpen(false)}
+          onCountChange={setNotesCount}
+        />
+      )}
     </div>
   );
 }
@@ -7249,11 +7753,13 @@ function OverviewView({
   filters,
   currentUserId,
   onOpenAccount,
+  users,
 }: {
   period: string;
   filters: PlanFilters;
   currentUserId: string | null;
   onOpenAccount: (accountKey: string) => void;
+  users: DirectoryUser[];
 }) {
   const [accounts, setAccounts] = useState<OverviewAccount[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -7344,6 +7850,7 @@ function OverviewView({
           onOpenAccount={() => onOpenAccount(acct.accountKey)}
           filters={filters}
           currentUserId={currentUserId}
+          users={users}
         />
       ))}
     </div>
@@ -7414,6 +7921,31 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
   // True while the AdEditorModal is open. Pauses autosave so transient draft
   // edits don't get persisted until the user clicks Save.
   const [editorOpen, setEditorOpen] = useState(false);
+  // Account-level notes modal — opened from the chat icon next to the
+  // period selector. Count fetched on activeKey change so the badge can
+  // surface "this account has notes" without opening the panel.
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [notesCount, setNotesCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (!accountKey) {
+      setNotesCount(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/meta-ads-pacer/${accountKey}/notes`)
+      .then((r) => (r.ok ? r.json() : { notes: [] }))
+      .then((data: { notes?: AccountNote[] }) => {
+        if (cancelled) return;
+        setNotesCount(Array.isArray(data.notes) ? data.notes.length : 0);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setNotesCount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey]);
 
   // ── Fetch directory of users (once) ──
   useEffect(() => {
@@ -7693,9 +8225,9 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
     let added = 0;
     let actual = 0;
     plan.ads.forEach((ad) => {
-      const a = num(ad.allocation) ?? 0;
-      if (ad.budgetSource === 'base') base += a;
-      else added += a;
+      const c = adContribution(ad);
+      base += c.baseAllocation;
+      added += c.addedAllocation;
       actual += num(ad.pacerActual) ?? 0;
     });
     return { base, added, actual };
@@ -7822,6 +8354,13 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         )}
 
         <div className="flex items-center gap-3 flex-wrap">
+          {activeKey && (
+            <AccountNotesButton
+              count={notesCount}
+              onClick={() => setNotesOpen(true)}
+              ariaLabel={`Open notes for ${activeAccount?.dealer ?? activeKey}`}
+            />
+          )}
           <PeriodSelector period={period} onChange={setPeriod} />
           <button
             type="button"
@@ -7902,6 +8441,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                 onOpenAccount={(key) =>
                   setAccount({ mode: 'account', accountKey: key })
                 }
+                users={users}
               />
             )
           ) : !loaded ? (
@@ -7978,6 +8518,19 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           />
         )}
       </div>
+
+      {/* Account-level notes modal — opened from the chat icon next to
+          the period selector (subaccount view) or the chat icon on
+          each account row (admin overview). */}
+      {notesOpen && activeKey && (
+        <AccountNotesModal
+          accountKey={activeKey}
+          accountLabel={activeAccount?.dealer ?? activeKey}
+          users={users}
+          onClose={() => setNotesOpen(false)}
+          onCountChange={setNotesCount}
+        />
+      )}
     </div>
   );
 }

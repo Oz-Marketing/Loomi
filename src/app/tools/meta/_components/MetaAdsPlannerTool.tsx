@@ -8367,37 +8367,20 @@ function OverviewView({
   currentUserId,
   onOpenAccount,
   users,
+  accounts,
+  loadError,
 }: {
   period: string;
   filters: PlanFilters;
   currentUserId: string | null;
   onOpenAccount: (accountKey: string) => void;
   users: DirectoryUser[];
+  // List + error are owned by the parent so the filter sidebar can
+  // share the same ads — see MetaAdsPlannerTool for the fetch.
+  accounts: OverviewAccount[] | null;
+  loadError: string | null;
 }) {
-  const [accounts, setAccounts] = useState<OverviewAccount[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-
-  useEffect(() => {
-    setAccounts(null);
-    setLoadError(null);
-    fetch(`/api/meta-ads-pacer/overview?period=${period}`)
-      .then(async (r) => {
-        if (!r.ok) {
-          const text = await r.text().catch(() => '');
-          throw new Error(`HTTP ${r.status} ${text.slice(0, 200)}`);
-        }
-        return r.json() as Promise<{ accounts: OverviewAccount[] }>;
-      })
-      .then((data) => {
-        setAccounts(Array.isArray(data?.accounts) ? data.accounts : []);
-      })
-      .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.error('[meta-ads-pacer] overview load failed', err);
-        setLoadError(err instanceof Error ? err.message : 'Failed to load overview');
-      });
-  }, [period]);
 
   const toggleExpand = (key: string) => {
     setExpanded((prev) => {
@@ -8531,6 +8514,46 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
   }, [period, pacerTab, mode, pathname, router]);
   const [filters, setFilters] = useState<PlanFilters>(EMPTY_FILTERS);
   const [filterSidebarOpen, setFilterSidebarOpen] = useState(false);
+  // Lifted overview list — fetched once per period when there's no
+  // active account so the parent can also wire the filter sidebar's
+  // `ads` prop on the admin overview. OverviewView consumes this via
+  // props instead of owning the fetch.
+  const [overviewAccounts, setOverviewAccounts] = useState<OverviewAccount[] | null>(null);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
+  useEffect(() => {
+    if (activeKey) return; // only relevant for the admin overview
+    let cancelled = false;
+    setOverviewAccounts(null);
+    setOverviewError(null);
+    fetch(`/api/meta-ads-pacer/overview?period=${period}`)
+      .then(async (r) => {
+        if (!r.ok) {
+          const text = await r.text().catch(() => '');
+          throw new Error(`HTTP ${r.status} ${text.slice(0, 200)}`);
+        }
+        return r.json() as Promise<{ accounts: OverviewAccount[] }>;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setOverviewAccounts(Array.isArray(data?.accounts) ? data.accounts : []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        // eslint-disable-next-line no-console
+        console.error('[meta-ads-pacer] overview load failed', err);
+        setOverviewError(err instanceof Error ? err.message : 'Failed to load overview');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [period, activeKey]);
+  // Flatten every overview account's ads so the filter sidebar can
+  // surface accurate Quick View counts + account-rep options on the
+  // admin overview (when there's no per-account `plan` to draw from).
+  const overviewAds = useMemo(
+    () => (overviewAccounts ?? []).flatMap((a) => a.ads),
+    [overviewAccounts],
+  );
   // True while the AdEditorModal is open. Pauses autosave so transient draft
   // edits don't get persisted until the user clicks Save.
   const [editorOpen, setEditorOpen] = useState(false);
@@ -9007,10 +9030,11 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
 
       {/* Body — budget header + content + inline filter sidebar all share
           the same 2-col grid so the header rows shrink alongside the body
-          when the filter panel opens. */}
+          when the filter panel opens. Layout applies on both the
+          per-account view and the admin overview. */}
       <div
         className={
-          activeKey && filterSidebarOpen
+          filterSidebarOpen
             ? 'grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start'
             : ''
         }
@@ -9055,6 +9079,8 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                   setAccount({ mode: 'account', accountKey: key })
                 }
                 users={users}
+                accounts={overviewAccounts}
+                loadError={overviewError}
               />
             )
           ) : !loaded ? (
@@ -9125,25 +9151,25 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           })()}
         </div>
 
-        {/* Inline filter sidebar — only mounts when an account is selected; the
-            slide-in/out animation comes from the className transitions. */}
-        {activeKey && (
-          <MetaAdsPacerFilterSidebar
-            open={filterSidebarOpen}
-            inline
-            onClose={() => setFilterSidebarOpen(false)}
-            filters={filters}
-            onChange={setFilters}
-            users={users}
-            ads={plan?.ads ?? []}
-            currentUserId={currentUserId}
-            className={`glass-panel glass-panel-strong w-full transition-[opacity,transform,max-height] duration-300 ease-out lg:sticky lg:top-24 lg:w-[360px] ${
-              filterSidebarOpen
-                ? 'pointer-events-auto max-h-[calc(100vh-8rem)] translate-x-0 opacity-100 animate-slide-in-right'
-                : 'pointer-events-none max-h-0 translate-x-4 opacity-0 hidden'
-            }`}
-          />
-        )}
+        {/* Inline filter sidebar — renders on both per-account view
+            (ads pulled from `plan.ads`) and the admin overview (ads
+            flattened from `overviewAccounts`). The slide-in/out
+            animation comes from the className transitions. */}
+        <MetaAdsPacerFilterSidebar
+          open={filterSidebarOpen}
+          inline
+          onClose={() => setFilterSidebarOpen(false)}
+          filters={filters}
+          onChange={setFilters}
+          users={users}
+          ads={activeKey ? plan?.ads ?? [] : overviewAds}
+          currentUserId={currentUserId}
+          className={`glass-panel glass-panel-strong w-full transition-[opacity,transform,max-height] duration-300 ease-out lg:sticky lg:top-24 lg:w-[360px] ${
+            filterSidebarOpen
+              ? 'pointer-events-auto max-h-[calc(100vh-8rem)] translate-x-0 opacity-100 animate-slide-in-right'
+              : 'pointer-events-none max-h-0 translate-x-4 opacity-0 hidden'
+          }`}
+        />
       </div>
 
       {/* Account-level notes modal — opened from the chat icon next to

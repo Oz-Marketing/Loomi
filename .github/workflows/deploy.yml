@@ -140,6 +140,22 @@ jobs:
             echo "=== Build complete, .next dir size ==="
             du -sh .next
 
+            # One-time folder-store migration: import legacy JSON folders into
+            # Postgres. Only fires when the previous release still ships the
+            # JSON file (i.e. this is the first deploy with the Postgres-backed
+            # store). After this deploy the new release no longer contains the
+            # JSON, so the `if -f` guard turns the block into a no-op on
+            # subsequent deploys — safe to leave in.
+            LEGACY_FOLDERS_JSON="$CURRENT_LINK/src/data/esp-template-folders.json"
+            if [ -f "$LEGACY_FOLDERS_JSON" ]; then
+              echo "=== Found legacy folder JSON — importing into Postgres ==="
+              cp "$LEGACY_FOLDERS_JSON" /tmp/loomi-folders-backup.json
+              npx tsx scripts/migrate-template-folders-to-db.ts /tmp/loomi-folders-backup.json --confirm
+              echo "=== Folder import complete ==="
+            else
+              echo "=== No legacy folder JSON at $LEGACY_FOLDERS_JSON — skipping import ==="
+            fi
+
             echo "=== Starting candidate app: $NEXT_APP on port $NEXT_PORT ==="
             pm2 stop "$NEXT_APP" || true
             pm2 delete "$NEXT_APP" || true

@@ -7212,7 +7212,7 @@ function SummaryPanel({ plan }: { plan: PacerPlan }) {
   }
 
   return (
-    <div className="glass-section-card rounded-xl px-5 py-4">
+    <div>
       <SectionLabel icon={<TableCellsIcon className="w-3 h-3" />} text="Summary Table" />
       {(baseGoal != null || addedGoal != null) && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
@@ -8958,9 +8958,19 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                 client picks up the new models, then refresh.
               </p>
             </div>
-          ) : !plan ? null : (
-            <div className="glass-section-card rounded-xl px-7 py-7">
-              {mode === 'planner' ? (
+          ) : !plan ? null : (() => {
+            // Ad Planner + Pacer's Summary tab render flush (no outer card)
+            // so the inner table reads as the page-level content. Pacer's
+            // Pacer + Over/Under Spend tabs keep the glass-section-card
+            // chrome since their content benefits from the visual frame.
+            const flat =
+              mode === 'planner' ||
+              (mode === 'pacer' && pacerTab === 'summary');
+            const wrapperClass = flat
+              ? ''
+              : 'glass-section-card rounded-xl px-7 py-7';
+            const inner =
+              mode === 'planner' ? (
                 <AdPlannerPanel
                   plan={plan}
                   period={period}
@@ -8993,9 +9003,9 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                 <ComparePanel accountKey={activeKey} />
               ) : (
                 <SummaryPanel plan={plan} />
-              )}
-            </div>
-          )}
+              );
+            return flat ? inner : <div className={wrapperClass}>{inner}</div>;
+          })()}
         </div>
 
         {/* Inline filter sidebar — only mounts when an account is selected; the

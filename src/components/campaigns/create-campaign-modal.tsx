@@ -54,15 +54,18 @@ export function CreateCampaignModal({
 
   if (!open) return null;
 
-  const canSubmit =
-    name.trim().length > 0 && (channel === 'email' || channel === 'sms') && !submitting;
+  const canSubmit = name.trim().length > 0 && !submitting;
 
   async function handleSubmit() {
     if (!canSubmit) return;
     setSubmitting(true);
     try {
-      const isSms = channel === 'sms';
-      const endpoint = isSms ? '/api/campaigns/sms/draft' : '/api/campaigns/email/draft';
+      const endpoint =
+        channel === 'both'
+          ? '/api/campaigns/multi/draft'
+          : channel === 'sms'
+            ? '/api/campaigns/sms/draft'
+            : '/api/campaigns/email/draft';
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -73,12 +76,21 @@ export function CreateCampaignModal({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || 'Failed to create campaign');
-      const campaignId = data?.campaign?.id;
-      if (!campaignId) throw new Error('Campaign created but no ID returned');
+
       const base = redirectBase || '/campaigns';
-      const path = isSms
-        ? `${base}/sms/${encodeURIComponent(campaignId)}/recipients`
-        : `${base}/${encodeURIComponent(campaignId)}/recipients`;
+      let path = '';
+      if (channel === 'both') {
+        const groupId = data?.groupId;
+        if (!groupId) throw new Error('Multi-channel campaign created but no group id returned');
+        path = `${base}/multi/${encodeURIComponent(groupId)}/recipients`;
+      } else {
+        const campaignId = data?.campaign?.id;
+        if (!campaignId) throw new Error('Campaign created but no ID returned');
+        path =
+          channel === 'sms'
+            ? `${base}/sms/${encodeURIComponent(campaignId)}/recipients`
+            : `${base}/${encodeURIComponent(campaignId)}/recipients`;
+      }
       router.push(path);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create campaign');
@@ -170,8 +182,7 @@ export function CreateCampaignModal({
                 onSelect={setChannel}
                 icon={Squares2X2Icon}
                 label="Both"
-                description="Multi-channel sends (email + SMS) ship in the next release."
-                disabled
+                description="Send a linked email + SMS pair to the same audience at the same time."
               />
             </div>
           </div>

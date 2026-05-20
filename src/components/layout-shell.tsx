@@ -19,18 +19,23 @@ type BuilderStepKey = (typeof BUILDER_STEPS)[number]['key'];
 function campaignBuilderStep(path: string): BuilderStepKey {
   // Email: /campaigns/[id]/(recipients|template|schedule)
   // SMS:   /campaigns/sms/[id]/(recipients|message|schedule)
+  // Multi: /campaigns/multi/[id]/(recipients|message|schedule)
+  const multiMatch = path.match(/^\/campaigns\/multi\/[^/]+\/(recipients|message|schedule)$/);
+  if (multiMatch) return multiMatch[1] as BuilderStepKey;
+  const smsMatch = path.match(/^\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/);
+  if (smsMatch) return smsMatch[1] as BuilderStepKey;
   const emailMatch = path.match(/^\/campaigns\/[^/]+\/(recipients|template|schedule)$/);
   if (emailMatch) {
     const raw = emailMatch[1];
     return raw === 'template' ? 'message' : (raw as BuilderStepKey);
   }
-  const smsMatch = path.match(/^\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/);
-  if (smsMatch) return smsMatch[1] as BuilderStepKey;
   return 'recipients';
 }
 
-function campaignBuilderChannel(path: string): 'email' | 'sms' {
-  return /^\/campaigns\/sms\//.test(path) ? 'sms' : 'email';
+function campaignBuilderChannel(path: string): 'email' | 'sms' | 'multi' {
+  if (/^\/campaigns\/multi\//.test(path)) return 'multi';
+  if (/^\/campaigns\/sms\//.test(path)) return 'sms';
+  return 'email';
 }
 
 function CampaignBuilderProgress({ current }: { current: BuilderStepKey }) {
@@ -97,7 +102,8 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
   // existing isTemplateEditor branch.)
   const isCampaignBuilder =
     /^\/campaigns\/[^/]+\/(recipients|template|schedule)$/.test(normalizedPath) ||
-    /^\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/.test(normalizedPath);
+    /^\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/.test(normalizedPath) ||
+    /^\/campaigns\/multi\/[^/]+\/(recipients|message|schedule)$/.test(normalizedPath);
 
   useEffect(() => {
     if (isFullScreen || isTemplateEditor || isCampaignBuilder) {
@@ -124,7 +130,12 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
   if (isCampaignBuilder) {
     const step = campaignBuilderStep(normalizedPath);
     const channel = campaignBuilderChannel(normalizedPath);
-    const title = channel === 'sms' ? 'Create a Text Campaign' : 'Create an Email Campaign';
+    const title =
+      channel === 'multi'
+        ? 'Create a Multi-Channel Campaign'
+        : channel === 'sms'
+          ? 'Create a Text Campaign'
+          : 'Create an Email Campaign';
     return (
       <div className="flex-1 flex flex-col min-h-screen">
         <header className="flex-shrink-0 grid grid-cols-[1fr_auto_1fr] items-center px-6 h-16 border-b border-[var(--border)] bg-[var(--card)]/80 backdrop-blur-md">

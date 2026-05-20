@@ -519,10 +519,13 @@ function AdminCampaignsPage() {
                 </button>
               </>
             )}
-            <PrimaryButton type="button" onClick={() => setShowCreateModal(true)}>
-              <PlusIcon className="w-4 h-4" />
-              Create Campaign
-            </PrimaryButton>
+            {/* Create Campaign lives on the list view; analytics is read-only. */}
+            {activeTab !== 'analytics' && (
+              <PrimaryButton type="button" onClick={() => setShowCreateModal(true)}>
+                <PlusIcon className="w-4 h-4" />
+                Create Campaign
+              </PrimaryButton>
+            )}
 
           </div>
         </div>
@@ -838,10 +841,13 @@ function AccountCampaignsPage() {
               />
             )}
 
-            <PrimaryButton type="button" onClick={openCreateCampaignModal}>
-              <PlusIcon className="w-4 h-4" />
-              Create Campaign
-            </PrimaryButton>
+            {/* Create Campaign lives on the list view; analytics is read-only. */}
+            {activeTab !== 'analytics' && (
+              <PrimaryButton type="button" onClick={openCreateCampaignModal}>
+                <PlusIcon className="w-4 h-4" />
+                Create Campaign
+              </PrimaryButton>
+            )}
           </div>
         </div>
       </div>

@@ -55,9 +55,27 @@ export async function GET(req: NextRequest) {
     return accountKeys.includes(accountKey);
   }
 
+  // Collapse multi-channel pairs into a single row anchored on the email
+  // campaign. The SMS half is dropped from the list so we don't show two
+  // entries for one logical campaign — the channel badge reads "Email + SMS"
+  // and the row's id remains the email campaign id (canonical group id).
+  const linkedSmsIdsOnEmails = new Set<string>();
+  for (const e of emails) {
+    const meta = parseMeta(e.metadata);
+    if (meta?.multiChannel && typeof meta.linkedSmsCampaignId === 'string') {
+      linkedSmsIdsOnEmails.add(meta.linkedSmsCampaignId);
+    }
+  }
+
   const campaigns = [
-    ...emails.filter((c) => matchesAccount(c.accountKeys)).map((c) => mapEmail(c)),
-    ...sms.filter((c) => matchesAccount(c.accountKeys)).map((c) => mapSms(c)),
+    ...emails
+      .filter((c) => matchesAccount(c.accountKeys))
+      .map((c) => mapEmail(c)),
+    ...sms
+      .filter((c) => matchesAccount(c.accountKeys))
+      // Drop SMS rows that are the SMS half of a linked multi-channel pair.
+      .filter((c) => !linkedSmsIdsOnEmails.has(c.id))
+      .map((c) => mapSms(c)),
   ];
 
   // Newest first (createdAt desc). Drafts and scheduled mix in by time.
@@ -66,7 +84,19 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ campaigns });
 }
 
+function parseMeta(raw: string | null | undefined): { multiChannel?: boolean; linkedSmsCampaignId?: string } | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function mapEmail(c: EmailCampaignSummary) {
+  const meta = parseMeta(c.metadata);
+  const isMulti = Boolean(meta?.multiChannel && meta?.linkedSmsCampaignId);
   return {
     id: c.id,
     campaignId: c.id,
@@ -81,7 +111,7 @@ function mapEmail(c: EmailCampaignSummary) {
     accountKey: c.accountKeys[0] || undefined,
     totalRecipients: c.totalRecipients,
     failedCount: c.failedCount,
-    channel: 'email' as const,
+    channel: (isMulti ? 'multi' : 'email') as 'multi' | 'email',
   };
 }
 

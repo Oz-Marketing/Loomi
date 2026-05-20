@@ -22,6 +22,7 @@ import {
   CheckIcon,
   TrashIcon,
   DocumentDuplicateIcon,
+  ChatBubbleLeftRightIcon,
 } from '@heroicons/react/24/outline';
 import { AccountAvatar as SharedAccountAvatar } from '@/components/account-avatar';
 import BulkActionDock from '@/components/bulk-action-dock';
@@ -48,6 +49,12 @@ interface Campaign {
   dealer?: string;
   bulkRequestId?: string;
   parentId?: string;
+  /**
+   * Channel for the row: 'email' (any HTML-based campaign), 'sms' (text-only),
+   * or 'multi' (linked email + SMS pair). Loomi-list sets this; ESP-fetched
+   * rows are always 'email'. The Campaigns table renders a badge from it.
+   */
+  channel?: 'email' | 'sms' | 'multi';
 }
 
 export interface AccountMeta {
@@ -310,6 +317,46 @@ function getVisiblePages(currentPage: number, totalPages: number, maxVisible = 5
   return Array.from({ length: end - start + 1 }, (_, index) => start + index);
 }
 
+// ── Channel inference + badge ──
+
+/**
+ * Returns the channel for a campaign row. Loomi-list endpoints stamp `channel`
+ * explicitly; ESP-fetched campaigns fall through to 'email' since the ESP
+ * integration we currently support is email-only.
+ */
+function getCampaignChannel(c: Campaign): 'email' | 'sms' | 'multi' {
+  if (c.channel) return c.channel;
+  const provider = (c.provider || '').toLowerCase();
+  if (provider === 'loomi-sms') return 'sms';
+  return 'email';
+}
+
+function ChannelBadge({ channel }: { channel: 'email' | 'sms' | 'multi' }) {
+  if (channel === 'sms') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/10 text-purple-400">
+        <ChatBubbleLeftRightIcon className="w-3 h-3" />
+        SMS
+      </span>
+    );
+  }
+  if (channel === 'multi') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/10 text-blue-400">
+        <EnvelopeIcon className="w-3 h-3" />
+        <ChatBubbleLeftRightIcon className="w-3 h-3 -ml-0.5" />
+        Email + SMS
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-sky-500/10 text-sky-400">
+      <EnvelopeIcon className="w-3 h-3" />
+      Email
+    </span>
+  );
+}
+
 // ── Sortable Column Header ──
 
 function SortHeader<F extends string>({
@@ -420,6 +467,9 @@ function CampaignTableRow({
           <EnvelopeIcon className="w-4 h-4 text-[var(--muted-foreground)] flex-shrink-0" />
           <span className="text-sm font-medium truncate">{item.name || '(Untitled)'}</span>
         </div>
+      </td>
+      <td className="px-3 py-2.5 align-middle">
+        <ChannelBadge channel={getCampaignChannel(item)} />
       </td>
       <td className="px-3 py-2.5 align-middle">
         <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${statusBadgeClass(item.status)}`}>
@@ -1317,6 +1367,9 @@ export function CampaignPageList({
                       )}
                       <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                         Name
+                      </th>
+                      <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                        Channel
                       </th>
                       <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                         <SortHeader label="Status" field="status" activeField={campaignSortField} activeDir={campaignSortDir} onToggle={toggleCampaignSort} />

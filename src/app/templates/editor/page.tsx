@@ -6492,6 +6492,25 @@ export default function TemplateEditorPage() {
   const modeParam = searchParams.get("mode");
   const accountKeyParam = searchParams.get("accountKey") || "";
   const libraryTemplateSlug = searchParams.get("libraryTemplate") || "";
+  // When launched from the campaign builder, the editor shows campaign-aware
+  // actions (Schedule, Manage template dropdown) in the top bar instead of
+  // the regular Save Template button.
+  const campaignIdParam = searchParams.get("campaignId") || "";
+  const [showManageTemplateMenu, setShowManageTemplateMenu] = useState(false);
+  const manageTemplateMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!showManageTemplateMenu) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (
+        manageTemplateMenuRef.current &&
+        !manageTemplateMenuRef.current.contains(event.target as Node)
+      ) {
+        setShowManageTemplateMenu(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showManageTemplateMenu]);
   const { isAdmin, isAccount, accountKey, accountData, accounts } = useAccount();
   const subHref = useSubaccountHref();
   const { markClean, markDirty } = useUnsavedChanges();
@@ -9671,16 +9690,75 @@ export default function TemplateEditorPage() {
             <EnvelopeIcon className="w-4 h-4" />
             Send Test
           </button>
-          {/* Save Template */}
-          <button
-            onClick={handleOpenSaveTemplate}
-            disabled={saving}
-            className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
-            title="Save template"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50" fill="currentColor" className="w-4 h-4"><path d="M 7 4 C 5.3545455 4 4 5.3545455 4 7 L 4 43 C 4 44.645455 5.3545455 46 7 46 L 43 46 C 44.645455 46 46 44.645455 46 43 L 46 13.199219 A 1.0001 1.0001 0 0 0 45.707031 12.492188 L 37.507812 4.2929688 A 1.0001 1.0001 0 0 0 36.800781 4 L 7 4 z M 7 6 L 12 6 L 12 18 C 12 19.645455 13.354545 21 15 21 L 34 21 C 35.645455 21 37 19.645455 37 18 L 37 6.6132812 L 44 13.613281 L 44 43 C 44 43.554545 43.554545 44 43 44 L 38 44 L 38 29 C 38 27.354545 36.645455 26 35 26 L 15 26 C 13.354545 26 12 27.354545 12 29 L 12 44 L 7 44 C 6.4454545 44 6 43.554545 6 43 L 6 7 C 6 6.4454545 6.4454545 6 7 6 z M 14 6 L 35 6 L 35 18 C 35 18.554545 34.554545 19 34 19 L 15 19 C 14.445455 19 14 18.554545 14 18 L 14 6 z M 29 8 A 1.0001 1.0001 0 0 0 28 9 L 28 16 A 1.0001 1.0001 0 0 0 29 17 L 32 17 A 1.0001 1.0001 0 0 0 33 16 L 33 9 A 1.0001 1.0001 0 0 0 32 8 L 29 8 z M 30 10 L 31 10 L 31 15 L 30 15 L 30 10 z M 15 28 L 35 28 C 35.554545 28 36 28.445455 36 29 L 36 44 L 14 44 L 14 29 C 14 28.445455 14.445455 28 15 28 z"/></svg>
-            Save Template
-          </button>
+          {campaignIdParam ? (
+            <>
+              {/* Manage template dropdown (campaign builder mode) */}
+              <div ref={manageTemplateMenuRef} className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowManageTemplateMenu((v) => !v)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-[var(--muted)] hover:bg-[var(--accent)] transition-colors"
+                  title="Template actions"
+                >
+                  Manage template
+                  <ChevronDownIcon
+                    className={`w-3.5 h-3.5 transition-transform ${showManageTemplateMenu ? "rotate-180" : ""}`}
+                  />
+                </button>
+                {showManageTemplateMenu && (
+                  <div className="absolute right-0 top-full mt-1 z-30 min-w-[200px] glass-dropdown p-1 shadow-lg">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowManageTemplateMenu(false);
+                        handleOpenSaveTemplate();
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]"
+                    >
+                      Save as template
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowManageTemplateMenu(false);
+                        router.push(
+                          `/campaigns/${encodeURIComponent(campaignIdParam)}/template`,
+                        );
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]"
+                    >
+                      Change template
+                    </button>
+                  </div>
+                )}
+              </div>
+              {/* Schedule (replaces Save Template in campaign builder mode) */}
+              <button
+                onClick={() =>
+                  router.push(
+                    `/campaigns/${encodeURIComponent(campaignIdParam)}/schedule`,
+                  )
+                }
+                disabled={saving}
+                className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+                title="Continue to Schedule"
+              >
+                <PaperAirplaneIcon className="w-4 h-4" />
+                Schedule
+              </button>
+            </>
+          ) : (
+            /* Save Template (normal editor mode) */
+            <button
+              onClick={handleOpenSaveTemplate}
+              disabled={saving}
+              className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+              title="Save template"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50" fill="currentColor" className="w-4 h-4"><path d="M 7 4 C 5.3545455 4 4 5.3545455 4 7 L 4 43 C 4 44.645455 5.3545455 46 7 46 L 43 46 C 44.645455 46 46 44.645455 46 43 L 46 13.199219 A 1.0001 1.0001 0 0 0 45.707031 12.492188 L 37.507812 4.2929688 A 1.0001 1.0001 0 0 0 36.800781 4 L 7 4 z M 7 6 L 12 6 L 12 18 C 12 19.645455 13.354545 21 15 21 L 34 21 C 35.645455 21 37 19.645455 37 18 L 37 6.6132812 L 44 13.613281 L 44 43 C 44 43.554545 43.554545 44 43 44 L 38 44 L 38 29 C 38 27.354545 36.645455 26 35 26 L 15 26 C 13.354545 26 12 27.354545 12 29 L 12 44 L 7 44 C 6.4454545 44 6 43.554545 6 43 L 6 7 C 6 6.4454545 6.4454545 6 7 6 z M 14 6 L 35 6 L 35 18 C 35 18.554545 34.554545 19 34 19 L 15 19 C 14.445455 19 14 18.554545 14 18 L 14 6 z M 29 8 A 1.0001 1.0001 0 0 0 28 9 L 28 16 A 1.0001 1.0001 0 0 0 29 17 L 32 17 A 1.0001 1.0001 0 0 0 33 16 L 33 9 A 1.0001 1.0001 0 0 0 32 8 L 29 8 z M 30 10 L 31 10 L 31 15 L 30 15 L 30 10 z M 15 28 L 35 28 C 35.554545 28 36 28.445455 36 29 L 36 44 L 14 44 L 14 29 C 14 28.445455 14.445455 28 15 28 z"/></svg>
+              Save Template
+            </button>
+          )}
           {/* History (clock icon only) */}
           <button
             onClick={handleOpenHistory}

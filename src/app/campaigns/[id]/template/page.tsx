@@ -56,6 +56,25 @@ function parseMetadata(raw: string | null | undefined): Record<string, unknown> 
   }
 }
 
+/**
+ * Templates are stored in raw form (v2 JSON for drag-and-drop, raw HTML
+ * for HTML-mode). Both must be compiled before they can be rendered in
+ * an iframe or sent as an email. /api/preview handles either format and
+ * returns ready-to-render HTML.
+ */
+async function compileTemplate(raw: string): Promise<string> {
+  const res = await fetch('/api/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ html: raw, previewValues: {} }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.html) {
+    throw new Error(data?.error || 'Failed to compile template');
+  }
+  return String(data.html);
+}
+
 type SortKey = 'updated' | 'name';
 
 function formatUpdated(value?: string): string {
@@ -99,8 +118,11 @@ export default function MessageStepPage({ params }: PageProps) {
         }
 
         // If the campaign references a template, re-fetch the latest content
-        // so edits made to the template (in the real editor) are reflected
-        // in this campaign. This is the cheap "snapshot on return" pattern.
+        // and compile it so edits made in the editor flow into this campaign.
+        // We store the COMPILED html on the campaign so the iframe preview
+        // and the send pipeline both get email-ready HTML (drag-and-drop
+        // templates are stored as v2 JSON in raw form, which would render
+        // as code in an iframe otherwise).
         const meta = parseMetadata(campaign.metadata);
         const templateSlug = typeof meta.templateSlug === 'string' ? meta.templateSlug : '';
         let synced = campaign;
@@ -110,10 +132,13 @@ export default function MessageStepPage({ params }: PageProps) {
               `/api/templates?design=${encodeURIComponent(templateSlug)}&format=raw`,
             );
             const rawData = await rawRes.json().catch(() => ({}));
-            const latest = String(rawData?.raw || '');
-            if (rawRes.ok && latest && latest !== campaign.htmlContent) {
-              const updated = await patchDraft({ htmlContent: latest });
-              if (updated) synced = updated;
+            const latestRaw = String(rawData?.raw || '');
+            if (rawRes.ok && latestRaw) {
+              const compiled = await compileTemplate(latestRaw);
+              if (compiled !== campaign.htmlContent) {
+                const updated = await patchDraft({ htmlContent: compiled });
+                if (updated) synced = updated;
+              }
             }
           } catch {
             // Best-effort sync; if it fails we still have the old snapshot.
@@ -179,12 +204,15 @@ export default function MessageStepPage({ params }: PageProps) {
         const line = titleMatch[1].match(/^title:\s*(.+)$/m);
         if (line) newSubject = line[1].trim().replace(/^["']|["']$/g, '');
       }
+      // Compile the template now so the campaign carries email-ready HTML
+      // (handles both drag-and-drop v2 JSON and raw HTML templates).
+      const compiled = await compileTemplate(raw);
       // Record the template slug on the campaign so we can re-fetch the
       // latest content when the user returns from the editor.
       const meta = { ...parseMetadata(draft.metadata), templateSlug: design };
       const updated = await patchDraft({
         subject: newSubject || draft.name,
-        htmlContent: raw,
+        htmlContent: compiled,
         sourceType: 'template-library',
         metadata: JSON.stringify(meta),
       });
@@ -195,7 +223,11 @@ export default function MessageStepPage({ params }: PageProps) {
       setPreviewDesign(null);
       // Klaviyo pattern: selecting a template drops you straight into the
       // existing template editor so the user can adjust before scheduling.
-      router.push(`/templates/editor?design=${encodeURIComponent(design)}`);
+      // campaignId is passed so the editor shows campaign-aware actions
+      // (Schedule + Manage template) instead of Save Template.
+      router.push(
+        `/templates/editor?design=${encodeURIComponent(design)}&campaignId=${encodeURIComponent(id)}`,
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to apply template');
       setApplying(false);
@@ -280,7 +312,9 @@ export default function MessageStepPage({ params }: PageProps) {
                   toast.error("Can't open editor — this campaign has no template slug recorded.");
                   return;
                 }
-                router.push(`/templates/editor?design=${encodeURIComponent(slug)}`);
+                router.push(
+                  `/templates/editor?design=${encodeURIComponent(slug)}&campaignId=${encodeURIComponent(id)}`,
+                );
               }}
               onChangeTemplate={handleChangeTemplate}
             />

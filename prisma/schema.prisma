@@ -107,6 +107,13 @@ model Account {
   // need code changes.
   markup       Float?
   espProvider  String // active provider id (must match a registered adapter)
+  // Sending identity for Loomi-native email sends. When null, falls back to
+  // SMTP_FROM / global defaults. Configure per-subaccount once DKIM/SPF for
+  // sendingDomain is set up in the client's DNS.
+  senderEmail   String?
+  senderName    String?
+  sendingDomain String?
+  replyToEmail  String?
   accountRepId String?
   accountRep   User?    @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
   createdAt    DateTime @default(now())

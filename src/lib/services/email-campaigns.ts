@@ -575,6 +575,65 @@ export async function getEmailCampaign(campaignId: string): Promise<EmailCampaig
   return row ? toSummary(row) : null;
 }
 
+/**
+ * Delete a campaign + its recipient rows. We block deletion of in-flight
+ * campaigns (queued/processing) so the worker never finds itself running
+ * a job whose campaign row has vanished mid-loop.
+ */
+export async function deleteEmailCampaign(campaignId: string): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const row = await tx.emailCampaign.findUnique({
+      where: { id: campaignId },
+      select: { status: true },
+    });
+    if (!row) return;
+    if (row.status === 'queued' || row.status === 'processing') {
+      throw new Error('Cannot delete a campaign that is currently sending.');
+    }
+    await tx.emailCampaignRecipient.deleteMany({ where: { campaignId } });
+    await tx.emailCampaign.delete({ where: { id: campaignId } });
+  });
+}
+
+/**
+ * Create a new draft email campaign by cloning an existing one. Status
+ * resets to 'draft', schedule + timestamps clear, name gets a "(Copy)"
+ * suffix, and recipient rows are NOT copied — the user will reselect the
+ * audience in the Recipients step.
+ */
+export async function duplicateEmailCampaign(
+  campaignId: string,
+  options?: { createdByUserId?: string; createdByRole?: string },
+): Promise<EmailCampaignSummary> {
+  const source = await prisma.emailCampaign.findUnique({
+    where: { id: campaignId },
+    select: emailCampaignSummarySelect,
+  });
+  if (!source) {
+    throw new Error('Source campaign not found');
+  }
+
+  const created = await prisma.emailCampaign.create({
+    data: {
+      name: source.name ? `${source.name} (Copy)` : defaultDraftName(new Date()),
+      subject: source.subject || '',
+      previewText: source.previewText || null,
+      htmlContent: source.htmlContent || '',
+      textContent: source.textContent || null,
+      sourceType: source.sourceType || 'drag-drop',
+      status: 'draft',
+      accountKeys: source.accountKeys || JSON.stringify([]),
+      sourceAudienceId: source.sourceAudienceId || null,
+      sourceFilter: source.sourceFilter || null,
+      metadata: source.metadata || null,
+      createdByUserId: options?.createdByUserId || null,
+      createdByRole: options?.createdByRole || null,
+    },
+    select: emailCampaignSummarySelect,
+  });
+  return toSummary(created);
+}
+
 export async function listEmailCampaigns(options?: {
   limit?: number;
   accountKeys?: string[];

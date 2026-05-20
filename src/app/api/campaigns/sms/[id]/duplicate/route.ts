@@ -1,0 +1,45 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { requireRole } from '@/lib/api-auth';
+import {
+  duplicateSmsCampaign,
+  getSmsCampaign,
+} from '@/lib/services/sms-campaigns';
+
+interface RouteParams {
+  params: Promise<{ id: string }>;
+}
+
+/** POST /api/campaigns/sms/[id]/duplicate — clone an SMS campaign into a new draft. */
+export async function POST(_req: NextRequest, { params }: RouteParams) {
+  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  if (error) return error;
+
+  const { id } = await params;
+  const existing = await getSmsCampaign(id);
+  if (!existing) {
+    return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
+  }
+
+  const userRole = session!.user.role;
+  const userAccountKeys: string[] = session!.user.accountKeys ?? [];
+  if (userRole === 'admin' && userAccountKeys.length > 0) {
+    const allowed = new Set(userAccountKeys);
+    const inScope =
+      existing.accountKeys.length === 0 ||
+      existing.accountKeys.some((key) => allowed.has(key));
+    if (!inScope) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+  }
+
+  try {
+    const copy = await duplicateSmsCampaign(id, {
+      createdByUserId: session!.user.id,
+      createdByRole: session!.user.role,
+    });
+    return NextResponse.json({ campaign: copy });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to duplicate campaign';
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

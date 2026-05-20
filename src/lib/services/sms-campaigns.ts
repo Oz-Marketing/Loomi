@@ -436,6 +436,58 @@ export async function getSmsCampaign(campaignId: string): Promise<SmsCampaignSum
   return row ? toSummary(row) : null;
 }
 
+/**
+ * Delete an SMS campaign + its recipient rows. Blocked while in-flight
+ * (queued/processing) so we don't yank the row out from under the worker.
+ */
+export async function deleteSmsCampaign(campaignId: string): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const row = await tx.smsCampaign.findUnique({
+      where: { id: campaignId },
+      select: { status: true },
+    });
+    if (!row) return;
+    if (row.status === 'queued' || row.status === 'processing') {
+      throw new Error('Cannot delete a campaign that is currently sending.');
+    }
+    await tx.smsCampaignRecipient.deleteMany({ where: { campaignId } });
+    await tx.smsCampaign.delete({ where: { id: campaignId } });
+  });
+}
+
+/**
+ * Clone an SMS campaign into a new draft. Status resets, recipient rows
+ * are not copied — the user re-picks an audience in the Recipients step.
+ */
+export async function duplicateSmsCampaign(
+  campaignId: string,
+  options?: { createdByUserId?: string; createdByRole?: string },
+): Promise<SmsCampaignSummary> {
+  const source = await prisma.smsCampaign.findUnique({
+    where: { id: campaignId },
+    select: smsCampaignSummarySelect,
+  });
+  if (!source) {
+    throw new Error('Source campaign not found');
+  }
+
+  const created = await prisma.smsCampaign.create({
+    data: {
+      name: source.name ? `${source.name} (Copy)` : defaultDraftName(new Date()),
+      message: source.message || '',
+      status: 'draft',
+      accountKeys: source.accountKeys || JSON.stringify([]),
+      sourceAudienceId: source.sourceAudienceId || null,
+      sourceFilter: source.sourceFilter || null,
+      metadata: source.metadata || null,
+      createdByUserId: options?.createdByUserId || null,
+      createdByRole: options?.createdByRole || null,
+    },
+    select: smsCampaignSummarySelect,
+  });
+  return toSummary(created);
+}
+
 export async function listSmsCampaigns(options?: {
   limit?: number;
   accountKeys?: string[];

@@ -19,8 +19,12 @@ import {
   PauseCircleIcon,
   XCircleIcon,
   EnvelopeIcon,
+  CheckIcon,
+  TrashIcon,
+  DocumentDuplicateIcon,
 } from '@heroicons/react/24/outline';
 import { AccountAvatar as SharedAccountAvatar } from '@/components/account-avatar';
+import BulkActionDock from '@/components/bulk-action-dock';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { getCampaignEditUrl, getCampaignStatsUrl } from '@/lib/esp/provider-links';
 import { resolveLocationId, resolveProviderId } from '@/lib/esp/provider-resolution';
@@ -352,18 +356,24 @@ function CampaignTableRow({
   accountProviders,
   isMenuOpen,
   downloading,
+  selectMode,
+  selected,
   onToggleMenu,
   onPreview,
   onDownload,
+  onToggleSelect,
 }: {
   item: Campaign;
   accountMeta?: Record<string, AccountMeta>;
   accountProviders?: Record<string, string>;
   isMenuOpen: boolean;
   downloading: boolean;
+  selectMode: boolean;
+  selected: boolean;
   onToggleMenu: (item: Campaign) => void;
   onPreview: (item: Campaign) => void;
   onDownload: (item: Campaign) => void;
+  onToggleSelect: (item: Campaign) => void;
 }) {
   const accountKey = campaignAccountKey(item);
   const provider = resolveProviderId(item, accountProviders, '');
@@ -387,7 +397,24 @@ function CampaignTableRow({
   const canPreview = Boolean(accountKey && getCampaignScheduleId(item));
 
   return (
-    <tr className="border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--muted)]/50 transition-colors">
+    <tr
+      onClick={selectMode ? () => onToggleSelect(item) : undefined}
+      className={`border-b border-[var(--border)] last:border-b-0 transition-colors ${
+        selectMode ? 'cursor-pointer' : ''
+      } ${selected ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/50'}`}
+    >
+      {selectMode && (
+        <td className="w-10 px-3 py-2.5 align-middle">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelect(item)}
+            onClick={(e) => e.stopPropagation()}
+            className="h-4 w-4 rounded border border-[var(--border)] bg-transparent accent-[var(--primary)] cursor-pointer"
+            aria-label="Select campaign"
+          />
+        </td>
+      )}
       <td className="px-3 py-2.5 align-middle">
         <div className="flex items-center gap-2 min-w-0">
           <EnvelopeIcon className="w-4 h-4 text-[var(--muted-foreground)] flex-shrink-0" />
@@ -584,7 +611,7 @@ export function CampaignPageList({
   emptyState,
   toolbarExtras,
 }: CampaignPageListProps) {
-  const { alert } = useLoomiDialog();
+  const { alert, confirm } = useLoomiDialog();
 
   // Search
   const [search, setSearch] = useState('');
@@ -614,6 +641,11 @@ export function CampaignPageList({
   const [previewLoading, setPreviewLoading] = useState(false);
   const previewCacheRef = useRef<Map<string, PreviewPayload>>(new Map());
 
+  // Bulk selection state (drill-down view only)
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
   useEffect(() => {
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => setDebouncedSearch(search), 300);
@@ -634,12 +666,21 @@ export function CampaignPageList({
     setCampaignSortDir('desc');
     setSearch('');
     setOpenMenuId(null);
+    setSelectMode(false);
+    setSelectedKeys(new Set());
   }
 
   function drillOut() {
     setSelectedAccount(null);
     setSearch('');
     setOpenMenuId(null);
+    setSelectMode(false);
+    setSelectedKeys(new Set());
+  }
+
+  function exitSelectMode() {
+    setSelectMode(false);
+    setSelectedKeys(new Set());
   }
 
   // ── Build account rows ──
@@ -815,12 +856,7 @@ export function CampaignPageList({
     setOpenMenuId(null);
     setDownloadingId(key);
     try {
-      const accountKey = campaignAccountKey(campaign);
-      const scheduleId = getCampaignScheduleId(campaign);
-      if (!accountKey || !scheduleId) {
-        throw new Error('Download is unavailable for this campaign.');
-      }
-      await downloadServerScreenshot(accountKey, scheduleId, campaign.name || 'campaign-email');
+      await downloadCampaignScreenshot(campaign);
     } catch (err) {
       console.error('PNG download failed:', err instanceof Error ? err.message : err);
       await alert({
@@ -830,6 +866,197 @@ export function CampaignPageList({
     } finally {
       setDownloadingId(null);
     }
+  }
+
+  // ── Bulk selection helpers ──
+
+  function toggleSelectCampaign(campaign: Campaign) {
+    const key = getCampaignKey(campaign);
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleSelectAllOnPage() {
+    setSelectedKeys((prev) => {
+      const pageKeys = pagedCampaigns.map((c) => getCampaignKey(c));
+      const allSelected = pageKeys.every((k) => prev.has(k));
+      const next = new Set(prev);
+      if (allSelected) {
+        for (const k of pageKeys) next.delete(k);
+      } else {
+        for (const k of pageKeys) next.add(k);
+      }
+      return next;
+    });
+  }
+
+  function getSelectedCampaigns(): Campaign[] {
+    return selectedCampaigns.filter((c) => selectedKeys.has(getCampaignKey(c)));
+  }
+
+  function isLoomiCampaign(c: Campaign): boolean {
+    const p = (c.provider || '').toLowerCase();
+    return p === 'loomi-email' || p === 'loomi-sms';
+  }
+
+  function isLoomiEmail(c: Campaign): boolean {
+    return (c.provider || '').toLowerCase() === 'loomi-email';
+  }
+
+  async function downloadCampaignScreenshot(campaign: Campaign): Promise<void> {
+    const fileBase = campaign.name || 'campaign-email';
+    if (isLoomiEmail(campaign)) {
+      const campaignId = campaign.campaignId || campaign.id;
+      if (!campaignId) throw new Error('Download is unavailable for this campaign.');
+      const res = await fetch(
+        `/api/campaigns/loomi/screenshot?campaignId=${encodeURIComponent(campaignId)}`,
+      );
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(
+          typeof data.error === 'string' ? data.error : `Screenshot failed (${res.status})`,
+        );
+      }
+      const blob = await res.blob();
+      if (!blob || blob.size === 0) throw new Error('Screenshot returned empty data');
+      downloadBlob(blob, `${sanitizeFileName(fileBase)}.png`);
+      return;
+    }
+    // ESP-fetched campaign — fall back to provider screenshot endpoint
+    const accountKey = campaignAccountKey(campaign);
+    const scheduleId = getCampaignScheduleId(campaign);
+    if (!accountKey || !scheduleId) {
+      throw new Error('Download is unavailable for this campaign.');
+    }
+    await downloadServerScreenshot(accountKey, scheduleId, fileBase);
+  }
+
+  async function handleBulkDownload() {
+    const targets = getSelectedCampaigns();
+    if (targets.length === 0) return;
+    setBulkBusy(true);
+    const failed: string[] = [];
+    try {
+      for (const c of targets) {
+        try {
+          await downloadCampaignScreenshot(c);
+        } catch (err) {
+          console.error('Bulk download failed for', c.name, err);
+          failed.push(c.name || '(Untitled)');
+        }
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+    if (failed.length > 0) {
+      await alert({
+        title: 'Some downloads failed',
+        message: `${failed.length} campaign${failed.length === 1 ? '' : 's'} could not be exported. The first failure was: ${failed[0]}`,
+      });
+    }
+  }
+
+  async function handleBulkCopy() {
+    const targets = getSelectedCampaigns().filter(isLoomiCampaign);
+    const skipped = selectedKeys.size - targets.length;
+    if (targets.length === 0) {
+      await alert({
+        title: 'Copy not supported',
+        message: 'Only Loomi-created campaigns can be duplicated. ESP-imported rows are read-only here.',
+      });
+      return;
+    }
+    setBulkBusy(true);
+    const failed: string[] = [];
+    try {
+      for (const c of targets) {
+        const id = c.campaignId || c.id;
+        const path = isLoomiEmail(c) ? 'email' : 'sms';
+        try {
+          const res = await fetch(`/api/campaigns/${path}/${encodeURIComponent(id)}/duplicate`, {
+            method: 'POST',
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch (err) {
+          console.error('Bulk copy failed for', c.name, err);
+          failed.push(c.name || '(Untitled)');
+        }
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+    exitSelectMode();
+    if (failed.length > 0 || skipped > 0) {
+      await alert({
+        title: 'Copy summary',
+        message: [
+          `${targets.length - failed.length} campaign${targets.length - failed.length === 1 ? '' : 's'} duplicated.`,
+          failed.length > 0 ? `${failed.length} failed.` : '',
+          skipped > 0 ? `${skipped} ESP row${skipped === 1 ? '' : 's'} skipped (not duplicable here).` : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
+      });
+    }
+    // Refresh the page so the new drafts appear. The parent owns the
+    // campaigns array, so a soft reload is the simplest sync.
+    if (typeof window !== 'undefined') window.location.reload();
+  }
+
+  async function handleBulkDelete() {
+    const targets = getSelectedCampaigns().filter(isLoomiCampaign);
+    const skipped = selectedKeys.size - targets.length;
+    if (targets.length === 0) {
+      await alert({
+        title: 'Delete not supported',
+        message: 'Only Loomi-created campaigns can be deleted from here. ESP-imported rows must be managed in their provider.',
+      });
+      return;
+    }
+    const confirmed = await confirm({
+      title: 'Delete selected campaigns?',
+      message: `This will permanently delete ${targets.length} campaign${targets.length === 1 ? '' : 's'} and any draft recipient data. This cannot be undone.`,
+      destructive: true,
+      confirmLabel: 'Delete',
+    });
+    if (!confirmed) return;
+    setBulkBusy(true);
+    const failed: string[] = [];
+    try {
+      for (const c of targets) {
+        const id = c.campaignId || c.id;
+        const path = isLoomiEmail(c) ? 'email' : 'sms';
+        try {
+          const res = await fetch(`/api/campaigns/${path}/${encodeURIComponent(id)}`, {
+            method: 'DELETE',
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch (err) {
+          console.error('Bulk delete failed for', c.name, err);
+          failed.push(c.name || '(Untitled)');
+        }
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+    exitSelectMode();
+    if (failed.length > 0 || skipped > 0) {
+      await alert({
+        title: 'Delete summary',
+        message: [
+          `${targets.length - failed.length} campaign${targets.length - failed.length === 1 ? '' : 's'} deleted.`,
+          failed.length > 0 ? `${failed.length} failed.` : '',
+          skipped > 0 ? `${skipped} ESP row${skipped === 1 ? '' : 's'} skipped (managed by provider).` : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
+      });
+    }
+    if (typeof window !== 'undefined') window.location.reload();
   }
 
   // ── Loading skeleton ──
@@ -905,6 +1132,23 @@ export function CampaignPageList({
                 className="w-52 pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
               />
             </div>
+            {selectedAccount && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (selectMode) exitSelectMode();
+                  else setSelectMode(true);
+                }}
+                className={`inline-flex items-center gap-1.5 h-[30px] px-2.5 text-xs font-medium rounded-lg border transition-colors ${
+                  selectMode
+                    ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+                    : 'border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)]'
+                }`}
+              >
+                <CheckIcon className="w-3.5 h-3.5" />
+                {selectMode ? 'Cancel' : 'Select'}
+              </button>
+            )}
             {toolbarExtras}
           </div>
         </div>
@@ -1047,6 +1291,30 @@ export function CampaignPageList({
                 <table className="w-full min-w-[600px]">
                   <thead className="sticky top-0 z-10">
                     <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
+                      {selectMode && (
+                        <th className="w-10 px-3 py-2">
+                          <input
+                            type="checkbox"
+                            checked={
+                              pagedCampaigns.length > 0 &&
+                              pagedCampaigns.every((c) => selectedKeys.has(getCampaignKey(c)))
+                            }
+                            ref={(el) => {
+                              if (!el) return;
+                              const someSelected = pagedCampaigns.some((c) =>
+                                selectedKeys.has(getCampaignKey(c)),
+                              );
+                              const allSelected =
+                                pagedCampaigns.length > 0 &&
+                                pagedCampaigns.every((c) => selectedKeys.has(getCampaignKey(c)));
+                              el.indeterminate = someSelected && !allSelected;
+                            }}
+                            onChange={toggleSelectAllOnPage}
+                            className="h-4 w-4 rounded border border-[var(--border)] bg-transparent accent-[var(--primary)] cursor-pointer"
+                            aria-label="Select all campaigns on this page"
+                          />
+                        </th>
+                      )}
                       <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                         Name
                       </th>
@@ -1073,12 +1341,15 @@ export function CampaignPageList({
                           accountProviders={accountProviders}
                           isMenuOpen={openMenuId === rowKey}
                           downloading={downloadingId === rowKey}
+                          selectMode={selectMode}
+                          selected={selectedKeys.has(rowKey)}
                           onToggleMenu={(campaign) => {
                             const key = getCampaignKey(campaign);
                             setOpenMenuId((prev) => (prev === key ? null : key));
                           }}
                           onPreview={handlePreview}
                           onDownload={handleDownload}
+                          onToggleSelect={toggleSelectCampaign}
                         />
                       );
                     })}
@@ -1098,6 +1369,50 @@ export function CampaignPageList({
           </>
         )}
       </div>
+
+      {/* Bulk action dock (drill-down view only) */}
+      {selectMode && selectedAccount && (
+        <BulkActionDock
+          count={selectedKeys.size}
+          itemLabel="campaigns"
+          onClose={exitSelectMode}
+          actions={[
+            {
+              id: 'select-all',
+              label:
+                pagedCampaigns.length > 0 &&
+                pagedCampaigns.every((c) => selectedKeys.has(getCampaignKey(c)))
+                  ? 'Deselect all'
+                  : 'Select all',
+              icon: <CheckIcon className="h-4 w-4" />,
+              onClick: toggleSelectAllOnPage,
+              disabled: pagedCampaigns.length === 0,
+            },
+            {
+              id: 'copy',
+              label: 'Copy',
+              icon: <DocumentDuplicateIcon className="h-4 w-4" />,
+              onClick: () => { void handleBulkCopy(); },
+              disabled: selectedKeys.size === 0 || bulkBusy,
+            },
+            {
+              id: 'download',
+              label: 'Download PNG',
+              icon: <ArrowDownTrayIcon className="h-4 w-4" />,
+              onClick: () => { void handleBulkDownload(); },
+              disabled: selectedKeys.size === 0 || bulkBusy,
+            },
+            {
+              id: 'delete',
+              label: 'Delete',
+              icon: <TrashIcon className="h-4 w-4" />,
+              onClick: () => { void handleBulkDelete(); },
+              disabled: selectedKeys.size === 0 || bulkBusy,
+              danger: true,
+            },
+          ]}
+        />
+      )}
 
       {/* Preview modal */}
       {previewCampaign && (

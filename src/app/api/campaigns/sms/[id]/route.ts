@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import {
+  deleteSmsCampaign,
   getSmsCampaign,
   updateSmsCampaignDraft,
 } from '@/lib/services/sms-campaigns';
@@ -87,5 +88,37 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to update campaign';
     return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+/** DELETE /api/campaigns/sms/[id] — hard-delete a Loomi SMS campaign. */
+export async function DELETE(_req: NextRequest, { params }: RouteParams) {
+  const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+  if (error) return error;
+
+  const { id } = await params;
+  const existing = await getSmsCampaign(id);
+  if (!existing) {
+    return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
+  }
+
+  const userRole = session!.user.role;
+  const userAccountKeys: string[] = session!.user.accountKeys ?? [];
+  if (userRole === 'admin' && userAccountKeys.length > 0) {
+    const allowed = new Set(userAccountKeys);
+    const inScope =
+      existing.accountKeys.length === 0 ||
+      existing.accountKeys.some((key) => allowed.has(key));
+    if (!inScope) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+  }
+
+  try {
+    await deleteSmsCampaign(id);
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Failed to delete campaign';
+    return NextResponse.json({ error: message }, { status: 409 });
   }
 }

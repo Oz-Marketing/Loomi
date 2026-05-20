@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
-import { XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { Sidebar } from '@/components/sidebar';
 import { TopUtilityBar } from '@/components/top-utility-bar';
 import { AppLogo } from '@/components/app-logo';
@@ -114,23 +114,22 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
       <div className="flex-1 flex flex-col min-h-screen">
         <header className="flex-shrink-0 grid grid-cols-[1fr_auto_1fr] items-center px-6 h-16 border-b border-[var(--border)] bg-[var(--card)]/80 backdrop-blur-md">
           <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={() => router.push('/campaigns')}
+              className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
+              aria-label="Exit campaign builder"
+              title="Exit"
+            >
+              <ArrowLeftIcon className="w-4 h-4" />
+            </button>
             <AppLogo className="h-7 w-auto" />
             <span className="hidden sm:inline text-sm font-semibold text-[var(--foreground)] truncate">
               Create an Email Campaign
             </span>
           </div>
           <CampaignBuilderProgress current={step} />
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={() => router.push('/campaigns')}
-              className="inline-flex items-center gap-1.5 px-3 h-9 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)] rounded-lg hover:bg-[var(--muted)]"
-              aria-label="Exit campaign builder"
-            >
-              <XMarkIcon className="w-4 h-4" />
-              Exit
-            </button>
-          </div>
+          <div />
         </header>
         <main className="flex-1 min-w-0">{children}</main>
       </div>

@@ -82,7 +82,13 @@ export default function RecipientsStepPage({ params }: PageProps) {
 
   const [saving, setSaving] = useState(false);
 
-  // Hydrate draft on mount
+  // Hydrate draft on mount.
+  // NOTE: router / subHref are intentionally NOT in the dep array.
+  // useSubaccountHref() returns a fresh function reference on every render,
+  // which would cause this effect to refire after each setState — an
+  // infinite fetch loop. We only want this effect to run when the campaign
+  // id changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     let cancelled = false;
     setDraftLoading(true);
@@ -128,7 +134,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
     return () => {
       cancelled = true;
     };
-  }, [id, router, subHref]);
+  }, [id]);
 
   // Account options to pick from
   const accountOptions = useMemo(() => {

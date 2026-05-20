@@ -6,7 +6,15 @@
  *
  * Start locally: `npm run worker:start`
  * PM2 in prod:  see ecosystem.config.js
+ *
+ * Unlike the Next.js web server, this process is plain Node and does NOT
+ * auto-load `.env` files. We load them explicitly so the worker sees
+ * DATABASE_URL (in .env) and SMTP_* / sender creds (in .env.local).
  */
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env' });
+dotenv.config({ path: '.env.local' });
+
 import { getBoss, stopBoss } from '@/lib/queue/boss';
 import {
   processDueEmailCampaigns,

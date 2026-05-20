@@ -504,6 +504,69 @@ export async function updateEmailCampaignDraft(
   return toSummary(updated);
 }
 
+/**
+ * Transitions a draft EmailCampaign into 'scheduled' (future send time) or
+ * 'queued' (send immediately). Creates EmailCampaignRecipient rows in the
+ * same transaction so the pg-boss worker has everything it needs once
+ * scheduledFor passes.
+ */
+export async function scheduleEmailCampaignDraft(
+  campaignId: string,
+  input: {
+    recipients: EmailRecipientInput[];
+    scheduledFor: Date | null; // null = send immediately
+  },
+): Promise<EmailCampaignSummary> {
+  const recipients = dedupeRecipients(input.recipients);
+  if (recipients.length === 0) {
+    throw new Error('At least one recipient is required');
+  }
+  const sendableRecipients = recipients.filter((r) => Boolean(r.email));
+  if (sendableRecipients.length === 0) {
+    throw new Error('No recipients with valid email addresses were provided');
+  }
+
+  const now = Date.now();
+  const isImmediate = !input.scheduledFor || input.scheduledFor.getTime() <= now;
+  const status: EmailCampaignStatus = isImmediate ? 'queued' : 'scheduled';
+
+  const updated = await prisma.$transaction(async (tx) => {
+    // Clear any pre-existing recipient rows so re-scheduling a draft
+    // starts from a clean slate.
+    await tx.emailCampaignRecipient.deleteMany({ where: { campaignId } });
+
+    await tx.emailCampaignRecipient.createMany({
+      data: recipients.map((recipient) => ({
+        campaignId,
+        contactId: recipient.contactId,
+        accountKey: recipient.accountKey,
+        email: recipient.email || null,
+        fullName: recipient.fullName || null,
+        status: recipient.email ? 'pending' : 'failed',
+        error: recipient.email ? null : INVALID_EMAIL_ERROR,
+      })),
+    });
+
+    const accountKeys = [...new Set(recipients.map((r) => r.accountKey).filter(Boolean))];
+
+    return tx.emailCampaign.update({
+      where: { id: campaignId },
+      data: {
+        status,
+        scheduledFor: isImmediate ? null : input.scheduledFor,
+        totalRecipients: recipients.length,
+        accountKeys: JSON.stringify(accountKeys),
+        startedAt: null,
+        completedAt: null,
+        error: null,
+      },
+      select: emailCampaignSummarySelect,
+    });
+  });
+
+  return toSummary(updated);
+}
+
 export async function getEmailCampaign(campaignId: string): Promise<EmailCampaignSummary | null> {
   const row = await prisma.emailCampaign.findUnique({
     where: { id: campaignId },

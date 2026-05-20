@@ -10,15 +10,27 @@ import { stripSubaccountPrefix } from '@/lib/account-slugs';
 
 const BUILDER_STEPS = [
   { key: 'recipients', label: 'Recipients' },
-  { key: 'template', label: 'Message' },
+  { key: 'message', label: 'Message' },
   { key: 'schedule', label: 'Schedule' },
 ] as const;
 
 type BuilderStepKey = (typeof BUILDER_STEPS)[number]['key'];
 
 function campaignBuilderStep(path: string): BuilderStepKey {
-  const match = path.match(/^\/campaigns\/[^/]+\/(recipients|template|schedule)$/);
-  return (match?.[1] as BuilderStepKey) || 'recipients';
+  // Email: /campaigns/[id]/(recipients|template|schedule)
+  // SMS:   /campaigns/sms/[id]/(recipients|message|schedule)
+  const emailMatch = path.match(/^\/campaigns\/[^/]+\/(recipients|template|schedule)$/);
+  if (emailMatch) {
+    const raw = emailMatch[1];
+    return raw === 'template' ? 'message' : (raw as BuilderStepKey);
+  }
+  const smsMatch = path.match(/^\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/);
+  if (smsMatch) return smsMatch[1] as BuilderStepKey;
+  return 'recipients';
+}
+
+function campaignBuilderChannel(path: string): 'email' | 'sms' {
+  return /^\/campaigns\/sms\//.test(path) ? 'sms' : 'email';
 }
 
 function CampaignBuilderProgress({ current }: { current: BuilderStepKey }) {
@@ -80,11 +92,12 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     || /^\/components\/folder\/[^/]+$/.test(normalizedPath);
 
   // Campaign builder steps run as a focused, full-screen flow with only
-  // the logo and an exit affordance — no sidebar, no top utility bar.
+  // the logo and a back affordance — no sidebar, no top utility bar.
   // (The template editor at /templates/editor uses its own chrome via the
   // existing isTemplateEditor branch.)
   const isCampaignBuilder =
-    /^\/campaigns\/[^/]+\/(recipients|template|schedule)$/.test(normalizedPath);
+    /^\/campaigns\/[^/]+\/(recipients|template|schedule)$/.test(normalizedPath) ||
+    /^\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/.test(normalizedPath);
 
   useEffect(() => {
     if (isFullScreen || isTemplateEditor || isCampaignBuilder) {
@@ -110,6 +123,8 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
 
   if (isCampaignBuilder) {
     const step = campaignBuilderStep(normalizedPath);
+    const channel = campaignBuilderChannel(normalizedPath);
+    const title = channel === 'sms' ? 'Create a Text Campaign' : 'Create an Email Campaign';
     return (
       <div className="flex-1 flex flex-col min-h-screen">
         <header className="flex-shrink-0 grid grid-cols-[1fr_auto_1fr] items-center px-6 h-16 border-b border-[var(--border)] bg-[var(--card)]/80 backdrop-blur-md">
@@ -125,7 +140,7 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
             </button>
             <AppLogo className="h-7 w-auto" />
             <span className="hidden sm:inline text-sm font-semibold text-[var(--foreground)] truncate">
-              Create an Email Campaign
+              {title}
             </span>
           </div>
           <CampaignBuilderProgress current={step} />

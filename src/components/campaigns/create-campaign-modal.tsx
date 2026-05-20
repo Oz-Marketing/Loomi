@@ -54,13 +54,16 @@ export function CreateCampaignModal({
 
   if (!open) return null;
 
-  const canSubmit = name.trim().length > 0 && channel === 'email' && !submitting;
+  const canSubmit =
+    name.trim().length > 0 && (channel === 'email' || channel === 'sms') && !submitting;
 
   async function handleSubmit() {
     if (!canSubmit) return;
     setSubmitting(true);
     try {
-      const res = await fetch('/api/campaigns/email/draft', {
+      const isSms = channel === 'sms';
+      const endpoint = isSms ? '/api/campaigns/sms/draft' : '/api/campaigns/email/draft';
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -73,7 +76,10 @@ export function CreateCampaignModal({
       const campaignId = data?.campaign?.id;
       if (!campaignId) throw new Error('Campaign created but no ID returned');
       const base = redirectBase || '/campaigns';
-      router.push(`${base}/${encodeURIComponent(campaignId)}/recipients`);
+      const path = isSms
+        ? `${base}/sms/${encodeURIComponent(campaignId)}/recipients`
+        : `${base}/${encodeURIComponent(campaignId)}/recipients`;
+      router.push(path);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to create campaign');
       setSubmitting(false);
@@ -156,8 +162,7 @@ export function CreateCampaignModal({
                 onSelect={setChannel}
                 icon={ChatBubbleLeftRightIcon}
                 label="Text Messaging"
-                description="SMS rail ships in the next release."
-                disabled
+                description="Send an SMS/MMS blast through your subaccount's GHL connection."
               />
               <ChannelOption
                 value="both"
@@ -165,7 +170,7 @@ export function CreateCampaignModal({
                 onSelect={setChannel}
                 icon={Squares2X2Icon}
                 label="Both"
-                description="Send email + SMS as a single campaign."
+                description="Multi-channel sends (email + SMS) ship in the next release."
                 disabled
               />
             </div>

@@ -10,6 +10,7 @@ import {
 } from '@/lib/contact-hygiene';
 
 type SmsCampaignStatus =
+  | 'draft'
   | 'queued'
   | 'scheduled'
   | 'processing'
@@ -51,6 +52,9 @@ export interface SmsCampaignSummary {
   sentCount: number;
   failedCount: number;
   accountKeys: string[];
+  sourceAudienceId: string;
+  sourceFilter: string;
+  metadata: string;
   createdAt: string;
   updatedAt: string;
   error: string;
@@ -194,6 +198,9 @@ function toSummary(row: {
   sentCount: number;
   failedCount: number;
   accountKeys: string;
+  sourceAudienceId: string | null;
+  sourceFilter: string | null;
+  metadata: string | null;
   createdAt: Date;
   updatedAt: Date;
   error: string | null;
@@ -210,6 +217,9 @@ function toSummary(row: {
     sentCount: row.sentCount,
     failedCount: row.failedCount,
     accountKeys: parseAccountKeys(row.accountKeys),
+    sourceAudienceId: row.sourceAudienceId || '',
+    sourceFilter: row.sourceFilter || '',
+    metadata: row.metadata || '',
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     error: row.error || '',
@@ -228,10 +238,144 @@ const smsCampaignSummarySelect = {
   sentCount: true,
   failedCount: true,
   accountKeys: true,
+  sourceAudienceId: true,
+  sourceFilter: true,
+  metadata: true,
   createdAt: true,
   updatedAt: true,
   error: true,
 } as const;
+
+function defaultDraftName(now: Date): string {
+  return `Campaign ${now.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })}`;
+}
+
+/** Creates an empty SmsCampaign in 'draft' status for the builder flow. */
+export async function createDraftSmsCampaign(input: {
+  name?: string;
+  accountKeys?: string[];
+  createdByUserId?: string;
+  createdByRole?: string;
+}): Promise<SmsCampaignSummary> {
+  const name = (input.name || '').trim() || defaultDraftName(new Date());
+  const created = await prisma.smsCampaign.create({
+    data: {
+      name,
+      message: '',
+      status: 'draft',
+      accountKeys: JSON.stringify(input.accountKeys || []),
+      createdByUserId: input.createdByUserId || null,
+      createdByRole: input.createdByRole || null,
+    },
+    select: smsCampaignSummarySelect,
+  });
+  return toSummary(created);
+}
+
+/** PATCH-style update for an in-flight SMS draft. */
+export async function updateSmsCampaignDraft(
+  campaignId: string,
+  patch: {
+    name?: string;
+    message?: string;
+    accountKeys?: string[];
+    sourceAudienceId?: string | null;
+    sourceFilter?: string | null;
+    scheduledFor?: Date | null;
+    status?: SmsCampaignStatus;
+    metadata?: string | null;
+  },
+): Promise<SmsCampaignSummary> {
+  const data: Record<string, unknown> = {};
+  if (patch.name !== undefined) data.name = patch.name;
+  if (patch.message !== undefined) data.message = patch.message;
+  if (patch.accountKeys !== undefined) data.accountKeys = JSON.stringify(patch.accountKeys);
+  if (patch.sourceAudienceId !== undefined) data.sourceAudienceId = patch.sourceAudienceId;
+  if (patch.sourceFilter !== undefined) data.sourceFilter = patch.sourceFilter;
+  if (patch.scheduledFor !== undefined) data.scheduledFor = patch.scheduledFor;
+  if (patch.status !== undefined) data.status = patch.status;
+  if (patch.metadata !== undefined) data.metadata = patch.metadata;
+
+  const updated = await prisma.smsCampaign.update({
+    where: { id: campaignId },
+    data,
+    select: smsCampaignSummarySelect,
+  });
+  return toSummary(updated);
+}
+
+const INVALID_PHONE_ERROR = 'Recipient phone is missing or blocked by hygiene policy';
+
+/**
+ * Transitions an SMS draft into 'scheduled' or 'queued' and persists
+ * recipient rows. The pg-boss worker picks it up once scheduledFor passes.
+ */
+export async function scheduleSmsCampaignDraft(
+  campaignId: string,
+  input: {
+    recipients: SmsRecipientInput[];
+    scheduledFor: Date | null;
+  },
+): Promise<SmsCampaignSummary> {
+  // Dedupe on (contactId, accountKey)
+  const seen = new Set<string>();
+  const recipients: SmsRecipientInput[] = [];
+  for (const r of input.recipients || []) {
+    const key = `${r.contactId}::${r.accountKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    recipients.push(r);
+  }
+  if (recipients.length === 0) throw new Error('At least one recipient is required');
+  const sendable = recipients.filter((r) => Boolean(r.phone));
+  if (sendable.length === 0) {
+    throw new Error('No recipients with valid phone numbers were provided');
+  }
+
+  const now = Date.now();
+  const isImmediate = !input.scheduledFor || input.scheduledFor.getTime() <= now;
+  const status: SmsCampaignStatus = isImmediate ? 'queued' : 'scheduled';
+
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.smsCampaignRecipient.deleteMany({ where: { campaignId } });
+
+    await tx.smsCampaignRecipient.createMany({
+      data: recipients.map((r) => ({
+        campaignId,
+        contactId: r.contactId,
+        accountKey: r.accountKey,
+        phone: r.phone || null,
+        fullName: r.fullName || null,
+        status: r.phone ? 'pending' : 'failed',
+        error: r.phone ? null : INVALID_PHONE_ERROR,
+      })),
+    });
+
+    const accountKeys = [...new Set(recipients.map((r) => r.accountKey).filter(Boolean))];
+
+    return tx.smsCampaign.update({
+      where: { id: campaignId },
+      data: {
+        status,
+        scheduledFor: isImmediate ? null : input.scheduledFor,
+        totalRecipients: recipients.length,
+        accountKeys: JSON.stringify(accountKeys),
+        startedAt: null,
+        completedAt: null,
+        error: null,
+      },
+      select: smsCampaignSummarySelect,
+    });
+  });
+
+  return toSummary(updated);
+}
 
 export async function createSmsCampaign(input: CreateSmsCampaignInput): Promise<SmsCampaignSummary> {
   const message = sanitizeMessage(input.message || '');

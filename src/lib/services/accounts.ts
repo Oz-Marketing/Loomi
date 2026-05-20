@@ -134,6 +134,12 @@ export async function updateAccount(
     // Pacer markup rate override. `null` clears the override and the
     // Meta Ads Pacer calculator falls back to its global default.
     markup: number | null;
+    // Loomi-native sending identity (Phase 1 of in-house send engine).
+    // Empty string clears the override; sends then fall back to SMTP_FROM.
+    senderEmail: string;
+    senderName: string;
+    sendingDomain: string;
+    replyToEmail: string;
   }>,
 ) {
   return prisma.account.update({ where: { key }, data });

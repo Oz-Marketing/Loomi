@@ -13,6 +13,7 @@ import {
   LinkIcon,
   PaintBrushIcon,
   PencilSquareIcon,
+  PaperAirplaneIcon,
   SwatchIcon,
   UsersIcon,
   XMarkIcon,
@@ -28,6 +29,7 @@ import { toast } from '@/lib/toast';
 import { AdminOnly } from '@/components/route-guard';
 import { UsersTab } from '@/components/settings/users-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
+import { SendingTab } from '@/components/settings/sending-tab';
 import { OemMultiSelect } from '@/components/oem-multi-select';
 import { UserAvatar } from '@/components/user-avatar';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -104,7 +106,7 @@ function providerSecretPlaceholder(auth: EspCapabilities['auth']): string {
   return 'Enter credential';
 }
 
-type DetailTab = 'company' | 'branding' | 'integration' | 'custom-values' | 'contacts' | 'users' | 'appearance';
+type DetailTab = 'company' | 'branding' | 'integration' | 'custom-values' | 'contacts' | 'users' | 'appearance' | 'sending';
 type AccountImageVariant = 'light' | 'dark' | 'white' | 'black' | 'storefront';
 type GhlAgencyStatus = {
   connected: boolean;
@@ -174,6 +176,7 @@ const SETTINGS_TABS: TabDef[] = [
   { key: 'branding', label: 'Branding', icon: PaintBrushIcon },
   { key: 'users', label: 'Users', icon: UsersIcon },
   { key: 'integration', label: 'Integrations', icon: LinkIcon },
+  { key: 'sending', label: 'Sending', icon: PaperAirplaneIcon },
   { key: 'custom-values', label: 'Custom Values', icon: AdjustmentsHorizontalIcon },
   { key: 'appearance', label: 'Appearance', icon: SwatchIcon },
 ];
@@ -2493,6 +2496,9 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
 
         {/* ════════════ APPEARANCE TAB (settings mode only) ════════════ */}
         {settingsMode && activeTab === 'appearance' && <AppearanceTab />}
+
+        {/* ════════════ SENDING TAB (settings mode only) ════════════ */}
+        {settingsMode && activeTab === 'sending' && <SendingTab accountKey={key} />}
 
         </div>{/* end tab content */}
         </div>{/* end flex sidebar+content */}

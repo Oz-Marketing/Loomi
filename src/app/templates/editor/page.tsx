@@ -9738,21 +9738,26 @@ export default function TemplateEditorPage() {
                   </div>
                 )}
               </div>
-              {/* Schedule (replaces Save Template in campaign builder mode) */}
+              {/* In multi-channel mode the primary action is 'Done' →
+                  back to the Message step, so the user still has to walk
+                  through the SMS tab before the Message step's own
+                  Continue-to-Schedule button lets them advance. In
+                  single-channel mode it's still 'Schedule' → straight
+                  to the schedule page. */}
               <button
                 onClick={() =>
                   router.push(
                     fromMultiBuilder
-                      ? `/campaigns/multi/${encodeURIComponent(campaignIdParam)}/schedule`
+                      ? `/campaigns/multi/${encodeURIComponent(campaignIdParam)}/message`
                       : `/campaigns/${encodeURIComponent(campaignIdParam)}/schedule`,
                   )
                 }
                 disabled={saving}
                 className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
-                title="Continue to Schedule"
+                title={fromMultiBuilder ? 'Back to Message' : 'Continue to Schedule'}
               >
                 <PaperAirplaneIcon className="w-4 h-4" />
-                Schedule
+                {fromMultiBuilder ? 'Done' : 'Schedule'}
               </button>
             </>
           ) : (

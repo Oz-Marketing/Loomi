@@ -5,6 +5,8 @@ import {
   isLikelyDeliverableEmail,
   normalizeEmailAddress,
 } from '@/lib/contact-hygiene';
+import { decryptToken } from '@/lib/esp/encryption';
+import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
 
 type EmailCampaignStatus =
   | 'draft'
@@ -285,12 +287,26 @@ const emailCampaignSummarySelect = {
 interface AccountSenderIdentity {
   from: string;
   replyTo: string | null;
+  /** Raw sender email (without name wrapping) for providers that take
+   *  separate name + email fields like SendGrid. */
+  senderEmail: string | null;
+  senderName: string | null;
+  /** Decrypted SendGrid API key when this sub-account has one configured;
+   *  null = fall back to nodemailer SMTP. */
+  sendgridApiKey: string | null;
 }
 
+/**
+ * Resolve the SMTP transport when env vars are present. Returns null
+ * when SMTP isn't configured so callers can route through SendGrid
+ * exclusively if every sub-account has its own key. The worker only
+ * errors out if BOTH SMTP and SendGrid are missing for a given
+ * recipient's account.
+ */
 function getTransporter(): {
   defaultFrom: string;
   transporter: nodemailer.Transporter;
-} {
+} | null {
   const smtpHost = process.env.SMTP_HOST;
   const smtpPort = Number(process.env.SMTP_PORT || '587');
   const smtpUser = process.env.SMTP_USER;
@@ -298,9 +314,7 @@ function getTransporter(): {
   const smtpFrom = process.env.SMTP_FROM || smtpUser;
 
   if (!smtpHost || !smtpUser || !smtpPass || !smtpFrom) {
-    throw new Error(
-      'Email sending is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASS, and optionally SMTP_FROM.',
-    );
+    return null;
   }
 
   const transporter = nodemailer.createTransport({
@@ -340,19 +354,44 @@ async function buildSenderMap(
       senderEmail: true,
       senderName: true,
       replyToEmail: true,
+      sendgridApiKey: true,
     },
   });
 
   const lookup = new Map(accounts.map((a) => [a.key, a]));
   for (const key of accountKeys) {
     const account = lookup.get(key);
+    let sendgridApiKey: string | null = null;
+    if (account?.sendgridApiKey) {
+      try {
+        sendgridApiKey = decryptToken(account.sendgridApiKey);
+      } catch (err) {
+        // Bad ciphertext is a clear misconfiguration — log and treat
+        // as "no SendGrid" so this account falls back to SMTP instead
+        // of silently failing every recipient.
+        console.error(
+          `[email-campaigns] Failed to decrypt SendGrid key for ${key}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
     if (account?.senderEmail) {
       map.set(key, {
         from: formatFromHeader(account.senderEmail, account.senderName),
         replyTo: account.replyToEmail || null,
+        senderEmail: account.senderEmail,
+        senderName: account.senderName || null,
+        sendgridApiKey,
       });
     } else {
-      map.set(key, { from: defaultFrom, replyTo: null });
+      map.set(key, {
+        from: defaultFrom,
+        replyTo: null,
+        senderEmail: null,
+        senderName: null,
+        sendgridApiKey,
+      });
     }
   }
   return map;
@@ -777,7 +816,8 @@ export async function processEmailCampaign(
     },
   });
 
-  const { transporter, defaultFrom } = getTransporter();
+  const smtp = getTransporter();
+  const defaultFrom = smtp?.defaultFrom || '';
   const uniqueAccountKeys = [...new Set(campaign.recipients.map((r) => r.accountKey))];
   const senderByAccount = await buildSenderMap(uniqueAccountKeys, defaultFrom);
   const metadata = parseCampaignMetadata(campaign.metadata);
@@ -800,33 +840,84 @@ export async function processEmailCampaign(
     const sender = senderByAccount.get(recipient.accountKey) || {
       from: defaultFrom,
       replyTo: null,
+      senderEmail: null,
+      senderName: null,
+      sendgridApiKey: null,
     };
 
-    try {
-      const info = await transporter.sendMail({
-        from: sender.from,
-        ...(sender.replyTo ? { replyTo: sender.replyTo } : {}),
-        to: recipientEmail,
-        subject: campaign.subject,
-        html,
-        text,
+    // Dispatch: SendGrid first (per-sub-account API key), then SMTP fallback.
+    // If neither is configured for this account, fail the recipient with
+    // a clear message rather than throwing — keeps the rest of the batch
+    // alive and the user sees what went wrong on the failed row.
+    const useSendGrid = Boolean(sender.sendgridApiKey && sender.senderEmail);
+
+    if (!useSendGrid && !smtp) {
+      await prisma.emailCampaignRecipient.update({
+        where: { id: recipient.id },
+        data: {
+          status: 'failed',
+          error:
+            'No sending transport configured for this sub-account. Add a SendGrid API key in Sending settings, or set SMTP_* env vars for a fallback.',
+        },
       });
+      return;
+    }
+
+    try {
+      let messageId: string | null = null;
+
+      if (useSendGrid) {
+        const result = await sendEmailViaSendGrid({
+          apiKey: sender.sendgridApiKey!,
+          from: { email: sender.senderEmail!, name: sender.senderName || undefined },
+          replyTo: sender.replyTo ? { email: sender.replyTo } : undefined,
+          to: { email: recipientEmail, name: recipient.fullName || undefined },
+          subject: campaign.subject,
+          html,
+          text,
+          categories: ['loomi', `campaign:${campaign.id}`],
+          // Carry these through to the Event webhook so we can correlate
+          // opens/clicks/bounces back to the originating row.
+          customArgs: {
+            campaignId: campaign.id,
+            recipientId: recipient.id,
+            accountKey: recipient.accountKey,
+          },
+        });
+        messageId = result.messageId || null;
+      } else {
+        const info = await smtp!.transporter.sendMail({
+          from: sender.from,
+          ...(sender.replyTo ? { replyTo: sender.replyTo } : {}),
+          to: recipientEmail,
+          subject: campaign.subject,
+          html,
+          text,
+        });
+        messageId = info.messageId || null;
+      }
 
       await prisma.emailCampaignRecipient.update({
         where: { id: recipient.id },
         data: {
           status: 'sent',
-          messageId: info.messageId || null,
+          messageId,
           sentAt: new Date(),
           error: null,
         },
       });
     } catch (err) {
+      const errorMessage =
+        err instanceof SendGridError
+          ? `SendGrid: ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : 'Failed to send email';
       await prisma.emailCampaignRecipient.update({
         where: { id: recipient.id },
         data: {
           status: 'failed',
-          error: err instanceof Error ? err.message : 'Failed to send email',
+          error: errorMessage,
         },
       });
     }

@@ -18,5 +18,11 @@ export function normalizeAccountOutputPayload(payload: Record<string, unknown>):
     if (!(field in payload)) continue;
     payload[field] = tryParseJson(payload[field]);
   }
+  // Surface a boolean for the SendGrid API key, never the ciphertext.
+  // Existing settings + sending UIs branch on `sendgridConfigured`.
+  if ('sendgridApiKey' in payload) {
+    payload.sendgridConfigured = Boolean(payload.sendgridApiKey);
+    delete payload.sendgridApiKey;
+  }
   applyAccountOutputAliases(payload);
 }

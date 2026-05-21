@@ -114,6 +114,13 @@ model Account {
   senderName    String?
   sendingDomain String?
   replyToEmail  String?
+  // Per-sub-account SendGrid API key (AES-256-GCM encrypted at rest via
+  // src/lib/esp/encryption.ts). When present, the worker sends through
+  // SendGrid instead of falling back to SMTP. sendgridFromDomain stores the
+  // verified sender domain so we can warn at send time if senderEmail isn't
+  // authenticated.
+  sendgridApiKey     String?
+  sendgridFromDomain String?
   accountRepId String?
   accountRep   User?    @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
   createdAt    DateTime @default(now())

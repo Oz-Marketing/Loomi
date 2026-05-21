@@ -8882,6 +8882,9 @@ export default function TemplateEditorPage() {
             templateName ||
             "Test Email",
           html: previewHtml,
+          // Routes through SendGrid when this account has a key
+          // configured; the server falls back to SMTP otherwise.
+          accountKey: effectiveAccountKey || undefined,
         }),
       });
       const data = await res.json();
@@ -8899,7 +8902,7 @@ export default function TemplateEditorPage() {
     } finally {
       setSendingTest(false);
     }
-  }, [sendTestTo, sendTestSubject, previewHtml, parsed, templateName]);
+  }, [sendTestTo, sendTestSubject, previewHtml, parsed, templateName, effectiveAccountKey]);
 
   const historyDiff = useMemo(
     () => buildSimpleDiff(code, selectedHistoryRaw),

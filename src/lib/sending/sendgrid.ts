@@ -35,6 +35,19 @@ export interface SendGridSendInput {
   /** Per-recipient custom args echoed back in webhooks; lets us match an
    *  event to its EmailCampaignRecipient row without a second lookup. */
   customArgs?: Record<string, string>;
+  /**
+   * CAN-SPAM / RFC 8058 compliance. When provided, SendGrid injects an
+   * unsubscribe link into the rendered HTML + sets the
+   * List-Unsubscribe + List-Unsubscribe-Post headers so Gmail/Apple
+   * one-click unsubscribe works. Skip for transactional sends like
+   * "Send test from editor" by omitting this field.
+   */
+  unsubscribe?: {
+    /** Footer line + sender physical address baked into the HTML. */
+    html: string;
+    /** Plaintext equivalent for the text/plain part. */
+    text: string;
+  };
 }
 
 export interface SendGridSendResult {
@@ -140,9 +153,32 @@ export async function sendEmailViaSendGrid(
       : {}),
     // Trail SendGrid's tracking on by default — opens via pixel, clicks
     // via link rewrites. Bounces + spam reports come through regardless.
+    //
+    // subscription_tracking handles CAN-SPAM compliance: when enabled,
+    // SendGrid injects an unsubscribe link into the HTML at the
+    // <% %> substitution_tag location, sets the List-Unsubscribe
+    // header, and AND (when configured at the SendGrid account level)
+    // includes the List-Unsubscribe-Post header for RFC 8058 one-click
+    // unsubscribe in Gmail/Apple. Recipients who click the link land
+    // on SendGrid's hosted unsubscribe page; the unsubscribe event
+    // fires through to our /api/webhooks/sendgrid/events endpoint and
+    // becomes an EmailSuppression row.
     tracking_settings: {
       click_tracking: { enable: true, enable_text: false },
       open_tracking: { enable: true },
+      ...(input.unsubscribe
+        ? {
+            subscription_tracking: {
+              enable: true,
+              text: input.unsubscribe.text,
+              html: input.unsubscribe.html,
+              // Token SendGrid replaces with the actual unsubscribe URL.
+              // The token appears verbatim in our HTML so the rest of
+              // the body renders unchanged in preview.
+              substitution_tag: '[%unsubscribe_url%]',
+            },
+          }
+        : {}),
     },
     mail_settings: {
       sandbox_mode: { enable: false },

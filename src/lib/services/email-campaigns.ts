@@ -7,6 +7,7 @@ import {
 } from '@/lib/contact-hygiene';
 import { decryptToken } from '@/lib/esp/encryption';
 import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
+import { buildUnsubscribeFooter } from '@/lib/sending/unsubscribe-footer';
 
 type EmailCampaignStatus =
   | 'draft'
@@ -294,6 +295,10 @@ interface AccountSenderIdentity {
   /** Decrypted SendGrid API key when this sub-account has one configured;
    *  null = fall back to nodemailer SMTP. */
   sendgridApiKey: string | null;
+  /** Pre-built CAN-SPAM unsubscribe footer (HTML + text). Null when the
+   *  account hasn't filled in any address/dealer info; the worker still
+   *  sends in that case but skips the subscription_tracking block. */
+  unsubscribeFooter: { html: string; text: string } | null;
 }
 
 /**
@@ -351,10 +356,17 @@ async function buildSenderMap(
     where: { key: { in: accountKeys } },
     select: {
       key: true,
+      dealer: true,
       senderEmail: true,
       senderName: true,
       replyToEmail: true,
       sendgridApiKey: true,
+      // CAN-SPAM physical-address fields. Falsy values get filtered out
+      // of the footer copy in buildUnsubscribeFooter.
+      address: true,
+      city: true,
+      state: true,
+      postalCode: true,
     },
   });
 
@@ -376,6 +388,18 @@ async function buildSenderMap(
       }
     }
 
+    // Build the unsubscribe footer once per account — same copy applies
+    // to every recipient in this batch.
+    const unsubscribeFooter = account
+      ? buildUnsubscribeFooter({
+          dealer: account.dealer || '',
+          address: account.address,
+          city: account.city,
+          state: account.state,
+          postalCode: account.postalCode,
+        })
+      : null;
+
     if (account?.senderEmail) {
       map.set(key, {
         from: formatFromHeader(account.senderEmail, account.senderName),
@@ -383,6 +407,7 @@ async function buildSenderMap(
         senderEmail: account.senderEmail,
         senderName: account.senderName || null,
         sendgridApiKey,
+        unsubscribeFooter,
       });
     } else {
       map.set(key, {
@@ -391,6 +416,7 @@ async function buildSenderMap(
         senderEmail: null,
         senderName: null,
         sendgridApiKey,
+        unsubscribeFooter,
       });
     }
   }
@@ -905,6 +931,7 @@ export async function processEmailCampaign(
       senderEmail: null,
       senderName: null,
       sendgridApiKey: null,
+      unsubscribeFooter: null,
     };
 
     // Dispatch: SendGrid first (per-sub-account API key), then SMTP fallback.
@@ -945,6 +972,15 @@ export async function processEmailCampaign(
             recipientId: recipient.id,
             accountKey: recipient.accountKey,
           },
+          // CAN-SPAM: SendGrid appends an unsubscribe link + sets the
+          // List-Unsubscribe header. Footer copy is built per-account in
+          // buildSenderMap. Skipped when the account has no dealer name
+          // configured (extremely rare) — the worker still sends but the
+          // recipient won't see a Loomi-rendered footer (their template
+          // might already include one).
+          ...(sender.unsubscribeFooter
+            ? { unsubscribe: sender.unsubscribeFooter }
+            : {}),
         });
         messageId = result.messageId || null;
       } else {

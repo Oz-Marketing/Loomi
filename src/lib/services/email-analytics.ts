@@ -11,6 +11,25 @@
 
 import { prisma } from '@/lib/prisma';
 
+/**
+ * The 20260521010000 migration added the EmailEvent + EmailSuppression
+ * models. If a dev server was started before `prisma generate` ran with
+ * the new schema, the cached singleton client doesn't have these
+ * delegates and every call below would throw the unhelpful
+ * "Cannot read properties of undefined (reading 'groupBy')". This guard
+ * turns that into something actionable.
+ */
+function assertEventModelAvailable(): void {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  if (!(prisma as any).emailEvent || !(prisma as any).emailSuppression) {
+    throw new Error(
+      'Prisma client is missing EmailEvent / EmailSuppression models. ' +
+      'Restart the dev server so the regenerated client is picked up ' +
+      '(or run `npx prisma generate` if you skipped that step).',
+    );
+  }
+}
+
 export interface EngagementTotals {
   /** Per-recipient sends that landed at SendGrid (mail/send 202). */
   sent: number;
@@ -98,6 +117,7 @@ export async function getEngagementTotals(
   series: TimeSeriesPoint[];
   topUrls: TopUrl[];
 }> {
+  assertEventModelAvailable();
   const { accountKeys, start, end } = input;
 
   // Sent count comes from recipient rows where sentAt is non-null.
@@ -163,6 +183,7 @@ export async function getEngagementTotals(
 export async function getCampaignEngagement(
   input: AggregateInput,
 ): Promise<CampaignEngagementRow[]> {
+  assertEventModelAvailable();
   const { accountKeys, start, end } = input;
 
   // Build the where clause incrementally to avoid the OR-with-undefined

@@ -5,6 +5,12 @@ import { withConcurrencyLimit } from '@/lib/esp/utils';
 import type { OutboundMessageChannel, MessagesAdapter } from '@/lib/esp/types';
 import { providerUnsupportedMessage } from '@/lib/esp/provider-display';
 import {
+  resolveTwilioConfig,
+  sendSmsViaTwilio,
+  TwilioError,
+  type TwilioConfig,
+} from '@/lib/sending/twilio';
+import {
   isLikelyDialablePhone,
   normalizePhoneNumber,
 } from '@/lib/contact-hygiene';
@@ -65,12 +71,19 @@ const TERMINAL_STATUSES: SmsCampaignStatus[] = ['completed', 'partial', 'failed'
 
 type ResolvedMessagingRuntime =
   | {
+      kind: 'twilio';
+      provider: 'twilio';
+      config: TwilioConfig;
+    }
+  | {
+      kind: 'legacy';
       adapter: MessagesAdapter;
       provider: string;
       token: string;
       locationId: string;
     }
   | {
+      kind: 'error';
       error: string;
     };
 
@@ -588,7 +601,7 @@ export async function processSmsCampaign(
     include: {
       recipients: {
         where: { status: 'pending' },
-        select: { id: true, contactId: true, accountKey: true },
+        select: { id: true, contactId: true, accountKey: true, phone: true },
       },
     },
   });
@@ -638,43 +651,76 @@ export async function processSmsCampaign(
     const cached = runtimeByAccount.get(accountKey);
     if (cached) return cached;
 
+    // ── Twilio path (preferred) ──
+    // When a sub-account has Twilio creds configured we send through
+    // their account directly — proper deliverability, A2P 10DLC
+    // compliance, status callbacks via webhook. Legacy GHL path stays
+    // available for sub-accounts that haven't migrated yet.
+    try {
+      const twilio = await resolveTwilioConfig(accountKey);
+      if (twilio && (twilio.phoneNumber || twilio.messagingServiceSid)) {
+        const resolved: ResolvedMessagingRuntime = {
+          kind: 'twilio',
+          provider: 'twilio',
+          config: twilio,
+        };
+        runtimeByAccount.set(accountKey, resolved);
+        return resolved;
+      }
+    } catch (err) {
+      // Bad ciphertext / decryption failure. Don't silently fall back
+      // — the user expects Twilio behaviour, surface the error.
+      const message = err instanceof Error ? err.message : 'Failed to load Twilio config';
+      const failed: ResolvedMessagingRuntime = {
+        kind: 'error',
+        error: `Twilio: ${message}`,
+      };
+      runtimeByAccount.set(accountKey, failed);
+      return failed;
+    }
+
+    // ── Legacy GHL Conversations API fallback ──
     try {
       const adapter = await getAdapterForAccount(accountKey);
       if (!adapter.contacts) {
-        const unsupported = {
+        const unsupported: ResolvedMessagingRuntime = {
+          kind: 'error',
           error: providerUnsupportedMessage(adapter.provider, 'contacts'),
-        } satisfies ResolvedMessagingRuntime;
+        };
         runtimeByAccount.set(accountKey, unsupported);
         return unsupported;
       }
       if (!adapter.messages) {
-        const unsupported = {
+        const unsupported: ResolvedMessagingRuntime = {
+          kind: 'error',
           error: providerUnsupportedMessage(adapter.provider, 'direct messaging'),
-        } satisfies ResolvedMessagingRuntime;
+        };
         runtimeByAccount.set(accountKey, unsupported);
         return unsupported;
       }
 
       const credentials = await adapter.contacts.resolveCredentials(accountKey);
       if (!credentials) {
-        const disconnected = {
-          error: `ESP not connected for recipient account (${adapter.provider})`,
-        } satisfies ResolvedMessagingRuntime;
+        const disconnected: ResolvedMessagingRuntime = {
+          kind: 'error',
+          error: `No Twilio configured + ESP not connected for ${accountKey}. Add Twilio credentials in Email & SMS settings.`,
+        };
         runtimeByAccount.set(accountKey, disconnected);
         return disconnected;
       }
 
-      const resolved = {
+      const resolved: ResolvedMessagingRuntime = {
+        kind: 'legacy',
         adapter: adapter.messages,
         provider: adapter.provider,
         token: credentials.token,
         locationId: credentials.locationId,
-      } satisfies ResolvedMessagingRuntime;
+      };
       runtimeByAccount.set(accountKey, resolved);
       return resolved;
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to resolve messaging provider';
-      const failed = { error: message } satisfies ResolvedMessagingRuntime;
+      const failed: ResolvedMessagingRuntime = { kind: 'error', error: message };
       runtimeByAccount.set(accountKey, failed);
       return failed;
     }
@@ -684,17 +730,63 @@ export async function processSmsCampaign(
     const { id, contactId, accountKey } = recipient;
 
     const runtime = await resolveMessagingRuntime(accountKey);
-    if ('error' in runtime) {
+    if (runtime.kind === 'error') {
       await prisma.smsCampaignRecipient.update({
         where: { id },
-        data: {
-          status: 'failed',
-          error: runtime.error,
-        },
+        data: { status: 'failed', error: runtime.error },
       });
       return;
     }
 
+    // Twilio path: needs the recipient's phone (already persisted on
+    // the row at schedule time). Missing phone = recipient was scheduled
+    // before phone hygiene caught the bad value, which shouldn't happen
+    // but we guard anyway.
+    if (runtime.kind === 'twilio') {
+      if (!recipient.phone) {
+        await prisma.smsCampaignRecipient.update({
+          where: { id },
+          data: { status: 'failed', error: 'No phone number on file for this recipient.' },
+        });
+        return;
+      }
+      try {
+        const sent = await sendSmsViaTwilio({
+          accountSid: runtime.config.accountSid,
+          authToken: runtime.config.authToken,
+          from: {
+            phoneNumber: runtime.config.phoneNumber,
+            messagingServiceSid: runtime.config.messagingServiceSid,
+          },
+          to: recipient.phone,
+          body: campaign.message,
+          mediaUrls: campaignMessageOptions.mediaUrls,
+        });
+        await prisma.smsCampaignRecipient.update({
+          where: { id },
+          data: {
+            status: 'sent',
+            messageId: sent.messageSid,
+            sentAt: new Date(),
+            error: null,
+          },
+        });
+      } catch (err) {
+        const errorMessage =
+          err instanceof TwilioError
+            ? `Twilio: ${err.message}`
+            : err instanceof Error
+              ? err.message
+              : 'Twilio send failed';
+        await prisma.smsCampaignRecipient.update({
+          where: { id },
+          data: { status: 'failed', error: errorMessage },
+        });
+      }
+      return;
+    }
+
+    // Legacy GHL Conversations API path
     try {
       const sent = await runtime.adapter.sendMessageToContact({
         token: runtime.token,

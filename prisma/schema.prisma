@@ -121,6 +121,18 @@ model Account {
   // authenticated.
   sendgridApiKey     String?
   sendgridFromDomain String?
+  // Per-sub-account Twilio credentials. accountSid + authToken are
+  // encrypted at rest with the same helper as the SendGrid key. The
+  // worker prefers messagingServiceSid (Twilio's recommendation for
+  // scaled sending — handles A2P 10DLC registration + sticky sender +
+  // automatic phone-number failover) and falls back to the single
+  // phoneNumber when no service is configured. When neither this nor a
+  // messaging service is set the SMS worker falls back to the legacy
+  // GHL Conversations API path.
+  twilioAccountSid           String?
+  twilioAuthToken            String?
+  twilioPhoneNumber          String?
+  twilioMessagingServiceSid  String?
   accountRepId String?
   accountRep   User?    @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
   createdAt    DateTime @default(now())

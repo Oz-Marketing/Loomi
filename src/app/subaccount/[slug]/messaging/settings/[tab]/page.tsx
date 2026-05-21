@@ -4,7 +4,7 @@ import { use } from 'react';
 import { notFound } from 'next/navigation';
 import { MessagingSettingsPage, type MessagingSettingsTab } from '@/components/messaging/messaging-settings-page';
 
-const VALID_TABS = new Set<MessagingSettingsTab>(['sending', 'suppressions']);
+const VALID_TABS = new Set<MessagingSettingsTab>(['sending', 'sms', 'suppressions']);
 
 interface PageProps {
   params: Promise<{ slug: string; tab: string }>;

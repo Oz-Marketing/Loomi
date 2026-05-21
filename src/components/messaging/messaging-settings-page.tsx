@@ -17,16 +17,19 @@ import {
   ArrowLeftIcon,
   PaperAirplaneIcon,
   NoSymbolIcon,
+  ChatBubbleLeftRightIcon,
 } from '@heroicons/react/24/outline';
 import { SendingTab } from '@/components/settings/sending-tab';
 import { SuppressionsTab } from '@/components/settings/suppressions-tab';
+import { SmsTab } from '@/components/settings/sms-tab';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 
-type MessagingSettingsTab = 'sending' | 'suppressions';
+type MessagingSettingsTab = 'sending' | 'sms' | 'suppressions';
 
 const TABS: Array<{ key: MessagingSettingsTab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-  { key: 'sending', label: 'Sending', icon: PaperAirplaneIcon },
+  { key: 'sending', label: 'Email', icon: PaperAirplaneIcon },
+  { key: 'sms', label: 'SMS', icon: ChatBubbleLeftRightIcon },
   { key: 'suppressions', label: 'Suppressions', icon: NoSymbolIcon },
 ];
 
@@ -71,9 +74,10 @@ export function MessagingSettingsPage({ tab }: MessagingSettingsPageProps) {
           <ArrowLeftIcon className="w-3.5 h-3.5" />
           Back to Campaigns
         </Link>
-        <h1 className="text-2xl font-bold">Email Settings</h1>
+        <h1 className="text-2xl font-bold">Messaging Settings</h1>
         <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Global rules and policies that apply to every campaign sent from{' '}
+          Sender identity, transport credentials, and suppression rules that apply to every
+          email + SMS campaign sent from{' '}
           <span className="text-[var(--foreground)] font-medium">{accountLabel}</span>.
         </p>
       </div>
@@ -101,6 +105,7 @@ export function MessagingSettingsPage({ tab }: MessagingSettingsPageProps) {
       </div>
 
       {tab === 'sending' && <SendingTab accountKey={accountKey || ''} />}
+      {tab === 'sms' && <SmsTab accountKey={accountKey || ''} />}
       {tab === 'suppressions' && <SuppressionsTab accountKey={accountKey || ''} />}
     </div>
   );

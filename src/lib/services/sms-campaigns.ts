@@ -10,6 +10,26 @@ import {
   TwilioError,
   type TwilioConfig,
 } from '@/lib/sending/twilio';
+
+/**
+ * Build the public URL Twilio will POST status callbacks to. The
+ * accountKey is routed through the query string so the webhook handler
+ * can resolve the right Twilio Auth Token for signature verification
+ * (one webhook endpoint, many sub-accounts).
+ *
+ * APP_PUBLIC_URL falls through to NEXTAUTH_URL since both point at the
+ * production origin in deploy. Localhost dev sends don't get callbacks
+ * unless the env var points at a tunnel (ngrok / Cloudflare) — that's
+ * intentional; status callbacks are noise during local development.
+ */
+function buildStatusCallbackUrl(accountKey: string): string | undefined {
+  const origin =
+    process.env.APP_PUBLIC_URL ||
+    process.env.NEXTAUTH_URL ||
+    '';
+  if (!origin) return undefined;
+  return `${origin.replace(/\/$/, '')}/api/webhooks/twilio/status?accountKey=${encodeURIComponent(accountKey)}`;
+}
 import {
   isLikelyDialablePhone,
   normalizePhoneNumber,
@@ -351,6 +371,32 @@ export async function scheduleSmsCampaignDraft(
     throw new Error('No recipients with valid phone numbers were provided');
   }
 
+  // ── Suppression filter ──
+  // Phones that opted out via STOP (or were manually suppressed) land
+  // in SmsSuppression. We drop them into status='skipped' rather than
+  // silently filtering, so the audit log shows why nothing got sent.
+  const accountKeysInBatch = [
+    ...new Set(sendable.map((r) => r.accountKey).filter(Boolean)),
+  ];
+  const phonesInBatch = [
+    ...new Set(sendable.map((r) => (r.phone || '').trim()).filter(Boolean)),
+  ];
+  const suppressed =
+    accountKeysInBatch.length > 0 && phonesInBatch.length > 0
+      ? await prisma.smsSuppression.findMany({
+          where: {
+            accountKey: { in: accountKeysInBatch },
+            phone: { in: phonesInBatch },
+          },
+          select: { accountKey: true, phone: true, reason: true },
+        })
+      : [];
+  const suppressionKey = (accountKey: string, phone: string) =>
+    `${accountKey}|${phone.trim()}`;
+  const suppressedByKey = new Map(
+    suppressed.map((s) => [suppressionKey(s.accountKey, s.phone), s.reason]),
+  );
+
   const now = Date.now();
   const isImmediate = !input.scheduledFor || input.scheduledFor.getTime() <= now;
   const status: SmsCampaignStatus = isImmediate ? 'queued' : 'scheduled';
@@ -359,15 +405,40 @@ export async function scheduleSmsCampaignDraft(
     await tx.smsCampaignRecipient.deleteMany({ where: { campaignId } });
 
     await tx.smsCampaignRecipient.createMany({
-      data: recipients.map((r) => ({
-        campaignId,
-        contactId: r.contactId,
-        accountKey: r.accountKey,
-        phone: r.phone || null,
-        fullName: r.fullName || null,
-        status: r.phone ? 'pending' : 'failed',
-        error: r.phone ? null : INVALID_PHONE_ERROR,
-      })),
+      data: recipients.map((r) => {
+        if (!r.phone) {
+          return {
+            campaignId,
+            contactId: r.contactId,
+            accountKey: r.accountKey,
+            phone: null,
+            fullName: r.fullName || null,
+            status: 'failed',
+            error: INVALID_PHONE_ERROR,
+          };
+        }
+        const reason = suppressedByKey.get(suppressionKey(r.accountKey, r.phone));
+        if (reason) {
+          return {
+            campaignId,
+            contactId: r.contactId,
+            accountKey: r.accountKey,
+            phone: r.phone,
+            fullName: r.fullName || null,
+            status: 'skipped',
+            error: `Suppressed (${reason})`,
+          };
+        }
+        return {
+          campaignId,
+          contactId: r.contactId,
+          accountKey: r.accountKey,
+          phone: r.phone,
+          fullName: r.fullName || null,
+          status: 'pending',
+          error: null,
+        };
+      }),
     });
 
     const accountKeys = [...new Set(recipients.map((r) => r.accountKey).filter(Boolean))];
@@ -761,6 +832,10 @@ export async function processSmsCampaign(
           to: recipient.phone,
           body: campaign.message,
           mediaUrls: campaignMessageOptions.mediaUrls,
+          // Status callback routes the accountKey through the URL so the
+          // webhook handler can resolve the right per-sub-account Auth
+          // Token for signature verification.
+          statusCallback: buildStatusCallbackUrl(accountKey),
         });
         await prisma.smsCampaignRecipient.update({
           where: { id },

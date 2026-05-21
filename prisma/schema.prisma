@@ -493,9 +493,59 @@ model SmsCampaignRecipient {
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
 
+  events SmsEvent[]
+
   @@unique([campaignId, contactId, accountKey])
   @@index([campaignId, status])
   @@index([accountKey, status])
+}
+
+// One row per Twilio status-callback / inbound webhook entry. Status
+// callbacks for the same Twilio Message SID arrive multiple times as
+// the message moves through states (queued → sent → delivered), so
+// the de-dup key is (sid, eventType) rather than sid alone.
+// recipientId is nullable so inbound STOP messages and out-of-band
+// sends still get logged for audit.
+model SmsEvent {
+  id                String   @id @default(cuid())
+  campaignId        String?
+  recipientId       String?
+  recipient         SmsCampaignRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+  accountKey        String?
+  eventType         String   // queued | sent | delivered | undelivered | failed | received | stop | unsub
+  twilioMessageSid  String?
+  from              String?
+  to                String?
+  body              String?
+  errorCode         String?
+  errorMessage      String?
+  raw               String   // full webhook payload (form-encoded → JSON serialised)
+  timestamp         DateTime
+  createdAt         DateTime @default(now())
+
+  @@index([campaignId, eventType])
+  @@index([recipientId])
+  @@index([accountKey, eventType])
+  @@index([twilioMessageSid])
+  @@index([timestamp])
+}
+
+// Sub-account scoped phone suppression list. Inbound STOP keywords
+// auto-populate this from the Twilio inbound webhook; the campaign
+// scheduler filters suppressed phones to status='skipped' before
+// queueing the send.
+model SmsSuppression {
+  id         String   @id @default(cuid())
+  accountKey String
+  phone      String
+  reason     String // stop | unsub | undelivered | manual
+  source     String   @default("twilio") // twilio | manual
+  raw        String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([accountKey, phone])
+  @@index([phone])
 }
 
 // ─────────────────────────────────────────────────────

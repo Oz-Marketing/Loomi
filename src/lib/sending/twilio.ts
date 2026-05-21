@@ -14,6 +14,7 @@
 // account has a messagingServiceSid set we prefer it; otherwise we fall
 // back to the single phoneNumber field.
 
+import crypto from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { decryptToken, encryptToken } from '@/lib/esp/encryption';
 
@@ -225,6 +226,45 @@ export interface TwilioVerifyResult {
   accountStatus?: string; // 'active' | 'suspended' | 'closed'
   friendlyName?: string;
   error?: string;
+}
+
+/**
+ * Verify a Twilio request signature. Twilio signs every webhook request
+ * with the receiving project's Auth Token; the algorithm is:
+ *
+ *   signature = base64( HMAC-SHA1( authToken, URL + sortedParams ) )
+ *
+ * where sortedParams is the concatenation of every form param in
+ * lexicographic order (key1value1key2value2…). For application/json
+ * bodies (rare on Twilio webhooks) the body is hashed separately and
+ * appended to the URL; we don't support that path here because we
+ * never configure JSON webhooks with Twilio.
+ *
+ * The URL must include the protocol, host, path, and any query string —
+ * exactly the URL Twilio called. When behind a proxy / CDN, the
+ * X-Forwarded-Proto + X-Forwarded-Host headers are usually required to
+ * reconstruct it correctly.
+ */
+export function verifyTwilioSignature(
+  authToken: string,
+  signature: string,
+  url: string,
+  params: Record<string, string>,
+): boolean {
+  if (!authToken || !signature || !url) return false;
+  const sortedKeys = Object.keys(params).sort();
+  const data = sortedKeys.reduce((acc, key) => acc + key + params[key], url);
+  const expected = crypto
+    .createHmac('sha1', authToken)
+    .update(Buffer.from(data, 'utf-8'))
+    .digest('base64');
+  // Constant-time comparison.
+  if (expected.length !== signature.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  } catch {
+    return false;
+  }
 }
 
 export async function verifyTwilioCredentials(

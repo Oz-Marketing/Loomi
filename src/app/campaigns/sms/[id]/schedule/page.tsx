@@ -224,7 +224,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
 
   return (
     <div className="pb-32">
-      <div className="max-w-6xl mx-auto py-8 px-6">
+      <div className="max-w-7xl mx-auto py-8 px-6">
         <div className="mb-6">
           <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">
             Schedule
@@ -235,26 +235,11 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
           </p>
         </div>
 
-        {/* SMS preview — final sanity check before scheduling. */}
-        <div className="glass-section-card rounded-2xl border border-[var(--border)] overflow-hidden mb-5">
-          <div className="px-4 py-3 border-b border-[var(--border)] flex items-center gap-2">
-            <ChatBubbleLeftRightIcon className="w-4 h-4 text-[var(--muted-foreground)]" />
-            <p className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
-              {smsMediaUrls.length > 0 ? 'MMS' : 'SMS'} preview
-            </p>
-          </div>
-          <div className="bg-[var(--muted)]/30 p-4 py-6 flex justify-center">
-            <IphoneSmsPreview
-              dealerName={account?.dealer || 'Your dealership'}
-              message={draft?.message || ''}
-              mediaUrls={smsMediaUrls}
-              isMms={smsMediaUrls.length > 0}
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-start">
-          <div className="lg:sticky lg:top-20 space-y-5">
+        {/* Two-column: scheduling details on the left, sticky preview on
+            the right so the user can keep eyes on the final message
+            while picking a send time. */}
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-6 items-start">
+          <div className="space-y-5 min-w-0">
             <div className="glass-section-card rounded-2xl p-5 border border-[var(--border)]">
               <p className="text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-4">
                 Summary
@@ -369,6 +354,28 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
                   label="Subaccount selected (SMS routes through its GHL connection)"
                 />
               </ul>
+            </div>
+          </div>
+
+          {/* Sticky preview column — pinned next to the scheduling
+              controls so users can sanity-check the message while
+              choosing a send time. */}
+          <div className="lg:sticky lg:top-20">
+            <div className="glass-section-card rounded-2xl border border-[var(--border)] overflow-hidden">
+              <div className="px-4 py-3 border-b border-[var(--border)] flex items-center gap-2">
+                <ChatBubbleLeftRightIcon className="w-4 h-4 text-[var(--muted-foreground)]" />
+                <p className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
+                  {smsMediaUrls.length > 0 ? 'MMS' : 'SMS'} preview
+                </p>
+              </div>
+              <div className="bg-[var(--muted)]/30 p-4 py-6 flex justify-center">
+                <IphoneSmsPreview
+                  dealerName={account?.dealer || 'Your dealership'}
+                  message={draft?.message || ''}
+                  mediaUrls={smsMediaUrls}
+                  isMms={smsMediaUrls.length > 0}
+                />
+              </div>
             </div>
           </div>
         </div>

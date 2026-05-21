@@ -220,7 +220,7 @@ export default function ScheduleStepPage({ params }: PageProps) {
 
   return (
     <div className="pb-32">
-      <div className="max-w-6xl mx-auto py-8 px-6">
+      <div className="max-w-7xl mx-auto py-8 px-6">
         <div className="mb-6">
           <p className="text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">
             Schedule
@@ -231,48 +231,12 @@ export default function ScheduleStepPage({ params }: PageProps) {
           </p>
         </div>
 
-        {/* Email preview — final sanity check before scheduling. */}
-        <div className="glass-section-card rounded-2xl border border-[var(--border)] overflow-hidden mb-5">
-          <div className="px-4 py-3 border-b border-[var(--border)] flex items-center gap-2">
-            <EnvelopeIcon className="w-4 h-4 text-[var(--muted-foreground)]" />
-            <p className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
-              Email preview
-            </p>
-          </div>
-          <div className="bg-[var(--muted)]/30 p-4">
-            {draft?.htmlContent ? (
-              <div className="bg-white rounded-lg border border-[var(--border)] overflow-hidden">
-                <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50 text-xs text-gray-700">
-                  <div className="truncate">
-                    <span className="font-medium">Subject:</span>{' '}
-                    {draft.subject || (
-                      <span className="text-gray-400 italic">No subject set</span>
-                    )}
-                  </div>
-                  {draft.previewText && (
-                    <div className="truncate text-gray-500 mt-0.5">{draft.previewText}</div>
-                  )}
-                </div>
-                <iframe
-                  title="Email preview"
-                  srcDoc={draft.htmlContent}
-                  sandbox=""
-                  className="w-full bg-white border-0"
-                  style={{ height: 600 }}
-                />
-              </div>
-            ) : (
-              <div className="py-16 text-center text-[var(--muted-foreground)]">
-                <EnvelopeIcon className="w-10 h-10 mx-auto opacity-40 mb-2" />
-                <p className="text-sm">No email template loaded yet.</p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-5 items-start">
-          {/* Left: summary card (sticky) */}
-          <div className="lg:sticky lg:top-20 space-y-5">
+        {/* Two-column: scheduling details on the left, sticky preview on
+            the right so the user can keep eyes on the final email while
+            picking a send time. */}
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(440px,540px)] gap-6 items-start">
+          {/* Left: summary + scheduling + checklist */}
+          <div className="space-y-5 min-w-0">
             <div className="glass-section-card rounded-2xl p-5 border border-[var(--border)]">
               <p className="text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-4">
                 Summary
@@ -401,6 +365,48 @@ export default function ScheduleStepPage({ params }: PageProps) {
                   label={`${recipients.length.toLocaleString()} sendable recipient${recipients.length === 1 ? '' : 's'}`}
                 />
               </ul>
+            </div>
+          </div>
+
+          {/* Sticky preview column — keeps the final email visible
+              while the user picks a send time. */}
+          <div className="lg:sticky lg:top-20">
+            <div className="glass-section-card rounded-2xl border border-[var(--border)] overflow-hidden">
+              <div className="px-4 py-3 border-b border-[var(--border)] flex items-center gap-2">
+                <EnvelopeIcon className="w-4 h-4 text-[var(--muted-foreground)]" />
+                <p className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
+                  Email preview
+                </p>
+              </div>
+              <div className="bg-[var(--muted)]/30 p-4">
+                {draft?.htmlContent ? (
+                  <div className="bg-white rounded-lg border border-[var(--border)] overflow-hidden">
+                    <div className="px-4 py-2.5 border-b border-gray-200 bg-gray-50 text-xs text-gray-700">
+                      <div className="truncate">
+                        <span className="font-medium">Subject:</span>{' '}
+                        {draft.subject || (
+                          <span className="text-gray-400 italic">No subject set</span>
+                        )}
+                      </div>
+                      {draft.previewText && (
+                        <div className="truncate text-gray-500 mt-0.5">{draft.previewText}</div>
+                      )}
+                    </div>
+                    <iframe
+                      title="Email preview"
+                      srcDoc={draft.htmlContent}
+                      sandbox=""
+                      className="w-full bg-white border-0"
+                      style={{ height: 560 }}
+                    />
+                  </div>
+                ) : (
+                  <div className="py-16 text-center text-[var(--muted-foreground)]">
+                    <EnvelopeIcon className="w-10 h-10 mx-auto opacity-40 mb-2" />
+                    <p className="text-sm">No email template loaded yet.</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

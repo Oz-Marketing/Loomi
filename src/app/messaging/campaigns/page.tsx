@@ -625,7 +625,7 @@ function AdminCampaignsPage() {
 
 function AccountCampaignsPage() {
   const subHref = useSubaccountHref();
-  const { accountKey, accountData } = useAccount();
+  const { accountKey, accountData, userRole } = useAccount();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [apiError, setApiError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -702,13 +702,20 @@ function AccountCampaignsPage() {
     [dateRange, customRange],
   );
 
+  // Drafts are admin-only — the Client role should never see in-progress
+  // work, just final scheduled/sent campaigns. Everyone else (admin,
+  // super_admin, developer) sees the full pipeline so they can resume
+  // their own drafts from this list.
   const visibleCampaigns = useMemo(
     () =>
       campaigns.filter((c) => {
         const status = normalizeCampaignStatus(c.status);
-        return status === 'scheduled' || status === 'sent';
+        if (userRole === 'client') {
+          return status === 'scheduled' || status === 'sent';
+        }
+        return true;
       }),
-    [campaigns],
+    [campaigns, userRole],
   );
 
   const dateFiltered = useMemo(() => {
@@ -752,13 +759,17 @@ function AccountCampaignsPage() {
     accountNotIntegrated
       ? 'Account not integrated'
       : visibleCampaigns.length === 0
-      ? 'No scheduled or sent campaigns yet'
+      ? (userRole === 'client'
+          ? 'No scheduled or sent campaigns yet'
+          : 'No campaigns yet')
       : 'No campaigns match this date range';
   const accountEmptySubtitle =
     accountNotIntegrated
       ? 'Connect your ESP integration to view reporting.'
       : visibleCampaigns.length === 0
-      ? 'Scheduled and sent campaigns will appear here.'
+      ? (userRole === 'client'
+          ? 'Scheduled and sent campaigns will appear here.'
+          : 'Drafts, scheduled, and sent campaigns will all appear here.')
       : 'Try expanding the selected date range.';
 
   const dealerName = accountData?.dealer || 'Your Sub-Account';

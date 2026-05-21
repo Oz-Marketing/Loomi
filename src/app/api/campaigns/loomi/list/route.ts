@@ -55,6 +55,16 @@ export async function GET(req: NextRequest) {
     return accountKeys.includes(accountKey);
   }
 
+  // Clients can never see drafts — drafts are in-progress work, and the
+  // client role is read-only over scheduled/sent campaigns. Admin and up
+  // get everything so they can resume their own drafts from this list.
+  function matchesStatusForRole(status: string): boolean {
+    if (role !== 'client') return true;
+    const s = status.toLowerCase();
+    return s === 'scheduled' || s === 'queued' || s === 'processing' ||
+      s === 'completed' || s === 'partial' || s === 'sent';
+  }
+
   // Collapse multi-channel pairs into a single row anchored on the email
   // campaign. The SMS half is dropped from the list so we don't show two
   // entries for one logical campaign — the channel badge reads "Email + SMS"
@@ -70,9 +80,11 @@ export async function GET(req: NextRequest) {
   const campaigns = [
     ...emails
       .filter((c) => matchesAccount(c.accountKeys))
+      .filter((c) => matchesStatusForRole(c.status))
       .map((c) => mapEmail(c)),
     ...sms
       .filter((c) => matchesAccount(c.accountKeys))
+      .filter((c) => matchesStatusForRole(c.status))
       // Drop SMS rows that are the SMS half of a linked multi-channel pair.
       .filter((c) => !linkedSmsIdsOnEmails.has(c.id))
       .map((c) => mapSms(c)),

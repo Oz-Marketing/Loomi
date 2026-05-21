@@ -13,9 +13,7 @@ import {
   LinkIcon,
   PaintBrushIcon,
   PencilSquareIcon,
-  PaperAirplaneIcon,
   SwatchIcon,
-  NoSymbolIcon,
   UsersIcon,
   XMarkIcon,
   ShieldCheckIcon,
@@ -30,8 +28,7 @@ import { toast } from '@/lib/toast';
 import { AdminOnly } from '@/components/route-guard';
 import { UsersTab } from '@/components/settings/users-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
-import { SendingTab } from '@/components/settings/sending-tab';
-import { SuppressionsTab } from '@/components/settings/suppressions-tab';
+// Sending + Suppressions tabs now live under /messaging/settings.
 import { OemMultiSelect } from '@/components/oem-multi-select';
 import { UserAvatar } from '@/components/user-avatar';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -108,7 +105,7 @@ function providerSecretPlaceholder(auth: EspCapabilities['auth']): string {
   return 'Enter credential';
 }
 
-type DetailTab = 'company' | 'branding' | 'integration' | 'custom-values' | 'contacts' | 'users' | 'appearance' | 'sending' | 'suppressions';
+type DetailTab = 'company' | 'branding' | 'integration' | 'custom-values' | 'contacts' | 'users' | 'appearance';
 type AccountImageVariant = 'light' | 'dark' | 'white' | 'black' | 'storefront';
 type GhlAgencyStatus = {
   connected: boolean;
@@ -173,13 +170,15 @@ const TABS: TabDef[] = [
   { key: 'contacts', label: 'Contacts', icon: UsersIcon },
 ];
 
+// Sending + Suppressions used to live here but moved into the
+// messaging-scoped settings page at /subaccount/<slug>/messaging/settings
+// since they're tightly coupled to the email engine. Legacy URLs are
+// redirected from the [tab] page below.
 const SETTINGS_TABS: TabDef[] = [
   { key: 'company', label: 'Company', icon: BuildingStorefrontIcon },
   { key: 'branding', label: 'Branding', icon: PaintBrushIcon },
   { key: 'users', label: 'Users', icon: UsersIcon },
   { key: 'integration', label: 'Integrations', icon: LinkIcon },
-  { key: 'sending', label: 'Sending', icon: PaperAirplaneIcon },
-  { key: 'suppressions', label: 'Suppressions', icon: NoSymbolIcon },
   { key: 'custom-values', label: 'Custom Values', icon: AdjustmentsHorizontalIcon },
   { key: 'appearance', label: 'Appearance', icon: SwatchIcon },
 ];
@@ -2500,11 +2499,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
         {/* ════════════ APPEARANCE TAB (settings mode only) ════════════ */}
         {settingsMode && activeTab === 'appearance' && <AppearanceTab />}
 
-        {/* ════════════ SENDING TAB (settings mode only) ════════════ */}
-        {settingsMode && activeTab === 'sending' && <SendingTab accountKey={key} />}
-
-        {/* ════════════ SUPPRESSIONS TAB (settings mode only) ════════════ */}
-        {settingsMode && activeTab === 'suppressions' && <SuppressionsTab accountKey={key} />}
+        {/* Sending + Suppressions tabs moved to /messaging/settings — see
+            the route at src/app/subaccount/[slug]/messaging/settings. */}
 
         </div>{/* end tab content */}
         </div>{/* end flex sidebar+content */}

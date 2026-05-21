@@ -800,13 +800,15 @@ function AccountCampaignsPage() {
             {/* Create Campaign lives on the list view; analytics is read-only. */}
             {activeTab !== 'analytics' && (
               <>
-                {/* Cog → Sending settings tab on this sub-account. Lets
-                    the user set global sender defaults that apply to
-                    every campaign sent from this sub-account. */}
+                {/* Cog → messaging-scoped settings (sender identity,
+                    SendGrid, suppressions). Lives inside /messaging so
+                    these surfaces stay close to the surface that uses
+                    them, rather than buried in the global sub-account
+                    settings page. */}
                 <Link
-                  href={subHref('/settings/sending')}
-                  aria-label="Email sending settings"
-                  title="Email sending settings"
+                  href={subHref('/messaging/settings')}
+                  aria-label="Email settings"
+                  title="Email settings"
                   className="inline-flex items-center justify-center h-10 w-10 rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)] transition-colors"
                 >
                   <Cog6ToothIcon className="w-4 h-4" />

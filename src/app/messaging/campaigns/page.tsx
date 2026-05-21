@@ -5,7 +5,6 @@ import { usePathname } from 'next/navigation';
 import { useAccount } from '@/contexts/account-context';
 import { useCampaignsAggregate, useWorkflowsAggregate } from '@/hooks/use-dashboard-data';
 import { AdminOnly } from '@/components/route-guard';
-import { CampaignPageAnalytics } from '@/components/campaigns/campaign-page-analytics';
 import { EngagementSection } from '@/components/campaigns/engagement-section';
 import { CampaignPageList, type AccountMeta } from '@/components/campaigns/campaign-page-list';
 import type { CampaignFilterState, CampaignFilterOptions, RepFilterOption } from '@/components/filters/campaign-toolbar';
@@ -60,17 +59,6 @@ interface AccountData {
   logos?: { light?: string; dark?: string; white?: string; black?: string };
   accountRepId?: string | null;
   accountRep?: { id: string; name: string; email: string } | null;
-}
-
-interface Workflow {
-  id: string;
-  name: string;
-  status: string;
-  createdAt: string;
-  updatedAt: string;
-  locationId: string;
-  accountKey?: string;
-  dealer?: string;
 }
 
 type PageTab = 'analytics' | 'list';
@@ -140,7 +128,10 @@ function normalizeCampaignStatus(status: string): string {
 
 function AdminCampaignsPage() {
   const { data: aggData, isLoading: aggLoading } = useCampaignsAggregate();
-  const { data: wfData, isLoading: wfLoading } = useWorkflowsAggregate();
+  // wfData (workflows aggregate) only fed the legacy ESP analytics
+  // overview; keep the hook around just for its loading state so the
+  // initial-load spinner still respects both fetches finishing.
+  const { isLoading: wfLoading } = useWorkflowsAggregate();
   const pathname = usePathname();
   // The sidebar drives view selection: /campaigns → list, /campaigns/analytics → analytics.
   // The in-page tab toggle is gone; navigation happens at the sidebar level.
@@ -200,7 +191,6 @@ function AdminCampaignsPage() {
     .filter((a) => a.length > 0).length;
   const [showCreateModal, setShowCreateModal] = useState(false);
 
-  const workflows = (wfData?.workflows ?? []) as Workflow[];
 
   // Side-rail mount/unmount (delayed unmount for slide-out animation)
   useEffect(() => {
@@ -392,40 +382,11 @@ function AdminCampaignsPage() {
     return result;
   }, [campaigns, filters, accountNames, accountMeta, bounds]);
 
-  // Apply same account/industry/date filters to workflows
-  const filteredWorkflows = useMemo(() => {
-    let result = workflows;
-
-    if (filters.account.length > 0) {
-      result = result.filter(w => {
-        const key = w.accountKey;
-        const name = key
-          ? resolveAccountLabel(key, accountNames, accountMeta)
-          : w.dealer;
-        return Boolean(name && filters.account.includes(name));
-      });
-    }
-
-    if (filters.industry.length > 0) {
-      result = result.filter(w => {
-        if (!w.accountKey) return false;
-        const meta = accountMeta[w.accountKey];
-        return Boolean(meta?.category && filters.industry.includes(meta.category));
-      });
-    }
-
-    if (bounds.start) {
-      result = result.filter(w => {
-        const raw = w.updatedAt || w.createdAt;
-        if (!raw) return false;
-        const d = new Date(raw);
-        if (Number.isNaN(d.getTime())) return false;
-        return d.getTime() >= bounds.start!.getTime() && d.getTime() <= bounds.end.getTime();
-      });
-    }
-
-    return result;
-  }, [workflows, filters, accountNames, accountMeta, bounds]);
+  // filteredWorkflows + the workflows aggregate fed the old ESP analytics
+  // breakdown. Now that the analytics tab uses the SendGrid-sourced
+  // EngagementSection, those derivations live as dead code in the older
+  // CampaignPageAnalytics component (still around for now) but the
+  // admin page doesn't need them anymore.
 
   const selectedAccountLabel = filters.account.length === 1 ? filters.account[0] : null;
 
@@ -451,15 +412,6 @@ function AdminCampaignsPage() {
           subtitle: 'Build and schedule campaigns in Loomi to get started.',
         }
     : null;
-
-  const adminEmptyTitle =
-    campaigns.length === 0
-      ? 'No campaign data yet'
-      : 'No campaigns match current filters';
-  const adminEmptySubtitle =
-    campaigns.length === 0
-      ? 'Sub-accounts may need to reconnect their integration with campaign scopes'
-      : 'Try expanding the selected sub-account/date/status/industry filters.';
 
   return (
     <div>
@@ -549,23 +501,7 @@ function AdminCampaignsPage() {
               dominate the page. */}
 
           {activeTab === 'analytics' && (
-            <div className="space-y-6">
-              {/* Loomi-native engagement: sourced from EmailEvent rows
-                  populated by the SendGrid webhook. Renders an empty
-                  state when no events yet. */}
-              <EngagementSection dateRange={dateRange} customRange={customRange} />
-              <CampaignPageAnalytics
-                campaigns={filteredCampaigns}
-                loading={loading}
-                showAccountBreakdown
-                accountNames={accountNames}
-                emptyTitle={adminEmptyTitle}
-                emptySubtitle={adminEmptySubtitle}
-                dateRange={dateRange}
-                customRange={customRange}
-                workflows={filteredWorkflows}
-              />
-            </div>
+            <EngagementSection dateRange={dateRange} customRange={customRange} />
           )}
 
           {activeTab === 'list' && (
@@ -900,26 +836,11 @@ function AccountCampaignsPage() {
         )}
 
         {activeTab === 'analytics' && (
-          <div className="space-y-6">
-            {/* Sub-account-scoped engagement — same component as the
-                admin view, but the API call is filtered to this
-                account's events only. */}
-            <EngagementSection
-              accountKey={accountKey || undefined}
-              dateRange={dateRange}
-              customRange={customRange}
-            />
-            <CampaignPageAnalytics
-              campaigns={dateFiltered}
-              loading={loading}
-              showAccountBreakdown={false}
-              accountNames={accountNames}
-              emptyTitle={accountEmptyTitle}
-              emptySubtitle={accountEmptySubtitle}
-              dateRange={dateRange}
-              customRange={customRange}
-            />
-          </div>
+          <EngagementSection
+            accountKey={accountKey || undefined}
+            dateRange={dateRange}
+            customRange={customRange}
+          />
         )}
 
         {activeTab === 'list' && (

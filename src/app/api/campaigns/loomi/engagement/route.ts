@@ -47,12 +47,20 @@ export async function GET(req: NextRequest) {
   const end = parseDate(endParam);
 
   const input = { accountKeys: visibilityScope, start, end };
-  const [{ totals, series, topUrls }, campaigns] = await Promise.all([
-    getEngagementTotals(input),
-    getCampaignEngagement(input),
-  ]);
-
-  return NextResponse.json({ totals, series, topUrls, campaigns });
+  try {
+    const [{ totals, series, topUrls }, campaigns] = await Promise.all([
+      getEngagementTotals(input),
+      getCampaignEngagement(input),
+    ]);
+    return NextResponse.json({ totals, series, topUrls, campaigns });
+  } catch (err) {
+    // Aggregations are best-effort — if the DB shape has shifted or a
+    // query is malformed, surface a 500 with the error message so the
+    // UI can show something more useful than a generic 'HTTP 500'.
+    const message = err instanceof Error ? err.message : 'Failed to load engagement metrics';
+    console.error('[campaigns:engagement] aggregation failed:', err);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }
 
 function parseDate(value: string | null): Date | null {

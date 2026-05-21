@@ -102,7 +102,11 @@ export async function getEngagementTotals(
 
   // Sent count comes from recipient rows where sentAt is non-null.
   const sentWhere = recipientWhere(input);
-  const sent = await prisma.emailCampaignRecipient.count({ where: { ...sentWhere, status: 'sent', sentAt: dateFilter(start, end) || undefined } });
+  const range = dateFilter(start, end);
+  const sentDateFilter = range ? { sentAt: range } : {};
+  const sent = await prisma.emailCampaignRecipient.count({
+    where: { ...sentWhere, status: 'sent', ...sentDateFilter },
+  });
   const skipped = await prisma.emailCampaignRecipient.count({ where: { ...sentWhere, status: 'skipped' } });
   const failed = await prisma.emailCampaignRecipient.count({ where: { ...sentWhere, status: 'failed' } });
 
@@ -160,31 +164,23 @@ export async function getCampaignEngagement(
   input: AggregateInput,
 ): Promise<CampaignEngagementRow[]> {
   const { accountKeys, start, end } = input;
-  const accountFilter =
-    accountKeys && accountKeys.length > 0
-      ? { accountKeys: { in: accountKeys.map((k) => JSON.stringify([k])) } }
-      : null;
 
-  // Pull every campaign that has either a send event or a sent recipient
-  // in range. The cleanest way is to list campaigns by createdAt range
-  // and then aggregate; for the engagement view we filter by
-  // completedAt/startedAt overlap.
+  // Build the where clause incrementally to avoid the OR-with-undefined
+  // pattern that Prisma sometimes chokes on. Account scoping happens
+  // in JS below because accountKeys is a JSON string on the row.
+  const range = dateFilter(start, end);
+  const where = range
+    ? {
+        OR: [
+          { startedAt: range },
+          { completedAt: range },
+          { scheduledFor: range },
+        ],
+      }
+    : {};
+
   const campaigns = await prisma.emailCampaign.findMany({
-    where: {
-      ...(accountFilter ? {} : {}),
-      AND: [
-        // Date filter: campaign sent OR scheduled in range
-        start || end
-          ? {
-              OR: [
-                { startedAt: dateFilter(start, end) || undefined },
-                { completedAt: dateFilter(start, end) || undefined },
-                { scheduledFor: dateFilter(start, end) || undefined },
-              ],
-            }
-          : {},
-      ],
-    },
+    where,
     select: {
       id: true,
       name: true,
@@ -393,14 +389,17 @@ function earliestKey(map: Map<string, unknown>): Date | null {
 async function buildTopUrls(
   baseWhere: ReturnType<typeof eventBaseWhere>,
 ): Promise<TopUrl[]> {
+  // Note: groupBy's orderBy on _count was finicky in Prisma 7 when the
+  // counted field doesn't match the order field. Sort in JS — for the
+  // top 10 list this is trivial cost.
   const grouped = await prisma.emailEvent.groupBy({
     by: ['url'],
     where: { ...baseWhere, eventType: 'click', url: { not: null } },
     _count: { _all: true },
-    orderBy: { _count: { url: 'desc' } },
-    take: 10,
   });
   return grouped
     .filter((g) => g.url)
-    .map((g) => ({ url: g.url!, clicks: g._count._all }));
+    .map((g) => ({ url: g.url!, clicks: g._count._all }))
+    .sort((a, b) => b.clicks - a.clicks)
+    .slice(0, 10);
 }

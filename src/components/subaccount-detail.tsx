@@ -15,6 +15,7 @@ import {
   PencilSquareIcon,
   PaperAirplaneIcon,
   SwatchIcon,
+  NoSymbolIcon,
   UsersIcon,
   XMarkIcon,
   ShieldCheckIcon,
@@ -30,6 +31,7 @@ import { AdminOnly } from '@/components/route-guard';
 import { UsersTab } from '@/components/settings/users-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { SendingTab } from '@/components/settings/sending-tab';
+import { SuppressionsTab } from '@/components/settings/suppressions-tab';
 import { OemMultiSelect } from '@/components/oem-multi-select';
 import { UserAvatar } from '@/components/user-avatar';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -106,7 +108,7 @@ function providerSecretPlaceholder(auth: EspCapabilities['auth']): string {
   return 'Enter credential';
 }
 
-type DetailTab = 'company' | 'branding' | 'integration' | 'custom-values' | 'contacts' | 'users' | 'appearance' | 'sending';
+type DetailTab = 'company' | 'branding' | 'integration' | 'custom-values' | 'contacts' | 'users' | 'appearance' | 'sending' | 'suppressions';
 type AccountImageVariant = 'light' | 'dark' | 'white' | 'black' | 'storefront';
 type GhlAgencyStatus = {
   connected: boolean;
@@ -177,6 +179,7 @@ const SETTINGS_TABS: TabDef[] = [
   { key: 'users', label: 'Users', icon: UsersIcon },
   { key: 'integration', label: 'Integrations', icon: LinkIcon },
   { key: 'sending', label: 'Sending', icon: PaperAirplaneIcon },
+  { key: 'suppressions', label: 'Suppressions', icon: NoSymbolIcon },
   { key: 'custom-values', label: 'Custom Values', icon: AdjustmentsHorizontalIcon },
   { key: 'appearance', label: 'Appearance', icon: SwatchIcon },
 ];
@@ -2499,6 +2502,9 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
 
         {/* ════════════ SENDING TAB (settings mode only) ════════════ */}
         {settingsMode && activeTab === 'sending' && <SendingTab accountKey={key} />}
+
+        {/* ════════════ SUPPRESSIONS TAB (settings mode only) ════════════ */}
+        {settingsMode && activeTab === 'suppressions' && <SuppressionsTab accountKey={key} />}
 
         </div>{/* end tab content */}
         </div>{/* end flex sidebar+content */}

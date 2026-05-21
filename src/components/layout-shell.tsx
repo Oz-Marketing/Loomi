@@ -17,14 +17,19 @@ const BUILDER_STEPS = [
 type BuilderStepKey = (typeof BUILDER_STEPS)[number]['key'];
 
 function campaignBuilderStep(path: string): BuilderStepKey {
-  // Email: /campaigns/[id]/(recipients|template|schedule)
-  // SMS:   /campaigns/sms/[id]/(recipients|message|schedule)
-  // Multi: /campaigns/multi/[id]/(recipients|message|schedule)
-  const multiMatch = path.match(/^\/campaigns\/multi\/[^/]+\/(recipients|message|schedule)$/);
+  // Strip optional /subaccount/<slug> prefix so the regexes below match
+  // admin + sub-account routes with one set of patterns. The builder
+  // surfaces live under /messaging/campaigns/ now (or
+  // /subaccount/<slug>/messaging/campaigns/ for sub-accounts):
+  // Email: /messaging/campaigns/[id]/(recipients|template|schedule)
+  // SMS:   /messaging/campaigns/sms/[id]/(recipients|message|schedule)
+  // Multi: /messaging/campaigns/multi/[id]/(recipients|message|schedule)
+  const stripped = path.replace(/^\/subaccount\/[^/]+/, '');
+  const multiMatch = stripped.match(/^\/messaging\/campaigns\/multi\/[^/]+\/(recipients|message|schedule)$/);
   if (multiMatch) return multiMatch[1] as BuilderStepKey;
-  const smsMatch = path.match(/^\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/);
+  const smsMatch = stripped.match(/^\/messaging\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/);
   if (smsMatch) return smsMatch[1] as BuilderStepKey;
-  const emailMatch = path.match(/^\/campaigns\/[^/]+\/(recipients|template|schedule)$/);
+  const emailMatch = stripped.match(/^\/messaging\/campaigns\/[^/]+\/(recipients|template|schedule)$/);
   if (emailMatch) {
     const raw = emailMatch[1];
     return raw === 'template' ? 'message' : (raw as BuilderStepKey);
@@ -33,8 +38,9 @@ function campaignBuilderStep(path: string): BuilderStepKey {
 }
 
 function campaignBuilderChannel(path: string): 'email' | 'sms' | 'multi' {
-  if (/^\/campaigns\/multi\//.test(path)) return 'multi';
-  if (/^\/campaigns\/sms\//.test(path)) return 'sms';
+  const stripped = path.replace(/^\/subaccount\/[^/]+/, '');
+  if (/^\/messaging\/campaigns\/multi\//.test(stripped)) return 'multi';
+  if (/^\/messaging\/campaigns\/sms\//.test(stripped)) return 'sms';
   return 'email';
 }
 
@@ -100,10 +106,11 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
   // the logo and a back affordance — no sidebar, no top utility bar.
   // (The template editor at /templates/editor uses its own chrome via the
   // existing isTemplateEditor branch.)
+  const builderProbe = normalizedPath.replace(/^\/subaccount\/[^/]+/, '');
   const isCampaignBuilder =
-    /^\/campaigns\/[^/]+\/(recipients|template|schedule)$/.test(normalizedPath) ||
-    /^\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/.test(normalizedPath) ||
-    /^\/campaigns\/multi\/[^/]+\/(recipients|message|schedule)$/.test(normalizedPath);
+    /^\/messaging\/campaigns\/[^/]+\/(recipients|template|schedule)$/.test(builderProbe) ||
+    /^\/messaging\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe) ||
+    /^\/messaging\/campaigns\/multi\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe);
 
   useEffect(() => {
     if (isFullScreen || isTemplateEditor || isCampaignBuilder) {

@@ -3269,7 +3269,7 @@ function ClientRoleDashboard({
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
                 <StatCard label="Campaigns" value={filteredEspCampaigns.length} icon={PaperAirplaneIcon} href={subHref('/messaging/campaigns')} />
-                <StatCard label="Scheduled" value={scheduledEsp} icon={ArrowPathIcon} href={subHref('/campaigns/schedule')} />
+                <StatCard label="Scheduled" value={scheduledEsp} icon={ArrowPathIcon} href={subHref('/messaging/campaigns/schedule')} />
                 <StatCard label="Sent / Completed" value={sentEsp} icon={CheckCircleIcon} href={subHref('/messaging/campaigns')} />
                 <StatCard label="Loomi Email" value={filteredLoomiEmailCampaigns.length} icon={BookOpenIcon} href={subHref('/messaging/campaigns')} />
                 <StatCard

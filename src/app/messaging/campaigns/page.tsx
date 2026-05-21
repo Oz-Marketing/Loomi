@@ -440,7 +440,7 @@ function AdminCampaignsPage() {
         title: `No campaigns found for ${selectedAccountLabel}`,
         subtitle: 'Build and schedule a campaign in Loomi to get started for this account.',
         actionLabel: 'Create Campaign',
-        actionHref: '/campaigns/schedule',
+        actionHref: '/messaging/campaigns/schedule',
       }
     : filters.account.length > 1
       ? {

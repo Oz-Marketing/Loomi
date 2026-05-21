@@ -9713,8 +9713,8 @@ export default function TemplateEditorPage() {
                         setShowManageTemplateMenu(false);
                         router.push(
                           fromMultiBuilder
-                            ? `/campaigns/multi/${encodeURIComponent(campaignIdParam)}/message`
-                            : `/campaigns/${encodeURIComponent(campaignIdParam)}/template`,
+                            ? `/messaging/campaigns/multi/${encodeURIComponent(campaignIdParam)}/message`
+                            : `/messaging/campaigns/${encodeURIComponent(campaignIdParam)}/template`,
                         );
                       }}
                       className="w-full text-left px-3 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]"
@@ -9738,8 +9738,8 @@ export default function TemplateEditorPage() {
                 onClick={() =>
                   router.push(
                     fromMultiBuilder
-                      ? `/campaigns/multi/${encodeURIComponent(campaignIdParam)}/message`
-                      : `/campaigns/${encodeURIComponent(campaignIdParam)}/schedule`,
+                      ? `/messaging/campaigns/multi/${encodeURIComponent(campaignIdParam)}/message`
+                      : `/messaging/campaigns/${encodeURIComponent(campaignIdParam)}/schedule`,
                   )
                 }
                 disabled={saving}

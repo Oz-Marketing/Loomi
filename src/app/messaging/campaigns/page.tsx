@@ -898,6 +898,7 @@ function AccountCampaignsPage() {
             accountMeta={accountMeta}
             accountProviders={accountProviders}
             emptyState={accountListEmptyState}
+            singleAccountMode
             toolbarExtras={
               <DashboardToolbar
                 dateRange={dateRange}

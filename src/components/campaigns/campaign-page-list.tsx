@@ -90,6 +90,13 @@ interface CampaignPageListProps {
    * to the search bar instead of cluttering the header.
    */
   toolbarExtras?: React.ReactNode;
+  /**
+   * When set, skip the accounts-overview drill-in table entirely and
+   * render the flat campaign list straight away. Used by the sub-account
+   * view where the accounts table doesn't add value — the user is
+   * already scoped to one account.
+   */
+  singleAccountMode?: boolean;
 }
 
 interface PreviewPayload {
@@ -660,6 +667,7 @@ export function CampaignPageList({
   accountProviders,
   emptyState,
   toolbarExtras,
+  singleAccountMode = false,
 }: CampaignPageListProps) {
   const { alert, confirm } = useLoomiDialog();
 
@@ -668,8 +676,13 @@ export function CampaignPageList({
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  // Drill-down state: null = accounts table, string = that account's campaigns
-  const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
+  // Drill-down state: null = accounts table, string = that account's campaigns.
+  // In singleAccountMode the accounts table is skipped — the caller's
+  // campaigns prop is already scoped to one account, so we treat the
+  // synthetic key '__single__' as "permanently drilled in".
+  const [selectedAccount, setSelectedAccount] = useState<string | null>(
+    singleAccountMode ? '__single__' : null,
+  );
 
   // Account table state
   const [accountPage, setAccountPage] = useState(1);
@@ -734,10 +747,15 @@ export function CampaignPageList({
   }
 
   // ── Build account rows ──
+  // Orphan campaigns (created at admin level with no accountKey) bucket
+  // under a friendly "Unassigned" label so the drill-in row is readable
+  // instead of showing a `_unknown` sentinel. They're still drill-inable
+  // so the user can resume them.
+  const UNASSIGNED_KEY = '__unassigned__';
   const accountRows: AccountRow[] = useMemo(() => {
     const map = new Map<string, Campaign[]>();
     campaigns.forEach((c) => {
-      const key = campaignAccountKey(c) || c.dealer || '_unknown';
+      const key = campaignAccountKey(c) || c.dealer || UNASSIGNED_KEY;
       const arr = map.get(key);
       if (arr) arr.push(c);
       else map.set(key, [c]);
@@ -748,9 +766,10 @@ export function CampaignPageList({
       const scheduledCount = items.filter(c => normalizeStatus(c.status) === 'scheduled').length;
       const lastActivityTs = Math.max(...items.map(c => getLastUpdatedTs(c)), 0);
       const meta = accountMeta?.[key];
+      const fallbackLabel = key === UNASSIGNED_KEY ? 'Unassigned' : key;
       return {
         key,
-        label: accountNames?.[key] || items[0]?.dealer || key,
+        label: accountNames?.[key] || items[0]?.dealer || fallbackLabel,
         campaigns: items,
         sentCount,
         scheduledCount,
@@ -807,8 +826,12 @@ export function CampaignPageList({
   );
 
   const selectedCampaigns = useMemo(() => {
-    if (!selectedAccountRow) return [];
-    let result = selectedAccountRow.campaigns;
+    // In singleAccountMode the caller already scoped `campaigns` to one
+    // account, so we work over the whole list directly.
+    let result = singleAccountMode
+      ? campaigns
+      : (selectedAccountRow ? selectedAccountRow.campaigns : []);
+    if (!singleAccountMode && !selectedAccountRow) return [];
     if (debouncedSearch) {
       const q = debouncedSearch.toLowerCase();
       result = result.filter(c =>
@@ -821,7 +844,7 @@ export function CampaignPageList({
       result = [...result].sort((a, b) => compareCampaigns(a, b, campaignSortField, campaignSortDir));
     }
     return result;
-  }, [selectedAccountRow, debouncedSearch, campaignSortField, campaignSortDir]);
+  }, [singleAccountMode, campaigns, selectedAccountRow, debouncedSearch, campaignSortField, campaignSortDir]);
 
   const campaignTotalPages = Math.max(1, Math.ceil(selectedCampaigns.length / PAGE_SIZE));
 
@@ -1137,7 +1160,7 @@ export function CampaignPageList({
         {/* Header bar */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
-            {selectedAccount && (
+            {selectedAccount && !singleAccountMode && (
               <button
                 type="button"
                 onClick={drillOut}
@@ -1148,23 +1171,26 @@ export function CampaignPageList({
               </button>
             )}
             <p className="text-sm text-[var(--muted-foreground)]">
-              {selectedAccount
-                ? (
-                  <>
-                    <span className="text-[var(--foreground)] font-medium">{selectedAccountRow?.label}</span>
-                    {' · '}
-                    {selectedCampaigns.length} campaign{selectedCampaigns.length !== 1 ? 's' : ''}
-                    {debouncedSearch ? ' found' : ''}
-                  </>
-                )
-                : (
-                  <>
-                    {sortedAccountRows.length} account{sortedAccountRows.length !== 1 ? 's' : ''}
-                    {debouncedSearch ? ' found' : ''}
-                    {' · '}
-                    {campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''}
-                  </>
-                )}
+              {singleAccountMode ? (
+                <>
+                  {selectedCampaigns.length} campaign{selectedCampaigns.length !== 1 ? 's' : ''}
+                  {debouncedSearch ? ' found' : ''}
+                </>
+              ) : selectedAccount ? (
+                <>
+                  <span className="text-[var(--foreground)] font-medium">{selectedAccountRow?.label}</span>
+                  {' · '}
+                  {selectedCampaigns.length} campaign{selectedCampaigns.length !== 1 ? 's' : ''}
+                  {debouncedSearch ? ' found' : ''}
+                </>
+              ) : (
+                <>
+                  {sortedAccountRows.length} account{sortedAccountRows.length !== 1 ? 's' : ''}
+                  {debouncedSearch ? ' found' : ''}
+                  {' · '}
+                  {campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''}
+                </>
+              )}
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">

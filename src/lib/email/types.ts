@@ -37,6 +37,7 @@ export interface EmailSettings {
 
 export interface EmailTemplate {
   version: '2';
+  title?: string;
   subject?: string;
   preheader?: string;
   settings: EmailSettings;

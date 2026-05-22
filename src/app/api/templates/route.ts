@@ -5,9 +5,11 @@ import { parseTemplate } from '@/lib/template-parser';
 import { serializeTemplate } from '@/lib/template-serializer';
 import { getStarterTemplate } from '@/lib/template-starters';
 import * as templateService from '@/lib/services/templates';
-import { isVisualEditableTemplate } from '@/lib/email/types';
+import { isVisualEditableTemplate, parseV2Template } from '@/lib/email/types';
 
 function extractFrontmatterTitle(content: string): string | undefined {
+  const v2 = parseV2Template(content);
+  if (v2?.title) return v2.title;
   const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
   if (!fmMatch) return undefined;
   const titleMatch = fmMatch[1].match(/^title:\s*(.+)$/m);
@@ -105,15 +107,22 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'Missing template or raw content' }, { status: 400 });
     }
 
-    // Extract title and preheader from content frontmatter
+    // Extract title and preheader from content. v2 JSON templates carry
+    // these as top-level fields; legacy formats use a YAML `---` block.
     let title: string | undefined;
     let preheader: string | undefined;
-    const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
-    if (fmMatch) {
-      const titleMatch = fmMatch[1].match(/^title:\s*(.+)$/m);
-      if (titleMatch) title = titleMatch[1].trim().replace(/^["']|["']$/g, '');
-      const phMatch = fmMatch[1].match(/^preheader:\s*(.+)$/m);
-      if (phMatch) preheader = phMatch[1].trim().replace(/^["']|["']$/g, '');
+    const v2 = parseV2Template(content);
+    if (v2) {
+      title = v2.title || undefined;
+      preheader = v2.preheader || undefined;
+    } else {
+      const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+      if (fmMatch) {
+        const titleMatch = fmMatch[1].match(/^title:\s*(.+)$/m);
+        if (titleMatch) title = titleMatch[1].trim().replace(/^["']|["']$/g, '');
+        const phMatch = fmMatch[1].match(/^preheader:\s*(.+)$/m);
+        if (phMatch) preheader = phMatch[1].trim().replace(/^["']|["']$/g, '');
+      }
     }
 
     const updated = await templateService.updateTemplate(

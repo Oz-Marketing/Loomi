@@ -245,6 +245,31 @@ jobs:
             pm2 stop loomi-studio || true
             pm2 delete loomi-studio || true
 
+            # Loomi-native send-engine worker. Singleton (not blue/green) —
+            # a brief restart is fine since pg-boss persists jobs in
+            # Postgres and the worker re-scans on boot. Delete + start (vs
+            # reload) so pm2 re-resolves the `current` symlink to the new
+            # release path. Env vars from .env.local were exported above
+            # via `set -a && source .env.local` and are inherited here.
+            echo "=== Restarting loomi-studio-worker on new release ==="
+            pm2 stop loomi-studio-worker 2>/dev/null || true
+            pm2 delete loomi-studio-worker 2>/dev/null || true
+            pm2 start "$CURRENT_LINK/ecosystem.config.js" --only loomi-studio-worker
+
+            echo "=== Worker health: waiting for pg-boss ==="
+            WORKER_OK=0
+            for i in $(seq 1 15); do
+              if pm2 logs loomi-studio-worker --nostream --lines 50 2>/dev/null | grep -q "\[worker\] pg-boss started"; then
+                WORKER_OK=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$WORKER_OK" -ne 1 ]; then
+              echo "WARN: worker did not log 'pg-boss started' within 15s; check pm2 logs loomi-studio-worker"
+              pm2 logs loomi-studio-worker --nostream --lines 40 || true
+            fi
+
             echo "=== PM2 process status ==="
             pm2 save
             pm2 list

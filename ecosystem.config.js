@@ -22,7 +22,11 @@ module.exports = {
       name: 'loomi-studio-worker',
       script: 'npm',
       args: 'run worker:start',
-      cwd: '/var/www/loomi-studio',
+      // Point at the symlink so the worker tracks whichever release is
+      // currently active. The deploy workflow delete + re-starts the
+      // worker AFTER swapping `current` so pm2 re-resolves the symlink
+      // and binds to the new release's realpath.
+      cwd: '/var/www/loomi-studio/current',
       max_memory_restart: '256M',
       kill_timeout: 10000,
       merge_logs: true,

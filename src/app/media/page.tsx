@@ -90,10 +90,8 @@ interface ProviderInfo {
 
 // ── Helpers ──
 
-// All media now flows through Loomi-native S3 storage. The provider
-// catalog used to map remote-ESP IDs (ghl/klaviyo) to display labels
-// but with the ESP teardown those branches are gone; only the 's3'
-// entry remains for the source pill on each media row.
+// All media flows through Loomi-native S3 storage. Single-entry
+// provider catalog keeps the source-pill rendering uniform.
 const PROVIDER_META: Record<string, ProviderInfo> = {
   s3: {
     id: 's3',

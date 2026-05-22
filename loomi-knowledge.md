@@ -6,13 +6,9 @@ This file is the source of truth for Loomi Studio AI assistants. Update this fil
 
 ## Platform Overview
 
-Loomi Studio is an internal email production platform built by Oz Marketing. Teams use it to design, manage, and deploy branded email templates across dealership and business accounts.
+Loomi Studio is an internal email production platform built by Oz Marketing. Teams use it to design, manage, and deploy branded email and SMS campaigns across dealership and business accounts.
 
-The platform is built with Next.js 14, uses [react-email](https://react.email/) (`@react-email/components` + `@react-email/render`) for template rendering, and integrates with ESP providers through a provider-agnostic adapter layer.
-
-Current production providers include:
-- GoHighLevel (OAuth)
-- Klaviyo (API key)
+The platform is built with Next.js 14 and uses [react-email](https://react.email/) (`@react-email/components` + `@react-email/render`) for template rendering. Email sends go out through SendGrid; SMS sends through Twilio. Contacts, lists, templates, and campaign state are stored locally in Postgres — no third-party ESP integration is involved.
 
 ---
 
@@ -29,7 +25,6 @@ Current production providers include:
 ### Settings Tabs
 
 - **Accounts** - Account list and detail management.
-- **Integrations** - Provider connection state, scope status, and reauthorization controls.
 - **Custom Values** - Account-level fields used by template variable replacement.
 - **Users** - User CRUD and access assignment.
 - **Knowledge** - This knowledge base editor.
@@ -264,87 +259,42 @@ Each account can store:
 - Dealer/business identity fields (name, address, phone, website, timezone)
 - Branding (logos, colors, fonts)
 - Custom values for template substitution
-- Provider preference and active ESP connection metadata
-
-Accounts can connect one or more ESP providers. Runtime reads provider capabilities and adjusts UI behavior by provider.
-When an account has no explicit `espProvider`, Loomi now resolves the most recently connected provider for that account before falling back to the global default provider.
+- Per-account Twilio credentials (for SMS sends)
 
 ---
 
-## ESP Integration Model
+## Campaign Sending And Webhooks
 
-Loomi uses a provider registry and adapter interfaces for:
-- OAuth authorization
-- API-key connection validation
-- Contacts
-- Campaigns
-- Workflows/flows
-- Messaging (provider dependent)
-- Users (provider dependent)
-- Webhooks
-- Custom values sync (provider dependent)
+Loomi sends campaigns natively — no third-party ESP is involved on either the send or the analytics path.
 
-### Current Provider Capabilities
-
-- **GoHighLevel (`ghl`)**
-  - OAuth connection
-  - Contacts, campaigns, workflows, messaging, users
-  - Custom value sync support
-  - Webhook support for email stats
-
-- **Klaviyo (`klaviyo`)**
-  - API key connection
-  - Contacts, campaigns, flows
-  - No native Loomi custom value push today
-
-### OAuth Scope Handling
-For OAuth providers, Loomi tracks granted scopes and flags reauthorization when required scopes change.
-
----
-
-## Campaign Analytics And Webhooks
-
-Loomi supports provider-routed email stats webhook ingestion:
-- Primary endpoint format: `POST /api/webhooks/esp/{provider}/email-stats`
-- Generic family route format: `POST /api/webhooks/esp/{provider}/{family}`
-- Supported providers for `email-stats`: `ghl`, `klaviyo`
-- Stores aggregate campaign stats in database
-- Campaign webhook stat rows are keyed by `provider + accountId + campaignId`
-- Preserves first delivered timestamp for accurate sent-time reporting
+- **Email sends:** routed through SendGrid. Engagement events (delivered / open / click / bounce / spam-report / unsubscribe) come back via the SendGrid Event Webhook at `POST /api/webhooks/sendgrid/events` and are persisted as `EmailCampaignEvent` rows keyed to the `EmailCampaignRecipient`.
+- **SMS sends:** routed through Twilio. Status callbacks land at `POST /api/webhooks/twilio/status`; inbound replies (including STOP) at `POST /api/webhooks/twilio/inbound`.
+- Aggregate campaign analytics (sent / opened / clicked counts) are derived directly from the event tables — no separate stats store.
 
 ---
 
 ## Template Variables
 
-Templates use ESP-compatible variables, including:
+Templates use Loomi's variable catalog, including:
 - Contact fields (`{{contact.first_name}}`, etc.)
 - Location/account fields (`{{location.name}}`, `{{location.phone}}`, etc.)
 - Custom values (`{{custom_values.website_url}}`, etc.)
 - System fields (`{{unsubscribe_link}}`, `{{message.id}}`)
 
-The variable catalog is managed as ESP variables and injected dynamically.
+The variable catalog is resolved per-recipient at send time.
 
 ---
 
 ## Common Questions
 
 ### How do I create an email?
-Open the template editor from Templates, choose visual or code mode, drag blocks onto the canvas (visual) or write email-safe HTML (code), then save and optionally publish to your ESP.
+Open the template editor from Templates, choose visual or code mode, drag blocks onto the canvas (visual) or write email-safe HTML (code), then save the template. From a campaign you can attach the saved template and schedule it.
 
 ### How do I add a new account?
-Create the account in Accounts, save business/branding data, then connect an ESP from Integrations.
-
-### How do I connect GoHighLevel?
-Use OAuth from Integrations at the account level.
-
-### How do I connect Klaviyo?
-Use API key connection from Integrations at the account level.
+Create the account in Accounts, then fill in business/branding data and (for SMS) Twilio credentials in Settings.
 
 ### How do I use the AI assistant in the template editor?
 Click the sparkle button in the bottom-right corner or press Cmd/Ctrl+Shift+A. Ask Loomi to build a full email, edit component props, write subject lines, or improve copy. Loomi can generate complete emails using your account's branding, logos, and business details. In code mode, it can write custom branded HTML beyond the visual component catalog.
-
-### Why are some custom values not syncing?
-Custom value sync depends on provider capability and connection state. Values can still be saved locally when provider sync is unavailable.
 
 ---
 
@@ -356,9 +306,8 @@ Custom value sync depends on provider capability and connection state. Values ca
 - **Auth:** NextAuth credentials flow
 - **Rendering:** react-email (`@react-email/components` + `@react-email/render`) for email template compilation
 - **AI:** Anthropic Claude API integration
-- **Integrations:** Provider-agnostic ESP adapter architecture
-- **Secrets:** ESP token encryption requires `ESP_TOKEN_SECRET`; OAuth state signing requires `ESP_OAUTH_STATE_SECRET` (with `ESP_TOKEN_SECRET` fallback)
-- **OAuth callbacks:** Signed OAuth state carries provider + account key in a provider-agnostic format
+- **Sending:** SendGrid (email) and Twilio (SMS) as the send transports; all campaign state, events, and analytics live in Postgres
+- **Secrets:** `src/lib/crypto/encryption.ts` encrypts Twilio + SendGrid credentials at rest using `TOKEN_ENCRYPTION_SECRET` (legacy `ESP_TOKEN_SECRET` still accepted as a fallback during env migration)
 
 ---
 

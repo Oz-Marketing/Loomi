@@ -49,8 +49,8 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
  * Body: { accountSid?, authToken?, phoneNumber?, messagingServiceSid? }
  *
  * Each field is independently updatable. Passing accountSid: null or
- * authToken: null clears the credential pair (sub-account falls back
- * to the legacy GHL Conversations API path). phoneNumber and
+ * authToken: null clears the credential pair (sends from this account
+ * will fail until creds are re-set). phoneNumber and
  * messagingServiceSid are non-sensitive routing metadata.
  */
 export async function PUT(req: NextRequest, { params }: RouteParams) {

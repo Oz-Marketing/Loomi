@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useMemo, useState } from 'react';
+import { use, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeftIcon,
@@ -9,8 +9,10 @@ import {
   CheckCircleIcon,
   EnvelopeIcon,
   ListBulletIcon,
+  PhoneIcon,
   PlusIcon,
   RectangleStackIcon,
+  UserGroupIcon,
   UsersIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
@@ -23,6 +25,7 @@ import { isLikelyDialablePhone, normalizePhoneNumber } from '@/lib/contact-hygie
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
 import { FilterBuilder } from '@/components/contacts/filter-builder';
+import { ContactsPicker } from '@/components/contacts/contacts-picker';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -35,11 +38,24 @@ interface CampaignDraftCore {
   sourceAudienceId: string;
   sourceFilter: string;
   sourceListId: string;
+  /** JSON-stringified array of Contact IDs for manual selection mode. */
+  sourceContactIds: string;
   metadata: string;
 }
 
 type EmailDraft = CampaignDraftCore;
 type SmsDraft = CampaignDraftCore;
+
+// Channel deliverability checks reused by the picker (selection gating)
+// and the sendable count (header math). Email = valid address;
+// SMS = dialable phone.
+function isEmailDeliverable(c: Contact): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(String(c.email || '').trim());
+}
+
+function isSmsDeliverable(c: Contact): boolean {
+  return isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || '')));
+}
 
 interface SavedAudience {
   id: string;
@@ -56,13 +72,16 @@ interface ListSummary {
   memberCount: number;
 }
 
-type AudienceTab = 'lists' | 'segments';
+type AudienceTab = 'lists' | 'segments' | 'contacts';
 type Rail = 'email' | 'sms';
 
 type AudienceSelection =
   | { kind: 'all' }
   | { kind: 'list'; id: string; name: string }
-  | { kind: 'segment'; id: string; name: string; filter: FilterDefinition };
+  | { kind: 'segment'; id: string; name: string; filter: FilterDefinition }
+  // Manual mode — caller curates an arbitrary set of Contact IDs from
+  // the Contacts tab. Persisted as sourceContactIds on the draft.
+  | { kind: 'contacts'; ids: string[] };
 
 function parseFilterDefinition(raw: string): FilterDefinition | null {
   if (!raw) return null;
@@ -73,10 +92,6 @@ function parseFilterDefinition(raw: string): FilterDefinition | null {
   } catch {
     return null;
   }
-}
-
-function isValidEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(value);
 }
 
 function parseLinkedSmsId(rawMetadata: string): string | null {
@@ -94,7 +109,20 @@ function audienceFromCampaign(c: {
   sourceListId?: string;
   sourceAudienceId?: string;
   sourceFilter?: string;
+  sourceContactIds?: string;
 }): AudienceSelection {
+  // Mutually exclusive — contacts wins, then list, then segment.
+  if (c.sourceContactIds) {
+    try {
+      const parsed = JSON.parse(c.sourceContactIds);
+      if (Array.isArray(parsed)) {
+        const ids = parsed.map((v) => String(v).trim()).filter(Boolean);
+        if (ids.length > 0) return { kind: 'contacts', ids };
+      }
+    } catch {
+      // fall through
+    }
+  }
   if (c.sourceListId) {
     return { kind: 'list', id: c.sourceListId, name: 'List' };
   }
@@ -118,11 +146,18 @@ function selectionsEqual(a: AudienceSelection, b: AudienceSelection): boolean {
   if (a.kind === 'all') return true;
   if (a.kind === 'list' && b.kind === 'list') return a.id === b.id;
   if (a.kind === 'segment' && b.kind === 'segment') return a.id === b.id;
+  if (a.kind === 'contacts' && b.kind === 'contacts') {
+    if (a.ids.length !== b.ids.length) return false;
+    const aSet = new Set(a.ids);
+    return b.ids.every((id) => aSet.has(id));
+  }
   return false;
 }
 
 function preferredTab(sel: AudienceSelection): AudienceTab {
-  return sel.kind === 'list' ? 'lists' : 'segments';
+  if (sel.kind === 'list') return 'lists';
+  if (sel.kind === 'contacts') return 'contacts';
+  return 'segments';
 }
 
 export default function MultiRecipientsStepPage({ params }: PageProps) {
@@ -161,6 +196,14 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
   const [modalRail, setModalRail] = useState<Rail>('email');
   const [showNewListModal, setShowNewListModal] = useState(false);
   const [showFilterBuilder, setShowFilterBuilder] = useState(false);
+
+  // Per-rail Contacts-tab state. The ContactsPicker is stateless; we
+  // own search + page locally so toggling between rails or tabs
+  // preserves the user's position.
+  const [emailContactsSearch, setEmailContactsSearch] = useState('');
+  const [emailContactsPage, setEmailContactsPage] = useState(0);
+  const [smsContactsSearch, setSmsContactsSearch] = useState('');
+  const [smsContactsPage, setSmsContactsPage] = useState(0);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -227,6 +270,24 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
       setSelectedAccountKey(accountOptions[0].key);
     }
   }, [accountOptions, selectedAccountKey]);
+
+  // Reset Contacts-tab state on subaccount change (post-mount). Selected
+  // IDs belong to a specific account's pool; keeping them across an
+  // account switch would silently send to a mismatched audience. The
+  // ref guard ensures initial hydration of a saved contacts-mode draft
+  // isn't clobbered.
+  const prevAccountKeyRef = useRef<string>('');
+  useEffect(() => {
+    const prev = prevAccountKeyRef.current;
+    prevAccountKeyRef.current = selectedAccountKey;
+    if (!prev || prev === selectedAccountKey) return;
+    setEmailContactsSearch('');
+    setEmailContactsPage(0);
+    setSmsContactsSearch('');
+    setSmsContactsPage(0);
+    setEmailSelection((current) => (current.kind === 'contacts' ? { kind: 'all' } : current));
+    setSmsSelection((current) => (current.kind === 'contacts' ? { kind: 'all' } : current));
+  }, [selectedAccountKey]);
 
   useEffect(() => {
     if (!selectedAccountKey) {
@@ -370,18 +431,18 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
 
   const { emailSendable, smsSendable } = useMemo(() => {
     if (contactsLoading) return { emailSendable: 0, smsSendable: 0 };
-    const emailOk = contacts.filter((c) =>
-      Boolean(c.id && isValidEmail(String(c.email || '').trim())),
-    );
-    const smsOk = contacts.filter((c) =>
-      isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || ''))),
-    );
+    const emailOk = contacts.filter((c) => Boolean(c.id) && isEmailDeliverable(c));
+    const smsOk = contacts.filter((c) => Boolean(c.id) && isSmsDeliverable(c));
 
     const resolveEmail = () => {
       if (emailSelection.kind === 'all') return emailOk.length;
       if (emailSelection.kind === 'list') {
         if (!emailListMembers) return 0;
         return emailOk.filter((c) => emailListMembers.has(c.id)).length;
+      }
+      if (emailSelection.kind === 'contacts') {
+        const idSet = new Set(emailSelection.ids);
+        return emailOk.filter((c) => idSet.has(c.id)).length;
       }
       return evaluateFilter(emailOk, emailSelection.filter).length;
     };
@@ -393,6 +454,10 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
         if (!smsListMembers) return 0;
         return smsOk.filter((c) => smsListMembers.has(c.id)).length;
       }
+      if (sel.kind === 'contacts') {
+        const idSet = new Set(sel.ids);
+        return smsOk.filter((c) => idSet.has(c.id)).length;
+      }
       return evaluateFilter(smsOk, sel.filter).length;
     };
 
@@ -403,18 +468,28 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     const payload: Record<string, unknown> = {
       accountKeys: [selectedAccountKey],
     };
+    // Mutually exclusive — always clear unused fields so stale state
+    // from a previous mode doesn't linger.
     if (sel.kind === 'all') {
       payload.sourceAudienceId = null;
       payload.sourceFilter = null;
       payload.sourceListId = null;
+      payload.sourceContactIds = null;
     } else if (sel.kind === 'list') {
       payload.sourceListId = sel.id;
+      payload.sourceAudienceId = null;
+      payload.sourceFilter = null;
+      payload.sourceContactIds = null;
+    } else if (sel.kind === 'contacts') {
+      payload.sourceContactIds = JSON.stringify(sel.ids);
+      payload.sourceListId = null;
       payload.sourceAudienceId = null;
       payload.sourceFilter = null;
     } else {
       payload.sourceAudienceId = sel.id;
       payload.sourceFilter = JSON.stringify(sel.filter);
       payload.sourceListId = null;
+      payload.sourceContactIds = null;
     }
     return payload;
   }
@@ -585,6 +660,22 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
               setModalRail('email');
               setShowFilterBuilder(true);
             }}
+            contacts={contacts}
+            contactsLoading={contactsLoading}
+            contactsSearch={emailContactsSearch}
+            onContactsSearchChange={setEmailContactsSearch}
+            contactsPage={emailContactsPage}
+            onContactsPageChange={setEmailContactsPage}
+            // Unified mode — a contact is selectable if EITHER channel
+            // can reach them. Per-row reach badges show which channels
+            // will fire so the user isn't surprised when sendable
+            // counts diverge.
+            contactsDeliverableCheck={(c) => isEmailDeliverable(c) || isSmsDeliverable(c)}
+            contactsEmptyNoun="reachable contacts"
+            reachIndicators={[
+              { label: 'Email', icon: EnvelopeIcon, check: isEmailDeliverable },
+              { label: 'SMS', icon: PhoneIcon, check: isSmsDeliverable },
+            ]}
           />
         ) : (
           <div className="space-y-5">
@@ -611,6 +702,14 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
                   setModalRail('email');
                   setShowFilterBuilder(true);
                 }}
+                contacts={contacts}
+                contactsLoading={contactsLoading}
+                contactsSearch={emailContactsSearch}
+                onContactsSearchChange={setEmailContactsSearch}
+                contactsPage={emailContactsPage}
+                onContactsPageChange={setEmailContactsPage}
+                contactsDeliverableCheck={isEmailDeliverable}
+                contactsEmptyNoun="deliverable email contacts"
               />
             </RailSection>
 
@@ -637,6 +736,14 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
                   setModalRail('sms');
                   setShowFilterBuilder(true);
                 }}
+                contacts={contacts}
+                contactsLoading={contactsLoading}
+                contactsSearch={smsContactsSearch}
+                onContactsSearchChange={setSmsContactsSearch}
+                contactsPage={smsContactsPage}
+                onContactsPageChange={setSmsContactsPage}
+                contactsDeliverableCheck={isSmsDeliverable}
+                contactsEmptyNoun="phone-deliverable contacts"
               />
             </RailSection>
           </div>
@@ -742,6 +849,17 @@ function AudiencePicker({
   allDescription,
   onRequestNewList,
   onRequestNewSegment,
+  // Contacts-tab props. Optional so the component still works in
+  // single-channel callers that don't need a manual picker.
+  contacts,
+  contactsLoading,
+  contactsSearch,
+  onContactsSearchChange,
+  contactsPage,
+  onContactsPageChange,
+  contactsDeliverableCheck,
+  contactsEmptyNoun,
+  reachIndicators,
 }: {
   selection: AudienceSelection;
   onChange: (next: AudienceSelection) => void;
@@ -753,6 +871,15 @@ function AudiencePicker({
   allDescription: string;
   onRequestNewList: () => void;
   onRequestNewSegment: () => void;
+  contacts: Contact[];
+  contactsLoading: boolean;
+  contactsSearch: string;
+  onContactsSearchChange: (value: string) => void;
+  contactsPage: number;
+  onContactsPageChange: (page: number) => void;
+  contactsDeliverableCheck: (c: Contact) => boolean;
+  contactsEmptyNoun: string;
+  reachIndicators?: React.ComponentProps<typeof ContactsPicker>['reachIndicators'];
 }) {
   const tabButton = (
     key: AudienceTab,
@@ -810,6 +937,7 @@ function AudiencePicker({
         <div className="border-b border-[var(--border)] flex items-center gap-1 px-5">
           {tabButton('lists', 'Lists', ListBulletIcon)}
           {tabButton('segments', 'Segments', RectangleStackIcon)}
+          {tabButton('contacts', 'Contacts', UserGroupIcon)}
         </div>
         <div className="p-5">
           {tab === 'lists' && (
@@ -869,7 +997,7 @@ function AudiencePicker({
                 </button>
               </div>
 
-              {scopedAudiences.length > 0 && (
+              {scopedAudiences.length > 0 ? (
                 <div className="space-y-2">
                   {scopedAudiences.map((a) => {
                     const filter = parseFilterDefinition(a.filters);
@@ -887,8 +1015,40 @@ function AudiencePicker({
                     );
                   })}
                 </div>
+              ) : (
+                <div className="py-10 text-center border border-dashed border-[var(--border)] rounded-xl">
+                  <RectangleStackIcon className="w-10 h-10 text-[var(--muted-foreground)] mx-auto mb-3 opacity-50" />
+                  <p className="text-sm font-medium">No segments for this account yet</p>
+                  <p className="text-xs text-[var(--muted-foreground)] mt-1.5 max-w-md mx-auto">
+                    Click <span className="font-medium">New segment</span> above to build a custom filter.
+                  </p>
+                </div>
               )}
             </div>
+          )}
+          {tab === 'contacts' && (
+            <ContactsPicker
+              contacts={contacts}
+              loading={contactsLoading}
+              search={contactsSearch}
+              onSearchChange={(value) => {
+                onContactsSearchChange(value);
+                onContactsPageChange(0);
+              }}
+              page={contactsPage}
+              onPageChange={onContactsPageChange}
+              selectedIds={selection.kind === 'contacts' ? selection.ids : []}
+              onSelectionChange={(ids) => {
+                if (ids.length === 0) {
+                  onChange({ kind: 'all' });
+                } else {
+                  onChange({ kind: 'contacts', ids });
+                }
+              }}
+              isDeliverable={contactsDeliverableCheck}
+              emptyNoun={contactsEmptyNoun}
+              reachIndicators={reachIndicators}
+            />
           )}
         </div>
       </div>

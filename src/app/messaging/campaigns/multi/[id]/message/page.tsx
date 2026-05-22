@@ -235,8 +235,8 @@ export default function MultiMessageStepPage({ params }: PageProps) {
         setSubject(updated.subject);
       }
       setPreviewDesign(null);
-      // Klaviyo pattern: jump into the editor with multi=1 so navigation
-      // from the editor goes back to /campaigns/multi/[id]/...
+      // Jump into the editor with multi=1 so navigation from the editor
+      // goes back to /campaigns/multi/[id]/...
       router.push(
         `/templates/editor?design=${encodeURIComponent(design)}&campaignId=${encodeURIComponent(id)}&multi=1`,
       );

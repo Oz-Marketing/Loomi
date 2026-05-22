@@ -11,11 +11,9 @@ import { prisma } from '@/lib/prisma';
 // The response shape matches what the existing contact detail panel
 // renders (`messages: ConvoMessage[]` + `stats`) so the consumer can
 // flip from /conversations → /activity in Phase C with no reshaping.
-// Fidelity caveat for the user: this only covers messages that
-// flowed through Loomi. Replies to non-Loomi sends or out-of-band
-// SMS exchanges with the dealer's GHL chat are NOT visible here —
-// that's a known regression from the GHL conversations API, called
-// out in the migration plan.
+// Fidelity caveat: this only covers messages that flowed through
+// Loomi. Out-of-band SMS exchanges sent through other tools won't
+// appear here.
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;

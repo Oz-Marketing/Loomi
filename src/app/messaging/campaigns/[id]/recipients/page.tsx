@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useMemo, useState } from 'react';
+import { use, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeftIcon,
@@ -9,6 +9,7 @@ import {
   ListBulletIcon,
   PlusIcon,
   RectangleStackIcon,
+  UserGroupIcon,
   UsersIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
@@ -21,6 +22,7 @@ import type { FilterDefinition } from '@/lib/smart-list-types';
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
 import { FilterBuilder } from '@/components/contacts/filter-builder';
+import { ContactsPicker } from '@/components/contacts/contacts-picker';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -34,6 +36,9 @@ interface DraftCampaign {
   sourceAudienceId: string;
   sourceFilter: string;
   sourceListId: string;
+  /** JSON-stringified array of Contact IDs for manual selection mode.
+   *  Mutually exclusive with sourceListId and sourceAudienceId+sourceFilter. */
+  sourceContactIds: string;
 }
 
 interface SavedAudience {
@@ -51,12 +56,16 @@ interface ListSummary {
   memberCount: number;
 }
 
-type AudienceTab = 'lists' | 'segments';
+type AudienceTab = 'lists' | 'segments' | 'contacts';
 
 type AudienceSelection =
   | { kind: 'all' }
   | { kind: 'list'; id: string; name: string }
-  | { kind: 'segment'; id: string; name: string; filter: FilterDefinition };
+  | { kind: 'segment'; id: string; name: string; filter: FilterDefinition }
+  // Manual mode — caller curates an arbitrary set of Contact IDs from
+  // the Contacts tab. Used for canary/test sends. Persisted as
+  // sourceContactIds (JSON array) on the campaign draft.
+  | { kind: 'contacts'; ids: string[] };
 
 function parseFilterDefinition(raw: string): FilterDefinition | null {
   if (!raw) return null;
@@ -100,6 +109,13 @@ export default function RecipientsStepPage({ params }: PageProps) {
   const [showFilterBuilder, setShowFilterBuilder] = useState(false);
   const [showNewListModal, setShowNewListModal] = useState(false);
 
+  // Contacts tab — paginated picker for ad-hoc manual selection. Search is
+  // in-memory across the already-loaded `contacts` array; page resets when
+  // the search query changes so the user doesn't end up paginating into an
+  // empty filtered view.
+  const [contactsSearch, setContactsSearch] = useState('');
+  const [contactsPage, setContactsPage] = useState(0);
+
   // Hydrate draft on mount.
   // NOTE: router / subHref are intentionally NOT in the dep array.
   // useSubaccountHref() returns a fresh function reference on every render,
@@ -124,10 +140,24 @@ export default function RecipientsStepPage({ params }: PageProps) {
         if (campaign.accountKeys.length > 0) {
           setSelectedAccountKey(campaign.accountKeys[0]);
         }
-        // sourceListId takes precedence — set during recipients step.
-        // sourceAudienceId+sourceFilter still resolves segments. Hydrate
-        // whichever shape the draft was saved with.
-        if (campaign.sourceListId) {
+        // Hydrate whichever selection mode the draft was saved with.
+        // The three modes are mutually exclusive — sourceContactIds wins,
+        // then sourceListId, then sourceAudienceId+sourceFilter.
+        if (campaign.sourceContactIds) {
+          let ids: string[] = [];
+          try {
+            const parsed = JSON.parse(campaign.sourceContactIds);
+            if (Array.isArray(parsed)) {
+              ids = parsed.map((v) => String(v).trim()).filter(Boolean);
+            }
+          } catch {
+            ids = [];
+          }
+          if (ids.length > 0) {
+            setSelection({ kind: 'contacts', ids });
+            setTab('contacts');
+          }
+        } else if (campaign.sourceListId) {
           // Name is resolved once the lists fetch completes (effect below).
           setSelection({ kind: 'list', id: campaign.sourceListId, name: 'List' });
           setTab('lists');
@@ -170,6 +200,25 @@ export default function RecipientsStepPage({ params }: PageProps) {
       setSelectedAccountKey(accountOptions[0].key);
     }
   }, [accountOptions, selectedAccountKey]);
+
+  // Reset Contacts-tab state when the selected subaccount *changes*
+  // post-mount. The selected IDs belong to a specific account's contact
+  // pool; keeping them across an account switch would silently send a
+  // campaign to a mismatched audience (or, more likely, zero recipients).
+  //
+  // The ref guard ensures the first set (initial hydration from
+  // accountOptions / a draft) does NOT clobber a freshly-hydrated
+  // contacts-mode selection from sourceContactIds. We only reset on
+  // explicit user-driven changes after the page has settled.
+  const prevAccountKeyRef = useRef<string>('');
+  useEffect(() => {
+    const prev = prevAccountKeyRef.current;
+    prevAccountKeyRef.current = selectedAccountKey;
+    if (!prev || prev === selectedAccountKey) return;
+    setContactsSearch('');
+    setContactsPage(0);
+    setSelection((current) => (current.kind === 'contacts' ? { kind: 'all' } : current));
+  }, [selectedAccountKey]);
 
   // Load contacts for the selected account so we can preview audience sizes
   useEffect(() => {
@@ -290,6 +339,13 @@ export default function RecipientsStepPage({ params }: PageProps) {
       if (!listMemberIds) return 0;
       return sendable.filter((c) => listMemberIds.has(c.id)).length;
     }
+    if (selection.kind === 'contacts') {
+      // Selection IDs that match the deliverable contact set — drops any
+      // ID whose underlying contact has since been deleted or had its
+      // email cleared.
+      const idSet = new Set(selection.ids);
+      return sendable.filter((c) => idSet.has(c.id)).length;
+    }
     return evaluateFilter(sendable, selection.filter).length;
   }, [contacts, contactsLoading, selection, listMemberIds]);
 
@@ -300,21 +356,30 @@ export default function RecipientsStepPage({ params }: PageProps) {
       const payload: Record<string, unknown> = {
         accountKeys: [selectedAccountKey],
       };
-      // Mutually exclusive: a draft holds either a list reference or a
-      // segment (audience+filter), not both. We always clear the unused
-      // pair so old state from a different selection mode doesn't linger.
+      // Mutually exclusive: a draft holds at most one of (list reference,
+      // segment audience+filter, manual contact IDs). We always clear
+      // the unused fields so stale state from a different selection mode
+      // doesn't linger after a mode switch.
       if (selection.kind === 'all') {
         payload.sourceAudienceId = null;
         payload.sourceFilter = null;
         payload.sourceListId = null;
+        payload.sourceContactIds = null;
       } else if (selection.kind === 'list') {
         payload.sourceListId = selection.id;
+        payload.sourceAudienceId = null;
+        payload.sourceFilter = null;
+        payload.sourceContactIds = null;
+      } else if (selection.kind === 'contacts') {
+        payload.sourceContactIds = JSON.stringify(selection.ids);
+        payload.sourceListId = null;
         payload.sourceAudienceId = null;
         payload.sourceFilter = null;
       } else {
         payload.sourceAudienceId = selection.id;
         payload.sourceFilter = JSON.stringify(selection.filter);
         payload.sourceListId = null;
+        payload.sourceContactIds = null;
       }
       const res = await fetch(`/api/campaigns/email/${encodeURIComponent(draft.id)}`, {
         method: 'PATCH',
@@ -396,7 +461,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
             </p>
           </div>
 
-          {/* Klaviyo-style large sendable count */}
+          {/* Large sendable count */}
           <div className="text-right flex-shrink-0">
             <p className="text-4xl sm:text-5xl font-bold tabular-nums leading-none">
               {contactsLoading || listMemberLoading ? (
@@ -467,6 +532,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
           <div className="border-b border-[var(--border)] flex items-center gap-1 px-5">
             {tabButton('lists', 'Lists', ListBulletIcon)}
             {tabButton('segments', 'Segments', RectangleStackIcon)}
+            {tabButton('contacts', 'Contacts', UserGroupIcon)}
           </div>
 
           <div className="p-5">
@@ -531,7 +597,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
                 </div>
 
                 {/* Saved segments — includes the auto-seeded lifecycle audiences for automotive accounts */}
-                {scopedAudiences.length > 0 && (
+                {scopedAudiences.length > 0 ? (
                   <div>
                     <div className="space-y-2">
                       {scopedAudiences.map((a) => {
@@ -553,8 +619,44 @@ export default function RecipientsStepPage({ params }: PageProps) {
                       })}
                     </div>
                   </div>
+                ) : (
+                  <div className="py-10 text-center border border-dashed border-[var(--border)] rounded-xl">
+                    <RectangleStackIcon className="w-10 h-10 text-[var(--muted-foreground)] mx-auto mb-3 opacity-50" />
+                    <p className="text-sm font-medium">No segments for this account yet</p>
+                    <p className="text-xs text-[var(--muted-foreground)] mt-1.5 max-w-md mx-auto">
+                      Click <span className="font-medium">New segment</span> above to build a custom filter (e.g., contacts created in the last 30 days).
+                    </p>
+                  </div>
                 )}
               </div>
+            )}
+
+            {tab === 'contacts' && (
+              <ContactsPicker
+                contacts={contacts}
+                loading={contactsLoading}
+                search={contactsSearch}
+                onSearchChange={(value) => {
+                  setContactsSearch(value);
+                  setContactsPage(0);
+                }}
+                page={contactsPage}
+                onPageChange={setContactsPage}
+                selectedIds={selection.kind === 'contacts' ? selection.ids : []}
+                onSelectionChange={(ids) => {
+                  // Switching to manual mode → flip the top-level
+                  // selection. Empty ids fall back to 'all' so the
+                  // sendable count never strands at zero just because
+                  // the user unchecked everything.
+                  if (ids.length === 0) {
+                    setSelection({ kind: 'all' });
+                  } else {
+                    setSelection({ kind: 'contacts', ids });
+                  }
+                }}
+                isDeliverable={(c) => isValidEmail(String(c.email || '').trim())}
+                emptyNoun="deliverable email contacts"
+              />
             )}
           </div>
         </div>
@@ -763,6 +865,7 @@ function NewListInlineModal({
     </div>
   );
 }
+
 
 function AudienceCard({
   title,

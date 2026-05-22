@@ -210,8 +210,8 @@ export default function MessageStepPage({ params }: PageProps) {
         setSubject(updated.subject);
       }
       setPreviewDesign(null);
-      // Klaviyo pattern: selecting a template drops you straight into the
-      // existing template editor so the user can adjust before scheduling.
+      // Selecting a template drops you straight into the existing template
+      // editor so the user can adjust before scheduling.
       // campaignId is passed so the editor shows campaign-aware actions
       // (Schedule + Manage template) instead of Save Template.
       router.push(

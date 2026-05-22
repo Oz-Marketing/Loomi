@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useMemo, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeftIcon,
@@ -9,6 +9,7 @@ import {
   ListBulletIcon,
   PlusIcon,
   RectangleStackIcon,
+  UserGroupIcon,
   UsersIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
@@ -21,6 +22,7 @@ import { isLikelyDialablePhone, normalizePhoneNumber } from '@/lib/contact-hygie
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
 import { FilterBuilder } from '@/components/contacts/filter-builder';
+import { ContactsPicker } from '@/components/contacts/contacts-picker';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -34,6 +36,8 @@ interface DraftCampaign {
   sourceAudienceId: string;
   sourceFilter: string;
   sourceListId: string;
+  /** JSON-stringified array of Contact IDs for manual selection mode. */
+  sourceContactIds: string;
 }
 
 interface SavedAudience {
@@ -51,12 +55,20 @@ interface ListSummary {
   memberCount: number;
 }
 
-type AudienceTab = 'lists' | 'segments';
+type AudienceTab = 'lists' | 'segments' | 'contacts';
 
 type AudienceSelection =
   | { kind: 'all' }
   | { kind: 'list'; id: string; name: string }
-  | { kind: 'segment'; id: string; name: string; filter: FilterDefinition };
+  | { kind: 'segment'; id: string; name: string; filter: FilterDefinition }
+  // Manual mode — caller curates an arbitrary set of Contact IDs from
+  // the Contacts tab. Persisted as sourceContactIds on the draft.
+  | { kind: 'contacts'; ids: string[] };
+
+// SMS deliverability check shared between sendable count + ContactsPicker.
+function isSmsDeliverable(c: Contact): boolean {
+  return isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || '')));
+}
 
 function parseFilterDefinition(raw: string): FilterDefinition | null {
   if (!raw) return null;
@@ -93,6 +105,11 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
   const [showFilterBuilder, setShowFilterBuilder] = useState(false);
   const [showNewListModal, setShowNewListModal] = useState(false);
 
+  // Contacts tab — paginated picker for ad-hoc manual selection. Same
+  // shape as the email recipients page; SMS uses phone-deliverability.
+  const [contactsSearch, setContactsSearch] = useState('');
+  const [contactsPage, setContactsPage] = useState(0);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     let cancelled = false;
@@ -111,7 +128,24 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
         if (campaign.accountKeys.length > 0) {
           setSelectedAccountKey(campaign.accountKeys[0]);
         }
-        if (campaign.sourceListId) {
+        // Hydrate whichever selection mode the draft was saved with.
+        // Mutually exclusive — sourceContactIds wins, then sourceListId,
+        // then sourceAudienceId+sourceFilter.
+        if (campaign.sourceContactIds) {
+          let ids: string[] = [];
+          try {
+            const parsed = JSON.parse(campaign.sourceContactIds);
+            if (Array.isArray(parsed)) {
+              ids = parsed.map((v) => String(v).trim()).filter(Boolean);
+            }
+          } catch {
+            ids = [];
+          }
+          if (ids.length > 0) {
+            setSelection({ kind: 'contacts', ids });
+            setTab('contacts');
+          }
+        } else if (campaign.sourceListId) {
           setSelection({ kind: 'list', id: campaign.sourceListId, name: 'List' });
           setTab('lists');
         } else if (campaign.sourceAudienceId && campaign.sourceFilter) {
@@ -151,6 +185,19 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
       setSelectedAccountKey(accountOptions[0].key);
     }
   }, [accountOptions, selectedAccountKey]);
+
+  // Reset Contacts-tab state when the selected subaccount *changes*
+  // post-mount. The ref guard ensures initial hydration of a saved
+  // contacts-mode draft isn't clobbered.
+  const prevAccountKeyRef = useRef<string>('');
+  useEffect(() => {
+    const prev = prevAccountKeyRef.current;
+    prevAccountKeyRef.current = selectedAccountKey;
+    if (!prev || prev === selectedAccountKey) return;
+    setContactsSearch('');
+    setContactsPage(0);
+    setSelection((current) => (current.kind === 'contacts' ? { kind: 'all' } : current));
+  }, [selectedAccountKey]);
 
   useEffect(() => {
     if (!selectedAccountKey) {
@@ -252,16 +299,18 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
   }, [selection]);
 
   // Sendable = contacts with a dialable phone (text rail uses phone for
-  // hygiene). Intersect with list members when a list is selected.
+  // hygiene). Intersect with list members or selected IDs as needed.
   const sendableCount = useMemo(() => {
     if (contactsLoading) return 0;
-    const sendable = contacts.filter((c) =>
-      isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || ''))),
-    );
+    const sendable = contacts.filter(isSmsDeliverable);
     if (selection.kind === 'all') return sendable.length;
     if (selection.kind === 'list') {
       if (!listMemberIds) return 0;
       return sendable.filter((c) => listMemberIds.has(c.id)).length;
+    }
+    if (selection.kind === 'contacts') {
+      const idSet = new Set(selection.ids);
+      return sendable.filter((c) => idSet.has(c.id)).length;
     }
     return evaluateFilter(sendable, selection.filter).length;
   }, [contacts, contactsLoading, selection, listMemberIds]);
@@ -273,18 +322,28 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
       const payload: Record<string, unknown> = {
         accountKeys: [selectedAccountKey],
       };
+      // Mutually exclusive selection modes — always clear unused fields
+      // so stale state from a different mode doesn't linger.
       if (selection.kind === 'all') {
         payload.sourceAudienceId = null;
         payload.sourceFilter = null;
         payload.sourceListId = null;
+        payload.sourceContactIds = null;
       } else if (selection.kind === 'list') {
         payload.sourceListId = selection.id;
+        payload.sourceAudienceId = null;
+        payload.sourceFilter = null;
+        payload.sourceContactIds = null;
+      } else if (selection.kind === 'contacts') {
+        payload.sourceContactIds = JSON.stringify(selection.ids);
+        payload.sourceListId = null;
         payload.sourceAudienceId = null;
         payload.sourceFilter = null;
       } else {
         payload.sourceAudienceId = selection.id;
         payload.sourceFilter = JSON.stringify(selection.filter);
         payload.sourceListId = null;
+        payload.sourceContactIds = null;
       }
       const res = await fetch(`/api/campaigns/sms/${encodeURIComponent(draft.id)}`, {
         method: 'PATCH',
@@ -332,24 +391,27 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
     );
   }
 
-  const tabButton = (key: AudienceTab, label: string, icon: React.ComponentType<{ className?: string }>) => {
-    const Icon = icon;
-    const active = tab === key;
-    return (
-      <button
-        type="button"
-        onClick={() => setTab(key)}
-        className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-          active
-            ? 'border-[var(--primary)] text-[var(--foreground)]'
-            : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-        }`}
-      >
-        <Icon className="w-4 h-4" />
-        {label}
-      </button>
-    );
-  };
+  const tabButton = useCallback(
+    (key: AudienceTab, label: string, icon: React.ComponentType<{ className?: string }>) => {
+      const Icon = icon;
+      const active = tab === key;
+      return (
+        <button
+          type="button"
+          onClick={() => setTab(key)}
+          className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+            active
+              ? 'border-[var(--primary)] text-[var(--foreground)]'
+              : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+          }`}
+        >
+          <Icon className="w-4 h-4" />
+          {label}
+        </button>
+      );
+    },
+    [tab],
+  );
 
   return (
     <div className="pb-32">
@@ -430,6 +492,7 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
           <div className="border-b border-[var(--border)] flex items-center gap-1 px-5">
             {tabButton('lists', 'Lists', ListBulletIcon)}
             {tabButton('segments', 'Segments', RectangleStackIcon)}
+            {tabButton('contacts', 'Contacts', UserGroupIcon)}
           </div>
           <div className="p-5">
             {tab === 'lists' && (
@@ -491,7 +554,7 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
                   </button>
                 </div>
 
-                {scopedAudiences.length > 0 && (
+                {scopedAudiences.length > 0 ? (
                   <div>
                     <div className="space-y-2">
                       {scopedAudiences.map((a) => {
@@ -513,8 +576,40 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
                       })}
                     </div>
                   </div>
+                ) : (
+                  <div className="py-10 text-center border border-dashed border-[var(--border)] rounded-xl">
+                    <RectangleStackIcon className="w-10 h-10 text-[var(--muted-foreground)] mx-auto mb-3 opacity-50" />
+                    <p className="text-sm font-medium">No segments for this account yet</p>
+                    <p className="text-xs text-[var(--muted-foreground)] mt-1.5 max-w-md mx-auto">
+                      Click <span className="font-medium">New segment</span> above to build a custom filter (e.g., contacts created in the last 30 days).
+                    </p>
+                  </div>
                 )}
               </div>
+            )}
+
+            {tab === 'contacts' && (
+              <ContactsPicker
+                contacts={contacts}
+                loading={contactsLoading}
+                search={contactsSearch}
+                onSearchChange={(value) => {
+                  setContactsSearch(value);
+                  setContactsPage(0);
+                }}
+                page={contactsPage}
+                onPageChange={setContactsPage}
+                selectedIds={selection.kind === 'contacts' ? selection.ids : []}
+                onSelectionChange={(ids) => {
+                  if (ids.length === 0) {
+                    setSelection({ kind: 'all' });
+                  } else {
+                    setSelection({ kind: 'contacts', ids });
+                  }
+                }}
+                isDeliverable={isSmsDeliverable}
+                emptyNoun="phone-deliverable contacts"
+              />
             )}
           </div>
         </div>

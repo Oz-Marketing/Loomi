@@ -7,29 +7,25 @@ function uniqueNonEmpty(values: Array<string | null | undefined>): string[] {
   return Array.from(new Set(normalized));
 }
 
-export function configuredEspTokenSecrets(): string[] {
-  return uniqueNonEmpty([process.env.ESP_TOKEN_SECRET]);
-}
-
-export function requireEspTokenSecrets(): string[] {
-  const secrets = configuredEspTokenSecrets();
-  if (secrets.length === 0) {
-    throw new Error('ESP_TOKEN_SECRET is required for ESP token encryption');
-  }
-  return secrets;
-}
-
-export function configuredEspOAuthStateSecrets(): string[] {
+// Token encryption secret(s).
+//
+// Primary env var: TOKEN_ENCRYPTION_SECRET. ESP_TOKEN_SECRET is read
+// as a fallback for backwards-compat during the env-var migration;
+// remove the fallback after the prod env has been updated to the new
+// name.
+export function configuredTokenEncryptionSecrets(): string[] {
   return uniqueNonEmpty([
-    process.env.ESP_OAUTH_STATE_SECRET,
+    process.env.TOKEN_ENCRYPTION_SECRET,
     process.env.ESP_TOKEN_SECRET,
   ]);
 }
 
-export function requireEspOAuthStateSecrets(): string[] {
-  const secrets = configuredEspOAuthStateSecrets();
+export function requireTokenEncryptionSecrets(): string[] {
+  const secrets = configuredTokenEncryptionSecrets();
   if (secrets.length === 0) {
-    throw new Error('ESP_OAUTH_STATE_SECRET or ESP_TOKEN_SECRET is required for OAuth state signing');
+    throw new Error(
+      'TOKEN_ENCRYPTION_SECRET (or legacy ESP_TOKEN_SECRET) is required for token encryption',
+    );
   }
   return secrets;
 }

@@ -353,7 +353,7 @@ model Audience {
 }
 
 // ─────────────────────────────────────────────────────
-// Contacts (Loomi-native; replaces GHL/Klaviyo contact reads).
+// Contacts (Loomi-native; canonical source for the filter engine + UI).
 //
 // Schema mirrors the Contact shape the filter engine + UI already
 // expect (see src/lib/smart-list-types.ts FILTERABLE_FIELDS). Two
@@ -406,9 +406,8 @@ model Contact {
   // it for now but the API surfaces it on the contact detail page.
   customFields Json?
 
-  // Minimal DND state: { email?: bool, sms?: bool }. Replaces the
-  // 7-channel GHL grid; only Email + SMS survive the cut because
-  // those are the only channels Loomi actually sends on.
+  // Minimal DND state: { email?: bool, sms?: bool } — Email and SMS
+  // are the only channels Loomi sends on.
   dnd          Json?
 
   createdAt    DateTime @default(now())
@@ -502,9 +501,14 @@ model SmsCampaign {
   sourceFilter     String?
   // Static list audience. Mirrors EmailCampaign.sourceListId so the
   // multi-channel recipients step can persist a list selection on both
-  // rails. At most one of (sourceListId, sourceAudienceId+sourceFilter)
-  // is meaningful — the recipients UI enforces exclusivity.
+  // rails. At most one of (sourceListId, sourceAudienceId+sourceFilter,
+  // sourceContactIds) is meaningful — the recipients UI enforces
+  // exclusivity.
   sourceListId     String?
+  // Manual selection — JSON-stringified array of Contact IDs. When set,
+  // the schedule step enumerates these contacts directly and skips
+  // list/segment resolution. Mirrors EmailCampaign.sourceContactIds.
+  sourceContactIds String?
   accountKeys      String    @default("[]") // JSON array of account keys
   totalRecipients  Int       @default(0)
   sentCount        Int       @default(0)
@@ -613,9 +617,15 @@ model EmailCampaign {
   sourceFilter     String?
   // Static list audience. When set, the worker pulls recipients from
   // ContactListMembership instead of evaluating sourceFilter. At most
-  // one of (sourceListId, sourceAudienceId+sourceFilter) is meaningful
-  // for a given campaign — the recipients UI enforces this exclusivity.
+  // one of (sourceListId, sourceAudienceId+sourceFilter, sourceContactIds)
+  // is meaningful for a given campaign — the recipients UI enforces this
+  // exclusivity.
   sourceListId     String?
+  // Manual selection — JSON-stringified array of Contact IDs. When set,
+  // the worker enumerates these contacts directly and skips list/segment
+  // resolution. Used by the Contacts tab in the recipients picker for
+  // ad-hoc canary/test sends to specific people.
+  sourceContactIds String?
   accountKeys      String    @default("[]") // JSON array of account keys
   totalRecipients  Int       @default(0)
   sentCount        Int       @default(0)

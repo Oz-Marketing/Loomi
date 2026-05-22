@@ -20,23 +20,10 @@ interface SingleAccountResponse {
   meta: { total: number };
 }
 
-interface AggregateContactsResponse {
-  contacts: Array<Contact & { _accountKey?: string; _dealer?: string }>;
-  perAccount?: Record<string, { dealer: string; count: number; connected: boolean; provider: string }>;
-  errors?: Record<string, string>;
-  meta?: {
-    accountsRequested?: number;
-    accountsFetched?: number;
-    sampled?: boolean;
-    sampledContacts?: number;
-    totalContacts?: number;
-    limitPerAccount?: number;
-  };
-}
-
-const ADMIN_CONTACTS_FETCH_CONCURRENCY = 3;
-const ADMIN_CONTACTS_FAST_LIMIT_PER_ACCOUNT = 150;
-const ADMIN_CONTACTS_FULL_FETCH_MAX_ACCOUNTS = 2;
+// Concurrency for per-account fan-out. Each account = one /api/contacts
+// call; 8 in flight keeps total round-trip time low even with 30+
+// sub-accounts without overwhelming the dev server or pg pool.
+const ADMIN_CONTACTS_FETCH_CONCURRENCY = 8;
 
 export default function ContactsPage() {
   const { isAdmin, accountKey, accounts } = useAccount();
@@ -154,49 +141,13 @@ function AdminContactsView() {
     setLoading(true);
     setFetchError(null);
 
-    // Above this threshold, use the aggregate endpoint (sampled per
-    // account). Below it, fetch every contact for each account.
-    if (accountKeysToFetch.length > ADMIN_CONTACTS_FULL_FETCH_MAX_ACCOUNTS) {
-      const params = new URLSearchParams({
-        limitPerAccount: String(ADMIN_CONTACTS_FAST_LIMIT_PER_ACCOUNT),
-        includeMessaging: 'true',
-      });
-      if (accountKeysToFetch.length !== availableAccounts.length) {
-        params.set('accountKeys', accountKeysToFetch.join(','));
-      }
-      const res = await fetch(`/api/contacts/aggregate?${params.toString()}`);
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        const message = typeof body.error === 'string' ? body.error : 'Failed to fetch aggregate contacts';
-        setFetchError(message);
-        setContacts([]);
-        setLoading(false);
-        return;
-      }
-
-      const data: AggregateContactsResponse = await res.json();
-      const sampledContacts = (data.contacts || []).map((contact) => {
-        const key = contact._accountKey || '';
-        return {
-          ...contact,
-          _accountKey: key || undefined,
-          _dealer: contact._dealer || accountMap[key]?.dealer || key || undefined,
-        };
-      });
-      const failures = Object.values(data.errors || {});
-
-      setContacts(sampledContacts);
-      if (failures.length === 0) {
-        setFetchError(null);
-      } else if (failures.length === accountKeysToFetch.length) {
-        setFetchError(failures[0]);
-      } else {
-        setFetchError(`${failures.length} sub-account fetches failed. Showing partial results.`);
-      }
-      setLoading(false);
-      return;
-    }
-
+    // Fan out per-account fetches in chunks. The aggregate endpoint
+    // (/api/contacts/aggregate) is reachable but has been observed to
+    // return empty contacts arrays in the admin rollup case — until
+    // that's diagnosed, the per-account path is the reliable rollup
+    // mechanism. Each call uses ?all=true so we get every contact for
+    // each sub-account (capped at MAX_FETCH_ALL=5000 per account in
+    // listContactsForAccount, which is plenty for an agency tenant).
     const nextContacts: Contact[] = [];
     const failures: string[] = [];
     for (let i = 0; i < accountKeysToFetch.length; i += ADMIN_CONTACTS_FETCH_CONCURRENCY) {
@@ -243,7 +194,7 @@ function AdminContactsView() {
       setFetchError(`${failures.length} sub-account fetches failed. Showing partial results.`);
     }
     setLoading(false);
-  }, [accountKeysToFetch, accountMap, availableAccounts.length]);
+  }, [accountKeysToFetch, accountMap]);
 
   useEffect(() => {
     fetchData();

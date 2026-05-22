@@ -110,6 +110,9 @@ export interface SmsCampaignSummary {
   sourceAudienceId: string;
   sourceFilter: string;
   sourceListId: string;
+  /** JSON-stringified array of Contact IDs for manual ad-hoc selections.
+   *  Mutually exclusive with sourceListId and sourceAudienceId+sourceFilter. */
+  sourceContactIds: string;
   metadata: string;
   createdAt: string;
   updatedAt: string;
@@ -257,6 +260,7 @@ function toSummary(row: {
   sourceAudienceId: string | null;
   sourceFilter: string | null;
   sourceListId: string | null;
+  sourceContactIds: string | null;
   metadata: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -277,6 +281,7 @@ function toSummary(row: {
     sourceAudienceId: row.sourceAudienceId || '',
     sourceFilter: row.sourceFilter || '',
     sourceListId: row.sourceListId || '',
+    sourceContactIds: row.sourceContactIds || '',
     metadata: row.metadata || '',
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -299,6 +304,7 @@ const smsCampaignSummarySelect = {
   sourceAudienceId: true,
   sourceFilter: true,
   sourceListId: true,
+  sourceContactIds: true,
   metadata: true,
   createdAt: true,
   updatedAt: true,
@@ -347,6 +353,7 @@ export async function updateSmsCampaignDraft(
     sourceAudienceId?: string | null;
     sourceFilter?: string | null;
     sourceListId?: string | null;
+    sourceContactIds?: string | null;
     scheduledFor?: Date | null;
     status?: SmsCampaignStatus;
     metadata?: string | null;
@@ -359,6 +366,7 @@ export async function updateSmsCampaignDraft(
   if (patch.sourceAudienceId !== undefined) data.sourceAudienceId = patch.sourceAudienceId;
   if (patch.sourceFilter !== undefined) data.sourceFilter = patch.sourceFilter;
   if (patch.sourceListId !== undefined) data.sourceListId = patch.sourceListId;
+  if (patch.sourceContactIds !== undefined) data.sourceContactIds = patch.sourceContactIds;
   if (patch.scheduledFor !== undefined) data.scheduledFor = patch.scheduledFor;
   if (patch.status !== undefined) data.status = patch.status;
   if (patch.metadata !== undefined) data.metadata = patch.metadata;
@@ -626,6 +634,7 @@ export async function duplicateSmsCampaign(
       accountKeys: source.accountKeys || JSON.stringify([]),
       sourceAudienceId: source.sourceAudienceId || null,
       sourceFilter: source.sourceFilter || null,
+      sourceContactIds: source.sourceContactIds || null,
       metadata: source.metadata || null,
       createdByUserId: options?.createdByUserId || null,
       createdByRole: options?.createdByRole || null,

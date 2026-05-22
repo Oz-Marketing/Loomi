@@ -6,9 +6,8 @@ import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
 
 // PATCH /api/contacts/:id/suppression?accountKey=
 //
-// Toggle the contact's Email / SMS opt-out. The 7-channel GHL DND
-// grid is gone — only Email and SMS survive the migration because
-// those are the only channels Loomi sends on.
+// Toggle the contact's Email / SMS opt-out. Email and SMS are the
+// only channels Loomi sends on.
 //
 // We persist suppression two ways:
 //   1. EmailSuppression / SmsSuppression rows — that's what the send

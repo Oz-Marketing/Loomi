@@ -1,14 +1,15 @@
 // ── Shared AES-256-GCM Encryption ──
-// Used by all ESP adapters for encrypting tokens and API keys at rest.
+// Encrypts provider credentials (Twilio auth tokens, SendGrid API keys)
+// at rest.
 
 import crypto from 'crypto';
-import { requireEspTokenSecrets } from '@/lib/crypto/secrets';
+import { requireTokenEncryptionSecrets } from '@/lib/crypto/secrets';
 
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 16;
 
 function assertConfiguredSecrets(): string[] {
-  return requireEspTokenSecrets();
+  return requireTokenEncryptionSecrets();
 }
 
 function deriveEncryptionKey(secret: string): Buffer {
@@ -60,7 +61,7 @@ export function decryptToken(encrypted: string): string {
     }
   }
 
-  throw new Error('Failed to decrypt token with configured ESP secrets', {
+  throw new Error('Failed to decrypt token with configured encryption secrets', {
     cause: lastError,
   });
 }

@@ -61,9 +61,8 @@ export async function GET(req: NextRequest) {
       stats[key] = {
         dealer,
         count: countByKey.get(key) ?? 0,
-        // "Connected" used to mean the GHL/Klaviyo auth was working.
-        // The local-DB path is always available, so every selected
-        // account reads connected=true.
+        // Always true now that contacts come from the local DB.
+        // Kept on the response shape to avoid breaking existing consumers.
         connected: true,
         cached: false,
         provider: 'loomi',

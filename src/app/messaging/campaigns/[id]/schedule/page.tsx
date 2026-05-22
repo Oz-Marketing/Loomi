@@ -39,6 +39,9 @@ interface DraftCampaign {
   sourceAudienceId: string;
   sourceFilter: string;
   sourceListId: string;
+  /** JSON-stringified array of Contact IDs for manual selection mode.
+   *  Mutually exclusive with sourceListId and sourceAudienceId+sourceFilter. */
+  sourceContactIds: string;
   metadata: string;
 }
 
@@ -303,16 +306,33 @@ export default function ScheduleStepPage({ params }: PageProps) {
     };
   }, [draft?.sourceListId]);
 
-  // Resolve audience → list of sendable recipients. List takes precedence
-  // over filter — they're mutually exclusive on the draft, but we still
-  // gate explicitly so an old filter on a list-mode draft can't leak in.
+  // Resolve audience → list of sendable recipients. Three mutually-exclusive
+  // modes: manual contact-ID list > static list > segment filter > "all".
+  // The recipients UI enforces exclusivity when persisting; we still gate
+  // explicitly here so stale fields from a different mode can't leak in.
   const recipients = useMemo(() => {
     if (!draft) return [] as { contactId: string; accountKey: string; email: string; fullName: string }[];
     const sendable = contacts.filter((c) =>
       Boolean(c.id && isValidEmail(String(c.email || '').trim())),
     );
     let matched: Contact[];
-    if (draft.sourceListId) {
+    if (draft.sourceContactIds) {
+      // Manual mode — JSON array of contact IDs picked from the Contacts tab.
+      // Anything in the list that's no longer deliverable (deleted, bad
+      // email, etc.) silently drops out; the schedule step's checklist
+      // surfaces the resulting recipient count so the user can react.
+      let ids: string[] = [];
+      try {
+        const parsed = JSON.parse(draft.sourceContactIds);
+        if (Array.isArray(parsed)) {
+          ids = parsed.map((v) => String(v).trim()).filter(Boolean);
+        }
+      } catch {
+        ids = [];
+      }
+      const idSet = new Set(ids);
+      matched = sendable.filter((c) => idSet.has(c.id));
+    } else if (draft.sourceListId) {
       if (!listMemberIds) return [];
       matched = sendable.filter((c) => listMemberIds.has(c.id));
     } else {

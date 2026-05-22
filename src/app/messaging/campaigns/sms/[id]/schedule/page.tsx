@@ -35,6 +35,8 @@ interface DraftCampaign {
   sourceAudienceId: string;
   sourceFilter: string;
   sourceListId: string;
+  /** JSON-stringified array of Contact IDs for manual selection mode. */
+  sourceContactIds: string;
   metadata: string;
 }
 
@@ -207,15 +209,33 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
     };
   }, [draft?.sourceListId]);
 
-  // List takes precedence over filter — exclusive on the draft, but
-  // gated explicitly so stale filter state on a list-mode draft can't leak.
+  // Resolve audience → list of sendable recipients. Three mutually-
+  // exclusive modes: manual contact-ID list > static list > segment
+  // filter > "all". Recipients UI enforces exclusivity when persisting;
+  // we still gate explicitly here so stale fields from a different mode
+  // can't leak in.
   const recipients = useMemo(() => {
     if (!draft) return [] as { contactId: string; accountKey: string; phone: string; fullName: string }[];
     const sendable = contacts.filter((c) =>
       isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || ''))),
     );
     let matched: Contact[];
-    if (draft.sourceListId) {
+    if (draft.sourceContactIds) {
+      // Manual mode — JSON array of contact IDs from the Contacts tab.
+      // IDs that no longer point at a phone-deliverable contact silently
+      // drop out; the schedule checklist surfaces the resulting count.
+      let ids: string[] = [];
+      try {
+        const parsed = JSON.parse(draft.sourceContactIds);
+        if (Array.isArray(parsed)) {
+          ids = parsed.map((v) => String(v).trim()).filter(Boolean);
+        }
+      } catch {
+        ids = [];
+      }
+      const idSet = new Set(ids);
+      matched = sendable.filter((c) => idSet.has(c.id));
+    } else if (draft.sourceListId) {
       if (!listMemberIds) return [];
       matched = sendable.filter((c) => listMemberIds.has(c.id));
     } else {

@@ -6,8 +6,8 @@
 //
 // This is intentionally schema-rigid: anything that doesn't map to a
 // canonical column gets stashed under `customFields` so the API can
-// surface it without a schema migration. The 7-channel GHL DND
-// concept is dropped — only `dnd.email` / `dnd.sms` survive.
+// surface it without a schema migration. DND state is limited to
+// `dnd.email` / `dnd.sms` — the channels Loomi sends on.
 
 // ── Canonical field names ──
 

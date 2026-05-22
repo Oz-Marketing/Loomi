@@ -45,9 +45,9 @@ export async function GET(req: NextRequest) {
     const userRole = session!.user.role;
     const userAccountKeys: string[] = session!.user.accountKeys ?? [];
 
-    // All non-system accounts. Mirrors the existing aggregate route's
-    // selection logic so the YAG rollup exclusion + restricted-admin
-    // filtering work identically.
+    // All non-system accounts (system accounts have keys prefixed
+    // with `_`). Restricted-admin users get further filtered to their
+    // assigned account keys below.
     const allAccounts = await prisma.account.findMany({
       where: { key: { not: { startsWith: '_' } } },
       select: { key: true, dealer: true },

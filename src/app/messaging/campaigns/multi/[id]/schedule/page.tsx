@@ -35,6 +35,8 @@ interface EmailDraft {
   htmlContent: string;
   sourceFilter: string;
   sourceListId: string;
+  /** JSON-stringified array of Contact IDs for manual selection mode. */
+  sourceContactIds: string;
   metadata: string;
 }
 
@@ -45,7 +47,20 @@ interface SmsDraft {
   message: string;
   sourceFilter: string;
   sourceListId: string;
+  /** JSON-stringified array of Contact IDs for manual selection mode. */
+  sourceContactIds: string;
   metadata: string;
+}
+
+function parseContactIdArray(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((v) => String(v).trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
 }
 
 function parseSmsMediaUrls(rawMetadata: string): string[] {
@@ -234,14 +249,20 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
   }, [emailListId, smsListId]);
 
   // Resolve each channel's recipient list against its own validity gate.
-  // List takes precedence over segment filter on each draft.
+  // Three mutually-exclusive selection modes per rail: manual contact-ID
+  // list > static list > segment filter > "all". Manual IDs that no
+  // longer point at a deliverable contact silently drop out; pre-flight
+  // checklist surfaces the resulting count so the user can react.
   const emailRecipients = useMemo(() => {
     if (!emailDraft) return [] as Array<{ contactId: string; accountKey: string; email: string; fullName: string }>;
     const sendable = contacts.filter((c) =>
       Boolean(c.id && isValidEmail(String(c.email || '').trim())),
     );
     let matched: Contact[];
-    if (emailDraft.sourceListId) {
+    if (emailDraft.sourceContactIds) {
+      const idSet = new Set(parseContactIdArray(emailDraft.sourceContactIds));
+      matched = sendable.filter((c) => idSet.has(c.id));
+    } else if (emailDraft.sourceListId) {
       const members = listMembersById.get(emailDraft.sourceListId);
       if (!members) return [];
       matched = sendable.filter((c) => members.has(c.id));
@@ -263,7 +284,10 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
       isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || ''))),
     );
     let matched: Contact[];
-    if (smsDraft.sourceListId) {
+    if (smsDraft.sourceContactIds) {
+      const idSet = new Set(parseContactIdArray(smsDraft.sourceContactIds));
+      matched = sendable.filter((c) => idSet.has(c.id));
+    } else if (smsDraft.sourceListId) {
       const members = listMembersById.get(smsDraft.sourceListId);
       if (!members) return [];
       matched = sendable.filter((c) => members.has(c.id));

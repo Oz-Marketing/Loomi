@@ -96,6 +96,9 @@ export interface EmailCampaignSummary {
   sourceAudienceId: string;
   sourceFilter: string;
   sourceListId: string;
+  /** JSON-stringified array of Contact IDs for manual ad-hoc selections.
+   *  Mutually exclusive with sourceListId and sourceAudienceId+sourceFilter. */
+  sourceContactIds: string;
   htmlContent: string;
   textContent: string;
   metadata: string;
@@ -262,6 +265,7 @@ function toSummary(row: {
   sourceAudienceId: string | null;
   sourceFilter: string | null;
   sourceListId: string | null;
+  sourceContactIds: string | null;
   htmlContent: string;
   textContent: string | null;
   metadata: string | null;
@@ -286,6 +290,7 @@ function toSummary(row: {
     sourceAudienceId: row.sourceAudienceId || '',
     sourceFilter: row.sourceFilter || '',
     sourceListId: row.sourceListId || '',
+    sourceContactIds: row.sourceContactIds || '',
     htmlContent: row.htmlContent || '',
     textContent: row.textContent || '',
     metadata: row.metadata || '',
@@ -312,6 +317,7 @@ const emailCampaignSummarySelect = {
   sourceAudienceId: true,
   sourceFilter: true,
   sourceListId: true,
+  sourceContactIds: true,
   htmlContent: true,
   textContent: true,
   metadata: true,
@@ -577,6 +583,7 @@ export async function updateEmailCampaignDraft(
     sourceAudienceId?: string | null;
     sourceFilter?: string | null;
     sourceListId?: string | null;
+    sourceContactIds?: string | null;
     sourceType?: string;
     scheduledFor?: Date | null;
     status?: EmailCampaignStatus;
@@ -593,6 +600,7 @@ export async function updateEmailCampaignDraft(
   if (patch.sourceAudienceId !== undefined) data.sourceAudienceId = patch.sourceAudienceId;
   if (patch.sourceFilter !== undefined) data.sourceFilter = patch.sourceFilter;
   if (patch.sourceListId !== undefined) data.sourceListId = patch.sourceListId;
+  if (patch.sourceContactIds !== undefined) data.sourceContactIds = patch.sourceContactIds;
   if (patch.sourceType !== undefined) data.sourceType = patch.sourceType;
   if (patch.scheduledFor !== undefined) data.scheduledFor = patch.scheduledFor;
   if (patch.status !== undefined) data.status = patch.status;
@@ -825,6 +833,7 @@ export async function duplicateEmailCampaign(
       accountKeys: source.accountKeys || JSON.stringify([]),
       sourceAudienceId: source.sourceAudienceId || null,
       sourceFilter: source.sourceFilter || null,
+      sourceContactIds: source.sourceContactIds || null,
       metadata: source.metadata || null,
       createdByUserId: options?.createdByUserId || null,
       createdByRole: options?.createdByRole || null,

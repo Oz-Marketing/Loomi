@@ -36,6 +36,7 @@ export function parseTemplate(fileContent: string): ParsedTemplate {
 
 function v2ToParsed(tpl: EmailTemplate, raw: string): ParsedTemplate {
   const frontmatter: Record<string, string> = { version: '2' };
+  if (tpl.title) frontmatter.title = tpl.title;
   if (tpl.subject) frontmatter.subject = tpl.subject;
   if (tpl.preheader) frontmatter.preheader = tpl.preheader;
 

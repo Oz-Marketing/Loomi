@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS } from './email/types';
 export function serializeTemplate(template: ParsedTemplate): string {
   const tpl: EmailTemplate = {
     version: '2',
+    ...(template.frontmatter.title ? { title: template.frontmatter.title } : {}),
     subject: template.frontmatter.subject || '',
     preheader: template.frontmatter.preheader || '',
     settings: {

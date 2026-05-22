@@ -66,6 +66,9 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
   if (typeof body?.sourceFilter === 'string' || body?.sourceFilter === null) {
     patch.sourceFilter = body.sourceFilter || null;
   }
+  if (typeof body?.sourceListId === 'string' || body?.sourceListId === null) {
+    patch.sourceListId = body.sourceListId || null;
+  }
   if (typeof body?.metadata === 'string' || body?.metadata === null) {
     patch.metadata = body.metadata || null;
   }

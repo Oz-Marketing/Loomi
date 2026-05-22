@@ -7,8 +7,10 @@ import {
   ArrowPathIcon,
   CheckCircleIcon,
   ListBulletIcon,
+  PlusIcon,
   RectangleStackIcon,
   UsersIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import type { Contact } from '@/lib/contacts/types';
@@ -18,6 +20,7 @@ import type { FilterDefinition } from '@/lib/smart-list-types';
 import { isLikelyDialablePhone, normalizePhoneNumber } from '@/lib/contact-hygiene';
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
+import { FilterBuilder } from '@/components/contacts/filter-builder';
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -30,6 +33,7 @@ interface DraftCampaign {
   accountKeys: string[];
   sourceAudienceId: string;
   sourceFilter: string;
+  sourceListId: string;
 }
 
 interface SavedAudience {
@@ -39,10 +43,19 @@ interface SavedAudience {
   accountKey?: string | null;
 }
 
+interface ListSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  accountKey: string;
+  memberCount: number;
+}
+
 type AudienceTab = 'lists' | 'segments';
 
 type AudienceSelection =
   | { kind: 'all' }
+  | { kind: 'list'; id: string; name: string }
   | { kind: 'segment'; id: string; name: string; filter: FilterDefinition };
 
 function parseFilterDefinition(raw: string): FilterDefinition | null {
@@ -71,7 +84,14 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
   const [savedAudiences, setSavedAudiences] = useState<SavedAudience[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
+
+  const [lists, setLists] = useState<ListSummary[]>([]);
+  const [listMemberIds, setListMemberIds] = useState<Set<string> | null>(null);
+  const [listMemberLoading, setListMemberLoading] = useState(false);
+
   const [saving, setSaving] = useState(false);
+  const [showFilterBuilder, setShowFilterBuilder] = useState(false);
+  const [showNewListModal, setShowNewListModal] = useState(false);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -91,7 +111,10 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
         if (campaign.accountKeys.length > 0) {
           setSelectedAccountKey(campaign.accountKeys[0]);
         }
-        if (campaign.sourceAudienceId && campaign.sourceFilter) {
+        if (campaign.sourceListId) {
+          setSelection({ kind: 'list', id: campaign.sourceListId, name: 'List' });
+          setTab('lists');
+        } else if (campaign.sourceAudienceId && campaign.sourceFilter) {
           const parsed = parseFilterDefinition(campaign.sourceFilter);
           if (parsed) {
             const preset = LIFECYCLE_PRESETS.find((p) => p.id === campaign.sourceAudienceId);
@@ -101,6 +124,7 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
               name: preset?.name || 'Saved Segment',
               filter: parsed,
             });
+            setTab('segments');
           }
         }
       })
@@ -155,36 +179,92 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
     };
   }, [selectedAccountKey]);
 
+  const refreshAudiences = async () => {
+    try {
+      const res = await fetch('/api/audiences');
+      const data = (res.ok ? await res.json() : { audiences: [] }) as { audiences?: SavedAudience[] };
+      setSavedAudiences(Array.isArray(data.audiences) ? data.audiences : []);
+    } catch {
+      setSavedAudiences([]);
+    }
+  };
+
   useEffect(() => {
-    let cancelled = false;
-    fetch('/api/audiences')
-      .then((res) => (res.ok ? res.json() : { audiences: [] }))
-      .then((data: { audiences?: SavedAudience[] }) => {
-        if (cancelled) return;
-        setSavedAudiences(Array.isArray(data.audiences) ? data.audiences : []);
-      })
-      .catch(() => {
-        if (!cancelled) setSavedAudiences([]);
-      });
-    return () => {
-      cancelled = true;
-    };
+    refreshAudiences();
+  }, []);
+
+  const refreshLists = async () => {
+    try {
+      const res = await fetch('/api/contacts/lists');
+      const data = (res.ok ? await res.json() : { lists: [] }) as { lists?: ListSummary[] };
+      setLists(Array.isArray(data.lists) ? data.lists : []);
+    } catch {
+      setLists([]);
+    }
+  };
+
+  useEffect(() => {
+    refreshLists();
   }, []);
 
   const scopedAudiences = useMemo(() => {
     return savedAudiences.filter((a) => !a.accountKey || a.accountKey === selectedAccountKey);
   }, [savedAudiences, selectedAccountKey]);
 
-  // Sendable = contacts with a dialable phone number (text rail uses phone,
-  // not email, for hygiene).
+  const scopedLists = useMemo(
+    () => lists.filter((l) => l.accountKey === selectedAccountKey),
+    [lists, selectedAccountKey],
+  );
+
+  useEffect(() => {
+    if (selection.kind !== 'list') return;
+    const match = scopedLists.find((l) => l.id === selection.id);
+    if (match && match.name !== selection.name) {
+      setSelection({ kind: 'list', id: match.id, name: match.name });
+    }
+  }, [scopedLists, selection]);
+
+  useEffect(() => {
+    if (selection.kind !== 'list') {
+      setListMemberIds(null);
+      return;
+    }
+    let cancelled = false;
+    setListMemberLoading(true);
+    fetch(`/api/contacts/lists/${encodeURIComponent(selection.id)}`)
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Failed to load list');
+        const memberIds: string[] = Array.isArray(data.members)
+          ? data.members.map((m: { id: string }) => m.id).filter(Boolean)
+          : [];
+        if (!cancelled) setListMemberIds(new Set(memberIds));
+      })
+      .catch(() => {
+        if (!cancelled) setListMemberIds(new Set());
+      })
+      .finally(() => {
+        if (!cancelled) setListMemberLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selection]);
+
+  // Sendable = contacts with a dialable phone (text rail uses phone for
+  // hygiene). Intersect with list members when a list is selected.
   const sendableCount = useMemo(() => {
     if (contactsLoading) return 0;
     const sendable = contacts.filter((c) =>
       isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || ''))),
     );
     if (selection.kind === 'all') return sendable.length;
+    if (selection.kind === 'list') {
+      if (!listMemberIds) return 0;
+      return sendable.filter((c) => listMemberIds.has(c.id)).length;
+    }
     return evaluateFilter(sendable, selection.filter).length;
-  }, [contacts, contactsLoading, selection]);
+  }, [contacts, contactsLoading, selection, listMemberIds]);
 
   async function persistSelection() {
     if (!draft) return;
@@ -196,9 +276,15 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
       if (selection.kind === 'all') {
         payload.sourceAudienceId = null;
         payload.sourceFilter = null;
+        payload.sourceListId = null;
+      } else if (selection.kind === 'list') {
+        payload.sourceListId = selection.id;
+        payload.sourceAudienceId = null;
+        payload.sourceFilter = null;
       } else {
         payload.sourceAudienceId = selection.id;
         payload.sourceFilter = JSON.stringify(selection.filter);
+        payload.sourceListId = null;
       }
       const res = await fetch(`/api/campaigns/sms/${encodeURIComponent(draft.id)}`, {
         method: 'PATCH',
@@ -280,7 +366,7 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
           </div>
           <div className="text-right flex-shrink-0">
             <p className="text-4xl sm:text-5xl font-bold tabular-nums leading-none">
-              {contactsLoading ? (
+              {contactsLoading || listMemberLoading ? (
                 <ArrowPathIcon className="w-7 h-7 inline animate-spin text-[var(--muted-foreground)]" />
               ) : (
                 sendableCount.toLocaleString()
@@ -347,16 +433,64 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
           </div>
           <div className="p-5">
             {tab === 'lists' && (
-              <div className="py-8 text-center">
-                <ListBulletIcon className="w-10 h-10 text-[var(--muted-foreground)] mx-auto mb-3 opacity-50" />
-                <p className="text-sm font-medium">Lists are coming with the local contact store</p>
-                <p className="text-xs text-[var(--muted-foreground)] mt-1.5 max-w-md mx-auto">
-                  Static, manually-curated contact groups need Loomi to own contact storage.
-                </p>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold">
+                    {scopedLists.length} {scopedLists.length === 1 ? 'list' : 'lists'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewListModal(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 h-8 text-xs rounded-lg border border-[var(--border)] hover:border-[var(--primary)]/40 text-[var(--foreground)]"
+                  >
+                    <PlusIcon className="w-3.5 h-3.5" />
+                    New list
+                  </button>
+                </div>
+
+                {scopedLists.length === 0 ? (
+                  <div className="py-10 text-center border border-dashed border-[var(--border)] rounded-xl">
+                    <ListBulletIcon className="w-10 h-10 text-[var(--muted-foreground)] mx-auto mb-3 opacity-50" />
+                    <p className="text-sm font-medium">No lists for this account yet</p>
+                    <p className="text-xs text-[var(--muted-foreground)] mt-1.5 max-w-md mx-auto">
+                      Click <span className="font-medium">New list</span> above to create one, then populate it on the Lists page.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {scopedLists.map((list) => {
+                      const active = selection.kind === 'list' && selection.id === list.id;
+                      const memberLabel = `${list.memberCount.toLocaleString()} ${list.memberCount === 1 ? 'contact' : 'contacts'}`;
+                      return (
+                        <AudienceCard
+                          key={list.id}
+                          title={list.name}
+                          subtitle={list.description ? `${memberLabel} · ${list.description}` : memberLabel}
+                          icon={ListBulletIcon}
+                          active={active}
+                          onClick={() =>
+                            setSelection({ kind: 'list', id: list.id, name: list.name })
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
             {tab === 'segments' && (
               <div className="space-y-5">
+                <div className="flex items-center justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setShowFilterBuilder(true)}
+                    className="inline-flex items-center gap-1.5 px-2.5 h-8 text-xs rounded-lg border border-[var(--border)] hover:border-[var(--primary)]/40 text-[var(--foreground)]"
+                  >
+                    <PlusIcon className="w-3.5 h-3.5" />
+                    New segment
+                  </button>
+                </div>
+
                 {scopedAudiences.length > 0 && (
                   <div>
                     <div className="space-y-2">
@@ -369,6 +503,7 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
                             key={a.id}
                             title={a.name}
                             subtitle="Custom segment"
+                            icon={RectangleStackIcon}
                             active={active}
                             onClick={() =>
                               setSelection({ kind: 'segment', id: a.id, name: a.name, filter })
@@ -384,6 +519,66 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
           </div>
         </div>
       </div>
+
+      {showNewListModal && (
+        <NewListInlineModal
+          accountKey={selectedAccountKey}
+          onCreated={(list) => {
+            setLists((prev) => [
+              { id: list.id, name: list.name, description: list.description, accountKey: list.accountKey, memberCount: 0 },
+              ...prev,
+            ]);
+            setSelection({ kind: 'list', id: list.id, name: list.name });
+            setShowNewListModal(false);
+            void refreshLists();
+            toast.success(`List "${list.name}" created. Populate it on the Lists page.`);
+          }}
+          onClose={() => setShowNewListModal(false)}
+        />
+      )}
+
+      {showFilterBuilder && (
+        <FilterBuilder
+          onApply={(definition) => {
+            setSelection({
+              kind: 'segment',
+              id: `ad-hoc-${Date.now()}`,
+              name: 'Custom segment',
+              filter: definition,
+            });
+            setShowFilterBuilder(false);
+          }}
+          onSave={async (name, definition) => {
+            try {
+              const res = await fetch('/api/audiences', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  name,
+                  filters: JSON.stringify(definition),
+                  accountKey: selectedAccountKey,
+                }),
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok) {
+                throw new Error(typeof data.error === 'string' ? data.error : 'Failed to save segment');
+              }
+              setSelection({
+                kind: 'segment',
+                id: data.audience.id,
+                name: data.audience.name,
+                filter: definition,
+              });
+              setShowFilterBuilder(false);
+              await refreshAudiences();
+              toast.success(`Segment "${name}" saved.`);
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : 'Failed to save segment');
+            }
+          }}
+          onClose={() => setShowFilterBuilder(false)}
+        />
+      )}
 
       <div className="fixed bottom-0 left-0 right-0 bg-[var(--card)]/80 backdrop-blur-md border-t border-[var(--border)] z-40">
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
@@ -407,14 +602,131 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
   );
 }
 
+function NewListInlineModal({
+  accountKey,
+  onCreated,
+  onClose,
+}: {
+  accountKey: string;
+  onCreated: (list: { id: string; name: string; description: string | null; accountKey: string }) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/contacts/lists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), accountKey, description: description.trim() || null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data.error === 'string' ? data.error : 'Failed to create list');
+      }
+      onCreated(data.list);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create list');
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <form
+        onSubmit={handleSubmit}
+        onClick={(e) => e.stopPropagation()}
+        className="glass-card glass-card-strong w-full max-w-md rounded-2xl border border-[var(--border)] p-5 space-y-4"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-bold">New list</h3>
+            <p className="text-xs text-[var(--muted-foreground)] mt-1">
+              Create an empty list and populate it from the Lists page (or by bulk-adding from Contacts).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]/60"
+            aria-label="Close"
+          >
+            <XMarkIcon className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+              Name
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Q4 Service Customers"
+              autoFocus
+              maxLength={120}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)]"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+              Description <span className="text-[var(--muted-foreground)] font-normal lowercase">(optional)</span>
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={2}
+              maxLength={500}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] resize-none"
+            />
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="px-3 h-10 text-sm rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--muted-foreground)] disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!name.trim() || submitting}
+            className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? 'Creating…' : 'Create list'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function AudienceCard({
   title,
   subtitle,
+  icon: Icon,
   active,
   onClick,
 }: {
   title: string;
   subtitle: string;
+  icon: React.ComponentType<{ className?: string }>;
   active: boolean;
   onClick: () => void;
 }) {
@@ -435,7 +747,7 @@ function AudienceCard({
             : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
         }`}
       >
-        <RectangleStackIcon className="w-4 h-4" />
+        <Icon className="w-4 h-4" />
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-[var(--foreground)]">{title}</p>

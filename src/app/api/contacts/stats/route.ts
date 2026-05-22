@@ -35,7 +35,9 @@ export async function GET(req: NextRequest) {
     const userAccountKeys: string[] = session!.user.accountKeys ?? [];
 
     const allAccounts = await prisma.account.findMany({
-      where: { key: { not: { startsWith: '_' } } },
+      // `'\\_'` escapes the SQL LIKE wildcard — see comment in
+      // src/app/api/contacts/aggregate/route.ts for full explanation.
+      where: { key: { not: { startsWith: '\\_' } } },
       select: { key: true, dealer: true },
       orderBy: { dealer: 'asc' },
     });

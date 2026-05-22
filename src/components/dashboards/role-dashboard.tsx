@@ -2,32 +2,23 @@
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import dynamic from 'next/dynamic';
 import type { ApexOptions } from 'apexcharts';
 import {
   ArrowPathIcon,
   BookOpenIcon,
-  BuildingStorefrontIcon,
   ChartBarIcon,
   CheckCircleIcon,
-  CommandLineIcon,
-  ExclamationTriangleIcon,
   FunnelIcon,
   MagnifyingGlassIcon,
   CheckIcon,
   PaperAirplaneIcon,
-  PhotoIcon,
   SquaresPlusIcon,
-  UserGroupIcon,
-  UsersIcon,
-  WrenchScrewdriverIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount, type AccountData } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
-import { roleDisplayName } from '@/lib/roles';
 import { DashboardToolbar, type AccountOption, type CustomDateRange } from '@/components/filters/dashboard-toolbar';
 import {
   type DateRangeBounds,
@@ -36,17 +27,13 @@ import {
   DEFAULT_DATE_RANGE,
   filterByDateRange,
   getDateRangeBounds,
-  getMonthBuckets,
 } from '@/lib/date-ranges';
 import { parseEmailListPayload, type EmailListItem } from '@/lib/email-list-payload';
 import { ContactAnalytics } from '@/components/contacts/contact-analytics';
 import { CampaignPageAnalytics } from '@/components/campaigns/campaign-page-analytics';
-import { FlowAnalytics } from '@/components/flows/flow-analytics';
-import { AccountHealthGrid } from '@/components/analytics/account-health-grid';
 import { AccountAvatar } from '@/components/account-avatar';
 import { formatRatePct, sumCampaignEngagement } from '@/lib/campaign-engagement';
-import { FlowIcon } from '@/components/icon-map';
-import { iconColorClassForLabel, iconColorHex, iconColorHexForLabel } from '@/lib/icon-colors';
+import { iconColorClassForLabel, iconColorHexForLabel } from '@/lib/icon-colors';
 import {
   DashboardCustomizePanel,
   DashboardWidgetFrame,
@@ -59,9 +46,23 @@ import {
   useWorkflowsAggregate,
   useContactStats,
 } from '@/hooks/use-dashboard-data';
+import { usePortfolioDashboard } from '@/hooks/use-portfolio-dashboard';
+import {
+  AccountHealthScoredGrid,
+  AnomalyFeedWidget,
+  EngagedContactsWidget,
+  EngagementTimelineWidget,
+  LifecycleActionCenter,
+  MetaPacerSummaryWidget,
+  PortfolioKpiStrip,
+  RecentActivityWidget,
+  RepPerformanceWidget,
+  SendPipelineWidget,
+  SuppressionHealthWidget,
+  TopCampaignsWidget,
+} from '@/components/dashboards/portfolio-widgets';
 
 type ManagementRole = 'developer' | 'super_admin' | 'admin';
-type DeveloperMode = 'analytics' | 'technical';
 
 type AggregateContact = {
   id: string;
@@ -151,28 +152,6 @@ type ContactStatsRow = {
   error?: string;
 };
 
-type AccountRollup = {
-  contactCount: number;
-  emailCount: number;
-  campaignCount: number;
-  workflowCount: number;
-  loomiCampaignCount: number;
-  isConnected: boolean;
-  hasError: boolean;
-};
-
-type ApiHealthSnapshot = {
-  label: string;
-  ok: boolean;
-  detail: string;
-  href?: string;
-};
-
-type UserSummary = {
-  id: string;
-  role: string;
-};
-
 type RepScopeOption = {
   id: string;
   label: string;
@@ -249,10 +228,6 @@ function relativeTime(iso?: string): string {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ago`;
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-function formatCompactNumber(value: number): string {
-  return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
 
 function normalizeStatus(status: string): string {
@@ -446,13 +421,6 @@ function buildMockManagementDataset(accounts: Record<string, AccountData>) {
     }
   }
 
-  const users: UserSummary[] = [
-    ...Array.from({ length: 6 }, (_, i) => ({ id: `mock-dev-${i}`, role: 'developer' })),
-    ...Array.from({ length: 4 }, (_, i) => ({ id: `mock-sa-${i}`, role: 'super_admin' })),
-    ...Array.from({ length: 14 }, (_, i) => ({ id: `mock-admin-${i}`, role: 'admin' })),
-    ...Array.from({ length: 18 }, (_, i) => ({ id: `mock-client-${i}`, role: 'client' })),
-  ];
-
   return {
     emails,
     contactStats,
@@ -461,29 +429,9 @@ function buildMockManagementDataset(accounts: Record<string, AccountData>) {
     espWorkflows,
     loomiEmailCampaigns,
     loomiSmsCampaigns,
-    users,
     campaignPerAccount,
     workflowPerAccount,
   };
-}
-
-function roleOrder(role: string): number {
-  if (role === 'developer') return 0;
-  if (role === 'super_admin') return 1;
-  if (role === 'admin') return 2;
-  if (role === 'client') return 3;
-  return 4;
-}
-
-function buildRoleCount(users: UserSummary[]): Array<{ role: string; count: number }> {
-  const counts = new Map<string, number>();
-  for (const user of users) {
-    const role = user.role || 'unknown';
-    counts.set(role, (counts.get(role) || 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([role, count]) => ({ role, count }))
-    .sort((a, b) => roleOrder(a.role) - roleOrder(b.role));
 }
 
 function toPossessiveLabel(name: string): string {
@@ -589,13 +537,11 @@ function ManagementRoleDashboard({
   const [emails, setEmails] = useState<EmailListItem[]>([]);
   const [loomiEmailCampaigns, setLoomiEmailCampaigns] = useState<LoomiEmailCampaign[]>([]);
   const [loomiSmsCampaigns, setLoomiSmsCampaigns] = useState<LoomiSmsCampaign[]>([]);
-  const [users, setUsers] = useState<UserSummary[]>([]);
 
   const [phase1Errors, setPhase1Errors] = useState<{
     emails?: string;
     loomiEmail?: string;
     loomiSms?: string;
-    users?: string;
   }>({});
   const [usingMockData, setUsingMockData] = useState(false);
 
@@ -604,8 +550,6 @@ function ManagementRoleDashboard({
   const [mockContactStats, setMockContactStats] = useState<Record<string, ContactStatsRow>>({});
   const [mockEspCampaigns, setMockEspCampaigns] = useState<EspCampaign[]>([]);
   const [mockEspWorkflows, setMockEspWorkflows] = useState<EspWorkflow[]>([]);
-  const [mockCampaignPerAccount, setMockCampaignPerAccount] = useState<Record<string, { dealer: string; count: number; connected: boolean; provider: string }>>({});
-  const [mockWorkflowPerAccount, setMockWorkflowPerAccount] = useState<Record<string, { dealer: string; count: number; connected: boolean; provider: string }>>({});
 
   const aggregateAccountKeys = useMemo(() => {
     const availableAccountKeys = Object.keys(accounts);
@@ -648,6 +592,27 @@ function ManagementRoleDashboard({
     accountKeys: aggregateAccountKeys,
   });
 
+  // Single batched fetch for every native (Loomi-side) widget. Sections
+  // come back in parallel server-side; SWR de-duplicates per
+  // (accountKeys, range) tuple.
+  const portfolioRangeBounds = useMemo(
+    () =>
+      dateRange === 'custom' && customRange
+        ? getDateRangeBounds('custom', customRange.start, customRange.end)
+        : getDateRangeBounds(dateRange),
+    [dateRange, customRange],
+  );
+  // Portfolio fetch is enabled as soon as the phase-1 load completes,
+  // regardless of mock mode. The API route handles the
+  // NEXT_PUBLIC_DASHBOARD_DUMMY_DATA=1 short-circuit server-side, so the
+  // hook needs to fire to receive the mock payload.
+  const portfolioHook = usePortfolioDashboard({
+    enabled: !loading,
+    accountKeys: aggregateAccountKeys,
+    start: portfolioRangeBounds.start,
+    end: portfolioRangeBounds.end,
+  });
+
   // Bridge variables — downstream useMemos reference these exact names
   const contacts: AggregateContact[] = usingMockData
     ? mockContacts
@@ -657,19 +622,10 @@ function ManagementRoleDashboard({
   const espCampaigns: EspCampaign[] = usingMockData
     ? mockEspCampaigns
     : (campaignsAgg.data?.campaigns as EspCampaign[] | undefined) ?? [];
-  const campaignPerAccount = usingMockData
-    ? mockCampaignPerAccount
-    : campaignsAgg.data?.perAccount ?? {};
-  const campaignsAggregateLoading = usingMockData ? false : !aggregatesReady || campaignsAgg.isLoading;
 
   const espWorkflows: EspWorkflow[] = usingMockData
     ? mockEspWorkflows
     : (workflowsAgg.data?.workflows as EspWorkflow[] | undefined) ?? [];
-  const workflowPerAccount = usingMockData
-    ? mockWorkflowPerAccount
-    : workflowsAgg.data?.perAccount ?? {};
-  const workflowsAggregateLoading = usingMockData ? false : !aggregatesReady || workflowsAgg.isLoading;
-  const contactStatsLoading = usingMockData ? false : !aggregatesReady || contactStatsHook.isLoading;
 
   const contactStats: Record<string, ContactStatsRow> = useMemo(() => {
     if (usingMockData) return mockContactStats;
@@ -690,56 +646,16 @@ function ManagementRoleDashboard({
     return normalized;
   }, [usingMockData, mockContactStats, contactStatsHook.data]);
 
-  const errors = useMemo(() => {
-    const e: {
-      contactsStats?: string;
-      contactsAggregate?: string;
-      campaignsAggregate?: string;
-      workflowsAggregate?: string;
-      emails?: string;
-      loomiEmail?: string;
-      loomiSms?: string;
-      users?: string;
-    } = { ...phase1Errors };
-    if (contactStatsHook.error) e.contactsStats = contactStatsHook.error.message;
-    if (contactsAgg.error) e.contactsAggregate = contactsAgg.error.message;
-    // ESP campaigns/workflows aggregates are no longer fetched — the hooks
-    // resolve immediately with an empty payload, so there's no error to
-    // surface here. Keys are kept in the type for backwards compatibility
-    // with downstream banners that read from them.
-    return e;
-  }, [phase1Errors, contactStatsHook.error, contactsAgg.error]);
-
   const { theme } = useTheme();
   const isDeveloper = role === 'developer';
   const isSuperAdmin = role === 'super_admin';
-  const isAdmin = role === 'admin';
-  const chartTextColor = theme === 'dark' ? '#cbd5e1' : '#334155';
-  const chartMutedColor = theme === 'dark' ? '#94a3b8' : '#64748b';
-  const chartGridColor = theme === 'dark' ? 'rgba(148,163,184,0.18)' : 'rgba(100,116,139,0.24)';
-  const chartStrokeColor = theme === 'dark' ? 'rgba(16,15,35,0.95)' : 'rgba(248,250,252,0.96)';
-  const chartTooltipTheme: 'dark' | 'light' = theme === 'dark' ? 'dark' : 'light';
   const quickFilterStorageKey = `loomi_dashboard_quick_filters_v1:${(userEmail || 'anonymous').toLowerCase()}`;
   const accountKeysSignature = useMemo(() => Object.keys(accounts).sort().join('|'), [accounts]);
 
-  const [developerMode, setDeveloperMode] = useState<DeveloperMode>('analytics');
   const [customizePanelOpen, setCustomizePanelOpen] = useState(false);
   const [draggedWidgetId, setDraggedWidgetId] = useState<string | null>(null);
   const [managementSideRailMounted, setManagementSideRailMounted] = useState(false);
   const [filterSideRailMounted, setFilterSideRailMounted] = useState(false);
-
-  useEffect(() => {
-    if (!isDeveloper) return;
-    const stored = typeof window !== 'undefined' ? window.localStorage.getItem('loomi_dashboard_dev_mode') : null;
-    if (stored === 'analytics' || stored === 'technical') {
-      setDeveloperMode(stored);
-    }
-  }, [isDeveloper]);
-
-  useEffect(() => {
-    if (!isDeveloper || typeof window === 'undefined') return;
-    window.localStorage.setItem('loomi_dashboard_dev_mode', developerMode);
-  }, [isDeveloper, developerMode]);
 
   useEffect(() => {
     setCustomizePanelOpen(false);
@@ -747,7 +663,7 @@ function ManagementRoleDashboard({
     setDraggedWidgetId(null);
     setManagementSideRailMounted(false);
     setFilterSideRailMounted(false);
-  }, [role, developerMode, isAccountMode, focusedAccountKey]);
+  }, [role, isAccountMode, focusedAccountKey]);
 
   const managementSideRailOpen = customizePanelOpen;
 
@@ -866,9 +782,6 @@ function ManagementRoleDashboard({
     setMockEspWorkflows(mock.espWorkflows);
     setLoomiEmailCampaigns(mock.loomiEmailCampaigns);
     setLoomiSmsCampaigns(mock.loomiSmsCampaigns);
-    setUsers(mock.users);
-    setMockCampaignPerAccount(mock.campaignPerAccount);
-    setMockWorkflowPerAccount(mock.workflowPerAccount);
     setUsingMockData(true);
     setLoading(false);
   }, [accounts]);
@@ -889,10 +802,7 @@ function ManagementRoleDashboard({
       setMockEspWorkflows(mock.espWorkflows);
       setLoomiEmailCampaigns(mock.loomiEmailCampaigns);
       setLoomiSmsCampaigns(mock.loomiSmsCampaigns);
-      setUsers(mock.users);
-      setMockCampaignPerAccount(mock.campaignPerAccount);
-      setMockWorkflowPerAccount(mock.workflowPerAccount);
-      setUsingMockData(true);
+          setUsingMockData(true);
     }
   }, [accounts, usingMockData, contactsAgg.error, contactsAgg.isLoading]);
 
@@ -909,12 +819,10 @@ function ManagementRoleDashboard({
         emailRes,
         loomiEmailRes,
         loomiSmsRes,
-        usersRes,
       ] = await Promise.all([
         loadJson('/api/emails'),
         loadJson('/api/campaigns/email?limit=50'),
         loadJson('/api/campaigns/sms?limit=50'),
-        loadJson('/api/users?summary=1'),
       ]);
 
       if (cancelled) return;
@@ -943,19 +851,6 @@ function ManagementRoleDashboard({
       } else {
         setLoomiSmsCampaigns([]);
         nextErrors.loomiSms = String((loomiSmsRes.json as Record<string, unknown>).error || `Error ${loomiSmsRes.status}`);
-      }
-
-      // users endpoint is role-gated; keep non-fatal for restricted admin experiences
-      if (usersRes.ok) {
-        setUsers(
-          asArray<Record<string, unknown>>(usersRes.json).map((row) => ({
-            id: String(row.id || ''),
-            role: String(row.role || 'unknown'),
-          })),
-        );
-      } else {
-        setUsers([]);
-        nextErrors.users = String((usersRes.json as Record<string, unknown>).error || `Error ${usersRes.status}`);
       }
 
       setPhase1Errors(nextErrors);
@@ -1112,165 +1007,6 @@ function ManagementRoleDashboard({
     [loomiSmsCampaigns, accountScopeSet, bounds],
   );
 
-  const selectedAccountMap = useMemo(() => {
-    if (accountScopeKeys.length === Object.keys(accounts).length) return accounts;
-    const next: Record<string, AccountData> = {};
-    for (const key of accountScopeKeys) {
-      if (accounts[key]) next[key] = accounts[key];
-    }
-    return next;
-  }, [accounts, accountScopeKeys]);
-
-  const emailRollupByAccount = useMemo(() => {
-    const map: Record<string, { total: number; active: number; draft: number }> = {};
-    for (const email of filteredEmailsByAccount) {
-      if (!map[email.accountKey]) {
-        map[email.accountKey] = { total: 0, active: 0, draft: 0 };
-      }
-      map[email.accountKey].total += 1;
-      if (email.status === 'active') map[email.accountKey].active += 1;
-      if (email.status === 'draft') map[email.accountKey].draft += 1;
-    }
-    return map;
-  }, [filteredEmailsByAccount]);
-
-  const espCampaignCountByAccount = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const campaign of espCampaigns) {
-      if (!campaign.accountKey) continue;
-      map[campaign.accountKey] = (map[campaign.accountKey] || 0) + 1;
-    }
-    return map;
-  }, [espCampaigns]);
-
-  const espWorkflowCountByAccount = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const workflow of espWorkflows) {
-      if (!workflow.accountKey) continue;
-      map[workflow.accountKey] = (map[workflow.accountKey] || 0) + 1;
-    }
-    return map;
-  }, [espWorkflows]);
-
-  const loomiCampaignCountByAccount = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const campaign of loomiEmailCampaigns) {
-      for (const accountKey of campaign.accountKeys) {
-        map[accountKey] = (map[accountKey] || 0) + 1;
-      }
-    }
-    for (const campaign of loomiSmsCampaigns) {
-      for (const accountKey of campaign.accountKeys) {
-        map[accountKey] = (map[accountKey] || 0) + 1;
-      }
-    }
-    return map;
-  }, [loomiEmailCampaigns, loomiSmsCampaigns]);
-
-  const accountRollups = useMemo(() => {
-    const rollups: Record<string, AccountRollup> = {};
-    const rollupKeys = Object.keys(accounts).length > 0 ? Object.keys(accounts) : Object.keys(contactStats);
-    for (const accountKey of rollupKeys) {
-      const contactCount = contactStats[accountKey]?.contactCount ?? 0;
-      const emailCount = emailRollupByAccount[accountKey]?.total ?? 0;
-      const campaignCount = espCampaignCountByAccount[accountKey] || 0;
-      const workflowCount = espWorkflowCountByAccount[accountKey] || 0;
-      const loomiCampaignCount = loomiCampaignCountByAccount[accountKey] || 0;
-      const isConnected = Boolean(contactStats[accountKey]?.connected);
-      const hasError = Boolean(contactStats[accountKey]?.error)
-        || (campaignPerAccount[accountKey]?.connected === false)
-        || (workflowPerAccount[accountKey]?.connected === false);
-
-      rollups[accountKey] = {
-        contactCount,
-        emailCount,
-        campaignCount,
-        workflowCount,
-        loomiCampaignCount,
-        isConnected,
-        hasError,
-      };
-    }
-    return rollups;
-  }, [
-    accounts,
-    contactStats,
-    emailRollupByAccount,
-    espCampaignCountByAccount,
-    espWorkflowCountByAccount,
-    loomiCampaignCountByAccount,
-    campaignPerAccount,
-    workflowPerAccount,
-  ]);
-
-  const apiHealth = useMemo<ApiHealthSnapshot[]>(() => {
-    return [
-      {
-        label: 'Contact Stats',
-        ok: contactStatsLoading ? true : !errors.contactsStats,
-        detail: contactStatsLoading
-          ? 'Loading contact stats...'
-          : errors.contactsStats
-            ? errors.contactsStats
-            : `${Object.keys(contactStats).length} account rows`,
-      },
-      {
-        label: 'Contact Aggregate',
-        ok: contactsAggregateLoading ? true : !errors.contactsAggregate,
-        detail: contactsAggregateLoading
-          ? 'Loading aggregate contacts...'
-          : errors.contactsAggregate
-            ? errors.contactsAggregate
-            : `${contacts.length.toLocaleString()} contacts`,
-      },
-      {
-        label: 'ESP Campaigns',
-        ok: campaignsAggregateLoading ? true : !errors.campaignsAggregate,
-        detail: campaignsAggregateLoading
-          ? 'Loading aggregate campaigns...'
-          : errors.campaignsAggregate
-            ? errors.campaignsAggregate
-            : `${espCampaigns.length.toLocaleString()} campaigns`,
-        href: '/messaging/campaigns',
-      },
-      {
-        label: 'ESP Workflows',
-        ok: workflowsAggregateLoading ? true : !errors.workflowsAggregate,
-        detail: workflowsAggregateLoading
-          ? 'Loading aggregate workflows...'
-          : errors.workflowsAggregate
-            ? errors.workflowsAggregate
-            : `${espWorkflows.length.toLocaleString()} flows`,
-        href: '/flows',
-      },
-      {
-        label: 'Loomi Email Campaigns',
-        ok: !errors.loomiEmail,
-        detail: errors.loomiEmail ? errors.loomiEmail : `${loomiEmailCampaigns.length.toLocaleString()} campaigns`,
-        href: '/messaging/campaigns',
-      },
-      {
-        label: 'Loomi SMS Campaigns',
-        ok: !errors.loomiSms,
-        detail: errors.loomiSms ? errors.loomiSms : `${loomiSmsCampaigns.length.toLocaleString()} campaigns`,
-        href: '/messaging/campaigns',
-      },
-    ];
-  }, [
-    errors,
-    contactStats,
-    contacts.length,
-    espCampaigns.length,
-    espWorkflows.length,
-    loomiEmailCampaigns.length,
-    loomiSmsCampaigns.length,
-    contactStatsLoading,
-    contactsAggregateLoading,
-    campaignsAggregateLoading,
-    workflowsAggregateLoading,
-  ]);
-
-  const roleCounts = useMemo(() => buildRoleCount(users), [users]);
   const scopedAccountKeys = accountScopeKeys;
 
   const totals = useMemo(() => {
@@ -1304,488 +1040,6 @@ function ManagementRoleDashboard({
     filteredLoomiSmsCampaigns.length,
   ]);
 
-  const industryPortfolioRows = useMemo(
-    () => {
-      type IndustryRow = {
-        industry: string;
-        accountCount: number;
-        connectedAccounts: number;
-        contactsTotal: number;
-        campaignCount: number;
-        workflowCount: number;
-      };
-
-      const rows = new Map<string, IndustryRow>();
-      for (const key of scopedAccountKeys) {
-        const account = accounts[key];
-        const industry = account?.category?.trim() || 'Uncategorized';
-        const rollup = accountRollups[key] || {
-          contactCount: 0,
-          campaignCount: 0,
-          workflowCount: 0,
-          isConnected: false,
-        };
-
-        const existing = rows.get(industry);
-        if (existing) {
-          existing.accountCount += 1;
-          existing.connectedAccounts += rollup.isConnected ? 1 : 0;
-          existing.contactsTotal += rollup.contactCount;
-          existing.campaignCount += rollup.campaignCount;
-          existing.workflowCount += rollup.workflowCount;
-        } else {
-          rows.set(industry, {
-            industry,
-            accountCount: 1,
-            connectedAccounts: rollup.isConnected ? 1 : 0,
-            contactsTotal: rollup.contactCount,
-            campaignCount: rollup.campaignCount,
-            workflowCount: rollup.workflowCount,
-          });
-        }
-      }
-
-      return [...rows.values()].sort((a, b) => b.accountCount - a.accountCount || b.contactsTotal - a.contactsTotal);
-    },
-    [scopedAccountKeys, accounts, accountRollups],
-  );
-
-  const connectedRatePct = totals.accountCount > 0
-    ? Math.round((totals.connectedAccounts / totals.accountCount) * 100)
-    : 0;
-  const activeEmailRatePct = totals.emailCount > 0
-    ? Math.round((totals.activeEmails / totals.emailCount) * 100)
-    : 0;
-  const openRatePct = Math.max(0, Math.min(100, Math.round((totals.engagement.openRate || 0) * 100)));
-  const clickRatePct = Math.max(0, Math.min(100, Math.round((totals.engagement.clickRate || 0) * 100)));
-
-  const campaignMixRows = useMemo(
-    () => [
-      { label: 'Campaigns', value: totals.campaignCount },
-      { label: 'Flows', value: totals.workflowCount },
-      { label: 'Loomi Messages', value: totals.loomiCampaignCount },
-    ],
-    [totals.campaignCount, totals.workflowCount, totals.loomiCampaignCount],
-  );
-
-  const topIndustryRows = useMemo(
-    () => industryPortfolioRows.slice(0, 6),
-    [industryPortfolioRows],
-  );
-
-  const accountLeaderboard = useMemo(() => {
-    const rows = Object.entries(accountRollups)
-      .filter(([key]) => accountScopeSet.has(key))
-      .map(([key, rollup]) => ({
-        key,
-        dealer: accounts[key]?.dealer || key,
-        rollup,
-        score:
-          rollup.contactCount +
-          rollup.emailCount * 12 +
-          rollup.campaignCount * 15 +
-          rollup.workflowCount * 12 +
-          rollup.loomiCampaignCount * 8,
-      }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8);
-
-    return rows;
-  }, [accountRollups, accountScopeSet, accounts]);
-
-  const attentionAccounts = useMemo(() => {
-    return Object.entries(accountRollups)
-      .filter(([key, rollup]) => {
-        if (!accountScopeSet.has(key)) return false;
-        return !rollup.isConnected || rollup.hasError;
-      })
-      .map(([key, rollup]) => ({
-        key,
-        dealer: accounts[key]?.dealer || key,
-        reason: !rollup.isConnected ? 'No active contact integration' : 'Partial integration/reporting errors',
-      }))
-      .slice(0, 8);
-  }, [accountRollups, accountScopeSet, accounts]);
-
-  const recentLoomiCampaigns = useMemo(() => {
-    type Activity = {
-      id: string;
-      source: 'email' | 'sms';
-      name: string;
-      status: string;
-      recipients: number;
-      sentCount: number;
-      failedCount: number;
-      updatedAt: string;
-      accountCount: number;
-    };
-
-    const emailRows: Activity[] = filteredLoomiEmailCampaigns.map((campaign) => ({
-      id: `email-${campaign.id}`,
-      source: 'email',
-      name: campaign.name || campaign.subject || 'Email Campaign',
-      status: campaign.status,
-      recipients: asNumber(campaign.totalRecipients),
-      sentCount: asNumber(campaign.sentCount),
-      failedCount: asNumber(campaign.failedCount),
-      updatedAt: campaign.updatedAt || campaign.createdAt,
-      accountCount: asArray<string>(campaign.accountKeys).length,
-    }));
-
-    const smsRows: Activity[] = filteredLoomiSmsCampaigns.map((campaign) => ({
-      id: `sms-${campaign.id}`,
-      source: 'sms',
-      name: campaign.name || 'SMS Campaign',
-      status: campaign.status,
-      recipients: asNumber(campaign.totalRecipients),
-      sentCount: asNumber(campaign.sentCount),
-      failedCount: asNumber(campaign.failedCount),
-      updatedAt: campaign.updatedAt || campaign.createdAt,
-      accountCount: asArray<string>(campaign.accountKeys).length,
-    }));
-
-    return [...emailRows, ...smsRows]
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-      .slice(0, 10);
-  }, [filteredLoomiEmailCampaigns, filteredLoomiSmsCampaigns]);
-
-  const developerApiRows = useMemo(
-    () =>
-      apiHealth.map((api) => ({
-        ...api,
-        score: api.ok ? 100 : 22,
-      })),
-    [apiHealth],
-  );
-
-  const developerAttentionRows = useMemo(
-    () =>
-      attentionAccounts
-        .map((item) => {
-          const rollup = accountRollups[item.key];
-          const severity = Math.min(
-            100,
-            (rollup && !rollup.isConnected ? 65 : 15) + (rollup?.hasError ? 35 : 0),
-          );
-          return {
-            ...item,
-            severity,
-          };
-        })
-        .sort((a, b) => b.severity - a.severity)
-        .slice(0, 8),
-    [attentionAccounts, accountRollups],
-  );
-
-  const developerLoomiChannelRows = useMemo(() => {
-    const emailSent = filteredLoomiEmailCampaigns.reduce((sum, campaign) => sum + asNumber(campaign.sentCount), 0);
-    const smsSent = filteredLoomiSmsCampaigns.reduce((sum, campaign) => sum + asNumber(campaign.sentCount), 0);
-    const emailFailed = filteredLoomiEmailCampaigns.reduce((sum, campaign) => sum + asNumber(campaign.failedCount), 0);
-    const smsFailed = filteredLoomiSmsCampaigns.reduce((sum, campaign) => sum + asNumber(campaign.failedCount), 0);
-
-    return [
-      { label: 'Email Sent', value: emailSent, gradient: 'from-blue-500 to-cyan-400' },
-      { label: 'SMS Sent', value: smsSent, gradient: 'from-emerald-500 to-teal-400' },
-      { label: 'Email Failed', value: emailFailed, gradient: 'from-rose-500 to-orange-400' },
-      { label: 'SMS Failed', value: smsFailed, gradient: 'from-amber-500 to-yellow-400' },
-    ];
-  }, [filteredLoomiEmailCampaigns, filteredLoomiSmsCampaigns]);
-
-  const developerPalette = ['#60a5fa', '#8b5cf6', '#34d399', '#f59e0b', '#f472b6', '#22d3ee', '#f97316'];
-  const developerRoleLabels = useMemo(
-    () => (roleCounts.length > 0 ? roleCounts.map((entry) => roleDisplayName(entry.role)) : ['No data']),
-    [roleCounts],
-  );
-  const developerRoleSeries = useMemo(
-    () => (roleCounts.length > 0 ? roleCounts.map((entry) => entry.count) : [1]),
-    [roleCounts],
-  );
-
-  const developerApiCategories = useMemo(
-    () => developerApiRows.map((api) => api.label.replace(' Campaigns', '').replace(' Workflows', '')),
-    [developerApiRows],
-  );
-  const developerApiSeries = useMemo(
-    () => [{ name: 'Health', data: developerApiRows.map((api) => api.score) }],
-    [developerApiRows],
-  );
-  const developerApiColors = useMemo(
-    () => developerApiRows.map((api) => (api.ok ? '#22d3ee' : '#fb7185')),
-    [developerApiRows],
-  );
-
-  const developerRiskCategories = useMemo(
-    () => (developerAttentionRows.length > 0 ? developerAttentionRows.map((row) => row.dealer) : ['No Alerts']),
-    [developerAttentionRows],
-  );
-  const developerRiskSeries = useMemo(
-    () => [{ name: 'Risk', data: developerAttentionRows.length > 0 ? developerAttentionRows.map((row) => row.severity) : [0] }],
-    [developerAttentionRows],
-  );
-
-  const developerMomentumCategories = useMemo(
-    () => (accountLeaderboard.length > 0 ? accountLeaderboard.map((row) => row.dealer) : ['No Accounts']),
-    [accountLeaderboard],
-  );
-  const developerMomentumSeries = useMemo(
-    () => [{ name: 'Momentum', data: accountLeaderboard.length > 0 ? accountLeaderboard.map((row) => row.score) : [0] }],
-    [accountLeaderboard],
-  );
-
-  const developerIndustryCategories = useMemo(
-    () => (topIndustryRows.length > 0 ? topIndustryRows.map((row) => row.industry) : ['Uncategorized']),
-    [topIndustryRows],
-  );
-  const developerIndustrySeries = useMemo(
-    () => [{ name: 'Contacts', data: topIndustryRows.length > 0 ? topIndustryRows.map((row) => row.contactsTotal) : [0] }],
-    [topIndustryRows],
-  );
-
-  const developerMixLabels = useMemo(
-    () => campaignMixRows.map((row) => row.label),
-    [campaignMixRows],
-  );
-  const developerMixSeries = useMemo(
-    () => campaignMixRows.map((row) => row.value),
-    [campaignMixRows],
-  );
-
-  const developerDeliverySeries = useMemo(() => {
-    const emailSent = developerLoomiChannelRows.find((row) => row.label === 'Email Sent')?.value || 0;
-    const smsSent = developerLoomiChannelRows.find((row) => row.label === 'SMS Sent')?.value || 0;
-    const emailFailed = developerLoomiChannelRows.find((row) => row.label === 'Email Failed')?.value || 0;
-    const smsFailed = developerLoomiChannelRows.find((row) => row.label === 'SMS Failed')?.value || 0;
-    return [
-      { name: 'Sent', data: [emailSent, smsSent] },
-      { name: 'Failed', data: [emailFailed, smsFailed] },
-    ];
-  }, [developerLoomiChannelRows]);
-
-  const developerTimeline = useMemo(() => {
-    const months = getMonthBuckets(Math.min(8, Math.max(4, bounds.monthCount)));
-    const categories = months.map((bucket) => bucket.label);
-    const campaigns = months.map((bucket) => {
-      const campaignCount = filteredEspCampaigns.filter((campaign) => {
-        const dateValue = firstCampaignDate(campaign) || campaign.updatedAt || campaign.createdAt;
-        if (!dateValue) return false;
-        const date = new Date(dateValue);
-        return date >= bucket.start && date < bucket.end;
-      }).length;
-      return campaignCount;
-    });
-    const workflows = months.map((bucket) => {
-      const workflowCount = filteredEspWorkflows.filter((workflow) => {
-        const dateValue = workflow.updatedAt || workflow.createdAt;
-        if (!dateValue) return false;
-        const date = new Date(dateValue);
-        return date >= bucket.start && date < bucket.end;
-      }).length;
-      return workflowCount;
-    });
-    const contactsByMonth = months.map((bucket) => {
-      const contactCount = filteredContacts.filter((contact) => {
-        if (!contact.dateAdded) return false;
-        const date = new Date(contact.dateAdded);
-        return date >= bucket.start && date < bucket.end;
-      }).length;
-      return contactCount;
-    });
-    return {
-      categories,
-      series: [
-        { name: 'Campaigns', data: campaigns },
-        { name: 'Flows', data: workflows },
-        { name: 'Contacts', data: contactsByMonth },
-      ],
-    };
-  }, [bounds.monthCount, filteredContacts, filteredEspCampaigns, filteredEspWorkflows]);
-
-  const developerGaugeSeries = [connectedRatePct, activeEmailRatePct, openRatePct, clickRatePct];
-
-  const developerDonutOptions = useMemo<ApexOptions>(
-    () => ({
-      chart: { type: 'donut', background: 'transparent', toolbar: { show: false }, foreColor: chartTextColor },
-      labels: developerRoleLabels,
-      colors: developerPalette,
-      dataLabels: { enabled: false },
-      stroke: { width: 2, colors: [chartStrokeColor] },
-      legend: { show: true, position: 'bottom', labels: { colors: chartTextColor }, fontSize: '11px' },
-      plotOptions: {
-        pie: {
-          donut: {
-            size: '70%',
-            labels: {
-              show: true,
-              total: {
-                show: true,
-                label: 'Users',
-                color: chartTextColor,
-                formatter: () => `${users.length}`,
-              },
-            },
-          },
-        },
-      },
-      tooltip: { theme: chartTooltipTheme },
-      noData: { text: 'No data', style: { color: chartMutedColor } },
-    }),
-    [chartMutedColor, chartStrokeColor, chartTextColor, chartTooltipTheme, developerPalette, developerRoleLabels, users.length],
-  );
-
-  const developerBarGrid = {
-    borderColor: chartGridColor,
-    strokeDashArray: 4,
-  };
-
-  const developerApiOptions = useMemo<ApexOptions>(
-    () => ({
-      chart: { type: 'bar', background: 'transparent', toolbar: { show: false }, foreColor: chartTextColor },
-      colors: developerApiColors,
-      plotOptions: { bar: { horizontal: true, distributed: true, borderRadius: 5, barHeight: '56%' } },
-      dataLabels: { enabled: false },
-      legend: { show: false },
-      xaxis: {
-        categories: developerApiCategories,
-        min: 0,
-        max: 100,
-        labels: { style: { colors: chartMutedColor } },
-      },
-      yaxis: { labels: { style: { colors: chartTextColor } } },
-      grid: developerBarGrid,
-      tooltip: { theme: chartTooltipTheme, y: { formatter: (value) => `${Math.round(value)}%` } },
-      noData: { text: 'No API data', style: { color: chartMutedColor } },
-    }),
-    [chartMutedColor, chartTextColor, chartTooltipTheme, developerApiCategories, developerApiColors, developerBarGrid],
-  );
-
-  const developerRiskOptions = useMemo<ApexOptions>(
-    () => ({
-      chart: { type: 'bar', background: 'transparent', toolbar: { show: false }, foreColor: chartTextColor },
-      colors: ['#f97316'],
-      plotOptions: { bar: { horizontal: false, borderRadius: 6, columnWidth: '56%' } },
-      dataLabels: { enabled: false },
-      legend: { show: false },
-      xaxis: { categories: developerRiskCategories, labels: { style: { colors: chartMutedColor }, rotate: -24 } },
-      yaxis: { min: 0, max: 100, labels: { style: { colors: chartMutedColor } } },
-      grid: developerBarGrid,
-      tooltip: { theme: chartTooltipTheme, y: { formatter: (value) => `${Math.round(value)} risk` } },
-      noData: { text: 'No risk data', style: { color: chartMutedColor } },
-    }),
-    [chartMutedColor, chartTextColor, chartTooltipTheme, developerBarGrid, developerRiskCategories],
-  );
-
-  const developerDeliveryOptions = useMemo<ApexOptions>(
-    () => ({
-      chart: { type: 'bar', background: 'transparent', toolbar: { show: false }, stacked: true, foreColor: chartTextColor },
-      colors: ['#22d3ee', '#fb7185'],
-      plotOptions: { bar: { horizontal: false, borderRadius: 6, columnWidth: '48%' } },
-      dataLabels: { enabled: false },
-      stroke: { show: true, width: 1, colors: ['transparent'] },
-      xaxis: { categories: ['Email', 'SMS'], labels: { style: { colors: chartMutedColor } } },
-      yaxis: { labels: { style: { colors: chartMutedColor } } },
-      legend: { position: 'top', horizontalAlign: 'left', labels: { colors: chartTextColor }, fontSize: '11px' },
-      grid: developerBarGrid,
-      tooltip: { theme: chartTooltipTheme },
-      noData: { text: 'No delivery data', style: { color: chartMutedColor } },
-    }),
-    [chartMutedColor, chartTextColor, chartTooltipTheme, developerBarGrid],
-  );
-
-  const developerTimelineOptions = useMemo<ApexOptions>(
-    () => ({
-      chart: { type: 'area', background: 'transparent', toolbar: { show: false }, foreColor: chartTextColor },
-      colors: [iconColorHex('campaigns'), iconColorHex('flows'), iconColorHex('contacts')],
-      stroke: { curve: 'smooth', width: 3 },
-      fill: {
-        type: 'gradient',
-        gradient: { shade: 'dark', type: 'vertical', opacityFrom: 0.34, opacityTo: 0.04, stops: [0, 85, 100] },
-      },
-      markers: { size: 3, strokeWidth: 0, hover: { sizeOffset: 2 } },
-      dataLabels: { enabled: false },
-      legend: { position: 'top', horizontalAlign: 'left', labels: { colors: chartTextColor }, fontSize: '11px' },
-      xaxis: { categories: developerTimeline.categories, labels: { style: { colors: chartMutedColor } } },
-      yaxis: { labels: { style: { colors: chartMutedColor } } },
-      grid: developerBarGrid,
-      tooltip: { theme: chartTooltipTheme, shared: true },
-      noData: { text: 'No timeline data', style: { color: chartMutedColor } },
-    }),
-    [chartMutedColor, chartTextColor, chartTooltipTheme, developerBarGrid, developerTimeline.categories],
-  );
-
-  const developerMomentumOptions = useMemo<ApexOptions>(
-    () => ({
-      chart: { type: 'bar', background: 'transparent', toolbar: { show: false }, foreColor: chartTextColor },
-      colors: ['#8b5cf6'],
-      plotOptions: { bar: { horizontal: true, borderRadius: 6, barHeight: '58%' } },
-      dataLabels: { enabled: false },
-      legend: { show: false },
-      xaxis: { categories: developerMomentumCategories, labels: { style: { colors: chartMutedColor } } },
-      yaxis: { labels: { style: { colors: chartTextColor } } },
-      grid: developerBarGrid,
-      tooltip: { theme: chartTooltipTheme },
-      noData: { text: 'No account momentum', style: { color: chartMutedColor } },
-    }),
-    [chartMutedColor, chartTextColor, chartTooltipTheme, developerBarGrid, developerMomentumCategories],
-  );
-
-  const developerIndustryOptions = useMemo<ApexOptions>(
-    () => ({
-      chart: { type: 'bar', background: 'transparent', toolbar: { show: false }, foreColor: chartTextColor },
-      colors: [iconColorHex('contacts')],
-      plotOptions: { bar: { horizontal: false, borderRadius: 6, columnWidth: '52%' } },
-      dataLabels: { enabled: false },
-      legend: { show: false },
-      xaxis: { categories: developerIndustryCategories, labels: { style: { colors: chartMutedColor }, rotate: -20 } },
-      yaxis: { labels: { style: { colors: chartMutedColor } } },
-      grid: developerBarGrid,
-      tooltip: { theme: chartTooltipTheme },
-      noData: { text: 'No industry data', style: { color: chartMutedColor } },
-    }),
-    [chartMutedColor, chartTextColor, chartTooltipTheme, developerBarGrid, developerIndustryCategories],
-  );
-
-  const developerMixOptions = useMemo<ApexOptions>(
-    () => ({
-      chart: { type: 'donut', background: 'transparent', toolbar: { show: false }, foreColor: chartTextColor },
-      labels: developerMixLabels,
-      colors: developerMixLabels.map((label) => iconColorHexForLabel(label)),
-      dataLabels: { enabled: false },
-      legend: { show: true, position: 'bottom', labels: { colors: chartTextColor }, fontSize: '11px' },
-      stroke: { width: 2, colors: [chartStrokeColor] },
-      plotOptions: { pie: { donut: { size: '70%' } } },
-      tooltip: { theme: chartTooltipTheme },
-      noData: { text: 'No mix data', style: { color: chartMutedColor } },
-    }),
-    [chartMutedColor, chartStrokeColor, chartTextColor, chartTooltipTheme, developerMixLabels],
-  );
-
-  const developerGaugeOptions = useMemo<ApexOptions>(
-    () => ({
-      chart: { type: 'radialBar', background: 'transparent', toolbar: { show: false }, foreColor: chartTextColor },
-      labels: ['Connected', 'Active Email', 'Open Rate', 'Click Rate'],
-      colors: ['#22d3ee', '#60a5fa', '#a78bfa', '#f472b6'],
-      plotOptions: {
-        radialBar: {
-          hollow: { size: '28%' },
-          track: { background: chartGridColor },
-          dataLabels: {
-            name: { fontSize: '10px', color: chartMutedColor },
-            value: { fontSize: '12px', color: chartTextColor },
-            total: {
-              show: true,
-              label: 'Health',
-              color: chartTextColor,
-              formatter: () => `${Math.round((connectedRatePct + activeEmailRatePct + openRatePct + clickRatePct) / 4)}%`,
-            },
-          },
-        },
-      },
-      legend: { show: true, position: 'bottom', labels: { colors: chartTextColor }, fontSize: '11px' },
-      tooltip: { theme: chartTooltipTheme },
-      noData: { text: 'No health data', style: { color: chartMutedColor } },
-    }),
-    [activeEmailRatePct, chartGridColor, chartMutedColor, chartTextColor, chartTooltipTheme, clickRatePct, connectedRatePct, openRatePct],
-  );
 
   const welcomeName = userName?.trim() || 'there';
   const focusedAccountData = focusedAccountKey ? accounts[focusedAccountKey] : null;
@@ -1793,52 +1047,29 @@ function ManagementRoleDashboard({
   const dashboardTitle = isAccountMode && focusedAccountName
     ? `${toPossessiveLabel(focusedAccountName)} Dashboard`
     : 'Dashboard';
-  const developerPanelClass = theme === 'dark'
-    ? 'rounded-2xl border border-white/10 bg-[linear-gradient(155deg,rgba(24,24,43,0.86),rgba(31,18,42,0.82))] p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]'
-    : 'rounded-2xl border border-white/70 bg-[linear-gradient(155deg,rgba(255,255,255,0.44),rgba(237,243,255,0.38))] backdrop-blur-xl p-4 shadow-[0_8px_20px_rgba(15,23,42,0.06),inset_0_1px_0_rgba(255,255,255,0.8)]';
-  const developerMetricClass = theme === 'dark'
-    ? 'rounded-2xl border border-violet-300/20 bg-[linear-gradient(155deg,rgba(58,29,79,0.58),rgba(33,28,61,0.58))] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]'
-    : 'rounded-2xl border border-indigo-100/70 bg-[linear-gradient(155deg,rgba(239,245,255,0.54),rgba(250,252,255,0.44))] backdrop-blur-xl px-4 py-3 shadow-[0_8px_20px_rgba(15,23,42,0.06),inset_0_1px_0_rgba(255,255,255,0.82)]';
-  const developerHeadingClass = theme === 'dark' ? 'text-white' : 'text-slate-900';
-  const developerSubtleClass = theme === 'dark' ? 'text-violet-100/70' : 'text-slate-500';
-  const developerMetricLabelClass = theme === 'dark' ? 'text-violet-200/70' : 'text-slate-500';
-  const developerMetricValueClass = theme === 'dark' ? 'text-white' : 'text-slate-900';
-  const developerMetricNoteClass = theme === 'dark' ? 'text-violet-100/80' : 'text-slate-600';
-  const developerIconTintClass = theme === 'dark' ? 'text-violet-200' : 'text-indigo-600';
-  const developerControlCardClass = theme === 'dark'
-    ? 'rounded-xl border border-violet-300/20 bg-violet-400/10 p-3 transition-colors hover:bg-violet-300/20'
-    : 'rounded-xl border border-white/70 bg-[rgba(255,255,255,0.45)] backdrop-blur-sm p-3 transition-colors hover:bg-[rgba(255,255,255,0.62)]';
-  const developerControlLabelClass = theme === 'dark' ? 'text-violet-100' : 'text-slate-700';
-  const developerWarnIconClass = theme === 'dark' ? 'text-amber-300' : 'text-amber-600';
-  const dashboardLayoutMode = isDeveloper && developerMode === 'technical'
-    ? `management:${role}:technical`
-    : `management:${role}:analytics`;
+  const dashboardLayoutMode = `management:${role}`;
   const dashboardLayoutScope = isAccountMode && focusedAccountKey ? `account:${focusedAccountKey}` : 'admin';
 
   const dashboardWidgets = useMemo<DashboardWidgetDefinition[]>(() => {
-    if (isDeveloper && developerMode === 'technical') {
-      return [
-        { id: 'tech_overview', title: 'Technical Overview', category: 'technical' },
-        { id: 'tech_activity_controls', title: 'Activity & Controls', category: 'operations' },
-        { id: 'tech_health_split', title: 'API, Health & Roles', category: 'technical' },
-        { id: 'tech_risk_delivery', title: 'Risk & Delivery', category: 'technical' },
-      ];
-    }
-
     const widgets: DashboardWidgetDefinition[] = [
-      { id: 'summary', title: 'Summary', category: 'overview' },
-      { id: 'health', title: 'Health Snapshot', category: 'operations' },
-      { id: 'insights', title: 'Insights', category: 'operations' },
-      { id: 'campaigns', title: 'Campaign Performance', category: 'campaigns' },
-      { id: 'flows', title: 'Flow Performance', category: 'flows' },
-      { id: 'contacts', title: 'Contact Analytics', category: 'contacts' },
+      { id: 'portfolio_kpis', title: 'Portfolio KPIs', category: 'overview', description: 'Accounts, contacts, sends, and engagement at a glance.' },
+      { id: 'lifecycle_alerts', title: 'Lifecycle Action Center', category: 'contacts', description: 'Service / lease / warranty windows due to fire.' },
+      { id: 'engagement_timeline', title: 'Engagement Timeline', category: 'engagement', description: 'Daily delivered / opens / clicks / bounces across portfolio.' },
+      { id: 'account_health', title: 'Account Health', category: 'overview', description: 'Per-account health score with send recency + engagement.' },
+      { id: 'anomaly_feed', title: 'Alerts & Anomalies', category: 'operations', description: 'Auto-flagged deliverability + activity problems.' },
+      { id: 'send_pipeline', title: 'Send Pipeline', category: 'operations', description: 'Scheduled, in-flight, and recently failed sends.' },
+      { id: 'top_campaigns', title: 'Top Campaigns', category: 'campaigns', description: 'Best-performing campaigns in the period.' },
+      { id: 'engaged_contacts', title: 'Engaged Contacts', category: 'engagement', description: 'Contacts who opened, clicked, or replied within window.' },
+      { id: 'suppression_health', title: 'Suppression Health', category: 'engagement', description: 'Suppression totals + growth reasons.' },
+      { id: 'recent_activity', title: 'Recent Activity', category: 'engagement', description: 'Latest campaigns, lists, imports across accounts.' },
+      { id: 'meta_pacer', title: 'Meta Ads Pacer', category: 'operations', description: 'Paid media pacing per account this period.' },
+      { id: 'contact_analytics', title: 'Contact Insights', category: 'contacts', description: 'Source breakdown, tags, upcoming lifecycle dates.' },
     ];
-    if (!isDeveloper) {
-      widgets.push({ id: 'recent_activity', title: 'Recent Loomi Campaign Activity', category: 'engagement' });
+    if (role === 'super_admin' || role === 'developer') {
+      widgets.splice(4, 0, { id: 'rep_performance', title: 'Rep Performance', category: 'overview', description: 'Per-rep portfolio metrics.' });
     }
-
     return widgets;
-  }, [developerMode, isAdmin, isDeveloper]);
+  }, [role]);
 
   const dashboardCustomization = useDashboardCustomization({
     enabled: !loading,
@@ -2228,16 +1459,34 @@ function ManagementRoleDashboard({
       <div className="page-sticky-header mb-6">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            {isAccountMode && focusedAccountKey ? (
-              <AccountAvatar
-                name={focusedAccountName}
-                accountKey={focusedAccountKey}
-                storefrontImage={focusedAccountData?.storefrontImage}
-                logos={focusedAccountData?.logos}
-                size={44}
-                className="h-11 w-11 rounded-xl border border-[var(--border)] bg-[var(--card)] flex-shrink-0"
-              />
-            ) : null}
+            {(() => {
+              if (!isAccountMode || !focusedAccountKey) return null;
+              // If a logo exists, render the bare image (no square chrome).
+              // Otherwise, fall back to the generated initials avatar in a
+              // square — the default AccountAvatar behavior.
+              const logoSrc = theme === 'light'
+                ? focusedAccountData?.logos?.dark
+                : focusedAccountData?.logos?.light;
+              if (logoSrc) {
+                return (
+                  <img
+                    src={logoSrc}
+                    alt={`${focusedAccountName} logo`}
+                    className="h-14 w-auto max-w-[120px] flex-shrink-0 object-contain"
+                  />
+                );
+              }
+              return (
+                <AccountAvatar
+                  name={focusedAccountName}
+                  accountKey={focusedAccountKey}
+                  storefrontImage={focusedAccountData?.storefrontImage}
+                  logos={focusedAccountData?.logos}
+                  size={56}
+                  className="h-14 w-14 flex-shrink-0 rounded-xl"
+                />
+              );
+            })()}
 
             <div>
               <h2 className="text-2xl font-bold">{dashboardTitle}</h2>
@@ -2249,33 +1498,6 @@ function ManagementRoleDashboard({
               ) : null}
             </div>
           </div>
-
-          {isDeveloper ? (
-            <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--card)] p-1">
-              <button
-                type="button"
-                onClick={() => setDeveloperMode('analytics')}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                  developerMode === 'analytics'
-                    ? 'bg-[var(--primary)] text-white'
-                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-              >
-                Analytics View
-              </button>
-              <button
-                type="button"
-                onClick={() => setDeveloperMode('technical')}
-                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                  developerMode === 'technical'
-                    ? 'bg-[var(--primary)] text-white'
-                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-              >
-                Technical View
-              </button>
-            </div>
-          ) : null}
 
           <div className="flex items-center gap-2">
             <button
@@ -2351,440 +1573,115 @@ function ManagementRoleDashboard({
         </div>
       ) : null}
 
-      {!loading && isDeveloper && developerMode === 'technical' ? (
+      {!loading ? (
         <div className={(managementSideRailMounted || filterSideRailMounted) ? 'grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start' : ''}>
           <div className="flex flex-col gap-5">
-            {renderManagedWidget('tech_overview', (
-            <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-              {[
-                { label: 'Sub-Accounts', value: totals.accountCount, note: `${totals.connectedAccounts} connected`, icon: BuildingStorefrontIcon },
-                { label: 'Users', value: users.length, note: `${roleCounts.length} role groups`, icon: UsersIcon },
-                { label: 'API Health', value: `${apiHealth.filter((api) => api.ok).length}/${apiHealth.length}`, note: 'reporting endpoints', icon: CommandLineIcon },
-                { label: 'Alerts', value: attentionAccounts.length, note: attentionAccounts.length > 0 ? 'needs action' : 'all clear', icon: ExclamationTriangleIcon },
-              ].map((item) => (
-                <div key={item.label} className={developerMetricClass}>
-                  <div className="mb-2 flex items-center justify-between">
-                    <item.icon className={`h-7 w-7 ${iconColorClassForLabel(item.label)}`} />
-                    <span className={`text-[10px] uppercase tracking-wider ${developerMetricLabelClass}`}>{item.label}</span>
-                  </div>
-                  <p className={`text-3xl font-semibold tabular-nums ${developerMetricValueClass}`}>{item.value}</p>
-                  <p className={`text-[11px] ${developerMetricNoteClass}`}>{item.note}</p>
-                </div>
-              ))}
-            </div>
-          ))}
+            {renderManagedWidget('portfolio_kpis', (
+              <PortfolioKpiStrip
+                kpis={portfolioHook.data?.kpis ?? null}
+                loading={portfolioHook.isLoading}
+              />
+            ))}
 
-          {renderManagedWidget('tech_activity_controls', (
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-              <div className={`${developerPanelClass} xl:col-span-2`}>
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Platform Activity Timeline</h3>
-                  <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>Campaigns vs flows vs contacts</span>
-                </div>
-                <ApexChart type="area" options={developerTimelineOptions} series={developerTimeline.series} height={280} />
-              </div>
+            {renderManagedWidget('lifecycle_alerts', (
+              <LifecycleActionCenter
+                lifecycle={portfolioHook.data?.lifecycle ?? null}
+                loading={portfolioHook.isLoading}
+                singleAccount={isAccountMode}
+              />
+            ))}
 
-              <div className={developerPanelClass}>
-                <div className="mb-3 flex items-center gap-2">
-                  <WrenchScrewdriverIcon className={`h-6 w-6 ${developerIconTintClass}`} />
-                  <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Developer Controls</h3>
-                </div>
-                <div className="grid grid-cols-2 gap-2.5">
-                  {[
-                    { href: '/users', label: 'Users', icon: UsersIcon },
-                    { href: '/subaccounts', label: 'Sub-Accounts', icon: BuildingStorefrontIcon },
-                    { href: '/settings/subaccounts', label: 'Integrations', icon: ArrowPathIcon },
-                    { href: '/messaging/campaigns', label: 'Campaigns', icon: PaperAirplaneIcon },
-                    { href: '/flows', label: 'Flows', icon: FlowIcon },
-                    { href: '/media', label: 'Media', icon: PhotoIcon },
-                  ].map((item) => (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={developerControlCardClass}
-                    >
-                      <item.icon className={`h-8 w-8 ${iconColorClassForLabel(item.label)}`} />
-                      <p className={`mt-2 text-xs font-medium ${developerControlLabelClass}`}>{item.label}</p>
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ))}
+            {renderManagedWidget('engagement_timeline', (
+              <EngagementTimelineWidget
+                timeline={portfolioHook.data?.timeline ?? []}
+                loading={portfolioHook.isLoading}
+                isDark={theme === 'dark'}
+              />
+            ))}
 
-          {renderManagedWidget('tech_health_split', (
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-              <div className={developerPanelClass}>
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Reporting API Health</h3>
-                  <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>score / 100</span>
-                </div>
-                <ApexChart type="bar" options={developerApiOptions} series={developerApiSeries} height={265} />
-              </div>
+            {renderManagedWidget('account_health', (
+              <AccountHealthScoredGrid
+                rows={portfolioHook.data?.accountHealth ?? []}
+                accounts={accounts}
+                loading={portfolioHook.isLoading}
+              />
+            ))}
 
-              <div className={developerPanelClass}>
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>System Health Rings</h3>
-                  <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>live mix</span>
-                </div>
-                <ApexChart type="radialBar" options={developerGaugeOptions} series={developerGaugeSeries} height={265} />
-              </div>
+            {(isSuperAdmin || isDeveloper) && renderManagedWidget('rep_performance', (
+              <RepPerformanceWidget
+                rows={portfolioHook.data?.repPerformance ?? []}
+                loading={portfolioHook.isLoading}
+              />
+            ))}
 
-              <div className={developerPanelClass}>
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>User Role Split</h3>
-                  <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>{users.length} users</span>
-                </div>
-                <ApexChart type="donut" options={developerDonutOptions} series={developerRoleSeries} height={265} />
-              </div>
-            </div>
-          ))}
+            {renderManagedWidget('anomaly_feed', (
+              <AnomalyFeedWidget
+                anomalies={portfolioHook.data?.anomalies ?? []}
+                loading={portfolioHook.isLoading}
+              />
+            ))}
 
-          {renderManagedWidget('tech_risk_delivery', (
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              <div className={developerPanelClass}>
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Integration Risk Intensity</h3>
-                  <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>top accounts</span>
-                </div>
-                <ApexChart type="bar" options={developerRiskOptions} series={developerRiskSeries} height={255} />
-              </div>
+            {renderManagedWidget('send_pipeline', (
+              <SendPipelineWidget
+                pipeline={portfolioHook.data?.pipeline ?? { scheduled: [], inFlight: [], recentlyFailed: [] }}
+                loading={portfolioHook.isLoading}
+              />
+            ))}
 
-              <div className={developerPanelClass}>
-                <div className="mb-3 flex items-center justify-between">
-                  <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Loomi Delivery Throughput</h3>
-                  <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>sent vs failed</span>
-                </div>
-                <ApexChart type="bar" options={developerDeliveryOptions} series={developerDeliverySeries} height={255} />
-              </div>
-            </div>
-          ))}
-          </div>
-          {filterSideRailMounted ? filterSidePanel : managementSideRailMounted ? managementCustomizePanel : null}
-        </div>
-      ) : null}
+            {renderManagedWidget('top_campaigns', (
+              <TopCampaignsWidget
+                campaigns={portfolioHook.data?.topCampaigns ?? []}
+                loading={portfolioHook.isLoading}
+              />
+            ))}
 
-      {!loading && (!isDeveloper || developerMode === 'analytics') ? (
-        <div className={(managementSideRailMounted || filterSideRailMounted) ? 'grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_360px] lg:items-start' : ''}>
-          <div className={isDeveloper ? 'flex flex-col gap-5' : 'flex flex-col gap-8'}>
-            {renderManagedWidget('summary', (
-            isDeveloper ? (
-              <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-                {[
-                  { label: 'Sub-Accounts', value: totals.accountCount, icon: BuildingStorefrontIcon },
-                  { label: 'Contacts', value: formatCompactNumber(totals.contactsTotal), icon: UserGroupIcon },
-                  { label: 'Campaigns', value: totals.campaignCount, icon: PaperAirplaneIcon },
-                  { label: 'Flows', value: totals.workflowCount, icon: FlowIcon },
-                ].map((item) => (
-                  <div key={item.label} className={developerMetricClass}>
-                    <div className="mb-2 flex items-center justify-between">
-                      <item.icon className={`h-7 w-7 ${iconColorClassForLabel(item.label)}`} />
-                      <span className={`text-[10px] uppercase tracking-wider ${developerMetricLabelClass}`}>{item.label}</span>
-                    </div>
-                    <p className={`text-3xl font-semibold tabular-nums ${developerMetricValueClass}`}>{item.value}</p>
-                    <p className={`text-[11px] ${developerMetricNoteClass}`}>Current scoped totals</p>
-                  </div>
-                ))}
-              </div>
+            {renderManagedWidget('engaged_contacts', (
+              <EngagedContactsWidget
+                data={portfolioHook.data?.engagedContacts ?? { windowDays: 90, engagedTotal: 0, engagedByAccount: [] }}
+                totalContacts={portfolioHook.data?.kpis?.contactsTotal ?? 0}
+                loading={portfolioHook.isLoading}
+                singleAccount={isAccountMode}
+              />
+            ))}
 
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-                <div className={`${developerPanelClass} xl:col-span-2`}>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Performance Timeline</h3>
-                    <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>multi-series trend</span>
-                  </div>
-                  <ApexChart type="area" options={developerTimelineOptions} series={developerTimeline.series} height={280} />
-                </div>
+            {renderManagedWidget('suppression_health', (
+              <SuppressionHealthWidget
+                data={portfolioHook.data?.suppression ?? null}
+                loading={portfolioHook.isLoading}
+              />
+            ))}
 
-                <div className={developerPanelClass}>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Channel Mix</h3>
-                    <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>donut</span>
-                  </div>
-                  <ApexChart type="donut" options={developerMixOptions} series={developerMixSeries} height={280} />
-                </div>
-              </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-4">
-                <StatCard
-                  label={isSuperAdmin ? 'Total Accounts' : 'Assigned Accounts'}
-                  value={totals.accountCount}
-                  sub={`${totals.connectedAccounts} connected`}
-                  icon={BuildingStorefrontIcon}
-                  href="/accounts"
-                />
-                <StatCard label="Contacts" value={formatCompactNumber(totals.contactsTotal)} icon={UserGroupIcon} />
-                <StatCard label="Campaigns" value={totals.campaignCount} icon={PaperAirplaneIcon} href="/messaging/campaigns" />
-                <StatCard label="Flows" value={totals.workflowCount} icon={FlowIcon} href="/flows" />
-              </div>
+            {renderManagedWidget('meta_pacer', (
+              <MetaPacerSummaryWidget
+                rows={portfolioHook.data?.metaPacer ?? []}
+                loading={portfolioHook.isLoading}
+              />
+            ))}
 
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-                <div className={developerPanelClass}>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Portfolio Pulse</h3>
-                    <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>connection + engagement</span>
-                  </div>
-                  <ApexChart type="radialBar" options={developerGaugeOptions} series={developerGaugeSeries} height={275} />
-                </div>
+            {renderManagedWidget('recent_activity', (
+              <RecentActivityWidget
+                activity={portfolioHook.data?.activity ?? []}
+                loading={portfolioHook.isLoading}
+              />
+            ))}
 
-                <div className={developerPanelClass}>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Campaign &amp; Flow Mix</h3>
-                    <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>current scope</span>
-                  </div>
-                  <ApexChart type="donut" options={developerMixOptions} series={developerMixSeries} height={275} />
-                </div>
-
-                <div className={developerPanelClass}>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Industry Signal</h3>
-                    <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>top segments</span>
-                  </div>
-                  <ApexChart type="bar" options={developerIndustryOptions} series={developerIndustrySeries} height={275} />
-                </div>
-              </div>
-              </div>
-            )
-          ))}
-
-          {renderManagedWidget('health', (
-            isAdmin ? (
-              <div>
+            {renderManagedWidget('contact_analytics', (
+              <div className="glass-card rounded-2xl p-5">
                 <div className="mb-4 flex items-center justify-between">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Account Health</h3>
-                  <Link href="/accounts" className="text-[10px] text-[var(--primary)] hover:underline">
-                    Open accounts
+                  <h3 className="text-sm font-semibold tracking-tight">Contact insights</h3>
+                  <Link href="/contacts" className="text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+                    Open contacts →
                   </Link>
                 </div>
-                <AccountHealthGrid
-                  accounts={selectedAccountMap}
-                  crmStats={contactStats}
-                  emailsByAccount={emailRollupByAccount}
-                  loading={loading || contactStatsLoading}
+                <ContactAnalytics
+                  contacts={filteredContacts}
+                  totalCount={totals.contactsTotal}
+                  loading={loading || contactsAggregateLoading}
+                  dateRange={dateRange}
+                  customRange={customRange}
                 />
               </div>
-            ) : isDeveloper ? (
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                <div className={developerPanelClass}>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>System KPI Rings</h3>
-                    <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>connection + engagement</span>
-                  </div>
-                  <ApexChart type="radialBar" options={developerGaugeOptions} series={developerGaugeSeries} height={275} />
-                </div>
-
-                <div className={developerPanelClass}>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Industry Concentration</h3>
-                    <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>contacts by segment</span>
-                  </div>
-                  <ApexChart type="bar" options={developerIndustryOptions} series={developerIndustrySeries} height={275} />
-                </div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <div className={developerPanelClass}>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Portfolio Overview</h3>
-                    <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>all scoped sub-accounts</span>
-                  </div>
-                  <ApexChart type="radialBar" options={developerGaugeOptions} series={developerGaugeSeries} height={275} />
-                </div>
-
-                <div className={developerPanelClass}>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Industry Breakdown</h3>
-                    <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>top segments</span>
-                  </div>
-                  <ApexChart type="bar" options={developerIndustryOptions} series={developerIndustrySeries} height={275} />
-                </div>
-              </div>
-            )
-          ))}
-
-          {renderManagedWidget('insights', (
-            isDeveloper ? (
-              <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-                <div className={developerPanelClass}>
-                  <div className="mb-3 flex items-center gap-2">
-                    <Image
-                      src="/icons/icons8-leaderboard.svg"
-                      alt="Leaderboard"
-                      width={30}
-                      height={30}
-                      className="h-7 w-7"
-                    />
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Top Account Momentum</h3>
-                  </div>
-                  <ApexChart type="bar" options={developerMomentumOptions} series={developerMomentumSeries} height={260} />
-                </div>
-
-                <div className={developerPanelClass}>
-                  <div className="mb-3 flex items-center gap-2">
-                    <ExclamationTriangleIcon className={`h-6 w-6 ${developerWarnIconClass}`} />
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Account Risk Intensity</h3>
-                  </div>
-                  <ApexChart type="bar" options={developerRiskOptions} series={developerRiskSeries} height={260} />
-                </div>
-
-                <div className={developerPanelClass}>
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className={`text-sm font-semibold ${developerHeadingClass}`}>Channel Delivery Trend</h3>
-                    <span className={`text-[10px] uppercase tracking-wider ${developerSubtleClass}`}>stacked volume</span>
-                  </div>
-                  <ApexChart type="bar" options={developerDeliveryOptions} series={developerDeliverySeries} height={260} />
-                </div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-                <div className="glass-card rounded-xl p-4">
-                  <div className="mb-3 flex items-center gap-2">
-                    <Image
-                      src="/icons/icons8-leaderboard.svg"
-                      alt="Leaderboard"
-                      width={24}
-                      height={24}
-                      className="h-6 w-6"
-                    />
-                    <h3 className="text-sm font-semibold">Account Leaderboard</h3>
-                  </div>
-                  {accountLeaderboard.length === 0 ? (
-                    <p className="text-sm text-[var(--muted-foreground)]">No account-level metrics available.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {accountLeaderboard.map((row, index) => (
-                        <div key={row.key} className="flex items-center gap-3 rounded-lg border border-[var(--border)] px-3 py-2">
-                          <span className="w-4 text-xs text-[var(--muted-foreground)]">{index + 1}</span>
-                          <div className="min-w-0 flex-1">
-                            <p className="truncate text-sm font-medium">{row.dealer}</p>
-                            <p className="text-[10px] text-[var(--muted-foreground)]">
-                              {row.rollup.contactCount.toLocaleString()} contacts · {row.rollup.campaignCount} campaigns · {row.rollup.workflowCount} flows
-                            </p>
-                          </div>
-                          <Link href={`/accounts/${row.key}`} className="text-[10px] text-[var(--primary)] hover:underline">
-                            View
-                          </Link>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="glass-card rounded-xl p-4">
-                  <div className="mb-3 flex items-center gap-2">
-                    <ExclamationTriangleIcon className="h-5 w-5 text-amber-400" />
-                    <h3 className="text-sm font-semibold">Needs Attention</h3>
-                  </div>
-                  {attentionAccounts.length === 0 ? (
-                    <p className="text-sm text-emerald-400">All scoped accounts look healthy.</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {attentionAccounts.map((item) => (
-                        <div key={item.key} className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <p className="text-sm font-medium">{item.dealer}</p>
-                            <Link href={`/accounts/${item.key}`} className="text-[10px] text-[var(--primary)] hover:underline">
-                              Resolve
-                            </Link>
-                          </div>
-                          <p className="text-xs text-[var(--muted-foreground)]">{item.reason}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )
-          ))}
-
-          {renderManagedWidget('campaigns', (
-            <div>
-              <div className="mb-4 flex items-center justify-between">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">ESP Campaign Performance</h3>
-                <Link href="/messaging/campaigns" className="text-[10px] text-[var(--primary)] hover:underline">
-                  Open campaign center
-                </Link>
-              </div>
-              <CampaignPageAnalytics
-                campaigns={filteredEspCampaigns}
-                loading={loading || campaignsAggregateLoading}
-                showAccountBreakdown
-                accountNames={accountNames}
-              />
-            </div>
-          ))}
-
-          {renderManagedWidget('flows', (
-            <div>
-              <div className="mb-4 flex items-center justify-between">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Flow Performance</h3>
-                <Link href="/flows" className="text-[10px] text-[var(--primary)] hover:underline">
-                  Open flow center
-                </Link>
-              </div>
-              <FlowAnalytics
-                workflows={filteredEspWorkflows}
-                loading={loading || workflowsAggregateLoading}
-                showAccountBreakdown
-                accountNames={accountNames}
-              />
-            </div>
-          ))}
-
-          {renderManagedWidget('contacts', (
-            <div>
-              <div className="mb-4 flex items-center justify-between">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Contact Analytics</h3>
-                <Link href="/contacts" className="text-[10px] text-[var(--primary)] hover:underline">
-                  Open contacts
-                </Link>
-              </div>
-              <ContactAnalytics
-                contacts={filteredContacts}
-                totalCount={totals.contactsTotal}
-                loading={loading || contactsAggregateLoading}
-                dateRange={dateRange}
-                customRange={customRange}
-              />
-            </div>
-          ))}
-
-          {!isDeveloper ? renderManagedWidget('recent_activity', (
-            <div className="glass-card rounded-xl p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold">Recent Loomi Campaign Activity</h3>
-                <Link href="/messaging/campaigns" className="text-[10px] text-[var(--primary)] hover:underline">
-                  View all campaigns
-                </Link>
-              </div>
-              {recentLoomiCampaigns.length === 0 ? (
-                <p className="text-sm text-[var(--muted-foreground)]">No Loomi campaigns in the selected scope.</p>
-              ) : (
-                <div className="space-y-2">
-                  {recentLoomiCampaigns.map((campaign) => (
-                    <div key={campaign.id} className="flex items-center gap-3 rounded-lg border border-[var(--border)] px-3 py-2">
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wider ${campaign.source === 'email' ? 'bg-blue-500/10 text-blue-300' : 'bg-emerald-500/10 text-emerald-300'}`}>
-                        {campaign.source}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium">{campaign.name}</p>
-                        <p className="text-[10px] text-[var(--muted-foreground)]">
-                          {campaign.recipients.toLocaleString()} recipients · {campaign.sentCount} sent · {campaign.failedCount} failed · {campaign.accountCount} account{campaign.accountCount === 1 ? '' : 's'}
-                        </p>
-                      </div>
-                      <div className="text-right text-[10px] text-[var(--muted-foreground)]">
-                        <p>{campaignStatusLabel(campaign.status)}</p>
-                        <p>{relativeTime(campaign.updatedAt)}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )) : null}
+            ))}
           </div>
           {filterSideRailMounted ? filterSidePanel : managementSideRailMounted ? managementCustomizePanel : null}
         </div>

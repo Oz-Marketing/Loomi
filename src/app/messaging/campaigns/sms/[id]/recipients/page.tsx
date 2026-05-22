@@ -357,37 +357,8 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
             )}
             {tab === 'segments' && (
               <div className="space-y-5">
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold mb-2.5">
-                    Pre-built
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {LIFECYCLE_PRESETS.map((preset) => {
-                      const active = selection.kind === 'segment' && selection.id === preset.id;
-                      return (
-                        <AudienceCard
-                          key={preset.id}
-                          title={preset.name}
-                          subtitle={preset.description}
-                          active={active}
-                          onClick={() =>
-                            setSelection({
-                              kind: 'segment',
-                              id: preset.id,
-                              name: preset.name,
-                              filter: preset.definition,
-                            })
-                          }
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
                 {scopedAudiences.length > 0 && (
                   <div>
-                    <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold mb-2.5">
-                      Saved
-                    </p>
                     <div className="space-y-2">
                       {scopedAudiences.map((a) => {
                         const filter = parseFilterDefinition(a.filters);

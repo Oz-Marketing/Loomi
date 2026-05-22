@@ -1,25 +1,26 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
+  ArrowPathIcon,
+  DocumentDuplicateIcon,
+  EllipsisHorizontalIcon,
   FunnelIcon,
+  GlobeAltIcon,
+  MagnifyingGlassIcon,
+  PencilSquareIcon,
   PlusIcon,
-  RectangleStackIcon,
   TrashIcon,
+  UsersIcon,
 } from '@heroicons/react/24/outline';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useAccount } from '@/contexts/account-context';
-import { FilterBuilder } from '@/components/contacts/filter-builder';
-import { LIFECYCLE_PRESETS } from '@/lib/smart-list-presets';
+import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
+import type { Contact } from '@/lib/contacts/types';
 import { toast } from '@/lib/toast';
-
-// Segments live here as first-class objects: pre-built lifecycle filters
-// (auto/service due / lease ending / etc.) on top, user-saved custom
-// segments below. The FilterBuilder modal handles creation; we POST
-// to /api/audiences which is the same store the campaign builder reads
-// from on the Recipients step.
 
 interface SavedSegment {
   id: string;
@@ -28,6 +29,7 @@ interface SavedSegment {
   filters: string;
   accountKey?: string | null;
   color?: string | null;
+  updatedAt?: string;
 }
 
 interface SavedSegmentResponse {
@@ -46,66 +48,127 @@ function parseDefinition(raw: string): FilterDefinition | null {
 
 function describeFilter(definition: FilterDefinition | null): string {
   if (!definition) return 'Invalid filter';
-  const groupCount = definition.groups.length;
   const conditionCount = definition.groups.reduce(
     (acc, group) => acc + group.conditions.length,
     0,
   );
   if (conditionCount === 0) return 'No conditions';
-  return `${conditionCount} condition${conditionCount === 1 ? '' : 's'} across ${groupCount} group${groupCount === 1 ? '' : 's'}`;
+  const groupSuffix = definition.groups.length > 1 ? ` in ${definition.groups.length} groups` : '';
+  return `${conditionCount} condition${conditionCount === 1 ? '' : 's'}${groupSuffix}`;
 }
 
 export default function SegmentsPage() {
-  const { isAccount, accountKey } = useAccount();
+  const router = useRouter();
+  const { isAccount, accountKey, accounts, accountData } = useAccount();
   const subHref = useSubaccountHref();
 
   const [savedSegments, setSavedSegments] = useState<SavedSegment[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showBuilder, setShowBuilder] = useState(false);
+  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [contactsLoading, setContactsLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
+  // ── Close action menu on outside click ───────────────────────────
+  useEffect(() => {
+    if (!openMenuId) return;
+    function handler() {
+      setOpenMenuId(null);
+    }
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, [openMenuId]);
+
+  // ── Fetch saved segments (with lazy lifecycle seed for autos) ────
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/audiences')
-      .then((res) => (res.ok ? res.json() : { audiences: [] }))
-      .then((data: SavedSegmentResponse) => {
+    setLoading(true);
+
+    async function loadAudiences() {
+      // Auto-bootstrap lifecycle audiences for automotive accounts on
+      // first visit. Idempotent — the endpoint short-circuits if the
+      // account has already been seeded or is not automotive.
+      const isAutomotive =
+        (accountData?.category ?? '').trim().toLowerCase() === 'automotive';
+      if (isAccount && accountKey && isAutomotive) {
+        try {
+          await fetch('/api/audiences/seed-lifecycle', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ accountKey }),
+          });
+        } catch {
+          // Non-fatal — fall through and just list what's there.
+        }
+      }
+
+      try {
+        const res = await fetch('/api/audiences');
+        const data: SavedSegmentResponse = res.ok ? await res.json() : { audiences: [] };
+        if (!cancelled) {
+          setSavedSegments(Array.isArray(data.audiences) ? data.audiences : []);
+        }
+      } catch {
+        if (!cancelled) setSavedSegments([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    loadAudiences();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAccount, accountKey, accountData?.category]);
+
+  // ── Fetch contacts (used for member counts) ──────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    setContactsLoading(true);
+    const url =
+      isAccount && accountKey
+        ? `/api/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true&includeMessaging=true`
+        : '/api/contacts/aggregate?includeMessaging=true&limitPerAccount=250';
+    fetch(url)
+      .then((res) => (res.ok ? res.json() : { contacts: [] }))
+      .then((data) => {
         if (cancelled) return;
-        setSavedSegments(Array.isArray(data.audiences) ? data.audiences : []);
+        setContacts(Array.isArray(data?.contacts) ? data.contacts : []);
       })
       .catch(() => {
-        if (!cancelled) setSavedSegments([]);
+        if (!cancelled) setContacts([]);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) setContactsLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isAccount, accountKey]);
 
-  async function handleSave(name: string, definition: FilterDefinition) {
-    try {
-      const res = await fetch('/api/audiences', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name,
-          filters: JSON.stringify(definition),
-          accountKey: isAccount && accountKey ? accountKey : undefined,
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(typeof data.error === 'string' ? data.error : 'Failed to save segment');
-      }
-      const data = await res.json();
-      setSavedSegments((prev) => [...prev, data.audience]);
-      setShowBuilder(false);
-      toast.success(`Segment "${name}" saved.`);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to save segment');
+  // ── Member-count map ─────────────────────────────────────────────
+  const memberCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    if (contactsLoading || !contacts.length) return map;
+    for (const segment of savedSegments) {
+      const def = parseDefinition(segment.filters);
+      if (def) map.set(segment.id, evaluateFilter(contacts, def).length);
     }
-  }
+    return map;
+  }, [contacts, contactsLoading, savedSegments]);
 
+  // ── Search filtering ─────────────────────────────────────────────
+  const visibleSavedSegments = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return savedSegments;
+    return savedSegments.filter(
+      (s) =>
+        s.name.toLowerCase().includes(q) ||
+        (s.description || '').toLowerCase().includes(q),
+    );
+  }, [savedSegments, search]);
+
+  // ── Actions ──────────────────────────────────────────────────────
   async function handleDelete(segment: SavedSegment) {
     if (!confirm(`Delete segment "${segment.name}"? This can't be undone.`)) return;
     try {
@@ -123,6 +186,15 @@ export default function SegmentsPage() {
     }
   }
 
+  function handleDuplicate(segment: SavedSegment) {
+    router.push(`${subHref('/contacts/segments/new')}?from=${encodeURIComponent(segment.id)}`);
+  }
+
+  function handleUsePreview(segmentId: string) {
+    router.push(`${subHref('/contacts')}?segment=${encodeURIComponent(segmentId)}`);
+  }
+
+  // ── Render ───────────────────────────────────────────────────────
   return (
     <div>
       <div className="page-sticky-header mb-6">
@@ -131,58 +203,53 @@ export default function SegmentsPage() {
             <FunnelIcon className="w-7 h-7 text-[var(--primary)]" />
             <div>
               <h2 className="text-2xl font-bold">Segments</h2>
-              <p className="text-[var(--muted-foreground)] mt-1">
-                Dynamic audiences defined by filter conditions.
+              <p className="text-[var(--muted-foreground)] mt-1 text-sm">
+                Dynamic audiences defined by filter conditions. Auto-updates as your contacts
+                change.
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            <button
-              type="button"
-              onClick={() => setShowBuilder(true)}
-              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90"
+            <div className="relative">
+              <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] pointer-events-none" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search segments…"
+                className="pl-9 pr-3 h-10 text-sm rounded-lg border border-[var(--border)] bg-transparent focus:outline-none focus:border-[var(--primary)] transition-colors w-56"
+              />
+            </div>
+            <Link
+              href={subHref('/contacts/segments/new')}
+              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 transition-colors"
             >
               <PlusIcon className="w-4 h-4" />
-              New Segment
-            </button>
+              New segment
+            </Link>
           </div>
         </div>
       </div>
 
-      {/* Pre-built lifecycle segments */}
-      <section className="mb-6">
-        <p className="text-[11px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold mb-3">
-          Built-in
-        </p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {LIFECYCLE_PRESETS.map((preset) => (
-            <Link
-              key={preset.id}
-              href={`${subHref('/contacts')}?segment=${encodeURIComponent(preset.id)}`}
-              className="glass-card rounded-xl border border-[var(--border)]/70 p-4 hover:border-[var(--primary)]/40 transition-colors"
-            >
-              <div className="flex items-start gap-3">
-                <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-${preset.color}-500/10 text-${preset.color}-400`}>
-                  <RectangleStackIcon className="w-4 h-4" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold truncate">{preset.name}</p>
-                  <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5 line-clamp-2">
-                    {preset.description}
-                  </p>
-                </div>
-              </div>
-            </Link>
-          ))}
-        </div>
-      </section>
-
       {/* Saved segments */}
       <section>
-        <p className="text-[11px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold mb-3">
-          Saved
-        </p>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[11px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold">
+            Saved segments
+            {!loading && savedSegments.length > 0 && (
+              <span className="ml-2 text-[var(--muted-foreground)]/60">
+                ({savedSegments.length})
+              </span>
+            )}
+          </p>
+          {contactsLoading && (
+            <span className="flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]">
+              <ArrowPathIcon className="w-3 h-3 animate-spin" />
+              Calculating member counts…
+            </span>
+          )}
+        </div>
 
         {loading && (
           <div className="text-center py-12 text-[var(--muted-foreground)] text-sm">
@@ -195,38 +262,132 @@ export default function SegmentsPage() {
             <FunnelIcon className="w-9 h-9 mx-auto text-[var(--muted-foreground)] mb-2 opacity-60" />
             <p className="text-sm font-medium">No saved segments yet</p>
             <p className="text-xs text-[var(--muted-foreground)] mt-1 max-w-md mx-auto">
-              Click <span className="font-medium">New Segment</span> to build a filter-driven audience you can reuse across campaigns.
+              Click <span className="font-medium">New segment</span> to build a filter-driven
+              audience, or customize one of the presets above.
             </p>
           </div>
         )}
 
-        {!loading && savedSegments.length > 0 && (
+        {!loading && savedSegments.length > 0 && visibleSavedSegments.length === 0 && (
+          <div className="text-center py-12 border border-dashed border-[var(--border)] rounded-xl">
+            <p className="text-sm">No segments match your search.</p>
+          </div>
+        )}
+
+        {!loading && visibleSavedSegments.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {savedSegments.map((segment) => {
+            {visibleSavedSegments.map((segment) => {
               const definition = parseDefinition(segment.filters);
+              const count = memberCounts.get(segment.id);
+              const dealer = segment.accountKey
+                ? accounts[segment.accountKey]?.dealer ?? segment.accountKey
+                : null;
+              const isMenuOpen = openMenuId === segment.id;
               return (
                 <div
                   key={segment.id}
-                  className="glass-card rounded-xl border border-[var(--border)]/70 p-4 group"
+                  className="glass-card rounded-xl border border-[var(--border)]/70 p-4 hover:border-[var(--primary)]/40 transition-colors flex flex-col gap-3"
                 >
                   <div className="flex items-start gap-3">
-                    <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-${segment.color || 'blue'}-500/10 text-${segment.color || 'blue'}-400`}>
+                    <div
+                      className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 bg-${segment.color || 'blue'}-500/10 text-${segment.color || 'blue'}-400`}
+                    >
                       <FunnelIcon className="w-4 h-4" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-semibold truncate">{segment.name}</p>
-                      <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
-                        {describeFilter(definition)}
+                      <Link
+                        href={`${subHref('/contacts/segments')}/${encodeURIComponent(segment.id)}`}
+                        className="block"
+                      >
+                        <p className="text-sm font-semibold truncate hover:text-[var(--primary)] transition-colors">
+                          {segment.name}
+                        </p>
+                      </Link>
+                      <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5 truncate">
+                        {segment.description || describeFilter(definition)}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDelete(segment)}
-                      title="Delete segment"
-                      className="opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-red-400 hover:bg-red-500/10 transition-colors"
+                    <div className="relative flex-shrink-0">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuId(isMenuOpen ? null : segment.id);
+                        }}
+                        title="Actions"
+                        className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--sidebar-muted)] transition-colors"
+                      >
+                        <EllipsisHorizontalIcon className="w-4 h-4" />
+                      </button>
+                      {isMenuOpen && (
+                        <div
+                          className="absolute right-0 top-7 z-20 w-40 rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg py-1 text-xs"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Link
+                            href={`${subHref('/contacts/segments')}/${encodeURIComponent(segment.id)}`}
+                            className="flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--sidebar-muted)]"
+                          >
+                            <PencilSquareIcon className="w-3.5 h-3.5" />
+                            Edit
+                          </Link>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              handleDuplicate(segment);
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--sidebar-muted)] text-left"
+                          >
+                            <DocumentDuplicateIcon className="w-3.5 h-3.5" />
+                            Duplicate
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              handleUsePreview(segment.id);
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-[var(--sidebar-muted)] text-left"
+                          >
+                            <UsersIcon className="w-3.5 h-3.5" />
+                            View contacts
+                          </button>
+                          <div className="my-1 border-t border-[var(--border)]/60" />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              handleDelete(segment);
+                            }}
+                            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-red-500/10 text-red-400 text-left"
+                          >
+                            <TrashIcon className="w-3.5 h-3.5" />
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 mt-auto pt-1">
+                    <span className="text-[11px] text-[var(--muted-foreground)] tabular-nums">
+                      {contactsLoading
+                        ? '…'
+                        : count !== undefined
+                          ? `${count.toLocaleString()} member${count === 1 ? '' : 's'}`
+                          : '—'}
+                    </span>
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] text-[var(--muted-foreground)] px-1.5 py-0.5 rounded border border-[var(--border)]/60"
+                      title={dealer ? `Visible only to ${dealer}` : 'Visible to all accounts'}
                     >
-                      <TrashIcon className="w-3.5 h-3.5" />
-                    </button>
+                      {dealer ? (
+                        <UsersIcon className="w-2.5 h-2.5" />
+                      ) : (
+                        <GlobeAltIcon className="w-2.5 h-2.5" />
+                      )}
+                      {dealer ?? 'Org-wide'}
+                    </span>
                   </div>
                 </div>
               );
@@ -234,14 +395,6 @@ export default function SegmentsPage() {
           </div>
         )}
       </section>
-
-      {showBuilder && (
-        <FilterBuilder
-          onApply={() => setShowBuilder(false)}
-          onSave={handleSave}
-          onClose={() => setShowBuilder(false)}
-        />
-      )}
     </div>
   );
 }

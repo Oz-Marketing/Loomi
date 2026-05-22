@@ -28,6 +28,20 @@ export async function getAudienceById(id: string) {
   return prisma.audience.findUnique({ where: { id } });
 }
 
+export async function updateAudience(
+  id: string,
+  data: {
+    name?: string;
+    description?: string | null;
+    filters?: string;
+    icon?: string | null;
+    color?: string | null;
+    sortOrder?: number;
+  },
+) {
+  return prisma.audience.update({ where: { id }, data });
+}
+
 export async function deleteAudience(id: string) {
   return prisma.audience.delete({ where: { id } });
 }

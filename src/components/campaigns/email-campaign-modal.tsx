@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Contact } from '@/lib/contacts/types';
 import { evaluateFilter } from '@/lib/smart-list-engine';
-import { LIFECYCLE_PRESETS } from '@/lib/smart-list-presets';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import {
   ArrowPathIcon,
@@ -19,7 +18,6 @@ type EmailCampaignSourceType = 'template-library' | 'drag-drop' | 'html';
 
 type AudienceOption =
   | { key: 'all'; label: string; definition: null }
-  | { key: `preset:${string}`; label: string; definition: FilterDefinition }
   | { key: `audience:${string}`; label: string; definition: FilterDefinition };
 
 interface EmailTemplateApiRecord {
@@ -193,20 +191,12 @@ export function EmailCampaignModal({
       { key: 'all', label: 'All contacts in current account filter', definition: null },
     ];
 
-    for (const preset of LIFECYCLE_PRESETS) {
-      options.push({
-        key: `preset:${preset.id}`,
-        label: `Lifecycle · ${preset.name}`,
-        definition: preset.definition,
-      });
-    }
-
     for (const audience of savedAudiences) {
       const definition = parseAudienceDefinition(audience.filters);
       if (!definition) continue;
       options.push({
         key: `audience:${audience.id}`,
-        label: `Custom · ${audience.name}`,
+        label: audience.name,
         definition,
       });
     }

@@ -48,8 +48,16 @@ export async function GET(req: NextRequest) {
     // All non-system accounts (system accounts have keys prefixed
     // with `_`). Restricted-admin users get further filtered to their
     // assigned account keys below.
+    //
+    // NOTE on the `\\_` escape: Prisma's `startsWith` compiles to a
+    // SQL `LIKE 'param%'` clause but does NOT escape SQL wildcards in
+    // the parameter. Since `_` is the LIKE single-char wildcard, a
+    // bare `startsWith: '_'` matches every non-empty string — meaning
+    // `not: { startsWith: '_' }` excludes EVERY account. Passing
+    // `'\\_'` produces `LIKE '\_%'` which Postgres treats as a
+    // literal underscore prefix (default escape char is `\`).
     const allAccounts = await prisma.account.findMany({
-      where: { key: { not: { startsWith: '_' } } },
+      where: { key: { not: { startsWith: '\\_' } } },
       select: { key: true, dealer: true },
       orderBy: { dealer: 'asc' },
     });

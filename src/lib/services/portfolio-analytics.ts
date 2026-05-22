@@ -83,7 +83,7 @@ export async function getPortfolioKpis(scope: PortfolioScope): Promise<Portfolio
   // many accounts the user can see in total.
   const accounts = await prisma.account.findMany({
     where: {
-      key: { not: { startsWith: '_' } },
+      key: { not: { startsWith: '\\_' } },
       ...(scope.accountKeys ? { key: { in: scope.accountKeys } } : {}),
     },
     select: { key: true },
@@ -400,7 +400,7 @@ export async function getEngagedContacts(
   const totalByAccount = new Map(totalContacts.map((r) => [r.accountKey, r._count._all]));
 
   const accountMeta = await prisma.account.findMany({
-    where: { key: { not: { startsWith: '_' } }, ...(scope.accountKeys ? { key: { in: scope.accountKeys } } : {}) },
+    where: { key: { not: { startsWith: '\\_' } }, ...(scope.accountKeys ? { key: { in: scope.accountKeys } } : {}) },
     select: { key: true, dealer: true },
   });
   const dealerByAccount = new Map(accountMeta.map((a) => [a.key, a.dealer]));
@@ -441,7 +441,7 @@ export async function getLifecycleAlerts(scope: { accountKeys: string[] | null }
 
   const accountKeyWhere = scope.accountKeys && scope.accountKeys.length > 0 ? { accountKey: { in: scope.accountKeys } } : {};
   const accounts = await prisma.account.findMany({
-    where: { key: { not: { startsWith: '_' } }, ...(scope.accountKeys ? { key: { in: scope.accountKeys } } : {}) },
+    where: { key: { not: { startsWith: '\\_' } }, ...(scope.accountKeys ? { key: { in: scope.accountKeys } } : {}) },
     select: { key: true, dealer: true },
   });
   const dealerByAccount = new Map(accounts.map((a) => [a.key, a.dealer]));
@@ -656,7 +656,7 @@ export async function getAccountHealth(scope: PortfolioScope): Promise<AccountHe
   const range = dateFilter(start, end);
 
   const accounts = await prisma.account.findMany({
-    where: { key: { not: { startsWith: '_' } }, ...(accountKeys ? { key: { in: accountKeys } } : {}) },
+    where: { key: { not: { startsWith: '\\_' } }, ...(accountKeys ? { key: { in: accountKeys } } : {}) },
     select: { key: true, dealer: true },
   });
   const allowedKeys = accounts.map((a) => a.key);
@@ -822,7 +822,7 @@ export async function getAnomalies(scope: { accountKeys: string[] | null }): Pro
 
   const accountKeyWhere = scope.accountKeys && scope.accountKeys.length > 0 ? { accountKey: { in: scope.accountKeys } } : {};
   const accounts = await prisma.account.findMany({
-    where: { key: { not: { startsWith: '_' } }, ...(scope.accountKeys ? { key: { in: scope.accountKeys } } : {}) },
+    where: { key: { not: { startsWith: '\\_' } }, ...(scope.accountKeys ? { key: { in: scope.accountKeys } } : {}) },
     select: { key: true, dealer: true, slug: true },
   });
   const dealerByAccount = new Map(accounts.map((a) => [a.key, a.dealer]));
@@ -1125,7 +1125,7 @@ export interface ActivityEntry {
 
 export async function getRecentActivity(scope: { accountKeys: string[] | null }, limit = 20): Promise<ActivityEntry[]> {
   const accounts = await prisma.account.findMany({
-    where: { key: { not: { startsWith: '_' } }, ...(scope.accountKeys ? { key: { in: scope.accountKeys } } : {}) },
+    where: { key: { not: { startsWith: '\\_' } }, ...(scope.accountKeys ? { key: { in: scope.accountKeys } } : {}) },
     select: { key: true, dealer: true },
   });
   const dealerByAccount = new Map(accounts.map((a) => [a.key, a.dealer]));

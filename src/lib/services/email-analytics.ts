@@ -319,6 +319,83 @@ export async function getCampaignEngagement(
     .sort((a, b) => (b.sentAt?.getTime() ?? 0) - (a.sentAt?.getTime() ?? 0));
 }
 
+/**
+ * Per-campaign engagement for a single campaign. Mirrors the shape of
+ * a row from {@link getCampaignEngagement} so the campaigns-list detail
+ * drawer can render the same KPIs without pulling the whole range.
+ */
+export async function getCampaignEngagementById(
+  campaignId: string,
+): Promise<CampaignEngagementRow | null> {
+  assertEventModelAvailable();
+
+  const campaign = await prisma.emailCampaign.findUnique({
+    where: { id: campaignId },
+    select: {
+      id: true,
+      name: true,
+      accountKeys: true,
+      scheduledFor: true,
+      startedAt: true,
+      completedAt: true,
+    },
+  });
+  if (!campaign) return null;
+
+  const recipientGroups = await prisma.emailCampaignRecipient.groupBy({
+    by: ['status'],
+    where: { campaignId: campaign.id },
+    _count: { _all: true },
+  });
+  const recipientCounts = { sent: 0, skipped: 0, failed: 0 };
+  for (const g of recipientGroups) {
+    if (g.status === 'sent') recipientCounts.sent = g._count._all;
+    if (g.status === 'skipped') recipientCounts.skipped = g._count._all;
+    if (g.status === 'failed') recipientCounts.failed = g._count._all;
+  }
+
+  const eventGroups = await prisma.emailEvent.groupBy({
+    by: ['eventType'],
+    where: { campaignId: campaign.id },
+    _count: { _all: true },
+  });
+  const eventCount = new Map(eventGroups.map((g) => [g.eventType, g._count._all]));
+
+  const uniqueOpens = await prisma.emailEvent.findMany({
+    where: { campaignId: campaign.id, eventType: 'open', recipientId: { not: null } },
+    distinct: ['recipientId'],
+    select: { recipientId: true },
+  });
+  const uniqueClicks = await prisma.emailEvent.findMany({
+    where: { campaignId: campaign.id, eventType: 'click', recipientId: { not: null } },
+    distinct: ['recipientId'],
+    select: { recipientId: true },
+  });
+
+  const totals = computeRatios({
+    sent: recipientCounts.sent,
+    delivered: eventCount.get('delivered') || 0,
+    uniqueOpens: uniqueOpens.length,
+    totalOpens: eventCount.get('open') || 0,
+    uniqueClicks: uniqueClicks.length,
+    totalClicks: eventCount.get('click') || 0,
+    bounces: eventCount.get('bounce') || 0,
+    dropped: eventCount.get('dropped') || 0,
+    spamReports: eventCount.get('spamreport') || 0,
+    unsubscribes:
+      (eventCount.get('unsubscribe') || 0) + (eventCount.get('group_unsubscribe') || 0),
+    skipped: recipientCounts.skipped,
+    failed: recipientCounts.failed,
+  });
+
+  return {
+    campaignId: campaign.id,
+    campaignName: campaign.name,
+    sentAt: campaign.completedAt || campaign.startedAt || campaign.scheduledFor || null,
+    ...totals,
+  };
+}
+
 // ── Helpers ──
 
 function dateFilter(start: Date | null, end: Date | null): { gte?: Date; lte?: Date } | null {

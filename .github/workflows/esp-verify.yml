@@ -46,5 +46,5 @@ jobs:
       - name: Push Prisma schema
         run: npx prisma db push
 
-      - name: Run ESP verification gate
-        run: npm run esp:verify
+      - name: Run verification gate
+        run: npm run verify

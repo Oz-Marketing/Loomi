@@ -132,6 +132,11 @@ model Account {
   twilioMessagingServiceSid  String?
   accountRepId String?
   accountRep   User?    @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
+  // Marker for the one-time bootstrap that seeds Loomi's six lifecycle
+  // audiences (service overdue, lease ending, etc.) into automotive
+  // accounts. Set once on first visit to /contacts/segments. Powersports
+  // and other categories stay null and never get seeded.
+  lifecyclePresetsSeededAt DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

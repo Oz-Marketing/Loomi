@@ -38,6 +38,7 @@ interface DraftCampaign {
   htmlContent: string;
   sourceAudienceId: string;
   sourceFilter: string;
+  sourceListId: string;
   metadata: string;
 }
 
@@ -162,6 +163,10 @@ export default function ScheduleStepPage({ params }: PageProps) {
   const [loading, setLoading] = useState(true);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
+  // When the draft has a sourceListId, we resolve recipients by
+  // intersecting the deliverable contact set with this list's members.
+  const [listMemberIds, setListMemberIds] = useState<Set<string> | null>(null);
+  const [listMembersLoading, setListMembersLoading] = useState(false);
 
   const [sendMode, setSendMode] = useState<SendMode>('later');
   // Default to ~30m out so the input isn't pinned to "now" (which would
@@ -267,21 +272,60 @@ export default function ScheduleStepPage({ params }: PageProps) {
     };
   }, [accountKey]);
 
-  // Resolve audience → list of sendable recipients.
+  // Fetch list members when the draft references a static list. Resolution
+  // happens client-side (matching the segment branch) so the recipient
+  // shape is built the same way on either path.
+  useEffect(() => {
+    const listId = draft?.sourceListId;
+    if (!listId) {
+      setListMemberIds(null);
+      return;
+    }
+    let cancelled = false;
+    setListMembersLoading(true);
+    fetch(`/api/contacts/lists/${encodeURIComponent(listId)}`)
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Failed to load list');
+        const ids: string[] = Array.isArray(data.members)
+          ? data.members.map((m: { id: string }) => m.id).filter(Boolean)
+          : [];
+        if (!cancelled) setListMemberIds(new Set(ids));
+      })
+      .catch(() => {
+        if (!cancelled) setListMemberIds(new Set());
+      })
+      .finally(() => {
+        if (!cancelled) setListMembersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [draft?.sourceListId]);
+
+  // Resolve audience → list of sendable recipients. List takes precedence
+  // over filter — they're mutually exclusive on the draft, but we still
+  // gate explicitly so an old filter on a list-mode draft can't leak in.
   const recipients = useMemo(() => {
     if (!draft) return [] as { contactId: string; accountKey: string; email: string; fullName: string }[];
-    const filter = draft.sourceFilter ? parseFilterDefinition(draft.sourceFilter) : null;
     const sendable = contacts.filter((c) =>
       Boolean(c.id && isValidEmail(String(c.email || '').trim())),
     );
-    const matched = filter ? evaluateFilter(sendable, filter) : sendable;
+    let matched: Contact[];
+    if (draft.sourceListId) {
+      if (!listMemberIds) return [];
+      matched = sendable.filter((c) => listMemberIds.has(c.id));
+    } else {
+      const filter = draft.sourceFilter ? parseFilterDefinition(draft.sourceFilter) : null;
+      matched = filter ? evaluateFilter(sendable, filter) : sendable;
+    }
     return matched.map((c) => ({
       contactId: String(c.id).trim(),
       accountKey,
       email: String(c.email || '').trim(),
       fullName: String(c.fullName || '').trim(),
     }));
-  }, [draft, contacts, accountKey]);
+  }, [draft, contacts, accountKey, listMemberIds]);
 
   async function handleSchedule() {
     if (!draft) return;
@@ -559,7 +603,7 @@ export default function ScheduleStepPage({ params }: PageProps) {
                   <UsersIcon className="w-4 h-4 text-[var(--primary)] flex-shrink-0" />
                   <div className="min-w-0">
                     <p className="text-sm font-semibold tabular-nums leading-tight">
-                      {contactsLoading ? (
+                      {contactsLoading || listMembersLoading ? (
                         <ArrowPathIcon className="w-3.5 h-3.5 inline animate-spin text-[var(--muted-foreground)]" />
                       ) : (
                         `${recipients.length.toLocaleString()} recipient${recipients.length === 1 ? '' : 's'}`
@@ -732,6 +776,7 @@ export default function ScheduleStepPage({ params }: PageProps) {
             disabled={
               submitting ||
               contactsLoading ||
+              listMembersLoading ||
               recipients.length === 0 ||
               !draft?.subject?.trim() ||
               !draft?.htmlContent?.trim()

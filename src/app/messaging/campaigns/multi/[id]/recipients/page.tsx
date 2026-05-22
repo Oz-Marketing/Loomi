@@ -5,10 +5,14 @@ import { useRouter } from 'next/navigation';
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
+  ChatBubbleLeftRightIcon,
   CheckCircleIcon,
+  EnvelopeIcon,
   ListBulletIcon,
+  PlusIcon,
   RectangleStackIcon,
   UsersIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import type { Contact } from '@/lib/contacts/types';
@@ -18,19 +22,24 @@ import type { FilterDefinition } from '@/lib/smart-list-types';
 import { isLikelyDialablePhone, normalizePhoneNumber } from '@/lib/contact-hygiene';
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
+import { FilterBuilder } from '@/components/contacts/filter-builder';
 
 interface PageProps {
   params: Promise<{ id: string }>;
 }
 
-interface EmailDraft {
+interface CampaignDraftCore {
   id: string;
   name: string;
   accountKeys: string[];
   sourceAudienceId: string;
   sourceFilter: string;
+  sourceListId: string;
   metadata: string;
 }
+
+type EmailDraft = CampaignDraftCore;
+type SmsDraft = CampaignDraftCore;
 
 interface SavedAudience {
   id: string;
@@ -39,10 +48,20 @@ interface SavedAudience {
   accountKey?: string | null;
 }
 
+interface ListSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  accountKey: string;
+  memberCount: number;
+}
+
 type AudienceTab = 'lists' | 'segments';
+type Rail = 'email' | 'sms';
 
 type AudienceSelection =
   | { kind: 'all' }
+  | { kind: 'list'; id: string; name: string }
   | { kind: 'segment'; id: string; name: string; filter: FilterDefinition };
 
 function parseFilterDefinition(raw: string): FilterDefinition | null {
@@ -71,6 +90,41 @@ function parseLinkedSmsId(rawMetadata: string): string | null {
   }
 }
 
+function audienceFromCampaign(c: {
+  sourceListId?: string;
+  sourceAudienceId?: string;
+  sourceFilter?: string;
+}): AudienceSelection {
+  if (c.sourceListId) {
+    return { kind: 'list', id: c.sourceListId, name: 'List' };
+  }
+  if (c.sourceAudienceId && c.sourceFilter) {
+    const parsed = parseFilterDefinition(c.sourceFilter);
+    if (parsed) {
+      const preset = LIFECYCLE_PRESETS.find((p) => p.id === c.sourceAudienceId);
+      return {
+        kind: 'segment',
+        id: c.sourceAudienceId,
+        name: preset?.name || 'Saved Segment',
+        filter: parsed,
+      };
+    }
+  }
+  return { kind: 'all' };
+}
+
+function selectionsEqual(a: AudienceSelection, b: AudienceSelection): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === 'all') return true;
+  if (a.kind === 'list' && b.kind === 'list') return a.id === b.id;
+  if (a.kind === 'segment' && b.kind === 'segment') return a.id === b.id;
+  return false;
+}
+
+function preferredTab(sel: AudienceSelection): AudienceTab {
+  return sel.kind === 'list' ? 'lists' : 'segments';
+}
+
 export default function MultiRecipientsStepPage({ params }: PageProps) {
   const router = useRouter();
   const { id } = use(params);
@@ -81,58 +135,81 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
   const [loading, setLoading] = useState(true);
 
   const [selectedAccountKey, setSelectedAccountKey] = useState('');
-  const [tab, setTab] = useState<AudienceTab>('segments');
-  const [selection, setSelection] = useState<AudienceSelection>({ kind: 'all' });
+
+  // Split-audience model: each rail tracks its own selection. When
+  // splitAudiences is false, smsSelection is ignored for persistence and
+  // counts — emailSelection drives both rails. State is preserved across
+  // toggles so users can switch back without re-picking.
+  const [splitAudiences, setSplitAudiences] = useState(false);
+  const [emailSelection, setEmailSelection] = useState<AudienceSelection>({ kind: 'all' });
+  const [smsSelection, setSmsSelection] = useState<AudienceSelection>({ kind: 'all' });
+  const [emailTab, setEmailTab] = useState<AudienceTab>('segments');
+  const [smsTab, setSmsTab] = useState<AudienceTab>('segments');
 
   const [savedAudiences, setSavedAudiences] = useState<SavedAudience[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
+
+  const [lists, setLists] = useState<ListSummary[]>([]);
+  // Shared list-member cache so a list referenced by both rails doesn't
+  // double-fetch when split is off (or when both rails happen to point
+  // at the same list in split mode).
+  const [listMembersById, setListMembersById] = useState<Map<string, Set<string>>>(new Map());
+  const [loadingListIds, setLoadingListIds] = useState<Set<string>>(new Set());
+
   const [saving, setSaving] = useState(false);
+  const [modalRail, setModalRail] = useState<Rail>('email');
+  const [showNewListModal, setShowNewListModal] = useState(false);
+  const [showFilterBuilder, setShowFilterBuilder] = useState(false);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    fetch(`/api/campaigns/email/${encodeURIComponent(id)}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Failed to load campaign'))))
-      .then((data: { campaign?: EmailDraft }) => {
-        if (cancelled) return;
-        const campaign = data.campaign;
-        if (!campaign) {
-          toast.error('Multi-channel campaign not found');
-          router.push('/messaging/campaigns');
-          return;
+    async function load() {
+      try {
+        const emailRes = await fetch(`/api/campaigns/email/${encodeURIComponent(id)}`);
+        const emailData = await emailRes.json().catch(() => ({}));
+        if (!emailRes.ok || !emailData?.campaign) {
+          throw new Error(emailData?.error || 'Multi-channel campaign not found');
         }
-        const smsId = parseLinkedSmsId(campaign.metadata || '');
+        const email = emailData.campaign as EmailDraft;
+        const smsId = parseLinkedSmsId(email.metadata || '');
         if (!smsId) {
           toast.error('Linked SMS draft missing — opening the email-only flow.');
           router.push(`/messaging/campaigns/${encodeURIComponent(id)}/recipients`);
           return;
         }
-        setEmailDraft(campaign);
+        const smsRes = await fetch(`/api/campaigns/sms/${encodeURIComponent(smsId)}`);
+        const smsData = await smsRes.json().catch(() => ({}));
+        if (!smsRes.ok || !smsData?.campaign) {
+          throw new Error(smsData?.error || 'Linked SMS draft not loadable');
+        }
+        const sms = smsData.campaign as SmsDraft;
+        if (cancelled) return;
+
+        setEmailDraft(email);
         setLinkedSmsId(smsId);
-        if (campaign.accountKeys.length > 0) {
-          setSelectedAccountKey(campaign.accountKeys[0]);
+        if (email.accountKeys.length > 0) {
+          setSelectedAccountKey(email.accountKeys[0]);
         }
-        if (campaign.sourceAudienceId && campaign.sourceFilter) {
-          const parsed = parseFilterDefinition(campaign.sourceFilter);
-          if (parsed) {
-            const preset = LIFECYCLE_PRESETS.find((p) => p.id === campaign.sourceAudienceId);
-            setSelection({
-              kind: 'segment',
-              id: campaign.sourceAudienceId,
-              name: preset?.name || 'Saved Segment',
-              filter: parsed,
-            });
-          }
+
+        const eSel = audienceFromCampaign(email);
+        const sSel = audienceFromCampaign(sms);
+        setEmailSelection(eSel);
+        setSmsSelection(sSel);
+        setEmailTab(preferredTab(eSel));
+        setSmsTab(preferredTab(sSel));
+        setSplitAudiences(!selectionsEqual(eSel, sSel));
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : 'Failed to load campaign');
+          router.push('/messaging/campaigns');
         }
-      })
-      .catch((err: Error) => {
-        if (!cancelled) toast.error(err.message);
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    }
+    load();
     return () => {
       cancelled = true;
     };
@@ -178,26 +255,118 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     };
   }, [selectedAccountKey]);
 
+  const refreshAudiences = async () => {
+    try {
+      const res = await fetch('/api/audiences');
+      const data = (res.ok ? await res.json() : { audiences: [] }) as { audiences?: SavedAudience[] };
+      setSavedAudiences(Array.isArray(data.audiences) ? data.audiences : []);
+    } catch {
+      setSavedAudiences([]);
+    }
+  };
+
   useEffect(() => {
-    let cancelled = false;
-    fetch('/api/audiences')
-      .then((res) => (res.ok ? res.json() : { audiences: [] }))
-      .then((data: { audiences?: SavedAudience[] }) => {
-        if (cancelled) return;
-        setSavedAudiences(Array.isArray(data.audiences) ? data.audiences : []);
-      })
-      .catch(() => {
-        if (!cancelled) setSavedAudiences([]);
-      });
-    return () => {
-      cancelled = true;
-    };
+    refreshAudiences();
+  }, []);
+
+  const refreshLists = async () => {
+    try {
+      const res = await fetch('/api/contacts/lists');
+      const data = (res.ok ? await res.json() : { lists: [] }) as { lists?: ListSummary[] };
+      setLists(Array.isArray(data.lists) ? data.lists : []);
+    } catch {
+      setLists([]);
+    }
+  };
+
+  useEffect(() => {
+    refreshLists();
   }, []);
 
   const scopedAudiences = useMemo(
     () => savedAudiences.filter((a) => !a.accountKey || a.accountKey === selectedAccountKey),
     [savedAudiences, selectedAccountKey],
   );
+
+  const scopedLists = useMemo(
+    () => lists.filter((l) => l.accountKey === selectedAccountKey),
+    [lists, selectedAccountKey],
+  );
+
+  // Hydrate the placeholder list name once the lists fetch completes.
+  useEffect(() => {
+    setEmailSelection((prev) => {
+      if (prev.kind !== 'list') return prev;
+      const match = scopedLists.find((l) => l.id === prev.id);
+      return match && match.name !== prev.name ? { kind: 'list', id: match.id, name: match.name } : prev;
+    });
+    setSmsSelection((prev) => {
+      if (prev.kind !== 'list') return prev;
+      const match = scopedLists.find((l) => l.id === prev.id);
+      return match && match.name !== prev.name ? { kind: 'list', id: match.id, name: match.name } : prev;
+    });
+  }, [scopedLists]);
+
+  // Fetch any list IDs we don't yet have cached. One unified effect so a
+  // shared list ID across both rails only triggers one network call.
+  const emailListId = emailSelection.kind === 'list' ? emailSelection.id : null;
+  const effectiveSmsSelection = splitAudiences ? smsSelection : emailSelection;
+  const smsListId = effectiveSmsSelection.kind === 'list' ? effectiveSmsSelection.id : null;
+
+  useEffect(() => {
+    const candidates = [emailListId, smsListId].filter((x): x is string => Boolean(x));
+    const needed = candidates.filter((listId) => !listMembersById.has(listId) && !loadingListIds.has(listId));
+    if (needed.length === 0) return;
+
+    setLoadingListIds((prev) => {
+      const next = new Set(prev);
+      for (const listId of needed) next.add(listId);
+      return next;
+    });
+
+    let cancelled = false;
+    needed.forEach((listId) => {
+      fetch(`/api/contacts/lists/${encodeURIComponent(listId)}`)
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Failed to load list');
+          const ids: string[] = Array.isArray(data.members)
+            ? data.members.map((m: { id: string }) => m.id).filter(Boolean)
+            : [];
+          if (cancelled) return;
+          setListMembersById((prev) => {
+            const next = new Map(prev);
+            next.set(listId, new Set(ids));
+            return next;
+          });
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setListMembersById((prev) => {
+            const next = new Map(prev);
+            next.set(listId, new Set());
+            return next;
+          });
+        })
+        .finally(() => {
+          if (cancelled) return;
+          setLoadingListIds((prev) => {
+            const next = new Set(prev);
+            next.delete(listId);
+            return next;
+          });
+        });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [emailListId, smsListId, listMembersById, loadingListIds]);
+
+  const emailListMembers = emailListId ? listMembersById.get(emailListId) ?? null : null;
+  const smsListMembers = smsListId ? listMembersById.get(smsListId) ?? null : null;
+  const emailListLoading = emailListId !== null && loadingListIds.has(emailListId);
+  const smsListLoading = smsListId !== null && loadingListIds.has(smsListId);
 
   const { emailSendable, smsSendable } = useMemo(() => {
     if (contactsLoading) return { emailSendable: 0, smsSendable: 0 };
@@ -207,39 +376,63 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     const smsOk = contacts.filter((c) =>
       isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || ''))),
     );
-    if (selection.kind === 'all') {
-      return { emailSendable: emailOk.length, smsSendable: smsOk.length };
-    }
-    return {
-      emailSendable: evaluateFilter(emailOk, selection.filter).length,
-      smsSendable: evaluateFilter(smsOk, selection.filter).length,
+
+    const resolveEmail = () => {
+      if (emailSelection.kind === 'all') return emailOk.length;
+      if (emailSelection.kind === 'list') {
+        if (!emailListMembers) return 0;
+        return emailOk.filter((c) => emailListMembers.has(c.id)).length;
+      }
+      return evaluateFilter(emailOk, emailSelection.filter).length;
     };
-  }, [contacts, contactsLoading, selection]);
+
+    const resolveSms = () => {
+      const sel = effectiveSmsSelection;
+      if (sel.kind === 'all') return smsOk.length;
+      if (sel.kind === 'list') {
+        if (!smsListMembers) return 0;
+        return smsOk.filter((c) => smsListMembers.has(c.id)).length;
+      }
+      return evaluateFilter(smsOk, sel.filter).length;
+    };
+
+    return { emailSendable: resolveEmail(), smsSendable: resolveSms() };
+  }, [contacts, contactsLoading, emailSelection, effectiveSmsSelection, emailListMembers, smsListMembers]);
+
+  function buildPayload(sel: AudienceSelection): Record<string, unknown> {
+    const payload: Record<string, unknown> = {
+      accountKeys: [selectedAccountKey],
+    };
+    if (sel.kind === 'all') {
+      payload.sourceAudienceId = null;
+      payload.sourceFilter = null;
+      payload.sourceListId = null;
+    } else if (sel.kind === 'list') {
+      payload.sourceListId = sel.id;
+      payload.sourceAudienceId = null;
+      payload.sourceFilter = null;
+    } else {
+      payload.sourceAudienceId = sel.id;
+      payload.sourceFilter = JSON.stringify(sel.filter);
+      payload.sourceListId = null;
+    }
+    return payload;
+  }
 
   async function persistSelection() {
     if (!emailDraft || !linkedSmsId) return;
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = {
-        accountKeys: [selectedAccountKey],
-      };
-      if (selection.kind === 'all') {
-        payload.sourceAudienceId = null;
-        payload.sourceFilter = null;
-      } else {
-        payload.sourceAudienceId = selection.id;
-        payload.sourceFilter = JSON.stringify(selection.filter);
-      }
       await Promise.all([
         fetch(`/api/campaigns/email/${encodeURIComponent(emailDraft.id)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          body: JSON.stringify(buildPayload(emailSelection)),
         }),
         fetch(`/api/campaigns/sms/${encodeURIComponent(linkedSmsId)}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          body: JSON.stringify(buildPayload(effectiveSmsSelection)),
         }),
       ]);
     } finally {
@@ -268,6 +461,21 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     router.push('/messaging/campaigns');
   }
 
+  function handleToggleSplit(next: boolean) {
+    // Seed smsSelection from emailSelection on first split so the SMS
+    // picker doesn't snap to a stale value from earlier in the session.
+    if (next && !splitAudiences) {
+      setSmsSelection(emailSelection);
+      setSmsTab(preferredTab(emailSelection));
+    }
+    setSplitAudiences(next);
+  }
+
+  function applySelection(rail: Rail, next: AudienceSelection) {
+    if (rail === 'email') setEmailSelection(next);
+    else setSmsSelection(next);
+  }
+
   if (loading) {
     return (
       <div className="max-w-5xl mx-auto py-12 px-6">
@@ -279,28 +487,8 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     );
   }
 
-  const tabButton = (
-    key: AudienceTab,
-    label: string,
-    icon: React.ComponentType<{ className?: string }>,
-  ) => {
-    const Icon = icon;
-    const active = tab === key;
-    return (
-      <button
-        type="button"
-        onClick={() => setTab(key)}
-        className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
-          active
-            ? 'border-[var(--primary)] text-[var(--foreground)]'
-            : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-        }`}
-      >
-        <Icon className="w-4 h-4" />
-        {label}
-      </button>
-    );
-  };
+  const emailCountsLoading = contactsLoading || emailListLoading;
+  const smsCountsLoading = contactsLoading || smsListLoading;
 
   return (
     <div className="pb-32">
@@ -312,14 +500,15 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
             </p>
             <h1 className="text-2xl font-bold">{emailDraft?.name || 'Campaign'}</h1>
             <p className="text-sm text-[var(--muted-foreground)] mt-1.5">
-              One audience for both channels. Email needs a valid address; SMS needs a dialable
-              phone — counts shown for each.
+              {splitAudiences
+                ? 'Email and SMS each get their own audience. Counts shown for each rail.'
+                : 'One audience for both channels. Email needs a valid address; SMS needs a dialable phone — counts shown for each.'}
             </p>
           </div>
           <div className="flex items-end gap-6 flex-shrink-0">
             <div className="text-right">
               <p className="text-3xl sm:text-4xl font-bold tabular-nums leading-none">
-                {contactsLoading ? (
+                {emailCountsLoading ? (
                   <ArrowPathIcon className="w-6 h-6 inline animate-spin text-[var(--muted-foreground)]" />
                 ) : (
                   emailSendable.toLocaleString()
@@ -329,7 +518,7 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
             </div>
             <div className="text-right">
               <p className="text-3xl sm:text-4xl font-bold tabular-nums leading-none">
-                {contactsLoading ? (
+                {smsCountsLoading ? (
                   <ArrowPathIcon className="w-6 h-6 inline animate-spin text-[var(--muted-foreground)]" />
                 ) : (
                   smsSendable.toLocaleString()
@@ -359,77 +548,166 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={() => setSelection({ kind: 'all' })}
-          className={`w-full text-left rounded-2xl border-2 p-5 mb-5 flex items-start gap-4 transition-all ${
-            selection.kind === 'all'
-              ? 'border-[var(--primary)] bg-[var(--primary)]/[0.05]'
-              : 'border-[var(--border)] hover:border-[var(--muted-foreground)]'
+        <div
+          className={`glass-section-card rounded-2xl p-4 border mb-5 flex items-center justify-between gap-4 ${
+            splitAudiences ? 'border-[var(--primary)]/40' : 'border-[var(--border)]'
           }`}
         >
-          <div
-            className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${
-              selection.kind === 'all'
-                ? 'bg-[var(--primary)]/10 text-[var(--primary)]'
-                : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
-            }`}
-          >
-            <UsersIcon className="w-5 h-5" />
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-sm font-semibold text-[var(--foreground)]">All Contacts</p>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold">Use a different audience for SMS</p>
             <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-              Send to every deliverable contact in this subaccount. Email and SMS will resolve
-              to their respective sendable subsets at send time.
+              Pick separate lists or segments for email and SMS. Off by default — both rails share
+              the same audience.
             </p>
           </div>
-          {selection.kind === 'all' && (
-            <CheckCircleIcon className="w-5 h-5 text-[var(--primary)] flex-shrink-0" />
-          )}
-        </button>
-
-        <div className="glass-section-card rounded-2xl border border-[var(--border)] overflow-hidden">
-          <div className="border-b border-[var(--border)] flex items-center gap-1 px-5">
-            {tabButton('lists', 'Lists', ListBulletIcon)}
-            {tabButton('segments', 'Segments', RectangleStackIcon)}
-          </div>
-          <div className="p-5">
-            {tab === 'lists' && (
-              <div className="py-8 text-center">
-                <ListBulletIcon className="w-10 h-10 text-[var(--muted-foreground)] mx-auto mb-3 opacity-50" />
-                <p className="text-sm font-medium">Lists are coming with the local contact store</p>
-              </div>
-            )}
-            {tab === 'segments' && (
-              <div className="space-y-5">
-                {scopedAudiences.length > 0 && (
-                  <div>
-                    <div className="space-y-2">
-                      {scopedAudiences.map((a) => {
-                        const filter = parseFilterDefinition(a.filters);
-                        if (!filter) return null;
-                        const active = selection.kind === 'segment' && selection.id === a.id;
-                        return (
-                          <AudienceCard
-                            key={a.id}
-                            title={a.name}
-                            subtitle="Custom segment"
-                            active={active}
-                            onClick={() =>
-                              setSelection({ kind: 'segment', id: a.id, name: a.name, filter })
-                            }
-                          />
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <Switch
+            checked={splitAudiences}
+            onChange={handleToggleSplit}
+            ariaLabel="Use a different audience for SMS"
+          />
         </div>
+
+        {!splitAudiences ? (
+          <AudiencePicker
+            selection={emailSelection}
+            onChange={(next) => applySelection('email', next)}
+            tab={emailTab}
+            onTabChange={setEmailTab}
+            scopedLists={scopedLists}
+            scopedAudiences={scopedAudiences}
+            allLabel="All Contacts"
+            allDescription="Send to every deliverable contact in this subaccount. Email and SMS will resolve to their respective sendable subsets at send time."
+            onRequestNewList={() => {
+              setModalRail('email');
+              setShowNewListModal(true);
+            }}
+            onRequestNewSegment={() => {
+              setModalRail('email');
+              setShowFilterBuilder(true);
+            }}
+          />
+        ) : (
+          <div className="space-y-5">
+            <RailSection
+              icon={EnvelopeIcon}
+              title="Email audience"
+              countLabel={`${emailSendable.toLocaleString()} email recipient${emailSendable === 1 ? '' : 's'}`}
+              countLoading={emailCountsLoading}
+            >
+              <AudiencePicker
+                selection={emailSelection}
+                onChange={(next) => applySelection('email', next)}
+                tab={emailTab}
+                onTabChange={setEmailTab}
+                scopedLists={scopedLists}
+                scopedAudiences={scopedAudiences}
+                allLabel="All Contacts (email)"
+                allDescription="Send to every contact with a valid email address in this subaccount."
+                onRequestNewList={() => {
+                  setModalRail('email');
+                  setShowNewListModal(true);
+                }}
+                onRequestNewSegment={() => {
+                  setModalRail('email');
+                  setShowFilterBuilder(true);
+                }}
+              />
+            </RailSection>
+
+            <RailSection
+              icon={ChatBubbleLeftRightIcon}
+              title="SMS audience"
+              countLabel={`${smsSendable.toLocaleString()} SMS recipient${smsSendable === 1 ? '' : 's'}`}
+              countLoading={smsCountsLoading}
+            >
+              <AudiencePicker
+                selection={smsSelection}
+                onChange={(next) => applySelection('sms', next)}
+                tab={smsTab}
+                onTabChange={setSmsTab}
+                scopedLists={scopedLists}
+                scopedAudiences={scopedAudiences}
+                allLabel="All Contacts (SMS)"
+                allDescription="Send to every contact with a dialable phone number in this subaccount."
+                onRequestNewList={() => {
+                  setModalRail('sms');
+                  setShowNewListModal(true);
+                }}
+                onRequestNewSegment={() => {
+                  setModalRail('sms');
+                  setShowFilterBuilder(true);
+                }}
+              />
+            </RailSection>
+          </div>
+        )}
       </div>
+
+      {showNewListModal && (
+        <NewListInlineModal
+          accountKey={selectedAccountKey}
+          onCreated={(list) => {
+            setLists((prev) => [
+              {
+                id: list.id,
+                name: list.name,
+                description: list.description,
+                accountKey: list.accountKey,
+                memberCount: 0,
+              },
+              ...prev,
+            ]);
+            applySelection(modalRail, { kind: 'list', id: list.id, name: list.name });
+            setShowNewListModal(false);
+            void refreshLists();
+            toast.success(`List "${list.name}" created. Populate it on the Lists page.`);
+          }}
+          onClose={() => setShowNewListModal(false)}
+        />
+      )}
+
+      {showFilterBuilder && (
+        <FilterBuilder
+          onApply={(definition) => {
+            applySelection(modalRail, {
+              kind: 'segment',
+              id: `ad-hoc-${Date.now()}`,
+              name: 'Custom segment',
+              filter: definition,
+            });
+            setShowFilterBuilder(false);
+          }}
+          onSave={async (name, definition) => {
+            try {
+              const res = await fetch('/api/audiences', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  name,
+                  filters: JSON.stringify(definition),
+                  accountKey: selectedAccountKey,
+                }),
+              });
+              const data = await res.json().catch(() => ({}));
+              if (!res.ok) {
+                throw new Error(typeof data.error === 'string' ? data.error : 'Failed to save segment');
+              }
+              applySelection(modalRail, {
+                kind: 'segment',
+                id: data.audience.id,
+                name: data.audience.name,
+                filter: definition,
+              });
+              setShowFilterBuilder(false);
+              await refreshAudiences();
+              toast.success(`Segment "${name}" saved.`);
+            } catch (err) {
+              toast.error(err instanceof Error ? err.message : 'Failed to save segment');
+            }
+          }}
+          onClose={() => setShowFilterBuilder(false)}
+        />
+      )}
 
       <div className="fixed bottom-0 left-0 right-0 bg-[var(--card)]/80 backdrop-blur-md border-t border-[var(--border)] z-40">
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
@@ -453,14 +731,361 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
   );
 }
 
+function AudiencePicker({
+  selection,
+  onChange,
+  tab,
+  onTabChange,
+  scopedLists,
+  scopedAudiences,
+  allLabel,
+  allDescription,
+  onRequestNewList,
+  onRequestNewSegment,
+}: {
+  selection: AudienceSelection;
+  onChange: (next: AudienceSelection) => void;
+  tab: AudienceTab;
+  onTabChange: (tab: AudienceTab) => void;
+  scopedLists: ListSummary[];
+  scopedAudiences: SavedAudience[];
+  allLabel: string;
+  allDescription: string;
+  onRequestNewList: () => void;
+  onRequestNewSegment: () => void;
+}) {
+  const tabButton = (
+    key: AudienceTab,
+    label: string,
+    icon: React.ComponentType<{ className?: string }>,
+  ) => {
+    const Icon = icon;
+    const active = tab === key;
+    return (
+      <button
+        type="button"
+        onClick={() => onTabChange(key)}
+        className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors ${
+          active
+            ? 'border-[var(--primary)] text-[var(--foreground)]'
+            : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+        }`}
+      >
+        <Icon className="w-4 h-4" />
+        {label}
+      </button>
+    );
+  };
+
+  return (
+    <div className="space-y-5">
+      <button
+        type="button"
+        onClick={() => onChange({ kind: 'all' })}
+        className={`w-full text-left rounded-2xl border-2 p-5 flex items-start gap-4 transition-all ${
+          selection.kind === 'all'
+            ? 'border-[var(--primary)] bg-[var(--primary)]/[0.05]'
+            : 'border-[var(--border)] hover:border-[var(--muted-foreground)]'
+        }`}
+      >
+        <div
+          className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${
+            selection.kind === 'all'
+              ? 'bg-[var(--primary)]/10 text-[var(--primary)]'
+              : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
+          }`}
+        >
+          <UsersIcon className="w-5 h-5" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-[var(--foreground)]">{allLabel}</p>
+          <p className="text-xs text-[var(--muted-foreground)] mt-0.5">{allDescription}</p>
+        </div>
+        {selection.kind === 'all' && (
+          <CheckCircleIcon className="w-5 h-5 text-[var(--primary)] flex-shrink-0" />
+        )}
+      </button>
+
+      <div className="glass-section-card rounded-2xl border border-[var(--border)] overflow-hidden">
+        <div className="border-b border-[var(--border)] flex items-center gap-1 px-5">
+          {tabButton('lists', 'Lists', ListBulletIcon)}
+          {tabButton('segments', 'Segments', RectangleStackIcon)}
+        </div>
+        <div className="p-5">
+          {tab === 'lists' && (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] font-semibold">
+                  {scopedLists.length} {scopedLists.length === 1 ? 'list' : 'lists'}
+                </p>
+                <button
+                  type="button"
+                  onClick={onRequestNewList}
+                  className="inline-flex items-center gap-1.5 px-2.5 h-8 text-xs rounded-lg border border-[var(--border)] hover:border-[var(--primary)]/40 text-[var(--foreground)]"
+                >
+                  <PlusIcon className="w-3.5 h-3.5" />
+                  New list
+                </button>
+              </div>
+
+              {scopedLists.length === 0 ? (
+                <div className="py-10 text-center border border-dashed border-[var(--border)] rounded-xl">
+                  <ListBulletIcon className="w-10 h-10 text-[var(--muted-foreground)] mx-auto mb-3 opacity-50" />
+                  <p className="text-sm font-medium">No lists for this account yet</p>
+                  <p className="text-xs text-[var(--muted-foreground)] mt-1.5 max-w-md mx-auto">
+                    Click <span className="font-medium">New list</span> above to create one, then populate it on the Lists page.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {scopedLists.map((list) => {
+                    const active = selection.kind === 'list' && selection.id === list.id;
+                    const memberLabel = `${list.memberCount.toLocaleString()} ${list.memberCount === 1 ? 'contact' : 'contacts'}`;
+                    return (
+                      <AudienceCard
+                        key={list.id}
+                        title={list.name}
+                        subtitle={list.description ? `${memberLabel} · ${list.description}` : memberLabel}
+                        icon={ListBulletIcon}
+                        active={active}
+                        onClick={() => onChange({ kind: 'list', id: list.id, name: list.name })}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          {tab === 'segments' && (
+            <div className="space-y-5">
+              <div className="flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={onRequestNewSegment}
+                  className="inline-flex items-center gap-1.5 px-2.5 h-8 text-xs rounded-lg border border-[var(--border)] hover:border-[var(--primary)]/40 text-[var(--foreground)]"
+                >
+                  <PlusIcon className="w-3.5 h-3.5" />
+                  New segment
+                </button>
+              </div>
+
+              {scopedAudiences.length > 0 && (
+                <div className="space-y-2">
+                  {scopedAudiences.map((a) => {
+                    const filter = parseFilterDefinition(a.filters);
+                    if (!filter) return null;
+                    const active = selection.kind === 'segment' && selection.id === a.id;
+                    return (
+                      <AudienceCard
+                        key={a.id}
+                        title={a.name}
+                        subtitle="Custom segment"
+                        icon={RectangleStackIcon}
+                        active={active}
+                        onClick={() => onChange({ kind: 'segment', id: a.id, name: a.name, filter })}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RailSection({
+  icon: Icon,
+  title,
+  countLabel,
+  countLoading,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  countLabel: string;
+  countLoading: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="glass-section-card rounded-2xl border border-[var(--border)] p-5">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-[var(--primary)]/10 text-[var(--primary)] flex items-center justify-center flex-shrink-0">
+            <Icon className="w-4 h-4" />
+          </div>
+          <p className="text-base font-semibold">{title}</p>
+        </div>
+        <p className="text-xs tabular-nums text-[var(--muted-foreground)]">
+          {countLoading ? (
+            <ArrowPathIcon className="w-3.5 h-3.5 inline animate-spin" />
+          ) : (
+            countLabel
+          )}
+        </p>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Switch({
+  checked,
+  onChange,
+  ariaLabel,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 ${
+        checked ? 'bg-[var(--primary)]' : 'bg-[var(--border)]'
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+          checked ? 'translate-x-[18px]' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
+  );
+}
+
+function NewListInlineModal({
+  accountKey,
+  onCreated,
+  onClose,
+}: {
+  accountKey: string;
+  onCreated: (list: { id: string; name: string; description: string | null; accountKey: string }) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/contacts/lists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), accountKey, description: description.trim() || null }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data.error === 'string' ? data.error : 'Failed to create list');
+      }
+      onCreated(data.list);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create list');
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <form
+        onSubmit={handleSubmit}
+        onClick={(e) => e.stopPropagation()}
+        className="glass-card glass-card-strong w-full max-w-md rounded-2xl border border-[var(--border)] p-5 space-y-4"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-bold">New list</h3>
+            <p className="text-xs text-[var(--muted-foreground)] mt-1">
+              Create an empty list and populate it from the Lists page (or by bulk-adding from Contacts).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]/60"
+            aria-label="Close"
+          >
+            <XMarkIcon className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+              Name
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="e.g. Q4 Service Customers"
+              autoFocus
+              maxLength={120}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)]"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+              Description <span className="text-[var(--muted-foreground)] font-normal lowercase">(optional)</span>
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={2}
+              maxLength={500}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] resize-none"
+            />
+          </div>
+          {error && <p className="text-xs text-red-400">{error}</p>}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={submitting}
+            className="px-3 h-10 text-sm rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--muted-foreground)] disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={!name.trim() || submitting}
+            className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {submitting ? 'Creating…' : 'Create list'}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 function AudienceCard({
   title,
   subtitle,
+  icon: Icon,
   active,
   onClick,
 }: {
   title: string;
   subtitle: string;
+  icon: React.ComponentType<{ className?: string }>;
   active: boolean;
   onClick: () => void;
 }) {
@@ -481,7 +1106,7 @@ function AudienceCard({
             : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
         }`}
       >
-        <RectangleStackIcon className="w-4 h-4" />
+        <Icon className="w-4 h-4" />
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-[var(--foreground)]">{title}</p>

@@ -34,6 +34,7 @@ interface DraftCampaign {
   message: string;
   sourceAudienceId: string;
   sourceFilter: string;
+  sourceListId: string;
   metadata: string;
 }
 
@@ -90,6 +91,10 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
   const [loading, setLoading] = useState(true);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
+  // When the draft has a sourceListId, resolve recipients by intersecting
+  // the dialable contact set with this list's members.
+  const [listMemberIds, setListMemberIds] = useState<Set<string> | null>(null);
+  const [listMembersLoading, setListMembersLoading] = useState(false);
 
   const [messageDraft, setMessageDraft] = useState('');
 
@@ -172,20 +177,58 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
     };
   }, [accountKey]);
 
+  // Fetch list members when the draft references a static list. Mirrors
+  // the segment-filter branch so the recipient shape is uniform.
+  useEffect(() => {
+    const listId = draft?.sourceListId;
+    if (!listId) {
+      setListMemberIds(null);
+      return;
+    }
+    let cancelled = false;
+    setListMembersLoading(true);
+    fetch(`/api/contacts/lists/${encodeURIComponent(listId)}`)
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Failed to load list');
+        const ids: string[] = Array.isArray(data.members)
+          ? data.members.map((m: { id: string }) => m.id).filter(Boolean)
+          : [];
+        if (!cancelled) setListMemberIds(new Set(ids));
+      })
+      .catch(() => {
+        if (!cancelled) setListMemberIds(new Set());
+      })
+      .finally(() => {
+        if (!cancelled) setListMembersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [draft?.sourceListId]);
+
+  // List takes precedence over filter — exclusive on the draft, but
+  // gated explicitly so stale filter state on a list-mode draft can't leak.
   const recipients = useMemo(() => {
     if (!draft) return [] as { contactId: string; accountKey: string; phone: string; fullName: string }[];
-    const filter = draft.sourceFilter ? parseFilterDefinition(draft.sourceFilter) : null;
     const sendable = contacts.filter((c) =>
       isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || ''))),
     );
-    const matched = filter ? evaluateFilter(sendable, filter) : sendable;
+    let matched: Contact[];
+    if (draft.sourceListId) {
+      if (!listMemberIds) return [];
+      matched = sendable.filter((c) => listMemberIds.has(c.id));
+    } else {
+      const filter = draft.sourceFilter ? parseFilterDefinition(draft.sourceFilter) : null;
+      matched = filter ? evaluateFilter(sendable, filter) : sendable;
+    }
     return matched.map((c) => ({
       contactId: String(c.id).trim(),
       accountKey,
       phone: normalizePhoneNumber(String(c.phone || '')),
       fullName: String(c.fullName || '').trim(),
     }));
-  }, [draft, contacts, accountKey]);
+  }, [draft, contacts, accountKey, listMemberIds]);
 
   async function handleSchedule() {
     if (!draft) return;
@@ -332,7 +375,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
                       </button>
                     </div>
                     <p className="text-2xl font-bold tabular-nums mt-0.5">
-                      {contactsLoading ? (
+                      {contactsLoading || listMembersLoading ? (
                         <ArrowPathIcon className="w-5 h-5 inline animate-spin text-[var(--muted-foreground)]" />
                       ) : (
                         recipients.length.toLocaleString()
@@ -435,6 +478,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
             disabled={
               submitting ||
               contactsLoading ||
+              listMembersLoading ||
               recipients.length === 0 ||
               !draft?.message?.trim()
             }

@@ -34,6 +34,7 @@ interface EmailDraft {
   previewText: string;
   htmlContent: string;
   sourceFilter: string;
+  sourceListId: string;
   metadata: string;
 }
 
@@ -43,6 +44,7 @@ interface SmsDraft {
   accountKeys: string[];
   message: string;
   sourceFilter: string;
+  sourceListId: string;
   metadata: string;
 }
 
@@ -115,6 +117,11 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
   const [loading, setLoading] = useState(true);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(false);
+  // Per-list-ID membership cache so split rails (each on its own list)
+  // each get their own member set. Single ID populates one entry; the
+  // recipient memos look up by the draft's sourceListId.
+  const [listMembersById, setListMembersById] = useState<Map<string, Set<string>>>(new Map());
+  const [listMembersLoading, setListMembersLoading] = useState(false);
 
   const [sendMode, setSendMode] = useState<SendMode>('later');
   const [previewTab, setPreviewTab] = useState<'email' | 'sms'>('email');
@@ -186,36 +193,91 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
     };
   }, [accountKey]);
 
+  // Rails can pick different lists in split-audience mode, so fetch per
+  // rail. Shared cache by list ID keeps us from double-fetching when both
+  // rails happen to land on the same list.
+  const emailListId = emailDraft?.sourceListId || '';
+  const smsListId = smsDraft?.sourceListId || '';
+
+  useEffect(() => {
+    const candidates = [emailListId, smsListId].filter((x) => x);
+    const distinct = [...new Set(candidates)];
+    if (distinct.length === 0) {
+      setListMembersById(new Map());
+      return;
+    }
+    let cancelled = false;
+    setListMembersLoading(true);
+    Promise.all(
+      distinct.map(async (listId) => {
+        const res = await fetch(`/api/contacts/lists/${encodeURIComponent(listId)}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Failed to load list');
+        const ids: string[] = Array.isArray(data.members)
+          ? data.members.map((m: { id: string }) => m.id).filter(Boolean)
+          : [];
+        return [listId, new Set(ids)] as const;
+      }),
+    )
+      .then((entries) => {
+        if (!cancelled) setListMembersById(new Map(entries));
+      })
+      .catch(() => {
+        if (!cancelled) setListMembersById(new Map());
+      })
+      .finally(() => {
+        if (!cancelled) setListMembersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [emailListId, smsListId]);
+
   // Resolve each channel's recipient list against its own validity gate.
+  // List takes precedence over segment filter on each draft.
   const emailRecipients = useMemo(() => {
     if (!emailDraft) return [] as Array<{ contactId: string; accountKey: string; email: string; fullName: string }>;
-    const filter = emailDraft.sourceFilter ? parseFilterDefinition(emailDraft.sourceFilter) : null;
     const sendable = contacts.filter((c) =>
       Boolean(c.id && isValidEmail(String(c.email || '').trim())),
     );
-    const matched = filter ? evaluateFilter(sendable, filter) : sendable;
+    let matched: Contact[];
+    if (emailDraft.sourceListId) {
+      const members = listMembersById.get(emailDraft.sourceListId);
+      if (!members) return [];
+      matched = sendable.filter((c) => members.has(c.id));
+    } else {
+      const filter = emailDraft.sourceFilter ? parseFilterDefinition(emailDraft.sourceFilter) : null;
+      matched = filter ? evaluateFilter(sendable, filter) : sendable;
+    }
     return matched.map((c) => ({
       contactId: String(c.id).trim(),
       accountKey,
       email: String(c.email || '').trim(),
       fullName: String(c.fullName || '').trim(),
     }));
-  }, [emailDraft, contacts, accountKey]);
+  }, [emailDraft, contacts, accountKey, listMembersById]);
 
   const smsRecipients = useMemo(() => {
     if (!smsDraft) return [] as Array<{ contactId: string; accountKey: string; phone: string; fullName: string }>;
-    const filter = smsDraft.sourceFilter ? parseFilterDefinition(smsDraft.sourceFilter) : null;
     const sendable = contacts.filter((c) =>
       isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || ''))),
     );
-    const matched = filter ? evaluateFilter(sendable, filter) : sendable;
+    let matched: Contact[];
+    if (smsDraft.sourceListId) {
+      const members = listMembersById.get(smsDraft.sourceListId);
+      if (!members) return [];
+      matched = sendable.filter((c) => members.has(c.id));
+    } else {
+      const filter = smsDraft.sourceFilter ? parseFilterDefinition(smsDraft.sourceFilter) : null;
+      matched = filter ? evaluateFilter(sendable, filter) : sendable;
+    }
     return matched.map((c) => ({
       contactId: String(c.id).trim(),
       accountKey,
       phone: normalizePhoneNumber(String(c.phone || '')),
       fullName: String(c.fullName || '').trim(),
     }));
-  }, [smsDraft, contacts, accountKey]);
+  }, [smsDraft, contacts, accountKey, listMembersById]);
 
   async function handleSchedule() {
     if (!emailDraft || !smsDraft) return;
@@ -366,13 +428,13 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
                     icon={EnvelopeIcon}
                     label="Email"
                     count={emailRecipients.length}
-                    loading={contactsLoading}
+                    loading={contactsLoading || listMembersLoading}
                   />
                   <ChannelStat
                     icon={ChatBubbleLeftRightIcon}
                     label="SMS"
                     count={smsRecipients.length}
-                    loading={contactsLoading}
+                    loading={contactsLoading || listMembersLoading}
                   />
                 </div>
 
@@ -538,6 +600,7 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
             disabled={
               submitting ||
               contactsLoading ||
+              listMembersLoading ||
               (emailRecipients.length === 0 && smsRecipients.length === 0)
             }
           >

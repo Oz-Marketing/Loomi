@@ -109,6 +109,7 @@ export interface SmsCampaignSummary {
   accountKeys: string[];
   sourceAudienceId: string;
   sourceFilter: string;
+  sourceListId: string;
   metadata: string;
   createdAt: string;
   updatedAt: string;
@@ -255,6 +256,7 @@ function toSummary(row: {
   accountKeys: string;
   sourceAudienceId: string | null;
   sourceFilter: string | null;
+  sourceListId: string | null;
   metadata: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -274,6 +276,7 @@ function toSummary(row: {
     accountKeys: parseAccountKeys(row.accountKeys),
     sourceAudienceId: row.sourceAudienceId || '',
     sourceFilter: row.sourceFilter || '',
+    sourceListId: row.sourceListId || '',
     metadata: row.metadata || '',
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -295,6 +298,7 @@ const smsCampaignSummarySelect = {
   accountKeys: true,
   sourceAudienceId: true,
   sourceFilter: true,
+  sourceListId: true,
   metadata: true,
   createdAt: true,
   updatedAt: true,
@@ -342,6 +346,7 @@ export async function updateSmsCampaignDraft(
     accountKeys?: string[];
     sourceAudienceId?: string | null;
     sourceFilter?: string | null;
+    sourceListId?: string | null;
     scheduledFor?: Date | null;
     status?: SmsCampaignStatus;
     metadata?: string | null;
@@ -353,6 +358,7 @@ export async function updateSmsCampaignDraft(
   if (patch.accountKeys !== undefined) data.accountKeys = JSON.stringify(patch.accountKeys);
   if (patch.sourceAudienceId !== undefined) data.sourceAudienceId = patch.sourceAudienceId;
   if (patch.sourceFilter !== undefined) data.sourceFilter = patch.sourceFilter;
+  if (patch.sourceListId !== undefined) data.sourceListId = patch.sourceListId;
   if (patch.scheduledFor !== undefined) data.scheduledFor = patch.scheduledFor;
   if (patch.status !== undefined) data.status = patch.status;
   if (patch.metadata !== undefined) data.metadata = patch.metadata;

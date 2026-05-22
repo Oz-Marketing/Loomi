@@ -500,6 +500,11 @@ model SmsCampaign {
   createdByRole    String?
   sourceAudienceId String?
   sourceFilter     String?
+  // Static list audience. Mirrors EmailCampaign.sourceListId so the
+  // multi-channel recipients step can persist a list selection on both
+  // rails. At most one of (sourceListId, sourceAudienceId+sourceFilter)
+  // is meaningful — the recipients UI enforces exclusivity.
+  sourceListId     String?
   accountKeys      String    @default("[]") // JSON array of account keys
   totalRecipients  Int       @default(0)
   sentCount        Int       @default(0)

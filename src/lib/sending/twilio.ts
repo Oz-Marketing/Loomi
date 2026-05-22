@@ -16,7 +16,7 @@
 
 import crypto from 'crypto';
 import { prisma } from '@/lib/prisma';
-import { decryptToken, encryptToken } from '@/lib/esp/encryption';
+import { decryptToken, encryptToken } from '@/lib/crypto/encryption';
 
 const TWILIO_BASE = 'https://api.twilio.com/2010-04-01';
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -73,8 +73,8 @@ function buildBasicAuth(sid: string, token: string): string {
 
 /**
  * Resolve a sub-account's Twilio config. Returns null when no Account
- * SID is configured — callers fall back to the legacy GHL Conversations
- * API send path.
+ * SID is configured — callers should surface a "Twilio not configured"
+ * error since Twilio is the only SMS transport.
  *
  * Decryption errors throw rather than silently returning null so a
  * misconfigured account fails loudly with a clear error message instead
@@ -103,7 +103,8 @@ export async function resolveTwilioConfig(
 
 /**
  * Persist Twilio creds. Passing `null` for accountSid/authToken clears
- * both — the worker then falls back to the legacy GHL path.
+ * both — the worker will refuse to send SMS for that sub-account until
+ * fresh credentials are set.
  */
 export async function setTwilioCredentials(
   accountKey: string,

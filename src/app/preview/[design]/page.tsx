@@ -248,7 +248,7 @@ export default function TemplatePreviewPage() {
     setPreviewContactsLoading(true);
     setPreviewContactsError('');
     try {
-      const res = await fetch(`/api/esp/contacts?accountKey=${encodeURIComponent(accountKey)}&limit=30`);
+      const res = await fetch(`/api/contacts?accountKey=${encodeURIComponent(accountKey)}&limit=30`);
       const data = await res.json();
       if (!res.ok) {
         setPreviewContacts([]);

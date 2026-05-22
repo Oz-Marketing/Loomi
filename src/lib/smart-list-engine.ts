@@ -1,5 +1,5 @@
 import type { FilterDefinition, FilterCondition, FilterGroup } from './smart-list-types';
-import type { Contact } from '@/components/contacts/contacts-table';
+import type { Contact } from '@/lib/contacts/types';
 
 /**
  * Evaluate a FilterDefinition against a list of contacts.

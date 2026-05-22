@@ -2,10 +2,9 @@
 
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useState, type ComponentType, type SVGProps } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
-import { providerUnsupportedMessage } from '@/lib/esp/provider-display';
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
@@ -19,6 +18,8 @@ import {
   ChatBubbleLeftRightIcon,
 } from '@heroicons/react/24/outline';
 import PrimaryButton from '@/components/primary-button';
+
+// ── Types ──
 
 interface ContactDetail {
   id: string;
@@ -45,10 +46,6 @@ interface ContactDetail {
   leaseEndDate: string;
   warrantyEndDate: string;
   purchaseDate: string;
-  profilePhoto?: string;
-  dnd?: boolean;
-  dndSettings?: unknown;
-  _accountKey?: string;
 }
 
 interface AccountSummary {
@@ -80,97 +77,14 @@ interface ConvoStats {
   lastMessageDirection: string | null;
 }
 
-interface ContactCapabilities {
-  dnd: boolean;
-  conversations: boolean;
-  messaging: boolean;
-}
-
-type DndChannelKey = 'SMS' | 'Email' | 'Call' | 'Voicemail' | 'WhatsApp' | 'FB' | 'GMB';
 type ComposeMessageChannel = 'SMS' | 'MMS';
-interface DndChannelState {
-  enabled: boolean;
-  status: string;
-  message: string;
-  code: string;
-}
-type DndSettings = Record<DndChannelKey, DndChannelState>;
 
-const DND_CHANNELS: Array<{
-  key: DndChannelKey;
-  label: string;
-  icon: ComponentType<SVGProps<SVGSVGElement>>;
-}> = [
-  { key: 'Email', label: 'Email', icon: EnvelopeIcon },
-  { key: 'SMS', label: 'SMS', icon: DevicePhoneMobileIcon },
-  { key: 'Call', label: 'Call', icon: PhoneIcon },
-  { key: 'Voicemail', label: 'Voicemail', icon: PhoneIcon },
-  { key: 'WhatsApp', label: 'WhatsApp', icon: DevicePhoneMobileIcon },
-  { key: 'FB', label: 'Facebook', icon: ChatBubbleLeftRightIcon },
-  { key: 'GMB', label: 'Google Business', icon: MapPinIcon },
-];
-
-const DND_CHANNEL_KEYS: DndChannelKey[] = DND_CHANNELS.map((channel) => channel.key);
-
-function emptyDndSettings(): DndSettings {
-  return {
-    SMS: { enabled: false, status: 'inactive', message: '', code: '' },
-    Email: { enabled: false, status: 'inactive', message: '', code: '' },
-    Call: { enabled: false, status: 'inactive', message: '', code: '' },
-    Voicemail: { enabled: false, status: 'inactive', message: '', code: '' },
-    WhatsApp: { enabled: false, status: 'inactive', message: '', code: '' },
-    FB: { enabled: false, status: 'inactive', message: '', code: '' },
-    GMB: { enabled: false, status: 'inactive', message: '', code: '' },
-  };
+interface DndState {
+  email: boolean;
+  sms: boolean;
 }
 
-function normalizeDndSettings(value: unknown): DndSettings {
-  const base = emptyDndSettings();
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return base;
-
-  const row = value as Record<string, unknown>;
-  for (const key of DND_CHANNEL_KEYS) {
-    const candidate = row[key];
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) continue;
-    const channel = candidate as Record<string, unknown>;
-    const enabled = Boolean(channel.enabled);
-    const status = toText(channel.status) || (enabled ? 'active' : 'inactive');
-    base[key] = {
-      enabled,
-      status,
-      message: toText(channel.message),
-      code: toText(channel.code),
-    };
-  }
-
-  return base;
-}
-
-function dndDraftFromSettings(settings: DndSettings): Record<DndChannelKey, boolean> {
-  return {
-    SMS: Boolean(settings.SMS.enabled),
-    Email: Boolean(settings.Email.enabled),
-    Call: Boolean(settings.Call.enabled),
-    Voicemail: Boolean(settings.Voicemail.enabled),
-    WhatsApp: Boolean(settings.WhatsApp.enabled),
-    FB: Boolean(settings.FB.enabled),
-    GMB: Boolean(settings.GMB.enabled),
-  };
-}
-
-function dndSettingsFromDraft(draft: Record<DndChannelKey, boolean>): DndSettings {
-  const settings = emptyDndSettings();
-  for (const key of DND_CHANNEL_KEYS) {
-    const enabled = Boolean(draft[key]);
-    settings[key] = {
-      enabled,
-      status: enabled ? 'active' : 'inactive',
-      message: '',
-      code: '',
-    };
-  }
-  return settings;
-}
+// ── Helpers ──
 
 function daysUntil(dateStr: string): number | null {
   if (!dateStr) return null;
@@ -204,159 +118,38 @@ function toText(value: unknown): string {
   if (value === undefined || value === null) return '';
   if (typeof value === 'string') return value;
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-
   if (Array.isArray(value)) {
     return value.map((item) => toText(item)).filter(Boolean).join(' ').trim();
   }
-
   if (typeof value === 'object') {
     const row = value as Record<string, unknown>;
     return toText(
-      row.value ??
-      row.text ??
-      row.message ??
-      row.body ??
-      row.subject ??
-      row.url ??
-      row.link ??
-      row.label ??
-      row.name ??
-      row.type ??
-      row.id,
+      row.value ?? row.text ?? row.message ?? row.body ?? row.subject ?? row.url ?? row.link ?? row.label ?? row.name ?? row.type ?? row.id,
     );
   }
-
   return '';
 }
 
-function isUrl(value: string): boolean {
-  return /^https?:\/\/\S+$/i.test(value);
-}
-
-function collectTextValues(value: unknown): string[] {
-  if (value === undefined || value === null) return [];
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return [String(value)];
-  }
-
-  if (Array.isArray(value)) {
-    return value.flatMap((item) => collectTextValues(item));
-  }
-
-  if (typeof value === 'object') {
-    const row = value as Record<string, unknown>;
-    const prioritized = [
-      row.body,
-      row.text,
-      row.message,
-      row.subject,
-      row.url,
-      row.link,
-      row.href,
-      row.urls,
-      row.attachments,
-      row.files,
-      row.media,
-    ];
-    const picked = prioritized.flatMap((item) => collectTextValues(item));
-    if (picked.length > 0) return picked;
-    return Object.values(row).flatMap((item) => collectTextValues(item));
-  }
-
-  return [];
-}
-
-function parseMessageContent(rawBody: unknown): { text: string; links: string[] } {
-  let textParts: string[] = [];
-  let links: string[] = [];
-
-  if (typeof rawBody !== 'string') {
-    const values = collectTextValues(rawBody).map((value) => value.trim()).filter(Boolean);
-    for (const value of values) {
-      if (isUrl(value)) links.push(value);
-      else textParts.push(value);
-    }
-  } else {
-    const initial = rawBody.trim();
-    if (!initial) return { text: '', links: [] };
-
-    if (initial.startsWith('[') || initial.startsWith('{')) {
-      try {
-        const parsed = JSON.parse(initial);
-        const values = collectTextValues(parsed).map((value) => value.trim()).filter(Boolean);
-        for (const value of values) {
-          if (isUrl(value)) links.push(value);
-          else textParts.push(value);
-        }
-      } catch {
-        // Not valid JSON — continue with text parsing below.
-      }
-    }
-
-    if (textParts.length === 0) textParts.push(initial);
-  }
-
-  if (textParts.length === 0 && links.length === 0) {
-    const fallback = toText(rawBody).trim();
-    if (!fallback) return { text: '', links: [] };
-    textParts.push(fallback);
-  }
-
-  const fallbackLinks = textParts
-    .flatMap((value) => value.match(/https?:\/\/[^\s\]'",)]+/gi) ?? [])
-    .map((value) => value.trim())
-    .filter(Boolean);
-
-  if (links.length === 0 && fallbackLinks.length > 0) {
-    links = fallbackLinks;
-  }
-
-  const dedupedLinks = [...new Set(links)];
-  const cleanedText = textParts
-    .join(' ')
-    .replace(/https?:\/\/[^\s\]'",)]+/gi, '')
-    .replace(/[\[\]{}"']/g, ' ')
-    .replace(/[,;|]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  const hasReadableText = /[a-z0-9]/i.test(cleanedText);
-
-  return {
-    text: hasReadableText ? cleanedText : '',
-    links: dedupedLinks,
-  };
+function parseDndPayload(value: unknown): DndState {
+  const out: DndState = { email: false, sms: false };
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+  const row = value as Record<string, unknown>;
+  if (typeof row.email === 'boolean') out.email = row.email;
+  if (typeof row.sms === 'boolean') out.sms = row.sms;
+  return out;
 }
 
 function parseMediaUrlInput(raw: string): string[] {
   if (!raw.trim()) return [];
-  const tokens = raw
-    .split(/[\n,\s]+/g)
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .filter((item) => /^https?:\/\/\S+$/i.test(item));
-  return [...new Set(tokens)];
-}
-
-function normalizeMessageType(rawChannel: string, rawType: string, hasLinks: boolean, rawContentType: string): string {
-  const channel = rawChannel.trim().toUpperCase();
-  if (channel === 'EMAIL') return 'EMAIL';
-  if (channel === 'SMS') return 'SMS';
-  if (channel === 'MMS') return 'SMS';
-
-  const cleaned = rawType.trim();
-  if (cleaned) {
-    const upper = cleaned.toUpperCase();
-    if (['SMS', 'EMAIL', 'MMS', 'CALL', 'VOICEMAIL', 'CHAT'].includes(upper)) return upper;
-    if (/^[a-z][a-z0-9 _-]*$/i.test(cleaned)) return upper;
-  }
-
-  const contentType = rawContentType.trim().toUpperCase();
-  if (contentType.includes('EMAIL')) return 'EMAIL';
-  if (contentType.includes('SMS')) return 'SMS';
-  if (contentType.includes('MMS')) return 'MMS';
-
-  return hasLinks ? 'MEDIA' : 'MESSAGE';
+  return [
+    ...new Set(
+      raw
+        .split(/[\n,\s]+/g)
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .filter((item) => /^https?:\/\/\S+$/i.test(item)),
+    ),
+  ];
 }
 
 function normalizeAccountSummary(value: unknown): AccountSummary | null {
@@ -365,11 +158,7 @@ function normalizeAccountSummary(value: unknown): AccountSummary | null {
   const key = toText(row.key);
   const dealer = toText(row.dealer);
   if (!key || !dealer) return null;
-
-  const logos = row.logos && typeof row.logos === 'object'
-    ? (row.logos as Record<string, unknown>)
-    : null;
-
+  const logos = row.logos && typeof row.logos === 'object' ? (row.logos as Record<string, unknown>) : null;
   return {
     key,
     dealer,
@@ -394,31 +183,12 @@ function accountLogoUrl(account: AccountSummary | null): string {
 
 function accountAddressLine(account: AccountSummary | null): string {
   if (!account) return '';
-  const full = [account.address, account.city, account.state, account.postalCode]
-    .filter(Boolean)
-    .join(', ');
+  const full = [account.address, account.city, account.state, account.postalCode].filter(Boolean).join(', ');
   if (!full) return '';
   return full.length > 64 ? `${full.slice(0, 64)}...` : full;
 }
 
-const DEFAULT_CONTACT_CAPABILITIES: ContactCapabilities = {
-  dnd: false,
-  conversations: false,
-  messaging: false,
-};
-
-function normalizeContactCapabilities(value: unknown): ContactCapabilities {
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const row = value as Record<string, unknown>;
-    return {
-      dnd: Boolean(row.dnd),
-      conversations: Boolean(row.conversations),
-      messaging: Boolean(row.messaging),
-    };
-  }
-
-  return DEFAULT_CONTACT_CAPABILITIES;
-}
+// ── Page ──
 
 export default function ContactDetailPage() {
   const { isAccount } = useAccount();
@@ -430,21 +200,19 @@ export default function ContactDetailPage() {
 
   const [contact, setContact] = useState<ContactDetail | null>(null);
   const [account, setAccount] = useState<AccountSummary | null>(null);
-  const [provider, setProvider] = useState('');
-  const [capabilities, setCapabilities] = useState<ContactCapabilities>(DEFAULT_CONTACT_CAPABILITIES);
   const [contactLoading, setContactLoading] = useState(true);
   const [contactError, setContactError] = useState<string | null>(null);
+  const [dnd, setDnd] = useState<DndState>({ email: false, sms: false });
 
   const [messages, setMessages] = useState<ConvoMessage[]>([]);
   const [stats, setStats] = useState<ConvoStats | null>(null);
   const [messagesLoading, setMessagesLoading] = useState(true);
   const [messagesError, setMessagesError] = useState<string | null>(null);
-  const [dndDraft, setDndDraft] = useState<Record<DndChannelKey, boolean>>(
-    dndDraftFromSettings(emptyDndSettings()),
-  );
+
   const [dndSaving, setDndSaving] = useState(false);
   const [dndError, setDndError] = useState<string | null>(null);
   const [dndSuccess, setDndSuccess] = useState<string | null>(null);
+
   const [smsChannel, setSmsChannel] = useState<ComposeMessageChannel>('SMS');
   const [smsMediaUrlsText, setSmsMediaUrlsText] = useState('');
   const [smsDraft, setSmsDraft] = useState('');
@@ -457,8 +225,6 @@ export default function ContactDetailPage() {
       setContactLoading(false);
       setMessagesLoading(false);
       setContactError('Missing contact identifier or account context.');
-      setProvider('');
-      setCapabilities(DEFAULT_CONTACT_CAPABILITIES);
       setAccount(null);
       return;
     }
@@ -473,59 +239,40 @@ export default function ContactDetailPage() {
 
       try {
         const contactRes = await fetch(
-          `/api/esp/contacts/${encodeURIComponent(contactId)}?accountKey=${encodeURIComponent(accountKey)}`,
+          `/api/contacts/${encodeURIComponent(contactId)}?accountKey=${encodeURIComponent(accountKey)}`,
         );
         const contactData = await contactRes.json().catch(() => ({}));
         if (!contactRes.ok) {
           throw new Error(contactData.error || 'Failed to fetch contact');
         }
 
-        const nextProvider = toText(contactData.provider).trim().toLowerCase();
-        const nextCapabilities = normalizeContactCapabilities(contactData.capabilities);
-
         if (!active) return;
 
-        setContact(contactData.contact || null);
+        const nextContact = (contactData.contact || null) as ContactDetail | null;
+        setContact(nextContact);
         setAccount(normalizeAccountSummary(contactData.account));
-        setProvider(nextProvider);
-        setCapabilities(nextCapabilities);
+        setDnd(parseDndPayload(contactData.contact?.dnd ?? contactData.dnd));
         setContactLoading(false);
 
-        if (!nextCapabilities.conversations) {
-          setMessages([]);
-          setStats(null);
-          setMessagesError(providerUnsupportedMessage(nextProvider, 'conversation history'));
-          setMessagesLoading(false);
-          return;
-        }
-
-        const convoRes = await fetch(
-          `/api/esp/contacts/${encodeURIComponent(contactId)}/conversations?accountKey=${encodeURIComponent(accountKey)}`,
+        const activityRes = await fetch(
+          `/api/contacts/${encodeURIComponent(contactId)}/activity?accountKey=${encodeURIComponent(accountKey)}`,
         );
-        const convoData = await convoRes.json().catch(() => ({}));
+        const activityData = await activityRes.json().catch(() => ({}));
         if (!active) return;
 
-        if (!convoRes.ok) {
-          setMessagesError(convoData.error || 'Failed to fetch messages');
+        if (!activityRes.ok) {
+          setMessagesError(activityData.error || 'Failed to fetch activity');
           setMessages([]);
           setStats(null);
         } else {
-          setMessages(Array.isArray(convoData.messages) ? convoData.messages : []);
-          setStats(convoData.stats || null);
-          if (typeof convoData.error === 'string' && convoData.error) {
-            setMessagesError(convoData.error);
-          } else if (convoData.unsupported) {
-            setMessagesError(providerUnsupportedMessage(nextProvider, 'conversation history'));
-          } else {
-            setMessagesError(null);
-          }
+          setMessages(Array.isArray(activityData.messages) ? activityData.messages : []);
+          setStats(activityData.stats || null);
+          setMessagesError(null);
         }
         setMessagesLoading(false);
       } catch (err) {
         if (!active) return;
         setContactError(err instanceof Error ? err.message : 'Failed to fetch contact');
-        setProvider('');
-        setCapabilities(DEFAULT_CONTACT_CAPABILITIES);
         setContactLoading(false);
         setMessagesLoading(false);
       }
@@ -547,95 +294,57 @@ export default function ContactDetailPage() {
     return [contact.vehicleYear, contact.vehicleMake, contact.vehicleModel].filter(Boolean).join(' ');
   }, [contact]);
 
-  const contactAvatar = useMemo(() => toText(contact?.profilePhoto), [contact?.profilePhoto]);
   const addedDateLabel = useMemo(() => {
     if (!contact?.dateAdded) return '';
     return formatRelativeDate(contact.dateAdded) || formatDate(contact.dateAdded);
   }, [contact?.dateAdded]);
+
   const accountLogo = useMemo(() => accountLogoUrl(account), [account]);
   const accountAddress = useMemo(() => accountAddressLine(account), [account]);
-  const currentDndSettings = useMemo(
-    () => normalizeDndSettings(contact?.dndSettings),
-    [contact?.dndSettings],
-  );
-  const dndDirty = useMemo(
-    () =>
-      DND_CHANNEL_KEYS.some((key) => Boolean(currentDndSettings[key]?.enabled) !== Boolean(dndDraft[key])),
-    [currentDndSettings, dndDraft],
-  );
-  const dndEnabledCount = useMemo(
-    () => DND_CHANNEL_KEYS.filter((key) => Boolean(dndDraft[key])).length,
-    [dndDraft],
-  );
 
-  useEffect(() => {
-    if (!contact) return;
-    setDndDraft(dndDraftFromSettings(currentDndSettings));
-    setDndError(null);
-  }, [contact, currentDndSettings]);
-
-  async function saveDndSettings() {
+  async function toggleSuppression(channel: 'email' | 'sms', enabled: boolean) {
     if (!contactId || !accountKey) return;
-    if (!capabilities.dnd) {
-      setDndError(providerUnsupportedMessage(provider, 'channel-level DND settings'));
-      return;
-    }
     setDndSaving(true);
     setDndError(null);
     setDndSuccess(null);
 
-    try {
-      const payload: Record<string, boolean> = {};
-      for (const key of DND_CHANNEL_KEYS) {
-        payload[key] = Boolean(dndDraft[key]);
-      }
+    // Optimistic.
+    const previous = dnd;
+    setDnd({ ...previous, [channel]: enabled });
 
+    try {
       const res = await fetch(
-        `/api/esp/contacts/${encodeURIComponent(contactId)}?accountKey=${encodeURIComponent(accountKey)}`,
+        `/api/contacts/${encodeURIComponent(contactId)}/suppression?accountKey=${encodeURIComponent(accountKey)}`,
         {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ dndSettings: payload }),
+          body: JSON.stringify({ [channel]: enabled }),
         },
       );
-
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(typeof data.error === 'string' ? data.error : 'Failed to update DND settings');
+        throw new Error(typeof data.error === 'string' ? data.error : 'Failed to update suppression');
       }
-
-      const nextSettings = normalizeDndSettings(data?.contact?.dndSettings ?? dndSettingsFromDraft(dndDraft));
-      setContact((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          dnd: Boolean(data?.contact?.dnd ?? DND_CHANNEL_KEYS.some((key) => nextSettings[key].enabled)),
-          dndSettings: nextSettings,
-        };
-      });
-      setDndDraft(dndDraftFromSettings(nextSettings));
-      setDndSuccess('DND settings updated.');
+      // Server is authoritative.
+      setDnd(parseDndPayload(data.dnd ?? data.contact?.dnd));
+      setDndSuccess(enabled ? `${channel === 'email' ? 'Email' : 'SMS'} suppressed.` : `${channel === 'email' ? 'Email' : 'SMS'} unsuppressed.`);
     } catch (err) {
-      setDndError(err instanceof Error ? err.message : 'Failed to update DND settings');
+      setDnd(previous);
+      setDndError(err instanceof Error ? err.message : 'Failed to update suppression');
     } finally {
       setDndSaving(false);
     }
   }
 
-  function resetDndSettings() {
-    setDndDraft(dndDraftFromSettings(currentDndSettings));
-    setDndError(null);
-    setDndSuccess(null);
-  }
-
   async function sendSmsMessage() {
     if (!contactId || !accountKey) return;
-    if (!capabilities.messaging) {
-      setSmsError(providerUnsupportedMessage(provider, 'direct 1:1 messaging'));
-      return;
-    }
     const message = smsDraft.trim();
     const mediaUrls = parseMediaUrlInput(smsMediaUrlsText);
+
+    if (!contact?.phone) {
+      setSmsError('Contact has no phone number on file.');
+      return;
+    }
     if (!message && mediaUrls.length === 0) {
       setSmsError(`Enter a ${smsChannel} message or at least one media URL.`);
       return;
@@ -644,8 +353,8 @@ export default function ContactDetailPage() {
       setSmsError(`${smsChannel} must be 640 characters or fewer.`);
       return;
     }
-    if (currentDndSettings.SMS.enabled) {
-      setSmsError('This contact has SMS DND enabled. Unblock SMS first.');
+    if (dnd.sms) {
+      setSmsError('This contact has SMS suppressed. Unblock SMS first.');
       return;
     }
 
@@ -655,51 +364,33 @@ export default function ContactDetailPage() {
 
     try {
       const res = await fetch(
-        `/api/esp/contacts/${encodeURIComponent(contactId)}/messages?accountKey=${encodeURIComponent(accountKey)}`,
+        `/api/contacts/${encodeURIComponent(contactId)}/sms?accountKey=${encodeURIComponent(accountKey)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            channel: smsChannel,
-            message,
-            mediaUrls,
-          }),
+          body: JSON.stringify({ channel: smsChannel, message, mediaUrls }),
         },
       );
-
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         throw new Error(typeof data.error === 'string' ? data.error : 'Failed to send message');
       }
 
-      const sentMessage = (data?.message && typeof data.message === 'object') ? data.message as Record<string, unknown> : null;
-      const normalized: ConvoMessage = {
-        id: toText(sentMessage?.id) || `local-${Date.now()}`,
-        channel: sentMessage?.channel ?? smsChannel,
-        type: sentMessage?.type ?? smsChannel,
-        direction: sentMessage?.direction ?? 'outbound',
-        body: sentMessage?.body ?? message,
-        dateAdded: sentMessage?.dateAdded ?? new Date().toISOString(),
-        subject: sentMessage?.subject ?? '',
-        contentType: sentMessage?.contentType ?? '',
-      };
-
-      setMessages((prev) => [normalized, ...prev]);
-      setStats((prev) => {
-        const channel = toText(normalized.channel).toUpperCase();
-        const isEmail = channel === 'EMAIL';
-        const isSms = channel === 'SMS' || channel === 'MMS';
-        const totalMessages = (prev?.totalMessages ?? 0) + 1;
-        const smsCount = (prev?.smsCount ?? 0) + (isSms ? 1 : 0);
-        const emailCount = (prev?.emailCount ?? 0) + (isEmail ? 1 : 0);
-        return {
-          totalMessages,
-          smsCount,
-          emailCount,
-          lastMessageDate: toText(normalized.dateAdded) || new Date().toISOString(),
-          lastMessageDirection: toText(normalized.direction) || 'outbound',
-        };
-      });
+      const sentMessage = (data?.message && typeof data.message === 'object') ? data.message as ConvoMessage : null;
+      if (sentMessage) {
+        setMessages((prev) => [sentMessage, ...prev]);
+        setStats((prev) => {
+          const total = (prev?.totalMessages ?? 0) + 1;
+          const smsCount = (prev?.smsCount ?? 0) + 1;
+          return {
+            totalMessages: total,
+            smsCount,
+            emailCount: prev?.emailCount ?? 0,
+            lastMessageDate: toText(sentMessage.dateAdded) || new Date().toISOString(),
+            lastMessageDirection: 'outbound',
+          };
+        });
+      }
       setSmsDraft('');
       setSmsMediaUrlsText('');
       setSmsSuccess(`${smsChannel} sent.`);
@@ -709,6 +400,8 @@ export default function ContactDetailPage() {
       setSmsSending(false);
     }
   }
+
+  const hasPhone = Boolean(contact?.phone);
 
   return (
     <div className="space-y-5">
@@ -723,11 +416,7 @@ export default function ContactDetailPage() {
             </Link>
 
             <div className="w-11 h-11 rounded-full overflow-hidden flex items-center justify-center bg-[var(--primary)]/15 text-[var(--primary)] font-semibold flex-shrink-0">
-              {contactAvatar ? (
-                <img src={contactAvatar} alt={fullName || 'Contact avatar'} className="w-full h-full object-cover" />
-              ) : (
-                <span>{(contact?.firstName || fullName || '?').charAt(0).toUpperCase()}</span>
-              )}
+              <span>{(contact?.firstName || fullName || '?').charAt(0).toUpperCase()}</span>
             </div>
 
             <div className="min-w-0">
@@ -780,300 +469,242 @@ export default function ContactDetailPage() {
       )}
 
       {!contactLoading && contact && (
-        <>
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-            <div className="space-y-4">
-              <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">
-                <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3">
-                  Contact
-                </h3>
-                <div className="grid gap-2.5 sm:grid-cols-2 text-sm">
-                  <InfoPill icon={<EnvelopeIcon className="w-4 h-4" />} label="Email" value={contact.email} />
-                  <InfoPill icon={<PhoneIcon className="w-4 h-4" />} label="Phone" value={contact.phone} />
-                  <InfoPill
-                    icon={<MapPinIcon className="w-4 h-4" />}
-                    label="Address"
-                    value={[contact.address1, contact.city, contact.state, contact.postalCode].filter(Boolean).join(', ')}
-                    className="sm:col-span-2"
-                  />
-                </div>
-              </section>
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <div className="space-y-4">
+            {/* Contact info */}
+            <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">
+              <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3">Contact</h3>
+              <div className="grid gap-2.5 sm:grid-cols-2 text-sm">
+                <InfoPill icon={<EnvelopeIcon className="w-4 h-4" />} label="Email" value={contact.email} />
+                <InfoPill icon={<PhoneIcon className="w-4 h-4" />} label="Phone" value={contact.phone} />
+                <InfoPill
+                  icon={<MapPinIcon className="w-4 h-4" />}
+                  label="Address"
+                  value={[contact.address1, contact.city, contact.state, contact.postalCode].filter(Boolean).join(', ')}
+                  className="sm:col-span-2"
+                />
+              </div>
+            </section>
 
-              <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">
-                <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-1">
-                  Do Not Disturb
-                </h3>
-                <p className="text-[11px] text-[var(--muted-foreground)] mb-3">
-                  Manage channel opt-outs for this contact.
-                </p>
-
-                {capabilities.dnd ? (
-                  <>
-                    <div className="grid gap-2.5 sm:grid-cols-2">
-                      {DND_CHANNELS.map((channel) => (
-                        <DndToggleTile
-                          key={channel.key}
-                          label={channel.label}
-                          enabled={Boolean(dndDraft[channel.key])}
-                          status={currentDndSettings[channel.key]?.status || (dndDraft[channel.key] ? 'active' : 'inactive')}
-                          onToggle={() =>
-                            setDndDraft((prev) => ({ ...prev, [channel.key]: !prev[channel.key] }))
-                          }
-                          icon={channel.icon}
-                        />
-                      ))}
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-between gap-3 flex-wrap">
-                      <p className="text-[11px] text-[var(--muted-foreground)]">
-                        {dndEnabledCount} channel{dndEnabledCount === 1 ? '' : 's'} blocked
-                      </p>
-                      <div className="flex items-center gap-2">
-                        {dndDirty && (
-                          <button
-                            type="button"
-                            onClick={resetDndSettings}
-                            disabled={dndSaving}
-                            className="px-2.5 py-1.5 text-[11px] rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-60"
-                          >
-                            Reset
-                          </button>
-                        )}
-                        <PrimaryButton
-                          type="button"
-                          onClick={saveDndSettings}
-                          disabled={!dndDirty || dndSaving}
-                        >
-                          {dndSaving ? 'Saving...' : 'Save DND'}
-                        </PrimaryButton>
-                      </div>
-                    </div>
-
-                    {dndError && (
-                      <p className="mt-2 text-[11px] text-red-300">{dndError}</p>
-                    )}
-                    {dndSuccess && !dndError && (
-                      <p className="mt-2 text-[11px] text-emerald-300">{dndSuccess}</p>
-                    )}
-                  </>
-                ) : (
-                  <p className="text-[11px] text-[var(--muted-foreground)]">
-                    {providerUnsupportedMessage(provider, 'channel-level DND controls')}.
-                  </p>
-                )}
-              </section>
-
-              <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">
-                <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3">
-                  Vehicle
-                </h3>
-                <div className="grid gap-3 sm:grid-cols-3 text-sm">
-                  <StatTile label="Primary Vehicle" value={vehicleStr || 'No vehicle data'} />
-                  <StatTile label="VIN" value={contact.vehicleVin || '—'} mono />
-                  <StatTile label="Mileage" value={contact.vehicleMileage || '—'} />
-                </div>
-              </section>
-
-              <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">
-                <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3 flex items-center gap-1.5">
-                  <ClockIcon className="w-3.5 h-3.5" />
-                  Lifecycle
-                </h3>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <LifecycleItem label="Last Service" dateStr={contact.lastServiceDate} type="past" />
-                  <LifecycleItem label="Next Service" dateStr={contact.nextServiceDate} type="future" />
-                  <LifecycleItem label="Purchase Date" dateStr={contact.purchaseDate} type="past" />
-                  <LifecycleItem label="Lease End" dateStr={contact.leaseEndDate} type="future" />
-                  <LifecycleItem label="Warranty End" dateStr={contact.warrantyEndDate} type="future" />
-                </div>
-              </section>
-            </div>
-
-            <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70 h-fit">
-              <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3 flex items-center gap-1.5">
-                <ChatBubbleLeftRightIcon className="w-3.5 h-3.5" />
-                Messages
+            {/* Suppression (replaces 7-channel DND grid) */}
+            <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">
+              <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-1">
+                Do Not Disturb
               </h3>
-
-              {capabilities.messaging ? (
-                <div className="mb-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/20 p-2.5">
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <p className="text-[11px] font-medium">Send 1:1 Message</p>
-                    {capabilities.dnd && currentDndSettings.SMS.enabled && (
-                      <span className="text-[10px] text-amber-300">SMS DND enabled</span>
-                    )}
-                  </div>
-
-                  <div className="mb-2 flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setSmsChannel('SMS')}
-                      disabled={smsSending}
-                      className={`px-2 py-1 text-[10px] rounded border ${
-                        smsChannel === 'SMS'
-                          ? 'border-[var(--primary)] bg-[var(--primary)]/15 text-[var(--primary)]'
-                          : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                      }`}
-                    >
-                      SMS
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSmsChannel('MMS')}
-                      disabled={smsSending}
-                      className={`px-2 py-1 text-[10px] rounded border ${
-                        smsChannel === 'MMS'
-                          ? 'border-[var(--primary)] bg-[var(--primary)]/15 text-[var(--primary)]'
-                          : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                      }`}
-                    >
-                      MMS
-                    </button>
-                  </div>
-
-                  <textarea
-                    value={smsDraft}
-                    onChange={(event) => {
-                      setSmsDraft(event.target.value);
-                      if (smsError) setSmsError(null);
-                      if (smsSuccess) setSmsSuccess(null);
-                    }}
-                    placeholder={smsChannel === 'MMS' ? 'Write an MMS caption (optional if media URLs provided)...' : 'Write an SMS message...'}
-                    rows={3}
-                    maxLength={640}
-                    className="w-full text-xs rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-2 focus:outline-none focus:border-[var(--primary)]"
-                  />
-
-                  {smsChannel === 'MMS' && (
-                    <textarea
-                      value={smsMediaUrlsText}
-                      onChange={(event) => {
-                        setSmsMediaUrlsText(event.target.value);
-                        if (smsError) setSmsError(null);
-                        if (smsSuccess) setSmsSuccess(null);
-                      }}
-                      placeholder="Media URLs (one per line)"
-                      rows={2}
-                      className="mt-2 w-full text-xs rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-2 focus:outline-none focus:border-[var(--primary)]"
-                    />
-                  )}
-
-                  <div className="mt-2 flex items-center justify-between gap-2">
-                    <span className="text-[10px] text-[var(--muted-foreground)]">
-                      {smsDraft.trim().length}/640
-                    </span>
-                    <PrimaryButton
-                      type="button"
-                      onClick={sendSmsMessage}
-                      disabled={smsSending || (capabilities.dnd && currentDndSettings.SMS.enabled) || (!smsDraft.trim() && (smsChannel !== 'MMS' || parseMediaUrlInput(smsMediaUrlsText).length === 0))}
-                    >
-                      {smsSending ? (
-                        <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <PaperAirplaneIcon className="w-3.5 h-3.5" />
-                      )}
-                      {smsSending ? 'Sending...' : `Send ${smsChannel}`}
-                    </PrimaryButton>
-                  </div>
-
-                  {smsError && <p className="mt-2 text-[11px] text-red-300">{smsError}</p>}
-                  {smsSuccess && !smsError && <p className="mt-2 text-[11px] text-emerald-300">{smsSuccess}</p>}
-                </div>
-              ) : (
-                <div className="mb-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/20 p-2.5">
-                  <p className="text-[11px] font-medium">Send 1:1 Message</p>
-                  <p className="text-[11px] text-[var(--muted-foreground)] mt-1">
-                    {providerUnsupportedMessage(provider, 'direct 1:1 messaging')}.
-                  </p>
-                </div>
-              )}
-
-              {messagesLoading && (
-                <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
-                  <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
-                  Loading conversation history...
-                </div>
-              )}
-
-              {!messagesLoading && stats && stats.totalMessages > 0 && (
-                <div className="flex items-center gap-3 text-[11px] text-[var(--muted-foreground)] mb-3">
-                  <span>{stats.totalMessages} total</span>
-                  {stats.smsCount > 0 && <span>{stats.smsCount} SMS</span>}
-                  {stats.emailCount > 0 && <span>{stats.emailCount} email</span>}
-                </div>
-              )}
-
-              {!messagesLoading && messagesError && messages.length === 0 && (
-                <p className="text-xs text-[var(--muted-foreground)] italic">{messagesError}</p>
-              )}
-
-              {!messagesLoading && messagesError && messages.length > 0 && (
-                <p className="text-[11px] text-amber-300/90 mb-2">{messagesError}</p>
-              )}
-
-              {!messagesLoading && !messagesError && messages.length === 0 && (
-                <p className="text-xs text-[var(--muted-foreground)] italic">No messages found.</p>
-              )}
-
-              {messages.length > 0 && (
-                <div className="space-y-2 max-h-[540px] overflow-y-auto pr-1">
-                  {messages.slice(0, 20).map((msg, idx) => {
-                    const direction = toText(msg.direction).toLowerCase();
-                    const content = parseMessageContent(msg.body);
-                    const typeLabel = normalizeMessageType(
-                      toText(msg.channel),
-                      toText(msg.type),
-                      content.links.length > 0,
-                      toText(msg.contentType),
-                    );
-                    const subjectText = toText(msg.subject);
-                    const dateLabel = formatRelativeDate(toText(msg.dateAdded));
-                    const isInbound = direction.includes('inbound');
-                    const isEmail = typeLabel === 'EMAIL';
-                    const isSms = typeLabel === 'SMS' || typeLabel === 'MMS';
-                    const itemKey = toText(msg.id) || `${toText(msg.dateAdded)}-${idx}`;
-                    const bodyText = content.text || 'No text content';
-                    const metaLabel = `${isInbound ? 'Inbound' : 'Outbound'}${typeLabel !== 'MESSAGE' ? ` • ${isEmail ? 'Email' : typeLabel}` : ''}`;
-                    const channelIcon = isEmail
-                      ? <EnvelopeIcon className="w-3.5 h-3.5" />
-                      : isSms
-                      ? <DevicePhoneMobileIcon className="w-3.5 h-3.5" />
-                      : <ChatBubbleLeftRightIcon className="w-3.5 h-3.5" />;
-
-                    return (
-                      <div
-                        key={itemKey}
-                        className={`rounded-lg p-2.5 border ${
-                          isInbound
-                            ? 'bg-[var(--primary)]/6 border-[var(--primary)]/25'
-                            : 'bg-[var(--muted)]/30 border-[var(--border)]'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2 text-[10px] mb-1.5">
-                          <span className="font-medium inline-flex items-center gap-1.5">
-                            {channelIcon}
-                            {metaLabel}
-                          </span>
-                          <span className="text-[var(--muted-foreground)]">{dateLabel}</span>
-                        </div>
-                        {subjectText && subjectText !== bodyText && (
-                          <p className="text-[11px] font-medium mb-1 truncate">{subjectText}</p>
-                        )}
-                        <p className="text-[11px] text-[var(--muted-foreground)] line-clamp-3">
-                          {bodyText}
-                        </p>
-                      </div>
-                    );
-                  })}
-                </div>
+              <p className="text-[11px] text-[var(--muted-foreground)] mb-3">
+                Block sends to this contact on individual channels.
+              </p>
+              <div className="grid gap-2.5 sm:grid-cols-2">
+                <SuppressionTile
+                  label="Email"
+                  enabled={dnd.email}
+                  disabled={!contact.email || dndSaving}
+                  hint={contact.email || 'No email on file'}
+                  icon={EnvelopeIcon}
+                  onToggle={() => toggleSuppression('email', !dnd.email)}
+                />
+                <SuppressionTile
+                  label="SMS"
+                  enabled={dnd.sms}
+                  disabled={!contact.phone || dndSaving}
+                  hint={contact.phone || 'No phone on file'}
+                  icon={DevicePhoneMobileIcon}
+                  onToggle={() => toggleSuppression('sms', !dnd.sms)}
+                />
+              </div>
+              {dndError && <p className="mt-2 text-[11px] text-red-300">{dndError}</p>}
+              {dndSuccess && !dndError && (
+                <p className="mt-2 text-[11px] text-emerald-300">{dndSuccess}</p>
               )}
             </section>
+
+            {/* Vehicle */}
+            <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">
+              <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3">Vehicle</h3>
+              <div className="grid gap-3 sm:grid-cols-3 text-sm">
+                <StatTile label="Primary Vehicle" value={vehicleStr || 'No vehicle data'} />
+                <StatTile label="VIN" value={contact.vehicleVin || '—'} mono />
+                <StatTile label="Mileage" value={contact.vehicleMileage || '—'} />
+              </div>
+            </section>
+
+            {/* Lifecycle */}
+            <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">
+              <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3 flex items-center gap-1.5">
+                <ClockIcon className="w-3.5 h-3.5" />
+                Lifecycle
+              </h3>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <LifecycleItem label="Last Service" dateStr={contact.lastServiceDate} type="past" />
+                <LifecycleItem label="Next Service" dateStr={contact.nextServiceDate} type="future" />
+                <LifecycleItem label="Purchase Date" dateStr={contact.purchaseDate} type="past" />
+                <LifecycleItem label="Lease End" dateStr={contact.leaseEndDate} type="future" />
+                <LifecycleItem label="Warranty End" dateStr={contact.warrantyEndDate} type="future" />
+              </div>
+            </section>
           </div>
-        </>
+
+          {/* Activity / 1:1 send */}
+          <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70 h-fit">
+            <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3 flex items-center gap-1.5">
+              <ChatBubbleLeftRightIcon className="w-3.5 h-3.5" />
+              Activity
+            </h3>
+
+            {/* 1:1 send composer */}
+            <div className="mb-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/20 p-2.5">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <p className="text-[11px] font-medium">Send 1:1 Message</p>
+                {dnd.sms && <span className="text-[10px] text-amber-300">SMS suppressed</span>}
+                {!hasPhone && <span className="text-[10px] text-amber-300">No phone on file</span>}
+              </div>
+
+              <div className="mb-2 flex items-center gap-1.5">
+                {(['SMS', 'MMS'] as const).map((ch) => (
+                  <button
+                    key={ch}
+                    type="button"
+                    onClick={() => setSmsChannel(ch)}
+                    disabled={smsSending}
+                    className={`px-2 py-1 text-[10px] rounded border ${
+                      smsChannel === ch
+                        ? 'border-[var(--primary)] bg-[var(--primary)]/15 text-[var(--primary)]'
+                        : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    {ch}
+                  </button>
+                ))}
+              </div>
+
+              <textarea
+                value={smsDraft}
+                onChange={(event) => {
+                  setSmsDraft(event.target.value);
+                  if (smsError) setSmsError(null);
+                  if (smsSuccess) setSmsSuccess(null);
+                }}
+                placeholder={smsChannel === 'MMS' ? 'Write an MMS caption (optional if media URLs provided)...' : 'Write an SMS message...'}
+                rows={3}
+                maxLength={640}
+                className="w-full text-xs rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-2 focus:outline-none focus:border-[var(--primary)]"
+              />
+
+              {smsChannel === 'MMS' && (
+                <textarea
+                  value={smsMediaUrlsText}
+                  onChange={(event) => {
+                    setSmsMediaUrlsText(event.target.value);
+                    if (smsError) setSmsError(null);
+                    if (smsSuccess) setSmsSuccess(null);
+                  }}
+                  placeholder="Media URLs (one per line)"
+                  rows={2}
+                  className="mt-2 w-full text-xs rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-2 focus:outline-none focus:border-[var(--primary)]"
+                />
+              )}
+
+              <div className="mt-2 flex items-center justify-between gap-2">
+                <span className="text-[10px] text-[var(--muted-foreground)]">{smsDraft.trim().length}/640</span>
+                <PrimaryButton
+                  type="button"
+                  onClick={sendSmsMessage}
+                  disabled={
+                    smsSending ||
+                    !hasPhone ||
+                    dnd.sms ||
+                    (!smsDraft.trim() && (smsChannel !== 'MMS' || parseMediaUrlInput(smsMediaUrlsText).length === 0))
+                  }
+                >
+                  {smsSending ? (
+                    <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <PaperAirplaneIcon className="w-3.5 h-3.5" />
+                  )}
+                  {smsSending ? 'Sending...' : `Send ${smsChannel}`}
+                </PrimaryButton>
+              </div>
+
+              {smsError && <p className="mt-2 text-[11px] text-red-300">{smsError}</p>}
+              {smsSuccess && !smsError && <p className="mt-2 text-[11px] text-emerald-300">{smsSuccess}</p>}
+            </div>
+
+            {messagesLoading && (
+              <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
+                Loading activity...
+              </div>
+            )}
+
+            {!messagesLoading && stats && stats.totalMessages > 0 && (
+              <div className="flex items-center gap-3 text-[11px] text-[var(--muted-foreground)] mb-3">
+                <span>{stats.totalMessages} events</span>
+                {stats.smsCount > 0 && <span>{stats.smsCount} SMS</span>}
+                {stats.emailCount > 0 && <span>{stats.emailCount} email</span>}
+              </div>
+            )}
+
+            {!messagesLoading && messagesError && messages.length === 0 && (
+              <p className="text-xs text-[var(--muted-foreground)] italic">{messagesError}</p>
+            )}
+
+            {!messagesLoading && !messagesError && messages.length === 0 && (
+              <p className="text-xs text-[var(--muted-foreground)] italic">
+                No activity yet. Sends, opens, clicks, and replies will show up here.
+              </p>
+            )}
+
+            {messages.length > 0 && (
+              <div className="space-y-2 max-h-[540px] overflow-y-auto pr-1">
+                {messages.slice(0, 50).map((msg) => {
+                  const direction = toText(msg.direction).toLowerCase();
+                  const channel = toText(msg.channel).toUpperCase();
+                  const typeLabel = channel === 'EMAIL' ? 'Email' : channel === 'MMS' ? 'MMS' : 'SMS';
+                  const subjectText = toText(msg.subject);
+                  const dateLabel = formatRelativeDate(toText(msg.dateAdded));
+                  const isInbound = direction.includes('inbound');
+                  const isEmail = channel === 'EMAIL';
+                  const bodyText = toText(msg.body) || 'No content';
+                  const metaLabel = `${isInbound ? 'Inbound' : 'Outbound'} • ${typeLabel}`;
+                  const channelIcon = isEmail
+                    ? <EnvelopeIcon className="w-3.5 h-3.5" />
+                    : <DevicePhoneMobileIcon className="w-3.5 h-3.5" />;
+
+                  return (
+                    <div
+                      key={toText(msg.id)}
+                      className={`rounded-lg p-2.5 border ${
+                        isInbound
+                          ? 'bg-[var(--primary)]/6 border-[var(--primary)]/25'
+                          : 'bg-[var(--muted)]/30 border-[var(--border)]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-2 text-[10px] mb-1.5">
+                        <span className="font-medium inline-flex items-center gap-1.5">
+                          {channelIcon}
+                          {metaLabel}
+                        </span>
+                        <span className="text-[var(--muted-foreground)]">{dateLabel}</span>
+                      </div>
+                      {subjectText && subjectText !== bodyText && (
+                        <p className="text-[11px] font-medium mb-1 truncate">{subjectText}</p>
+                      )}
+                      <p className="text-[11px] text-[var(--muted-foreground)] line-clamp-3">
+                        {bodyText}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </div>
       )}
     </div>
   );
 }
+
+// ── Subcomponents ──
 
 function InfoPill({
   icon,
@@ -1098,24 +729,27 @@ function InfoPill({
   );
 }
 
-function DndToggleTile({
+function SuppressionTile({
   label,
   enabled,
-  status,
-  onToggle,
+  disabled,
+  hint,
   icon: Icon,
+  onToggle,
 }: {
   label: string;
   enabled: boolean;
-  status: string;
+  disabled?: boolean;
+  hint: string;
+  icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
   onToggle: () => void;
-  icon: ComponentType<SVGProps<SVGSVGElement>>;
 }) {
   return (
     <button
       type="button"
       onClick={onToggle}
-      className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
+      disabled={disabled}
+      className={`rounded-lg border px-3 py-2.5 text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
         enabled
           ? 'border-[var(--primary)]/45 bg-[var(--primary)]/10'
           : 'border-[var(--border)] bg-[var(--muted)]/25 hover:border-[var(--primary)]/30'
@@ -1129,9 +763,7 @@ function DndToggleTile({
         </div>
         <span
           className={`inline-flex w-8 h-4 rounded-full border transition-colors ${
-            enabled
-              ? 'bg-[var(--primary)] border-[var(--primary)]'
-              : 'bg-transparent border-[var(--border)]'
+            enabled ? 'bg-[var(--primary)] border-[var(--primary)]' : 'bg-transparent border-[var(--border)]'
           }`}
         >
           <span
@@ -1141,22 +773,14 @@ function DndToggleTile({
           />
         </span>
       </div>
-      <p className="mt-1 text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-        {status || (enabled ? 'active' : 'inactive')}
+      <p className="mt-1 text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] truncate">
+        {hint}
       </p>
     </button>
   );
 }
 
-function StatTile({
-  label,
-  value,
-  mono,
-}: {
-  label: string;
-  value: string;
-  mono?: boolean;
-}) {
+function StatTile({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)]/25 px-3 py-2.5">
       <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">{label}</p>

@@ -23,3 +23,11 @@ export async function createAudience(data: {
 }) {
   return prisma.audience.create({ data });
 }
+
+export async function getAudienceById(id: string) {
+  return prisma.audience.findUnique({ where: { id } });
+}
+
+export async function deleteAudience(id: string) {
+  return prisma.audience.delete({ where: { id } });
+}

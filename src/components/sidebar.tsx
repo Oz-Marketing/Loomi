@@ -22,6 +22,7 @@ import {
   ChartBarSquareIcon,
   ChatBubbleLeftRightIcon,
   ListBulletIcon,
+  FunnelIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
@@ -107,10 +108,23 @@ const messagingNav: NavItem = {
   ],
 };
 
+// Contacts group. The parent is a toggle; "All Contacts" routes to the
+// existing /contacts table, Lists + Segments are first-class destinations.
+const contactsNav: NavItem = {
+  href: '/contacts',
+  label: 'Contacts',
+  icon: UserGroupIcon,
+  children: [
+    { href: '/contacts', label: 'All Contacts', icon: UserGroupIcon },
+    { href: '/contacts/lists', label: 'Lists', icon: ListBulletIcon },
+    { href: '/contacts/segments', label: 'Segments', icon: FunnelIcon },
+  ],
+};
+
 // Admin-level nav (when in admin mode)
 const adminNavItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: Squares2X2Icon },
-  { href: '/contacts', label: 'Contacts', icon: UserGroupIcon },
+  contactsNav,
   messagingNav,
   flowsNavItem,
   { href: '/media', label: 'Media', icon: PhotoIcon },
@@ -120,7 +134,7 @@ const adminNavItems: NavItem[] = [
 // Sub-account nav for admin/developer users viewing a sub-account
 const subaccountAdminNavItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: Squares2X2Icon },
-  { href: '/contacts', label: 'Contacts', icon: UserGroupIcon },
+  contactsNav,
   messagingNav,
   flowsNavItem,
   { href: '/media', label: 'Media', icon: PhotoIcon },
@@ -131,7 +145,7 @@ const subaccountAdminNavItems: NavItem[] = [
 // admin-only restriction on Flows).
 const subaccountClientNavItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: Squares2X2Icon },
-  { href: '/contacts', label: 'Contacts', icon: UserGroupIcon },
+  contactsNav,
   messagingNav,
 ];
 
@@ -319,7 +333,6 @@ function NavGroup({
           : 'text-[var(--sidebar-muted-foreground)] font-medium hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]/60'
       }`;
 
-  const iconSize = isTop ? 'w-5 h-5' : 'w-4 h-4';
   const chevronSize = isTop ? 'w-4 h-4' : 'w-3.5 h-3.5';
 
   return (
@@ -330,7 +343,10 @@ function NavGroup({
         aria-expanded={open}
         className={buttonClass}
       >
-        {item.icon && <item.icon className={iconSize} />}
+        {/* Icons only render at the top level of the nav. Nested
+            groups (Tools → Meta) drop their icon so the hierarchy stays
+            visually clean — the indent + rail communicate the nesting. */}
+        {isTop && item.icon && <item.icon className="w-5 h-5" />}
         <span className="flex-1 text-left">{item.label}</span>
         <ChevronDownIcon
           className={`${chevronSize} transition-transform duration-200 ${open ? 'rotate-180' : ''} ${
@@ -347,41 +363,56 @@ function NavGroup({
               aria-hidden="true"
               className="pointer-events-none absolute top-1 bottom-0.5 left-[14px] w-px bg-[var(--sidebar-border-soft)]"
             />
-            {item.children!.map((child) => {
-              // Children with their own children render as a nested group so
-              // we get e.g. Tools → Meta → [Ad Planner, Ad Pacer].
-              if (child.children && child.children.length > 0) {
-                return (
-                  <NavGroup
-                    key={child.label}
-                    item={child}
-                    prefix={prefix}
-                    normalizedPath={normalizedPath}
-                    depth={depth + 1}
-                  />
-                );
+            {(() => {
+              // Pick the longest-matching child path so a parent route like
+              // /contacts doesn't read as active when the URL is /contacts/lists.
+              // Only the most-specific match wins.
+              let bestMatch = '';
+              for (const child of item.children!) {
+                if (child.children && child.children.length > 0) continue;
+                const childPath = child.absolute
+                  ? child.href
+                  : child.href.replace(prefix, '');
+                const matches =
+                  normalizedPath === childPath ||
+                  normalizedPath.startsWith(`${childPath}/`);
+                if (matches && childPath.length > bestMatch.length) {
+                  bestMatch = childPath;
+                }
               }
-              const childPath = child.absolute
-                ? child.href
-                : child.href.replace(prefix, '');
-              const childActive =
-                normalizedPath === childPath ||
-                normalizedPath.startsWith(`${childPath}/`);
-              return (
-                <Link
-                  key={child.href}
-                  href={child.href}
-                  className={`relative flex items-center gap-2.5 pl-3 pr-3 py-1.5 rounded-lg text-[13px] font-medium transition-all duration-200 ${
-                    childActive
-                      ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
-                      : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]/60'
-                  }`}
-                >
-                  {child.icon && <child.icon className="w-4 h-4" />}
-                  {child.label}
-                </Link>
-              );
-            })}
+              return item.children!.map((child) => {
+                // Children with their own children render as a nested group so
+                // we get e.g. Tools → Meta → [Ad Planner, Ad Pacer].
+                if (child.children && child.children.length > 0) {
+                  return (
+                    <NavGroup
+                      key={child.label}
+                      item={child}
+                      prefix={prefix}
+                      normalizedPath={normalizedPath}
+                      depth={depth + 1}
+                    />
+                  );
+                }
+                const childPath = child.absolute
+                  ? child.href
+                  : child.href.replace(prefix, '');
+                const childActive = childPath === bestMatch;
+                return (
+                  <Link
+                    key={child.href}
+                    href={child.href}
+                    className={`relative flex items-center gap-2.5 pl-3 pr-3 py-1.5 rounded-lg text-[13px] transition-all duration-200 ${
+                      childActive
+                        ? 'text-[var(--primary)] font-semibold'
+                        : 'text-[var(--sidebar-muted-foreground)] font-medium hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]/60'
+                    }`}
+                  >{/* Sub-page rows are icon-free by design. */}
+                    {child.label}
+                  </Link>
+                );
+              });
+            })()}
           </div>
         </div>
       </div>

@@ -1,11 +1,14 @@
 'use client';
 
 import { use, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
+  ArrowPathRoundedSquareIcon,
   CalendarDaysIcon,
+  ChartBarSquareIcon,
   CheckCircleIcon,
   ClockIcon,
   EnvelopeIcon,
@@ -15,7 +18,8 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
-import type { Contact } from '@/components/contacts/contacts-table';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import type { Contact } from '@/lib/contacts/types';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import PrimaryButton from '@/components/primary-button';
@@ -34,13 +38,89 @@ interface DraftCampaign {
   htmlContent: string;
   sourceAudienceId: string;
   sourceFilter: string;
+  metadata: string;
 }
 
 type SendMode = 'now' | 'later';
 
-function toLocalDateTimeInputValue(date: Date): string {
+interface UtmSettings {
+  enabled: boolean;
+  source: string;
+  medium: string;
+  campaign: string;
+  term: string;
+  content: string;
+}
+
+interface ResendSettings {
+  enabled: boolean;
+  delayHours: number;
+  subject: string;
+}
+
+interface CampaignMetadata {
+  utm?: Partial<UtmSettings>;
+  resend?: Partial<ResendSettings>;
+}
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function defaultUtm(campaignName: string): UtmSettings {
+  return {
+    enabled: false,
+    source: 'loomi',
+    medium: 'email',
+    campaign: slugify(campaignName) || 'campaign',
+    term: '',
+    content: '',
+  };
+}
+
+function defaultResend(): ResendSettings {
+  return {
+    enabled: false,
+    delayHours: 72,
+    subject: '',
+  };
+}
+
+function parseMetadata(raw: string): CampaignMetadata {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as CampaignMetadata)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+// Split-input date/time. We keep them as separate strings (YYYY-MM-DD,
+// HH:MM) and combine on submit so each input gets its own native picker
+// — `datetime-local` is one widget on Chrome but two on Safari etc.,
+// and the split form makes the keyboard flow obvious on every browser.
+
+function toLocalDateInputValue(date: Date): string {
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
+  return local.toISOString().slice(0, 10);
+}
+
+function toLocalTimeInputValue(date: Date): string {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(11, 16);
+}
+
+function combineDateAndTime(dateStr: string, timeStr: string): Date | null {
+  if (!dateStr || !timeStr) return null;
+  const d = new Date(`${dateStr}T${timeStr}`);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 function formatDateTime(iso: string): string {
@@ -75,6 +155,8 @@ export default function ScheduleStepPage({ params }: PageProps) {
   const router = useRouter();
   const { id } = use(params);
   const { accounts } = useAccount();
+  const subHref = useSubaccountHref();
+  const sendingSettingsHref = subHref('/messaging/settings/sending');
 
   const [draft, setDraft] = useState<DraftCampaign | null>(null);
   const [loading, setLoading] = useState(true);
@@ -82,9 +164,11 @@ export default function ScheduleStepPage({ params }: PageProps) {
   const [contactsLoading, setContactsLoading] = useState(false);
 
   const [sendMode, setSendMode] = useState<SendMode>('later');
-  const [sendAtLocal, setSendAtLocal] = useState(
-    toLocalDateTimeInputValue(new Date(Date.now() + 30 * 60_000)),
-  );
+  // Default to ~30m out so the input isn't pinned to "now" (which would
+  // immediately fail the future-only validator on submit).
+  const defaultSend = useMemo(() => new Date(Date.now() + 30 * 60_000), []);
+  const [sendDate, setSendDate] = useState(toLocalDateInputValue(defaultSend));
+  const [sendTime, setSendTime] = useState(toLocalTimeInputValue(defaultSend));
   const [submitting, setSubmitting] = useState(false);
 
   // Inline-edit state for subject + preview text. These persist back to
@@ -93,10 +177,25 @@ export default function ScheduleStepPage({ params }: PageProps) {
   const [subjectDraft, setSubjectDraft] = useState('');
   const [previewTextDraft, setPreviewTextDraft] = useState('');
 
+  // UTM + Resend live in the campaign's `metadata` JSON field. Hydrated
+  // from the draft once it lands; persisted in handleSchedule alongside
+  // the schedule POST (so we don't fire a PATCH per keystroke). The
+  // enabled flag also drives section expansion — see ToggleSection.
+  const [utm, setUtm] = useState<UtmSettings>(defaultUtm(''));
+  const [resend, setResend] = useState<ResendSettings>(defaultResend());
+
   useEffect(() => {
     setSubjectDraft(draft?.subject || '');
     setPreviewTextDraft(draft?.previewText || '');
   }, [draft?.subject, draft?.previewText]);
+
+  useEffect(() => {
+    if (!draft) return;
+    const meta = parseMetadata(draft.metadata);
+    const baseUtm = defaultUtm(draft.name || '');
+    setUtm({ ...baseUtm, ...(meta.utm ?? {}) });
+    setResend({ ...defaultResend(), ...(meta.resend ?? {}) });
+  }, [draft]);
 
   async function persistField(patch: { subject?: string; previewText?: string }) {
     if (!draft) return;
@@ -148,7 +247,7 @@ export default function ScheduleStepPage({ params }: PageProps) {
     if (!accountKey) return;
     let cancelled = false;
     setContactsLoading(true);
-    fetch(`/api/esp/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true`)
+    fetch(`/api/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true`)
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || 'Failed to load contacts');
@@ -193,8 +292,8 @@ export default function ScheduleStepPage({ params }: PageProps) {
 
     let scheduledFor: string | null = null;
     if (sendMode === 'later') {
-      const date = new Date(sendAtLocal);
-      if (Number.isNaN(date.getTime())) {
+      const date = combineDateAndTime(sendDate, sendTime);
+      if (!date) {
         toast.error('Pick a valid send date and time.');
         return;
       }
@@ -205,8 +304,30 @@ export default function ScheduleStepPage({ params }: PageProps) {
       scheduledFor = date.toISOString();
     }
 
+    // Build the metadata blob from the UTM + Resend state. We keep the
+    // existing metadata fields the schedule step doesn't own (in case
+    // earlier steps store anything alongside).
+    const existingMeta = parseMetadata(draft.metadata);
+    const nextMeta: CampaignMetadata = { ...existingMeta, utm, resend };
+    const metadataJson = JSON.stringify(nextMeta);
+
     setSubmitting(true);
     try {
+      // Persist metadata first so the schedule POST sees a finalized
+      // campaign. Done as a PATCH because the schedule endpoint only
+      // accepts the recipient list + scheduledFor.
+      if (metadataJson !== (draft.metadata || '')) {
+        const patchRes = await fetch(`/api/campaigns/email/${encodeURIComponent(draft.id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ metadata: metadataJson }),
+        });
+        if (!patchRes.ok) {
+          const patchData = await patchRes.json().catch(() => ({}));
+          throw new Error(patchData?.error || 'Failed to save tracking settings');
+        }
+      }
+
       const res = await fetch(
         `/api/campaigns/email/${encodeURIComponent(draft.id)}/schedule`,
         {
@@ -288,116 +409,196 @@ export default function ScheduleStepPage({ params }: PageProps) {
 
               {sendMode === 'later' && (
                 <div className="mt-5 pt-5 border-t border-[var(--border)]">
-                  <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
-                    Send Date &amp; Time
-                  </label>
-                  <div className="relative">
-                    <CalendarDaysIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] pointer-events-none" />
-                    <input
-                      type="datetime-local"
-                      value={sendAtLocal}
-                      min={toLocalDateTimeInputValue(new Date())}
-                      onChange={(e) => setSendAtLocal(e.target.value)}
-                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-9 pr-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
-                    />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+                        Send Date
+                      </label>
+                      <div className="relative">
+                        <CalendarDaysIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] pointer-events-none" />
+                        <input
+                          type="date"
+                          value={sendDate}
+                          min={toLocalDateInputValue(new Date())}
+                          onChange={(e) => setSendDate(e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-9 pr-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+                        Send Time
+                      </label>
+                      <div className="relative">
+                        <ClockIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] pointer-events-none" />
+                        <input
+                          type="time"
+                          value={sendTime}
+                          onChange={(e) => setSendTime(e.target.value)}
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-9 pr-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
+                        />
+                      </div>
+                    </div>
                   </div>
                   <p className="text-[11px] text-[var(--muted-foreground)] mt-2">
-                    Will send {sendAtLocal ? formatDateTime(new Date(sendAtLocal).toISOString()) : '—'}
+                    {(() => {
+                      const combined = combineDateAndTime(sendDate, sendTime);
+                      return combined
+                        ? `Will send ${formatDateTime(combined.toISOString())}`
+                        : 'Pick a date and time to schedule the send.';
+                    })()}
                   </p>
                 </div>
               )}
             </div>
 
-            {/* Summary — recipients (with link back to Recipients step)
-                + inline-editable subject + preview text + from. */}
-            <div className="glass-section-card rounded-2xl p-5 border border-[var(--border)]">
-              <p className="text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-4">
-                Summary
-              </p>
+            {/* UTM tracking. Header toggle drives both enabled + expanded
+                state. When enabled, links in the rendered email get utm_*
+                query params appended. Stored under metadata.utm. */}
+            <ToggleSection
+              icon={ChartBarSquareIcon}
+              title="UTM tracking"
+              subtitle={
+                utm.enabled
+                  ? `Tagging links with ${utm.source}/${utm.medium}`
+                  : 'Append utm_* params to links in this email'
+              }
+              enabled={utm.enabled}
+              onToggle={(checked) => setUtm((u) => ({ ...u, enabled: checked }))}
+            >
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <UtmField
+                  label="Source"
+                  value={utm.source}
+                  placeholder="loomi"
+                  onChange={(v) => setUtm((u) => ({ ...u, source: v }))}
+                />
+                <UtmField
+                  label="Medium"
+                  value={utm.medium}
+                  placeholder="email"
+                  onChange={(v) => setUtm((u) => ({ ...u, medium: v }))}
+                />
+                <UtmField
+                  label="Campaign"
+                  value={utm.campaign}
+                  placeholder="spring-launch"
+                  onChange={(v) => setUtm((u) => ({ ...u, campaign: v }))}
+                />
+                <UtmField
+                  label="Term"
+                  value={utm.term}
+                  placeholder="(optional)"
+                  onChange={(v) => setUtm((u) => ({ ...u, term: v }))}
+                />
+                <UtmField
+                  label="Content"
+                  value={utm.content}
+                  placeholder="(optional)"
+                  onChange={(v) => setUtm((u) => ({ ...u, content: v }))}
+                />
+              </div>
+            </ToggleSection>
 
-              <div className="space-y-4">
-                <div className="flex items-start gap-3">
-                  <div className="w-9 h-9 rounded-lg bg-[var(--primary)]/10 text-[var(--primary)] flex items-center justify-center flex-shrink-0">
-                    <UsersIcon className="w-4 h-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                        Recipients
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => router.push(`/messaging/campaigns/${encodeURIComponent(id)}/recipients`)}
-                        className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--primary)] hover:underline"
-                      >
-                        <PencilSquareIcon className="w-3 h-3" />
-                        Change
-                      </button>
-                    </div>
-                    <p className="text-2xl font-bold tabular-nums mt-0.5">
+            {/* Resend to non-engaged. Fires a follow-up after a delay to
+                recipients who haven't opened/clicked. Stored under
+                metadata.resend; the worker schedules + filters at send. */}
+            <ToggleSection
+              icon={ArrowPathRoundedSquareIcon}
+              title="Resend to non-engaged"
+              subtitle={
+                resend.enabled
+                  ? `Follow-up after ${resend.delayHours}h to anyone who didn't open or click`
+                  : 'Send a second email to recipients who didn’t engage'
+              }
+              enabled={resend.enabled}
+              onToggle={(checked) => setResend((r) => ({ ...r, enabled: checked }))}
+            >
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+                    Delay
+                  </label>
+                  <select
+                    value={resend.delayHours}
+                    onChange={(e) => setResend((r) => ({ ...r, delayHours: Number(e.target.value) }))}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)]"
+                  >
+                    <option value={24}>24 hours</option>
+                    <option value={48}>2 days</option>
+                    <option value={72}>3 days</option>
+                    <option value={120}>5 days</option>
+                    <option value={168}>7 days</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+                    Resend subject <span className="font-normal lowercase">(optional override)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={resend.subject}
+                    onChange={(e) => setResend((r) => ({ ...r, subject: e.target.value }))}
+                    placeholder={draft?.subject ? `Reminder: ${draft.subject}` : 'Leave blank to reuse the original subject'}
+                    maxLength={200}
+                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2.5 text-sm focus:outline-none focus:border-[var(--primary)]"
+                  />
+                </div>
+              </div>
+            </ToggleSection>
+          </div>
+
+          {/* Right (sticky): compact summary → checklist → subject/preview
+              → email preview, top to bottom. */}
+          <div className="lg:sticky lg:top-20 space-y-4">
+            {/* Compact summary — replaces the old Summary card. Two rows:
+                recipients (with Change shortcut) and From identity. */}
+            <div className="glass-section-card rounded-xl border border-[var(--border)] px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <UsersIcon className="w-4 h-4 text-[var(--primary)] flex-shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold tabular-nums leading-tight">
                       {contactsLoading ? (
-                        <ArrowPathIcon className="w-5 h-5 inline animate-spin text-[var(--muted-foreground)]" />
+                        <ArrowPathIcon className="w-3.5 h-3.5 inline animate-spin text-[var(--muted-foreground)]" />
                       ) : (
-                        recipients.length.toLocaleString()
+                        `${recipients.length.toLocaleString()} recipient${recipients.length === 1 ? '' : 's'}`
                       )}
                     </p>
                   </div>
                 </div>
-
-                <div className="pt-3 border-t border-[var(--border)] space-y-2">
-                  <label className="block text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                    Subject
-                  </label>
-                  <input
-                    type="text"
-                    value={subjectDraft}
-                    onChange={(e) => setSubjectDraft(e.target.value)}
-                    onBlur={() => {
-                      const trimmed = subjectDraft.trim();
-                      if (trimmed !== (draft?.subject || '')) {
-                        void persistField({ subject: trimmed });
-                      }
-                    }}
-                    placeholder="Subject line"
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
-                  />
-                  <label className="block text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] pt-1">
-                    Preview text
-                  </label>
-                  <input
-                    type="text"
-                    value={previewTextDraft}
-                    onChange={(e) => setPreviewTextDraft(e.target.value)}
-                    onBlur={() => {
-                      const trimmed = previewTextDraft.trim();
-                      if (trimmed !== (draft?.previewText || '')) {
-                        void persistField({ previewText: trimmed });
-                      }
-                    }}
-                    placeholder="Optional inbox preview snippet"
-                    className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-xs text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
-                  />
-                </div>
-
-                <div className="pt-3 border-t border-[var(--border)]">
-                  <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] mb-1.5">
+                <button
+                  type="button"
+                  onClick={() => router.push(`/messaging/campaigns/${encodeURIComponent(id)}/recipients`)}
+                  className="inline-flex items-center gap-1 text-[11px] font-medium text-[var(--primary)] hover:underline whitespace-nowrap"
+                >
+                  <PencilSquareIcon className="w-3 h-3" />
+                  Change
+                </button>
+              </div>
+              <div className="flex items-start gap-2.5 mt-2 pt-2 border-t border-[var(--border)] min-w-0">
+                <EnvelopeIcon className="w-4 h-4 text-[var(--muted-foreground)] flex-shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] leading-tight">
                     From
                   </p>
-                  <p className="text-sm font-medium">
+                  <p className="text-xs font-medium truncate">
                     {fromName || <span className="text-[var(--muted-foreground)] italic">Not set</span>}
                   </p>
-                  <p className="text-xs text-[var(--muted-foreground)]">
+                  <p className="text-[11px] text-[var(--muted-foreground)] truncate">
                     {fromEmail || (
-                      <span className="italic">Configure in Sending settings</span>
+                      <Link
+                        href={sendingSettingsHref}
+                        className="italic text-[var(--primary)] hover:underline"
+                      >
+                        Configure in Sending settings →
+                      </Link>
                     )}
                   </p>
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* Right (sticky): pre-flight checklist on top, preview below. */}
-          <div className="lg:sticky lg:top-20 space-y-5">
             <div className="glass-section-card rounded-2xl p-5 border border-[var(--border)]">
               <h3 className="text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-3">
                 Pre-flight checklist
@@ -413,13 +614,64 @@ export default function ScheduleStepPage({ params }: PageProps) {
                 />
                 <ChecklistItem
                   ok={Boolean(fromEmail)}
-                  label="Sender email configured in Sending settings"
+                  label={
+                    <>
+                      Sender email configured in{' '}
+                      <Link
+                        href={sendingSettingsHref}
+                        className="text-[var(--primary)] hover:underline"
+                      >
+                        Sending settings
+                      </Link>
+                    </>
+                  }
                 />
                 <ChecklistItem
                   ok={recipients.length > 0}
                   label={`${recipients.length.toLocaleString()} sendable recipient${recipients.length === 1 ? '' : 's'}`}
                 />
               </ul>
+            </div>
+
+            {/* Inline subject + preview text editors. Persist on blur so
+                tweaks don't require bouncing back to the message step. */}
+            <div className="glass-section-card rounded-2xl p-4 border border-[var(--border)] space-y-3">
+              <div>
+                <label className="block text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] mb-1.5">
+                  Subject
+                </label>
+                <input
+                  type="text"
+                  value={subjectDraft}
+                  onChange={(e) => setSubjectDraft(e.target.value)}
+                  onBlur={() => {
+                    const trimmed = subjectDraft.trim();
+                    if (trimmed !== (draft?.subject || '')) {
+                      void persistField({ subject: trimmed });
+                    }
+                  }}
+                  placeholder="Subject line"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] uppercase tracking-wider text-[var(--muted-foreground)] mb-1.5">
+                  Preview text
+                </label>
+                <input
+                  type="text"
+                  value={previewTextDraft}
+                  onChange={(e) => setPreviewTextDraft(e.target.value)}
+                  onBlur={() => {
+                    const trimmed = previewTextDraft.trim();
+                    if (trimmed !== (draft?.previewText || '')) {
+                      void persistField({ previewText: trimmed });
+                    }
+                  }}
+                  placeholder="Optional inbox preview snippet"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-xs text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
+                />
+              </div>
             </div>
 
             <div className="glass-section-card rounded-2xl border border-[var(--border)] overflow-hidden">
@@ -541,7 +793,115 @@ function SendModeOption({
   );
 }
 
-function ChecklistItem({ ok, label }: { ok: boolean; label: string }) {
+function ToggleSection({
+  icon: Icon,
+  title,
+  subtitle,
+  enabled,
+  onToggle,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  subtitle: string;
+  enabled: boolean;
+  onToggle: (next: boolean) => void;
+  children: React.ReactNode;
+}) {
+  // Single source of truth: `enabled` drives both persistence (the
+  // metadata.utm/resend.enabled flag) and visibility of the fields.
+  // There's no "open but disabled" intermediate state — the toggle
+  // decides everything.
+  return (
+    <div
+      className={`glass-section-card rounded-2xl border ${
+        enabled ? 'border-[var(--primary)]/40' : 'border-[var(--border)]'
+      }`}
+    >
+      <div className="flex items-center gap-3 px-5 py-4">
+        <div
+          className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
+            enabled
+              ? 'bg-[var(--primary)]/10 text-[var(--primary)]'
+              : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
+          }`}
+        >
+          <Icon className="w-4 h-4" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold">{title}</p>
+          <p className="text-xs text-[var(--muted-foreground)] mt-0.5 truncate">{subtitle}</p>
+        </div>
+        <Switch checked={enabled} onChange={onToggle} ariaLabel={`Enable ${title.toLowerCase()}`} />
+      </div>
+      {enabled && (
+        <div className="px-5 pb-5 pt-4 border-t border-[var(--border)]">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Switch({
+  checked,
+  onChange,
+  ariaLabel,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={ariaLabel}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/30 ${
+        checked ? 'bg-[var(--primary)]' : 'bg-[var(--border)]'
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+          checked ? 'translate-x-[18px]' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
+  );
+}
+
+function UtmField({
+  label,
+  value,
+  placeholder,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div>
+      <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
+        {label}
+      </label>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        maxLength={120}
+        className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)]"
+      />
+    </div>
+  );
+}
+
+function ChecklistItem({ ok, label }: { ok: boolean; label: React.ReactNode }) {
   return (
     <li className="flex items-start gap-2.5">
       <CheckCircleIcon

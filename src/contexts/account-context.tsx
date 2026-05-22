@@ -10,30 +10,6 @@ export interface AccountData {
   category?: string;
   oem?: string;
   oems?: string[];
-  espProvider?: string;
-  activeEspProvider?: string;
-  activeLocationId?: string | null;
-  activeConnection?: {
-    provider: string;
-    connected: boolean;
-    connectionType: 'oauth' | 'api-key' | 'none';
-    locationId?: string | null;
-    accountId?: string | null;
-    accountName?: string | null;
-  };
-  connectedProviders?: string[];
-  oauthConnections?: Array<{
-    provider: string;
-    locationId?: string | null;
-    locationName?: string | null;
-    installedAt?: string | null;
-  }>;
-  espConnections?: Array<{
-    provider: string;
-    accountId?: string | null;
-    accountName?: string | null;
-    installedAt?: string | null;
-  }>;
   email?: string;
   phone?: string;
   salesPhone?: string;

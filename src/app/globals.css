@@ -441,6 +441,19 @@ main[data-scrolled='true'] .page-sticky-header {
     inset 0 0.5px 0 rgba(255, 255, 255, 0.6);
 }
 
+/* Strong variant — for modal surfaces that need to feel like a panel,
+   not a frosted overlay. Mirrors .glass-panel-strong. */
+[data-theme='dark'] .glass-card-strong {
+  background: rgba(18, 18, 22, 0.96);
+}
+[data-theme='light'] .glass-card-strong {
+  background: rgba(255, 255, 255, 0.97);
+}
+.glass-card-strong:hover {
+  /* Modals don't lift on hover — kill the inherited .glass-card hover lift. */
+  transform: none;
+}
+
 /* ── Bulk action dock ── */
 .loomi-bulk-dock {
   background: rgba(10, 12, 24, 0.95);

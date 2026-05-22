@@ -84,7 +84,6 @@ export async function createAccount(data: {
   key: string;
   dealer: string;
   slug?: string;
-  espProvider: string;
   category?: string;
   oem?: string;
   oems?: string;
@@ -115,7 +114,6 @@ export async function updateAccount(
     category: string;
     oem: string;
     oems: string;
-    espProvider: string;
     email: string;
     phone: string;
     salesPhone: string;

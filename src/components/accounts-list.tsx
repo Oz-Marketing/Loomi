@@ -3,14 +3,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import {
   PlusIcon,
   XMarkIcon,
   TrashIcon,
-  ArrowLeftIcon,
   MagnifyingGlassIcon,
-  LinkIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -21,11 +19,10 @@ import { formatAccountCityState } from '@/lib/account-resolvers';
 import { industryHasBrands, brandsForIndustry } from '@/lib/oems';
 import { useAccount, type AccountData } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
-import { providerDisplayName, providerIcon } from '@/lib/esp/provider-display';
 
-type CreateMode = null | 'choose' | 'manual';
+type CreateMode = null | 'manual';
 type SortDirection = 'asc' | 'desc';
-type AccountSortField = 'dealer' | 'category' | 'location' | 'rep' | 'integrations';
+type AccountSortField = 'dealer' | 'category' | 'location' | 'rep';
 
 interface AccountsListProps {
   listPath?: string;
@@ -47,22 +44,6 @@ function toCamelCaseSlug(name: string): string {
     .join('');
 }
 
-function normalizeConnectedProviders(account: AccountData): string[] {
-  if (Array.isArray(account.connectedProviders) && account.connectedProviders.length > 0) {
-    return [...new Set(
-      account.connectedProviders
-        .map((provider) => String(provider || '').trim().toLowerCase())
-        .filter(Boolean),
-    )];
-  }
-
-  if (account.activeConnection?.connected && account.activeConnection.provider) {
-    return [String(account.activeConnection.provider).trim().toLowerCase()].filter(Boolean);
-  }
-
-  return [];
-}
-
 function getVisiblePages(currentPage: number, totalPages: number, maxVisible = 5): number[] {
   if (totalPages <= maxVisible) {
     return Array.from({ length: totalPages }, (_, index) => index + 1);
@@ -81,11 +62,11 @@ function getVisiblePages(currentPage: number, totalPages: number, maxVisible = 5
 }
 
 export function AccountsList({
-  listPath = '/subaccounts',
+  listPath: _listPath = '/subaccounts',
   detailBasePath = '/subaccounts',
 }: AccountsListProps) {
+  void _listPath;
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { confirm } = useLoomiDialog();
   const { userRole } = useAccount();
   const canManageAccounts = userRole === 'developer' || userRole === 'super_admin';
@@ -129,17 +110,6 @@ export function AccountsList({
         .catch(() => setRepUsers([]));
     }
   }, [createMode]);
-
-  // Handle OAuth error from redirect.
-  useEffect(() => {
-    const errorMessage = searchParams.get('esp_error');
-    const provider = searchParams.get('esp_provider');
-
-    if (errorMessage) {
-      toast.error(`${providerDisplayName(provider)} connection failed: ${errorMessage}`);
-      router.replace(listPath, { scroll: false });
-    }
-  }, [searchParams, router, listPath]);
 
   const resetCreate = () => {
     setCreateMode(null);
@@ -241,8 +211,6 @@ export function AccountsList({
         compareValue = (formatAccountCityState(accountA) || '').toLowerCase().localeCompare((formatAccountCityState(accountB) || '').toLowerCase());
       } else if (sortField === 'rep') {
         compareValue = (accountA.accountRep?.name || '').toLowerCase().localeCompare((accountB.accountRep?.name || '').toLowerCase());
-      } else if (sortField === 'integrations') {
-        compareValue = normalizeConnectedProviders(accountA).length - normalizeConnectedProviders(accountB).length;
       }
 
       if (compareValue === 0) {
@@ -295,7 +263,7 @@ export function AccountsList({
       {/* Portal action button into the settings title bar */}
       {canManageAccounts && titleActionsEl && createPortal(
         <button
-          onClick={() => setCreateMode('choose')}
+          onClick={() => setCreateMode('manual')}
           className="flex items-center gap-1.5 px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 transition-opacity"
         >
           <PlusIcon className="w-4 h-4" /> New Sub-Account
@@ -324,58 +292,10 @@ export function AccountsList({
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-overlay-in">
           <div className="glass-modal w-full max-w-lg mx-4">
 
-            {/* ── Step 1: Choose path ── */}
-            {createMode === 'choose' && (
-              <div className="p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-lg font-semibold">Add New Sub-Account</h3>
-                  <button onClick={resetCreate} className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]">
-                    <XMarkIcon className="w-5 h-5" />
-                  </button>
-                </div>
-                <div className="space-y-3">
-                  <button
-                    onClick={() => setCreateMode('manual')}
-                    className="w-full flex items-center gap-4 p-4 glass-card rounded-xl hover:bg-[var(--primary)]/5 transition-all text-left group"
-                  >
-                    <div className="w-10 h-10 rounded-lg bg-sky-500/10 flex items-center justify-center flex-shrink-0 group-hover:bg-sky-500/20 transition-colors">
-                      <LinkIcon className="w-5 h-5 text-sky-400" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium">Integrate with ESP</div>
-                      <div className="text-xs text-[var(--muted-foreground)] mt-0.5">
-                        Create a sub-account and connect an ESP provider
-                      </div>
-                    </div>
-                    <span className="text-[10px] font-medium bg-sky-500/10 text-sky-400 px-2 py-0.5 rounded-full flex-shrink-0">
-                      Recommended
-                    </span>
-                  </button>
-                  <button
-                    onClick={() => setCreateMode('manual')}
-                    className="w-full flex items-center gap-4 p-4 glass-card rounded-xl hover:bg-[var(--primary)]/5 transition-all text-left group"
-                  >
-                    <div className="w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-500/20 transition-colors">
-                      <PlusIcon className="w-5 h-5 text-emerald-400" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium">Add Manually</div>
-                      <div className="text-xs text-[var(--muted-foreground)] mt-0.5">
-                        Set up sub-account details without an ESP connection
-                      </div>
-                    </div>
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* ── Manual Create (simplified: Name + Industry + Brand) ── */}
             {createMode === 'manual' && (
               <div className="p-6">
                 <div className="flex items-center gap-3 mb-6">
-                  <button onClick={() => setCreateMode('choose')} className="p-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]">
-                    <ArrowLeftIcon className="w-4 h-4" />
-                  </button>
                   <h3 className="text-lg font-semibold flex-1">Create Sub-Account</h3>
                   <button onClick={resetCreate} className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]">
                     <XMarkIcon className="w-5 h-5" />
@@ -469,7 +389,7 @@ export function AccountsList({
                 </div>
 
                 <p className="text-[11px] text-[var(--muted-foreground)] mt-4">
-                  You&apos;ll be taken to the account detail page to add business details, logos, and ESP connection.
+                  You&apos;ll be taken to the account detail page to add business details, logos, and sending credentials.
                 </p>
 
                 <div className="flex items-center gap-2 mt-4">
@@ -524,12 +444,6 @@ export function AccountsList({
                   <button type="button" onClick={() => toggleSort('rep')} className="inline-flex items-center gap-1 hover:text-[var(--foreground)] transition-colors">
                     Account Rep
                     <span className="text-[10px]">{sortIndicator('rep')}</span>
-                  </button>
-                </th>
-                <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                  <button type="button" onClick={() => toggleSort('integrations')} className="inline-flex items-center gap-1 hover:text-[var(--foreground)] transition-colors">
-                    Integrations
-                    <span className="text-[10px]">{sortIndicator('integrations')}</span>
                   </button>
                 </th>
                 <th className="w-10 px-3 py-2"></th>
@@ -595,47 +509,6 @@ export function AccountsList({
                       ) : (
                         <span className="text-xs text-[var(--muted-foreground)]">—</span>
                       )}
-                    </td>
-                    <td className="px-3 py-2 align-middle">
-                      <div className="flex items-center gap-1.5">
-                        {(() => {
-                          const connectedProviders = normalizeConnectedProviders(account);
-                          if (connectedProviders.length === 0) {
-                            return <span className="text-xs text-[var(--muted-foreground)]">—</span>;
-                          }
-
-                          return connectedProviders.map((provider) => {
-                            const icon = providerIcon(provider);
-                            if (icon) {
-                              return (
-                                <button
-                                  key={provider}
-                                  onClick={(e) => { e.stopPropagation(); router.push(`${detailBasePath}/${key}?tab=integration`); }}
-                                  className="w-6 h-6 rounded-full bg-white border border-[var(--border)] flex items-center justify-center flex-shrink-0 overflow-hidden hover:ring-2 hover:ring-[var(--primary)]/40 transition-shadow"
-                                  title={`${providerDisplayName(provider)} — Click to manage`}
-                                >
-                                  <img
-                                    src={icon.src}
-                                    alt={icon.alt}
-                                    className="w-4 h-4 object-contain"
-                                  />
-                                </button>
-                              );
-                            }
-
-                            return (
-                              <button
-                                key={provider}
-                                onClick={(e) => { e.stopPropagation(); router.push(`${detailBasePath}/${key}?tab=integration`); }}
-                                className="h-6 min-w-6 px-1 rounded-full bg-[var(--muted)] border border-[var(--border)] text-[10px] font-semibold uppercase text-[var(--muted-foreground)] hover:ring-2 hover:ring-[var(--primary)]/40 transition-shadow"
-                                title={`${providerDisplayName(provider)} — Click to manage`}
-                              >
-                                {provider.slice(0, 2)}
-                              </button>
-                            );
-                          });
-                        })()}
-                      </div>
                     </td>
                     {canManageAccounts && (
                       <td className="px-3 py-2 align-middle">

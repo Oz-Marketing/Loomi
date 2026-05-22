@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
-import { getDefaultEspProvider } from '@/lib/esp/registry';
-import '@/lib/esp/init';
 import { INDUSTRY_TEMPLATES, type IndustryDefaults } from '@/data/industry-defaults';
 
 const KEY_PREFIX = '_industryTemplate:';
@@ -93,12 +91,11 @@ export async function POST(req: NextRequest) {
 
     const slug = slugify(name);
     const key = `${KEY_PREFIX}${slug}`;
-    const defaultProvider = getDefaultEspProvider();
 
     await prisma.account.upsert({
       where: { key },
       update: { dealer: name.trim(), customValues: JSON.stringify(fields) },
-      create: { key, slug: `_industry-${slug}`, dealer: name.trim(), customValues: JSON.stringify(fields), espProvider: defaultProvider },
+      create: { key, slug: `_industry-${slug}`, dealer: name.trim(), customValues: JSON.stringify(fields) },
     });
 
     return NextResponse.json({ name: name.trim(), fields, builtin: false }, { status: 201 });
@@ -129,13 +126,12 @@ export async function PUT(req: NextRequest) {
     const slug = slugify(name);
     const key = `${KEY_PREFIX}${slug}`;
     const displayName = newName?.trim() || name;
-    const defaultProvider = getDefaultEspProvider();
 
     // Upsert: creates a DB row for built-in overrides, or updates existing custom entry
     await prisma.account.upsert({
       where: { key },
       update: { dealer: displayName, customValues: JSON.stringify(fields) },
-      create: { key, slug: `_industry-${slug}`, dealer: displayName, customValues: JSON.stringify(fields), espProvider: defaultProvider },
+      create: { key, slug: `_industry-${slug}`, dealer: displayName, customValues: JSON.stringify(fields) },
     });
 
     return NextResponse.json({ name: displayName, fields, builtin: isBuiltin });

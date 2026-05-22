@@ -11,7 +11,7 @@ import {
   UsersIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
-import type { Contact } from '@/components/contacts/contacts-table';
+import type { Contact } from '@/lib/contacts/types';
 import { LIFECYCLE_PRESETS } from '@/lib/smart-list-presets';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
@@ -158,7 +158,7 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     }
     let cancelled = false;
     setContactsLoading(true);
-    fetch(`/api/esp/contacts?accountKey=${encodeURIComponent(selectedAccountKey)}&all=true`)
+    fetch(`/api/contacts?accountKey=${encodeURIComponent(selectedAccountKey)}&all=true`)
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || 'Failed to load contacts');

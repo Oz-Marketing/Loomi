@@ -1,7 +1,23 @@
 'use client';
 
 import useSWR from 'swr';
-import type { NormalizedContact, EspCampaign, EspWorkflow } from '@/lib/esp/types';
+
+// Minimal contact shape returned by /api/contacts/aggregate. Mirrors the
+// fields the dashboard consumers actually read — we don't surface the
+// full ESP-era normalized contact anywhere in the dashboard now.
+type DashboardContact = {
+  id: string;
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  city: string;
+  state: string;
+  tags: string[];
+  dateAdded: string;
+  source: string;
+};
 
 // ── Fetcher ──
 
@@ -57,21 +73,25 @@ type PerAccountEntry = {
 };
 
 export type ContactsAggregateResponse = {
-  contacts: (NormalizedContact & { _accountKey?: string; _dealer?: string })[];
+  contacts: (DashboardContact & { _accountKey?: string; _dealer?: string })[];
   perAccount: Record<string, PerAccountEntry>;
   errors: Record<string, string>;
   meta: { totalContacts: number; accountsFetched: number };
 };
 
+// Campaigns/workflows aggregates used to come from the ESP layer. With the
+// ESP teardown those endpoints are gone, so the hooks resolve to empty
+// shapes — keeping the same response surface lets consumers keep their
+// existing destructure/render code without conditional branches.
 export type CampaignsAggregateResponse = {
-  campaigns: (EspCampaign & { accountKey: string; dealer: string; provider: string })[];
+  campaigns: never[];
   perAccount: Record<string, PerAccountEntry>;
   errors: Record<string, string>;
   meta: { totalCampaigns: number; accountsFetched: number };
 };
 
 export type WorkflowsAggregateResponse = {
-  workflows: (EspWorkflow & { accountKey: string; dealer: string; provider: string })[];
+  workflows: never[];
   perAccount: Record<string, PerAccountEntry>;
   errors: Record<string, string>;
   meta: { totalWorkflows: number; accountsFetched: number };
@@ -97,34 +117,56 @@ export type ContactStatsResponse = {
 export function useContactsAggregate(options: DashboardAggregateOptions = {}) {
   const enabled = options.enabled ?? true;
   return useSWR<ContactsAggregateResponse>(
-    enabled ? buildDashboardUrl('/api/esp/contacts/aggregate', options) : null,
+    enabled ? buildDashboardUrl('/api/contacts/aggregate', options) : null,
     jsonFetcher,
     DASHBOARD_SWR_CONFIG,
   );
 }
 
-export function useCampaignsAggregate(options: DashboardAggregateOptions = {}) {
-  const enabled = options.enabled ?? true;
-  return useSWR<CampaignsAggregateResponse>(
-    enabled ? buildDashboardUrl('/api/esp/campaigns/aggregate', options) : null,
-    jsonFetcher,
-    DASHBOARD_SWR_CONFIG,
-  );
+const EMPTY_CAMPAIGNS_AGGREGATE: CampaignsAggregateResponse = {
+  campaigns: [],
+  perAccount: {},
+  errors: {},
+  meta: { totalCampaigns: 0, accountsFetched: 0 },
+};
+
+const EMPTY_WORKFLOWS_AGGREGATE: WorkflowsAggregateResponse = {
+  workflows: [],
+  perAccount: {},
+  errors: {},
+  meta: { totalWorkflows: 0, accountsFetched: 0 },
+};
+
+// ESP campaigns/workflows aggregates are gone. The hooks survive as
+// thin stubs that immediately resolve to empty data so existing call
+// sites (loading flags, perAccount maps, etc.) keep working while we
+// migrate consumers to Loomi-native sources.
+export function useCampaignsAggregate(_options: DashboardAggregateOptions = {}) {
+  void _options;
+  return {
+    data: EMPTY_CAMPAIGNS_AGGREGATE,
+    error: undefined,
+    isLoading: false,
+    isValidating: false,
+    mutate: async () => EMPTY_CAMPAIGNS_AGGREGATE,
+  } as const;
 }
 
-export function useWorkflowsAggregate(options: DashboardAggregateOptions = {}) {
-  const enabled = options.enabled ?? true;
-  return useSWR<WorkflowsAggregateResponse>(
-    enabled ? buildDashboardUrl('/api/esp/workflows/aggregate', options) : null,
-    jsonFetcher,
-    DASHBOARD_SWR_CONFIG,
-  );
+export function useWorkflowsAggregate(_options: DashboardAggregateOptions = {}) {
+  void _options;
+  return {
+    data: EMPTY_WORKFLOWS_AGGREGATE,
+    error: undefined,
+    isLoading: false,
+    isValidating: false,
+    mutate: async () => EMPTY_WORKFLOWS_AGGREGATE,
+  } as const;
 }
 
 export function useContactStats(options: DashboardAggregateOptions = {}) {
   const enabled = options.enabled ?? true;
   return useSWR<ContactStatsResponse>(
-    enabled ? buildDashboardUrl('/api/esp/contacts/stats', options) : null,
+    enabled ? buildDashboardUrl('/api/contacts/stats', options) : null,
     jsonFetcher,
     DASHBOARD_SWR_CONFIG,
   );

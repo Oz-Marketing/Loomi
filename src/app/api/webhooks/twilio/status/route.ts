@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { decryptToken } from '@/lib/esp/encryption';
+import { decryptToken } from '@/lib/crypto/encryption';
 import { verifyTwilioSignature } from '@/lib/sending/twilio';
 import {
   processTwilioStatusCallback,

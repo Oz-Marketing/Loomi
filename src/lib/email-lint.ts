@@ -285,7 +285,7 @@ function checkImages(
       category: "images",
       message: `${oversized} image${oversized === 1 ? "" : "s"} wider than 600px without max-width:100%`,
       detail:
-        "Image width > 600px with no max-width:100% will overflow mobile viewports and the GHL preview pane. Add style=\"max-width:100%; height:auto\" to constrain it.",
+        "Image width > 600px with no max-width:100% will overflow mobile viewports. Add style=\"max-width:100%; height:auto\" to constrain it.",
     });
   }
 }

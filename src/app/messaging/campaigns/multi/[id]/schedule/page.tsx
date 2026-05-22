@@ -15,7 +15,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
-import type { Contact } from '@/components/contacts/contacts-table';
+import type { Contact } from '@/lib/contacts/types';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import { isLikelyDialablePhone, normalizePhoneNumber } from '@/lib/contact-hygiene';
@@ -166,7 +166,7 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
     if (!accountKey) return;
     let cancelled = false;
     setContactsLoading(true);
-    fetch(`/api/esp/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true`)
+    fetch(`/api/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true`)
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || 'Failed to load contacts');
@@ -446,7 +446,7 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
                 <p className="text-[11px] text-[var(--muted-foreground)] mt-3 border-t border-[var(--border)] pt-3">
                   Email sends as <strong className="text-[var(--foreground)]">{fromName}</strong>{' '}
                   {fromEmail ? `(${fromEmail})` : ''}. SMS routes through this subaccount&apos;s
-                  GHL connection.
+                  Twilio connection.
                 </p>
               )}
             </div>

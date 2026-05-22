@@ -314,22 +314,22 @@ function buildMockManagementDataset(accounts: Record<string, AccountData>) {
       contactCount: totalContacts,
       connected,
       cached: true,
-      provider: 'ghl',
-      error: connected ? undefined : 'Mock integration warning',
+      provider: 'loomi',
+      error: connected ? undefined : 'Mock data warning',
     };
 
     campaignPerAccount[accountKey] = {
       dealer,
       count: 14 + index * 2,
       connected,
-      provider: 'ghl',
+      provider: 'loomi',
     };
 
     workflowPerAccount[accountKey] = {
       dealer,
       count: 7 + index,
       connected,
-      provider: 'ghl',
+      provider: 'loomi',
     };
 
     for (let i = 0; i < 8; i += 1) {
@@ -703,10 +703,12 @@ function ManagementRoleDashboard({
     } = { ...phase1Errors };
     if (contactStatsHook.error) e.contactsStats = contactStatsHook.error.message;
     if (contactsAgg.error) e.contactsAggregate = contactsAgg.error.message;
-    if (campaignsAgg.error) e.campaignsAggregate = campaignsAgg.error.message;
-    if (workflowsAgg.error) e.workflowsAggregate = workflowsAgg.error.message;
+    // ESP campaigns/workflows aggregates are no longer fetched — the hooks
+    // resolve immediately with an empty payload, so there's no error to
+    // surface here. Keys are kept in the type for backwards compatibility
+    // with downstream banners that read from them.
     return e;
-  }, [phase1Errors, contactStatsHook.error, contactsAgg.error, campaignsAgg.error, workflowsAgg.error]);
+  }, [phase1Errors, contactStatsHook.error, contactsAgg.error]);
 
   const { theme } = useTheme();
   const isDeveloper = role === 'developer';
@@ -871,13 +873,14 @@ function ManagementRoleDashboard({
     setLoading(false);
   }, [accounts]);
 
-  // Dev fallback — if all SWR aggregates errored, fall back to mock data
+  // Dev fallback — if the contacts SWR aggregate errors out completely
+  // we drop down to mock data so the dashboard still renders something
+  // useful locally. ESP aggregate hooks no longer fire (they stub to an
+  // empty payload), so they're omitted from the trigger condition.
   useEffect(() => {
     if (DASHBOARD_DUMMY_MODE || usingMockData) return;
     if (process.env.NODE_ENV !== 'development') return;
-    const allErrored = contactsAgg.error && campaignsAgg.error && workflowsAgg.error;
-    const allSettled = !contactsAgg.isLoading && !campaignsAgg.isLoading && !workflowsAgg.isLoading;
-    if (allErrored && allSettled) {
+    if (contactsAgg.error && !contactsAgg.isLoading) {
       const mock = buildMockManagementDataset(accounts);
       setEmails(mock.emails);
       setMockContactStats(mock.contactStats);
@@ -891,7 +894,7 @@ function ManagementRoleDashboard({
       setMockWorkflowPerAccount(mock.workflowPerAccount);
       setUsingMockData(true);
     }
-  }, [accounts, usingMockData, contactsAgg.error, contactsAgg.isLoading, campaignsAgg.error, campaignsAgg.isLoading, workflowsAgg.error, workflowsAgg.isLoading]);
+  }, [accounts, usingMockData, contactsAgg.error, contactsAgg.isLoading]);
 
   // Phase 1 — lightweight endpoints (emails, loomi campaigns, users)
   useEffect(() => {
@@ -910,7 +913,7 @@ function ManagementRoleDashboard({
       ] = await Promise.all([
         loadJson('/api/emails'),
         loadJson('/api/campaigns/email?limit=50'),
-        loadJson('/api/esp/messages/bulk?limit=50'),
+        loadJson('/api/campaigns/sms?limit=50'),
         loadJson('/api/users?summary=1'),
       ]);
 
@@ -2861,33 +2864,16 @@ function ClientRoleDashboard({
         return;
       }
 
-      const [campaignRes, loomiEmailRes, loomiSmsRes] = await Promise.all([
-        loadJson(`/api/esp/campaigns?accountKey=${encodeURIComponent(targetAccountKey)}`),
+      // ESP-fetched campaigns are gone — only Loomi-native email + SMS
+      // campaigns feed the per-account dashboard now.
+      const [loomiEmailRes, loomiSmsRes] = await Promise.all([
         loadJson('/api/campaigns/email?limit=50'),
-        loadJson('/api/esp/messages/bulk?limit=50'),
+        loadJson('/api/campaigns/sms?limit=50'),
       ]);
 
       if (cancelled) return;
 
-      const shouldFallbackToMock = process.env.NODE_ENV === 'development' && !campaignRes.ok;
-      if (shouldFallbackToMock) {
-        const mockAccounts: Record<string, AccountData> = {
-          [targetAccountKey]: accountData || ({ dealer: 'Demo Account' } as AccountData),
-        };
-        const mock = buildMockManagementDataset(mockAccounts);
-        setEspCampaigns(mock.espCampaigns.filter((campaign) => campaign.accountKey === targetAccountKey));
-        setLoomiEmailCampaigns(mock.loomiEmailCampaigns.filter((campaign) => campaign.accountKeys.includes(targetAccountKey)));
-        setLoomiSmsCampaigns(mock.loomiSmsCampaigns.filter((campaign) => campaign.accountKeys.includes(targetAccountKey)));
-        setUsingMockData(true);
-        setLoading(false);
-        return;
-      }
-
-      if (campaignRes.ok) {
-        setEspCampaigns(asArray<EspCampaign>((campaignRes.json as Record<string, unknown>).campaigns));
-      } else {
-        setEspCampaigns([]);
-      }
+      setEspCampaigns([]);
 
       if (loomiEmailRes.ok) {
         const allRows = asArray<LoomiEmailCampaign>((loomiEmailRes.json as Record<string, unknown>).campaigns);
@@ -2901,11 +2887,6 @@ function ClientRoleDashboard({
         setLoomiSmsCampaigns(allRows.filter((campaign) => asArray<string>(campaign.accountKeys).includes(targetAccountKey)));
       } else {
         setLoomiSmsCampaigns([]);
-      }
-
-      if (!campaignRes.ok) {
-        const message = String((campaignRes.json as Record<string, unknown>).error || 'Unable to load campaign reporting');
-        setError(message);
       }
 
       setUsingMockData(false);

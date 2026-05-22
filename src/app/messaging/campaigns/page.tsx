@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { useAccount } from '@/contexts/account-context';
-import { useCampaignsAggregate, useWorkflowsAggregate } from '@/hooks/use-dashboard-data';
 import { AdminOnly } from '@/components/route-guard';
 import { EngagementSection } from '@/components/campaigns/engagement-section';
 import { CampaignPageList, type AccountMeta } from '@/components/campaigns/campaign-page-list';
@@ -101,19 +100,6 @@ function inRange(campaign: Campaign, start: Date, end: Date): boolean {
   return value >= start.getTime() && value <= end.getTime();
 }
 
-function withCampaignErrorHint(message: string): string {
-  if (message.includes('not yet supported by the IAM Service')) {
-    return 'Some accounts need their GHL integration re-authorized to access campaigns. Go to each account\u2019s Settings \u2192 Integrations tab.';
-  }
-  if (
-    message.includes('emails/schedule.readonly') ||
-    message.includes('not authorized')
-  ) {
-    return `${message} Re-authorize the integration to grant the campaigns scope.`;
-  }
-  return message;
-}
-
 function normalizeCampaignStatus(status: string): string {
   const s = status.toLowerCase().trim();
   if (s.includes('complete') || s.includes('deliver') || s.includes('finish') || s.includes('sent')) return 'sent';
@@ -127,50 +113,36 @@ function normalizeCampaignStatus(status: string): string {
 // ── Inner Page ──
 
 function AdminCampaignsPage() {
-  const { data: aggData, isLoading: aggLoading } = useCampaignsAggregate();
-  // wfData (workflows aggregate) only fed the legacy ESP analytics
-  // overview; keep the hook around just for its loading state so the
-  // initial-load spinner still respects both fetches finishing.
-  const { isLoading: wfLoading } = useWorkflowsAggregate();
   const pathname = usePathname();
   // The sidebar drives view selection: /campaigns → list, /campaigns/analytics → analytics.
   // The in-page tab toggle is gone; navigation happens at the sidebar level.
   const activeTab: PageTab = pathname.endsWith('/analytics') ? 'analytics' : 'list';
   const [sideRailMounted, setSideRailMounted] = useState(false);
 
-  // Loomi-native campaigns (EmailCampaign + SmsCampaign) — fetched
-  // alongside the ESP aggregate so drafts and scheduled/sent Loomi
-  // campaigns show up in the list.
-  const [loomiCampaigns, setLoomiCampaigns] = useState<Campaign[]>([]);
+  // Loomi-native campaigns (EmailCampaign + SmsCampaign) are the only
+  // source now — ESP-fetched campaigns are gone.
+  const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [campaignsLoading, setCampaignsLoading] = useState(true);
   useEffect(() => {
     let cancelled = false;
     fetch('/api/campaigns/loomi/list')
       .then((r) => (r.ok ? r.json() : { campaigns: [] }))
       .then((data: { campaigns?: Campaign[] }) => {
         if (cancelled) return;
-        setLoomiCampaigns(Array.isArray(data.campaigns) ? data.campaigns : []);
+        setCampaigns(Array.isArray(data.campaigns) ? data.campaigns : []);
+        setCampaignsLoading(false);
       })
       .catch(() => {
-        if (!cancelled) setLoomiCampaigns([]);
+        if (cancelled) return;
+        setCampaigns([]);
+        setCampaignsLoading(false);
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const campaigns = useMemo(() => {
-    const espCampaigns = (aggData?.campaigns ?? []) as Campaign[];
-    return [...loomiCampaigns, ...espCampaigns];
-  }, [aggData, loomiCampaigns]);
-  const accountNames = useMemo(() => {
-    const names: Record<string, string> = {};
-    if (aggData?.perAccount) {
-      Object.entries(aggData.perAccount).forEach(([key, val]) => {
-        if (val.dealer) names[key] = val.dealer;
-      });
-    }
-    return names;
-  }, [aggData]);
+  const accountNames = useMemo<Record<string, string>>(() => ({}), []);
 
   const [accountMeta, setAccountMeta] = useState<Record<string, AccountMeta>>({});
   const [accountProviders, setAccountProviders] = useState<Record<string, string>>({});
@@ -202,12 +174,12 @@ function AdminCampaignsPage() {
     return () => window.clearTimeout(timer);
   }, [filtersOpen]);
 
-  // Sync loading state with SWR
+  // Sync loading state with campaign fetch
   useEffect(() => {
-    if (!aggLoading && !wfLoading) setLoading(false);
-  }, [aggLoading, wfLoading]);
+    if (!campaignsLoading) setLoading(false);
+  }, [campaignsLoading]);
 
-  // Fetch account metadata (separate from SWR-managed campaigns)
+  // Fetch account metadata (separate from the campaigns fetch)
   useEffect(() => {
     let cancelled = false;
 
@@ -242,14 +214,6 @@ function AdminCampaignsPage() {
             providers[key] = preferredProvider;
           });
         }
-        // Merge provider info from aggregate perAccount
-        if (aggData?.perAccount) {
-          Object.entries(aggData.perAccount).forEach(([key, val]) => {
-            if (typeof val.provider === 'string' && val.provider.trim()) {
-              providers[key] = val.provider.trim();
-            }
-          });
-        }
         setAccountMeta(meta);
         setAccountProviders(providers);
       } catch {
@@ -259,7 +223,7 @@ function AdminCampaignsPage() {
 
     loadAccountMeta();
     return () => { cancelled = true; };
-  }, [aggData]);
+  }, []);
 
   const bounds = useMemo(
     () =>
@@ -587,52 +551,33 @@ function AccountCampaignsPage() {
 
     let cancelled = false;
     async function load() {
-      // Fetch both sources in parallel: ESP-fetched campaigns and any
-      // Loomi-native drafts/scheduled/sent campaigns. Either side may
-      // legitimately fail (e.g. account has no ESP connection) — we
-      // surface that as a non-fatal warning while still showing the
-      // Loomi campaigns the user owns.
-      const [espRes, loomiRes] = await Promise.allSettled([
-        fetch(`/api/esp/campaigns?accountKey=${encodeURIComponent(accountKey!)}`),
-        fetch(`/api/campaigns/loomi/list?accountKey=${encodeURIComponent(accountKey!)}`),
-      ]);
-      if (cancelled) return;
-
-      let espCampaigns: Campaign[] = [];
-      let espErrorMessage: string | null = null;
-      if (espRes.status === 'fulfilled') {
-        const data = await espRes.value.json().catch(() => ({}));
+      // Loomi-native is the only source now — ESP campaigns are gone.
+      try {
+        const res = await fetch(
+          `/api/campaigns/loomi/list?accountKey=${encodeURIComponent(accountKey!)}`,
+        );
         if (cancelled) return;
-        if (espRes.value.ok && Array.isArray(data.campaigns)) {
-          espCampaigns = data.campaigns as Campaign[];
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (res.ok && Array.isArray(data.campaigns)) {
+          setCampaigns(data.campaigns as Campaign[]);
+          setApiError(null);
         } else {
-          espErrorMessage = typeof data.error === 'string'
-            ? withCampaignErrorHint(data.error)
-            : `Failed to fetch ESP campaigns (${espRes.value.status})`;
+          setCampaigns([]);
+          setApiError(
+            typeof data.error === 'string'
+              ? data.error
+              : `Failed to load campaigns (${res.status})`,
+          );
         }
-      } else {
-        espErrorMessage = 'Failed to fetch ESP campaigns.';
-      }
-
-      let loomiCampaigns: Campaign[] = [];
-      if (loomiRes.status === 'fulfilled') {
-        const data = await loomiRes.value.json().catch(() => ({}));
-        if (cancelled) return;
-        if (loomiRes.value.ok && Array.isArray(data.campaigns)) {
-          loomiCampaigns = data.campaigns as Campaign[];
+      } catch {
+        if (!cancelled) {
+          setCampaigns([]);
+          setApiError('Failed to load campaigns.');
         }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-
-      setCampaigns([...loomiCampaigns, ...espCampaigns]);
-      // Only flag an ESP error if we have nothing to show at all —
-      // otherwise the user sees their Loomi campaigns and an
-      // 'integration not connected' warning would be misleading.
-      if (espErrorMessage && loomiCampaigns.length === 0) {
-        setApiError(espErrorMessage);
-      } else {
-        setApiError(null);
-      }
-      setLoading(false);
     }
 
     load();
@@ -671,47 +616,14 @@ function AccountCampaignsPage() {
     return result;
   }, [visibleCampaigns, bounds]);
 
-  const hasLoomiCampaigns = useMemo(
-    () =>
-      campaigns.some(
-        (c) => c.provider === 'loomi-email' || c.provider === 'loomi-sms',
-      ),
-    [campaigns],
-  );
-
-  const accountNotIntegrated = useMemo(() => {
-    // If the user has Loomi-native campaigns, ESP connection state is
-    // irrelevant — Loomi is the engine and we have content to show.
-    if (hasLoomiCampaigns) return false;
-    const message = (apiError || '').toLowerCase();
-    const disconnectedConnection = accountData?.activeConnection?.connected === false;
-    const missingConnectionMetadata =
-      Boolean(accountData) &&
-      !accountData?.activeConnection?.connected &&
-      !accountData?.activeConnection?.provider &&
-      !accountData?.activeEspProvider &&
-      !accountData?.espProvider;
-    return (
-      message.includes('esp not connected') ||
-      message.includes('not connected for this account') ||
-      message.includes('not integrated') ||
-      disconnectedConnection ||
-      missingConnectionMetadata
-    );
-  }, [accountData, apiError, hasLoomiCampaigns]);
-
   const accountEmptyTitle =
-    accountNotIntegrated
-      ? 'Account not integrated'
-      : visibleCampaigns.length === 0
+    visibleCampaigns.length === 0
       ? (userRole === 'client'
           ? 'No scheduled or sent campaigns yet'
           : 'No campaigns yet')
       : 'No campaigns match this date range';
   const accountEmptySubtitle =
-    accountNotIntegrated
-      ? 'Connect your ESP integration to view reporting.'
-      : visibleCampaigns.length === 0
+    visibleCampaigns.length === 0
       ? (userRole === 'client'
           ? 'Scheduled and sent campaigns will appear here.'
           : 'Drafts, scheduled, and sent campaigns will all appear here.')
@@ -749,11 +661,10 @@ function AccountCampaignsPage() {
     () => ({
       title: accountEmptyTitle,
       subtitle: accountEmptySubtitle,
-      actionLabel: accountNotIntegrated ? 'Open Integrations' : 'Create Campaign',
-      actionHref: accountNotIntegrated ? '/settings/integrations' : undefined,
-      onAction: accountNotIntegrated ? undefined : () => setShowCreateModal(true),
+      actionLabel: 'Create Campaign',
+      onAction: () => setShowCreateModal(true),
     }),
-    [accountEmptySubtitle, accountEmptyTitle, accountNotIntegrated],
+    [accountEmptySubtitle, accountEmptyTitle],
   );
 
   function openCreateCampaignModal() {
@@ -831,7 +742,7 @@ function AccountCampaignsPage() {
       />
 
       <div className="min-w-0">
-        {apiError && !accountNotIntegrated && (
+        {apiError && (
           <div className="px-4 py-3 mb-4 rounded-xl border border-red-500/20 bg-red-500/10 text-sm text-red-300">
             {apiError}
           </div>

@@ -3,14 +3,8 @@ import { requireAuth, requireRole } from '@/lib/api-auth';
 import { ELEVATED_ROLES } from '@/lib/auth';
 import { normalizeOems } from '@/lib/oems';
 import * as accountService from '@/lib/services/accounts';
-import { buildAccountConnectionMetadata } from '@/lib/esp/account-connection-metadata';
 import { normalizeAccountInputAliases } from '@/lib/account-field-aliases';
 import { normalizeAccountOutputPayload } from '@/lib/account-output';
-import { getDefaultEspProvider } from '@/lib/esp/registry';
-import { parseEspProvider, providerValidationMessage } from '@/lib/esp/provider-utils';
-import { listOAuthConnections } from '@/lib/esp/oauth-connections';
-import { listApiKeyConnections } from '@/lib/esp/api-key-connections';
-import { listAccountProviderLinks } from '@/lib/esp/account-provider-links';
 import { getIndustryDefaults } from '@/data/industry-defaults';
 import { hasUnrestrictedAccountAccess } from '@/lib/roles';
 
@@ -27,62 +21,6 @@ export async function GET() {
         ? await accountService.getAccounts(userAccountKeys)
         : [];
 
-    // Fetch connection status in bulk (provider-agnostic OAuth + API-key rows)
-    const allKeys = accounts.map(a => a.key);
-    const [oauthConnections, espConnections, accountProviderLinks] = await Promise.all([
-      listOAuthConnections({ accountKeys: allKeys }),
-      listApiKeyConnections({ accountKeys: allKeys }),
-      listAccountProviderLinks({ accountKeys: allKeys }).catch(() => []),
-    ]);
-    const oauthByAccount = new Map<string, Array<{
-      provider: string;
-      locationId: string | null;
-      locationName: string | null;
-      installedAt: Date;
-    }>>();
-    for (const connection of oauthConnections) {
-      const list = oauthByAccount.get(connection.accountKey) || [];
-      list.push({
-        provider: connection.provider,
-        locationId: connection.locationId,
-        locationName: connection.locationName,
-        installedAt: connection.installedAt,
-      });
-      oauthByAccount.set(connection.accountKey, list);
-    }
-    const linksByAccount = new Map<string, Array<{
-      provider: string;
-      locationId: string | null;
-      locationName: string | null;
-      installedAt: Date;
-    }>>();
-    for (const link of accountProviderLinks) {
-      const list = linksByAccount.get(link.accountKey) || [];
-      list.push({
-        provider: link.provider,
-        locationId: link.locationId,
-        locationName: link.locationName,
-        installedAt: link.linkedAt,
-      });
-      linksByAccount.set(link.accountKey, list);
-    }
-    const espByAccount = new Map<string, Array<{
-      provider: string;
-      accountId: string | null;
-      accountName: string | null;
-      installedAt: Date;
-    }>>();
-    for (const connection of espConnections) {
-      const list = espByAccount.get(connection.accountKey) || [];
-      list.push({
-        provider: connection.provider,
-        accountId: connection.accountId,
-        accountName: connection.accountName,
-        installedAt: connection.installedAt,
-      });
-      espByAccount.set(connection.accountKey, list);
-    }
-
     // Return as key-indexed account map: { [accountKey]: accountData }
     const result: Record<string, Record<string, unknown>> = {};
     for (const account of accounts) {
@@ -91,26 +29,10 @@ export async function GET() {
       delete data.createdAt;
       delete data.updatedAt;
       normalizeAccountOutputPayload(data);
-      // Include provider-agnostic connection flags
-      const oauth = oauthByAccount.get(key) || [];
-      const links = linksByAccount.get(key) || [];
-      const mergedOauth = [...oauth];
-      const oauthProviders = new Set(oauth.map((entry) => entry.provider));
-      for (const link of links) {
-        if (oauthProviders.has(link.provider)) continue;
-        mergedOauth.push(link);
-      }
-      const esp = espByAccount.get(key) || [];
-      const metadata = buildAccountConnectionMetadata({
-        accountProvider: account.espProvider,
-        oauthConnections: mergedOauth,
-        espConnections: esp,
-      });
-      Object.assign(data, metadata);
       result[key] = data;
     }
     return NextResponse.json(result);
-  } catch (err) {
+  } catch {
     return NextResponse.json({ error: 'Could not read accounts' }, { status: 500 });
   }
 }
@@ -138,7 +60,6 @@ export async function POST(req: NextRequest) {
       postalCode,
       website,
       timezone,
-      espProvider,
       accountRepId,
     } = payload as {
       key?: string;
@@ -157,7 +78,6 @@ export async function POST(req: NextRequest) {
       postalCode?: string;
       website?: string;
       timezone?: string;
-      espProvider?: string;
       accountRepId?: string;
     };
     if (!key || !dealer) {
@@ -177,16 +97,11 @@ export async function POST(req: NextRequest) {
     }
 
     const normalizedOems = normalizeOems(oems, oem);
-    const parsedProvider = parseEspProvider(espProvider);
-    if (espProvider && !parsedProvider) {
-      return NextResponse.json({ error: providerValidationMessage('espProvider') }, { status: 400 });
-    }
 
     const accountData: Parameters<typeof accountService.createAccount>[0] = {
       key: safeKey,
       dealer: dealer.trim(),
       category: category || 'General',
-      espProvider: parsedProvider || getDefaultEspProvider(),
       logos: JSON.stringify({ light: '', dark: '' }),
     };
 

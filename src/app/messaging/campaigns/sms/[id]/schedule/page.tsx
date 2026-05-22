@@ -15,7 +15,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
-import type { Contact } from '@/components/contacts/contacts-table';
+import type { Contact } from '@/lib/contacts/types';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import { isLikelyDialablePhone, normalizePhoneNumber } from '@/lib/contact-hygiene';
@@ -152,7 +152,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
     if (!accountKey) return;
     let cancelled = false;
     setContactsLoading(true);
-    fetch(`/api/esp/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true`)
+    fetch(`/api/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true`)
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data?.error || 'Failed to load contacts');
@@ -373,7 +373,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
                     )}
                   </p>
                   <p className="text-xs text-[var(--muted-foreground)]">
-                    Routes through this subaccount&apos;s GHL connection.
+                    Routes through this subaccount&apos;s Twilio connection.
                   </p>
                 </div>
               </div>
@@ -395,7 +395,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
                 />
                 <ChecklistItem
                   ok={Boolean(account)}
-                  label="Subaccount selected (SMS routes through its GHL connection)"
+                  label="Subaccount selected (SMS routes through its Twilio connection)"
                 />
               </ul>
             </div>

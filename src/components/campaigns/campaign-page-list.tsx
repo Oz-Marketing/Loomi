@@ -13,7 +13,6 @@ import {
   EyeIcon,
   ArrowDownTrayIcon,
   XMarkIcon,
-  ChartBarIcon,
   CheckCircleIcon,
   ClockIcon,
   DocumentTextIcon,
@@ -30,8 +29,6 @@ import {
 import { AccountAvatar as SharedAccountAvatar } from '@/components/account-avatar';
 import BulkActionDock from '@/components/bulk-action-dock';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
-import { getCampaignEditUrl, getCampaignStatsUrl } from '@/lib/esp/provider-links';
-import { resolveLocationId, resolveProviderId } from '@/lib/esp/provider-resolution';
 
 // ── Types ──
 
@@ -100,21 +97,6 @@ interface CampaignPageListProps {
    * already scoped to one account.
    */
   singleAccountMode?: boolean;
-}
-
-interface PreviewPayload {
-  previewUrl: string;
-  html: string;
-}
-
-// ── Provider Deep Link ──
-
-function getCampaignEditId(campaign: Campaign): string | null {
-  return campaign.campaignId || campaign.id || null;
-}
-
-function getCampaignScheduleId(campaign: Campaign): string | null {
-  return campaign.scheduleId || campaign.id || null;
 }
 
 function getCampaignKey(campaign: Campaign): string {
@@ -286,31 +268,6 @@ function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-async function downloadServerScreenshot(
-  accountKey: string,
-  scheduleId: string,
-  fileBaseName: string,
-): Promise<void> {
-  const params = new URLSearchParams({ accountKey, scheduleId });
-  const res = await fetch(`/api/esp/campaigns/screenshot?${params.toString()}`);
-
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(
-      typeof data.error === 'string'
-        ? data.error
-        : `Screenshot failed (${res.status})`,
-    );
-  }
-
-  const blob = await res.blob();
-  if (!blob || blob.size === 0) {
-    throw new Error('Screenshot returned empty data');
-  }
-
-  downloadBlob(blob, `${sanitizeFileName(fileBaseName)}.png`);
-}
-
 // ── Pagination helper ──
 
 function getVisiblePages(currentPage: number, totalPages: number, maxVisible = 5): number[] {
@@ -434,8 +391,8 @@ function SortHeader<F extends string>({
 
 function CampaignTableRow({
   item,
-  accountMeta,
-  accountProviders,
+  accountMeta: _accountMeta,
+  accountProviders: _accountProviders,
   isMenuOpen,
   downloading,
   selectMode,
@@ -449,6 +406,9 @@ function CampaignTableRow({
   onDelete,
 }: {
   item: Campaign;
+  // accountMeta + accountProviders were only used for ESP deep links.
+  // Accepted (unused) to keep the prop surface stable until callers
+  // are swept.
   accountMeta?: Record<string, AccountMeta>;
   accountProviders?: Record<string, string>;
   isMenuOpen: boolean;
@@ -463,31 +423,18 @@ function CampaignTableRow({
   onArchive: (item: Campaign) => void;
   onDelete: (item: Campaign) => void;
 }) {
-  const accountKey = campaignAccountKey(item);
-  const provider = resolveProviderId(item, accountProviders, '');
-  const locationId = resolveLocationId(item, accountMeta);
-  const providerUrl = getCampaignEditUrl({
-    provider,
-    locationId,
-    editId: getCampaignEditId(item),
-  });
+  void _accountMeta;
+  void _accountProviders;
   const loomiEditUrl = getLoomiEditUrl(item);
-  const providerStatsUrl = getCampaignStatsUrl({
-    provider,
-    locationId,
-    scheduleId: getCampaignScheduleId(item),
-    bulkRequestId: item.bulkRequestId,
-    folderId: item.parentId,
-  });
   const normalizedStatus = normalizeStatus(item.status);
   const scheduledParts = getScheduledDateParts(item);
   const updatedParts = getLastUpdatedDateParts(item);
   const StatusIcon = STATUS_ICON[normalizedStatus];
-  const canPreview = Boolean(accountKey && getCampaignScheduleId(item));
   const isLoomi = (item.provider || '').toLowerCase().startsWith('loomi-');
-  // Archive/Delete only operate on Loomi-native rows; ESP rows are read-only.
-  // In-flight statuses are blocked server-side too — we mirror that here so
-  // the button doesn't dangle uselessly.
+  const canPreview = isLoomi;
+  // Archive/Delete only operate on Loomi-native rows. In-flight statuses
+  // are blocked server-side too — we mirror that here so the button
+  // doesn't dangle uselessly.
   const canMutate = isLoomi && normalizedStatus !== 'scheduled' && item.status !== 'queued' && item.status !== 'processing';
   const rowClickable = !selectMode && Boolean(loomiEditUrl);
 
@@ -576,16 +523,6 @@ function CampaignTableRow({
                     Edit
                     <PencilSquareIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
                   </button>
-                ) : providerUrl ? (
-                  <a
-                    href={providerUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                  >
-                    Edit
-                    <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
-                  </a>
                 ) : (
                   <button
                     type="button"
@@ -616,19 +553,7 @@ function CampaignTableRow({
                   <ArrowDownTrayIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
                 </button>
 
-                {normalizedStatus === 'sent' && providerStatsUrl && (
-                  <a
-                    href={providerStatsUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                  >
-                    View Analytics
-                    <ChartBarIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
-                  </a>
-                )}
-
-                {isLoomi && <div className="my-1 border-t border-[var(--border)]" />}
+                {isLoomi && <div className="my-1 border-t border-[var(--border)] " />}
 
                 {isLoomi && (
                   <button
@@ -787,7 +712,6 @@ export function CampaignPageList({
   const [previewUrl, setPreviewUrl] = useState('');
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const previewCacheRef = useRef<Map<string, PreviewPayload>>(new Map());
 
   // Bulk selection state (drill-down view only)
   const [selectMode, setSelectMode] = useState(false);
@@ -954,59 +878,16 @@ export function CampaignPageList({
 
   // ── Preview / Download ──
 
-  async function fetchPreviewForCampaign(campaign: Campaign): Promise<PreviewPayload> {
-    const accountKey = campaignAccountKey(campaign);
-    const scheduleId = getCampaignScheduleId(campaign);
-    if (!accountKey || !scheduleId) {
-      throw new Error('Preview is unavailable for this campaign.');
-    }
-
-    const cacheKey = `${accountKey}|${scheduleId}`;
-    const cached = previewCacheRef.current.get(cacheKey);
-    if (cached) return cached;
-
-    const res = await fetch(
-      `/api/esp/campaigns/preview?accountKey=${encodeURIComponent(accountKey)}&scheduleId=${encodeURIComponent(scheduleId)}`,
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(
-        typeof data.error === 'string'
-          ? data.error
-          : `Failed to fetch campaign preview (${res.status})`,
-      );
-    }
-
-    const payload: PreviewPayload = {
-      previewUrl: typeof data.previewUrl === 'string' ? data.previewUrl : '',
-      html: typeof data.html === 'string' ? data.html : '',
-    };
-
-    if (!payload.html.trim()) {
-      throw new Error('Preview HTML is unavailable for this campaign.');
-    }
-
-    previewCacheRef.current.set(cacheKey, payload);
-    return payload;
-  }
-
+  // ESP-backed preview is gone. Loomi-native campaigns can wire a new
+  // preview endpoint in a follow-up — for now the action surfaces a
+  // friendly "unavailable" state in the preview modal.
   async function handlePreview(campaign: Campaign) {
     setOpenMenuId(null);
     setPreviewCampaign(campaign);
-    setPreviewError(null);
     setPreviewHtml('');
     setPreviewUrl('');
-    setPreviewLoading(true);
-
-    try {
-      const payload = await fetchPreviewForCampaign(campaign);
-      setPreviewHtml(payload.html);
-      setPreviewUrl(payload.previewUrl);
-    } catch (err) {
-      setPreviewError(err instanceof Error ? err.message : 'Failed to load preview.');
-    } finally {
-      setPreviewLoading(false);
-    }
+    setPreviewLoading(false);
+    setPreviewError('Preview is not available yet for this campaign.');
   }
 
   async function handleDownload(campaign: Campaign) {
@@ -1067,30 +948,25 @@ export function CampaignPageList({
 
   async function downloadCampaignScreenshot(campaign: Campaign): Promise<void> {
     const fileBase = campaign.name || 'campaign-email';
-    if (isLoomiEmail(campaign)) {
-      const campaignId = campaign.campaignId || campaign.id;
-      if (!campaignId) throw new Error('Download is unavailable for this campaign.');
-      const res = await fetch(
-        `/api/campaigns/loomi/screenshot?campaignId=${encodeURIComponent(campaignId)}`,
-      );
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(
-          typeof data.error === 'string' ? data.error : `Screenshot failed (${res.status})`,
-        );
-      }
-      const blob = await res.blob();
-      if (!blob || blob.size === 0) throw new Error('Screenshot returned empty data');
-      downloadBlob(blob, `${sanitizeFileName(fileBase)}.png`);
-      return;
-    }
-    // ESP-fetched campaign — fall back to provider screenshot endpoint
-    const accountKey = campaignAccountKey(campaign);
-    const scheduleId = getCampaignScheduleId(campaign);
-    if (!accountKey || !scheduleId) {
+    // Only Loomi-native email campaigns support in-app screenshots now —
+    // ESP-fetched rows have nowhere to point.
+    if (!isLoomiEmail(campaign)) {
       throw new Error('Download is unavailable for this campaign.');
     }
-    await downloadServerScreenshot(accountKey, scheduleId, fileBase);
+    const campaignId = campaign.campaignId || campaign.id;
+    if (!campaignId) throw new Error('Download is unavailable for this campaign.');
+    const res = await fetch(
+      `/api/campaigns/loomi/screenshot?campaignId=${encodeURIComponent(campaignId)}`,
+    );
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(
+        typeof data.error === 'string' ? data.error : `Screenshot failed (${res.status})`,
+      );
+    }
+    const blob = await res.blob();
+    if (!blob || blob.size === 0) throw new Error('Screenshot returned empty data');
+    downloadBlob(blob, `${sanitizeFileName(fileBase)}.png`);
   }
 
   async function handleBulkDownload() {

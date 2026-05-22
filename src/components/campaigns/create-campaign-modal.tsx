@@ -174,7 +174,7 @@ export function CreateCampaignModal({
                 onSelect={setChannel}
                 icon={ChatBubbleLeftRightIcon}
                 label="Text Messaging"
-                description="Send an SMS/MMS blast through your subaccount's GHL connection."
+                description="Send an SMS/MMS blast through your subaccount's Twilio connection."
               />
               <ChannelOption
                 value="both"

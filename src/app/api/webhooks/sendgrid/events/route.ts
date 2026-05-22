@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifySendGridWebhookSignature } from '@/lib/esp/adapters/sendgrid/webhook';
+import { verifySendGridWebhookSignature } from '@/lib/sending/sendgrid-webhook';
 import {
   processSendGridEventBatch,
   type SendGridEvent,

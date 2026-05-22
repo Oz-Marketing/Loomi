@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
-import { decryptToken } from '@/lib/esp/encryption';
+import { decryptToken } from '@/lib/crypto/encryption';
 import { verifyTwilioCredentials } from '@/lib/sending/twilio';
 
 interface RouteParams {

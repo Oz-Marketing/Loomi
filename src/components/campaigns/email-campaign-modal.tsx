@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import type { Contact } from '@/components/contacts/contacts-table';
+import type { Contact } from '@/lib/contacts/types';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import { LIFECYCLE_PRESETS } from '@/lib/smart-list-presets';
 import type { FilterDefinition } from '@/lib/smart-list-types';

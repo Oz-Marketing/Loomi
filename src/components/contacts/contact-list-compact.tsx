@@ -97,7 +97,7 @@ export function ContactListCompact({
       });
       if (debouncedSearch) params.set('search', debouncedSearch);
 
-      const res = await fetch(`/api/esp/contacts?${params.toString()}`);
+      const res = await fetch(`/api/contacts?${params.toString()}`);
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || 'Failed to fetch contacts');
@@ -116,20 +116,6 @@ export function ContactListCompact({
   useEffect(() => {
     fetchContacts();
   }, [fetchContacts]);
-
-  const isNotConnected = Boolean(error && /(not connected|no .*connection)/i.test(error));
-
-  if (isNotConnected) {
-    return (
-      <div className="text-center py-12 border border-dashed border-[var(--border)] rounded-xl">
-        <ExclamationTriangleIcon className="w-6 h-6 text-[var(--muted-foreground)] mx-auto mb-2" />
-        <p className="text-[var(--muted-foreground)] text-sm">No ESP Connection</p>
-        <p className="text-[var(--muted-foreground)] text-[10px] mt-1">
-          Connect an ESP to view contacts.
-        </p>
-      </div>
-    );
-  }
 
   return (
     <div>
@@ -156,7 +142,7 @@ export function ContactListCompact({
       </div>
 
       {/* Error */}
-      {error && !isNotConnected && (
+      {error && (
         <div className="flex items-center gap-2 p-3 mb-3 rounded-lg bg-red-500/10 border border-red-500/20 text-sm text-red-400">
           <ExclamationTriangleIcon className="w-4 h-4 flex-shrink-0" />
           {error}
@@ -397,7 +383,7 @@ function ConversationPanel({ contactId, accountKey }: { contactId: string; accou
   const [convoError, setConvoError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`/api/esp/contacts/${contactId}/conversations?accountKey=${accountKey}`)
+    fetch(`/api/contacts/${contactId}/activity?accountKey=${accountKey}`)
       .then(r => r.json())
       .then(data => {
         if (data.error && !data.messages) {

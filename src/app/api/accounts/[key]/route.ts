@@ -3,53 +3,16 @@ import { requireRole } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import { normalizeOems } from '@/lib/oems';
 import * as accountService from '@/lib/services/accounts';
-import '@/lib/esp/init';
-import { getAdapterForAccount } from '@/lib/esp/registry';
-import type { CustomValueInput, EspCredentials } from '@/lib/esp/types';
-import { buildAccountConnectionMetadata } from '@/lib/esp/account-connection-metadata';
 import { normalizeAccountInputAliases } from '@/lib/account-field-aliases';
 import { normalizeAccountOutputPayload } from '@/lib/account-output';
-import { listOAuthConnections } from '@/lib/esp/oauth-connections';
-import { listApiKeyConnections } from '@/lib/esp/api-key-connections';
-import { listAccountProviderLinks } from '@/lib/esp/account-provider-links';
 
-async function resolveAccountConnectionMetadata(account: {
-  key: string;
-  espProvider?: string | null;
-}) {
-  const [oauthConnections, espConnections, accountProviderLinks] = await Promise.all([
-    listOAuthConnections({ accountKeys: [account.key] }),
-    listApiKeyConnections({ accountKeys: [account.key] }),
-    listAccountProviderLinks({ accountKeys: [account.key] }).catch(() => []),
-  ]);
-
-  const mergedOauthConnections: Array<{
-    provider: string;
-    locationId: string | null;
-    locationName: string | null;
-    installedAt: Date;
-  }> = oauthConnections.map((connection) => ({
-    provider: connection.provider,
-    locationId: connection.locationId,
-    locationName: connection.locationName,
-    installedAt: connection.installedAt,
-  }));
-  const oauthProviders = new Set(mergedOauthConnections.map((connection) => connection.provider));
-  for (const link of accountProviderLinks) {
-    if (oauthProviders.has(link.provider)) continue;
-    mergedOauthConnections.push({
-      provider: link.provider,
-      locationId: link.locationId,
-      locationName: link.locationName,
-      installedAt: link.linkedAt,
-    });
-  }
-
-  return buildAccountConnectionMetadata({
-    accountProvider: account.espProvider,
-    oauthConnections: mergedOauthConnections,
-    espConnections,
-  });
+/**
+ * Strip the ESP-era legacy column from an outbound account payload.
+ * The DB column survives until a later phase but should never reach
+ * the wire.
+ */
+function stripLegacyEspFields(payload: Record<string, unknown>): void {
+  delete payload.espProvider;
 }
 
 /**
@@ -156,125 +119,12 @@ export async function PATCH(
             : JSON.stringify(body.customValues);
     }
 
-    // previewValues replaces entirely if provided
+    // Persist locally only. Remote ESP sync was removed in the teardown.
     const saved = await accountService.updateAccount(key, updatePayload);
-
-    // ── Provider sync: push business details/custom values when supported ──
-    const normalizeComparable = (value: unknown) =>
-      value === null || value === undefined ? '' : String(value).trim();
-    const businessDetailsChanged =
-      normalizeComparable(existing.dealer) !== normalizeComparable(saved.dealer) ||
-      normalizeComparable(existing.email) !== normalizeComparable(saved.email) ||
-      normalizeComparable(existing.phone) !== normalizeComparable(saved.phone) ||
-      normalizeComparable(existing.address) !== normalizeComparable(saved.address) ||
-      normalizeComparable(existing.city) !== normalizeComparable(saved.city) ||
-      normalizeComparable(existing.state) !== normalizeComparable(saved.state) ||
-      normalizeComparable(existing.postalCode) !== normalizeComparable(saved.postalCode) ||
-      normalizeComparable(existing.website) !== normalizeComparable(saved.website) ||
-      normalizeComparable(existing.timezone) !== normalizeComparable(saved.timezone);
-    const deleteManaged = body._deleteManaged === true;
-    const customValuesChanged =
-      normalizeComparable(existing.customValues) !== normalizeComparable(saved.customValues);
-
-    let syncWarning: string | undefined;
-    let adapter: Awaited<ReturnType<typeof getAdapterForAccount>> | null = null;
-    let resolvedCredentials: EspCredentials | null | undefined;
-    try {
-      adapter = await getAdapterForAccount(key);
-    } catch {
-      adapter = null;
-    }
-
-    const resolveAdapterCredentials = async (): Promise<EspCredentials | null> => {
-      if (resolvedCredentials !== undefined) {
-        return resolvedCredentials;
-      }
-      if (!adapter) {
-        resolvedCredentials = null;
-        return resolvedCredentials;
-      }
-
-      resolvedCredentials = adapter.resolveCredentials
-        ? await adapter.resolveCredentials(key)
-        : adapter.contacts
-          ? await adapter.contacts.resolveCredentials(key)
-          : null;
-      return resolvedCredentials;
-    };
-
-    if (adapter?.accountDetailsSync && businessDetailsChanged) {
-      const credentials = await resolveAdapterCredentials();
-      const locationId = credentials?.locationId || '';
-
-      if (!locationId) {
-        const msg = `Business details sync skipped: no ${adapter.provider} location/account context`;
-        syncWarning = syncWarning ? `${syncWarning} | ${msg}` : msg;
-      } else {
-        const result = await adapter.accountDetailsSync.syncBusinessDetails(key, locationId, {
-          name: saved.dealer || undefined,
-          email: saved.email || undefined,
-          phone: saved.phone || undefined,
-          address: saved.address || undefined,
-          city: saved.city || undefined,
-          state: saved.state || undefined,
-          postalCode: saved.postalCode || undefined,
-          website: saved.website || undefined,
-          timezone: saved.timezone || undefined,
-        });
-
-        if (!result.synced && result.warning) {
-          syncWarning = result.warning;
-        }
-      }
-    }
-
-    // ── Custom Values sync (provider-capability based) ──
-    const customValues = saved.customValues
-      ? (JSON.parse(saved.customValues) as Record<string, { name: string; value: string }>)
-      : null;
-    if ((customValuesChanged || deleteManaged) && customValues && adapter?.capabilities.customValues && adapter.customValues) {
-      try {
-        const credentials = await resolveAdapterCredentials();
-
-        if (!credentials) {
-          const msg = `Custom values sync skipped: no ${adapter.provider} credentials available`;
-          syncWarning = syncWarning ? `${syncWarning} | ${msg}` : msg;
-        } else {
-          const desired: CustomValueInput[] = [];
-          const managedNames: string[] = [];
-          for (const [fieldKey, def] of Object.entries(customValues)) {
-            managedNames.push(def.name);
-            if (def.value) {
-              desired.push({ fieldKey, name: def.name, value: def.value });
-            }
-          }
-
-          const cvResult = await adapter.customValues.syncCustomValues(
-            credentials.token,
-            credentials.locationId,
-            desired,
-            deleteManaged ? managedNames : undefined,
-          );
-          if (cvResult.errors.length > 0) {
-            const errorMsg = cvResult.errors.map(e => `${e.fieldKey}: ${e.error}`).join('; ');
-            syncWarning = syncWarning
-              ? `${syncWarning} | Custom values sync partial: ${errorMsg}`
-              : `Custom values sync partial: ${errorMsg}`;
-          }
-        }
-      } catch (err) {
-        console.warn(`Custom values sync error for ${key}:`, err);
-        const msg = err instanceof Error ? err.message : 'Custom values sync failed';
-        syncWarning = syncWarning ? `${syncWarning} | ${msg}` : msg;
-      }
-    }
 
     const response: Record<string, unknown> = { ...saved };
     normalizeAccountOutputPayload(response);
-    Object.assign(response, await resolveAccountConnectionMetadata(saved));
-    if (syncWarning) {
-      response._syncWarning = syncWarning;
-    }
+    stripLegacyEspFields(response);
 
     return NextResponse.json(response);
   } catch (err) {
@@ -308,7 +158,7 @@ export async function GET(
 
     const response: Record<string, unknown> = { ...account };
     normalizeAccountOutputPayload(response);
-    Object.assign(response, await resolveAccountConnectionMetadata(account));
+    stripLegacyEspFields(response);
 
     return NextResponse.json(response);
   } catch (err) {

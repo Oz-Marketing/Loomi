@@ -16,7 +16,7 @@ import path from 'path';
 
 async function main() {
   const { renderCampaignScreenshotFromHtml } = await import(
-    '../src/lib/esp/screenshot-render'
+    '../src/lib/email/screenshot'
   );
 
   const htmlArg = process.argv[2];

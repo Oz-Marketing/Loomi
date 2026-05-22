@@ -7,16 +7,15 @@ import {
   MagnifyingGlassIcon,
   XMarkIcon,
   ArrowUpTrayIcon,
-  FolderIcon,
-  FolderPlusIcon,
-  ChevronRightIcon,
-  HomeIcon,
-  CheckIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
-import { shouldFallbackToS3Media } from '@/lib/esp/media-fallback';
 
 // ── Types ──
+//
+// With the ESP teardown the only backing store for media is the
+// Loomi-managed S3 bucket. The old `source: 's3' | 'esp'` union, the
+// folder navigation, and the create-folder UI all came from the ESP
+// provider's media library — nothing on S3 needs them, so they're gone.
 
 interface MediaFile {
   id: string;
@@ -27,22 +26,6 @@ interface MediaFile {
   thumbnailUrl?: string;
   createdAt?: string;
   updatedAt?: string;
-  source?: 'esp' | 's3';
-}
-
-type SourceFilter = 'all' | 'esp' | 's3';
-
-interface MediaFolder {
-  id: string;
-  name: string;
-  parentId?: string;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-interface FolderBreadcrumb {
-  id: string | undefined;
-  name: string;
 }
 
 export interface MediaPickerModalProps {
@@ -57,7 +40,6 @@ export interface MediaPickerModalProps {
 export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = false }: MediaPickerModalProps) {
   const [mounted, setMounted] = useState(false);
   const [files, setFiles] = useState<MediaFile[]>([]);
-  const [folders, setFolders] = useState<MediaFolder[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [nextCursor, setNextCursor] = useState<string | undefined>();
@@ -65,125 +47,36 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [currentFolderId, setCurrentFolderId] = useState<string | undefined>();
-  const [folderPath, setFolderPath] = useState<FolderBreadcrumb[]>([{ id: undefined, name: 'Root' }]);
-  const [canNavigateFolders, setCanNavigateFolders] = useState(false);
-  const [espMediaAvailable, setEspMediaAvailable] = useState(Boolean(accountKey));
-  const [sourceFilter, setSourceFilter] = useState<SourceFilter>(accountKey ? 'all' : 's3');
-  const [creatingFolder, setCreatingFolder] = useState(false);
-  const [newFolderName, setNewFolderName] = useState('');
-  const [savingFolder, setSavingFolder] = useState(false);
-  const newFolderInputRef = useRef<HTMLInputElement>(null);
 
   // ── Fetch media ──
 
   const loadMedia = useCallback(async (cursor?: string) => {
     if (cursor) setLoadingMore(true);
-    else { setLoading(true); setFolders([]); }
+    else setLoading(true);
 
     try {
-      const loadS3Media = async (accountScope?: string) => {
-        const s3Params = new URLSearchParams({ limit: '50' });
-        if (accountScope) s3Params.set('accountKey', accountScope);
-        if (cursor) s3Params.set('cursor', cursor);
-        const s3Res = await fetch(`/api/media?${s3Params.toString()}`);
-        const s3Data = await s3Res.json().catch(() => ({}));
-        if (!s3Res.ok) {
-          throw new Error((s3Data as Record<string, string>)?.error || `Error ${s3Res.status}`);
-        }
-        const s3Files: MediaFile[] = (s3Data.files || []).map((f: MediaFile) => ({
-          ...f,
-          source: 's3' as const,
-        }));
-        setFiles((prev) => (cursor ? [...prev, ...s3Files] : s3Files));
-        setNextCursor((s3Data as { nextCursor?: string }).nextCursor || undefined);
-        setCanNavigateFolders(false);
-        if (!cursor) {
-          setCurrentFolderId(undefined);
-          setFolderPath([{ id: undefined, name: 'Root' }]);
-          setCreatingFolder(false);
-        }
-      };
-
-      if (!accountKey || !espMediaAvailable) {
-        await loadS3Media(accountKey || undefined);
-        return;
+      const params = new URLSearchParams({ limit: '50' });
+      if (accountKey) params.set('accountKey', accountKey);
+      if (cursor) params.set('cursor', cursor);
+      const res = await fetch(`/api/media?${params.toString()}`);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error((data as Record<string, string>)?.error || `Error ${res.status}`);
       }
-
-      const espParams = new URLSearchParams({ accountKey, limit: '50' });
-      if (cursor) espParams.set('cursor', cursor);
-      if (currentFolderId) espParams.set('parentId', currentFolderId);
-
-      // Fetch ESP + admin S3 in parallel (S3 only at root, only on initial load)
-      // S3 fetches admin-level files (no accountKey) — Loomi media library
-      const fetchS3 = !currentFolderId && !cursor;
-      const [espRes, s3Res] = await Promise.all([
-        fetch(`/api/esp/media?${espParams.toString()}`),
-        fetchS3
-          ? fetch(`/api/media?${new URLSearchParams({ limit: '50' }).toString()}`)
-          : Promise.resolve(null),
-      ]);
-
-      if (!espRes.ok) {
-        const errData = await espRes.json().catch(() => ({}));
-        const errorMessage = (errData as Record<string, string>)?.error || `Error ${espRes.status}`;
-        if (shouldFallbackToS3Media(espRes.status, errorMessage)) {
-          setEspMediaAvailable(false);
-          setCanNavigateFolders(false);
-          setCreatingFolder(false);
-          if (!cursor) {
-            setFolders([]);
-            setCurrentFolderId(undefined);
-            setFolderPath([{ id: undefined, name: 'Root' }]);
-          }
-          await loadS3Media(accountKey);
-          return;
-        }
-        // Still try S3 even if ESP fails
-        let s3Files: MediaFile[] = [];
-        if (s3Res?.ok) {
-          const s3Data = await s3Res.json();
-          s3Files = (s3Data.files || []).map((f: MediaFile) => ({ ...f, source: 's3' as const }));
-        }
-        if (s3Files.length > 0) {
-          setFiles(s3Files);
-          if (!cursor) setFolders([]);
-          setNextCursor(undefined);
-          setCanNavigateFolders(false);
-        } else {
-          throw new Error(errorMessage);
-        }
-      } else {
-        const data = await espRes.json();
-        const espFiles: MediaFile[] = (data.files || []).map((f: MediaFile) => ({ ...f, source: 'esp' as const }));
-        setEspMediaAvailable(true);
-
-        let s3Files: MediaFile[] = [];
-        if (s3Res?.ok) {
-          const s3Data = await s3Res.json();
-          s3Files = (s3Data.files || []).map((f: MediaFile) => ({ ...f, source: 's3' as const }));
-        }
-
-        setFiles((prev) => (cursor ? [...prev, ...espFiles] : [...espFiles, ...s3Files]));
-        if (!cursor) setFolders(data.folders || []);
-        setNextCursor(data.nextCursor || undefined);
-        setCanNavigateFolders(Boolean(data.capabilities?.canNavigateFolders));
-      }
+      const newFiles: MediaFile[] = data.files || [];
+      setFiles((prev) => (cursor ? [...prev, ...newFiles] : newFiles));
+      setNextCursor((data as { nextCursor?: string }).nextCursor || undefined);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to load media');
     } finally {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [accountKey, currentFolderId, espMediaAvailable]);
+  }, [accountKey]);
 
   useEffect(() => {
     loadMedia();
   }, [loadMedia]);
-
-  useEffect(() => {
-    setEspMediaAvailable(Boolean(accountKey));
-  }, [accountKey]);
 
   // ── Upload ──
 
@@ -191,7 +84,8 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
     if (!fileList?.length) return;
     setUploading(true);
     try {
-      const uploadToS3 = async (file: File) => {
+      const uploaded: MediaFile[] = [];
+      for (const file of Array.from(fileList)) {
         const formData = new FormData();
         formData.append('file', file);
         if (accountKey) {
@@ -204,50 +98,8 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
         if (!res.ok) {
           throw new Error((data as Record<string, string>)?.error || `Upload failed (${res.status})`);
         }
-        return data;
-      };
-
-      const uploaded: MediaFile[] = [];
-      for (const file of Array.from(fileList)) {
-        const isEspUpload = Boolean(accountKey && espMediaAvailable);
-        let data: { file?: MediaFile };
-        let source: MediaFile['source'] = 's3';
-
-        if (isEspUpload) {
-          const formData = new FormData();
-          formData.append('file', file);
-          formData.append('accountKey', accountKey!);
-          if (currentFolderId) formData.append('parentId', currentFolderId);
-
-          const res = await fetch('/api/esp/media', { method: 'POST', body: formData });
-          const espData = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            const errorMessage =
-              (espData as Record<string, string>)?.error || `Upload failed (${res.status})`;
-            if (!shouldFallbackToS3Media(res.status, errorMessage)) {
-              throw new Error(errorMessage);
-            }
-            setEspMediaAvailable(false);
-            setCanNavigateFolders(false);
-            setCreatingFolder(false);
-            setFolders([]);
-            setCurrentFolderId(undefined);
-            setFolderPath([{ id: undefined, name: 'Root' }]);
-            data = await uploadToS3(file);
-          } else {
-            setEspMediaAvailable(true);
-            data = espData as { file?: MediaFile };
-            source = 'esp';
-          }
-        } else {
-          data = await uploadToS3(file);
-        }
-
-        if (data.file) {
-          uploaded.push({
-            ...(data.file as MediaFile),
-            source,
-          });
+        if ((data as { file?: MediaFile }).file) {
+          uploaded.push((data as { file: MediaFile }).file);
         }
       }
       if (uploaded.length) {
@@ -259,7 +111,7 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
     } finally {
       setUploading(false);
     }
-  }, [accountKey, currentFolderId, espMediaAvailable]);
+  }, [accountKey]);
 
   // ── Drag & drop ──
 
@@ -269,91 +121,13 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
     handleUpload(e.dataTransfer.files);
   }, [handleUpload]);
 
-  // ── Folder navigation ──
-
-  const navigateToFolder = useCallback((folder: MediaFolder) => {
-    setCurrentFolderId(folder.id);
-    setFolderPath(prev => [...prev, { id: folder.id, name: folder.name }]);
-    setSearch('');
-  }, []);
-
-  const navigateToBreadcrumb = useCallback((index: number) => {
-    const crumb = folderPath[index];
-    setCurrentFolderId(crumb.id);
-    setFolderPath(prev => prev.slice(0, index + 1));
-    setSearch('');
-  }, [folderPath]);
-
-  // ── Create folder ──
-
-  const handleCreateFolder = useCallback(async () => {
-    const trimmed = newFolderName.trim();
-    if (!trimmed || !accountKey) return;
-    setSavingFolder(true);
-    try {
-      const res = await fetch('/api/esp/media/folders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accountKey,
-          name: trimmed,
-          parentId: currentFolderId || undefined,
-        }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error((data as Record<string, string>)?.error || `Error ${res.status}`);
-      }
-      const data = await res.json();
-      if (data.folder) {
-        setFolders((prev) => [...prev, data.folder as MediaFolder]);
-      }
-      toast.success(`Folder "${trimmed}" created`);
-      setCreatingFolder(false);
-      setNewFolderName('');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to create folder');
-    } finally {
-      setSavingFolder(false);
-    }
-  }, [accountKey, currentFolderId, newFolderName]);
-
-  // Focus the folder name input when creation mode is activated
-  useEffect(() => {
-    if (creatingFolder) {
-      // Small delay to ensure the input is rendered
-      requestAnimationFrame(() => newFolderInputRef.current?.focus());
-    }
-  }, [creatingFolder]);
-
   // ── Search ──
 
   const filtered = useMemo(() => {
-    let result = files;
-    if (sourceFilter !== 'all') {
-      result = result.filter((f) => (f.source || 'esp') === sourceFilter);
-    }
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      result = result.filter((f) => f.name.toLowerCase().includes(q));
-    }
-    return result;
-  }, [files, search, sourceFilter]);
-
-  const filteredFolders = useMemo(() => {
-    if (!search.trim()) return folders;
+    if (!search.trim()) return files;
     const q = search.toLowerCase();
-    return folders.filter((f) => f.name.toLowerCase().includes(q));
-  }, [folders, search]);
-
-  const sourceOptions: SourceFilter[] =
-    accountKey && espMediaAvailable ? ['all', 'esp', 's3'] : ['s3'];
-
-  useEffect(() => {
-    if ((!accountKey || !espMediaAvailable) && sourceFilter !== 's3') {
-      setSourceFilter('s3');
-    }
-  }, [accountKey, espMediaAvailable, sourceFilter]);
+    return files.filter((f) => f.name.toLowerCase().includes(q));
+  }, [files, search]);
 
   // ── Escape key ──
 
@@ -403,42 +177,12 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
               placeholder="Search files..."
             />
           </div>
-          {accountKey && espMediaAvailable && (
-            <button
-              onClick={() => { setCreatingFolder(true); setNewFolderName(''); }}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:border-[var(--primary)] transition-colors flex-shrink-0"
-              title="Create folder"
-            >
-              <FolderPlusIcon className="w-4 h-4" />
-              New Folder
-            </button>
-          )}
           <button
             onClick={onClose}
             className="p-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
           >
             <XMarkIcon className="w-5 h-5" />
           </button>
-        </div>
-
-        {/* ── Source filter tabs ── */}
-        <div className="flex items-center gap-1 px-4 pt-3">
-          {sourceOptions.map((src) => {
-            const label = src === 'all' ? 'All' : src === 'esp' ? 'ESP' : 'Loomi';
-            return (
-              <button
-                key={src}
-                onClick={() => setSourceFilter(src)}
-                className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
-                  sourceFilter === src
-                    ? 'bg-[var(--primary)] text-white'
-                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]'
-                }`}
-              >
-                {label}
-              </button>
-            );
-          })}
         </div>
 
         {/* ── Upload zone ── */}
@@ -474,36 +218,6 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
           )}
         </div>
 
-        {/* ── Breadcrumbs ── */}
-        {canNavigateFolders && folderPath.length > 1 && (
-          <div className="flex items-center gap-1 px-4 pt-3 text-xs flex-wrap">
-            {folderPath.map((crumb, idx) => {
-              const isLast = idx === folderPath.length - 1;
-              return (
-                <span key={crumb.id ?? 'root'} className="flex items-center gap-1">
-                  {idx > 0 && (
-                    <ChevronRightIcon className="w-3 h-3 text-[var(--muted-foreground)]" />
-                  )}
-                  {isLast ? (
-                    <span className="font-medium text-[var(--foreground)] flex items-center gap-1">
-                      {idx === 0 ? <HomeIcon className="w-3 h-3" /> : <FolderIcon className="w-3 h-3" />}
-                      {crumb.name}
-                    </span>
-                  ) : (
-                    <button
-                      onClick={() => navigateToBreadcrumb(idx)}
-                      className="flex items-center gap-1 text-[var(--primary)] hover:text-[var(--primary)]/80 transition-colors"
-                    >
-                      {idx === 0 ? <HomeIcon className="w-3 h-3" /> : <FolderIcon className="w-3 h-3" />}
-                      {crumb.name}
-                    </button>
-                  )}
-                </span>
-              );
-            })}
-          </div>
-        )}
-
         {/* ── Media grid ── */}
         <div className="flex-1 overflow-y-auto p-4">
           {loading ? (
@@ -515,119 +229,55 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
                 </div>
               ))}
             </div>
-          ) : filtered.length === 0 && filteredFolders.length === 0 ? (
+          ) : filtered.length === 0 ? (
             <div className="text-center py-12 text-[var(--muted-foreground)]">
               <PhotoIcon className="w-10 h-10 mx-auto mb-2 opacity-30" />
               <p className="text-sm">
-                {files.length === 0 && folders.length === 0
-                  ? currentFolderId ? 'This folder is empty' : 'No media files yet'
-                  : 'No matches'}
+                {files.length === 0 ? 'No media files yet' : 'No matches'}
               </p>
-              {files.length === 0 && folders.length === 0 && !currentFolderId && (
+              {files.length === 0 && (
                 <p className="text-xs mt-1 opacity-60">Upload an image to get started</p>
               )}
             </div>
           ) : (
-            <>
-              {/* Create folder inline */}
-              {creatingFolder && accountKey && espMediaAvailable && (
-                <div className="flex items-center gap-2 mb-3 px-1">
-                  <FolderPlusIcon className="w-5 h-5 text-[var(--primary)] flex-shrink-0" />
-                  <input
-                    ref={newFolderInputRef}
-                    type="text"
-                    value={newFolderName}
-                    onChange={(e) => setNewFolderName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && newFolderName.trim()) handleCreateFolder();
-                      if (e.key === 'Escape') { setCreatingFolder(false); setNewFolderName(''); }
-                    }}
-                    className="flex-1 text-sm bg-[var(--input)] border border-[var(--primary)] rounded-lg px-3 py-1.5 outline-none"
-                    placeholder="Folder name..."
-                    disabled={savingFolder}
-                  />
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+              {filtered.map((f) => {
+                const isImage = f.type?.startsWith('image') || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(f.url || '');
+                return (
                   <button
-                    onClick={handleCreateFolder}
-                    disabled={!newFolderName.trim() || savingFolder}
-                    className="p-1.5 rounded-lg bg-[var(--primary)] text-white disabled:opacity-40 hover:opacity-90 transition-opacity"
+                    key={f.id}
+                    onClick={() => onSelect(f.url)}
+                    className="text-left rounded-lg overflow-hidden border border-transparent hover:border-[var(--primary)] hover:ring-1 hover:ring-[var(--primary)]/30 transition-all group"
+                    title={f.name}
                   >
-                    <CheckIcon className="w-4 h-4" />
+                    <div className="h-[120px] bg-[var(--muted)] overflow-hidden">
+                      {isImage && f.url ? (
+                        <img
+                          src={f.thumbnailUrl || f.url}
+                          alt={f.name}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
+                          loading="lazy"
+                        />
+                      ) : (
+                        <div className="flex items-center justify-center h-full">
+                          <PhotoIcon className="w-6 h-6 text-[var(--muted-foreground)] opacity-30" />
+                        </div>
+                      )}
+                    </div>
+                    <p className="text-[10px] truncate px-1.5 py-1 text-[var(--muted-foreground)]">
+                      {f.name}
+                    </p>
                   </button>
-                  <button
-                    onClick={() => { setCreatingFolder(false); setNewFolderName(''); }}
-                    className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
-                  >
-                    <XMarkIcon className="w-4 h-4" />
-                  </button>
-                </div>
-              )}
-
-              {/* Folder cards */}
-              {filteredFolders.length > 0 && (
-                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 mb-2">
-                  {filteredFolders.map((folder) => (
-                    <button
-                      key={folder.id}
-                      onClick={() => navigateToFolder(folder)}
-                      className="text-left rounded-lg p-3 border border-transparent hover:border-[var(--primary)] hover:ring-1 hover:ring-[var(--primary)]/30 transition-all group bg-[var(--muted)]/30"
-                      title={folder.name}
-                    >
-                      <div className="flex items-center gap-2">
-                        <FolderIcon className="w-5 h-5 text-[var(--primary)] flex-shrink-0" />
-                        <span className="text-[11px] font-medium truncate group-hover:text-[var(--primary)] transition-colors">
-                          {folder.name}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {/* File cards */}
-              <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-                {filtered.map((f) => {
-                  const isImage = f.type?.startsWith('image') || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(f.url || '');
-                  return (
-                    <button
-                      key={f.id}
-                      onClick={() => onSelect(f.url)}
-                      className="text-left rounded-lg overflow-hidden border border-transparent hover:border-[var(--primary)] hover:ring-1 hover:ring-[var(--primary)]/30 transition-all group"
-                      title={f.name}
-                    >
-                      <div className="h-[120px] bg-[var(--muted)] overflow-hidden">
-                        {isImage && f.url ? (
-                          <img
-                            src={f.thumbnailUrl || f.url}
-                            alt={f.name}
-                            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200"
-                            loading="lazy"
-                          />
-                        ) : (
-                          <div className="flex items-center justify-center h-full">
-                            <PhotoIcon className="w-6 h-6 text-[var(--muted-foreground)] opacity-30" />
-                          </div>
-                        )}
-                      </div>
-                      <p className="text-[10px] truncate px-1.5 py-1 text-[var(--muted-foreground)]">
-                        {f.name}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-            </>
+                );
+              })}
+            </div>
           )}
         </div>
 
         {/* ── Footer ── */}
         <div className="flex items-center justify-between px-5 py-3 border-t border-[var(--border)]">
           <p className="text-xs text-[var(--muted-foreground)]">
-            {loading ? 'Loading...' : (
-              <>
-                {filteredFolders.length > 0 && `${filteredFolders.length} folder${filteredFolders.length !== 1 ? 's' : ''}, `}
-                {`${filtered.length} file${filtered.length !== 1 ? 's' : ''}`}
-              </>
-            )}
+            {loading ? 'Loading...' : `${filtered.length} file${filtered.length !== 1 ? 's' : ''}`}
           </p>
           {nextCursor && !loading && (
             <button

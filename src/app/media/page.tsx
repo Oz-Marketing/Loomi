@@ -90,17 +90,11 @@ interface ProviderInfo {
 
 // ── Helpers ──
 
+// All media now flows through Loomi-native S3 storage. The provider
+// catalog used to map remote-ESP IDs (ghl/klaviyo) to display labels
+// but with the ESP teardown those branches are gone; only the 's3'
+// entry remains for the source pill on each media row.
 const PROVIDER_META: Record<string, ProviderInfo> = {
-  ghl: {
-    id: 'ghl',
-    displayName: 'GoHighLevel',
-    iconSrc: 'https://storage.googleapis.com/msgsndr/CVpny6EUSHRxlXfqAFb7/media/6992d3c254da0462343bf828.jpg',
-  },
-  klaviyo: {
-    id: 'klaviyo',
-    displayName: 'Klaviyo',
-    iconSrc: 'https://storage.googleapis.com/msgsndr/CVpny6EUSHRxlXfqAFb7/media/6992d3ac3b3cc9155bdaf06e.png',
-  },
   s3: {
     id: 's3',
     displayName: 'Loomi',
@@ -956,7 +950,6 @@ interface AccountCardProps {
 function AccountCard({ acctKey, acctData, overviewRow, onSelect }: AccountCardProps) {
   const acctName = acctData?.dealer || acctKey;
   const location = [acctData?.city, acctData?.state].filter(Boolean).join(', ');
-  const providerList = acctData?.connectedProviders || [];
 
   return (
     <button
@@ -979,11 +972,6 @@ function AccountCard({ acctKey, acctData, overviewRow, onSelect }: AccountCardPr
           {location && (
             <p className="text-[11px] text-[var(--muted-foreground)] truncate mt-0.5">{location}</p>
           )}
-          <div className="flex items-center gap-2 mt-2">
-            {providerList.map((prov: string) => (
-              <ProviderPill key={prov} prov={prov} />
-            ))}
-          </div>
         </div>
         <ChevronRightIcon className="w-4 h-4 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 transition-opacity mt-1 flex-shrink-0" />
       </div>
@@ -1046,9 +1034,6 @@ export default function MediaPage() {
   const [pageDragOver, setPageDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pageDragDepthRef = useRef(0);
-  const [uploadDestination, setUploadDestination] = useState<'esp' | 's3'>('esp');
-  const [uploadAccountKeys, setUploadAccountKeys] = useState<Set<string>>(new Set());
-  const [uploadAccountSearch, setUploadAccountSearch] = useState('');
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
 
   // Modals
@@ -1120,12 +1105,6 @@ export default function MediaPage() {
   const [adminMediaTotal, setAdminMediaTotal] = useState(0);
   const [adminMediaLoading, setAdminMediaLoading] = useState(false);
 
-  // ── Push to Sub-accounts modal ──
-  const [showPushModal, setShowPushModal] = useState(false);
-  const [pushAccountKeys, setPushAccountKeys] = useState<Set<string>>(new Set());
-  const [pushAccountSearch, setPushAccountSearch] = useState('');
-  const [pushing, setPushing] = useState(false);
-
   // Derive the effective account key
   const effectiveAccountKey = isAccount
     ? accountKey
@@ -1148,13 +1127,8 @@ export default function MediaPage() {
     });
   }, [accounts]);
 
-  // Account keys that have ESP connections
-  const connectedAccountKeys = useMemo(() => {
-    return allAccountKeys.filter(k => {
-      const acct = accounts[k];
-      return acct?.connectedProviders && acct.connectedProviders.length > 0;
-    });
-  }, [allAccountKeys, accounts]);
+  // Every account is "connected" now that media is Loomi-S3-backed.
+  const connectedAccountKeys = allAccountKeys;
 
   // Filter overview accounts by search
   const filteredOverviewKeys = useMemo(() => {
@@ -1207,22 +1181,23 @@ export default function MediaPage() {
     }
     setOverviewData(initialState);
 
-    // Fetch total file counts for all connected accounts (ESP only — S3 is admin-level)
+    // Fetch total file counts for all connected accounts.
+    // S3 is the canonical (and only) media store now — ESP media is gone.
     const results = await Promise.allSettled(
       connectedAccountKeys.map(async (key) => {
         const params = new URLSearchParams({
           accountKey: key,
           countOnly: 'true',
         });
-        const espRes = await fetch(`/api/esp/media?${params.toString()}`);
-        const espData = await espRes.json();
+        const res = await fetch(`/api/media?${params.toString()}`);
+        const data = await res.json();
 
-        if (espRes.ok) {
+        if (res.ok) {
           return {
             accountKey: key,
-            totalCount: (espData.total as number) || 0,
-            provider: espData.provider || null,
-            capabilities: espData.capabilities || null,
+            totalCount: (data.total as number) || 0,
+            provider: 's3' as string | null,
+            capabilities: S3_CAPABILITIES as MediaCapabilities | null,
           };
         } else {
           return {
@@ -1230,7 +1205,7 @@ export default function MediaPage() {
             totalCount: 0,
             provider: null,
             capabilities: null,
-            error: espData.error || 'Failed to load',
+            error: data.error || 'Failed to load',
           };
         }
       })
@@ -1332,32 +1307,33 @@ export default function MediaPage() {
     }
 
     try {
-      const espParams = new URLSearchParams({
+      const params = new URLSearchParams({
         accountKey: effectiveAccountKey,
       });
-      if (cursor) espParams.set('cursor', cursor);
-      if (currentFolderId) espParams.set('parentId', currentFolderId);
-      espParams.set('limit', '50');
+      if (cursor) params.set('cursor', cursor);
+      // S3 media is flat; the legacy parentId scoping is a no-op here
+      // but we forward it so the API can ignore/honor it without
+      // changing the call surface.
+      if (currentFolderId) params.set('parentId', currentFolderId);
+      params.set('limit', '50');
 
-      // Sub-account view: fetch ESP only (S3 files are admin-level only)
-      const espRes = await fetch(`/api/esp/media?${espParams.toString()}`);
-      const espData = await espRes.json();
+      const res = await fetch(`/api/media?${params.toString()}`);
+      const data = await res.json();
 
-      if (espRes.ok) {
-        // Tag ESP files with source
-        const espFiles = (espData.files || []).map((f: MediaFile) => ({ ...f, source: 'esp' as const }));
+      if (res.ok) {
+        const incoming = (data.files || []).map((f: MediaFile) => ({ ...f, source: 's3' as const }));
 
         if (cursor) {
-          setFiles(prev => [...prev, ...espFiles]);
+          setFiles(prev => [...prev, ...incoming]);
         } else {
-          setFiles(espFiles);
-          setFolders(espData.folders || []);
+          setFiles(incoming);
+          setFolders(data.folders || []);
         }
-        setNextCursor(espData.nextCursor || undefined);
-        setProvider(espData.provider || null);
-        setCapabilities(espData.capabilities || null);
+        setNextCursor(data.nextCursor || undefined);
+        setProvider('s3');
+        setCapabilities(S3_CAPABILITIES);
       } else {
-        toast.error(espData.error || 'Failed to load media');
+        toast.error(data.error || 'Failed to load media');
       }
     } catch {
       toast.error('Failed to load media');
@@ -1410,20 +1386,6 @@ export default function MediaPage() {
     const filesToUpload = files ?? stagedFiles;
     if (filesToUpload.length === 0) return;
 
-    // Determine target account keys for ESP uploads
-    const targetKeys: string[] = [];
-    if (uploadDestination === 'esp') {
-      if (showOverview) {
-        targetKeys.push(...Array.from(uploadAccountKeys));
-      } else if (effectiveAccountKey) {
-        targetKeys.push(effectiveAccountKey);
-      }
-      if (targetKeys.length === 0) {
-        toast.error('No account selected');
-        return;
-      }
-    }
-
     setUploading(true);
     const uploadedFiles: MediaFile[] = [];
     let successCount = 0;
@@ -1431,77 +1393,41 @@ export default function MediaPage() {
 
     for (let i = 0; i < filesToUpload.length; i++) {
       const file = filesToUpload[i];
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('category', 'general');
+      if (effectiveAccountKey) formData.append('accountKey', effectiveAccountKey);
 
-      if (uploadDestination === 's3') {
-        // Upload to Loomi S3 storage (admin-level, no accountKey)
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('category', 'general');
+      try {
+        const res = await fetch('/api/media', { method: 'POST', body: formData });
+        const { ok, data, error } = await safeJson<{ file: MediaFile }>(res);
 
-        try {
-          const res = await fetch('/api/media', { method: 'POST', body: formData });
-          const { ok, data, error } = await safeJson<{ file: MediaFile }>(res);
-
-          if (ok && data?.file) {
-            uploadedFiles.push(data.file);
-            successCount++;
-          } else {
-            toast.error(`Failed to upload ${file.name}: ${error || 'Unknown error'}`);
-            failCount++;
-          }
-        } catch {
-          toast.error(`Failed to upload ${file.name}`);
+        if (ok && data?.file) {
+          uploadedFiles.push({ ...data.file, source: 's3' });
+          successCount++;
+        } else {
+          toast.error(`Failed to upload ${file.name}: ${error || 'Unknown error'}`);
           failCount++;
         }
-      } else {
-        // Upload to ESP — potentially multiple accounts
-        const results = await Promise.allSettled(
-          targetKeys.map(async (acctKey) => {
-            const formData = new FormData();
-            formData.append('accountKey', acctKey);
-            formData.append('file', file);
-            if (currentFolderId && targetKeys.length === 1) formData.append('parentId', currentFolderId);
-
-            const res = await fetch('/api/esp/media', { method: 'POST', body: formData });
-            const { ok, data, error } = await safeJson<{ file: MediaFile }>(res);
-
-            if (ok && data?.file) return { acctKey, file: data.file };
-            throw new Error(error || 'Unknown error');
-          })
-        );
-
-        for (const result of results) {
-          if (result.status === 'fulfilled') {
-            // Only add to the current view if it's the active account
-            if (result.value.acctKey === effectiveAccountKey) {
-              uploadedFiles.push(result.value.file);
-            }
-            successCount++;
-          } else {
-            failCount++;
-          }
-        }
-
-        if (failCount > 0 && targetKeys.length > 1) {
-          toast.error(`${failCount} upload${failCount > 1 ? 's' : ''} failed`);
-        }
+      } catch {
+        toast.error(`Failed to upload ${file.name}`);
+        failCount++;
       }
     }
 
-    if (uploadDestination === 's3' && uploadedFiles.length > 0) {
-      // Refresh admin media after S3 upload
-      setAdminMediaFiles(prev => [...uploadedFiles, ...prev]);
-      setAdminMediaTotal(prev => prev + uploadedFiles.length);
-    } else if (uploadedFiles.length > 0) {
-      setFiles(prev => [...uploadedFiles, ...prev]);
+    if (uploadedFiles.length > 0) {
+      if (showOverview && !effectiveAccountKey) {
+        setAdminMediaFiles(prev => [...uploadedFiles, ...prev]);
+        setAdminMediaTotal(prev => prev + uploadedFiles.length);
+      } else {
+        setFiles(prev => [...uploadedFiles, ...prev]);
+      }
     }
     if (successCount > 0) {
-      const label = uploadDestination === 's3'
-        ? `Uploaded ${successCount} file${successCount > 1 ? 's' : ''} to Loomi`
-        : targetKeys.length > 1
-          ? `Uploaded to ${targetKeys.length} accounts`
-          : `Uploaded ${successCount} file${successCount > 1 ? 's' : ''}`;
-      toast.success(label);
+      toast.success(`Uploaded ${successCount} file${successCount > 1 ? 's' : ''}`);
+    }
+    if (failCount > 0) {
+      toast.error(`${failCount} upload${failCount > 1 ? 's' : ''} failed`);
     }
 
     setUploading(false);
@@ -1569,17 +1495,6 @@ export default function MediaPage() {
 
       stageFiles(droppedFiles);
 
-      if (showOverview) {
-        const defaultDestination = overviewTab === 'subaccounts' && connectedAccountKeys.length > 0
-          ? 'esp'
-          : 's3';
-        setUploadDestination(defaultDestination);
-        setUploadAccountKeys(new Set());
-        setUploadAccountSearch('');
-      } else {
-        setUploadDestination('esp');
-      }
-
       setShowUploadModal(true);
     };
 
@@ -1596,22 +1511,19 @@ export default function MediaPage() {
       pageDragDepthRef.current = 0;
       setPageDragOver(false);
     };
-  }, [canDropUploadFiles, connectedAccountKeys.length, overviewTab, showOverview, showUploadModal, stageFiles]);
+  }, [canDropUploadFiles, showUploadModal, stageFiles]);
 
   // ── Rename ──
 
   const handleRename = async () => {
     if (!renameFile || !renameValue.trim()) return;
-    // S3 admin files don't require effectiveAccountKey; ESP files do
-    if (renameFile.source !== 's3' && !effectiveAccountKey) return;
     setRenaming(true);
 
     try {
-      const apiBase = renameFile.source === 's3' ? '/api/media' : '/api/esp/media';
       const body: Record<string, string> = { name: renameValue.trim() };
       if (effectiveAccountKey) body.accountKey = effectiveAccountKey;
 
-      const res = await fetch(`${apiBase}/${encodeURIComponent(renameFile.id)}`, {
+      const res = await fetch(`/api/media/${encodeURIComponent(renameFile.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -1619,13 +1531,13 @@ export default function MediaPage() {
       const data = await res.json();
 
       if (res.ok && data.file) {
-        if (showOverview && renameFile.source === 's3') {
+        if (showOverview && !effectiveAccountKey) {
           setAdminMediaFiles(prev =>
             prev.map(f => (f.id === renameFile.id ? { ...f, ...data.file, source: 's3' as const } : f))
           );
         } else {
           setFiles(prev =>
-            prev.map(f => (f.id === renameFile.id ? { ...f, ...data.file, source: renameFile.source } : f))
+            prev.map(f => (f.id === renameFile.id ? { ...f, ...data.file, source: 's3' as const } : f))
           );
         }
         toast.success('File renamed');
@@ -1644,21 +1556,18 @@ export default function MediaPage() {
 
   const handleDelete = async () => {
     if (!deleteFile) return;
-    // S3 admin files don't require effectiveAccountKey; ESP files do
-    if (deleteFile.source !== 's3' && !effectiveAccountKey) return;
     setDeleting(true);
 
     try {
-      const apiBase = deleteFile.source === 's3' ? '/api/media' : '/api/esp/media';
       const params = effectiveAccountKey ? `?accountKey=${encodeURIComponent(effectiveAccountKey)}` : '';
       const res = await fetch(
-        `${apiBase}/${encodeURIComponent(deleteFile.id)}${params}`,
+        `/api/media/${encodeURIComponent(deleteFile.id)}${params}`,
         { method: 'DELETE' },
       );
       const data = await res.json();
 
       if (res.ok) {
-        if (showOverview && deleteFile.source === 's3') {
+        if (showOverview && !effectiveAccountKey) {
           setAdminMediaFiles(prev => prev.filter(f => f.id !== deleteFile.id));
           setAdminMediaTotal(prev => prev - 1);
         } else {
@@ -1703,12 +1612,6 @@ export default function MediaPage() {
   const handleCropSave = async (crop: CropRect) => {
     const fileToCrop = cropFile;
     if (!fileToCrop?.url) return;
-
-    const targetAccountKey = effectiveAccountKey;
-    if (fileToCrop.source !== 's3' && !targetAccountKey) {
-      toast.error('No account selected');
-      return;
-    }
 
     setCropping(true);
 
@@ -1767,37 +1670,25 @@ export default function MediaPage() {
         URL.revokeObjectURL(objectUrl);
       }
 
-      if (fileToCrop.source === 's3') {
-        const formData = new FormData();
-        formData.append('file', croppedFile);
-        formData.append('category', 'general');
+      const formData = new FormData();
+      formData.append('file', croppedFile);
+      formData.append('category', 'general');
+      if (effectiveAccountKey) formData.append('accountKey', effectiveAccountKey);
 
-        const res = await fetch('/api/media', { method: 'POST', body: formData });
-        const { ok, data, error } = await safeJson<{ file: MediaFile }>(res);
-        if (!ok || !data?.file) {
-          throw new Error(error || 'Failed to upload cropped image');
-        }
+      const res = await fetch('/api/media', { method: 'POST', body: formData });
+      const { ok, data, error } = await safeJson<{ file: MediaFile }>(res);
+      if (!ok || !data?.file) {
+        throw new Error(error || 'Failed to upload cropped image');
+      }
 
-        const created: MediaFile = { ...data.file, source: 's3' };
+      const created: MediaFile = { ...data.file, source: 's3' };
+      if (showOverview && !effectiveAccountKey) {
         setAdminMediaFiles(prev => [created, ...prev]);
         setAdminMediaTotal(prev => prev + 1);
-        setPreviewFile(created);
       } else {
-        const formData = new FormData();
-        formData.append('accountKey', targetAccountKey as string);
-        formData.append('file', croppedFile);
-        if (currentFolderId) formData.append('parentId', currentFolderId);
-
-        const res = await fetch('/api/esp/media', { method: 'POST', body: formData });
-        const { ok, data, error } = await safeJson<{ file: MediaFile }>(res);
-        if (!ok || !data?.file) {
-          throw new Error(error || 'Failed to upload cropped image');
-        }
-
-        const created: MediaFile = { ...data.file, source: 'esp' };
         setFiles(prev => [created, ...prev]);
-        setPreviewFile(created);
       }
+      setPreviewFile(created);
 
       toast.success('Cropped image uploaded');
       setCropFile(null);
@@ -1837,7 +1728,7 @@ export default function MediaPage() {
       const params = new URLSearchParams({ accountKey: effectiveAccountKey });
       if (parentId) params.set('parentId', parentId);
       params.set('limit', '200');
-      const res = await fetch(`/api/esp/media?${params.toString()}`);
+      const res = await fetch(`/api/media?${params.toString()}`);
       const data = await res.json();
       if (res.ok) {
         setMoveFolders(data.folders || []);
@@ -1864,7 +1755,7 @@ export default function MediaPage() {
 
     for (const item of moveItems) {
       try {
-        const res = await fetch(`/api/esp/media/${encodeURIComponent(item.id)}`, {
+        const res = await fetch(`/api/media/${encodeURIComponent(item.id)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1922,7 +1813,7 @@ export default function MediaPage() {
     for (const id of selectedIds) {
       try {
         const res = await fetch(
-          `/api/esp/media/${encodeURIComponent(id)}?accountKey=${encodeURIComponent(effectiveAccountKey)}`,
+          `/api/media/${encodeURIComponent(id)}?accountKey=${encodeURIComponent(effectiveAccountKey)}`,
           { method: 'DELETE' },
         );
         if (res.ok) successCount++;
@@ -1971,45 +1862,6 @@ export default function MediaPage() {
     clearSelection();
   };
 
-  // ── Push to Sub-accounts ──
-
-  const handlePushToSubaccounts = async () => {
-    if (selectedIds.size === 0 || pushAccountKeys.size === 0) return;
-
-    setPushing(true);
-    const assetIds = Array.from(selectedIds);
-    const accountKeysArr = Array.from(pushAccountKeys);
-
-    try {
-      const res = await fetch('/api/media/push-to-esp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assetIds, accountKeys: accountKeysArr }),
-      });
-      const data = await res.json();
-
-      if (res.ok) {
-        const succeeded = data.succeeded || 0;
-        const failed = data.failed || 0;
-        if (succeeded > 0) {
-          toast.success(`Pushed to ${succeeded} sub-account${succeeded > 1 ? 's' : ''}`);
-        }
-        if (failed > 0) {
-          toast.error(`${failed} push${failed > 1 ? 'es' : ''} failed`);
-        }
-      } else {
-        toast.error(data.error || 'Push failed');
-      }
-    } catch {
-      toast.error('Failed to push files');
-    }
-
-    setPushing(false);
-    setShowPushModal(false);
-    setPushAccountKeys(new Set());
-    clearSelection();
-  };
-
   // ── Delete Folder ──
 
   const handleDeleteFolder = async () => {
@@ -2018,7 +1870,7 @@ export default function MediaPage() {
 
     try {
       const res = await fetch(
-        `/api/esp/media/${encodeURIComponent(deleteFolderItem.id)}?accountKey=${encodeURIComponent(effectiveAccountKey)}`,
+        `/api/media/${encodeURIComponent(deleteFolderItem.id)}?accountKey=${encodeURIComponent(effectiveAccountKey)}`,
         { method: 'DELETE' },
       );
       const data = await res.json();
@@ -2053,7 +1905,7 @@ export default function MediaPage() {
     setRenamingFolder(true);
 
     try {
-      const res = await fetch(`/api/esp/media/${encodeURIComponent(renameFolderItem.id)}`, {
+      const res = await fetch(`/api/media/${encodeURIComponent(renameFolderItem.id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2117,7 +1969,7 @@ export default function MediaPage() {
     if (dragData.type === 'folder' && dragData.id === targetFolderId) return;
 
     try {
-      const res = await fetch(`/api/esp/media/${encodeURIComponent(dragData.id)}`, {
+      const res = await fetch(`/api/media/${encodeURIComponent(dragData.id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountKey: effectiveAccountKey, targetFolderId, name: dragData.name }),
@@ -2155,7 +2007,7 @@ export default function MediaPage() {
     setCreatingFolder(true);
 
     try {
-      const res = await fetch('/api/esp/media/folders', {
+      const res = await fetch('/api/media/folders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2210,9 +2062,9 @@ export default function MediaPage() {
     setOverviewSearch('');
   }, [overviewTab, showOverview]);
 
-  // ── Connection state ──
-  const connectedProviders = accountData?.connectedProviders;
-  const hasConnection = effectiveAccountKey && connectedProviders && connectedProviders.length > 0;
+  // Loomi-native media is always available; gating on a provider
+  // connection no longer makes sense post-ESP-teardown.
+  const hasConnection = Boolean(effectiveAccountKey);
   const activeFolderName = folderPath.length > 1 ? folderPath[folderPath.length - 1]?.name : null;
   const activeAccountName = effectiveAccountKey
     ? (accounts[effectiveAccountKey]?.dealer || accountData?.dealer || effectiveAccountKey)
@@ -2344,12 +2196,6 @@ export default function MediaPage() {
             {showOverview && (
               <PrimaryButton
                 onClick={() => {
-                  const defaultDestination = overviewTab === 'subaccounts' && connectedAccountKeys.length > 0
-                    ? 'esp'
-                    : 's3';
-                  setUploadDestination(defaultDestination);
-                  setUploadAccountKeys(new Set());
-                  setUploadAccountSearch('');
                   setStagedFiles([]);
                   setShowUploadModal(true);
                 }}
@@ -2374,7 +2220,7 @@ export default function MediaPage() {
                   </button>
                 )}
                 <PrimaryButton
-                  onClick={() => { setUploadDestination('esp'); setUploadAccountKeys(new Set()); setUploadAccountSearch(''); setStagedFiles([]); setShowUploadModal(true); }}
+                  onClick={() => { setStagedFiles([]); setShowUploadModal(true); }}
                   disabled={uploading}
                 >
                   <ArrowUpTrayIcon className="w-4 h-4" />
@@ -2624,15 +2470,6 @@ export default function MediaPage() {
             </div>
           )}
 
-          {/* Account mode: no connection */}
-          {!isAdmin && effectiveAccountKey && !hasConnection && !loading && (
-            <div className="text-center py-16 text-[var(--muted-foreground)]">
-              <ExclamationTriangleIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
-              <p className="text-sm font-medium mb-1">No Integration Connected</p>
-              <p className="text-xs">Connect an integration in your account settings to manage media files.</p>
-            </div>
-          )}
-
           {/* Account mode: no account selected */}
           {!isAdmin && !effectiveAccountKey && (
             <div className="text-center py-16 text-[var(--muted-foreground)]">
@@ -2835,15 +2672,6 @@ export default function MediaPage() {
               },
               disabled: filteredAdminMedia.length === 0,
             },
-            ...(connectedAccountKeys.length > 0
-              ? [{
-                  id: 'push',
-                  label: 'Push',
-                  icon: <ArrowUpTrayIcon className="h-4 w-4" />,
-                  onClick: () => { setPushAccountKeys(new Set()); setPushAccountSearch(''); setShowPushModal(true); },
-                  disabled: selectedIds.size === 0,
-                }]
-              : []),
             {
               id: 'delete',
               label: 'Delete',
@@ -3099,109 +2927,6 @@ export default function MediaPage() {
               </button>
             </div>
             <div className="p-5 space-y-4">
-              {/* Destination picker (admin overview only) */}
-              {showOverview && (
-                <div>
-                  <p className="text-xs font-medium text-[var(--muted-foreground)] mb-2">Where would you like to upload?</p>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setUploadDestination('s3')}
-                      className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-colors ${
-                        uploadDestination === 's3'
-                          ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
-                          : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]'
-                      }`}
-                    >
-                      Loomi
-                      <span className="block text-[10px] mt-0.5 opacity-70">Upload to Loomi&apos;s media library</span>
-                      <span className="block text-[10px] mt-0.5 opacity-50">Distribute to sub-accounts later</span>
-                    </button>
-                    <button
-                      onClick={() => setUploadDestination('esp')}
-                      className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-colors ${
-                        uploadDestination === 'esp'
-                          ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
-                          : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]'
-                      }`}
-                    >
-                      Sub-account storage
-                      <span className="block text-[10px] mt-0.5 opacity-70">Upload to a sub-account&apos;s ESP</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Multi-account selector (admin overview mode + ESP destination) */}
-              {showOverview && uploadDestination === 'esp' && connectedAccountKeys.length > 0 && (() => {
-                const q = uploadAccountSearch.toLowerCase();
-                const filteredKeys = q
-                  ? connectedAccountKeys.filter((k) => {
-                      const a = accounts[k];
-                      return k.toLowerCase().includes(q) || a?.dealer?.toLowerCase().includes(q) || a?.city?.toLowerCase().includes(q) || a?.state?.toLowerCase().includes(q);
-                    })
-                  : connectedAccountKeys;
-                return (
-                <div>
-                  <div className="relative mb-2">
-                    <MagnifyingGlassIcon className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-                    <input
-                      type="text"
-                      value={uploadAccountSearch}
-                      onChange={(e) => setUploadAccountSearch(e.target.value)}
-                      placeholder="Search sub-accounts..."
-                      className="w-full text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg pl-8 pr-3 py-1.5 text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] focus:border-[var(--primary)]"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between mb-2">
-                    <p className="text-[11px] text-[var(--muted-foreground)]">{uploadAccountKeys.size} of {connectedAccountKeys.length} selected</p>
-                    <div className="flex items-center gap-2 text-[10px]">
-                      <button onClick={() => setUploadAccountKeys(new Set(filteredKeys))} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors">Select all</button>
-                      <span className="text-[var(--muted-foreground)]">·</span>
-                      <button onClick={() => setUploadAccountKeys(new Set())} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors">Clear</button>
-                    </div>
-                  </div>
-                  <div className="max-h-48 overflow-y-auto space-y-1">
-                    {filteredKeys.map((key) => {
-                      const acct = accounts[key];
-                      const isSelected = uploadAccountKeys.has(key);
-                      const location = [acct?.city, acct?.state].filter(Boolean).join(', ');
-                      return (
-                        <button
-                          key={key}
-                          onClick={() => {
-                            setUploadAccountKeys(prev => {
-                              const next = new Set(prev);
-                              if (next.has(key)) next.delete(key); else next.add(key);
-                              return next;
-                            });
-                          }}
-                          className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border transition-all text-left ${
-                            isSelected
-                              ? 'border-[var(--primary)] bg-[var(--primary)]/5'
-                              : 'border-[var(--border)] hover:border-[var(--primary)] bg-[var(--card)] hover:bg-[var(--primary)]/5'
-                          }`}
-                        >
-                          <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 transition-colors ${
-                            isSelected ? 'bg-[var(--primary)] border-[var(--primary)]' : 'border-2 border-[var(--border)]'
-                          }`}>
-                            {isSelected && <CheckIcon className="w-3 h-3 text-white" />}
-                          </div>
-                          <AccountAvatar name={acct?.dealer || key} accountKey={key} storefrontImage={acct?.storefrontImage} logos={acct?.logos} size={24} className="w-6 h-6 rounded-md object-cover flex-shrink-0 border border-[var(--border)]" />
-                          <div className="min-w-0">
-                            <span className="block text-xs font-medium truncate">{acct?.dealer || key}</span>
-                            {location && <span className="block text-[10px] text-[var(--muted-foreground)] truncate">{location}</span>}
-                          </div>
-                        </button>
-                      );
-                    })}
-                    {filteredKeys.length === 0 && (
-                      <p className="text-xs text-[var(--muted-foreground)] text-center py-4">No sub-accounts match your search.</p>
-                    )}
-                  </div>
-                </div>
-                );
-              })()}
-
               {/* Drop zone */}
               <div
                 className={`border-2 border-dashed rounded-xl ${stagedFiles.length > 0 ? 'p-5' : 'p-10'} text-center transition-all cursor-pointer ${
@@ -3284,14 +3009,12 @@ export default function MediaPage() {
                 </button>
                 <button
                   onClick={() => handleUpload()}
-                  disabled={uploading || stagedFiles.length === 0 || (uploadDestination === 'esp' && showOverview && uploadAccountKeys.size === 0)}
+                  disabled={uploading || stagedFiles.length === 0}
                   className="px-4 py-2 text-xs font-medium rounded-lg bg-[var(--primary)] text-white hover:opacity-90 transition-opacity disabled:opacity-50"
                 >
                   {uploading
                     ? 'Uploading...'
-                    : uploadDestination === 'esp' && showOverview && uploadAccountKeys.size > 0
-                      ? `Upload to ${uploadAccountKeys.size} account${uploadAccountKeys.size !== 1 ? 's' : ''}`
-                      : `Upload ${stagedFiles.length} file${stagedFiles.length !== 1 ? 's' : ''}`
+                    : `Upload ${stagedFiles.length} file${stagedFiles.length !== 1 ? 's' : ''}`
                   }
                 </button>
               </div>
@@ -3443,122 +3166,6 @@ export default function MediaPage() {
                   {moving ? 'Moving...' : 'Move Here'}
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Push to Sub-accounts Modal ── */}
-      {showPushModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in"
-          onClick={() => !pushing && setShowPushModal(false)}
-          onKeyDown={(e) => { if (e.key === 'Escape' && !pushing) setShowPushModal(false); }}
-          tabIndex={-1}
-          ref={(el) => el?.focus()}
-        >
-          <div className="glass-modal w-[480px] max-h-[70vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)]">
-              <div>
-                <h3 className="text-base font-semibold">Push to Sub-accounts</h3>
-                <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-                  {selectedIds.size} file{selectedIds.size !== 1 ? 's' : ''} selected
-                </p>
-              </div>
-              <button
-                onClick={() => setShowPushModal(false)}
-                className="p-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
-              >
-                <XMarkIcon className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-5">
-              {(() => {
-                const q = pushAccountSearch.toLowerCase();
-                const filteredKeys = q
-                  ? connectedAccountKeys.filter((k) => {
-                      const a = accounts[k];
-                      return k.toLowerCase().includes(q) || a?.dealer?.toLowerCase().includes(q) || a?.city?.toLowerCase().includes(q) || a?.state?.toLowerCase().includes(q);
-                    })
-                  : connectedAccountKeys;
-                return (
-                  <>
-                    <div className="relative mb-2">
-                      <MagnifyingGlassIcon className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-                      <input
-                        type="text"
-                        value={pushAccountSearch}
-                        onChange={(e) => setPushAccountSearch(e.target.value)}
-                        placeholder="Search sub-accounts..."
-                        className="w-full text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg pl-8 pr-3 py-1.5 text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] focus:border-[var(--primary)]"
-                      />
-                    </div>
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-[11px] text-[var(--muted-foreground)]">{pushAccountKeys.size} of {connectedAccountKeys.length} selected</p>
-                      <div className="flex items-center gap-2 text-[10px]">
-                        <button onClick={() => setPushAccountKeys(new Set(filteredKeys))} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors">Select all</button>
-                        <span className="text-[var(--muted-foreground)]">·</span>
-                        <button onClick={() => setPushAccountKeys(new Set())} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors">Clear</button>
-                      </div>
-                    </div>
-                    <div className="max-h-60 overflow-y-auto space-y-1">
-                      {filteredKeys.map((key) => {
-                        const acct = accounts[key];
-                        const isSelected = pushAccountKeys.has(key);
-                        const location = [acct?.city, acct?.state].filter(Boolean).join(', ');
-                        return (
-                          <button
-                            key={key}
-                            onClick={() => {
-                              setPushAccountKeys(prev => {
-                                const next = new Set(prev);
-                                if (next.has(key)) next.delete(key); else next.add(key);
-                                return next;
-                              });
-                            }}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border transition-all text-left ${
-                              isSelected
-                                ? 'border-[var(--primary)] bg-[var(--primary)]/5'
-                                : 'border-[var(--border)] hover:border-[var(--primary)] bg-[var(--card)] hover:bg-[var(--primary)]/5'
-                            }`}
-                          >
-                            <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 transition-colors ${
-                              isSelected ? 'bg-[var(--primary)] border-[var(--primary)]' : 'border-2 border-[var(--border)]'
-                            }`}>
-                              {isSelected && <CheckIcon className="w-3 h-3 text-white" />}
-                            </div>
-                            <AccountAvatar name={acct?.dealer || key} accountKey={key} storefrontImage={acct?.storefrontImage} logos={acct?.logos} size={24} className="w-6 h-6 rounded-md object-cover flex-shrink-0 border border-[var(--border)]" />
-                            <div className="min-w-0">
-                              <span className="block text-xs font-medium truncate">{acct?.dealer || key}</span>
-                              {location && <span className="block text-[10px] text-[var(--muted-foreground)] truncate">{location}</span>}
-                            </div>
-                          </button>
-                        );
-                      })}
-                      {filteredKeys.length === 0 && (
-                        <p className="text-xs text-[var(--muted-foreground)] text-center py-4">No sub-accounts match your search.</p>
-                      )}
-                    </div>
-                  </>
-                );
-              })()}
-            </div>
-
-            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--border)]">
-              <button
-                onClick={() => setShowPushModal(false)}
-                className="px-4 py-2 text-sm font-medium text-[var(--foreground)] rounded-lg hover:bg-[var(--muted)] transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handlePushToSubaccounts}
-                disabled={pushing || pushAccountKeys.size === 0}
-                className="px-4 py-2 text-sm font-medium text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
-              >
-                {pushing ? 'Pushing...' : `Push to ${pushAccountKeys.size} account${pushAccountKeys.size !== 1 ? 's' : ''}`}
-              </button>
             </div>
           </div>
         </div>

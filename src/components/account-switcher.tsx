@@ -163,37 +163,9 @@ function resolveSubaccountPath(pathname: string, slug: string): string {
   return subaccountPath(slug, 'dashboard');
 }
 
-function parseCityStateFromLocationName(locationName: string | null | undefined): string | null {
-  if (typeof locationName !== 'string') return null;
-  const trimmed = locationName.trim();
-  if (!trimmed) return null;
-
-  const parts = trimmed
-    .split(',')
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  if (parts.length < 2) return null;
-
-  const city = parts[0];
-  const stateToken = parts[1].split(/\s+/)[0]?.trim();
-  if (!city || !stateToken) return null;
-
-  return `${city}, ${stateToken.toUpperCase()}`;
-}
 
 function resolveAccountCityStateLabel(accountData: AccountData): string | null {
-  const directCityState = formatAccountCityState(accountData);
-  if (directCityState) return directCityState;
-
-  const fromActiveConnection = parseCityStateFromLocationName(accountData.activeConnection?.accountName);
-  if (fromActiveConnection) return fromActiveConnection;
-
-  const fromOAuthConnection = accountData.oauthConnections
-    ?.map((connection) => parseCityStateFromLocationName(connection.locationName))
-    .find((value): value is string => Boolean(value));
-
-  return fromOAuthConnection || null;
+  return formatAccountCityState(accountData) || null;
 }
 
 export function AccountSwitcher({ onSwitch }: AccountSwitcherProps) {

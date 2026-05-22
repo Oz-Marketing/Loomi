@@ -36,16 +36,6 @@ interface Entry {
 }
 
 const entries: Entry[] = [
-  // ── 2026-02-21: GHL Agency OAuth ──
-  {
-    id: 'feature_ghl_agency_oauth_20260221',
-    title: 'GHL Agency OAuth + Bulk Location Linking',
-    content:
-      'Replaced per-location OAuth with an agency-token architecture for GoHighLevel. OAuth can now be authorized once at the agency level, locations are linked per account, location tokens are minted on demand, and required scope updates can be rolled out through one re-authorization. Added account-level agency linking UI and a bulk location-link assistant to accelerate migration.',
-    type: 'feature',
-    createdBy: 'Connor',
-    publishedAt: new Date('2026-02-21T18:00:00Z'),
-  },
   // ── 2026-02-22: Template editor overhaul ──
   {
     id: 'changelog_split_component_20260222',

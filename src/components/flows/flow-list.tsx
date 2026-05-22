@@ -18,8 +18,6 @@ import {
 } from '@heroicons/react/24/outline';
 import { FlowIcon } from '@/components/icon-map';
 import { AccountAvatar as SharedAccountAvatar } from '@/components/account-avatar';
-import { getWorkflowEditUrl } from '@/lib/esp/provider-links';
-import { resolveLocationId, resolveProviderId } from '@/lib/esp/provider-resolution';
 
 // ── Types ──
 
@@ -56,6 +54,8 @@ interface FlowListProps {
   loading?: boolean;
   accountNames?: Record<string, string>;
   accountMeta?: Record<string, AccountMeta>;
+  // ESP provider deep-links are gone — accepted as an unused prop only
+  // for callers that haven't been swept yet. Phase D.9 will drop it.
   accountProviders?: Record<string, string>;
   onToggleLoomiStatus?: (workflow: Workflow, nextStatus: 'active' | 'inactive') => void;
   updatingStatusFlowIds?: string[];
@@ -297,7 +297,6 @@ function WorkflowRow({
   item,
   accountNames,
   accountMeta,
-  accountProviders,
   showAccount,
   isMenuOpen,
   isStatusUpdating,
@@ -307,7 +306,6 @@ function WorkflowRow({
   item: Workflow;
   accountNames?: Record<string, string>;
   accountMeta?: Record<string, AccountMeta>;
-  accountProviders?: Record<string, string>;
   showAccount: boolean;
   isMenuOpen: boolean;
   isStatusUpdating: boolean;
@@ -322,13 +320,6 @@ function WorkflowRow({
       '—'
     : null;
   const meta = accountKey ? accountMeta?.[accountKey] : undefined;
-  const provider = resolveProviderId(item, accountProviders, '');
-  const locationId = resolveLocationId(item, accountMeta);
-  const providerUrl = getWorkflowEditUrl({
-    provider,
-    locationId,
-    workflowId: item.id,
-  });
   const normalized = normalizeStatus(item.status);
   const StatusIcon = STATUS_ICON[normalized];
   const isLoomiFlow = isLoomiWorkflow(item);
@@ -415,27 +406,7 @@ function WorkflowRow({
                 </button>
               )}
 
-              {!isLoomiFlow && (providerUrl ? (
-                <a
-                  href={providerUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                >
-                  Edit
-                  <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
-                </a>
-              ) : (
-                <button
-                  type="button"
-                  disabled
-                  className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--muted-foreground)] opacity-50 cursor-not-allowed"
-                >
-                  Edit
-                </button>
-              ))}
-
-              {!providerUrl && !canToggleStatus && (
+              {!canToggleStatus && (
                 <button
                   type="button"
                   disabled
@@ -515,11 +486,14 @@ export function FlowList({
   loading,
   accountNames,
   accountMeta,
-  accountProviders,
+  // accountProviders accepted for backwards-compat with old call sites
+  // until Phase D.9 drops it from the surface entirely.
+  accountProviders: _accountProviders,
   onToggleLoomiStatus,
   updatingStatusFlowIds = [],
   emptyState,
 }: FlowListProps) {
+  void _accountProviders;
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -735,7 +709,6 @@ export function FlowList({
                             item={item}
                             accountNames={accountNames}
                             accountMeta={accountMeta}
-                            accountProviders={accountProviders}
                             showAccount={false}
                             isMenuOpen={openMenuId === getWorkflowKey(item)}
                             isStatusUpdating={updatingStatusFlowIds.includes(item.id)}
@@ -777,7 +750,6 @@ export function FlowList({
                   item={item}
                   accountNames={accountNames}
                   accountMeta={accountMeta}
-                  accountProviders={accountProviders}
                   showAccount={true}
                   isMenuOpen={openMenuId === getWorkflowKey(item)}
                   isStatusUpdating={updatingStatusFlowIds.includes(item.id)}

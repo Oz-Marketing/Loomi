@@ -3,11 +3,11 @@
 // Engagement metrics surface — sits on the Campaigns Analytics page
 // below the existing campaign-status overview.
 //
-// Data comes from /api/campaigns/loomi/engagement which aggregates the
+// Data comes from /api/campaigns/loomi/engagement which aggregates
 // EmailEvent rows (delivered, open, click, bounce, etc.) populated by
-// the SendGrid Event webhook. For sub-accounts with no SendGrid wiring
-// the section renders an empty state rather than disappearing — gives
-// users an obvious cue to configure SendGrid in Sending settings.
+// the email-event webhook. For sub-accounts with no real sends yet
+// the section renders a demo/preview view with synthetic data so users
+// can see what the report will look like once campaigns ship.
 
 import { useEffect, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
@@ -18,7 +18,6 @@ import {
   NoSymbolIcon,
   PaperAirplaneIcon,
   CheckCircleIcon,
-  ChartBarIcon,
   LinkIcon,
 } from '@heroicons/react/24/outline';
 import { useTheme } from '@/contexts/theme-context';
@@ -188,25 +187,30 @@ export function EngagementSection({
     );
   }
 
-  if (!data || data.totals.sent === 0) {
-    return (
-      <div className="glass-section-card rounded-2xl p-8 border border-[var(--border)] text-center">
-        <ChartBarIcon className="w-10 h-10 mx-auto text-[var(--muted-foreground)] opacity-40 mb-3" />
-        <p className="text-sm font-semibold text-[var(--foreground)]">
-          No engagement data yet
-        </p>
-        <p className="text-xs text-[var(--muted-foreground)] mt-1 max-w-md mx-auto">
-          Once a Loomi-native campaign sends through SendGrid, opens, clicks, bounces,
-          and unsubscribes will show up here.
-        </p>
-      </div>
-    );
-  }
-
-  const { totals, series, topUrls, campaigns } = data;
+  // When there's no real data yet, fall back to a demo view so users
+  // can see what the report will look like once they ship campaigns.
+  // The synthetic data is flagged with a banner up top so there's no
+  // ambiguity about what's real.
+  const isDemo = !data || data.totals.sent === 0;
+  const { totals, series, topUrls, campaigns } = isDemo ? buildDemoEngagement(bounds) : data;
 
   return (
     <div className="space-y-5">
+      {isDemo && (
+        <div className="rounded-2xl px-4 py-3 border border-dashed border-[var(--primary)]/40 bg-[var(--primary)]/[0.04] flex items-start gap-3">
+          <PaperAirplaneIcon className="w-4 h-4 text-[var(--primary)] flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-semibold text-[var(--foreground)]">
+              Demo data — start sending emails to get analytics
+            </p>
+            <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
+              The numbers below are illustrative. Once your campaigns start sending, opens,
+              clicks, bounces, and unsubscribes will populate this report automatically.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ── KPI cards ── */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <KpiCard
@@ -453,4 +457,155 @@ function EngagementChart({ series, isDark }: { series: TimeSeriesPoint[]; isDark
   }), [isDark]);
 
   return <ReactApexChart options={options} series={seriesData} type="area" height={260} />;
+}
+
+// ── Demo data ──
+//
+// Synthetic engagement payload rendered when the real EmailEvent
+// aggregate is empty. Deterministic-ish so the preview doesn't flicker
+// numbers on each render; ranges chosen to look like a healthy
+// dealership send program (open ~22%, click ~3%, bounce <1%).
+
+interface DemoBounds {
+  start: Date | null;
+  end: Date | null;
+}
+
+const DEMO_CAMPAIGN_NAMES = [
+  'October Service Reminder',
+  'New Inventory This Week',
+  'Lease-End Outreach',
+  'Black Friday Preview',
+  'Year-End Trade-In Offer',
+  'Winterization Service Promo',
+  'Welcome Series · Day 1',
+  'VIP Customer Appreciation',
+];
+
+const DEMO_LINKS: Array<{ url: string; weight: number }> = [
+  { url: 'https://example.com/inventory/new', weight: 38 },
+  { url: 'https://example.com/service/schedule', weight: 27 },
+  { url: 'https://example.com/promotions/october', weight: 19 },
+  { url: 'https://example.com/trade-in', weight: 11 },
+  { url: 'https://example.com/contact', weight: 5 },
+];
+
+function buildDemoEngagement(bounds: DemoBounds): EngagementResponse {
+  const end = bounds.end ?? new Date();
+  const start = bounds.start ?? new Date(end.getTime() - 1000 * 60 * 60 * 24 * 180);
+  const dayMs = 1000 * 60 * 60 * 24;
+  const totalDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / dayMs));
+
+  // Cap the time series at a reasonable resolution so the chart stays
+  // readable even on a 6-month window.
+  const seriesDays = Math.min(totalDays, 90);
+  const stepMs = (end.getTime() - start.getTime()) / seriesDays;
+
+  const series: TimeSeriesPoint[] = [];
+  let cumulative = { sent: 0, delivered: 0, opens: 0, totalOpens: 0, clicks: 0, totalClicks: 0, bounces: 0 };
+
+  for (let i = 0; i < seriesDays; i += 1) {
+    const date = new Date(start.getTime() + stepMs * i);
+    // Light sinusoidal cadence so the chart has shape but doesn't look fake.
+    const wave = 0.55 + 0.45 * Math.sin((i / seriesDays) * Math.PI * 4);
+    const burst = i % 14 === 3 ? 2.4 : 1;
+    const dailySent = Math.round(180 * wave * burst);
+    const delivered = Math.round(dailySent * 0.985);
+    const opens = Math.round(delivered * (0.20 + 0.08 * Math.sin(i / 6)));
+    const totalOpens = Math.round(opens * 1.45);
+    const clicks = Math.round(delivered * (0.028 + 0.012 * Math.sin(i / 9)));
+    const totalClicks = Math.round(clicks * 1.6);
+    const bounces = Math.max(0, Math.round(dailySent * 0.008));
+
+    series.push({
+      date: date.toISOString(),
+      delivered,
+      opens,
+      clicks,
+      bounces,
+    });
+
+    cumulative = {
+      sent: cumulative.sent + dailySent,
+      delivered: cumulative.delivered + delivered,
+      opens: cumulative.opens + opens,
+      totalOpens: cumulative.totalOpens + totalOpens,
+      clicks: cumulative.clicks + clicks,
+      totalClicks: cumulative.totalClicks + totalClicks,
+      bounces: cumulative.bounces + bounces,
+    };
+  }
+
+  const sent = cumulative.sent;
+  const delivered = cumulative.delivered;
+  const uniqueOpens = cumulative.opens;
+  const uniqueClicks = cumulative.clicks;
+  const bounces = cumulative.bounces;
+  const spamReports = Math.round(sent * 0.0003);
+  const unsubscribes = Math.round(delivered * 0.0042);
+  const dropped = Math.round(sent * 0.001);
+
+  const totals: EngagementTotals = {
+    sent,
+    delivered,
+    uniqueOpens,
+    totalOpens: cumulative.totalOpens,
+    uniqueClicks,
+    totalClicks: cumulative.totalClicks,
+    bounces,
+    dropped,
+    spamReports,
+    unsubscribes,
+    skipped: 0,
+    failed: 0,
+    deliveryRate: sent > 0 ? delivered / sent : 0,
+    openRate: delivered > 0 ? uniqueOpens / delivered : 0,
+    clickRate: delivered > 0 ? uniqueClicks / delivered : 0,
+    clickToOpenRate: uniqueOpens > 0 ? uniqueClicks / uniqueOpens : 0,
+    bounceRate: sent > 0 ? bounces / sent : 0,
+    unsubscribeRate: delivered > 0 ? unsubscribes / delivered : 0,
+  };
+
+  // Spread the campaign sends across the window so the table shows a
+  // recent-first list that lines up with the time series shape.
+  const campaigns: CampaignRow[] = DEMO_CAMPAIGN_NAMES.map((name, idx) => {
+    const sentAt = new Date(start.getTime() + ((idx + 1) / (DEMO_CAMPAIGN_NAMES.length + 1)) * (end.getTime() - start.getTime()));
+    const campaignSent = Math.round(sent / DEMO_CAMPAIGN_NAMES.length * (0.7 + 0.6 * Math.random()));
+    const campaignDelivered = Math.round(campaignSent * 0.985);
+    const campaignOpens = Math.round(campaignDelivered * (0.18 + 0.10 * Math.random()));
+    const campaignClicks = Math.round(campaignDelivered * (0.022 + 0.018 * Math.random()));
+    const campaignBounces = Math.max(0, Math.round(campaignSent * (0.006 + 0.006 * Math.random())));
+
+    return {
+      campaignId: `demo-${idx + 1}`,
+      campaignName: name,
+      sentAt: sentAt.toISOString(),
+      sent: campaignSent,
+      delivered: campaignDelivered,
+      uniqueOpens: campaignOpens,
+      totalOpens: Math.round(campaignOpens * 1.4),
+      uniqueClicks: campaignClicks,
+      totalClicks: Math.round(campaignClicks * 1.5),
+      bounces: campaignBounces,
+      dropped: 0,
+      spamReports: 0,
+      unsubscribes: Math.max(0, Math.round(campaignDelivered * 0.004)),
+      skipped: 0,
+      failed: 0,
+      deliveryRate: campaignSent > 0 ? campaignDelivered / campaignSent : 0,
+      openRate: campaignDelivered > 0 ? campaignOpens / campaignDelivered : 0,
+      clickRate: campaignDelivered > 0 ? campaignClicks / campaignDelivered : 0,
+      clickToOpenRate: campaignOpens > 0 ? campaignClicks / campaignOpens : 0,
+      bounceRate: campaignSent > 0 ? campaignBounces / campaignSent : 0,
+      unsubscribeRate: 0,
+    };
+  }).reverse(); // newest first
+
+  const totalLinkWeight = DEMO_LINKS.reduce((acc, l) => acc + l.weight, 0);
+  const topUrls: TopUrl[] = DEMO_LINKS.map((l) => ({
+    url: l.url,
+    clicks: Math.round((l.weight / totalLinkWeight) * uniqueClicks),
+  }));
+
+  return { totals, series, topUrls, campaigns };
 }

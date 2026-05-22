@@ -2,8 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import * as accountService from '@/lib/services/accounts';
-import { resolveAdapterAndCredentials, isResolveError } from '@/lib/esp/route-helpers';
-import type { MediaUploadInput } from '@/lib/esp/types';
 import fs from 'fs';
 import path from 'path';
 
@@ -11,59 +9,13 @@ const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml', 
 const MAX_SIZE = 5 * 1024 * 1024; // 5MB
 
 /**
- * Attempt to upload a logo to the account's ESP media library.
- * Returns the ESP-hosted URL on success, or null if ESP is unavailable/fails.
- */
-async function tryEspUpload(
-  accountKey: string,
-  buffer: Buffer,
-  fileName: string,
-  mimeType: string,
-): Promise<{ url: string; provider: string } | null> {
-  try {
-    const result = await resolveAdapterAndCredentials(accountKey, {
-      requireCapability: 'media',
-    });
-
-    if (isResolveError(result)) {
-      console.warn(`[logos] ESP resolve failed for ${accountKey}: ${result.error} (${result.status})`);
-      return null;
-    }
-
-    const { adapter, credentials } = result;
-    if (!adapter.media) {
-      console.warn(`[logos] ESP adapter for ${accountKey} (${adapter.provider}) has no media support`);
-      return null;
-    }
-
-    const input: MediaUploadInput = {
-      file: buffer,
-      name: fileName,
-      mimeType,
-    };
-
-    const uploaded = await adapter.media.uploadMedia(
-      credentials.token,
-      credentials.locationId,
-      input,
-    );
-
-    return { url: uploaded.url, provider: adapter.provider };
-  } catch (err) {
-    console.error(`[logos] ESP upload failed for ${accountKey}:`, err);
-    return null;
-  }
-}
-
-/**
  * POST /api/accounts/[key]/logos
  *
- * Upload a logo file for an account.
- * Primary: uploads to the account's connected ESP media library (GHL, Klaviyo, etc.)
- * Fallback: saves locally to /public/logos/[key]/[variant].[ext] when no ESP is available.
+ * Upload a logo file for an account. Logos are stored locally under
+ * data/logos/[key]/[variant].[ext] and served via the /api/logos route.
  *
  * Body: multipart/form-data with `file` (image) and `variant` (light|dark|white|black|storefront)
- * Returns: { url: string, source: 'esp' | 'local' }
+ * Returns: { url: string, source: 'local' }
  */
 export async function POST(
   req: NextRequest,
@@ -111,40 +63,26 @@ export async function POST(
     const ext = extMap[file.type] || 'png';
     const buffer = Buffer.from(await file.arrayBuffer());
 
-    // ── Try ESP media library first ──
-    const espFileName = `loomi-${key}-logo-${variant}.${ext}`;
-    const espResult = await tryEspUpload(key, buffer, espFileName, file.type);
-
-    let url: string;
-    let source: string;
-
-    if (espResult) {
-      url = espResult.url;
-      source = 'esp';
-      console.log(`[logos] ESP upload succeeded for ${key}/${variant} → ${url}`);
-    } else {
-      // ── Fallback: save to data/logos (served via API route) ──
-      const logoDir = path.join(process.cwd(), 'data', 'logos', key);
-      if (!fs.existsSync(logoDir)) {
-        fs.mkdirSync(logoDir, { recursive: true });
-      }
-
-      // Remove old files for this variant (any extension)
-      const existingFiles = fs.readdirSync(logoDir);
-      for (const f of existingFiles) {
-        if (f.startsWith(`${variant}.`)) {
-          fs.unlinkSync(path.join(logoDir, f));
-        }
-      }
-
-      const fileName = `${variant}.${ext}`;
-      const filePath = path.join(logoDir, fileName);
-      fs.writeFileSync(filePath, buffer);
-      // Serve through API route (Next.js doesn't serve files added to /public after build)
-      url = `/api/logos/${key}/${fileName}`;
-      source = 'local';
-      console.log(`[logos] Local fallback for ${key}/${variant} → ${filePath}`);
+    // ── Save under data/logos (served via API route) ──
+    const logoDir = path.join(process.cwd(), 'data', 'logos', key);
+    if (!fs.existsSync(logoDir)) {
+      fs.mkdirSync(logoDir, { recursive: true });
     }
+
+    // Remove old files for this variant (any extension)
+    const existingFiles = fs.readdirSync(logoDir);
+    for (const f of existingFiles) {
+      if (f.startsWith(`${variant}.`)) {
+        fs.unlinkSync(path.join(logoDir, f));
+      }
+    }
+
+    const fileName = `${variant}.${ext}`;
+    const filePath = path.join(logoDir, fileName);
+    fs.writeFileSync(filePath, buffer);
+    // Serve through API route (Next.js doesn't serve files added to /public after build)
+    const url = `/api/logos/${key}/${fileName}`;
+    console.log(`[logos] Saved ${key}/${variant} → ${filePath}`);
 
     // ── Update account data via Prisma ──
     if (variant === 'storefront') {
@@ -179,7 +117,7 @@ export async function POST(
       });
     }
 
-    return NextResponse.json({ url, source });
+    return NextResponse.json({ url, source: 'local' });
   } catch (err) {
     console.error('Logo upload error:', err);
     return NextResponse.json(

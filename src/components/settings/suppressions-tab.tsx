@@ -53,7 +53,7 @@ const REASON_META: Record<
   bounce: {
     label: 'Bounce',
     badgeClass: 'bg-amber-500/10 text-amber-400',
-    description: 'Hard bounce reported by SendGrid.',
+    description: 'Hard bounce from the recipient mail server.',
   },
   spamreport: {
     label: 'Spam report',
@@ -217,8 +217,7 @@ export function SuppressionsTab({ accountKey }: SuppressionsTabProps) {
             <h3 className="text-base font-semibold text-[var(--foreground)]">Suppression List</h3>
             <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
               Emails on this list are dropped from every campaign batch before send.
-              Bounces, spam reports, and unsubscribes auto-populate here from the SendGrid
-              Event webhook.
+              Bounces, spam reports, and unsubscribes auto-populate here.
             </p>
           </div>
           <PrimaryButton onClick={() => setShowAdd((v) => !v)}>
@@ -346,7 +345,7 @@ export function SuppressionsTab({ accountKey }: SuppressionsTabProps) {
             <p className="text-xs text-[var(--muted-foreground)] mt-1 max-w-md mx-auto">
               {debouncedSearch || reasonFilter
                 ? 'Try a different search or filter.'
-                : "Bounces and spam reports from SendGrid will land here automatically. You can also add an email manually using the button above."}
+                : "Bounces and spam reports will land here automatically once your campaigns start sending. You can also add an email manually using the button above."}
             </p>
           </div>
         ) : (

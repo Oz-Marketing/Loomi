@@ -11,13 +11,7 @@
     "db:push": "npx prisma db push",
     "db:seed": "npx tsx prisma/seed.ts",
     "db:migrate:sqlite-to-postgres": "npx tsx scripts/migrate-sqlite-to-postgres.ts",
-    "esp:audit": "node --import tsx scripts/esp-audit.ts",
-    "esp:webhook-fixtures": "node --import tsx scripts/esp-webhook-fixtures.ts",
-    "esp:oauth-state-fixtures": "node --import tsx scripts/esp-oauth-state-fixtures.ts",
-    "esp:reencrypt-credentials": "node --import tsx scripts/esp-reencrypt-credentials.ts",
-    "esp:secret-health": "node --import tsx scripts/esp-secret-health.ts",
-    "esp:migrate-env-secrets": "node --import tsx scripts/esp-migrate-env-secrets.ts",
-    "esp:verify": "npx tsc --noEmit && npx tsc --noEmit --noUnusedLocals --noUnusedParameters && npm run esp:oauth-state-fixtures && npm run esp:webhook-fixtures && npm run esp:audit -- --include-internal"
+    "verify": "npx tsc --noEmit && npx tsc --noEmit --noUnusedLocals --noUnusedParameters"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"
@@ -44,6 +38,7 @@
     "next": "^16.1.6",
     "next-auth": "^4.24.13",
     "nodemailer": "^7.0.13",
+    "papaparse": "^5.5.3",
     "pg-boss": "^12.18.2",
     "postcss": "^8.5.6",
     "puppeteer": "^24.37.3",
@@ -62,6 +57,7 @@
     "@tailwindcss/postcss": "^4.1.18",
     "@types/bcryptjs": "^2.4.6",
     "@types/nodemailer": "^7.0.9",
+    "@types/papaparse": "^5.5.2",
     "@types/pg": "^8.16.0",
     "@types/react-dom": "^19.2.3",
     "@types/sharp": "^0.31.1",

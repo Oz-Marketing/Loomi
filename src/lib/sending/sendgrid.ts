@@ -10,7 +10,7 @@
 // read them; everything else takes a plaintext key.
 
 import { prisma } from '@/lib/prisma';
-import { decryptToken, encryptToken } from '@/lib/esp/encryption';
+import { decryptToken, encryptToken } from '@/lib/crypto/encryption';
 
 const SENDGRID_BASE = 'https://api.sendgrid.com/v3';
 const REQUEST_TIMEOUT_MS = 15_000;
@@ -71,7 +71,7 @@ export class SendGridError extends Error {
  * Resolve a sub-account's SendGrid config from the Account row. Returns
  * null when the key isn't set — callers fall back to nodemailer SMTP.
  *
- * The key is encrypted at rest (AES-256-GCM via @/lib/esp/encryption);
+ * The key is encrypted at rest (AES-256-GCM via @/lib/crypto/encryption);
  * we decrypt on the worker as needed. Encryption fails throw — we'd
  * rather refuse to send than fall back silently to SMTP with a clearly
  * misconfigured account, since the user expects SendGrid behaviour.

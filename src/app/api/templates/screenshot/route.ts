@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import * as templateService from '@/lib/services/templates';
-import { renderCampaignScreenshotFromHtml } from '@/lib/esp/screenshot-render';
+import { renderCampaignScreenshotFromHtml } from '@/lib/email/screenshot';
 import { isV2Template, parseV2Template } from '@/lib/email/types';
 import { renderEmailTemplate } from '@/lib/email/render';
 

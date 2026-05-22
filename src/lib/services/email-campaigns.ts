@@ -1,13 +1,44 @@
 import nodemailer from 'nodemailer';
 import { prisma } from '@/lib/prisma';
-import { withConcurrencyLimit } from '@/lib/esp/utils';
 import {
   isLikelyDeliverableEmail,
   normalizeEmailAddress,
 } from '@/lib/contact-hygiene';
-import { decryptToken } from '@/lib/esp/encryption';
+import { decryptToken } from '@/lib/crypto/encryption';
 import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
 import { buildUnsubscribeFooter } from '@/lib/sending/unsubscribe-footer';
+
+/**
+ * Run async tasks with a concurrency limit. Inlined here (was previously
+ * in a shared utils module) so the email worker has no cross-module deps.
+ */
+async function withConcurrencyLimit<T>(
+  tasks: (() => Promise<T>)[],
+  limit: number,
+): Promise<PromiseSettledResult<T>[]> {
+  const results: PromiseSettledResult<T>[] = new Array(tasks.length);
+  let nextIndex = 0;
+
+  async function runNext(): Promise<void> {
+    while (nextIndex < tasks.length) {
+      const index = nextIndex++;
+      try {
+        const value = await tasks[index]();
+        results[index] = { status: 'fulfilled', value };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(limit, tasks.length) },
+    () => runNext(),
+  );
+  await Promise.all(workers);
+
+  return results;
+}
 
 type EmailCampaignStatus =
   | 'draft'
@@ -64,6 +95,7 @@ export interface EmailCampaignSummary {
   accountKeys: string[];
   sourceAudienceId: string;
   sourceFilter: string;
+  sourceListId: string;
   htmlContent: string;
   textContent: string;
   metadata: string;
@@ -229,6 +261,7 @@ function toSummary(row: {
   accountKeys: string;
   sourceAudienceId: string | null;
   sourceFilter: string | null;
+  sourceListId: string | null;
   htmlContent: string;
   textContent: string | null;
   metadata: string | null;
@@ -252,6 +285,7 @@ function toSummary(row: {
     accountKeys: parseAccountKeys(row.accountKeys),
     sourceAudienceId: row.sourceAudienceId || '',
     sourceFilter: row.sourceFilter || '',
+    sourceListId: row.sourceListId || '',
     htmlContent: row.htmlContent || '',
     textContent: row.textContent || '',
     metadata: row.metadata || '',
@@ -277,6 +311,7 @@ const emailCampaignSummarySelect = {
   accountKeys: true,
   sourceAudienceId: true,
   sourceFilter: true,
+  sourceListId: true,
   htmlContent: true,
   textContent: true,
   metadata: true,
@@ -541,6 +576,7 @@ export async function updateEmailCampaignDraft(
     accountKeys?: string[];
     sourceAudienceId?: string | null;
     sourceFilter?: string | null;
+    sourceListId?: string | null;
     sourceType?: string;
     scheduledFor?: Date | null;
     status?: EmailCampaignStatus;
@@ -556,6 +592,7 @@ export async function updateEmailCampaignDraft(
   if (patch.accountKeys !== undefined) data.accountKeys = JSON.stringify(patch.accountKeys);
   if (patch.sourceAudienceId !== undefined) data.sourceAudienceId = patch.sourceAudienceId;
   if (patch.sourceFilter !== undefined) data.sourceFilter = patch.sourceFilter;
+  if (patch.sourceListId !== undefined) data.sourceListId = patch.sourceListId;
   if (patch.sourceType !== undefined) data.sourceType = patch.sourceType;
   if (patch.scheduledFor !== undefined) data.scheduledFor = patch.scheduledFor;
   if (patch.status !== undefined) data.status = patch.status;

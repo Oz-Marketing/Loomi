@@ -10,14 +10,10 @@ import {
   CheckCircleIcon,
   ClockIcon,
   UserGroupIcon,
-  PaperAirplaneIcon,
 } from '@heroicons/react/24/outline';
-import { FlowIcon } from '@/components/icon-map';
 import { ContactAnalytics } from '@/components/contacts/contact-analytics';
 import { ContactListCompact } from '@/components/contacts/contact-list-compact';
 import { EmailAnalytics } from '@/components/analytics/email-analytics';
-import { CampaignAnalytics } from '@/components/campaigns/campaign-analytics';
-import { FlowAnalytics } from '@/components/flows/flow-analytics';
 import { DashboardToolbar, type CustomDateRange } from '@/components/filters/dashboard-toolbar';
 import {
   type DateRangeKey,
@@ -77,9 +73,6 @@ export function AccountDashboard() {
   const [contactCount, setContactCount] = useState<number | null>(null);
   const [allContacts, setAllContacts] = useState<AnalyticsContact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(true);
-  const [espCampaigns, setEspCampaigns] = useState<{ id: string; name: string; status: string }[]>([]);
-  const [espWorkflows, setEspWorkflows] = useState<{ id: string; name: string; status: string }[]>([]);
-  const [campaignsLoading, setCampaignsLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [dateRange, setDateRange] = useState<DateRangeKey>(DEFAULT_DATE_RANGE);
   const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
@@ -97,7 +90,7 @@ export function AccountDashboard() {
 
     // Fetch all contacts for analytics
     setContactsLoading(true);
-    fetch(`/api/esp/contacts?accountKey=${accountKey}&all=true`)
+    fetch(`/api/contacts?accountKey=${accountKey}&all=true`)
       .then(r => r.json())
       .then(data => {
         if (data.contacts) {
@@ -107,17 +100,6 @@ export function AccountDashboard() {
         setContactsLoading(false);
       })
       .catch(() => setContactsLoading(false));
-
-    // Fetch ESP campaigns + workflows for this account
-    setCampaignsLoading(true);
-    Promise.all([
-      fetch(`/api/esp/campaigns?accountKey=${accountKey}`).then(r => r.json()),
-      fetch(`/api/esp/workflows?accountKey=${accountKey}`).then(r => r.json()),
-    ]).then(([campaignData, workflowData]) => {
-      if (campaignData.campaigns) setEspCampaigns(campaignData.campaigns);
-      if (workflowData.workflows) setEspWorkflows(workflowData.workflows);
-      setCampaignsLoading(false);
-    }).catch(() => setCampaignsLoading(false));
   }, [accountKey]);
 
   // Filter data by selected date range for analytics sections
@@ -266,35 +248,6 @@ export function AccountDashboard() {
             </Link>
           </div>
           <EmailAnalytics emails={filteredEmails} loading={!loaded} dateRange={dateRange} customRange={customRange} />
-        </div>
-      )}
-
-      {/* ESP Campaign Analytics */}
-      {(espCampaigns.length > 0 || campaignsLoading) && (
-        <div id="campaigns" className="mb-8">
-          <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider flex items-center gap-1.5 mb-4">
-            <PaperAirplaneIcon className={`w-3.5 h-3.5 ${iconColorClass('campaigns')}`} />
-            ESP Campaigns
-          </h3>
-          <CampaignAnalytics
-            campaigns={espCampaigns}
-            workflows={[]}
-            loading={campaignsLoading}
-          />
-        </div>
-      )}
-
-      {/* Flow Analytics (ESP Workflows) */}
-      {(espWorkflows.length > 0 || campaignsLoading) && (
-        <div id="flows" className="mb-8">
-          <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider flex items-center gap-1.5 mb-4">
-            <FlowIcon className={`w-3.5 h-3.5 ${iconColorClass('flows')}`} />
-            Flows
-          </h3>
-          <FlowAnalytics
-            workflows={espWorkflows}
-            loading={campaignsLoading}
-          />
         </div>
       )}
 

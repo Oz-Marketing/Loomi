@@ -11,14 +11,10 @@ import {
   ChartBarIcon,
   BuildingStorefrontIcon,
   SignalIcon,
-  PaperAirplaneIcon,
 } from '@heroicons/react/24/outline';
-import { FlowIcon } from '@/components/icon-map';
 import { EmailAnalytics } from '@/components/analytics/email-analytics';
 import { AccountHealthGrid } from '@/components/analytics/account-health-grid';
 import { ContactAnalytics } from '@/components/contacts/contact-analytics';
-import { CampaignAnalytics } from '@/components/campaigns/campaign-analytics';
-import { FlowAnalytics } from '@/components/flows/flow-analytics';
 import { DashboardToolbar, type CustomDateRange, type AccountOption } from '@/components/filters/dashboard-toolbar';
 import {
   type DateRangeKey,
@@ -102,9 +98,6 @@ export function AdminDashboard() {
   const [crmLoading, setCrmLoading] = useState(true);
   const [allContacts, setAllContacts] = useState<AnalyticsContact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(true);
-  const [espCampaigns, setEspCampaigns] = useState<{ id: string; name: string; status: string; accountKey?: string; dealer?: string }[]>([]);
-  const [espWorkflows, setEspWorkflows] = useState<{ id: string; name: string; status: string; accountKey?: string; dealer?: string }[]>([]);
-  const [campaignsLoading, setCampaignsLoading] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [dateRange, setDateRange] = useState<DateRangeKey>(DEFAULT_DATE_RANGE);
   const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
@@ -126,7 +119,7 @@ export function AdminDashboard() {
     }).catch(() => setLoaded(true));
 
     // CRM stats (contact counts per account)
-    fetch('/api/esp/contacts/stats')
+    fetch('/api/contacts/stats')
       .then(r => r.json())
       .then(data => {
         if (data.stats) {
@@ -152,7 +145,7 @@ export function AdminDashboard() {
       .catch(() => setCrmLoading(false));
 
     // Aggregate contacts for cross-account analytics
-    fetch('/api/esp/contacts/aggregate')
+    fetch('/api/contacts/aggregate')
       .then(r => r.json())
       .then(data => {
         if (data.contacts) {
@@ -161,16 +154,6 @@ export function AdminDashboard() {
         setContactsLoading(false);
       })
       .catch(() => setContactsLoading(false));
-
-    // ESP campaigns + workflows
-    Promise.all([
-      fetch('/api/esp/campaigns/aggregate').then(r => r.json()),
-      fetch('/api/esp/workflows/aggregate').then(r => r.json()),
-    ]).then(([campaignData, workflowData]) => {
-      if (campaignData.campaigns) setEspCampaigns(campaignData.campaigns);
-      if (workflowData.workflows) setEspWorkflows(workflowData.workflows);
-      setCampaignsLoading(false);
-    }).catch(() => setCampaignsLoading(false));
   }, []);
 
   // Filter data — account filter first, then date range
@@ -377,45 +360,6 @@ export function AdminDashboard() {
           accountNames={accountNames}
           dateRange={dateRange}
           customRange={customRange}
-        />
-      </div>
-
-      {/* Campaign Analytics (ESP Email Campaigns) */}
-      <div id="campaigns" className="mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider flex items-center gap-1.5">
-            <PaperAirplaneIcon className={`w-3.5 h-3.5 ${iconColorClass('campaigns')}`} />
-            ESP Campaigns
-          </h3>
-          <Link href="/messaging/campaigns" className="text-[10px] text-[var(--primary)] hover:underline">
-            View campaigns
-          </Link>
-        </div>
-        <CampaignAnalytics
-          campaigns={espCampaigns}
-          workflows={[]}
-          loading={campaignsLoading}
-          showAccountBreakdown={!hasAccountSelection}
-          accountNames={accountNames}
-        />
-      </div>
-
-      {/* Flow Analytics (ESP Workflows) */}
-      <div id="flows" className="mb-8">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider flex items-center gap-1.5">
-            <FlowIcon className={`w-3.5 h-3.5 ${iconColorClass('flows')}`} />
-            Flows
-          </h3>
-          <Link href="/flows" className="text-[10px] text-[var(--primary)] hover:underline">
-            View all flows
-          </Link>
-        </div>
-        <FlowAnalytics
-          workflows={espWorkflows}
-          loading={campaignsLoading}
-          showAccountBreakdown={!hasAccountSelection}
-          accountNames={accountNames}
         />
       </div>
 

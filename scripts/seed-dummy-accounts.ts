@@ -118,7 +118,6 @@ async function main() {
         const sequence = Number.parseInt(key.replace('demoAccount', ''), 10);
         const location = CITY_STATE_LIBRARY[index % CITY_STATE_LIBRARY.length];
         const category = CATEGORY_LIBRARY[index % CATEGORY_LIBRARY.length];
-        const isKlaviyoAccount = category === 'Ecommerce';
         const dealer = `Demo Account ${String(sequence).padStart(3, '0')}`;
         const websiteSlug = key.toLowerCase();
 
@@ -128,7 +127,6 @@ async function main() {
           slug,
           dealer,
           category,
-          espProvider: isKlaviyoAccount ? 'klaviyo' : 'ghl',
           email: `hello+${websiteSlug}@example.com`,
           phone: `(555) 01${String((sequence % 1000)).padStart(2, '0')}-${String((sequence * 7) % 10000).padStart(4, '0')}`,
           city: location.city,

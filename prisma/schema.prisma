@@ -106,7 +106,6 @@ model Account {
   // null. Settable per-account so stores with non-standard markups don't
   // need code changes.
   markup       Float?
-  espProvider  String // active provider id (must match a registered adapter)
   // Sending identity for Loomi-native email sends. When null, falls back to
   // SMTP_FROM / global defaults. Configure per-subaccount once DKIM/SPF for
   // sendingDomain is set up in the client's DNS.
@@ -115,7 +114,7 @@ model Account {
   sendingDomain String?
   replyToEmail  String?
   // Per-sub-account SendGrid API key (AES-256-GCM encrypted at rest via
-  // src/lib/esp/encryption.ts). When present, the worker sends through
+  // src/lib/crypto/encryption.ts). When present, the worker sends through
   // SendGrid instead of falling back to SMTP. sendgridFromDomain stores the
   // verified sender domain so we can warn at send time if senderEmail isn't
   // authenticated.
@@ -126,9 +125,7 @@ model Account {
   // worker prefers messagingServiceSid (Twilio's recommendation for
   // scaled sending — handles A2P 10DLC registration + sticky sender +
   // automatic phone-number failover) and falls back to the single
-  // phoneNumber when no service is configured. When neither this nor a
-  // messaging service is set the SMS worker falls back to the legacy
-  // GHL Conversations API path.
+  // phoneNumber when no service is configured.
   twilioAccountSid           String?
   twilioAuthToken            String?
   twilioPhoneNumber          String?
@@ -139,13 +136,10 @@ model Account {
   updatedAt    DateTime @updatedAt
 
   emails                  AccountEmail[]
-  espConnections          EspConnection[]
-  espOAuthConnections     EspOAuthConnection[]
-  espAccountProviderLinks EspAccountProviderLink[]
   audiences               Audience[]
+  contacts                Contact[]
+  contactLists            ContactList[]
   loomiFlows              LoomiFlow[]
-  espTemplates            EspTemplate[]
-  espTemplateFolders      EspTemplateFolder[]
   mediaAssets             MediaAsset[]
   metaAdsPacerPlan        MetaAdsPacerPlan?
   metaAdsPacerAccountNotes MetaAdsPacerAccountNote[]
@@ -226,75 +220,6 @@ model YagRollupRunHistory {
   @@index([configSingletonKey, createdAt])
   @@index([runType, createdAt])
   @@index([triggeredByUserId, createdAt])
-}
-
-// ─────────────────────────────────────────────────────
-// ESP Connections (API-key-based providers)
-// ─────────────────────────────────────────────────────
-
-model EspConnection {
-  id          String   @id @default(cuid())
-  accountKey  String
-  account     Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
-  provider    String // provider id
-  apiKey      String // encrypted at rest (AES-256-GCM)
-  accountId   String? // provider-specific account identifier
-  accountName String?
-  metadata    String? // JSON for provider-specific extras
-  installedAt DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@unique([accountKey, provider])
-  @@index([provider])
-  @@index([accountKey])
-}
-
-model EspOAuthConnection {
-  id             String   @id @default(cuid())
-  accountKey     String
-  account        Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
-  provider       String // provider id
-  locationId     String?
-  locationName   String?
-  accessToken    String // encrypted at rest (AES-256-GCM)
-  refreshToken   String // encrypted at rest (AES-256-GCM)
-  tokenExpiresAt DateTime
-  scopes         String   @default("[]") // JSON array of granted scopes
-  installedAt    DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  @@unique([accountKey, provider])
-  @@index([provider])
-  @@index([accountKey])
-}
-
-model EspProviderOAuthCredential {
-  id             String   @id @default(cuid())
-  provider       String   @unique // provider id
-  subjectType    String? // provider-specific credential scope (e.g. "agency")
-  subjectId      String? // provider-specific subject id (e.g. companyId)
-  accessToken    String // encrypted at rest (AES-256-GCM)
-  refreshToken   String // encrypted at rest (AES-256-GCM)
-  tokenExpiresAt DateTime
-  scopes         String   @default("[]") // JSON array of granted scopes
-  installedAt    DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-}
-
-model EspAccountProviderLink {
-  id           String   @id @default(cuid())
-  accountKey   String
-  account      Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
-  provider     String // provider id
-  locationId   String?
-  locationName String?
-  metadata     String? // provider-specific mapping metadata
-  linkedAt     DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  @@unique([accountKey, provider])
-  @@index([provider])
-  @@index([accountKey])
 }
 
 // ─────────────────────────────────────────────────────
@@ -420,6 +345,114 @@ model Audience {
 
   @@unique([name, accountKey])
   @@index([accountKey])
+}
+
+// ─────────────────────────────────────────────────────
+// Contacts (Loomi-native; replaces GHL/Klaviyo contact reads).
+//
+// Schema mirrors the Contact shape the filter engine + UI already
+// expect (see src/lib/smart-list-types.ts FILTERABLE_FIELDS). Two
+// Json relief valves keep the schema stable as CSV imports surface
+// dealer-specific data: customFields for arbitrary key/value pairs,
+// dnd for {email,sms} opt-outs.
+//
+// Uniqueness is enforced via partial indexes (see migration SQL) so
+// rows missing email or phone don't collide with other email-less /
+// phone-less rows. At-least-one-of-(email,phone) is enforced at the
+// API layer rather than via CHECK constraint, to keep bulk import
+// dry-runs flexible.
+// ─────────────────────────────────────────────────────
+
+model Contact {
+  id           String   @id @default(cuid())
+  accountKey   String
+  account      Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  email        String?
+  phone        String?
+  firstName    String?
+  lastName     String?
+  fullName     String?
+
+  address1     String?
+  city         String?
+  state        String?
+  postalCode   String?
+  country      String?
+
+  source       String?
+  tags         Json     @default("[]")
+  dateAdded    DateTime?
+
+  vehicleYear     String?
+  vehicleMake     String?
+  vehicleModel    String?
+  vehicleVin      String?
+  vehicleMileage  String?
+
+  lastServiceDate  DateTime?
+  nextServiceDate  DateTime?
+  leaseEndDate     DateTime?
+  warrantyEndDate  DateTime?
+  purchaseDate     DateTime?
+
+  // Catch-all for CSV columns the canonical schema doesn't cover.
+  // Stored as a flat string-keyed JSON object; the filter UI ignores
+  // it for now but the API surfaces it on the contact detail page.
+  customFields Json?
+
+  // Minimal DND state: { email?: bool, sms?: bool }. Replaces the
+  // 7-channel GHL grid; only Email + SMS survive the cut because
+  // those are the only channels Loomi actually sends on.
+  dnd          Json?
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  listMemberships ContactListMembership[]
+
+  @@unique([accountKey, email])
+  @@unique([accountKey, phone])
+  @@index([accountKey])
+  @@index([accountKey, dateAdded])
+}
+
+// ─────────────────────────────────────────────────────
+// Contact Lists (static, manually-curated contact rosters).
+//
+// Unlike Audiences (filter-driven, dynamic), lists are an explicit
+// roster you populate by CSV upload or by picking contacts. Membership
+// is stored in an explicit join table so a contact can belong to many
+// lists and we can keep a per-membership addedAt timestamp.
+// ─────────────────────────────────────────────────────
+
+model ContactList {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  accountKey      String
+  account         Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  memberships ContactListMembership[]
+
+  @@unique([accountKey, name])
+  @@index([accountKey])
+}
+
+model ContactListMembership {
+  listId    String
+  contactId String
+  addedAt   DateTime @default(now())
+
+  list    ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  contact Contact     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([listId, contactId])
+  @@index([listId])
+  @@index([contactId])
 }
 
 // ─────────────────────────────────────────────────────
@@ -568,6 +601,11 @@ model EmailCampaign {
   createdByRole    String?
   sourceAudienceId String?
   sourceFilter     String?
+  // Static list audience. When set, the worker pulls recipients from
+  // ContactListMembership instead of evaluating sourceFilter. At most
+  // one of (sourceListId, sourceAudienceId+sourceFilter) is meaningful
+  // for a given campaign — the recipients UI enforces this exclusivity.
+  sourceListId     String?
   accountKeys      String    @default("[]") // JSON array of account keys
   totalRecipients  Int       @default(0)
   sentCount        Int       @default(0)
@@ -651,55 +689,6 @@ model EmailSuppression {
 
   @@unique([accountKey, email])
   @@index([email])
-}
-
-// ─────────────────────────────────────────────────────
-// ESP Templates (synced from GHL / Klaviyo)
-// ─────────────────────────────────────────────────────
-
-model EspTemplate {
-  id           String    @id @default(cuid())
-  accountKey   String
-  account      Account   @relation(fields: [accountKey], references: [key], onDelete: Cascade)
-  provider     String // primary provider at creation time
-  remoteId     String? // legacy — use publishedTo for multi-ESP
-  publishedTo  String? // JSON: {"ghl":"remote-id","klaviyo":"remote-id"}
-  name         String
-  subject      String?
-  previewText  String?
-  html         String    @default("")
-  source       String? // Maizzle markup for visual/D&D templates (null = HTML-only)
-  status       String    @default("draft")
-  editorType   String? // 'visual' | 'code'
-  thumbnailUrl String?
-  folderId     String?
-  folder       EspTemplateFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
-  lastSyncedAt DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-
-  @@unique([accountKey, provider, remoteId])
-  @@index([accountKey])
-  @@index([provider])
-  @@index([folderId])
-}
-
-model EspTemplateFolder {
-  id         String   @id @default(cuid())
-  accountKey String
-  account    Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
-  name       String
-  parentId   String?
-  parent     EspTemplateFolder?  @relation("FolderParent", fields: [parentId], references: [id], onDelete: SetNull)
-  children   EspTemplateFolder[] @relation("FolderParent")
-  remoteId   String? // GHL remote folder ID (set when synced from ESP)
-  templates  EspTemplate[]
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  @@index([accountKey])
-  @@index([parentId])
-  @@unique([accountKey, remoteId])
 }
 
 // ─────────────────────────────────────────────────────

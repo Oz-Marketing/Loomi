@@ -36,19 +36,14 @@ import {
   ExclamationTriangleIcon,
   EnvelopeIcon,
   QuestionMarkCircleIcon,
-  BookOpenIcon,
   PhotoIcon,
-  ChevronUpDownIcon,
-  MagnifyingGlassIcon,
   Squares2X2Icon,
   SunIcon,
   MoonIcon,
   EllipsisVerticalIcon,
 } from "@heroicons/react/24/outline";
 import { toast } from "sonner";
-import Link from "next/link";
 import { VariablePickerButton } from "@/components/variable-picker";
-import { AccountAvatar } from "@/components/account-avatar";
 import { useAccount } from "@/contexts/account-context";
 import { useSubaccountHref } from "@/hooks/use-subaccount-href";
 import { useUnsavedChanges } from "@/contexts/unsaved-changes-context";
@@ -75,7 +70,6 @@ import {
   type LintIssue,
   type LintCategory,
 } from "@/lib/email-lint";
-import { shouldFallbackToS3Media } from "@/lib/esp/media-fallback";
 import espVariablesData from "@/data/esp-variables.json";
 import { ComponentIcon, SectionsIcon } from "@/components/icon-map";
 import { CodeEditor } from "@/components/code-editor";
@@ -6488,7 +6482,6 @@ export default function TemplateEditorPage() {
   const designParam = searchParams.get("design") || "";
   const [design, setDesign] = useState(designParam);
   const templateName = "template";
-  const espTemplateId = searchParams.get("id") || "";
   const modeParam = searchParams.get("mode");
   const accountKeyParam = searchParams.get("accountKey") || "";
   const libraryTemplateSlug = searchParams.get("libraryTemplate") || "";
@@ -6518,29 +6511,13 @@ export default function TemplateEditorPage() {
   const { isAdmin, isAccount, accountKey, accountData, accounts } = useAccount();
   const subHref = useSubaccountHref();
   const { markClean, markDirty } = useUnsavedChanges();
-  // Track account key from loaded ESP template (may not be in URL)
-  const [espAccountKey, setEspAccountKey] = useState(accountKeyParam || "");
-  const effectiveAccountKey = espAccountKey || accountKeyParam || accountKey;
+  // accountKey priority: URL param > current session account context.
+  // Library templates aren't account-scoped, so this is mainly used by the
+  // media picker and account-specific branding fallbacks.
+  const effectiveAccountKey = accountKeyParam || accountKey;
   const effectiveAccountData = useMemo(
     () => (effectiveAccountKey ? accounts[effectiveAccountKey] || null : accountData),
     [effectiveAccountKey, accounts, accountData],
-  );
-  const availableAccountOptions = useMemo(
-    () =>
-      Object.entries(accounts)
-        .map(([key, data]) => ({
-          key,
-          dealer: (data?.dealer || key).trim(),
-          location: [data?.city, data?.state].filter(Boolean).join(", "),
-          storefrontImage: data?.storefrontImage || null,
-          logos: data?.logos || null,
-        }))
-        .sort((a, b) => a.dealer.localeCompare(b.dealer)),
-    [accounts],
-  );
-  const selectedAssignedAccountOption = useMemo(
-    () => availableAccountOptions.find((opt) => opt.key === effectiveAccountKey) || null,
-    [availableAccountOptions, effectiveAccountKey],
   );
   // Parse branding safely — may arrive as a JSON string from the API
   const parsedBranding = useMemo(() => {
@@ -6612,20 +6589,6 @@ export default function TemplateEditorPage() {
   const builderMode = searchParams.get("builder");
   const isHtmlOnlyBuilder = builderMode === "html";
 
-  // ESP template mode: we're editing an EspTemplate record (not a library template)
-  const [espMode, setEspMode] = useState(false);
-  const [espRecordId, setEspRecordId] = useState<string | null>(null);
-  const espRecordIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    espRecordIdRef.current = espRecordId;
-  }, [espRecordId]);
-  const [espTemplateName, setEspTemplateName] = useState("");
-  const [espSubject, setEspSubject] = useState("");
-  const [espPreviewText, setEspPreviewText] = useState("");
-  const [originalEspTemplateName, setOriginalEspTemplateName] = useState("");
-  const [originalEspSubject, setOriginalEspSubject] = useState("");
-  const [originalEspPreviewText, setOriginalEspPreviewText] = useState("");
-
   const [code, setCode] = useState("");
   const [originalCode, setOriginalCode] = useState("");
   const [parsed, setParsed] = useState<ParsedTemplate | null>(null);
@@ -6640,10 +6603,6 @@ export default function TemplateEditorPage() {
   const previewKeyRef = useRef(0);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const [accountAssignmentSaving, setAccountAssignmentSaving] = useState(false);
-  const [storeAssignmentOpen, setStoreAssignmentOpen] = useState(false);
-  const [storeAssignmentSearch, setStoreAssignmentSearch] = useState("");
-  const storeAssignmentDropdownRef = useRef<HTMLDivElement | null>(null);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [copied, setCopied] = useState(false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
@@ -6670,19 +6629,6 @@ export default function TemplateEditorPage() {
     useState("__sample__");
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitleValue, setEditTitleValue] = useState("");
-  const [aiMetaLoading, setAiMetaLoading] = useState(false);
-  const [aiMetaField, setAiMetaField] = useState<"subject" | "previewText" | null>(null);
-  const filteredStoreAssignmentOptions = useMemo(() => {
-    const query = storeAssignmentSearch.trim().toLowerCase();
-    if (!query) return availableAccountOptions;
-    return availableAccountOptions.filter((opt) => {
-      return (
-        opt.dealer.toLowerCase().includes(query) ||
-        opt.key.toLowerCase().includes(query) ||
-        opt.location.toLowerCase().includes(query)
-      );
-    });
-  }, [availableAccountOptions, storeAssignmentSearch]);
   const [showAiAssistant, setShowAiAssistant] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiLoading, setAiLoading] = useState(false);
@@ -6983,11 +6929,11 @@ export default function TemplateEditorPage() {
         parsed,
         previewHtml,
         rawTemplate: code,
-        subject: espSubject || parsed?.frontmatter?.subject || parsed?.frontmatter?.title || null,
-        previewText: espPreviewText || parsed?.frontmatter?.previewText || null,
+        subject: parsed?.frontmatter?.subject || parsed?.frontmatter?.title || null,
+        previewText: parsed?.frontmatter?.previewText || null,
         selectedComponent: selectedEditorComponent,
       }),
-    [parsed, previewHtml, code, espSubject, espPreviewText, selectedEditorComponent],
+    [parsed, previewHtml, code, selectedEditorComponent],
   );
 
   const compilePreview = useCallback(
@@ -7057,7 +7003,7 @@ export default function TemplateEditorPage() {
     setPreviewContactsError("");
     try {
       const res = await fetch(
-        `/api/esp/contacts?accountKey=${encodeURIComponent(effectiveAccountKey)}&limit=30`,
+        `/api/contacts?accountKey=${encodeURIComponent(effectiveAccountKey)}&limit=30`,
       );
       const data = await res.json();
       if (!res.ok) {
@@ -7165,84 +7111,13 @@ export default function TemplateEditorPage() {
       };
     };
 
-    // ── ESP template: load by ID ──
-    if (espTemplateId) {
-      setEspMode(true);
-      setParsed(null);
-      espRecordIdRef.current = espTemplateId;
-      setEspRecordId(espTemplateId);
-      fetch(`/api/esp/templates/${espTemplateId}`)
-        .then((r) => r.json())
-        .then(async (data) => {
-          if (data.error) { console.error(data.error); return; }
-          const t = data.template;
-          if (t.accountKey) setEspAccountKey(t.accountKey);
-          const resolvedSubject = t.subject || "";
-          const resolvedPreviewText = t.previewText || "";
-          setEspSubject(resolvedSubject);
-          setEspPreviewText(resolvedPreviewText);
-          setOriginalEspSubject(resolvedSubject);
-          setOriginalEspPreviewText(resolvedPreviewText);
-
-          // Resolve source — library: references need fetching from the library
-          let raw = "";
-          const isLibRef = typeof t.source === "string" && t.source.startsWith("library:");
-          if (isLibRef) {
-            const slug = t.source.slice("library:".length);
-            try {
-              const libRes = await fetch(`/api/templates?design=${slug}&type=template&format=raw`);
-              const libData = await libRes.json();
-              raw = libData.raw || t.html || "";
-            } catch {
-              raw = t.html || "";
-            }
-          } else {
-            raw = t.source || t.html || "";
-          }
-
-          const visualSource = hasVisualTemplateScaffold(raw);
-          const parsedRaw = visualSource ? parseTemplate(raw) : null;
-          const parsedWithFontDefaults = parsedRaw
-            ? applyResolvedFontDefaults(parsedRaw)
-            : null;
-          const visualRaw = parsedWithFontDefaults
-            ? serializeTemplateClient(parsedWithFontDefaults)
-            : raw;
-          const shouldUseCodeMode =
-            t.editorType === "code" || (!t.source && !isLibRef) || !visualSource;
-          const initialSource = shouldUseCodeMode ? raw : visualRaw;
-          setCode(initialSource);
-          setOriginalCode(initialSource);
-          const fmTitle = parsedRaw?.frontmatter?.title;
-          const resolvedTitle = fmTitle || t.name || "";
-          setEspTemplateName(resolvedTitle);
-          setOriginalEspTemplateName(resolvedTitle);
-          if (shouldUseCodeMode) {
-            setParsed(null);
-            setEditorMode("code");
-            compilePreview(raw);
-          } else {
-            if (parsedWithFontDefaults) {
-              setParsed(parsedWithFontDefaults);
-              compilePreview(serializeTemplateForPreview(parsedWithFontDefaults, new Set()));
-            } else {
-              compilePreview(raw);
-            }
-          }
-        })
-        .catch((err) => console.error("Error loading ESP template:", err));
-      return;
-    }
-
-    // ── New ESP template (no ID yet) ──
+    // ── New template scratch (no design slug yet, account-scoped start) ──
+    // Used when the editor is launched from a campaign builder before a
+    // library template has been picked: just initialize a blank source so
+    // the user can write/build immediately. The first save creates a
+    // library record under a generated slug.
     if (accountKeyParam && !design) {
-      setEspMode(true);
-      setEspSubject("");
-      setEspPreviewText("");
-      setOriginalEspSubject("");
-      setOriginalEspPreviewText("");
       if (modeParam === "code") setEditorMode("code");
-      // If starting from a library template, load its source
       if (libraryTemplateSlug) {
         fetch(`/api/templates?design=${libraryTemplateSlug}&type=template&format=raw`)
           .then((r) => r.json())
@@ -7255,9 +7130,6 @@ export default function TemplateEditorPage() {
                 const serialized = serializeTemplateClient(withFont);
                 setCode(serialized);
                 setOriginalCode(rawData.raw);
-                const resolvedTitle = withFont.frontmatter?.title || "Untitled Template";
-                setEspTemplateName(resolvedTitle);
-                setOriginalEspTemplateName(resolvedTitle);
                 setParsed(withFont);
                 compilePreview(serializeTemplateForPreview(withFont, new Set()));
               } else {
@@ -7265,15 +7137,12 @@ export default function TemplateEditorPage() {
                 setEditorMode("code");
                 setCode(rawData.raw);
                 setOriginalCode(rawData.raw);
-                setEspTemplateName("Untitled Template");
-                setOriginalEspTemplateName("Untitled Template");
                 compilePreview(rawData.raw);
               }
             }
           })
           .catch((err) => console.error("Error loading library template:", err));
       } else {
-        // Brand new blank ESP template — use mode-specific starter
         const blank = getStarterTemplate(modeParam === "code" ? "code" : "visual");
         const blankIsVisual = hasVisualTemplateScaffold(blank);
         if (blankIsVisual) {
@@ -7282,8 +7151,6 @@ export default function TemplateEditorPage() {
           const serialized = serializeTemplateClient(withFont);
           setCode(serialized);
           setOriginalCode(blank);
-          setEspTemplateName("Untitled Template");
-          setOriginalEspTemplateName("Untitled Template");
           setParsed(withFont);
           compilePreview(serializeTemplateForPreview(withFont, new Set()));
         } else {
@@ -7291,8 +7158,6 @@ export default function TemplateEditorPage() {
           setEditorMode("code");
           setCode(blank);
           setOriginalCode(blank);
-          setEspTemplateName("Untitled Template");
-          setOriginalEspTemplateName("Untitled Template");
           compilePreview(blank);
         }
       }
@@ -7340,29 +7205,11 @@ export default function TemplateEditorPage() {
       })
       .catch((err) => console.error("Error loading template:", err));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [design, templateName, espTemplateId, accountKeyParam, libraryTemplateSlug, parsedBranding?.fonts?.body, modeParam, isHtmlOnlyBuilder]);
+  }, [design, templateName, accountKeyParam, libraryTemplateSlug, parsedBranding?.fonts?.body, modeParam, isHtmlOnlyBuilder]);
 
   useEffect(() => {
-    const hasCodeChanges = code !== originalCode;
-    const hasMetaChanges =
-      espMode &&
-      (
-        espTemplateName !== originalEspTemplateName ||
-        espSubject !== originalEspSubject ||
-        espPreviewText !== originalEspPreviewText
-      );
-    setHasChanges(hasCodeChanges || hasMetaChanges);
-  }, [
-    code,
-    originalCode,
-    espMode,
-    espTemplateName,
-    espSubject,
-    espPreviewText,
-    originalEspTemplateName,
-    originalEspSubject,
-    originalEspPreviewText,
-  ]);
+    setHasChanges(code !== originalCode);
+  }, [code, originalCode]);
 
   useEffect(() => {
     if (hasChanges) {
@@ -7371,45 +7218,6 @@ export default function TemplateEditorPage() {
     }
     markClean();
   }, [hasChanges, markClean, markDirty]);
-
-  const resolveHtmlForTemplateSave = useCallback(async (): Promise<string | undefined> => {
-    if (editorMode === "code") return code;
-    if (previewHtml) return previewHtml;
-
-    try {
-      const compileRes = await fetch("/api/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ html: code, project: "core" }),
-      });
-      const compileData = await compileRes.json().catch(() => ({}));
-      const compiledHtml =
-        typeof compileData.html === "string" && compileData.html.trim()
-          ? compileData.html
-          : "";
-      if (compiledHtml) {
-        setPreviewHtml(compiledHtml);
-        return compiledHtml;
-      }
-    } catch {
-      // Fall through to undefined — save can still persist the source locally.
-    }
-
-    return undefined;
-  }, [code, editorMode, previewHtml]);
-
-  const getEspSaveMessage = useCallback((data: {
-    syncAttempted?: boolean;
-    syncResults?: Record<string, { success: boolean }>;
-  } | null | undefined): string => {
-    if (!data?.syncAttempted) return "Saved";
-    const results = Object.values(data.syncResults || {});
-    if (results.length === 0) return "Saved";
-    const successCount = results.filter((result) => result.success).length;
-    if (successCount === results.length) return "Saved & synced";
-    if (successCount > 0) return "Saved • partial sync";
-    return "Saved locally • sync failed";
-  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof document === "undefined") return;
@@ -7452,94 +7260,36 @@ export default function TemplateEditorPage() {
   }, []);
 
   // ── Auto-save (3s after last change) ──
+  // Library templates only — ESP-side persistence is gone. If we don't
+  // have a design slug yet (brand-new template launched from a campaign
+  // builder before the first save) we just defer; an explicit save will
+  // create the library record.
   useEffect(() => {
     if (!hasChanges || saving) return;
+    if (!design) return;
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
     autoSaveTimerRef.current = setTimeout(async () => {
       setSaving(true);
       setMessage("");
-      const htmlForSave = espMode
-        ? await resolveHtmlForTemplateSave()
-        : (editorMode === "code" ? code : (previewHtml || undefined));
       try {
-        if (espMode && espRecordId) {
-          // Save to ESP template record
-          const res = await fetch(`/api/esp/templates/${espRecordId}`, {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name: espTemplateName || undefined,
-              subject: espSubject || undefined,
-              previewText: espPreviewText || undefined,
-              source: code,
-              html: htmlForSave,
-              editorType: editorMode,
-              accountKey: effectiveAccountKey || undefined,
-              syncToRemote: true,
-            }),
-          });
-          if (res.ok) {
-            const data = await res.json().catch(() => ({}));
-            const updatedId = data?.template?.id;
-            if (typeof updatedId === "string" && updatedId.trim()) {
-              espRecordIdRef.current = updatedId.trim();
-              setEspRecordId(updatedId.trim());
-            }
-            setOriginalCode(code);
-            setOriginalEspTemplateName(espTemplateName);
-            setOriginalEspSubject(espSubject);
-            setOriginalEspPreviewText(espPreviewText);
-            setMessage(getEspSaveMessage(data));
-            setTimeout(() => setMessage(""), 2000);
-          }
-        } else if (espMode && !espRecordId && effectiveAccountKey) {
-          // First save for new ESP template — create record
-          const res = await fetch("/api/esp/templates", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              accountKey: effectiveAccountKey,
-              name: espTemplateName || "Untitled Template",
-              subject: espSubject || null,
-              previewText: espPreviewText || null,
-              source: code,
-              html: htmlForSave || "",
-              editorType: editorMode,
-              syncToRemote: true,
-            }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            espRecordIdRef.current = data.template.id;
-            setEspRecordId(data.template.id);
-            setOriginalCode(code);
-            setOriginalEspTemplateName(espTemplateName);
-            setOriginalEspSubject(espSubject);
-            setOriginalEspPreviewText(espPreviewText);
-            setMessage(getEspSaveMessage(data));
-            setTimeout(() => setMessage(""), 2000);
-          }
-        } else if (design) {
-          // Save library template
-          const res = await fetch("/api/templates", {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ design, type: templateName, raw: code }),
-          });
-          if (res.ok) {
-            const data = await res.json();
-            if (data.slug && data.slug !== design) setDesign(data.slug);
-            setOriginalCode(code);
-            setMessage("Saved");
-            setTimeout(() => setMessage(""), 2000);
-          }
+        const res = await fetch("/api/templates", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ design, type: templateName, raw: code }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.slug && data.slug !== design) setDesign(data.slug);
+          setOriginalCode(code);
+          setMessage("Saved");
+          setTimeout(() => setMessage(""), 2000);
         }
       } catch { /* silent */ }
       setSaving(false);
     }, 3000);
     return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasChanges, code, design, templateName, espMode, espRecordId, effectiveAccountKey, espTemplateName, espSubject, espPreviewText, saving, editorMode, previewHtml, resolveHtmlForTemplateSave, getEspSaveMessage]);
+  }, [hasChanges, code, design, templateName, saving]);
 
   useEffect(() => {
     if (isHtmlOnlyBuilder) {
@@ -7599,14 +7349,15 @@ export default function TemplateEditorPage() {
   const handleModeSwitch = async (mode: EditorMode) => {
     if (mode === editorMode) return;
     if (mode === "visual" && !canUseVisualBuilder) return;
-    if (espMode) {
-      if (mode === "visual") {
-        if (parsed) {
-          const previewCode = serializeTemplateForPreview(parsed, hiddenComponents);
-          compilePreview(previewCode);
-        } else {
-          compilePreview(code);
-        }
+    // Templates launched from a campaign builder may not have a design
+    // slug yet (no library record created). In that case skip the
+    // server-side reparse — just toggle the in-memory mode.
+    if (!design) {
+      if (mode === "visual" && parsed) {
+        const previewCode = serializeTemplateForPreview(parsed, hiddenComponents);
+        compilePreview(previewCode);
+      } else if (mode === "visual") {
+        compilePreview(code);
       }
       setEditorMode(mode);
       return;
@@ -7677,54 +7428,25 @@ export default function TemplateEditorPage() {
       throw new Error("Select an account to upload media");
     }
 
-    const uploadToS3 = async () => {
-      const s3FormData = new FormData();
-      s3FormData.append("file", file);
-      if (mediaPickerAccountKey) {
-        s3FormData.append("accountKey", mediaPickerAccountKey);
-      } else {
-        s3FormData.append("category", "general");
-      }
-      const res = await fetch("/api/media", {
-        method: "POST",
-        body: s3FormData,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(
-          (data as { error?: string }).error || `Upload failed (${res.status})`,
-        );
-      }
-      return data as { file?: { url?: string } };
-    };
-
-    const isEspUpload = Boolean(mediaPickerAccountKey);
-    let data: { file?: { url?: string } };
-    if (isEspUpload) {
-      const espFormData = new FormData();
-      espFormData.append("file", file);
-      espFormData.append("accountKey", mediaPickerAccountKey!);
-
-      const espRes = await fetch("/api/esp/media", {
-        method: "POST",
-        body: espFormData,
-      });
-      const espData = await espRes.json().catch(() => ({}));
-      if (!espRes.ok) {
-        const errorMessage =
-          (espData as { error?: string }).error || `Upload failed (${espRes.status})`;
-        if (!shouldFallbackToS3Media(espRes.status, errorMessage)) {
-          throw new Error(errorMessage);
-        }
-        data = await uploadToS3();
-      } else {
-        data = espData as { file?: { url?: string } };
-      }
+    const formData = new FormData();
+    formData.append("file", file);
+    if (mediaPickerAccountKey) {
+      formData.append("accountKey", mediaPickerAccountKey);
     } else {
-      data = await uploadToS3();
+      formData.append("category", "general");
+    }
+    const res = await fetch("/api/media", {
+      method: "POST",
+      body: formData,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        (data as { error?: string }).error || `Upload failed (${res.status})`,
+      );
     }
 
-    const uploadedUrl = data.file?.url;
+    const uploadedUrl = (data as { file?: { url?: string } }).file?.url;
     if (!uploadedUrl) {
       throw new Error("Upload succeeded but no image URL was returned");
     }
@@ -7748,9 +7470,6 @@ export default function TemplateEditorPage() {
   ]);
 
   const updateFrontmatter = (key: string, value: string) => {
-    if (espMode && key === "title") {
-      setEspTemplateName(value);
-    }
     if (!parsed) return;
     const newParsed = {
       ...parsed,
@@ -7917,11 +7636,9 @@ export default function TemplateEditorPage() {
 
   const handleAiBuildTemplate = useCallback(
     (build: TemplateBuild) => {
-      // Apply subject line and preview text if provided
-      const fm = build.frontmatter;
-      if (fm?.subject) setEspSubject(fm.subject);
-      if (fm?.previewText) setEspPreviewText(fm.previewText);
-
+      // Subject + preview text travel via frontmatter on the parsed
+      // template — they're folded in below when the new visual template
+      // is constructed.
       if (build.mode === "visual" && build.components) {
         const newComponents = build.components.map((comp) => {
           const schema = componentSchemas[comp.type];
@@ -7968,43 +7685,10 @@ export default function TemplateEditorPage() {
     [parsed, syncVisualToCode, compilePreview],
   );
 
-  const handleGenerateEmailMeta = useCallback(async (field: "subject" | "previewText") => {
-    setAiMetaLoading(true);
-    setAiMetaField(field);
-    try {
-      const textContent = previewHtml
-        ? (() => {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(previewHtml, "text/html");
-            return doc.body.textContent?.trim() || "";
-          })()
-        : "";
-
-      const res = await fetch("/api/ai/generate-email-meta", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          field,
-          emailTextContent: textContent.slice(0, 3000),
-          currentSubject: espSubject,
-          currentPreviewText: espPreviewText,
-        }),
-      });
-      const data = await res.json();
-      if (data.result) {
-        if (field === "subject") setEspSubject(data.result);
-        else setEspPreviewText(data.result);
-      } else if (data.error) {
-        toast.error(data.error);
-      }
-    } catch (err) {
-      console.error("AI generation failed:", err);
-      toast.error("Failed to generate — check AI configuration");
-    } finally {
-      setAiMetaLoading(false);
-      setAiMetaField(null);
-    }
-  }, [previewHtml, espSubject, espPreviewText]);
+  // handleGenerateEmailMeta — the "Generate subject/preview text with AI"
+  // buttons lived inside the ESP-only Email Meta settings panel, which is
+  // gone. The AI endpoint `/api/ai/generate-email-meta` is still there if
+  // we want to rewire it into a library-frontmatter-driven UI later.
 
   const handleAskAssistant = useCallback(async (promptOverride?: string) => {
     const prompt = (promptOverride ?? aiPrompt).trim();
@@ -8425,115 +8109,24 @@ export default function TemplateEditorPage() {
     syncVisualToCode(newParsed);
   };
 
-  const handleStoreAssignmentChange = useCallback(async (nextAccountKey: string) => {
-    const next = nextAccountKey.trim();
-    const prev = espAccountKey;
-    if (!next) return;
-    if (next === effectiveAccountKey) {
-      setStoreAssignmentOpen(false);
-      setStoreAssignmentSearch("");
-      return;
-    }
-    setStoreAssignmentOpen(false);
-    setStoreAssignmentSearch("");
-    setEspAccountKey(next);
-
-    if (!espMode) return;
-
-    if (!espRecordId) {
-      setMessage("Store assignment updated");
-      setTimeout(() => setMessage(""), 2000);
-      return;
-    }
-
-    setAccountAssignmentSaving(true);
-    try {
-      const res = await fetch(`/api/esp/templates/${espRecordId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountKey: next }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) {
-        setEspAccountKey(prev);
-        toast.error(data?.error || "Failed to update assigned store");
-        return;
-      }
-      const savedKey = data?.template?.accountKey;
-      if (typeof savedKey === "string" && savedKey.trim()) {
-        setEspAccountKey(savedKey.trim());
-      }
-      setMessage("Store assignment updated");
-      setTimeout(() => setMessage(""), 2000);
-    } catch {
-      setEspAccountKey(prev);
-      toast.error("Failed to update assigned store");
-    } finally {
-      setAccountAssignmentSaving(false);
-    }
-  }, [effectiveAccountKey, espAccountKey, espMode, espRecordId]);
-
   const handleSave = async (): Promise<boolean> => {
     setSaving(true);
     setMessage("");
-    const htmlForSave = espMode
-      ? await resolveHtmlForTemplateSave()
-      : (editorMode === "code" ? code : (previewHtml || undefined));
     try {
-      let res: Response;
-      let responseData: any = null;
-      if (espMode && espRecordId) {
-        res = await fetch(`/api/esp/templates/${espRecordId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: espTemplateName || undefined,
-            subject: espSubject || undefined,
-            previewText: espPreviewText || undefined,
-            source: code,
-            html: htmlForSave,
-            editorType: editorMode,
-            accountKey: effectiveAccountKey || undefined,
-            syncToRemote: true,
-          }),
-        });
-      } else if (espMode && !espRecordId && effectiveAccountKey) {
-        res = await fetch("/api/esp/templates", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            accountKey: effectiveAccountKey,
-            name: espTemplateName || "Untitled Template",
-            subject: espSubject || null,
-            previewText: espPreviewText || null,
-            source: code,
-            html: htmlForSave || "",
-            editorType: editorMode,
-            syncToRemote: true,
-          }),
-        });
-        if (res.ok) {
-          responseData = await res.json();
-          espRecordIdRef.current = responseData.template.id;
-          setEspRecordId(responseData.template.id);
-        }
-      } else {
-        res = await fetch("/api/templates", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ design, type: templateName, raw: code }),
-        });
+      if (!design) {
+        setMessage("Save unavailable until template has a slug");
+        return false;
       }
+      const res = await fetch("/api/templates", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ design, type: templateName, raw: code }),
+      });
       if (res.ok) {
-        const data = responseData ?? await res.json().catch(() => ({}));
+        const data = await res.json().catch(() => ({}));
         if (data.slug && data.slug !== design) setDesign(data.slug);
         setOriginalCode(code);
-        if (espMode) {
-          setOriginalEspTemplateName(espTemplateName);
-          setOriginalEspSubject(espSubject);
-          setOriginalEspPreviewText(espPreviewText);
-        }
-        setMessage(espMode ? getEspSaveMessage(data) : "Saved");
+        setMessage("Saved");
         setTimeout(() => setMessage(""), 3000);
         return true;
       }
@@ -8547,228 +8140,12 @@ export default function TemplateEditorPage() {
     }
   };
 
-  // ── Save Template (to Loomi + optional ESP providers) ──
-  const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
-  const [saveTemplateProviders, setSaveTemplateProviders] = useState<Record<string, boolean>>({});
-  const [savingTemplate, setSavingTemplate] = useState(false);
-  const [saveTemplateResults, setSaveTemplateResults] = useState<Record<string, { success: boolean; error?: string }> | null>(null);
-  const [saveToLibrary, setSaveToLibrary] = useState(false);
-  const [saveToLibraryResult, setSaveToLibraryResult] = useState<{ success: boolean; error?: string } | null>(null);
-
-  const connectedProviders = useMemo(
-    () => effectiveAccountData?.connectedProviders ?? [],
-    [effectiveAccountData],
-  );
-
-  const PROVIDER_META: Record<string, { displayName: string; iconSrc: string }> = {
-    ghl: {
-      displayName: "GoHighLevel",
-      iconSrc: "https://storage.googleapis.com/msgsndr/CVpny6EUSHRxlXfqAFb7/media/6992d3c254da0462343bf828.jpg",
-    },
-    klaviyo: {
-      displayName: "Klaviyo",
-      iconSrc: "https://storage.googleapis.com/msgsndr/CVpny6EUSHRxlXfqAFb7/media/6992d3ac3b3cc9155bdaf06e.png",
-    },
-  };
-
-  const handleOpenSaveTemplate = () => {
-    // Reset state
-    setSaveTemplateResults(null);
-    setSaveToLibrary(false);
-    setSaveToLibraryResult(null);
-    const initial: Record<string, boolean> = {};
-    for (const p of connectedProviders) initial[p] = true;
-    setSaveTemplateProviders(initial);
-    setShowSaveTemplateModal(true);
-  };
-
-  const handleSaveTemplate = async () => {
-    setSavingTemplate(true);
-    setSaveTemplateResults(null);
-    try {
-      // 1. Save locally first
-      if (hasChanges) {
-        const saved = await handleSave();
-        if (!saved) {
-          setSavingTemplate(false);
-          return;
-        }
-      }
-
-      // Save to template library if checked
-      let librarySaved = false;
-      if (saveToLibrary) {
-        try {
-          const templateTitle = parsed?.frontmatter?.title || designLabel;
-          const slug = templateTitle
-            .trim()
-            .toLowerCase()
-            .replace(/[^a-z0-9-]/g, '-')
-            .replace(/-+/g, '-')
-            .replace(/^-|-$/g, '');
-
-          // Create or check if exists
-          const createRes = await fetch("/api/templates", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ design: slug }),
-          });
-
-          if (!createRes.ok && createRes.status !== 409) {
-            const err = await createRes.json();
-            setSaveToLibraryResult({ success: false, error: err.error || "Failed to create library entry" });
-          } else {
-            // Save the actual content
-            const putRes = await fetch("/api/templates", {
-              method: "PUT",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ design: slug, raw: code }),
-            });
-
-            if (putRes.ok) {
-              librarySaved = true;
-              setSaveToLibraryResult({ success: true });
-            } else {
-              const err = await putRes.json();
-              setSaveToLibraryResult({ success: false, error: err.error || "Failed to save to library" });
-            }
-          }
-        } catch {
-          setSaveToLibraryResult({ success: false, error: "Failed to save to library" });
-        }
-      }
-
-      // Check which providers are selected
-      const selectedProviders = Object.entries(saveTemplateProviders)
-        .filter(([, checked]) => checked)
-        .map(([p]) => p);
-
-      if (selectedProviders.length === 0) {
-        // No provider publishing — show appropriate toast
-        if (librarySaved) {
-          toast.success("Template saved on Loomi and added to library");
-        } else {
-          toast.success("Template saved on Loomi");
-        }
-        setShowSaveTemplateModal(false);
-        setSavingTemplate(false);
-        return;
-      }
-
-      // 2. Compile to get final HTML for ESP
-      let compiledHtml = previewHtml;
-      if (!compiledHtml) {
-        const compileRes = await fetch("/api/preview", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ html: code, project: "core" }),
-        });
-        const compileData = await compileRes.json();
-        if (compileData.html) compiledHtml = compileData.html;
-      }
-
-      if (!compiledHtml) {
-        toast.error("Failed to compile template HTML");
-        setSavingTemplate(false);
-        return;
-      }
-
-      // 3. Reuse/update current ESP template record, or create one if needed
-      const templateTitle = parsed?.frontmatter?.title || designLabel;
-      let targetEspTemplateId = espRecordIdRef.current;
-      if (targetEspTemplateId) {
-        const updateRes = await fetch(`/api/esp/templates/${targetEspTemplateId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            accountKey: effectiveAccountKey || undefined,
-            name: templateTitle,
-            subject: espSubject || parsed?.frontmatter?.title || "",
-            previewText: espPreviewText || undefined,
-            html: compiledHtml,
-            source: code,
-            editorType: editorMode === "code" ? "code" : "visual",
-          }),
-        });
-        if (!updateRes.ok) {
-          const err = await updateRes.json().catch(() => ({}));
-          toast.error(err.error || "Failed to update template before publish");
-          setSavingTemplate(false);
-          return;
-        }
-        const updated = await updateRes.json().catch(() => ({}));
-        const updatedId = updated?.template?.id;
-        if (typeof updatedId === "string" && updatedId.trim()) {
-          targetEspTemplateId = updatedId.trim();
-          espRecordIdRef.current = targetEspTemplateId;
-          setEspRecordId(targetEspTemplateId);
-        }
-      } else {
-        if (!effectiveAccountKey) {
-          toast.error("Select an account before publishing this template");
-          setSavingTemplate(false);
-          return;
-        }
-        const createRes = await fetch("/api/esp/templates", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            accountKey: effectiveAccountKey,
-            name: templateTitle,
-            subject: espSubject || parsed?.frontmatter?.title || "",
-            previewText: espPreviewText || null,
-            html: compiledHtml,
-            source: code,
-            editorType: editorMode === "code" ? "code" : "visual",
-          }),
-        });
-        if (!createRes.ok) {
-          const err = await createRes.json().catch(() => ({}));
-          toast.error(err.error || "Failed to create template");
-          setSavingTemplate(false);
-          return;
-        }
-        const { template: espTemplate } = await createRes.json();
-        targetEspTemplateId = espTemplate.id;
-        espRecordIdRef.current = espTemplate.id;
-        setEspRecordId(espTemplate.id);
-      }
-
-      // 4. Publish to selected providers
-      const publishRes = await fetch(`/api/esp/templates/${targetEspTemplateId}/publish`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ providers: selectedProviders }),
-      });
-
-      if (!publishRes.ok) {
-        const err = await publishRes.json();
-        toast.error(err.error || "Failed to publish template");
-        setSavingTemplate(false);
-        return;
-      }
-
-      const { results } = await publishRes.json();
-      setSaveTemplateResults(results);
-
-      // Check results
-      const allSuccess = Object.values(results).every((r: any) => r.success);
-      const anySuccess = Object.values(results).some((r: any) => r.success);
-
-      if (allSuccess) {
-        toast.success(`Template saved and published to ${selectedProviders.map(p => PROVIDER_META[p]?.displayName || p).join(", ")}`);
-        setTimeout(() => setShowSaveTemplateModal(false), 1500);
-      } else if (anySuccess) {
-        toast.warning("Template published to some integrations — check results below");
-      } else {
-        toast.error("Failed to publish template");
-      }
-    } catch (err: any) {
-      toast.error(err.message || "Failed to save template");
-    } finally {
-      setSavingTemplate(false);
-    }
-  };
+  // ── Save Template ──
+  // The publish-to-ESP flow is gone with the ESP teardown. The remaining
+  // surface is the Loomi library save, which the toolbar's Save button
+  // triggers directly via handleSave. We keep a thin savingTemplate flag
+  // wired into the toolbar's autosave status display.
+  const savingTemplate = false;
 
   const handleRestoreVersion = async (versionId: string) => {
     const confirmed = await confirm({
@@ -8961,10 +8338,6 @@ export default function TemplateEditorPage() {
           setShowShortcuts(false);
           return;
         }
-        if (showSaveTemplateModal) {
-          setShowSaveTemplateModal(false);
-          return;
-        }
         if (showSendTest) {
           setShowSendTest(false);
           return;
@@ -8985,10 +8358,6 @@ export default function TemplateEditorPage() {
           setShowMoreMenu(false);
           return;
         }
-        if (storeAssignmentOpen) {
-          setStoreAssignmentOpen(false);
-          return;
-        }
       }
     };
     window.addEventListener("keydown", handler);
@@ -8997,29 +8366,12 @@ export default function TemplateEditorPage() {
     code,
     editorMode,
     showShortcuts,
-    showSaveTemplateModal,
     showSendTest,
     showHistory,
     showAiAssistant,
     showMissingVars,
     showMoreMenu,
-    storeAssignmentOpen,
   ]);
-
-  useEffect(() => {
-    if (!storeAssignmentOpen) {
-      setStoreAssignmentSearch("");
-      return;
-    }
-    const handler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (!storeAssignmentDropdownRef.current?.contains(target)) {
-        setStoreAssignmentOpen(false);
-      }
-    };
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
-  }, [storeAssignmentOpen]);
 
   // Close dropdowns on outside click
   useEffect(() => {
@@ -9496,9 +8848,7 @@ export default function TemplateEditorPage() {
     .split("-")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
-  const designLabel = (espMode || espTemplateId)
-    ? (espTemplateName || parsed?.frontmatter?.title || "Untitled Template")
-    : (parsed?.frontmatter?.title || slugLabel);
+  const designLabel = parsed?.frontmatter?.title || slugLabel;
   const isDragDropTemplate = useMemo(
     () => hasVisualTemplateScaffold(code),
     [code],
@@ -9509,7 +8859,7 @@ export default function TemplateEditorPage() {
     : null;
   const isDragDropLabel = templateTypeLabel === "Drag & Drop";
   const lineCount = code.split("\n").length;
-  const backHref = espMode ? subHref("/templates") : isAccount ? subHref("/emails") : "/templates";
+  const backHref = isAccount ? subHref("/emails") : "/templates";
   const handleBackClick = useCallback(() => {
     if (typeof window !== "undefined" && window.history.length > 1) {
       router.back();
@@ -9595,12 +8945,8 @@ export default function TemplateEditorPage() {
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     const trimmed = editTitleValue.trim();
-                    if (trimmed) {
-                      if (parsed) {
-                        updateFrontmatter("title", trimmed);
-                      } else if (espMode) {
-                        setEspTemplateName(trimmed);
-                      }
+                    if (trimmed && parsed) {
+                      updateFrontmatter("title", trimmed);
                     }
                     setIsEditingTitle(false);
                   } else if (e.key === "Escape") {
@@ -9609,12 +8955,8 @@ export default function TemplateEditorPage() {
                 }}
                 onBlur={() => {
                   const trimmed = editTitleValue.trim();
-                  if (trimmed) {
-                    if (parsed) {
-                      updateFrontmatter("title", trimmed);
-                    } else if (espMode) {
-                      setEspTemplateName(trimmed);
-                    }
+                  if (trimmed && parsed) {
+                    updateFrontmatter("title", trimmed);
                   }
                   setIsEditingTitle(false);
                 }}
@@ -9626,21 +8968,13 @@ export default function TemplateEditorPage() {
                 role="button"
                 tabIndex={0}
                 onClick={() => {
-                  setEditTitleValue(
-                    espMode
-                      ? espTemplateName || parsed?.frontmatter?.title || designLabel
-                      : parsed?.frontmatter?.title || designLabel,
-                  );
+                  setEditTitleValue(parsed?.frontmatter?.title || designLabel);
                   setIsEditingTitle(true);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    setEditTitleValue(
-                      espMode
-                        ? espTemplateName || parsed?.frontmatter?.title || designLabel
-                        : parsed?.frontmatter?.title || designLabel,
-                    );
+                    setEditTitleValue(parsed?.frontmatter?.title || designLabel);
                     setIsEditingTitle(true);
                   }
                 }}
@@ -9700,16 +9034,11 @@ export default function TemplateEditorPage() {
                 </button>
                 {campaignIdParam && (
                   <>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowManageTemplateMenu(false);
-                        handleOpenSaveTemplate();
-                      }}
-                      className="w-full text-left px-3 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]"
-                    >
-                      Save as template
-                    </button>
+                    {/* "Save as template" used to open the publish-to-ESP
+                        modal. With the ESP teardown the standalone library
+                        save flow is the only path, and it's already wired
+                        to the Save button in the toolbar, so the dropdown
+                        item is gone. Change template stays. */}
                     <button
                       type="button"
                       onClick={() => {
@@ -9754,9 +9083,10 @@ export default function TemplateEditorPage() {
               </button>
             </>
           ) : (
-            /* Save Template (normal editor mode) */
+            /* Save Template (normal editor mode) — library-only now;
+                the multi-provider publish modal is gone with the ESP teardown. */
             <button
-              onClick={handleOpenSaveTemplate}
+              onClick={() => { void handleSave(); }}
               disabled={saving}
               className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
               title="Save template"
@@ -9851,223 +9181,18 @@ export default function TemplateEditorPage() {
           ) : (
             <div className="flex-1 min-h-0 overflow-y-auto">
               <div className="p-4 space-y-8">
-                {/* Settings sub-tab */}
-                {visualTab === "settings" && espMode && (
-                  <div>
-                    <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-2">
-                      Template Assignment
-                    </h3>
-                    <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/35 p-3 space-y-2.5">
-                      <label className="text-xs text-[var(--muted-foreground)] block">
-                        Assigned Store
-                      </label>
-                      <div
-                        ref={storeAssignmentDropdownRef}
-                        className="relative"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => setStoreAssignmentOpen((prev) => !prev)}
-                          disabled={accountAssignmentSaving || availableAccountOptions.length === 0}
-                          className="w-full rounded-xl border border-[var(--border)] bg-[var(--card)] px-2.5 py-2.5 text-left transition-colors hover:bg-[var(--muted)] disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            {selectedAssignedAccountOption ? (
-                              <AccountAvatar
-                                name={selectedAssignedAccountOption.dealer}
-                                accountKey={selectedAssignedAccountOption.key}
-                                storefrontImage={selectedAssignedAccountOption.storefrontImage}
-                                logos={selectedAssignedAccountOption.logos}
-                                size={30}
-                                className="w-8 h-8 rounded-md border border-[var(--border)] flex-shrink-0"
-                              />
-                            ) : (
-                              <div className="w-8 h-8 rounded-md border border-[var(--border)] bg-[var(--muted)] flex items-center justify-center flex-shrink-0">
-                                <UserCircleIcon className="w-4 h-4 text-[var(--muted-foreground)]" />
-                              </div>
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm font-medium text-[var(--foreground)] truncate">
-                                {selectedAssignedAccountOption?.dealer || "Select store"}
-                              </p>
-                              <p className="text-[11px] text-[var(--muted-foreground)] truncate">
-                                {selectedAssignedAccountOption
-                                  ? `${selectedAssignedAccountOption.key}${selectedAssignedAccountOption.location ? ` · ${selectedAssignedAccountOption.location}` : ""}`
-                                  : "Choose the sub-account this template is assigned to"}
-                              </p>
-                            </div>
-                            <ChevronUpDownIcon className="w-4 h-4 text-[var(--muted-foreground)] flex-shrink-0" />
-                          </div>
-                        </button>
-
-                        {storeAssignmentOpen && (
-                          <div className="absolute left-0 right-0 top-full mt-2 z-[60]">
-                            <div className="glass-dropdown rounded-xl shadow-lg overflow-hidden border border-[var(--border)]">
-                              <div className="p-2 border-b border-[var(--border)]">
-                                <div className="relative">
-                                  <MagnifyingGlassIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-                                  <input
-                                    type="text"
-                                    value={storeAssignmentSearch}
-                                    onChange={(e) => setStoreAssignmentSearch(e.target.value)}
-                                    placeholder="Search stores..."
-                                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
-                                  />
-                                </div>
-                              </div>
-                              <div className="max-h-72 overflow-y-auto p-1.5 space-y-1">
-                                {filteredStoreAssignmentOptions.length === 0 ? (
-                                  <p className="text-xs text-[var(--muted-foreground)] text-center py-4">
-                                    No stores match your search
-                                  </p>
-                                ) : (
-                                  filteredStoreAssignmentOptions.map((opt) => {
-                                    const isSelected = opt.key === effectiveAccountKey;
-                                    return (
-                                      <button
-                                        key={opt.key}
-                                        type="button"
-                                        onClick={() => handleStoreAssignmentChange(opt.key)}
-                                        className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${isSelected ? "bg-[var(--primary)]/12" : "hover:bg-[var(--muted)]"}`}
-                                      >
-                                        <AccountAvatar
-                                          name={opt.dealer}
-                                          accountKey={opt.key}
-                                          storefrontImage={opt.storefrontImage}
-                                          logos={opt.logos}
-                                          size={28}
-                                          className="w-7 h-7 rounded-md border border-[var(--border)] flex-shrink-0"
-                                        />
-                                        <div className="min-w-0 flex-1">
-                                          <p className="text-xs font-medium text-[var(--foreground)] truncate">
-                                            {opt.dealer}
-                                          </p>
-                                          <p className="text-[10px] text-[var(--muted-foreground)] truncate leading-tight">
-                                            {opt.key}
-                                            {opt.location ? ` · ${opt.location}` : ""}
-                                          </p>
-                                        </div>
-                                        {isSelected && (
-                                          <CheckIcon className="w-3.5 h-3.5 text-[var(--primary)] flex-shrink-0" />
-                                        )}
-                                      </button>
-                                    );
-                                  })
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                      {accountAssignmentSaving && (
-                        <p className="text-[11px] text-[var(--muted-foreground)]">
-                          Updating store assignment...
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                )}
-                {visualTab === "settings" && espMode && (
-                  <div>
-                    <h3 className="text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-2">
-                      Email Meta
-                    </h3>
-                    <div className="space-y-3">
-                      {/* Template Title */}
-                      <div>
-                        <div className="flex items-center gap-1 mb-1">
-                          <label className="text-xs text-[var(--muted-foreground)]">
-                            Template Title
-                          </label>
-                        </div>
-                        <input
-                          type="text"
-                          value={espTemplateName}
-                          onChange={(e) => {
-                            const nextTitle = e.target.value;
-                            if (parsed) {
-                              updateFrontmatter("title", nextTitle);
-                            } else {
-                              setEspTemplateName(nextTitle);
-                            }
-                          }}
-                          placeholder="Enter template title..."
-                          className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] focus:border-[var(--primary)]"
-                        />
-                      </div>
-                      {/* Subject Line */}
-                      <div>
-                        <div className="flex items-center gap-1 mb-1">
-                          <label className="text-xs text-[var(--muted-foreground)]">
-                            Subject Line
-                          </label>
-                          <button
-                            onClick={() => handleGenerateEmailMeta("subject")}
-                            disabled={aiMetaLoading}
-                            className="ai-horizon-chip inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors disabled:opacity-40"
-                            title="Generate subject with Loomi AI"
-                            aria-label="Generate subject with Loomi AI"
-                          >
-                            {aiMetaLoading && aiMetaField === "subject" ? (
-                              <ArrowPathIcon className="w-3 h-3 animate-spin" />
-                            ) : (
-                              <SparklesIcon className="w-3 h-3" />
-                            )}
-                            <span>AI</span>
-                          </button>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            type="text"
-                            value={espSubject}
-                            onChange={(e) => setEspSubject(e.target.value)}
-                            placeholder="Enter subject line..."
-                            className="flex-1 min-w-0 text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] focus:border-[var(--primary)]"
-                          />
-                          <VariablePickerButton onInsert={(token) => setEspSubject((prev) => prev + token)} />
-                        </div>
-                      </div>
-                      {/* Preview Text */}
-                      <div>
-                        <div className="flex items-center gap-1 mb-1">
-                          <label className="text-xs text-[var(--muted-foreground)]">
-                            Preview Text
-                          </label>
-                          <button
-                            onClick={() => handleGenerateEmailMeta("previewText")}
-                            disabled={aiMetaLoading}
-                            className="ai-horizon-chip inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors disabled:opacity-40"
-                            title="Generate preview text with Loomi AI"
-                            aria-label="Generate preview text with Loomi AI"
-                          >
-                            {aiMetaLoading && aiMetaField === "previewText" ? (
-                              <ArrowPathIcon className="w-3 h-3 animate-spin" />
-                            ) : (
-                              <SparklesIcon className="w-3 h-3" />
-                            )}
-                            <span>AI</span>
-                          </button>
-                        </div>
-                        <div className="flex items-center gap-1.5">
-                          <input
-                            type="text"
-                            value={espPreviewText}
-                            onChange={(e) => setEspPreviewText(e.target.value)}
-                            placeholder="Enter preview text..."
-                            className="flex-1 min-w-0 text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)] focus:border-[var(--primary)]"
-                          />
-                          <VariablePickerButton onInsert={(token) => setEspPreviewText((prev) => prev + token)} />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                {/* The "Template Assignment" + ESP-specific "Email Meta"
+                    panels (subject/preview text fed from the EspTemplate
+                    record) were removed with the ESP teardown. Library
+                    templates carry subject + preview text as part of the
+                    frontmatter section below, so no replacement is needed
+                    here. */}
                 {visualTab === "settings" &&
                   parsed &&
-                  SETTINGS_SECTIONS.filter((s) => !(espMode && s.key === "meta")).map((section, sectionIdx) => (
+                  SETTINGS_SECTIONS.map((section, sectionIdx) => (
                     <div key={section.key}>
                       <h3
-                        className={`text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider ${sectionIdx > 0 || espMode ? "mt-4" : ""} mb-2`}
+                        className={`text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider ${sectionIdx > 0 ? "mt-4" : ""} mb-2`}
                       >
                         {section.label}
                       </h3>
@@ -11724,139 +10849,10 @@ export default function TemplateEditorPage() {
         </div>
       )}
 
-      {/* Save Template Modal */}
-      {showSaveTemplateModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in"
-          onClick={() => !savingTemplate && setShowSaveTemplateModal(false)}
-        >
-          <div
-            className="glass-modal w-[440px]"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)]">
-              <div className="flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50" fill="currentColor" className="w-4 h-4 text-[var(--primary)]"><path d="M 7 4 C 5.3545455 4 4 5.3545455 4 7 L 4 43 C 4 44.645455 5.3545455 46 7 46 L 43 46 C 44.645455 46 46 44.645455 46 43 L 46 13.199219 A 1.0001 1.0001 0 0 0 45.707031 12.492188 L 37.507812 4.2929688 A 1.0001 1.0001 0 0 0 36.800781 4 L 7 4 z M 7 6 L 12 6 L 12 18 C 12 19.645455 13.354545 21 15 21 L 34 21 C 35.645455 21 37 19.645455 37 18 L 37 6.6132812 L 44 13.613281 L 44 43 C 44 43.554545 43.554545 44 43 44 L 38 44 L 38 29 C 38 27.354545 36.645455 26 35 26 L 15 26 C 13.354545 26 12 27.354545 12 29 L 12 44 L 7 44 C 6.4454545 44 6 43.554545 6 43 L 6 7 C 6 6.4454545 6.4454545 6 7 6 z M 14 6 L 35 6 L 35 18 C 35 18.554545 34.554545 19 34 19 L 15 19 C 14.445455 19 14 18.554545 14 18 L 14 6 z M 29 8 A 1.0001 1.0001 0 0 0 28 9 L 28 16 A 1.0001 1.0001 0 0 0 29 17 L 32 17 A 1.0001 1.0001 0 0 0 33 16 L 33 9 A 1.0001 1.0001 0 0 0 32 8 L 29 8 z M 30 10 L 31 10 L 31 15 L 30 15 L 30 10 z M 15 28 L 35 28 C 35.554545 28 36 28.445455 36 29 L 36 44 L 14 44 L 14 29 C 14 28.445455 14.445455 28 15 28 z"/></svg>
-                <h3 className="text-sm font-semibold">Save Template</h3>
-              </div>
-              <button
-                onClick={() => setShowSaveTemplateModal(false)}
-                disabled={savingTemplate}
-                className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-40"
-              >
-                <XMarkIcon className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-5 space-y-4">
-              <p className="text-xs text-[var(--muted-foreground)]">
-                Your template will always be saved on Loomi. Optionally, also publish it to your connected integration{connectedProviders.length > 1 ? "s" : ""}.
-              </p>
-
-              {/* Save to Template Library — admin/developer only */}
-              {isAdmin && (
-                <label className="flex items-center gap-3 p-3 rounded-lg border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--muted)]/50 cursor-pointer transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={saveToLibrary}
-                    onChange={(e) => setSaveToLibrary(e.target.checked)}
-                    className="rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
-                  />
-                  <BookOpenIcon className="w-5 h-5 text-[var(--primary)]" />
-                  <div className="flex-1 min-w-0">
-                    <span className="text-sm font-medium block">Save to Template Library</span>
-                    <span className="text-[10px] text-[var(--muted-foreground)]">Make available for all accounts</span>
-                  </div>
-                  {saveToLibraryResult && (
-                    <span className={`ml-auto text-[10px] font-medium ${saveToLibraryResult.success ? "text-green-400" : "text-red-400"}`}>
-                      {saveToLibraryResult.success ? "✓ Added" : saveToLibraryResult.error || "Failed"}
-                    </span>
-                  )}
-                </label>
-              )}
-
-              {connectedProviders.length > 0 ? (
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-[var(--muted-foreground)]">
-                    Also publish to:
-                  </label>
-                  {connectedProviders.map((provider) => {
-                    const meta = PROVIDER_META[provider];
-                    return (
-                      <label
-                        key={provider}
-                        className="flex items-center gap-3 p-3 rounded-lg border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--muted)]/50 cursor-pointer transition-colors"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={saveTemplateProviders[provider] ?? false}
-                          onChange={(e) =>
-                            setSaveTemplateProviders((prev) => ({
-                              ...prev,
-                              [provider]: e.target.checked,
-                            }))
-                          }
-                          className="rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
-                        />
-                        {meta?.iconSrc && (
-                          <img
-                            src={meta.iconSrc}
-                            alt={meta.displayName}
-                            className="w-5 h-5 rounded"
-                          />
-                        )}
-                        <span className="text-sm font-medium">
-                          {meta?.displayName || provider}
-                        </span>
-                        {saveTemplateResults?.[provider] && (
-                          <span className={`ml-auto text-[10px] font-medium ${saveTemplateResults[provider].success ? "text-green-400" : "text-red-400"}`}>
-                            {saveTemplateResults[provider].success ? "✓ Published" : saveTemplateResults[provider].error || "Failed"}
-                          </span>
-                        )}
-                      </label>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="p-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 space-y-2">
-                  <p className="text-xs text-[var(--muted-foreground)]">
-                    No integrations connected. The template will be saved on Loomi only.
-                  </p>
-                  <Link
-                    href={effectiveAccountKey ? `/accounts/${effectiveAccountKey}?tab=integrations` : "/settings"}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--primary)] hover:underline"
-                  >
-                    <LinkIcon className="w-3 h-3" />
-                    Set up integrations
-                  </Link>
-                </div>
-              )}
-            </div>
-            <div className="flex justify-end gap-2 px-5 py-3 border-t border-[var(--border)] bg-[var(--muted)]/30">
-              <button
-                onClick={() => setShowSaveTemplateModal(false)}
-                disabled={savingTemplate}
-                className="px-4 py-2 text-sm font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] rounded-lg hover:bg-[var(--muted)] transition-colors disabled:opacity-40"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveTemplate}
-                disabled={savingTemplate}
-                className="flex items-center gap-1.5 px-4 py-2 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 50 50" fill="currentColor" className="w-3.5 h-3.5"><path d="M 7 4 C 5.3545455 4 4 5.3545455 4 7 L 4 43 C 4 44.645455 5.3545455 46 7 46 L 43 46 C 44.645455 46 46 44.645455 46 43 L 46 13.199219 A 1.0001 1.0001 0 0 0 45.707031 12.492188 L 37.507812 4.2929688 A 1.0001 1.0001 0 0 0 36.800781 4 L 7 4 z M 7 6 L 12 6 L 12 18 C 12 19.645455 13.354545 21 15 21 L 34 21 C 35.645455 21 37 19.645455 37 18 L 37 6.6132812 L 44 13.613281 L 44 43 C 44 43.554545 43.554545 44 43 44 L 38 44 L 38 29 C 38 27.354545 36.645455 26 35 26 L 15 26 C 13.354545 26 12 27.354545 12 29 L 12 44 L 7 44 C 6.4454545 44 6 43.554545 6 43 L 6 7 C 6 6.4454545 6.4454545 6 7 6 z M 14 6 L 35 6 L 35 18 C 35 18.554545 34.554545 19 34 19 L 15 19 C 14.445455 19 14 18.554545 14 18 L 14 6 z M 29 8 A 1.0001 1.0001 0 0 0 28 9 L 28 16 A 1.0001 1.0001 0 0 0 29 17 L 32 17 A 1.0001 1.0001 0 0 0 33 16 L 33 9 A 1.0001 1.0001 0 0 0 32 8 L 29 8 z M 30 10 L 31 10 L 31 15 L 30 15 L 30 10 z M 15 28 L 35 28 C 35.554545 28 36 28.445455 36 29 L 36 44 L 14 44 L 14 29 C 14 28.445455 14.445455 28 15 28 z"/></svg>
-                {savingTemplate
-                  ? "Saving..."
-                  : Object.values(saveTemplateProviders).some(Boolean)
-                    ? "Save & Publish"
-                    : saveToLibrary
-                      ? "Save & Add to Library"
-                      : "Save on Loomi"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* The multi-provider "Save Template" modal lived here. It bundled
+          library save with publish-to-ESP, which is gone with the ESP
+          teardown. The toolbar Save button now writes directly to the
+          Loomi template library via handleSave. */}
 
       {/* Send Test Email Modal */}
       {showSendTest && (

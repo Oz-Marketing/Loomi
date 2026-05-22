@@ -1,15 +1,44 @@
 import { prisma } from '@/lib/prisma';
-import '@/lib/esp/init';
-import { getAdapterForAccount } from '@/lib/esp/registry';
-import { withConcurrencyLimit } from '@/lib/esp/utils';
-import type { OutboundMessageChannel, MessagesAdapter } from '@/lib/esp/types';
-import { providerUnsupportedMessage } from '@/lib/esp/provider-display';
 import {
   resolveTwilioConfig,
   sendSmsViaTwilio,
   TwilioError,
   type TwilioConfig,
 } from '@/lib/sending/twilio';
+
+type OutboundMessageChannel = 'SMS' | 'MMS';
+
+/**
+ * Run async tasks with a concurrency limit. Inlined here (was previously
+ * in a shared utils module) so the SMS worker has no cross-module dep.
+ */
+async function withConcurrencyLimit<T>(
+  tasks: (() => Promise<T>)[],
+  limit: number,
+): Promise<PromiseSettledResult<T>[]> {
+  const results: PromiseSettledResult<T>[] = new Array(tasks.length);
+  let nextIndex = 0;
+
+  async function runNext(): Promise<void> {
+    while (nextIndex < tasks.length) {
+      const index = nextIndex++;
+      try {
+        const value = await tasks[index]();
+        results[index] = { status: 'fulfilled', value };
+      } catch (reason) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(limit, tasks.length) },
+    () => runNext(),
+  );
+  await Promise.all(workers);
+
+  return results;
+}
 
 /**
  * Build the public URL Twilio will POST status callbacks to. The
@@ -94,13 +123,6 @@ type ResolvedMessagingRuntime =
       kind: 'twilio';
       provider: 'twilio';
       config: TwilioConfig;
-    }
-  | {
-      kind: 'legacy';
-      adapter: MessagesAdapter;
-      provider: string;
-      token: string;
-      locationId: string;
     }
   | {
       kind: 'error';
@@ -722,11 +744,10 @@ export async function processSmsCampaign(
     const cached = runtimeByAccount.get(accountKey);
     if (cached) return cached;
 
-    // ── Twilio path (preferred) ──
-    // When a sub-account has Twilio creds configured we send through
-    // their account directly — proper deliverability, A2P 10DLC
-    // compliance, status callbacks via webhook. Legacy GHL path stays
-    // available for sub-accounts that haven't migrated yet.
+    // ── Twilio (the only SMS transport) ──
+    // We send through the sub-account's Twilio creds directly for
+    // proper deliverability, A2P 10DLC compliance, and status
+    // callbacks via webhook.
     try {
       const twilio = await resolveTwilioConfig(accountKey);
       if (twilio && (twilio.phoneNumber || twilio.messagingServiceSid)) {
@@ -750,55 +771,17 @@ export async function processSmsCampaign(
       return failed;
     }
 
-    // ── Legacy GHL Conversations API fallback ──
-    try {
-      const adapter = await getAdapterForAccount(accountKey);
-      if (!adapter.contacts) {
-        const unsupported: ResolvedMessagingRuntime = {
-          kind: 'error',
-          error: providerUnsupportedMessage(adapter.provider, 'contacts'),
-        };
-        runtimeByAccount.set(accountKey, unsupported);
-        return unsupported;
-      }
-      if (!adapter.messages) {
-        const unsupported: ResolvedMessagingRuntime = {
-          kind: 'error',
-          error: providerUnsupportedMessage(adapter.provider, 'direct messaging'),
-        };
-        runtimeByAccount.set(accountKey, unsupported);
-        return unsupported;
-      }
-
-      const credentials = await adapter.contacts.resolveCredentials(accountKey);
-      if (!credentials) {
-        const disconnected: ResolvedMessagingRuntime = {
-          kind: 'error',
-          error: `No Twilio configured + ESP not connected for ${accountKey}. Add Twilio credentials in Email & SMS settings.`,
-        };
-        runtimeByAccount.set(accountKey, disconnected);
-        return disconnected;
-      }
-
-      const resolved: ResolvedMessagingRuntime = {
-        kind: 'legacy',
-        adapter: adapter.messages,
-        provider: adapter.provider,
-        token: credentials.token,
-        locationId: credentials.locationId,
-      };
-      runtimeByAccount.set(accountKey, resolved);
-      return resolved;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Failed to resolve messaging provider';
-      const failed: ResolvedMessagingRuntime = { kind: 'error', error: message };
-      runtimeByAccount.set(accountKey, failed);
-      return failed;
-    }
+    // No Twilio creds = no SMS. There's no other transport.
+    const missingTwilio: ResolvedMessagingRuntime = {
+      kind: 'error',
+      error: `Twilio is not configured for ${accountKey}. Add credentials in Email & SMS settings.`,
+    };
+    runtimeByAccount.set(accountKey, missingTwilio);
+    return missingTwilio;
   }
 
   const tasks = campaign.recipients.map((recipient) => async () => {
-    const { id, contactId, accountKey } = recipient;
+    const { id, accountKey } = recipient;
 
     const runtime = await resolveMessagingRuntime(accountKey);
     if (runtime.kind === 'error') {
@@ -861,36 +844,6 @@ export async function processSmsCampaign(
       return;
     }
 
-    // Legacy GHL Conversations API path
-    try {
-      const sent = await runtime.adapter.sendMessageToContact({
-        token: runtime.token,
-        locationId: runtime.locationId,
-        contactId,
-        message: campaign.message,
-        channel: campaignMessageOptions.channel,
-        mediaUrls: campaignMessageOptions.mediaUrls,
-      });
-
-      await prisma.smsCampaignRecipient.update({
-        where: { id },
-        data: {
-          status: 'sent',
-          messageId: sent.id || null,
-          conversationId: sent.conversationId || null,
-          sentAt: new Date(),
-          error: null,
-        },
-      });
-    } catch (err) {
-      await prisma.smsCampaignRecipient.update({
-        where: { id },
-        data: {
-          status: 'failed',
-          error: err instanceof Error ? err.message : `Failed to send message (${runtime.provider})`,
-        },
-      });
-    }
   });
 
   await withConcurrencyLimit(tasks, concurrency);

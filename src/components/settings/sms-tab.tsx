@@ -144,7 +144,7 @@ export function SmsTab({ accountKey }: SmsTabProps) {
   }
 
   async function handleRemoveCredentials() {
-    if (!confirm('Remove Twilio credentials? SMS sends will fall back to the legacy GHL Conversations API path (if available).')) {
+    if (!confirm('Remove Twilio credentials? Without them, SMS sends from this sub-account will fail until new credentials are provided.')) {
       return;
     }
     await persist({ accountSid: null, authToken: null });
@@ -195,8 +195,8 @@ export function SmsTab({ accountKey }: SmsTabProps) {
               )}
             </div>
             <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-              Optional — when set, this sub-account&apos;s SMS campaigns send through Twilio
-              directly. Leave blank to fall back to the legacy GHL Conversations API path.
+              Required for SMS — this sub-account&apos;s campaigns send through Twilio directly.
+              Without credentials, SMS sends will fail.
             </p>
           </div>
         </div>

@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { componentSchemas } from './component-schemas';
 import { prisma } from './prisma';
-import { readEspVariables } from './esp/variables';
 
 // ── Paths ──
 const STUDIO_ROOT = process.cwd();
@@ -50,17 +49,7 @@ async function buildDynamicData(): Promise<string> {
     sections.push(`### Available Components (${componentEntries.length})\n\n${lines.join('\n\n')}`);
   }
 
-  // 2. ESP Variables
-  const espVars = readEspVariables();
-  if (Object.keys(espVars).length > 0) {
-    const lines = Object.entries(espVars).map(([category, vars]) => {
-      const varList = vars.map((v) => `\`${v.variable}\` (${v.label})`).join(', ');
-      return `- **${category}:** ${varList}`;
-    });
-    sections.push(`### Template Variables (ESP)\n\n${lines.join('\n')}`);
-  }
-
-  // 3. Template tags from DB
+  // 2. Template tags from DB
   try {
     const tags = await prisma.templateTag.findMany({ orderBy: { name: 'asc' } });
     if (tags.length > 0) {

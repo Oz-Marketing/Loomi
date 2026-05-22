@@ -26,9 +26,32 @@ import {
   PencilSquareIcon,
   ArchiveBoxIcon,
 } from '@heroicons/react/24/outline';
+
+// ── Engagement helpers ──
+
+interface CampaignEngagement {
+  sent: number;
+  delivered: number;
+  uniqueOpens: number;
+  openRate: number;
+  uniqueClicks: number;
+  clickRate: number;
+  bounces: number;
+  bounceRate: number;
+}
+
+function formatPct(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0%';
+  return `${(value * 100).toFixed(value >= 0.1 ? 1 : 2)}%`;
+}
+
+function formatNum(value: number): string {
+  return value.toLocaleString();
+}
 import { AccountAvatar as SharedAccountAvatar } from '@/components/account-avatar';
 import BulkActionDock from '@/components/bulk-action-dock';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
+import { SentCampaignDrawer } from '@/components/campaigns/sent-campaign-drawer';
 
 // ── Types ──
 
@@ -173,16 +196,19 @@ function getTimestamp(dateStr?: string): number {
   return Number.isNaN(d.getTime()) ? 0 : d.getTime();
 }
 
-function getScheduledTs(campaign: Campaign): number {
-  return getTimestamp(campaign.scheduledAt);
+function getSendTs(campaign: Campaign): number {
+  // Send date prefers the actual delivery timestamp once the campaign
+  // has gone out; otherwise falls back to the scheduled-for time so
+  // scheduled-but-unsent rows still sort meaningfully.
+  return getTimestamp(campaign.sentAt) || getTimestamp(campaign.scheduledAt);
 }
 
 function getLastUpdatedTs(campaign: Campaign): number {
   return getTimestamp(campaign.updatedAt || campaign.createdAt);
 }
 
-function getScheduledDateParts(campaign: Campaign): { date: string; time: string } | null {
-  return getDateTimeParts(campaign.scheduledAt);
+function getSendDateParts(campaign: Campaign): { date: string; time: string } | null {
+  return getDateTimeParts(campaign.sentAt || campaign.scheduledAt);
 }
 
 function getLastUpdatedDateParts(campaign: Campaign): { date: string; time: string } | null {
@@ -196,7 +222,7 @@ function formatShortDate(ts: number): string {
 
 // ── Sort ──
 
-type CampaignSortField = 'status' | 'scheduled' | 'updated';
+type CampaignSortField = 'status' | 'send' | 'updated';
 type SortDir = 'asc' | 'desc';
 
 const STATUS_ORDER: Record<string, number> = {
@@ -209,8 +235,8 @@ function compareCampaigns(a: Campaign, b: Campaign, field: CampaignSortField, di
     const aOrder = STATUS_ORDER[normalizeStatus(a.status)] ?? 99;
     const bOrder = STATUS_ORDER[normalizeStatus(b.status)] ?? 99;
     cmp = aOrder - bOrder;
-  } else if (field === 'scheduled') {
-    cmp = getScheduledTs(a) - getScheduledTs(b);
+  } else if (field === 'send') {
+    cmp = getSendTs(a) - getSendTs(b);
   } else if (field === 'updated') {
     cmp = getLastUpdatedTs(a) - getLastUpdatedTs(b);
   } else {
@@ -324,27 +350,35 @@ function getCampaignChannel(c: Campaign): 'email' | 'sms' | 'multi' {
 }
 
 function ChannelBadge({ channel }: { channel: 'email' | 'sms' | 'multi' }) {
-  if (channel === 'sms') {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/10 text-purple-400">
-        <ChatBubbleLeftRightIcon className="w-3 h-3" />
-        SMS
-      </span>
-    );
-  }
-  if (channel === 'multi') {
-    return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-500/10 text-blue-400">
-        <EnvelopeIcon className="w-3 h-3" />
-        <ChatBubbleLeftRightIcon className="w-3 h-3 -ml-0.5" />
-        Email + SMS
-      </span>
-    );
-  }
+  // Icon-only with a hover tooltip. Email stays sky to match the
+  // existing inbox-y palette; Text uses emerald so it reads
+  // distinctly at a glance (and matches the iMessage-style green
+  // most people associate with text messages). Multi-channel rows
+  // show both icons in their own colors, so the combination is
+  // self-describing.
+  const label =
+    channel === 'sms' ? 'Text' : channel === 'multi' ? 'Email + Text' : 'Email';
+
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-sky-500/10 text-sky-400">
-      <EnvelopeIcon className="w-3 h-3" />
-      Email
+    <span className="relative inline-flex items-center group" aria-label={label}>
+      {channel === 'sms' && (
+        <ChatBubbleLeftRightIcon className="w-5 h-5 text-emerald-400" />
+      )}
+      {channel === 'email' && (
+        <EnvelopeIcon className="w-5 h-5 text-sky-400" />
+      )}
+      {channel === 'multi' && (
+        <span className="inline-flex items-center gap-1">
+          <EnvelopeIcon className="w-5 h-5 text-sky-400" />
+          <ChatBubbleLeftRightIcon className="w-5 h-5 text-emerald-400" />
+        </span>
+      )}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute left-1/2 -translate-x-1/2 -top-1 -translate-y-full whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-[10px] font-medium text-[var(--foreground)] opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100 z-20"
+      >
+        {label}
+      </span>
     </span>
   );
 }
@@ -389,14 +423,50 @@ function SortHeader<F extends string>({
 
 // ── Campaign Row (table row) ──
 
+function EngagementCell({
+  primary,
+  secondary,
+  empty,
+  warn,
+}: {
+  primary: string | null;
+  secondary: string | null;
+  empty: boolean;
+  warn?: boolean;
+}) {
+  if (empty || primary === null) {
+    return (
+      <td className="px-3 py-2.5 align-middle text-right tabular-nums leading-tight">
+        <span className="text-xs text-[var(--muted-foreground)]">—</span>
+      </td>
+    );
+  }
+  return (
+    <td className="px-3 py-2.5 align-middle text-right tabular-nums leading-tight">
+      <span
+        className={`block text-xs font-medium ${
+          warn ? 'text-amber-400' : 'text-[var(--foreground)]'
+        }`}
+      >
+        {primary}
+      </span>
+      {secondary && (
+        <span className="block text-[10px] text-[var(--muted-foreground)]">
+          {secondary}
+        </span>
+      )}
+    </td>
+  );
+}
+
 function CampaignTableRow({
   item,
   accountMeta: _accountMeta,
   accountProviders: _accountProviders,
   isMenuOpen,
   downloading,
-  selectMode,
   selected,
+  engagement,
   onToggleMenu,
   onPreview,
   onDownload,
@@ -404,6 +474,7 @@ function CampaignTableRow({
   onEdit,
   onArchive,
   onDelete,
+  onOpenSentDetail,
 }: {
   item: Campaign;
   // accountMeta + accountProviders were only used for ESP deep links.
@@ -413,8 +484,8 @@ function CampaignTableRow({
   accountProviders?: Record<string, string>;
   isMenuOpen: boolean;
   downloading: boolean;
-  selectMode: boolean;
   selected: boolean;
+  engagement?: CampaignEngagement;
   onToggleMenu: (item: Campaign) => void;
   onPreview: (item: Campaign) => void;
   onDownload: (item: Campaign) => void;
@@ -422,12 +493,13 @@ function CampaignTableRow({
   onEdit: (item: Campaign) => void;
   onArchive: (item: Campaign) => void;
   onDelete: (item: Campaign) => void;
+  onOpenSentDetail: (item: Campaign) => void;
 }) {
   void _accountMeta;
   void _accountProviders;
   const loomiEditUrl = getLoomiEditUrl(item);
   const normalizedStatus = normalizeStatus(item.status);
-  const scheduledParts = getScheduledDateParts(item);
+  const sendParts = getSendDateParts(item);
   const updatedParts = getLastUpdatedDateParts(item);
   const StatusIcon = STATUS_ICON[normalizedStatus];
   const isLoomi = (item.provider || '').toLowerCase().startsWith('loomi-');
@@ -436,11 +508,14 @@ function CampaignTableRow({
   // are blocked server-side too — we mirror that here so the button
   // doesn't dangle uselessly.
   const canMutate = isLoomi && normalizedStatus !== 'scheduled' && item.status !== 'queued' && item.status !== 'processing';
-  const rowClickable = !selectMode && Boolean(loomiEditUrl);
+  const isSent = isLoomi && normalizedStatus === 'sent';
+  // Sent rows open the read-only detail drawer instead of the editor;
+  // draft/scheduled rows keep navigating to the builder.
+  const rowClickable = Boolean(loomiEditUrl) || isSent;
 
   function handleRowClick() {
-    if (selectMode) {
-      onToggleSelect(item);
+    if (isSent) {
+      onOpenSentDetail(item);
       return;
     }
     if (loomiEditUrl) onEdit(item);
@@ -448,28 +523,23 @@ function CampaignTableRow({
 
   return (
     <tr
-      onClick={rowClickable || selectMode ? handleRowClick : undefined}
+      onClick={rowClickable ? handleRowClick : undefined}
       className={`border-b border-[var(--border)] last:border-b-0 transition-colors ${
-        rowClickable || selectMode ? 'cursor-pointer' : ''
+        rowClickable ? 'cursor-pointer' : ''
       } ${selected ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/50'}`}
     >
-      {selectMode && (
-        <td className="w-10 px-3 py-2.5 align-middle">
-          <input
-            type="checkbox"
-            checked={selected}
-            onChange={() => onToggleSelect(item)}
-            onClick={(e) => e.stopPropagation()}
-            className="h-4 w-4 rounded border border-[var(--border)] bg-transparent accent-[var(--primary)] cursor-pointer"
-            aria-label="Select campaign"
-          />
-        </td>
-      )}
+      <td className="w-10 px-3 py-2.5 align-middle">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelect(item)}
+          onClick={(e) => e.stopPropagation()}
+          className="h-4 w-4 rounded border border-[var(--border)] bg-transparent accent-[var(--primary)] cursor-pointer"
+          aria-label="Select campaign"
+        />
+      </td>
       <td className="px-3 py-2.5 align-middle">
-        <div className="flex items-center gap-2 min-w-0">
-          <EnvelopeIcon className="w-4 h-4 text-[var(--muted-foreground)] flex-shrink-0" />
-          <span className="text-sm font-medium truncate">{item.name || '(Untitled)'}</span>
-        </div>
+        <span className="block text-sm font-medium truncate">{item.name || '(Untitled)'}</span>
       </td>
       <td className="px-3 py-2.5 align-middle">
         <ChannelBadge channel={getCampaignChannel(item)} />
@@ -481,15 +551,36 @@ function CampaignTableRow({
         </span>
       </td>
       <td className="px-3 py-2.5 align-middle text-right tabular-nums leading-tight">
-        {scheduledParts ? (
+        {sendParts ? (
           <>
-            <span className="block text-xs text-[var(--muted-foreground)]">{scheduledParts.date}</span>
-            <span className="block text-[10px] text-[var(--muted-foreground)]">{scheduledParts.time}</span>
+            <span className="block text-xs text-[var(--muted-foreground)]">{sendParts.date}</span>
+            <span className="block text-[10px] text-[var(--muted-foreground)]">{sendParts.time}</span>
           </>
         ) : (
           <span className="text-xs text-[var(--muted-foreground)]">—</span>
         )}
       </td>
+      <EngagementCell
+        primary={engagement ? formatNum(engagement.sent) : null}
+        secondary={null}
+        empty={!isSent}
+      />
+      <EngagementCell
+        primary={engagement ? formatPct(engagement.openRate) : null}
+        secondary={engagement ? `${formatNum(engagement.uniqueOpens)} unique` : null}
+        empty={!isSent}
+      />
+      <EngagementCell
+        primary={engagement ? formatPct(engagement.clickRate) : null}
+        secondary={engagement ? `${formatNum(engagement.uniqueClicks)} unique` : null}
+        empty={!isSent}
+      />
+      <EngagementCell
+        primary={engagement ? formatPct(engagement.bounceRate) : null}
+        secondary={engagement ? formatNum(engagement.bounces) : null}
+        empty={!isSent}
+        warn={engagement ? engagement.bounceRate > 0.02 : false}
+      />
       <td className="px-3 py-2.5 align-middle text-right tabular-nums leading-tight">
         {updatedParts ? (
           <>
@@ -522,6 +613,15 @@ function CampaignTableRow({
                   >
                     Edit
                     <PencilSquareIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
+                  </button>
+                ) : isSent ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenSentDetail(item)}
+                    className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                  >
+                    View Details
+                    <EyeIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
                   </button>
                 ) : (
                   <button
@@ -713,16 +813,98 @@ export function CampaignPageList({
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
-  // Bulk selection state (drill-down view only)
-  const [selectMode, setSelectMode] = useState(false);
+  // Bulk selection state (drill-down view only). Checkboxes are always
+  // visible on each row; the action dock only appears once the user
+  // selects at least one campaign.
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Per-campaign engagement lookup. Fetched once per mount + account
+  // scope. Drafts/scheduled rows simply won't have an entry and the
+  // row falls back to "—".
+  const [engagementById, setEngagementById] = useState<Map<string, CampaignEngagement>>(new Map());
+
+  // Sent-campaign detail drawer (read-only analytics + preview pane
+  // that opens when a sent row is clicked).
+  const [sentDetailCampaign, setSentDetailCampaign] = useState<Campaign | null>(null);
+  const [sentDetailOpen, setSentDetailOpen] = useState(false);
+
+  function openSentDetail(campaign: Campaign) {
+    setSentDetailCampaign(campaign);
+    setSentDetailOpen(true);
+    setOpenMenuId(null);
+  }
+
+  function closeSentDetail() {
+    setSentDetailOpen(false);
+    // Keep the campaign mounted briefly so the slide-out animation
+    // doesn't flash empty state on the way out.
+    window.setTimeout(() => setSentDetailCampaign(null), 320);
+  }
 
   useEffect(() => {
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => setDebouncedSearch(search), 300);
     return () => clearTimeout(debounceRef.current);
   }, [search]);
+
+  // Pick a single accountKey to scope the engagement call when the
+  // caller has narrowed us to one account. For the admin (all-accounts)
+  // view we leave the param off and let server-side role scoping pick
+  // the right campaigns.
+  const engagementAccountKey = useMemo<string | null>(() => {
+    if (!singleAccountMode) return null;
+    for (const c of campaigns) {
+      if (c.accountKey) return c.accountKey;
+    }
+    return null;
+  }, [campaigns, singleAccountMode]);
+
+  // Fetch per-campaign engagement (sent / opens / clicks / bounces)
+  // for the new metric columns. One request covers every visible
+  // sent row — drafts and scheduled rows simply won't have an entry
+  // and fall back to "—" in the cell.
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams();
+    if (engagementAccountKey) params.set('accountKey', engagementAccountKey);
+    const qs = params.toString();
+    fetch(`/api/campaigns/loomi/engagement${qs ? `?${qs}` : ''}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data || !Array.isArray(data.campaigns)) return;
+        const next = new Map<string, CampaignEngagement>();
+        for (const row of data.campaigns as Array<{
+          campaignId: string;
+          sent: number;
+          delivered: number;
+          uniqueOpens: number;
+          openRate: number;
+          uniqueClicks: number;
+          clickRate: number;
+          bounces: number;
+          bounceRate: number;
+        }>) {
+          next.set(row.campaignId, {
+            sent: row.sent,
+            delivered: row.delivered,
+            uniqueOpens: row.uniqueOpens,
+            openRate: row.openRate,
+            uniqueClicks: row.uniqueClicks,
+            clickRate: row.clickRate,
+            bounces: row.bounces,
+            bounceRate: row.bounceRate,
+          });
+        }
+        setEngagementById(next);
+      })
+      .catch(() => {
+        // Engagement is non-critical; rows still render with "—".
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [engagementAccountKey]);
 
   // Reset pagination on search change
   useEffect(() => {
@@ -738,7 +920,6 @@ export function CampaignPageList({
     setCampaignSortDir('desc');
     setSearch('');
     setOpenMenuId(null);
-    setSelectMode(false);
     setSelectedKeys(new Set());
   }
 
@@ -746,12 +927,10 @@ export function CampaignPageList({
     setSelectedAccount(null);
     setSearch('');
     setOpenMenuId(null);
-    setSelectMode(false);
     setSelectedKeys(new Set());
   }
 
-  function exitSelectMode() {
-    setSelectMode(false);
+  function clearSelection() {
     setSelectedKeys(new Set());
   }
 
@@ -1023,7 +1202,7 @@ export function CampaignPageList({
     } finally {
       setBulkBusy(false);
     }
-    exitSelectMode();
+    clearSelection();
     if (failed.length > 0 || skipped > 0) {
       await alert({
         title: 'Copy summary',
@@ -1140,7 +1319,7 @@ export function CampaignPageList({
     } finally {
       setBulkBusy(false);
     }
-    exitSelectMode();
+    clearSelection();
     if (failed.length > 0 || skipped > 0) {
       await alert({
         title: 'Delete summary',
@@ -1232,23 +1411,6 @@ export function CampaignPageList({
                 className="w-52 pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
               />
             </div>
-            {selectedAccount && (
-              <button
-                type="button"
-                onClick={() => {
-                  if (selectMode) exitSelectMode();
-                  else setSelectMode(true);
-                }}
-                className={`inline-flex items-center gap-1.5 h-[30px] px-2.5 text-xs font-medium rounded-lg border transition-colors ${
-                  selectMode
-                    ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
-                    : 'border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)]'
-                }`}
-              >
-                <CheckIcon className="w-3.5 h-3.5" />
-                {selectMode ? 'Cancel' : 'Select'}
-              </button>
-            )}
             {toolbarExtras}
           </div>
         </div>
@@ -1302,7 +1464,7 @@ export function CampaignPageList({
                           <span className="text-[10px]">{accountSortIndicator('sent')}</span>
                         </button>
                       </th>
-                      <th className="text-center px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                      <th className="text-center px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
                         Scheduled
                       </th>
                       <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
@@ -1388,46 +1550,56 @@ export function CampaignPageList({
               </div>
             ) : (
               <div className="overflow-x-auto glass-table">
-                <table className="w-full min-w-[600px]">
+                <table className="w-full min-w-[1000px]">
                   <thead className="sticky top-0 z-10">
                     <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
-                      {selectMode && (
-                        <th className="w-10 px-3 py-2">
-                          <input
-                            type="checkbox"
-                            checked={
+                      <th className="w-10 px-3 py-2">
+                        <input
+                          type="checkbox"
+                          checked={
+                            pagedCampaigns.length > 0 &&
+                            pagedCampaigns.every((c) => selectedKeys.has(getCampaignKey(c)))
+                          }
+                          ref={(el) => {
+                            if (!el) return;
+                            const someSelected = pagedCampaigns.some((c) =>
+                              selectedKeys.has(getCampaignKey(c)),
+                            );
+                            const allSelected =
                               pagedCampaigns.length > 0 &&
-                              pagedCampaigns.every((c) => selectedKeys.has(getCampaignKey(c)))
-                            }
-                            ref={(el) => {
-                              if (!el) return;
-                              const someSelected = pagedCampaigns.some((c) =>
-                                selectedKeys.has(getCampaignKey(c)),
-                              );
-                              const allSelected =
-                                pagedCampaigns.length > 0 &&
-                                pagedCampaigns.every((c) => selectedKeys.has(getCampaignKey(c)));
-                              el.indeterminate = someSelected && !allSelected;
-                            }}
-                            onChange={toggleSelectAllOnPage}
-                            className="h-4 w-4 rounded border border-[var(--border)] bg-transparent accent-[var(--primary)] cursor-pointer"
-                            aria-label="Select all campaigns on this page"
-                          />
-                        </th>
-                      )}
-                      <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                              pagedCampaigns.every((c) => selectedKeys.has(getCampaignKey(c)));
+                            el.indeterminate = someSelected && !allSelected;
+                          }}
+                          onChange={toggleSelectAllOnPage}
+                          className="h-4 w-4 rounded border border-[var(--border)] bg-transparent accent-[var(--primary)] cursor-pointer"
+                          aria-label="Select all campaigns on this page"
+                        />
+                      </th>
+                      <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
                         Name
                       </th>
-                      <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                      <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
                         Channel
                       </th>
-                      <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                      <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
                         <SortHeader label="Status" field="status" activeField={campaignSortField} activeDir={campaignSortDir} onToggle={toggleCampaignSort} />
                       </th>
-                      <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                        <SortHeader label="Scheduled" field="scheduled" activeField={campaignSortField} activeDir={campaignSortDir} onToggle={toggleCampaignSort} />
+                      <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
+                        <SortHeader label="Send Date" field="send" activeField={campaignSortField} activeDir={campaignSortDir} onToggle={toggleCampaignSort} />
                       </th>
-                      <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                      <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
+                        Sent
+                      </th>
+                      <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
+                        Open
+                      </th>
+                      <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
+                        Click
+                      </th>
+                      <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
+                        Bounce
+                      </th>
+                      <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] normal-case tracking-wider">
                         <SortHeader label="Last Updated" field="updated" activeField={campaignSortField} activeDir={campaignSortDir} onToggle={toggleCampaignSort} />
                       </th>
                       <th className="w-14 px-3 py-2"></th>
@@ -1436,6 +1608,7 @@ export function CampaignPageList({
                   <tbody>
                     {pagedCampaigns.map((item) => {
                       const rowKey = getCampaignKey(item);
+                      const campaignId = item.campaignId || item.id;
                       return (
                         <CampaignTableRow
                           key={rowKey}
@@ -1444,8 +1617,8 @@ export function CampaignPageList({
                           accountProviders={accountProviders}
                           isMenuOpen={openMenuId === rowKey}
                           downloading={downloadingId === rowKey}
-                          selectMode={selectMode}
                           selected={selectedKeys.has(rowKey)}
+                          engagement={engagementById.get(campaignId)}
                           onToggleMenu={(campaign) => {
                             const key = getCampaignKey(campaign);
                             setOpenMenuId((prev) => (prev === key ? null : key));
@@ -1456,6 +1629,7 @@ export function CampaignPageList({
                           onEdit={handleEditCampaign}
                           onArchive={handleArchiveCampaign}
                           onDelete={handleDeleteCampaign}
+                          onOpenSentDetail={openSentDetail}
                         />
                       );
                     })}
@@ -1476,12 +1650,15 @@ export function CampaignPageList({
         )}
       </div>
 
-      {/* Bulk action dock (drill-down view only) */}
-      {selectMode && selectedAccount && (
+      {/* Bulk action dock (drill-down view only). Dock surfaces once
+          the user actually selects something — checkboxes are
+          always visible on rows, so there's no separate "enter
+          select mode" step to undo. */}
+      {selectedKeys.size > 0 && selectedAccount && (
         <BulkActionDock
           count={selectedKeys.size}
           itemLabel="campaigns"
-          onClose={exitSelectMode}
+          onClose={clearSelection}
           actions={[
             {
               id: 'select-all',
@@ -1581,6 +1758,13 @@ export function CampaignPageList({
           </div>
         </div>
       )}
+
+      {/* Sent-campaign detail drawer */}
+      <SentCampaignDrawer
+        open={sentDetailOpen}
+        campaign={sentDetailCampaign}
+        onClose={closeSentDetail}
+      />
     </>
   );
 }

@@ -15,9 +15,12 @@ import {
   XCircleIcon,
   DocumentTextIcon,
   BoltIcon,
+  Squares2X2Icon,
+  TableCellsIcon,
 } from '@heroicons/react/24/outline';
 import { FlowIcon } from '@/components/icon-map';
 import { AccountAvatar as SharedAccountAvatar } from '@/components/account-avatar';
+import { FlowCard } from '@/components/flows/flow-card';
 
 // ── Types ──
 
@@ -291,6 +294,50 @@ function AccountAvatar({
   );
 }
 
+// ── Publish Switch (inline toggle for table view) ──
+
+function PublishSwitch({
+  active,
+  disabled,
+  updating,
+  onToggle,
+}: {
+  active: boolean;
+  disabled: boolean;
+  updating: boolean;
+  onToggle: (next: 'active' | 'inactive') => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={active}
+      disabled={disabled || updating}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onToggle(active ? 'inactive' : 'active');
+      }}
+      title={
+        disabled
+          ? 'Publish toggle only available for Loomi flows'
+          : active
+            ? 'Click to unpublish'
+            : 'Click to publish'
+      }
+      className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+        active ? 'bg-green-500' : 'bg-[var(--muted)] border border-[var(--border)]'
+      } ${updating ? 'animate-pulse' : ''}`}
+    >
+      <span
+        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${
+          active ? 'translate-x-[18px]' : 'translate-x-0.5'
+        }`}
+      />
+    </button>
+  );
+}
+
 // ── Workflow Row ──
 
 function WorkflowRow({
@@ -324,8 +371,6 @@ function WorkflowRow({
   const StatusIcon = STATUS_ICON[normalized];
   const isLoomiFlow = isLoomiWorkflow(item);
   const canToggleStatus = isLoomiFlow && typeof onToggleLoomiStatus === 'function';
-  const nextStatus: 'active' | 'inactive' = normalized === 'active' ? 'inactive' : 'active';
-  const nextStatusLabel = nextStatus === 'active' ? 'Set Active / Publish' : 'Set Inactive';
   const scheduledParts = getScheduledDateParts(item);
   const updatedParts = getLastUpdatedDateParts(item);
 
@@ -352,6 +397,14 @@ function WorkflowRow({
           {StatusIcon && <StatusIcon className="w-3 h-3" />}
           {normalized.replace(/_/g, ' ')}
         </span>
+      </span>
+      <span className="w-20 flex justify-center">
+        <PublishSwitch
+          active={normalized === 'active'}
+          disabled={!canToggleStatus}
+          updating={isStatusUpdating}
+          onToggle={(next) => onToggleLoomiStatus?.(item, next)}
+        />
       </span>
       <span className="w-36 text-right tabular-nums leading-tight">
         {scheduledParts ? (
@@ -386,35 +439,13 @@ function WorkflowRow({
 
           {isMenuOpen && (
             <div className="absolute right-0 top-full mt-1 z-50 w-40 glass-dropdown shadow-lg p-1.5">
-              {canToggleStatus && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isStatusUpdating) return;
-                    onToggleLoomiStatus?.(item, nextStatus);
-                    onToggleMenu(item);
-                  }}
-                  disabled={isStatusUpdating}
-                  className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isStatusUpdating ? 'Updating...' : nextStatusLabel}
-                  {nextStatus === 'active' ? (
-                    <CheckCircleIcon className="w-3.5 h-3.5 text-green-400" />
-                  ) : (
-                    <XCircleIcon className="w-3.5 h-3.5 text-red-400" />
-                  )}
-                </button>
-              )}
-
-              {!canToggleStatus && (
-                <button
-                  type="button"
-                  disabled
-                  className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--muted-foreground)] opacity-50 cursor-not-allowed"
-                >
-                  No actions
-                </button>
-              )}
+              <button
+                type="button"
+                disabled
+                className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--muted-foreground)] opacity-50 cursor-not-allowed"
+              >
+                No actions
+              </button>
             </div>
           )}
         </div>
@@ -481,6 +512,8 @@ function GroupHeader({
 
 // ── Component ──
 
+type ViewMode = 'card' | 'table';
+
 export function FlowList({
   workflows,
   loading,
@@ -502,6 +535,7 @@ export function FlowList({
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [sortField, setSortField] = useState<SortField | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('desc');
+  const [viewMode, setViewMode] = useState<ViewMode>('card');
 
   useEffect(() => {
     clearTimeout(debounceRef.current);
@@ -613,8 +647,38 @@ export function FlowList({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* View mode toggle */}
+          <div className="flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
+            <button
+              type="button"
+              onClick={() => setViewMode('card')}
+              className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                viewMode === 'card'
+                  ? 'bg-[var(--primary)] text-white'
+                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+              title="Card view"
+            >
+              <Squares2X2Icon className="w-3.5 h-3.5" />
+              Cards
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                viewMode === 'table'
+                  ? 'bg-[var(--primary)] text-white'
+                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+              title="Table view"
+            >
+              <TableCellsIcon className="w-3.5 h-3.5" />
+              Table
+            </button>
+          </div>
+
           {/* Collapse / Expand toggle */}
-          {hasMultipleAccounts && (
+          {hasMultipleAccounts && viewMode === 'table' && (
             <button
               onClick={allCollapsed ? expandAll : collapseAll}
               className="text-[10px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors px-1.5 py-1"
@@ -663,8 +727,76 @@ export function FlowList({
               </a>
             )}
           </div>
+        ) : viewMode === 'card' ? (
+          /* ── Card view ── */
+          hasMultipleAccounts ? (
+            <div className="space-y-4 mt-1">
+              {groups.map((group) => {
+                const isOpen = !collapsed[group.key];
+                const activeCount = group.workflows.filter(
+                  w => normalizeStatus(w.status) === 'active'
+                ).length;
+
+                return (
+                  <div key={group.key}>
+                    <GroupHeader
+                      groupKey={group.key}
+                      label={group.label}
+                      isOpen={isOpen}
+                      workflowCount={group.workflows.length}
+                      activeCount={activeCount}
+                      storefrontImage={accountMeta?.[group.key]?.storefrontImage}
+                      onToggle={() => toggleGroup(group.key)}
+                    />
+
+                    <div className="collapsible-wrapper" data-open={isOpen}>
+                      <div className="collapsible-inner">
+                        <div className="ml-5.5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pt-2">
+                          {group.workflows.map((item) => (
+                            <FlowCard
+                              key={getWorkflowKey(item)}
+                              workflow={item}
+                              accountMeta={accountMeta?.[item.accountKey || '']}
+                              accountName={item.accountKey ? accountNames?.[item.accountKey] : undefined}
+                              showAccount={false}
+                              isMenuOpen={openMenuId === getWorkflowKey(item)}
+                              isStatusUpdating={updatingStatusFlowIds.includes(item.id)}
+                              onToggleMenu={(workflow) => {
+                                const key = getWorkflowKey(workflow);
+                                setOpenMenuId((prev) => (prev === key ? null : key));
+                              }}
+                              onToggleLoomiStatus={onToggleLoomiStatus}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-1">
+              {pagedWorkflows.map((item) => (
+                <FlowCard
+                  key={getWorkflowKey(item)}
+                  workflow={item}
+                  accountMeta={accountMeta?.[item.accountKey || '']}
+                  accountName={item.accountKey ? accountNames?.[item.accountKey] : undefined}
+                  showAccount={true}
+                  isMenuOpen={openMenuId === getWorkflowKey(item)}
+                  isStatusUpdating={updatingStatusFlowIds.includes(item.id)}
+                  onToggleMenu={(workflow) => {
+                    const key = getWorkflowKey(workflow);
+                    setOpenMenuId((prev) => (prev === key ? null : key));
+                  }}
+                  onToggleLoomiStatus={onToggleLoomiStatus}
+                />
+              ))}
+            </div>
+          )
         ) : hasMultipleAccounts ? (
-          /* ── Grouped view ── */
+          /* ── Grouped table view ── */
           <div className="space-y-1 mt-1">
             {groups.map((group) => {
               const isOpen = !collapsed[group.key];
@@ -694,6 +826,7 @@ export function FlowList({
                         <span className="w-20 text-right">
                           <SortHeader label="STATUS" field="status" activeField={sortField} activeDir={sortDir} onToggle={toggleSort} />
                         </span>
+                        <span className="w-20 text-center">Publish</span>
                         <span className="w-36 text-right">
                           <SortHeader label="SCHEDULED" field="scheduled" activeField={sortField} activeDir={sortDir} onToggle={toggleSort} />
                         </span>
@@ -727,7 +860,7 @@ export function FlowList({
             })}
           </div>
         ) : (
-          /* ── Flat view (single account or no grouping needed) ── */
+          /* ── Flat table view (single account or no grouping needed) ── */
           <div className="mt-1">
             <div className="flex items-center gap-3 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
               <span className="flex-1">Name</span>
@@ -735,6 +868,7 @@ export function FlowList({
               <span className="w-20 text-right">
                 <SortHeader label="STATUS" field="status" activeField={sortField} activeDir={sortDir} onToggle={toggleSort} />
               </span>
+              <span className="w-20 text-center">Publish</span>
               <span className="w-36 text-right">
                 <SortHeader label="SCHEDULED" field="scheduled" activeField={sortField} activeDir={sortDir} onToggle={toggleSort} />
               </span>

@@ -8,9 +8,8 @@ import {
   useSensors,
 } from '@dnd-kit/core';
 import { LandingPageEditorProvider, useLandingPageEditor } from './EditorContext';
-import { BlockPalette } from './BlockPalette';
 import { Canvas } from './Canvas';
-import { PropertyPanel } from './PropertyPanel';
+import { Sidebar } from './Sidebar';
 import type { LandingPageTemplate } from '../types';
 
 /**
@@ -82,15 +81,12 @@ function DndShell() {
 
   return (
     <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-      <div className="flex-1 min-h-0 flex">
-        <div className="w-[260px] flex-shrink-0">
-          <BlockPalette />
+      <div className="flex w-full h-full min-h-0 gap-4 p-4">
+        <div className="w-[320px] flex-shrink-0 min-h-0 flex">
+          <Sidebar />
         </div>
-        <div className="flex-1 min-w-0 flex flex-col">
+        <div className="flex-1 min-w-0 min-h-0 flex flex-col border border-[var(--border)] rounded-xl overflow-hidden bg-[var(--card)]">
           <Canvas />
-        </div>
-        <div className="w-[320px] flex-shrink-0">
-          <PropertyPanel />
         </div>
       </div>
     </DndContext>

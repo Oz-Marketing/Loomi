@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { useLandingPageEditor } from './EditorContext';
+import { SLIDER_CLASS } from './slider-style';
 
 const inputClass =
   'w-full px-3 py-2 text-sm bg-transparent text-[var(--foreground)] border border-[var(--border)] rounded-md outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] transition-colors';
@@ -15,22 +16,18 @@ const FONT_FAMILY_OPTIONS = [
 ];
 
 /**
- * Page-level settings panel — shown in the right rail when nothing is
- * selected. Mirrors the form editor's FormSettings panel.
+ * Page-level settings rendered inside the left sidebar's Settings
+ * tab. Mirrors the forms editor's FormSettings panel structure —
+ * stacked sections, schema-driven inputs, no outer chrome (the
+ * Sidebar wraps everything in the same glass-card frame the rest of
+ * the editor uses).
  */
 export function PageSettingsPanel() {
   const { template, updateSettings } = useLandingPageEditor();
   const { settings } = template;
 
   return (
-    <div className="h-full overflow-y-auto bg-[var(--card)] border-l border-[var(--border)]">
-      <div className="px-4 py-3 border-b border-[var(--border)] sticky top-0 bg-[var(--card)] z-10">
-        <h2 className="text-sm font-semibold">Page Settings</h2>
-        <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
-          Click a block on the canvas to edit it.
-        </p>
-      </div>
-
+    <div>
       <Section name="Background">
         <Stacked label="Page Background">
           <ColorRow
@@ -165,7 +162,7 @@ function NumberRow({
         max={max}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="flex-1"
+        className={`flex-1 ${SLIDER_CLASS}`}
       />
       <div className="flex items-center gap-1">
         <input

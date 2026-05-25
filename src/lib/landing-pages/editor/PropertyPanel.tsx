@@ -1,16 +1,14 @@
 'use client';
 
-import * as React from 'react';
 import { useLandingPageEditor } from './EditorContext';
 import { BLOCK_SCHEMA_BY_TYPE, type PropSchema } from '../schemas';
-import { PageSettingsPanel } from './PageSettingsPanel';
 import { FormPickerInput } from './FormPickerInput';
 import { ItemArrayEditor } from './ItemArrayEditor';
+import { SLIDER_CLASS } from './slider-style';
 import type { Block } from '../types';
 
-/** Walk the block tree to find a block by id. The editor used to
- *  search only the top level — that broke as soon as we wired up
- *  nested editing. */
+/** Walk the block tree to find a block by id. Nested blocks (inside
+ *  Section / column slots) are valid selections. */
 function findBlockDeep(blocks: Block[], id: string): Block | undefined {
   for (const b of blocks) {
     if (b.id === id) return b;
@@ -26,38 +24,26 @@ const inputClass =
   'w-full px-3 py-2 text-sm bg-transparent text-[var(--foreground)] border border-[var(--border)] rounded-md outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] transition-colors';
 
 /**
- * Right-hand panel. Shows the schema-driven property editor for the
- * selected block, or the page-level settings when nothing is selected.
- *
- * Inputs are minimal-but-functional — they cover every prop type the
- * schemas declare (text, textarea, color, url, image, select, toggle,
- * number, range, unit, form-picker). PR3 will polish these with the
- * same slider/stepper UX the forms PropertyControls module ships.
+ * Block-properties view. Lives inside the left sidebar — the Sidebar
+ * component owns the outer chrome (border, header, scroll). When no
+ * block is selected, the sidebar shows the Content / Settings tabs
+ * instead of this view, so this component never has to render an
+ * "empty" state.
  */
-export function PropertyPanel() {
+export function BlockProperties() {
   const { template, selectedId, updateBlockProps } = useLandingPageEditor();
-
-  // Find the selected block anywhere in the tree (top-level or
-  // nested inside a Section / column slot).
   const block = selectedId ? findBlockDeep(template.blocks, selectedId) : undefined;
-
-  if (!block) {
-    return <PageSettingsPanel />;
-  }
+  if (!block) return null;
 
   const schema = BLOCK_SCHEMA_BY_TYPE[block.type];
   if (!schema) {
     return (
-      <Panel title="Unknown block">
-        <p className="px-4 py-3 text-xs text-[var(--muted-foreground)]">
-          No schema registered for type <code>{block.type}</code>.
-        </p>
-      </Panel>
+      <p className="px-4 py-3 text-xs text-[var(--muted-foreground)]">
+        No schema registered for type <code>{block.type}</code>.
+      </p>
     );
   }
 
-  // Group props by `group` field so the panel reads as labelled
-  // sections rather than a flat dump.
   const grouped = schema.props.reduce<Record<string, PropSchema[]>>((acc, p) => {
     const key = p.group ?? 'general';
     (acc[key] ??= []).push(p);
@@ -65,9 +51,12 @@ export function PropertyPanel() {
   }, {});
 
   return (
-    <Panel title={schema.label}>
+    <div>
       {Object.entries(grouped).map(([group, props]) => (
-        <div key={group} className="px-4 py-3 border-b border-[var(--border)] space-y-3 last:border-b-0">
+        <div
+          key={group}
+          className="px-4 py-3 border-b border-[var(--border)] space-y-3 last:border-b-0"
+        >
           <h4 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">
             {group}
           </h4>
@@ -77,7 +66,6 @@ export function PropertyPanel() {
                 <PropEditor
                   prop={p}
                   value={(block.props[p.key] as unknown) ?? p.default}
-                  accountKey={undefined /* PR3 wires this when the picker needs scoping */}
                   onChange={(value) => updateBlockProps(block.id, { [p.key]: value })}
                 />
               </div>
@@ -85,17 +73,6 @@ export function PropertyPanel() {
           </div>
         </div>
       ))}
-    </Panel>
-  );
-}
-
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="h-full overflow-y-auto bg-[var(--card)] border-l border-[var(--border)]">
-      <div className="px-4 py-3 border-b border-[var(--border)] sticky top-0 bg-[var(--card)] z-10">
-        <h2 className="text-sm font-semibold">{title}</h2>
-      </div>
-      {children}
     </div>
   );
 }
@@ -104,7 +81,6 @@ interface PropEditorProps {
   prop: PropSchema;
   value: unknown;
   onChange: (value: unknown) => void;
-  accountKey?: string;
 }
 
 function PropEditor({ prop, value, onChange }: PropEditorProps) {
@@ -240,7 +216,7 @@ function PropEditor({ prop, value, onChange }: PropEditorProps) {
                 max={prop.sliderMax ?? prop.max ?? 200}
                 value={numeric}
                 onChange={(e) => onChange(Number(e.target.value))}
-                className="flex-1"
+                className={`flex-1 ${SLIDER_CLASS}`}
               />
               <input
                 type="number"

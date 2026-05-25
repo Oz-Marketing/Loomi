@@ -36,11 +36,11 @@ export function BlockPalette() {
   }, []);
 
   return (
-    <div className="h-full overflow-y-auto bg-[var(--card)] border-r border-[var(--border)]">
+    <div className="flex flex-col">
       <div className="px-4 py-3 border-b border-[var(--border)]">
-        <h2 className="text-sm font-semibold">Blocks</h2>
-        <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
-          Click to add to the canvas.
+        <p className="text-[11px] text-[var(--muted-foreground)]">
+          Click a block to add it to the canvas. Hover a block on the canvas to
+          see its edit controls.
         </p>
       </div>
       {CATEGORY_ORDER.map((cat) => (

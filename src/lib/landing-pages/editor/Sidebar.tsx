@@ -35,7 +35,7 @@ export function Sidebar() {
   const selectedBlock = selectedId ? findBlockDeep(template.blocks, selectedId) : null;
 
   return (
-    <aside className="flex flex-col h-full w-full min-h-0">
+    <aside className="flex flex-col h-full w-full min-h-0 bg-[var(--card)] border border-[var(--border)] rounded-xl overflow-hidden">
       {selectedBlock ? (
         <SelectedBlockHeader
           block={selectedBlock}

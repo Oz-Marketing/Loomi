@@ -135,20 +135,26 @@ function CanvasActionBar({
   previewWidth: PreviewWidth;
   onChange: (w: PreviewWidth) => void;
 }) {
+  // Bare bar — no background, no separator. The toggle itself is the
+  // only chrome on this row. Same pill-tab idiom the sidebar uses.
   return (
-    <div className="flex items-center justify-center gap-1 px-4 py-2 border-b border-[var(--border)] bg-[var(--muted)] flex-shrink-0">
-      <PreviewToggleButton
-        active={previewWidth === 'desktop'}
-        onClick={() => onChange('desktop')}
-        title="Desktop preview"
-        icon={<ComputerDesktopIcon className="w-4 h-4" />}
-      />
-      <PreviewToggleButton
-        active={previewWidth === 'mobile'}
-        onClick={() => onChange('mobile')}
-        title="Mobile preview"
-        icon={<DevicePhoneMobileIcon className="w-4 h-4" />}
-      />
+    <div className="flex items-center justify-center px-4 py-2 flex-shrink-0">
+      <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-1 gap-0.5">
+        <PreviewToggleButton
+          active={previewWidth === 'desktop'}
+          onClick={() => onChange('desktop')}
+          title="Desktop preview"
+          icon={<ComputerDesktopIcon className="w-3.5 h-3.5" />}
+          label="Desktop"
+        />
+        <PreviewToggleButton
+          active={previewWidth === 'mobile'}
+          onClick={() => onChange('mobile')}
+          title="Mobile preview"
+          icon={<DevicePhoneMobileIcon className="w-3.5 h-3.5" />}
+          label="Mobile"
+        />
+      </div>
     </div>
   );
 }
@@ -158,11 +164,13 @@ function PreviewToggleButton({
   onClick,
   title,
   icon,
+  label,
 }: {
   active: boolean;
   onClick: () => void;
   title: string;
   icon: React.ReactNode;
+  label: string;
 }) {
   return (
     <button
@@ -171,13 +179,14 @@ function PreviewToggleButton({
       title={title}
       aria-label={title}
       aria-pressed={active}
-      className={`inline-flex items-center justify-center w-8 h-8 rounded-md transition-colors ${
+      className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded transition-colors ${
         active
-          ? 'bg-[var(--card)] text-[var(--foreground)] shadow-sm'
-          : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--card)]/50'
+          ? 'bg-[var(--primary)] text-white'
+          : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
       }`}
     >
       {icon}
+      {label}
     </button>
   );
 }

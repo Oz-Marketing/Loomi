@@ -219,21 +219,29 @@ export function FormOverview() {
 
       {/* Two-column body — preview + embed */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,420px)] gap-5">
-        <section className="glass-card rounded-2xl overflow-hidden">
+        {/* The whole preview card routes into the builder on click.
+            The inner FormRenderer is pointer-events:none so users
+            can't accidentally interact with form fields here — the
+            edit hint pill in the corner is the visible affordance. */}
+        <Link
+          href={subHref(`/websites/forms/${form.id}/edit`)}
+          aria-label="Edit form in builder"
+          className="glass-card group relative rounded-2xl overflow-hidden block transition-shadow hover:shadow-lg hover:border-[var(--primary)]/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]/40"
+        >
           <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
             <div>
               <h3 className="font-semibold">Preview</h3>
               <p className="text-xs text-[var(--muted-foreground)]">
-                What visitors see. Open the live URL to actually submit.
+                Click anywhere on the preview to edit the form.
               </p>
             </div>
-            <Link
-              href={subHref(`/websites/forms/${form.id}/edit`)}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
+            <span
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity"
+              aria-hidden="true"
             >
               <PencilSquareIcon className="w-3.5 h-3.5" />
               Edit
-            </Link>
+            </span>
           </div>
           <div
             className="max-h-[680px] overflow-y-auto bg-[var(--muted)]/30"
@@ -243,7 +251,7 @@ export function FormOverview() {
               <FormRenderer template={form.schema} />
             </div>
           </div>
-        </section>
+        </Link>
 
         <section className="glass-card rounded-2xl p-4 h-fit">
           <div className="flex items-center justify-between gap-3 mb-2">

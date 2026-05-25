@@ -44,6 +44,13 @@ export interface FormSettings {
   bodyBg: string;        // outer page background (around the form container)
   contentBg: string;     // form container background
   contentWidth: number;  // pixels, default 640
+  /** Inner padding of the form container — space between the form
+   *  container's edge and its content. Applied to all four sides
+   *  uniformly. Default 32. Use 0 for an edge-to-edge layout. */
+  contentPadding: number;
+  /** Outer spacing around the form container — the gap between the
+   *  form card and the page edges. Default 32. */
+  contentMargin: number;
   fontFamily: string;    // default font stack
   textColor: string;     // default body text color
   // Whether the public page strips outer chrome (used by ?embed=1 and
@@ -63,6 +70,8 @@ export const DEFAULT_FORM_SETTINGS: FormSettings = {
   bodyBg: '#f5f5f5',
   contentBg: '#ffffff',
   contentWidth: 640,
+  contentPadding: 32,
+  contentMargin: 32,
   fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
   textColor: '#1a1a1a',
 };

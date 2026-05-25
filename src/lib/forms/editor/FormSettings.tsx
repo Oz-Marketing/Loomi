@@ -71,6 +71,30 @@ export function FormSettings() {
             sliderMax={1024}
           />
         </StackedField>
+        <StackedField label="Content Padding">
+          <NumberInput
+            value={settings.contentPadding ?? 32}
+            onChange={(v) => updateSettings({ contentPadding: v })}
+            min={0}
+            max={96}
+            unit="px"
+            slider
+            sliderMin={0}
+            sliderMax={96}
+          />
+        </StackedField>
+        <StackedField label="Form Margin">
+          <NumberInput
+            value={settings.contentMargin ?? 32}
+            onChange={(v) => updateSettings({ contentMargin: v })}
+            min={0}
+            max={96}
+            unit="px"
+            slider
+            sliderMin={0}
+            sliderMax={96}
+          />
+        </StackedField>
       </div>
 
       {/* Typography */}

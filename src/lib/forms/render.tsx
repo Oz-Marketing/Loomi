@@ -29,6 +29,10 @@ const FieldErrorContext = React.createContext<Record<string, string>>({});
 
 export function FormRenderer({ template, options }: FormRendererProps) {
   const errors = options?.errors ?? {};
+  // Spacing settings — fall back to sensible defaults so older form
+  // schemas that predate these fields still render without jumping.
+  const contentPadding = template.settings.contentPadding ?? 32;
+  const contentMargin = template.settings.contentMargin ?? 32;
   return (
     <FieldErrorContext.Provider value={errors}>
       <div
@@ -38,7 +42,7 @@ export function FormRenderer({ template, options }: FormRendererProps) {
           fontFamily: template.settings.fontFamily,
           color: template.settings.textColor,
           minHeight: '100%',
-          padding: '32px 16px',
+          padding: `${contentMargin}px`,
         }}
       >
         <div
@@ -47,7 +51,7 @@ export function FormRenderer({ template, options }: FormRendererProps) {
             margin: '0 auto',
             backgroundColor: template.settings.contentBg,
             borderRadius: 12,
-            padding: '8px 0',
+            padding: `${contentPadding}px`,
           }}
         >
           {template.blocks.map((block) => (

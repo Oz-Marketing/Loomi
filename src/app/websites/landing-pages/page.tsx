@@ -86,33 +86,17 @@ export default function LandingPagesPage() {
   }
 
   async function duplicate(page: LandingPageSummary) {
-    const res = await fetch('/api/landing-pages', {
+    const res = await fetch(`/api/landing-pages/${page.id}/clone`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        accountKey: page.accountKey,
-        name: `${page.name || 'Untitled'} (copy)`,
-        templateId: 'blank',
-      }),
+      body: JSON.stringify({}),
     });
     const payload = await res.json().catch(() => ({}));
     if (!res.ok) {
       toast.error(payload.error || 'Could not duplicate.');
       return;
     }
-    // Now PATCH the new page with the source's schema. We don't have a
-    // dedicated /clone endpoint yet; the two-step flow keeps PR3 small.
-    const patchRes = await fetch(`/api/landing-pages/${payload.page.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ schema: page.schema }),
-    });
-    if (!patchRes.ok) {
-      const p2 = await patchRes.json().catch(() => ({}));
-      toast.error(p2.error || 'Duplicate created but schema copy failed.');
-    } else {
-      toast.success('Page duplicated.');
-    }
+    toast.success('Page duplicated.');
     await mutate();
   }
 

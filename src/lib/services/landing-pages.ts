@@ -259,3 +259,45 @@ export async function deleteLandingPage(
   }
   await prisma.landingPage.delete({ where: { id } });
 }
+
+/**
+ * Clone an existing landing page in a single transaction. The new
+ * page:
+ *  - inherits the source's schema (deep copy via JSON roundtrip)
+ *  - gets a fresh slug derived from "<source.name> copy"
+ *  - starts in draft status
+ *  - drops SEO metadata (clones often want their own SEO; carrying
+ *    over the original's title/description leads to duplicate-page
+ *    SEO problems)
+ */
+export async function cloneLandingPage(
+  id: string,
+  accountKeys: string[] | null,
+  options: { createdByUserId?: string; name?: string } = {},
+): Promise<LandingPageDetail> {
+  const source = await prisma.landingPage.findUnique({ where: { id } });
+  if (!source) throw new LandingPageServiceError('Not found.', 404);
+  if (accountKeys && accountKeys.length > 0 && !accountKeys.includes(source.accountKey)) {
+    throw new LandingPageServiceError('Not found.', 404);
+  }
+
+  const baseName = options.name?.trim() || `${source.name || 'Untitled'} (copy)`;
+  const baseSlug = slugify(baseName);
+  const slug = await ensureUniqueSlug(baseSlug);
+
+  // Deep clone via JSON roundtrip — safe because LandingPageTemplate
+  // is plain data (no Maps / Sets / functions).
+  const schema = JSON.parse(JSON.stringify(source.schema)) as Prisma.InputJsonValue;
+
+  const row = await prisma.landingPage.create({
+    data: {
+      accountKey: source.accountKey,
+      name: baseName,
+      slug,
+      schema,
+      status: 'draft',
+      createdByUserId: options.createdByUserId,
+    },
+  });
+  return toDetail(row);
+}

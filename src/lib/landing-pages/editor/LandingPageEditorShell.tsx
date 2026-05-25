@@ -1,5 +1,6 @@
 'use client';
 
+import * as React from 'react';
 import {
   DndContext,
   PointerSensor,
@@ -37,7 +38,15 @@ export function LandingPageEditorShell({
 }
 
 function DndShell() {
-  const { template, reorderInParent, moveBlockTo } = useLandingPageEditor();
+  const {
+    template,
+    selectedId,
+    selectBlock,
+    deleteBlock,
+    duplicateBlock,
+    reorderInParent,
+    moveBlockTo,
+  } = useLandingPageEditor();
 
   // PointerSensor with an 8px activation distance so a click on a
   // block selects (and never accidentally starts a drag). Drags fire
@@ -45,6 +54,50 @@ function DndShell() {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
   );
+
+  // Block-level keyboard shortcuts. Bail when focus is inside a
+  // text field — those handle their own Delete/Backspace/etc.
+  React.useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (event.key === 'Escape') {
+        if (selectedId) {
+          event.preventDefault();
+          selectBlock(null);
+        }
+        return;
+      }
+
+      if (!selectedId) return;
+
+      // Cmd/Ctrl+D — duplicate. Browser default "bookmark page"
+      // would otherwise fire; we preempt.
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'd') {
+        event.preventDefault();
+        duplicateBlock(selectedId);
+        return;
+      }
+
+      // Delete / Backspace — remove the selected block.
+      if (event.key === 'Delete' || event.key === 'Backspace') {
+        event.preventDefault();
+        deleteBlock(selectedId);
+        return;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [selectedId, selectBlock, deleteBlock, duplicateBlock]);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;

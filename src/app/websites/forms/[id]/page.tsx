@@ -1,12 +1,12 @@
 'use client';
 
 import { AdminOnly } from '@/components/route-guard';
-import { FormBuilderPage } from '@/components/forms/form-builder-page';
+import { FormOverview } from '@/components/forms/form-overview';
 
-export default function FormBuilderTabPage() {
+export default function FormOverviewPage() {
   return (
     <AdminOnly>
-      <FormBuilderPage />
+      <FormOverview />
     </AdminOnly>
   );
 }

@@ -1,10 +1,18 @@
 import { notFound, redirect } from 'next/navigation';
 import { getAccountScope, getAuthSession } from '@/lib/api-auth';
 import { getForm } from '@/lib/services/forms';
-import { FormDetailHeader } from '@/components/forms/form-detail-header';
 import { FormDetailProvider } from '@/components/forms/form-detail-context';
-import { FormDetailTabs } from '@/components/forms/form-detail-tabs';
 
+/**
+ * Detail-area shell. Fetches the form once and exposes it via
+ * FormDetailProvider so the overview / builder / settings / submissions
+ * pages can share state without each one refetching.
+ *
+ * Page chrome (header, action bar) lives in the individual pages now —
+ * the overview sits in the regular app shell, while the builder owns a
+ * full-viewport workspace via /edit/layout.tsx. The IA mirrors Flows
+ * (overview at /flows/[id], builder at /flows/[id]/edit).
+ */
 export default async function FormDetailLayout({
   children,
   params,
@@ -20,17 +28,5 @@ export default async function FormDetailLayout({
   const form = await getForm(id, getAccountScope(session));
   if (!form) notFound();
 
-  // Match the email template editor's chrome: a 3-column top toolbar
-  // with the click-to-edit title, then a thin tabs row, then the page
-  // content. The outer wrapper sizes to the available viewport minus
-  // the app shell's 1rem padding (same calc the email editor uses).
-  return (
-    <FormDetailProvider initialForm={form}>
-      <div className="flex flex-col h-[calc(100vh-2rem)]">
-        <FormDetailHeader />
-        <FormDetailTabs formId={form.id} />
-        {children}
-      </div>
-    </FormDetailProvider>
-  );
+  return <FormDetailProvider initialForm={form}>{children}</FormDetailProvider>;
 }

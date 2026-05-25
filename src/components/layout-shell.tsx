@@ -122,11 +122,11 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // inside the regular app shell.
   const isFlowBuilder = /^\/flows\/[^/]+\/edit$/.test(builderProbe);
   const isWebsiteBuilder =
-    // Match the entire form detail subtree (builder + settings +
-    // submissions) so all three tabs render inside the email-editor-
-    // style full-viewport chrome instead of the standard app shell.
-    /^\/websites\/forms\/[^/]+(\/.*)?$/.test(builderProbe) ||
-    /^\/websites\/landing-pages\/[^/]+(\/.*)?$/.test(builderProbe) ||
+    // Only the builder (/edit) is a full-viewport workspace — the
+    // overview, settings, and submissions pages stay inside the
+    // standard app shell so the user keeps their sidebar context.
+    /^\/websites\/forms\/[^/]+\/edit$/.test(builderProbe) ||
+    /^\/websites\/landing-pages\/[^/]+\/edit$/.test(builderProbe) ||
     builderProbe === '/websites/landing-pages/demo';
 
   useEffect(() => {

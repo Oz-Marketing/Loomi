@@ -151,7 +151,10 @@ export function FlowCard({
     <div className="glass-card group relative rounded-xl p-4 transition-all hover:border-[var(--primary)]/40 hover:shadow-lg">
       <Link href={href} className="absolute inset-0 rounded-xl" aria-label={`Open ${workflow.name}`} />
 
-      <div className="relative flex items-start justify-between gap-2 mb-3">
+      {/* Header row — left half is non-interactive (so clicks bubble
+          to the underlying Link); the toggle + menu cluster on the
+          right opts back into pointer events. */}
+      <div className="relative flex items-start justify-between gap-2 mb-3 pointer-events-none">
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-9 h-9 rounded-lg bg-[var(--primary)]/10 flex items-center justify-center flex-shrink-0">
             <BoltIcon className="w-5 h-5 text-[var(--primary)]" />
@@ -171,7 +174,7 @@ export function FlowCard({
           </div>
         </div>
 
-        <div className="relative flex items-center gap-1 flex-shrink-0">
+        <div className="relative flex items-center gap-1 flex-shrink-0 pointer-events-auto">
           {isLoomi && (
             <PublishSwitch
               active={normalized === 'active'}
@@ -227,7 +230,7 @@ export function FlowCard({
       </div>
 
       {showAccount && accountKey && (
-        <div className="relative flex items-center gap-2 mb-3 pb-3 border-b border-[var(--border)]">
+        <div className="relative flex items-center gap-2 mb-3 pb-3 border-b border-[var(--border)] pointer-events-none">
           <SharedAccountAvatar
             name={dealer}
             accountKey={accountKey}
@@ -240,7 +243,7 @@ export function FlowCard({
         </div>
       )}
 
-      <div className="relative flex items-center justify-between text-[11px] text-[var(--muted-foreground)]">
+      <div className="relative flex items-center justify-between text-[11px] text-[var(--muted-foreground)] pointer-events-none">
         <span className="inline-flex items-center gap-1">
           <ClockIcon className="w-3 h-3" />
           Updated {formatRelativeDate(workflow.updatedAt || workflow.createdAt)}

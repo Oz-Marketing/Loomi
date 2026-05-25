@@ -66,8 +66,9 @@ export function FormCard({
         aria-label={`Open ${form.name || 'Untitled form'}`}
       />
 
-      {/* Preview thumbnail */}
-      <div className="relative">
+      {/* Preview thumbnail — pointer-events disabled so clicks fall
+          through to the absolute Link underneath. */}
+      <div className="relative pointer-events-none">
         <FormPreviewThumbnail template={form.schema} height={200} />
 
         {/* Status pill — bottom-left corner of the preview so it doesn't
@@ -83,8 +84,9 @@ export function FormCard({
         </span>
       </div>
 
-      {/* Meta strip */}
-      <div className="relative z-10 p-3 border-t border-[var(--border)] bg-[var(--card)]/70 backdrop-blur-sm">
+      {/* Meta strip — non-interactive areas pass clicks through to
+          the Link; only the toggle + menu opt back in. */}
+      <div className="relative z-10 p-3 border-t border-[var(--border)] bg-[var(--card)]/70 backdrop-blur-sm pointer-events-none">
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="min-w-0">
             <h3
@@ -98,7 +100,7 @@ export function FormCard({
             </p>
           </div>
 
-          <div className="flex items-center gap-1 flex-shrink-0">
+          <div className="flex items-center gap-1 flex-shrink-0 pointer-events-auto">
             {onTogglePublish && (
               <PublishSwitch
                 active={published}

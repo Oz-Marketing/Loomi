@@ -768,11 +768,13 @@ export async function deleteEmailCampaign(campaignId: string): Promise<void> {
 }
 
 /**
- * Toggle the archive flag on a campaign. Archive is stored as
- * `metadata.archived = true` so we can ship it without a Prisma
- * migration. The list endpoint filters archived rows out by default.
- * In-flight campaigns (queued/processing) can't be archived to keep the
- * worker's state machine simple.
+ * Toggle the archive state on a campaign. Stores the archive flag in
+ * two places for back-compat during the migration to a dedicated
+ * column: the existing `metadata.archived` flag (legacy callers) and
+ * the new `archivedAt` timestamp (drives the 30-day purge job +
+ * status filter on the campaigns table). In-flight campaigns
+ * (queued/processing) can't be archived to keep the worker's state
+ * machine simple.
  */
 export async function setEmailCampaignArchived(
   campaignId: string,
@@ -797,10 +799,77 @@ export async function setEmailCampaignArchived(
   else delete meta.archived;
   const updated = await prisma.emailCampaign.update({
     where: { id: campaignId },
-    data: { metadata: JSON.stringify(meta) },
+    data: {
+      metadata: JSON.stringify(meta),
+      archivedAt: archived ? new Date() : null,
+    },
     select: emailCampaignSummarySelect,
   });
   return toSummary(updated);
+}
+
+/**
+ * Explicit restore — same effect as setEmailCampaignArchived(id, false)
+ * but rejects rows that aren't currently archived so the UI can
+ * surface a clearer error than the legacy toggle would.
+ */
+export async function restoreEmailCampaign(
+  campaignId: string,
+): Promise<EmailCampaignSummary> {
+  const existing = await prisma.emailCampaign.findUnique({
+    where: { id: campaignId },
+    select: { archivedAt: true, metadata: true },
+  });
+  if (!existing) throw new Error('Campaign not found');
+  const isArchived =
+    existing.archivedAt !== null || parseArchivedMetadata(existing.metadata);
+  if (!isArchived) {
+    throw new Error('Campaign is not archived — nothing to restore.');
+  }
+  return setEmailCampaignArchived(campaignId, false);
+}
+
+/**
+ * Hard-delete archived email campaigns whose archivedAt is older than
+ * the retention window. Invoked by the daily purge worker. Returns
+ * the number of rows removed for logging.
+ */
+export async function purgeOldArchivedEmailCampaigns(
+  retentionDays = 30,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  // Hand-rolled fan-out: cascading recipient deletes happen inside
+  // deleteEmailCampaign which guards against in-flight rows. We
+  // pre-filter on archivedAt so the in-flight guard never trips.
+  const rows = await prisma.emailCampaign.findMany({
+    where: { archivedAt: { not: null, lt: cutoff } },
+    select: { id: true },
+  });
+  if (rows.length === 0) return 0;
+  await prisma.$transaction(async (tx) => {
+    await tx.emailCampaignRecipient.deleteMany({
+      where: { campaignId: { in: rows.map((r) => r.id) } },
+    });
+    await tx.emailCampaign.deleteMany({
+      where: { id: { in: rows.map((r) => r.id) } },
+    });
+  });
+  return rows.length;
+}
+
+/**
+ * Parses `metadata.archived` out of a JSON string. Returns true iff
+ * the row has the legacy archived flag set; callers should treat
+ * archivedAt as the new source of truth.
+ */
+function parseArchivedMetadata(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return parsed?.archived === true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -843,12 +912,25 @@ export async function duplicateEmailCampaign(
   return toSummary(created);
 }
 
+export type CampaignStatusFilter = 'all' | 'archived';
+
 export async function listEmailCampaigns(options?: {
   limit?: number;
   accountKeys?: string[];
+  /** 'all' (default) hides archived rows. 'archived' returns only
+   *  archived rows so the table can show them under the StatusFilter. */
+  statusFilter?: CampaignStatusFilter;
 }): Promise<EmailCampaignSummary[]> {
   const limit = Math.max(1, Math.min(100, options?.limit ?? 25));
+  const statusFilter = options?.statusFilter ?? 'all';
+  // Filter on archivedAt at the DB layer — much cheaper than fetching
+  // everything and dropping rows client-side once we have a real index.
+  const where =
+    statusFilter === 'archived'
+      ? { archivedAt: { not: null } }
+      : { archivedAt: null };
   const rows = await prisma.emailCampaign.findMany({
+    where,
     select: emailCampaignSummarySelect,
     orderBy: { createdAt: 'desc' },
     take: limit * 4,

@@ -238,15 +238,44 @@ function toFlowSummary(row: {
 // CRUD
 // ─────────────────────────────────────────────────────
 
+/** Status filter passed to listFlows from the API. `all` means
+ *  "everything except archived" (the default — keeps soft-deleted rows
+ *  out of view). `draft` covers both 'draft' and 'paused' DB statuses
+ *  since we no longer surface 'paused' as its own state in the UI. */
+export type FlowStatusFilter = 'all' | 'draft' | 'published' | 'archived';
+
+function statusFilterWhere(filter: FlowStatusFilter | undefined): Record<string, unknown> {
+  switch (filter) {
+    case 'draft':
+      return { status: { in: ['draft', 'paused'] } };
+    case 'published':
+      return { status: 'active' };
+    case 'archived':
+      return { status: 'archived' };
+    case 'all':
+    case undefined:
+    default:
+      return { status: { not: 'archived' } };
+  }
+}
+
 export async function listFlows(options?: {
   accountKeys?: string[] | null;
+  /** Pre-merge call sites still pass includeArchived — when true,
+   *  treated as { statusFilter: 'all' } modulo archived inclusion.
+   *  New callers should prefer statusFilter. */
   includeArchived?: boolean;
+  statusFilter?: FlowStatusFilter;
 }): Promise<FlowSummary[]> {
   const where: Record<string, unknown> = {};
   if (options?.accountKeys && options.accountKeys.length > 0) {
     where.accountKey = { in: options.accountKeys };
   }
-  if (!options?.includeArchived) {
+  // Status filter takes precedence; fall back to the legacy
+  // includeArchived behaviour so existing callers don't break.
+  if (options?.statusFilter) {
+    Object.assign(where, statusFilterWhere(options.statusFilter));
+  } else if (!options?.includeArchived) {
     where.status = { not: 'archived' };
   }
 
@@ -577,6 +606,36 @@ export async function archiveFlow(id: string): Promise<FlowSummary> {
     include: { _count: { select: { nodes: true } } },
   });
   return toFlowSummary(updated);
+}
+
+// Inverse of archiveFlow. Pops the row back to 'draft' (the UI's
+// unified inactive state — 'paused' is no longer surfaced as a
+// distinct vocabulary) and clears the archivedAt timestamp so the
+// 30-day purge job leaves it alone.
+export async function restoreFlow(id: string): Promise<FlowSummary> {
+  const updated = await prisma.loomiFlow.update({
+    where: { id },
+    data: { status: 'draft', archivedAt: null },
+    include: { _count: { select: { nodes: true } } },
+  });
+  return toFlowSummary(updated);
+}
+
+// Hard-delete archived flows older than the retention window. Cascades
+// wipe nodes/edges/triggers/enrollments and orphan any instances via
+// the SetNull rule on parentTemplateId. Invoked by the daily purge
+// job. Returns the deleted-row count for logging.
+export async function purgeOldArchivedFlows(
+  retentionDays = 30,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const result = await prisma.loomiFlow.deleteMany({
+    where: {
+      status: 'archived',
+      archivedAt: { not: null, lt: cutoff },
+    },
+  });
+  return result.count;
 }
 
 export async function duplicateFlow(

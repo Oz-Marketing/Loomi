@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
+import { prisma } from '@/lib/prisma';
 import {
   archiveFlow,
   getFlow,
@@ -63,8 +64,17 @@ export async function PATCH(
   return NextResponse.json({ flow });
 }
 
+// DELETE /api/flows/[id]
+//
+// Default: soft-archive (status='archived'). Hidden from listFlows
+// but stays in the DB so the row can be restored if needed.
+//
+// With `?purge=true`: hard-delete the row. Cascades wipe nodes,
+// edges, triggers, enrollments, and orphans any instances of this
+// template (parentTemplateId is set to null via SetNull). Reserved
+// for the explicit "Delete" action — Archive remains the default.
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ id: string }> },
 ) {
   const { session, error } = await requireRole('developer', 'super_admin', 'admin');
@@ -73,6 +83,12 @@ export async function DELETE(
   const { id } = await context.params;
   const existing = await getFlow(id, accountScope(session!));
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+
+  const purge = req.nextUrl.searchParams.get('purge') === 'true';
+  if (purge) {
+    await prisma.loomiFlow.delete({ where: { id } });
+    return NextResponse.json({ purged: true, id });
+  }
 
   const flow = await archiveFlow(id);
   return NextResponse.json({ flow });

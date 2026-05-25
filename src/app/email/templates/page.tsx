@@ -1,6 +1,13 @@
 'use client';
 
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { createContext, useContext, useEffect, useState, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
+
+// Slot for header-area actions on the embedded templates view (when
+// the parent owns the page title + tabs). ManagementView portals its
+// Create Template + overflow menu into here so the affordances sit
+// in the page header rather than below the tabs.
+const TemplatesHeaderActionsContext = createContext<HTMLElement | null>(null);
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   PlusIcon,
@@ -718,21 +725,34 @@ function SubaccountTabsView({
   // Force-remount the subaccount view when a library copy completes so the
   // freshly-cloned template appears immediately on tab switch.
   const [subaccountRefreshKey, setSubaccountRefreshKey] = useState(0);
+  // Slot element for header-aligned action buttons. ManagementView
+  // portals its Create + overflow buttons into this div via the
+  // TemplatesHeaderActionsContext below.
+  const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
 
   const subaccountSubtitle = `Templates owned by ${accountLabel}.`;
   const librarySubtitle = 'Published templates from the shared library.';
 
   return (
+    <TemplatesHeaderActionsContext.Provider value={actionsSlot}>
     <div>
       <div className="page-sticky-header mb-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <BookOpenIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold">Templates</h1>
-            <p className="text-[var(--muted-foreground)] text-sm mt-0.5 truncate">
-              {tab === 'subaccount' ? subaccountSubtitle : librarySubtitle}
-            </p>
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <BookOpenIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />
+            <div className="min-w-0">
+              <h1 className="text-2xl font-bold">Templates</h1>
+              <p className="text-[var(--muted-foreground)] text-sm mt-0.5 truncate">
+                {tab === 'subaccount' ? subaccountSubtitle : librarySubtitle}
+              </p>
+            </div>
           </div>
+          {/* Right-aligned action slot. ManagementView's Create
+              Template + overflow buttons portal in here when active. */}
+          <div
+            ref={setActionsSlot}
+            className="flex items-center gap-2 flex-shrink-0"
+          />
         </div>
         <div className="mt-4 flex items-center gap-1 border-b border-[var(--border)]">
           {([
@@ -787,6 +807,58 @@ function SubaccountTabsView({
         />
       )}
     </div>
+    </TemplatesHeaderActionsContext.Provider>
+  );
+}
+
+// Portals Create Template + overflow menu into the slot the parent
+// SubaccountTabsView reserves in its sticky header. Renders nothing
+// (returns null) until the slot DOM node is available on first
+// render after mount.
+function EmbeddedHeaderActions({
+  showOverflowMenu,
+  overflowMenuRef,
+  onToggleOverflowMenu,
+  onManageTags,
+  onCreate,
+}: {
+  showOverflowMenu: boolean;
+  overflowMenuRef: React.RefObject<HTMLDivElement | null>;
+  onToggleOverflowMenu: () => void;
+  onManageTags: () => void;
+  onCreate: () => void;
+}) {
+  const slot = useContext(TemplatesHeaderActionsContext);
+  if (!slot) return null;
+  return createPortal(
+    <>
+      <div className="relative" ref={showOverflowMenu ? overflowMenuRef : undefined}>
+        <button
+          onClick={onToggleOverflowMenu}
+          className="flex items-center justify-center w-9 h-9 rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+          title="More actions"
+          aria-label="More actions"
+        >
+          <EllipsisHorizontalIcon className="w-4 h-4" />
+        </button>
+        {showOverflowMenu && (
+          <div className="absolute right-0 top-full mt-1 z-30 w-48 glass-dropdown">
+            <button
+              onClick={onManageTags}
+              className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2"
+            >
+              <TagIcon className="w-4 h-4" />
+              Manage tags
+            </button>
+          </div>
+        )}
+      </div>
+      <PrimaryButton onClick={onCreate}>
+        <PlusIcon className="w-4 h-4" />
+        Create Template
+      </PrimaryButton>
+    </>,
+    slot,
   );
 }
 
@@ -1362,36 +1434,18 @@ function ManagementView({
         </div>
       )}
 
-      {/* Embedded actions row — when the parent owns the header, surface the
-          Create + overflow controls here so the toolbar stays self-contained. */}
+      {/* Embedded actions — when the parent owns the header, portal
+          the Create + overflow buttons into the header's right-side
+          slot via TemplatesHeaderActionsContext. The buttons sit next
+          to the page title instead of below the tabs. */}
       {embedded && (
-        <div className="mb-4 flex items-center justify-end gap-2">
-          <div className="relative" ref={showOverflowMenu ? overflowMenuRef : undefined}>
-            <button
-              onClick={() => setShowOverflowMenu(!showOverflowMenu)}
-              className="flex items-center justify-center w-9 h-9 rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-              title="More actions"
-              aria-label="More actions"
-            >
-              <EllipsisHorizontalIcon className="w-4 h-4" />
-            </button>
-            {showOverflowMenu && (
-              <div className="absolute right-0 top-full mt-1 z-30 w-48 glass-dropdown">
-                <button
-                  onClick={() => { setShowTagModal(true); setShowOverflowMenu(false); }}
-                  className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2"
-                >
-                  <TagIcon className="w-4 h-4" />
-                  Manage tags
-                </button>
-              </div>
-            )}
-          </div>
-          <PrimaryButton onClick={() => setShowCreateChoice(true)}>
-            <PlusIcon className="w-4 h-4" />
-            Create Template
-          </PrimaryButton>
-        </div>
+        <EmbeddedHeaderActions
+          showOverflowMenu={showOverflowMenu}
+          overflowMenuRef={overflowMenuRef}
+          onToggleOverflowMenu={() => setShowOverflowMenu(!showOverflowMenu)}
+          onManageTags={() => { setShowTagModal(true); setShowOverflowMenu(false); }}
+          onCreate={() => setShowCreateChoice(true)}
+        />
       )}
 
       {/* Toolbar */}

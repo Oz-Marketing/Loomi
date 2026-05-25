@@ -9,6 +9,7 @@ import { CampaignPageList, type AccountMeta } from '@/components/campaigns/campa
 import type { CampaignFilterState, CampaignFilterOptions, RepFilterOption } from '@/components/filters/campaign-toolbar';
 import { CampaignFilterSidebar } from '@/components/filters/campaign-filter-sidebar';
 import { DashboardToolbar, type CustomDateRange } from '@/components/filters/dashboard-toolbar';
+import { StatusFilter } from '@/components/status-filter';
 import { DEFAULT_DATE_RANGE, getDateRangeBounds, type DateRangeKey } from '@/lib/date-ranges';
 import { resolveAccountLocationId, resolveAccountProvider } from '@/lib/account-resolvers';
 import {
@@ -123,9 +124,14 @@ function AdminCampaignsPage() {
   // source now — ESP-fetched campaigns are gone.
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(true);
+  // Status filter — drives the StatusFilter dropdown in the campaign
+  // list toolbar and the ?status= param on the loomi list endpoint.
+  // Campaigns only support 'all' (live) and 'archived' for now.
+  const [campaignsStatusFilter, setCampaignsStatusFilter] = useState<'all' | 'archived'>('all');
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/campaigns/loomi/list')
+    setCampaignsLoading(true);
+    fetch(`/api/campaigns/loomi/list?status=${campaignsStatusFilter}`)
       .then((r) => (r.ok ? r.json() : { campaigns: [] }))
       .then((data: { campaigns?: Campaign[] }) => {
         if (cancelled) return;
@@ -140,7 +146,7 @@ function AdminCampaignsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [campaignsStatusFilter]);
 
   const accountNames = useMemo<Record<string, string>>(() => ({}), []);
 
@@ -478,6 +484,18 @@ function AdminCampaignsPage() {
               emptyState={campaignEmptyState}
               toolbarExtras={
                 <>
+                  <StatusFilter
+                    value={campaignsStatusFilter}
+                    onChange={(next) =>
+                      setCampaignsStatusFilter(
+                        next === 'archived' ? 'archived' : 'all',
+                      )
+                    }
+                    options={[
+                      { value: 'all', label: 'All' },
+                      { value: 'archived', label: 'Archived' },
+                    ]}
+                  />
                   <DashboardToolbar
                     dateRange={dateRange}
                     onDateRangeChange={setDateRange}
@@ -506,6 +524,7 @@ function AdminCampaignsPage() {
                   </button>
                 </>
               }
+              statusFilter={campaignsStatusFilter}
             />
           )}
         </div>
@@ -545,6 +564,9 @@ function AccountCampaignsPage() {
   const [dateRange, setDateRange] = useState<DateRangeKey>(DEFAULT_DATE_RANGE);
   const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  // Status filter — drives the StatusFilter dropdown in the campaign
+  // list toolbar + the ?status= param on the loomi list endpoint.
+  const [campaignsStatusFilter, setCampaignsStatusFilter] = useState<'all' | 'archived'>('all');
 
   useEffect(() => {
     if (!accountKey) return;
@@ -554,7 +576,7 @@ function AccountCampaignsPage() {
       // Loomi-native is the only source now — ESP campaigns are gone.
       try {
         const res = await fetch(
-          `/api/campaigns/loomi/list?accountKey=${encodeURIComponent(accountKey!)}`,
+          `/api/campaigns/loomi/list?accountKey=${encodeURIComponent(accountKey!)}&status=${campaignsStatusFilter}`,
         );
         if (cancelled) return;
         const data = await res.json().catch(() => ({}));
@@ -582,7 +604,7 @@ function AccountCampaignsPage() {
 
     load();
     return () => { cancelled = true; };
-  }, [accountKey]);
+  }, [accountKey, campaignsStatusFilter]);
 
   const bounds = useMemo(
     () =>
@@ -766,15 +788,30 @@ function AccountCampaignsPage() {
             emptyState={accountListEmptyState}
             singleAccountMode
             toolbarExtras={
-              <DashboardToolbar
-                dateRange={dateRange}
-                onDateRangeChange={setDateRange}
-                customRange={customRange}
-                onCustomRangeChange={setCustomRange}
-                showReset={false}
-                triggerSize="compact"
-              />
+              <>
+                <StatusFilter
+                  value={campaignsStatusFilter}
+                  onChange={(next) =>
+                    setCampaignsStatusFilter(
+                      next === 'archived' ? 'archived' : 'all',
+                    )
+                  }
+                  options={[
+                    { value: 'all', label: 'All' },
+                    { value: 'archived', label: 'Archived' },
+                  ]}
+                />
+                <DashboardToolbar
+                  dateRange={dateRange}
+                  onDateRangeChange={setDateRange}
+                  customRange={customRange}
+                  onCustomRangeChange={setCustomRange}
+                  showReset={false}
+                  triggerSize="compact"
+                />
+              </>
             }
+            statusFilter={campaignsStatusFilter}
           />
         )}
       </div>

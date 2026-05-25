@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -11,9 +11,17 @@ import {
   ChevronRightIcon,
   MagnifyingGlassIcon,
   Squares2X2Icon,
+  EllipsisHorizontalIcon,
+  PencilSquareIcon,
+  PencilIcon,
+  DocumentDuplicateIcon,
+  ArchiveBoxIcon,
+  ArrowUturnLeftIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import { AccountAvatar } from '@/components/account-avatar';
 import BulkActionDock, { type BulkActionDockItem } from '@/components/bulk-action-dock';
+import { StatusFilter, type StatusFilterValue } from '@/components/status-filter';
 
 // ── Types ──
 // `Workflow` mirrors the shape used elsewhere on the flows page.
@@ -31,6 +39,11 @@ export interface FlowsTableRow {
    *  Powers the adoption column (admin view: each template row shows
    *  which sub-accounts have an instance). */
   parentTemplateId?: string;
+  /** Currently-enrolled contact count. Sourced from FlowSummary in
+   *  the listFlows service. Shown as its own column in the
+   *  sub-account view so users can see at a glance how many contacts
+   *  are flowing through each instance. */
+  activeEnrollments?: number;
 }
 
 interface FlowsTableProps {
@@ -65,6 +78,22 @@ interface FlowsTableProps {
    *  adoption column can still see them. When omitted, the table
    *  builds its own map from `workflows`. */
   adoption?: Map<string, FlowsTableRow[]>;
+  /** Status filter — when both value + onChange are provided the
+   *  table renders the StatusFilter dropdown to the left of the
+   *  search input. The caller owns the state so it can drive the
+   *  API fetch. */
+  statusFilter?: StatusFilterValue;
+  onStatusFilterChange?: (next: StatusFilterValue) => void;
+  /** Row-level action handlers. When any are provided, the table
+   *  renders an Actions column with a 3-dot menu per row. The page
+   *  owns the dialogs/modals these trigger so we don't duplicate
+   *  Loomi dialog state per row. */
+  onRowEdit?: (flow: FlowsTableRow) => void;
+  onRowRename?: (flow: FlowsTableRow) => void;
+  onRowClone?: (flow: FlowsTableRow) => void;
+  onRowArchive?: (flow: FlowsTableRow) => void;
+  onRowRestore?: (flow: FlowsTableRow) => void;
+  onRowDelete?: (flow: FlowsTableRow) => void;
 }
 
 export interface BulkActionContext {
@@ -94,10 +123,24 @@ function formatRelativeDate(iso?: string) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+// Display mapping for the status badge. 'paused' is folded into
+// 'draft' in the UI — we no longer surface the paused vocabulary even
+// though the DB still uses it under the hood (pauseFlow continues to
+// write status='paused').
+function statusDisplayLabel(status: string): string {
+  if (status === 'paused') return 'draft';
+  return status;
+}
+
+function statusDisplayKey(status: string): string {
+  return statusDisplayLabel(status);
+}
+
 const STATUS_STYLES: Record<string, string> = {
+  // 'paused' is intentionally absent — statusDisplayKey collapses it
+  // into 'draft' before lookup.
   draft: 'bg-zinc-500/15 text-zinc-400',
   active: 'bg-green-500/15 text-green-400',
-  paused: 'bg-amber-500/15 text-amber-400',
   archived: 'bg-rose-500/15 text-rose-400',
 };
 
@@ -113,7 +156,24 @@ export function FlowsTable({
   emptyState,
   bulkActions,
   adoption: providedAdoption,
+  onRowEdit,
+  onRowRename,
+  onRowClone,
+  onRowArchive,
+  onRowRestore,
+  onRowDelete,
+  statusFilter,
+  onStatusFilterChange,
 }: FlowsTableProps) {
+  // Whether any row-level action is wired. Drives the Actions column
+  // header + per-row menu visibility.
+  const hasRowActions =
+    !!onRowEdit ||
+    !!onRowRename ||
+    !!onRowClone ||
+    !!onRowArchive ||
+    !!onRowRestore ||
+    !!onRowDelete;
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('updatedAt');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -252,18 +312,29 @@ export function FlowsTable({
           )}
         </div>
 
-        <div className="relative">
-          <MagnifyingGlassIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
-            }}
-            placeholder="Search flows..."
-            className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
-          />
+        <div className="flex items-center gap-2">
+          {statusFilter !== undefined && onStatusFilterChange && (
+            <StatusFilter
+              value={statusFilter}
+              onChange={(next) => {
+                onStatusFilterChange(next);
+                setPage(1);
+              }}
+            />
+          )}
+          <div className="relative">
+            <MagnifyingGlassIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setPage(1);
+              }}
+              placeholder="Search flows..."
+              className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
+            />
+          </div>
         </div>
       </div>
 
@@ -310,24 +381,34 @@ export function FlowsTable({
                     dir={sortDir}
                     onSort={handleSort}
                   />
-                  <SortHeader
-                    label="Status"
-                    sortKey="status"
-                    currentKey={sortKey}
-                    dir={sortDir}
-                    onSort={handleSort}
-                  />
-                  <th className="text-left px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
-                    Publish
-                  </th>
+                  {/* Status — admin view only. Sub-account view
+                      drops it since the publish toggle already
+                      communicates active vs paused/draft. */}
                   {showAccountColumn && (
                     <SortHeader
-                      label="Sub-Account"
-                      sortKey="dealer"
+                      label="Status"
+                      sortKey="status"
                       currentKey={sortKey}
                       dir={sortDir}
                       onSort={handleSort}
                     />
+                  )}
+                  {/* Publish — only relevant when the row could
+                      actually be published. Admin view shows
+                      templates (which deploy, not publish) so the
+                      column is hidden there. */}
+                  {!showAccountColumn && (
+                    <th className="text-left px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
+                      Publish
+                    </th>
+                  )}
+                  {/* Active Enrolled — sub-account view only. Helps
+                      the user see at a glance how many contacts are
+                      flowing through each instance right now. */}
+                  {!showAccountColumn && (
+                    <th className="text-right px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
+                      Active Enrolled
+                    </th>
                   )}
                   {showAccountColumn && (
                     <SortHeader
@@ -352,6 +433,9 @@ export function FlowsTable({
                     dir={sortDir}
                     onSort={handleSort}
                   />
+                  {hasRowActions && (
+                    <th className="w-12 px-3 py-3" aria-label="Row actions" />
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -367,6 +451,12 @@ export function FlowsTable({
                     selectable={bulkEnabled}
                     isSelected={selectedIds.has(flow.id)}
                     onToggleSelect={() => toggleRowSelection(flow.id)}
+                    onEdit={onRowEdit}
+                    onRename={onRowRename}
+                    onClone={onRowClone}
+                    onArchive={onRowArchive}
+                    onRestore={onRowRestore}
+                    onDelete={onRowDelete}
                   />
                 ))}
               </tbody>
@@ -574,6 +664,12 @@ function FlowRow({
   selectable,
   isSelected,
   onToggleSelect,
+  onEdit,
+  onRename,
+  onClone,
+  onArchive,
+  onRestore,
+  onDelete,
 }: {
   flow: FlowsTableRow;
   showAccountColumn: boolean;
@@ -584,11 +680,23 @@ function FlowRow({
   selectable: boolean;
   isSelected: boolean;
   onToggleSelect: () => void;
+  onEdit?: (flow: FlowsTableRow) => void;
+  onRename?: (flow: FlowsTableRow) => void;
+  onClone?: (flow: FlowsTableRow) => void;
+  onArchive?: (flow: FlowsTableRow) => void;
+  onRestore?: (flow: FlowsTableRow) => void;
+  onDelete?: (flow: FlowsTableRow) => void;
 }) {
+  const hasRowActions =
+    !!onEdit || !!onRename || !!onClone || !!onArchive || !!onRestore || !!onDelete;
   const router = useRouter();
   const isActive = flow.status === 'active';
-  const statusClass = STATUS_STYLES[flow.status] || 'bg-zinc-500/15 text-zinc-400';
-  const meta = flow.accountKey ? accountMeta[flow.accountKey] : null;
+  // Use the display label/key so 'paused' rows render as Draft, not
+  // as their raw DB value.
+  const displayKey = statusDisplayKey(flow.status);
+  const displayLabel = statusDisplayLabel(flow.status);
+  const statusClass = STATUS_STYLES[displayKey] || 'bg-zinc-500/15 text-zinc-400';
+  const isTemplate = !flow.accountKey;
 
   return (
     <tr
@@ -610,28 +718,39 @@ function FlowRow({
         </td>
       )}
       <td className="px-4 py-3">
-        <span className="text-sm font-medium text-[var(--foreground)]">
-          {flow.name || 'Untitled flow'}
-        </span>
-      </td>
-      <td className="px-4 py-3">
-        <span
-          className={`inline-flex items-center text-[10px] uppercase tracking-wider font-medium px-2 py-0.5 rounded-full ${statusClass}`}
-        >
-          {flow.status}
-        </span>
-      </td>
-      <td className="px-4 py-3">
-        {/* Templates (no accountKey) can't be published directly —
-            they're deployed to sub-accounts and each instance has its
-            own publish state. Render a muted dash so the column stays
-            aligned without offering a non-functional control. */}
-        {!flow.accountKey ? (
-          <span className="text-xs text-[var(--muted-foreground)]/60" title="Templates are deployed, not published. Open the template to deploy it.">
-            —
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm font-medium text-[var(--foreground)] truncate">
+            {flow.name || 'Untitled flow'}
           </span>
-        ) : (
-          onToggleStatus && (
+          {/* Inline "Template" chip in the admin view so admins can
+              tell templates apart at a glance — replaces what used
+              to live in the Sub-Account column. */}
+          {showAccountColumn && isTemplate && (
+            <span
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-violet-500/15 text-violet-300 flex-shrink-0"
+              title="No sub-account — this is a template flow. Open it to deploy to one or more sub-accounts."
+            >
+              <Squares2X2Icon className="w-3 h-3" />
+              Template
+            </span>
+          )}
+        </div>
+      </td>
+      {showAccountColumn && (
+        <td className="px-4 py-3">
+          <span
+            className={`inline-flex items-center text-[10px] uppercase tracking-wider font-medium px-2 py-0.5 rounded-full ${statusClass}`}
+          >
+            {displayLabel}
+          </span>
+        </td>
+      )}
+      {/* Publish column — hidden in admin view (templates deploy,
+          they don't publish; standalone flows live in their own
+          sub-account where this column does show). */}
+      {!showAccountColumn && (
+        <td className="px-4 py-3">
+          {onToggleStatus && (
             <button
               type="button"
               disabled={isUpdating}
@@ -657,31 +776,19 @@ function FlowRow({
                 style={{ left: isActive ? '18px' : '2px' }}
               />
             </button>
-          )
-        )}
-      </td>
-      {showAccountColumn && (
-        <td className="px-4 py-3 max-w-[200px]">
-          {meta ? (
-            <div className="flex items-center gap-2 min-w-0">
-              <AccountAvatar
-                name={meta.dealer}
-                logos={meta.logos}
-                size={24}
-                className="flex-shrink-0"
-              />
-              <span className="text-sm text-[var(--muted-foreground)] truncate">
-                {meta.dealer}
-              </span>
-            </div>
-          ) : (
-            <span
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-violet-500/15 text-violet-300"
-              title="No sub-account — this is a template flow. Open it to deploy to one or more sub-accounts."
-            >
-              <Squares2X2Icon className="w-3 h-3" />
-              Template
+          )}
+        </td>
+      )}
+      {/* Active Enrolled — sub-account view only. Shows the live
+          count returned by the listFlows service. */}
+      {!showAccountColumn && (
+        <td className="px-4 py-3 text-right tabular-nums">
+          {flow.activeEnrollments && flow.activeEnrollments > 0 ? (
+            <span className="text-sm text-[var(--foreground)]">
+              {flow.activeEnrollments.toLocaleString()}
             </span>
+          ) : (
+            <span className="text-sm text-[var(--muted-foreground)]/60">0</span>
           )}
         </td>
       )}
@@ -696,6 +803,191 @@ function FlowRow({
       <td className="px-4 py-3 text-sm text-[var(--muted-foreground)] whitespace-nowrap">
         {formatRelativeDate(flow.createdAt)}
       </td>
+      {hasRowActions && (
+        <td className="px-3 py-3 align-middle">
+          <FlowRowActionsMenu
+            flow={flow}
+            onEdit={onEdit}
+            onRename={onRename}
+            onClone={onClone}
+            onArchive={onArchive}
+            onRestore={onRestore}
+            onDelete={onDelete}
+          />
+        </td>
+      )}
     </tr>
+  );
+}
+
+// 3-dot menu rendered in the rightmost Actions column. Click-outside
+// closes; each item callback receives the row's flow. Renders the
+// dropdown panel only when open so we don't pay layout cost per row
+// at idle.
+function FlowRowActionsMenu({
+  flow,
+  onEdit,
+  onRename,
+  onClone,
+  onArchive,
+  onRestore,
+  onDelete,
+}: {
+  flow: FlowsTableRow;
+  onEdit?: (flow: FlowsTableRow) => void;
+  onRename?: (flow: FlowsTableRow) => void;
+  onClone?: (flow: FlowsTableRow) => void;
+  onArchive?: (flow: FlowsTableRow) => void;
+  onRestore?: (flow: FlowsTableRow) => void;
+  onDelete?: (flow: FlowsTableRow) => void;
+}) {
+  const isArchived = flow.status === 'archived';
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent) => {
+      if (!wrapperRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('mousedown', onPointer);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onPointer);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  function fire(fn?: (f: FlowsTableRow) => void) {
+    if (!fn) return;
+    setOpen(false);
+    fn(flow);
+  }
+
+  return (
+    <div
+      ref={wrapperRef}
+      className="relative inline-flex"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Row actions"
+        className="inline-flex items-center justify-center w-8 h-8 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+      >
+        <EllipsisHorizontalIcon className="w-4 h-4" />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full mt-1 z-30 w-48 glass-dropdown shadow-lg"
+        >
+          {/* Archived rows get a stripped menu — Restore + Delete only.
+              Edit/Rename/Clone/Archive don't make sense until the row
+              is back in a live state. */}
+          {isArchived ? (
+            <>
+              {onRestore && (
+                <MenuItem
+                  icon={ArrowUturnLeftIcon}
+                  label="Restore"
+                  onClick={() => fire(onRestore)}
+                />
+              )}
+              {onRestore && onDelete && (
+                <div className="my-1 h-px bg-[var(--border)]" />
+              )}
+              {onDelete && (
+                <MenuItem
+                  icon={TrashIcon}
+                  label="Delete"
+                  danger
+                  onClick={() => fire(onDelete)}
+                />
+              )}
+            </>
+          ) : (
+            <>
+              {onEdit && (
+                <MenuItem
+                  icon={PencilSquareIcon}
+                  label="Edit"
+                  onClick={() => fire(onEdit)}
+                />
+              )}
+              {onRename && (
+                <MenuItem
+                  icon={PencilIcon}
+                  label="Rename"
+                  onClick={() => fire(onRename)}
+                />
+              )}
+              {onClone && (
+                <MenuItem
+                  icon={DocumentDuplicateIcon}
+                  label="Clone to sub-account…"
+                  onClick={() => fire(onClone)}
+                />
+              )}
+              {(onArchive || onDelete) && (
+                <div className="my-1 h-px bg-[var(--border)]" />
+              )}
+              {onArchive && (
+                <MenuItem
+                  icon={ArchiveBoxIcon}
+                  label="Archive"
+                  onClick={() => fire(onArchive)}
+                />
+              )}
+              {onDelete && (
+                <MenuItem
+                  icon={TrashIcon}
+                  label="Delete"
+                  danger
+                  onClick={() => fire(onDelete)}
+                />
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MenuItem({
+  icon: Icon,
+  label,
+  danger,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  danger?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className={`w-full flex items-center gap-2 px-2.5 py-2 text-xs rounded-md transition-colors ${
+        danger
+          ? 'text-red-400 hover:bg-red-500/10'
+          : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
+      }`}
+    >
+      <Icon className="w-3.5 h-3.5" />
+      {label}
+    </button>
   );
 }

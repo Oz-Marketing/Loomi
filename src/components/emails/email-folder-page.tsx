@@ -18,6 +18,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
+import { StatusFilter, type StatusFilterValue } from '@/components/status-filter';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import {
@@ -85,6 +86,10 @@ export function EmailFolderPage() {
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set());
   const [showBulkMoveModal, setShowBulkMoveModal] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  // Status filter — drives the API fetch + the StatusFilter dropdown
+  // in the toolbar. Default 'all' (everything except archived).
+  // Archived rows auto-purge after 30 days regardless.
+  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all');
 
   useEffect(() => { setViewMode(loadView()); }, []);
 
@@ -98,7 +103,10 @@ export function EmailFolderPage() {
 
   const loadData = async () => {
     try {
-      const emailUrl = isAccount && accountKey ? `/api/emails?accountKey=${accountKey}` : '/api/emails';
+      const emailParams = new URLSearchParams();
+      if (isAccount && accountKey) emailParams.set('accountKey', accountKey);
+      emailParams.set('status', statusFilter);
+      const emailUrl = `/api/emails${emailParams.toString() ? `?${emailParams.toString()}` : ''}`;
       const [emailsRes, tplRes, accountsRes, foldersRes] = await Promise.all([
         fetch(emailUrl),
         fetch('/api/templates'),
@@ -115,7 +123,9 @@ export function EmailFolderPage() {
     setLoading(false);
   };
 
-  useEffect(() => { loadData(); }, []);
+  // Re-fetch emails when the status filter changes so the list
+  // reflects the current scope without a full page reload.
+  useEffect(() => { loadData(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [statusFilter]);
 
   const saveFolders = async (newFolders: FolderAssignments) => {
     setFolders(newFolders);
@@ -420,6 +430,10 @@ export function EmailFolderPage() {
                   <ListBulletIcon className="w-4 h-4" />
                 </button>
               </div>
+              <StatusFilter
+                value={statusFilter}
+                onChange={setStatusFilter}
+              />
               <button onClick={() => setShowNewFolder(true)} className="flex items-center gap-1.5 px-3 py-2 border border-[var(--border)] text-[var(--foreground)] rounded-lg text-sm font-medium hover:bg-[var(--muted)] transition-colors">
                 <FolderPlusIcon className="w-4 h-4" /> New Folder
               </button>

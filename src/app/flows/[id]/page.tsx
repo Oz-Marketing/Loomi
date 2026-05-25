@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useMemo, useState } from 'react';
+import { use, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
@@ -23,8 +23,12 @@ import {
   ArrowPathIcon,
   ArrowRightIcon,
   InformationCircleIcon,
+  EllipsisHorizontalIcon,
+  TrashIcon,
+  PencilIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { FlowIcon } from '@/components/icon-map';
 import { FlowDiagram, type FlowNode } from '@/components/flows/flow-diagram';
@@ -218,8 +222,33 @@ function FlowOverview({ flowId }: { flowId: string }) {
   const subHref = useSubaccountHref();
   const router = useRouter();
   const { isAdmin, accounts } = useAccount();
+  const { confirm, prompt } = useLoomiDialog();
   const [deployOpen, setDeployOpen] = useState(false);
   const [resyncing, setResyncing] = useState(false);
+  // Header overflow menu state. Hosts the destructive Archive +
+  // Delete actions so they stay one click removed from the primary
+  // Deploy / Edit / Publish controls.
+  const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
+  const headerMenuRef = useRef<HTMLDivElement>(null);
+
+  // Click-outside + Esc to close the header overflow menu.
+  useEffect(() => {
+    if (!headerMenuOpen) return;
+    const onPointer = (e: MouseEvent) => {
+      if (!headerMenuRef.current?.contains(e.target as Node)) {
+        setHeaderMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setHeaderMenuOpen(false);
+    };
+    window.addEventListener('mousedown', onPointer);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onPointer);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [headerMenuOpen]);
   // Per-instance resync state for the Deployments list — each row's
   // Update button shows its own spinner without locking the others.
   const [resyncingInstanceIds, setResyncingInstanceIds] = useState<Set<string>>(
@@ -372,6 +401,78 @@ function FlowOverview({ flowId }: { flowId: string }) {
     }
   }
 
+  async function handleRename() {
+    if (!flow) return;
+    setHeaderMenuOpen(false);
+    const next = await prompt({
+      title: 'Rename flow',
+      message: 'Pick a new name for this flow.',
+      defaultValue: flow.name || '',
+      confirmLabel: 'Rename',
+      required: true,
+    });
+    if (next === null) return;
+    const trimmed = next.trim();
+    if (!trimmed || trimmed === flow.name) return;
+    const res = await fetch(`/api/flows/${flow.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      toast.error(payload.error || 'Rename failed');
+      return;
+    }
+    toast.success('Flow renamed.');
+    await mutate();
+  }
+
+  // Header-menu destructive actions. After success, navigate back to
+  // the flows list — there's nothing useful to show on a freshly
+  // archived/deleted flow's overview.
+  async function handleArchive() {
+    if (!flow) return;
+    setHeaderMenuOpen(false);
+    const ok = await confirm({
+      title: 'Archive flow?',
+      message: `"${flow.name || 'Untitled flow'}" will be hidden from the flows list and auto-deleted in 30 days. Active enrollments stop on the next tick.`,
+      confirmLabel: 'Archive',
+      destructive: true,
+    });
+    if (!ok) return;
+    const res = await fetch(`/api/flows/${flow.id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      toast.error(payload.error || 'Archive failed');
+      return;
+    }
+    toast.success('Flow archived.');
+    router.push(subHref('/flows'));
+  }
+
+  async function handleDelete() {
+    if (!flow) return;
+    setHeaderMenuOpen(false);
+    const ok = await confirm({
+      title: 'Delete flow permanently?',
+      message: `"${flow.name || 'Untitled flow'}" and all its steps, triggers, and enrollment history will be permanently removed. This cannot be undone.`,
+      confirmLabel: 'Delete forever',
+      destructive: true,
+    });
+    if (!ok) return;
+    const res = await fetch(`/api/flows/${flow.id}?purge=true`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      toast.error(payload.error || 'Delete failed');
+      return;
+    }
+    toast.success('Flow deleted.');
+    router.push(subHref('/flows'));
+  }
+
   const outOfDateCount = flow.instances.filter((i) => i.outOfDate).length;
   const activeInstanceCount = flow.instances.filter((i) => i.status === 'active').length;
   const totalInstanceEnrollments = flow.instances.reduce(
@@ -435,6 +536,60 @@ function FlowOverview({ flowId }: { flowId: string }) {
                   updating={false}
                   onToggle={handleToggle}
                 />
+              </div>
+            )}
+            {/* Overflow menu — destructive actions sit one click away
+                from the primary Deploy/Edit controls. Borderless to
+                read as a tertiary control. Admin-only. Positioned to
+                the left of Deploy so the destructive options are the
+                first item the eye hits in the action cluster. */}
+            {isAdmin && (
+              <div className="relative" ref={headerMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setHeaderMenuOpen((v) => !v)}
+                  aria-haspopup="menu"
+                  aria-expanded={headerMenuOpen}
+                  title="More actions"
+                  className="inline-flex items-center justify-center w-10 h-10 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                >
+                  <EllipsisHorizontalIcon className="w-5 h-5" />
+                </button>
+                {headerMenuOpen && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-full mt-1 z-30 w-48 glass-dropdown shadow-lg"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={handleRename}
+                      className="w-full flex items-center gap-2 px-2.5 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                    >
+                      <PencilIcon className="w-3.5 h-3.5" />
+                      Rename
+                    </button>
+                    <div className="my-1 h-px bg-[var(--border)]" />
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={handleArchive}
+                      className="w-full flex items-center gap-2 px-2.5 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                    >
+                      <ArchiveBoxIcon className="w-3.5 h-3.5" />
+                      Archive
+                    </button>
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={handleDelete}
+                      className="w-full flex items-center gap-2 px-2.5 py-2 text-xs rounded-md text-red-400 hover:bg-red-500/10 transition-colors"
+                    >
+                      <TrashIcon className="w-3.5 h-3.5" />
+                      Delete
+                    </button>
+                  </div>
+                )}
               </div>
             )}
             {isAdmin && !flow.accountKey && (

@@ -44,9 +44,18 @@ export async function GET(req: NextRequest) {
     visibilityScope = userAccountKeys;
   }
 
+  // ?status=all (default) hides archived rows; ?status=archived shows
+  // only archived. Legacy ?includeArchived=1 maps to status=archived so
+  // older callers keep working.
+  const statusParam = req.nextUrl.searchParams.get('status');
+  const legacyIncludeArchived =
+    req.nextUrl.searchParams.get('includeArchived') === '1';
+  const statusFilter: 'all' | 'archived' =
+    statusParam === 'archived' || legacyIncludeArchived ? 'archived' : 'all';
+
   const [emails, sms] = await Promise.all([
-    listEmailCampaigns({ limit: 500, accountKeys: visibilityScope }),
-    listSmsCampaigns({ limit: 500, accountKeys: visibilityScope }),
+    listEmailCampaigns({ limit: 500, accountKeys: visibilityScope, statusFilter }),
+    listSmsCampaigns({ limit: 500, accountKeys: visibilityScope, statusFilter }),
   ]);
 
   function matchesAccount(accountKeys: string[]): boolean {
@@ -77,20 +86,22 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // Archived campaigns are hidden by default. Pass ?includeArchived=1 to
-  // surface them (future "Archived" view can use this).
-  const includeArchived = req.nextUrl.searchParams.get('includeArchived') === '1';
-
+  // Archive filter is now applied at the DB layer via archivedAt in
+  // listEmailCampaigns / listSmsCampaigns — we no longer need to drop
+  // archived rows here. Legacy archived rows that still rely on
+  // metadata.archived are backfilled by a one-time migration; if any
+  // slip through, the metadata fallback below keeps them hidden when
+  // viewing the live list.
   const campaigns = [
     ...emails
       .filter((c) => matchesAccount(c.accountKeys))
       .filter((c) => matchesStatusForRole(c.status))
-      .filter((c) => includeArchived || !isArchived(c.metadata))
+      .filter((c) => statusFilter === 'archived' || !isArchived(c.metadata))
       .map((c) => mapEmail(c)),
     ...sms
       .filter((c) => matchesAccount(c.accountKeys))
       .filter((c) => matchesStatusForRole(c.status))
-      .filter((c) => includeArchived || !isArchived(c.metadata))
+      .filter((c) => statusFilter === 'archived' || !isArchived(c.metadata))
       // Drop SMS rows that are the SMS half of a linked multi-channel pair.
       .filter((c) => !linkedSmsIdsOnEmails.has(c.id))
       .map((c) => mapSms(c)),

@@ -236,6 +236,10 @@ model AccountEmail {
   name       String // "Service Reminder - Young Honda"
   content    String? // null = use library template, non-null = customized copy
   status     String       @default("draft") // draft | active | archived
+  // Set when status transitions to 'archived'. Drives the global
+  // 30-day purge job — rows where archivedAt < now − 30d get hard-
+  // deleted by the daily worker task. Null on non-archived rows.
+  archivedAt DateTime?
   folderId   String?
   folder     EmailFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
   createdAt  DateTime     @default(now())
@@ -243,6 +247,7 @@ model AccountEmail {
 
   @@index([accountKey])
   @@index([templateId])
+  @@index([status, archivedAt])
 }
 
 // ─────────────────────────────────────────────────────
@@ -440,6 +445,7 @@ model LoomiFlow {
   @@index([status])
   @@index([createdAt])
   @@index([parentTemplateId])
+  @@index([status, archivedAt])
 }
 
 // One drawing-canvas node in a flow's graph. `config` is JSON sized to
@@ -571,6 +577,10 @@ model SmsCampaign {
   failedCount      Int       @default(0)
   metadata         String?
   error            String?
+  // Set when the campaign is archived via /archive. The daily purge
+  // job hard-deletes rows where archivedAt < now − 30d. Null on live
+  // (non-archived) rows.
+  archivedAt       DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -578,6 +588,7 @@ model SmsCampaign {
 
   @@index([status, scheduledFor])
   @@index([createdAt])
+  @@index([archivedAt])
 }
 
 model SmsCampaignRecipient {
@@ -688,6 +699,10 @@ model EmailCampaign {
   failedCount      Int       @default(0)
   metadata         String?
   error            String?
+  // Set when the campaign is archived via /archive. The daily purge
+  // job hard-deletes rows where archivedAt < now − 30d. Null on live
+  // (non-archived) rows.
+  archivedAt       DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -695,6 +710,7 @@ model EmailCampaign {
 
   @@index([status, scheduledFor])
   @@index([createdAt])
+  @@index([archivedAt])
 }
 
 model EmailCampaignRecipient {

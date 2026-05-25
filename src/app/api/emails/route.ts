@@ -1,29 +1,51 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import * as accountEmailService from '@/lib/services/account-emails';
+import type { EmailStatusFilter } from '@/lib/services/account-emails';
 import { hasUnrestrictedAccountAccess } from '@/lib/roles';
+
+const ALLOWED_EMAIL_STATUS_FILTERS = new Set<EmailStatusFilter>([
+  'all',
+  'draft',
+  'published',
+  'archived',
+]);
+function parseEmailStatusFilter(value: string | null): EmailStatusFilter | undefined {
+  if (!value) return undefined;
+  return ALLOWED_EMAIL_STATUS_FILTERS.has(value as EmailStatusFilter)
+    ? (value as EmailStatusFilter)
+    : undefined;
+}
 
 export async function GET(req: NextRequest) {
   const { session, error } = await requireAuth();
   if (error) return error;
 
   const accountKey = req.nextUrl.searchParams.get('accountKey');
+  // ?status=all|draft|published|archived is the preferred filter.
+  // Legacy ?includeArchived=1 still works for any caller that hasn't
+  // migrated. Default (neither set) hides archived rows.
+  const statusFilter = parseEmailStatusFilter(req.nextUrl.searchParams.get('status'));
+  const includeArchived =
+    req.nextUrl.searchParams.get('includeArchived') === '1' ||
+    req.nextUrl.searchParams.get('includeArchived') === 'true';
   const userRole = session!.user.role;
   const userAccountKeys = session!.user.accountKeys ?? [];
   const unrestricted = hasUnrestrictedAccountAccess(userRole, userAccountKeys);
+  const listOptions = { statusFilter, includeArchived };
 
   if (accountKey) {
     if (!unrestricted && !userAccountKeys.includes(accountKey)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
-    const emails = await accountEmailService.getAccountEmails(accountKey);
+    const emails = await accountEmailService.getAccountEmails(accountKey, listOptions);
     return NextResponse.json(emails);
   }
 
   const emails = unrestricted
-    ? await accountEmailService.getAllEmails()
+    ? await accountEmailService.getAllEmails(listOptions)
     : userAccountKeys.length > 0
-      ? await accountEmailService.getEmailsForAccounts(userAccountKeys)
+      ? await accountEmailService.getEmailsForAccounts(userAccountKeys, listOptions)
       : [];
   return NextResponse.json(emails);
 }

@@ -25,11 +25,21 @@ import {
 import {
   processDueFlowEnrollments,
   processFlowTriggers,
+  purgeOldArchivedFlows,
 } from '@/lib/services/loomi-flows';
+import { purgeOldArchivedEmails } from '@/lib/services/account-emails';
+import { purgeOldArchivedEmailCampaigns } from '@/lib/services/email-campaigns';
+import { purgeOldArchivedSmsCampaigns } from '@/lib/services/sms-campaigns';
 
 const PROCESS_DUE_CAMPAIGNS_QUEUE = 'loomi.process-due-campaigns';
 const PROCESS_FLOW_ENROLLMENTS_QUEUE = 'loomi.process-flow-enrollments';
 const PROCESS_FLOW_TRIGGERS_QUEUE = 'loomi.process-flow-triggers';
+// Daily archive-retention purge. Hard-deletes archived rows older
+// than 30 days across every model that supports archiving (flows,
+// emails). Runs at 02:00 UTC to avoid overlapping with peak send
+// windows. Tweak ARCHIVE_RETENTION_DAYS if the global rule changes.
+const PURGE_ARCHIVED_QUEUE = 'loomi.purge-archived';
+const ARCHIVE_RETENTION_DAYS = 30;
 
 async function runProcessDueCampaigns(): Promise<void> {
   const startedAt = Date.now();
@@ -83,6 +93,28 @@ async function runProcessFlowTriggers(): Promise<void> {
   }
 }
 
+async function runPurgeArchived(): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const [flowsPurged, emailsPurged, emailCampaignsPurged, smsCampaignsPurged] =
+      await Promise.all([
+        purgeOldArchivedFlows(ARCHIVE_RETENTION_DAYS),
+        purgeOldArchivedEmails(ARCHIVE_RETENTION_DAYS),
+        purgeOldArchivedEmailCampaigns(ARCHIVE_RETENTION_DAYS),
+        purgeOldArchivedSmsCampaigns(ARCHIVE_RETENTION_DAYS),
+      ]);
+    const total =
+      flowsPurged + emailsPurged + emailCampaignsPurged + smsCampaignsPurged;
+    if (total > 0) {
+      console.log(
+        `[worker] purged ${flowsPurged} flow(s), ${emailsPurged} email(s), ${emailCampaignsPurged} email campaign(s), ${smsCampaignsPurged} sms campaign(s) older than ${ARCHIVE_RETENTION_DAYS}d in ${Date.now() - startedAt}ms`,
+      );
+    }
+  } catch (err) {
+    console.error('[worker] purgeArchived failed', err);
+  }
+}
+
 async function main(): Promise<void> {
   const boss = await getBoss();
   console.log('[worker] pg-boss started');
@@ -102,6 +134,11 @@ async function main(): Promise<void> {
     await runProcessFlowTriggers();
   });
 
+  await boss.createQueue(PURGE_ARCHIVED_QUEUE);
+  await boss.work(PURGE_ARCHIVED_QUEUE, async () => {
+    await runPurgeArchived();
+  });
+
   // Recurring schedule: every minute. pg-boss is idempotent on schedule
   // creation, so this is safe to call on every boot.
   await boss.schedule(PROCESS_DUE_CAMPAIGNS_QUEUE, '* * * * *');
@@ -115,6 +152,12 @@ async function main(): Promise<void> {
 
   await boss.schedule(PROCESS_FLOW_TRIGGERS_QUEUE, '*/5 * * * *');
   console.log('[worker] scheduled', PROCESS_FLOW_TRIGGERS_QUEUE, 'every 5 minutes');
+
+  // Archive retention sweep — runs daily at 02:00 UTC. Hard-deletes
+  // rows archived more than ARCHIVE_RETENTION_DAYS ago across every
+  // model that supports archiving.
+  await boss.schedule(PURGE_ARCHIVED_QUEUE, '0 2 * * *');
+  console.log('[worker] scheduled', PURGE_ARCHIVED_QUEUE, 'daily at 02:00 UTC');
 
   // Also run once immediately so the first send doesn't have to wait up
   // to a minute after boot.

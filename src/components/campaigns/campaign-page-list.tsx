@@ -25,6 +25,7 @@ import {
   ChatBubbleLeftRightIcon,
   PencilSquareIcon,
   ArchiveBoxIcon,
+  ArrowUturnLeftIcon,
 } from '@heroicons/react/24/outline';
 
 // ── Engagement helpers ──
@@ -120,6 +121,12 @@ interface CampaignPageListProps {
    * already scoped to one account.
    */
   singleAccountMode?: boolean;
+  /**
+   * Current status filter from the parent — drives Restore-vs-Archive
+   * action surfacing. When 'archived', the row menu swaps Archive for
+   * Restore and the bulk dock surfaces Restore alongside Delete.
+   */
+  statusFilter?: 'all' | 'archived';
 }
 
 function getCampaignKey(campaign: Campaign): string {
@@ -473,8 +480,10 @@ function CampaignTableRow({
   onToggleSelect,
   onEdit,
   onArchive,
+  onRestore,
   onDelete,
   onOpenSentDetail,
+  showRestore,
 }: {
   item: Campaign;
   // accountMeta + accountProviders were only used for ESP deep links.
@@ -492,8 +501,12 @@ function CampaignTableRow({
   onToggleSelect: (item: Campaign) => void;
   onEdit: (item: Campaign) => void;
   onArchive: (item: Campaign) => void;
+  onRestore: (item: Campaign) => void;
   onDelete: (item: Campaign) => void;
   onOpenSentDetail: (item: Campaign) => void;
+  /** When true, the row sits in the archived view — show Restore in
+   *  the menu instead of Archive. */
+  showRestore: boolean;
 }) {
   void _accountMeta;
   void _accountProviders;
@@ -656,15 +669,26 @@ function CampaignTableRow({
                 {isLoomi && <div className="my-1 border-t border-[var(--border)] " />}
 
                 {isLoomi && (
-                  <button
-                    type="button"
-                    onClick={() => onArchive(item)}
-                    disabled={!canMutate}
-                    className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Archive
-                    <ArchiveBoxIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
-                  </button>
+                  showRestore ? (
+                    <button
+                      type="button"
+                      onClick={() => onRestore(item)}
+                      className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                    >
+                      Restore
+                      <ArrowUturnLeftIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onArchive(item)}
+                      disabled={!canMutate}
+                      className="w-full flex items-center justify-between px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Archive
+                      <ArchiveBoxIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)]" />
+                    </button>
+                  )
                 )}
 
                 {isLoomi && (
@@ -777,6 +801,7 @@ export function CampaignPageList({
   emptyState,
   toolbarExtras,
   singleAccountMode = false,
+  statusFilter = 'all',
 }: CampaignPageListProps) {
   const { alert, confirm } = useLoomiDialog();
   const router = useRouter();
@@ -1253,6 +1278,29 @@ export function CampaignPageList({
     if (typeof window !== 'undefined') window.location.reload();
   }
 
+  async function handleRestoreCampaign(campaign: Campaign) {
+    setOpenMenuId(null);
+    if (!isLoomiCampaign(campaign)) return;
+    const id = campaign.campaignId || campaign.id;
+    const path = isLoomiEmail(campaign) ? 'email' : 'sms';
+    try {
+      const res = await fetch(`/api/campaigns/${path}/${encodeURIComponent(id)}/restore`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(typeof data?.error === 'string' ? data.error : `HTTP ${res.status}`);
+      }
+    } catch (err) {
+      await alert({
+        title: 'Restore failed',
+        message: err instanceof Error ? err.message : 'Failed to restore campaign.',
+      });
+      return;
+    }
+    if (typeof window !== 'undefined') window.location.reload();
+  }
+
   async function handleDeleteCampaign(campaign: Campaign) {
     setOpenMenuId(null);
     if (!isLoomiCampaign(campaign)) return;
@@ -1279,6 +1327,98 @@ export function CampaignPageList({
         message: err instanceof Error ? err.message : 'Failed to delete campaign.',
       });
       return;
+    }
+    if (typeof window !== 'undefined') window.location.reload();
+  }
+
+  async function handleBulkRestore() {
+    const targets = getSelectedCampaigns().filter(isLoomiCampaign);
+    if (targets.length === 0) {
+      await alert({
+        title: 'Restore not supported',
+        message: 'Only Loomi-created campaigns can be restored from here.',
+      });
+      return;
+    }
+    setBulkBusy(true);
+    const failed: string[] = [];
+    try {
+      for (const c of targets) {
+        const id = c.campaignId || c.id;
+        const path = isLoomiEmail(c) ? 'email' : 'sms';
+        try {
+          const res = await fetch(
+            `/api/campaigns/${path}/${encodeURIComponent(id)}/restore`,
+            { method: 'POST' },
+          );
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch (err) {
+          console.error('Bulk restore failed for', c.name, err);
+          failed.push(c.name || '(Untitled)');
+        }
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+    clearSelection();
+    if (failed.length > 0) {
+      await alert({
+        title: 'Restore summary',
+        message: `${targets.length - failed.length} restored, ${failed.length} failed.`,
+      });
+    }
+    if (typeof window !== 'undefined') window.location.reload();
+  }
+
+  async function handleBulkArchive() {
+    const targets = getSelectedCampaigns().filter(isLoomiCampaign);
+    const skipped = selectedKeys.size - targets.length;
+    if (targets.length === 0) {
+      await alert({
+        title: 'Archive not supported',
+        message: 'Only Loomi-created campaigns can be archived from here. ESP-imported rows must be managed in their provider.',
+      });
+      return;
+    }
+    const confirmed = await confirm({
+      title: 'Archive selected campaigns?',
+      message: `${targets.length} campaign${targets.length === 1 ? '' : 's'} will be hidden from the live list and auto-deleted in 30 days. Active sends finish on the next tick.`,
+      confirmLabel: 'Archive',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    setBulkBusy(true);
+    const failed: string[] = [];
+    try {
+      for (const c of targets) {
+        const id = c.campaignId || c.id;
+        const path = isLoomiEmail(c) ? 'email' : 'sms';
+        try {
+          const res = await fetch(
+            `/api/campaigns/${path}/${encodeURIComponent(id)}/archive`,
+            { method: 'POST' },
+          );
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } catch (err) {
+          console.error('Bulk archive failed for', c.name, err);
+          failed.push(c.name || '(Untitled)');
+        }
+      }
+    } finally {
+      setBulkBusy(false);
+    }
+    clearSelection();
+    if (failed.length > 0 || skipped > 0) {
+      await alert({
+        title: 'Archive summary',
+        message: [
+          `${targets.length - failed.length} archived.`,
+          failed.length > 0 ? `${failed.length} failed.` : '',
+          skipped > 0 ? `${skipped} ESP row${skipped === 1 ? '' : 's'} skipped.` : '',
+        ]
+          .filter(Boolean)
+          .join(' '),
+      });
     }
     if (typeof window !== 'undefined') window.location.reload();
   }
@@ -1628,8 +1768,10 @@ export function CampaignPageList({
                           onToggleSelect={toggleSelectCampaign}
                           onEdit={handleEditCampaign}
                           onArchive={handleArchiveCampaign}
+                          onRestore={handleRestoreCampaign}
                           onDelete={handleDeleteCampaign}
                           onOpenSentDetail={openSentDetail}
+                          showRestore={statusFilter === 'archived'}
                         />
                       );
                     })}
@@ -1659,41 +1801,73 @@ export function CampaignPageList({
           count={selectedKeys.size}
           itemLabel="campaigns"
           onClose={clearSelection}
-          actions={[
-            {
-              id: 'select-all',
-              label:
-                pagedCampaigns.length > 0 &&
-                pagedCampaigns.every((c) => selectedKeys.has(getCampaignKey(c)))
-                  ? 'Deselect all'
-                  : 'Select all',
-              icon: <CheckIcon className="h-4 w-4" />,
-              onClick: toggleSelectAllOnPage,
-              disabled: pagedCampaigns.length === 0,
-            },
-            {
-              id: 'copy',
-              label: 'Copy',
-              icon: <DocumentDuplicateIcon className="h-4 w-4" />,
-              onClick: () => { void handleBulkCopy(); },
-              disabled: selectedKeys.size === 0 || bulkBusy,
-            },
-            {
-              id: 'download',
-              label: 'Download PNG',
-              icon: <ArrowDownTrayIcon className="h-4 w-4" />,
-              onClick: () => { void handleBulkDownload(); },
-              disabled: selectedKeys.size === 0 || bulkBusy,
-            },
-            {
-              id: 'delete',
-              label: 'Delete',
-              icon: <TrashIcon className="h-4 w-4" />,
-              onClick: () => { void handleBulkDelete(); },
-              disabled: selectedKeys.size === 0 || bulkBusy,
-              danger: true,
-            },
-          ]}
+          // Archived view strips the dock down to just the two
+          // recovery ops — Copy / Download / Archive don't apply to
+          // already-archived rows. Live view keeps the existing full
+          // set + adds Archive next to Delete.
+          actions={
+            statusFilter === 'archived'
+              ? [
+                  {
+                    id: 'restore',
+                    label: 'Restore',
+                    icon: <ArrowUturnLeftIcon className="h-4 w-4" />,
+                    onClick: () => { void handleBulkRestore(); },
+                    disabled: selectedKeys.size === 0 || bulkBusy,
+                  },
+                  {
+                    id: 'delete',
+                    label: 'Delete',
+                    icon: <TrashIcon className="h-4 w-4" />,
+                    onClick: () => { void handleBulkDelete(); },
+                    disabled: selectedKeys.size === 0 || bulkBusy,
+                    danger: true,
+                  },
+                ]
+              : [
+                  {
+                    id: 'select-all',
+                    label:
+                      pagedCampaigns.length > 0 &&
+                      pagedCampaigns.every((c) => selectedKeys.has(getCampaignKey(c)))
+                        ? 'Deselect all'
+                        : 'Select all',
+                    icon: <CheckIcon className="h-4 w-4" />,
+                    onClick: toggleSelectAllOnPage,
+                    disabled: pagedCampaigns.length === 0,
+                  },
+                  {
+                    id: 'copy',
+                    label: 'Copy',
+                    icon: <DocumentDuplicateIcon className="h-4 w-4" />,
+                    onClick: () => { void handleBulkCopy(); },
+                    disabled: selectedKeys.size === 0 || bulkBusy,
+                  },
+                  {
+                    id: 'download',
+                    label: 'Download PNG',
+                    icon: <ArrowDownTrayIcon className="h-4 w-4" />,
+                    onClick: () => { void handleBulkDownload(); },
+                    disabled: selectedKeys.size === 0 || bulkBusy,
+                  },
+                  {
+                    id: 'archive',
+                    label: 'Archive',
+                    icon: <ArchiveBoxIcon className="h-4 w-4" />,
+                    onClick: () => { void handleBulkArchive(); },
+                    disabled: selectedKeys.size === 0 || bulkBusy,
+                    danger: true,
+                  },
+                  {
+                    id: 'delete',
+                    label: 'Delete',
+                    icon: <TrashIcon className="h-4 w-4" />,
+                    onClick: () => { void handleBulkDelete(); },
+                    disabled: selectedKeys.size === 0 || bulkBusy,
+                    danger: true,
+                  },
+                ]
+          }
         />
       )}
 

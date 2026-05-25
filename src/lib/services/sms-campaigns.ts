@@ -576,10 +576,11 @@ export async function deleteSmsCampaign(campaignId: string): Promise<void> {
 }
 
 /**
- * Toggle archive flag on an SMS campaign. Stored as
- * `metadata.archived = true` (no Prisma migration needed). List endpoint
- * filters archived rows out by default. In-flight campaigns can't be
- * archived.
+ * Toggle archive state on an SMS campaign. Same back-compat pattern
+ * as email campaigns: writes both the legacy `metadata.archived` flag
+ * and the new `archivedAt` timestamp. The timestamp drives the daily
+ * 30-day purge job + the status filter on the campaigns table.
+ * In-flight campaigns (queued/processing) can't be archived.
  */
 export async function setSmsCampaignArchived(
   campaignId: string,
@@ -604,10 +605,67 @@ export async function setSmsCampaignArchived(
   else delete meta.archived;
   const updated = await prisma.smsCampaign.update({
     where: { id: campaignId },
-    data: { metadata: JSON.stringify(meta) },
+    data: {
+      metadata: JSON.stringify(meta),
+      archivedAt: archived ? new Date() : null,
+    },
     select: smsCampaignSummarySelect,
   });
   return toSummary(updated);
+}
+
+/**
+ * Explicit restore — rejects rows that aren't currently archived so
+ * the UI surfaces a clearer error than the toggle.
+ */
+export async function restoreSmsCampaign(
+  campaignId: string,
+): Promise<SmsCampaignSummary> {
+  const existing = await prisma.smsCampaign.findUnique({
+    where: { id: campaignId },
+    select: { archivedAt: true, metadata: true },
+  });
+  if (!existing) throw new Error('Campaign not found');
+  const isArchived =
+    existing.archivedAt !== null || parseArchivedMetadata(existing.metadata);
+  if (!isArchived) {
+    throw new Error('Campaign is not archived — nothing to restore.');
+  }
+  return setSmsCampaignArchived(campaignId, false);
+}
+
+/**
+ * Hard-delete archived SMS campaigns whose archivedAt is older than
+ * the retention window. Daily worker job.
+ */
+export async function purgeOldArchivedSmsCampaigns(
+  retentionDays = 30,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const rows = await prisma.smsCampaign.findMany({
+    where: { archivedAt: { not: null, lt: cutoff } },
+    select: { id: true },
+  });
+  if (rows.length === 0) return 0;
+  await prisma.$transaction(async (tx) => {
+    await tx.smsCampaignRecipient.deleteMany({
+      where: { campaignId: { in: rows.map((r) => r.id) } },
+    });
+    await tx.smsCampaign.deleteMany({
+      where: { id: { in: rows.map((r) => r.id) } },
+    });
+  });
+  return rows.length;
+}
+
+function parseArchivedMetadata(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return parsed?.archived === true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -644,12 +702,23 @@ export async function duplicateSmsCampaign(
   return toSummary(created);
 }
 
+export type CampaignStatusFilter = 'all' | 'archived';
+
 export async function listSmsCampaigns(options?: {
   limit?: number;
   accountKeys?: string[];
+  /** 'all' (default) hides archived rows. 'archived' returns only
+   *  archived rows so the table can show them under the StatusFilter. */
+  statusFilter?: CampaignStatusFilter;
 }): Promise<SmsCampaignSummary[]> {
   const limit = Math.max(1, Math.min(100, options?.limit ?? 25));
+  const statusFilter = options?.statusFilter ?? 'all';
+  const where =
+    statusFilter === 'archived'
+      ? { archivedAt: { not: null } }
+      : { archivedAt: null };
   const rows = await prisma.smsCampaign.findMany({
+    where,
     select: smsCampaignSummarySelect,
     orderBy: { createdAt: 'desc' },
     take: limit * 4,

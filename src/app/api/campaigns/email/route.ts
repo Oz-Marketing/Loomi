@@ -4,8 +4,16 @@ import {
   createEmailCampaign,
   listEmailCampaigns,
   processEmailCampaign,
+  type CampaignStatusFilter,
   type EmailRecipientInput,
 } from '@/lib/services/email-campaigns';
+
+function parseCampaignStatusFilter(
+  value: string | null,
+): CampaignStatusFilter | undefined {
+  if (value === 'all' || value === 'archived') return value;
+  return undefined;
+}
 
 function parseDate(value: unknown): Date | null {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -45,11 +53,14 @@ export async function GET(req: NextRequest) {
 
   const limitRaw = Number(req.nextUrl.searchParams.get('limit') || '20');
   const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(50, limitRaw)) : 20;
+  const statusFilter = parseCampaignStatusFilter(
+    req.nextUrl.searchParams.get('status'),
+  );
   const accountKeys = session!.user.role === 'client'
     ? (session!.user.accountKeys ?? [])
     : undefined;
 
-  const campaigns = await listEmailCampaigns({ limit, accountKeys });
+  const campaigns = await listEmailCampaigns({ limit, accountKeys, statusFilter });
   return NextResponse.json({ campaigns });
 }
 

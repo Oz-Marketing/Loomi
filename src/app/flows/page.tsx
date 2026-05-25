@@ -1,22 +1,30 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { AdminOnly } from '@/components/route-guard';
 import { useAccount } from '@/contexts/account-context';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import {
   FlowsTable,
   type FlowsTableRow,
   type BulkActionContext,
 } from '@/components/flows/flows-table';
+import { CloneFlowModal } from '@/components/flows/clone-flow-modal';
+import { PickTemplateModal } from '@/components/flows/pick-template-modal';
+import type { StatusFilterValue } from '@/components/status-filter';
 import type { BulkActionDockItem } from '@/components/bulk-action-dock';
 import {
   PlusIcon,
   PlayIcon,
   PauseIcon,
   ArchiveBoxIcon,
+  ArrowUturnLeftIcon,
+  TrashIcon,
+  Squares2X2Icon,
 } from '@heroicons/react/24/outline';
 import { FlowIcon } from '@/components/icon-map';
 
@@ -61,19 +69,21 @@ function flowsToRows(
     accountKey: f.accountKey || undefined,
     dealer: f.accountKey ? accountNames[f.accountKey] : undefined,
     parentTemplateId: f.parentTemplateId || undefined,
+    activeEnrollments: f.activeEnrollments ?? 0,
   }));
 }
 
 function FlowsPageHeader({
   title,
   subtitle,
-  onCreate,
-  creating,
+  cta,
 }: {
   title: string;
   subtitle: string;
-  onCreate: () => void;
-  creating: boolean;
+  // CTA rendered as a slot so admin (Create Flow) and sub-account
+  // (Add Flow dropdown) can each provide their own affordance
+  // without complicating this component with mode flags.
+  cta: React.ReactNode;
 }) {
   return (
     <div className="page-sticky-header mb-6">
@@ -86,18 +96,102 @@ function FlowsPageHeader({
           </div>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap justify-end">
+        <div className="flex items-center gap-2 flex-wrap justify-end">{cta}</div>
+      </div>
+    </div>
+  );
+}
+
+// Sub-account header CTA. "Add Flow" splits into a primary affordance
+// (pick a published template) plus a secondary "Create from scratch"
+// option. Templates are the discovery path; scratch is the escape
+// hatch.
+function AddTemplateButton({
+  creating,
+  onPickFromTemplate,
+  onCreateFromScratch,
+}: {
+  creating: boolean;
+  onPickFromTemplate: () => void;
+  onCreateFromScratch: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (e: MouseEvent) => {
+      if (!wrapperRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    window.addEventListener('mousedown', onPointer);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onPointer);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrapperRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={creating}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-60"
+      >
+        <PlusIcon className="w-4 h-4" />
+        {creating ? 'Creating…' : 'Add Flow'}
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full mt-1 z-30 w-56 glass-dropdown shadow-lg"
+        >
           <button
             type="button"
-            onClick={onCreate}
-            disabled={creating}
-            className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-60"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onPickFromTemplate();
+            }}
+            className="w-full flex items-start gap-2 px-3 py-2 text-left rounded-md hover:bg-[var(--muted)] transition-colors"
           >
-            <PlusIcon className="w-4 h-4" />
-            {creating ? 'Creating…' : 'Create Flow'}
+            <Squares2X2Icon className="w-4 h-4 text-violet-300 mt-0.5 flex-shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-xs font-semibold text-[var(--foreground)]">
+                Pick from templates
+              </span>
+              <span className="block text-[10px] text-[var(--muted-foreground)] leading-snug mt-0.5">
+                Adopt a published template into this account.
+              </span>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setOpen(false);
+              onCreateFromScratch();
+            }}
+            className="w-full flex items-start gap-2 px-3 py-2 text-left rounded-md hover:bg-[var(--muted)] transition-colors"
+          >
+            <PlusIcon className="w-4 h-4 text-[var(--muted-foreground)] mt-0.5 flex-shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-xs font-semibold text-[var(--foreground)]">
+                Create from scratch
+              </span>
+              <span className="block text-[10px] text-[var(--muted-foreground)] leading-snug mt-0.5">
+                Start a new empty flow.
+              </span>
+            </span>
           </button>
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -120,12 +214,27 @@ function FlowsPageBody({
 }) {
   const router = useRouter();
   const { accounts } = useAccount();
+  const { confirm, prompt } = useLoomiDialog();
+  const subHref = useSubaccountHref();
   const [creating, setCreating] = useState(false);
   const [updatingIds, setUpdatingIds] = useState<string[]>([]);
+  // Single-target clone modal — surfaced from the row's 3-dot menu.
+  // Tracks the source flow so we know what to /duplicate against.
+  const [cloneTarget, setCloneTarget] = useState<FlowsTableRow | null>(null);
+  // Sub-account picker modal — opens from the "Add Template" CTA on
+  // the sub-account view. Lists published templates the user can
+  // adopt into their own account.
+  const [pickTemplateOpen, setPickTemplateOpen] = useState(false);
+  // Status filter — drives the API fetch + the StatusFilter dropdown
+  // in the FlowsTable toolbar. Default is 'all' (live items only, no
+  // archived). Selecting 'archived' lets the user recover something
+  // before the 30-day purge job sweeps it.
+  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all');
 
-  const query = presetAccountKey
-    ? `?accountKey=${encodeURIComponent(presetAccountKey)}`
-    : '';
+  const queryParams = new URLSearchParams();
+  if (presetAccountKey) queryParams.set('accountKey', presetAccountKey);
+  queryParams.set('status', statusFilter);
+  const query = queryParams.toString() ? `?${queryParams.toString()}` : '';
   const { data, error, mutate, isLoading } = useSWR<{ flows: FlowApiRow[] }>(
     `/api/flows${query}`,
     fetcher,
@@ -211,7 +320,11 @@ function FlowsPageBody({
         return;
       }
       const payload = await res.json();
-      router.push(`/flows/${payload.flow.id}`);
+      // Brand-new "Untitled flow" has nothing useful to show on the
+      // overview — jump straight to the editor so the user can start
+      // building. Sub-account-aware so the URL stays inside the
+      // current scope.
+      router.push(subHref(`/flows/${payload.flow.id}/edit`));
     } finally {
       setCreating(false);
     }
@@ -249,6 +362,89 @@ function FlowsPageBody({
     }
   };
 
+  // ── Row-level action handlers (3-dot menu) ──
+  const handleRowEdit = (flow: FlowsTableRow) => {
+    router.push(subHref(`/flows/${flow.id}/edit`));
+  };
+
+  const handleRowRename = async (flow: FlowsTableRow) => {
+    const nextName = await prompt({
+      title: 'Rename flow',
+      message: 'Pick a new name for this flow.',
+      defaultValue: flow.name || '',
+      confirmLabel: 'Rename',
+      required: true,
+    });
+    if (nextName === null) return;
+    const trimmed = nextName.trim();
+    if (!trimmed || trimmed === flow.name) return;
+    const res = await fetch(`/api/flows/${flow.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      toast.error(payload.error || 'Rename failed');
+      return;
+    }
+    toast.success('Flow renamed.');
+    await mutate();
+  };
+
+  const handleRowClone = (flow: FlowsTableRow) => {
+    setCloneTarget(flow);
+  };
+
+  const handleRowArchive = async (flow: FlowsTableRow) => {
+    const ok = await confirm({
+      title: 'Archive flow?',
+      message: `"${flow.name || 'Untitled flow'}" will be hidden from this list. You can still find it via direct link. Active enrollments stop on the next tick.`,
+      confirmLabel: 'Archive',
+      destructive: true,
+    });
+    if (!ok) return;
+    const res = await fetch(`/api/flows/${flow.id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      toast.error(payload.error || 'Archive failed');
+      return;
+    }
+    toast.success('Flow archived.');
+    await mutate();
+  };
+
+  const handleRowRestore = async (flow: FlowsTableRow) => {
+    const res = await fetch(`/api/flows/${flow.id}/restore`, { method: 'POST' });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      toast.error(payload.error || 'Restore failed');
+      return;
+    }
+    toast.success('Flow restored.');
+    await mutate();
+  };
+
+  const handleRowDelete = async (flow: FlowsTableRow) => {
+    const ok = await confirm({
+      title: 'Delete flow permanently?',
+      message: `"${flow.name || 'Untitled flow'}" and all its steps, enrollments, and step history will be permanently removed. This cannot be undone.`,
+      confirmLabel: 'Delete forever',
+      destructive: true,
+    });
+    if (!ok) return;
+    const res = await fetch(`/api/flows/${flow.id}?purge=true`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      toast.error(payload.error || 'Delete failed');
+      return;
+    }
+    toast.success('Flow deleted.');
+    await mutate();
+  };
+
   // ── Bulk-action runner ──
   // Runs the same per-flow endpoint over a selection, sequentially.
   // We don't expose a true bulk endpoint yet, so this fans out
@@ -256,7 +452,7 @@ function FlowsPageBody({
   // toast at the end. Failures don't short-circuit — we report
   // succeeded/failed counts so the user can re-try the failures.
   const runBulk = async (
-    label: 'publish' | 'pause' | 'archive',
+    label: 'publish' | 'pause' | 'archive' | 'restore' | 'delete',
     ids: string[],
     fetchFor: (id: string) => Promise<Response>,
     clearSelection: () => void,
@@ -283,36 +479,107 @@ function FlowsPageBody({
     clearSelection();
   };
 
-  const buildBulkActions = (ctx: BulkActionContext): BulkActionDockItem[] => [
-    {
-      id: 'publish',
-      label: 'Publish',
-      icon: <PlayIcon className="w-3.5 h-3.5" />,
+  // Admin view = templates + standalone flows. Publishing/pausing
+  // templates makes no sense (they deploy to instances; instances are
+  // what get published), and Archive is gated to per-row only for
+  // template management. So admin's bulk dock is reduced to the two
+  // recovery ops: Restore (only when viewing archived) and a confirmed
+  // hard Delete.
+  const isAdminView = presetAccountKey === null;
+
+  const buildBulkActions = (ctx: BulkActionContext): BulkActionDockItem[] => {
+    // Restore — only meaningful on archived rows.
+    const restoreItem: BulkActionDockItem = {
+      id: 'restore',
+      label: 'Restore',
+      icon: <ArrowUturnLeftIcon className="w-3.5 h-3.5" />,
       onClick: () =>
-        void runBulk('publish', ctx.selectedIds, (id) =>
-          fetch(`/api/flows/${id}/publish`, { method: 'POST' }), ctx.clearSelection,
+        void runBulk('restore', ctx.selectedIds, (id) =>
+          fetch(`/api/flows/${id}/restore`, { method: 'POST' }),
+          ctx.clearSelection,
         ),
-    },
-    {
-      id: 'pause',
-      label: 'Pause',
-      icon: <PauseIcon className="w-3.5 h-3.5" />,
-      onClick: () =>
-        void runBulk('pause', ctx.selectedIds, (id) =>
-          fetch(`/api/flows/${id}/pause`, { method: 'POST' }), ctx.clearSelection,
-        ),
-    },
-    {
-      id: 'archive',
-      label: 'Archive',
+    };
+
+    // Hard delete — confirmed so a misclick can't wipe a batch.
+    // Available in admin (always) + any view when filter='archived'
+    // (since archive is a soft state and the natural follow-up is
+    // either restore or permanent removal).
+    const deleteItem: BulkActionDockItem = {
+      id: 'delete',
+      label: 'Delete',
       danger: true,
-      icon: <ArchiveBoxIcon className="w-3.5 h-3.5" />,
-      onClick: () =>
-        void runBulk('archive', ctx.selectedIds, (id) =>
-          fetch(`/api/flows/${id}`, { method: 'DELETE' }), ctx.clearSelection,
-        ),
-    },
-  ];
+      icon: <TrashIcon className="w-3.5 h-3.5" />,
+      onClick: async () => {
+        const count = ctx.selectedIds.length;
+        const ok = await confirm({
+          title:
+            count === 1
+              ? 'Delete flow permanently?'
+              : `Delete ${count} flows permanently?`,
+          message:
+            count === 1
+              ? 'This flow and all its steps, triggers, and enrollment history will be permanently removed. This cannot be undone.'
+              : `These ${count} flows and all their steps, triggers, and enrollment history will be permanently removed. This cannot be undone.`,
+          confirmLabel: 'Delete forever',
+          destructive: true,
+        });
+        if (!ok) return;
+        void runBulk('delete', ctx.selectedIds, (id) =>
+          fetch(`/api/flows/${id}?purge=true`, { method: 'DELETE' }),
+          ctx.clearSelection,
+        );
+      },
+    };
+
+    // When the user is viewing archived rows the only sensible bulk
+    // ops are Restore (un-archive) and Delete (purge). The
+    // publish/pause/archive triad doesn't apply to archived rows, so
+    // it's suppressed regardless of admin vs sub-account.
+    if (statusFilter === 'archived') {
+      return [restoreItem, deleteItem];
+    }
+
+    if (isAdminView) {
+      // Admin live-view dock: just Delete. Publish/pause/archive are
+      // managed per-row from the overview, not in bulk.
+      return [deleteItem];
+    }
+
+    // Sub-account live-view: status appliers + Archive.
+    return [
+      {
+        id: 'publish',
+        label: 'Publish',
+        icon: <PlayIcon className="w-3.5 h-3.5" />,
+        onClick: () =>
+          void runBulk('publish', ctx.selectedIds, (id) =>
+            fetch(`/api/flows/${id}/publish`, { method: 'POST' }),
+            ctx.clearSelection,
+          ),
+      },
+      {
+        id: 'pause',
+        label: 'Pause',
+        icon: <PauseIcon className="w-3.5 h-3.5" />,
+        onClick: () =>
+          void runBulk('pause', ctx.selectedIds, (id) =>
+            fetch(`/api/flows/${id}/pause`, { method: 'POST' }),
+            ctx.clearSelection,
+          ),
+      },
+      {
+        id: 'archive',
+        label: 'Archive',
+        danger: true,
+        icon: <ArchiveBoxIcon className="w-3.5 h-3.5" />,
+        onClick: () =>
+          void runBulk('archive', ctx.selectedIds, (id) =>
+            fetch(`/api/flows/${id}`, { method: 'DELETE' }),
+            ctx.clearSelection,
+          ),
+      },
+    ];
+  };
 
   const emptyState = {
     title: 'No flows yet',
@@ -332,8 +599,25 @@ function FlowsPageBody({
       <FlowsPageHeader
         title="Flows"
         subtitle={subtitle}
-        onCreate={handleCreate}
-        creating={creating}
+        cta={
+          presetAccountKey ? (
+            <AddTemplateButton
+              creating={creating}
+              onPickFromTemplate={() => setPickTemplateOpen(true)}
+              onCreateFromScratch={handleCreate}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={handleCreate}
+              disabled={creating}
+              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-60"
+            >
+              <PlusIcon className="w-4 h-4" />
+              {creating ? 'Creating…' : 'Create Flow'}
+            </button>
+          )
+        }
       />
 
       {hiddenInstanceCount > 0 && (
@@ -355,7 +639,53 @@ function FlowsPageBody({
         emptyState={emptyState}
         bulkActions={buildBulkActions}
         adoption={adoptionMap}
+        onRowEdit={handleRowEdit}
+        onRowRename={handleRowRename}
+        onRowClone={handleRowClone}
+        // Admin row menu has no Archive — templates aren't part of the
+        // publish/pause/archive lifecycle. Sub-account view keeps it
+        // since instances there are real publishable flows.
+        onRowArchive={isAdminView ? undefined : handleRowArchive}
+        onRowRestore={handleRowRestore}
+        onRowDelete={handleRowDelete}
+        statusFilter={statusFilter}
+        onStatusFilterChange={setStatusFilter}
       />
+
+      {presetAccountKey && (
+        <PickTemplateModal
+          open={pickTemplateOpen}
+          targetAccountKey={presetAccountKey}
+          onClose={() => setPickTemplateOpen(false)}
+          onAdopted={(newId) => {
+            if (newId) router.push(subHref(`/flows/${newId}`));
+            else void mutate();
+          }}
+        />
+      )}
+
+      {cloneTarget && (
+        <CloneFlowModal
+          open={!!cloneTarget}
+          flowId={cloneTarget.id}
+          flowName={cloneTarget.name || 'Untitled flow'}
+          // For templates, hide accounts that already have an
+          // instance — same constraint as the multi-target deploy
+          // flow. For non-templates we don't have this info on the
+          // row, so the picker shows all accounts.
+          excludeAccountKeys={
+            !cloneTarget.accountKey
+              ? (adoptionMap.get(cloneTarget.id) ?? [])
+                  .map((r) => r.accountKey)
+                  .filter((k): k is string => !!k)
+              : []
+          }
+          onClose={() => setCloneTarget(null)}
+          onCloned={() => {
+            void mutate();
+          }}
+        />
+      )}
     </div>
   );
 }

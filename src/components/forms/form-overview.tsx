@@ -40,6 +40,34 @@ export function FormOverview() {
   const [publishing, setPublishing] = React.useState(false);
   const [copiedKey, setCopiedKey] = React.useState<string | null>(null);
 
+  // Refetch fresh form data on every mount. Necessary because the
+  // FormDetailProvider stays mounted across overview ↔ builder
+  // navigation, so its in-memory `form` can lag the database when the
+  // builder's autosave was still in flight (or completed via the
+  // unmount keepalive) at the moment the user clicked Back. Comparing
+  // `updatedAt` keeps optimistic in-context edits from being
+  // clobbered by an older server snapshot.
+  React.useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/forms/${form.id}`, { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((payload) => {
+        if (cancelled || !payload?.form) return;
+        const serverAt = new Date(payload.form.updatedAt).getTime();
+        const localAt = new Date(form.updatedAt).getTime();
+        if (serverAt >= localAt) setForm(payload.form);
+      })
+      .catch(() => {
+        /* offline / 404 — fall back to whatever the context already has */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // Mount-only; we intentionally don't re-run when `form.updatedAt`
+    // moves, to avoid a feedback loop with the setForm call inside.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.id]);
+
   // Just for the stat cards — the full submissions table embedded at
   // the bottom does its own fetch with pagination.
   const { data: submissionsPayload } = useSWR<{

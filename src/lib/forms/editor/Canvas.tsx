@@ -67,6 +67,13 @@ export function Canvas({ previewWidth = 'desktop', zoom = 100, previewValues }: 
       ? Math.min(375, template.settings.contentWidth)
       : template.settings.contentWidth;
 
+  // Per-side spacing — same fallback shape FormRenderer uses, so the
+  // editor canvas matches what the public page + overview thumbnail
+  // render. `??` covers older schemas that predate these fields.
+  const s = template.settings;
+  const canvasMargin = `${s.contentMarginTop ?? 32}px ${s.contentMarginRight ?? 32}px ${s.contentMarginBottom ?? 32}px ${s.contentMarginLeft ?? 32}px`;
+  const canvasPadding = `${s.contentPaddingTop ?? 32}px ${s.contentPaddingRight ?? 32}px ${s.contentPaddingBottom ?? 32}px ${s.contentPaddingLeft ?? 32}px`;
+
   const ctxValue: PreviewSubstitutionContextValue = {
     previewValues: previewValues && Object.keys(previewValues).length > 0 ? previewValues : null,
   };
@@ -80,7 +87,7 @@ export function Canvas({ previewWidth = 'desktop', zoom = 100, previewValues }: 
       style={{
         minHeight: '100%',
         backgroundColor: template.settings.bodyBg,
-        padding: '24px 0',
+        padding: canvasMargin,
       }}
     >
       {/* Disable link navigation + form interactions inside the canvas —
@@ -113,6 +120,7 @@ export function Canvas({ previewWidth = 'desktop', zoom = 100, previewValues }: 
           backgroundColor: template.settings.contentBg,
           fontFamily: template.settings.fontFamily,
           color: template.settings.textColor,
+          padding: canvasPadding,
           transform: `scale(${zoom / 100})`,
           transformOrigin: 'top center',
           transition: 'max-width 150ms ease, transform 120ms ease',

@@ -74,10 +74,26 @@ export function FormBuilderPage() {
   // fire one final PATCH with `keepalive` so the request survives the
   // page transition. This catches the "drag slider, immediately click
   // Back" scenario that otherwise drops the change.
+  //
+  // Crucially, we ALSO push the pending schema into the form context
+  // optimistically. The layout/provider stay mounted on Back (overview
+  // and editor share `[id]/layout.tsx`), so when the user re-enters
+  // the builder it reads `form.schema` from the context. Without the
+  // optimistic update the keepalive PATCH persists server-side but the
+  // remounted builder reads the pre-edit schema from a stale context
+  // and visually "loses" the change.
   React.useEffect(() => {
     return () => {
       const pending = latestTemplateRef.current;
       if (pending === savedTemplateRef.current) return;
+      // 1) Mark this as the new baseline so a same-tick pagehide
+      //    listener doesn't double-send the same payload.
+      savedTemplateRef.current = pending;
+      // 2) Optimistically reflect the pending schema in the form
+      //    context. Safe even after this component unmounts because
+      //    the dispatch belongs to the parent provider.
+      setForm((prev) => ({ ...prev, schema: pending }));
+      // 3) Best-effort server flush via keepalive.
       try {
         fetch(`/api/forms/${formIdRef.current}`, {
           method: 'PATCH',
@@ -91,7 +107,7 @@ export function FormBuilderPage() {
         /* ignore — best-effort flush */
       }
     };
-  }, []);
+  }, [setForm]);
 
   // Page-level safety net: if the user closes the tab or hard-navigates
   // while edits are pending, the same keepalive flush runs from the
@@ -101,6 +117,7 @@ export function FormBuilderPage() {
     const flush = () => {
       const pending = latestTemplateRef.current;
       if (pending === savedTemplateRef.current) return;
+      savedTemplateRef.current = pending;
       try {
         fetch(`/api/forms/${formIdRef.current}`, {
           method: 'PATCH',

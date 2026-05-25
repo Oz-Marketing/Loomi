@@ -158,8 +158,16 @@ function AppShell({ children }: { children: React.ReactNode }) {
     return <div className="flex-1">{children}</div>;
   }
 
-  if (isFlowBuilder || isWebsiteBuilder) {
+  if (isFlowBuilder) {
+    // Flow builder owns its full canvas edge-to-edge — no shell padding.
     return <div className="flex-1 min-w-0">{children}</div>;
+  }
+
+  if (isWebsiteBuilder) {
+    // Mirror the email template editor wrapper (p-4 + main) so the
+    // Forms / Landing Pages builders inherit the same breathing room
+    // and the inner `h-[calc(100vh-2rem)]` math lines up correctly.
+    return <main className="flex-1 p-4">{children}</main>;
   }
 
   if (isCampaignBuilder) {

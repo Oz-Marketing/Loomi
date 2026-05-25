@@ -9,25 +9,22 @@ import { useFormDetail } from '@/components/forms/form-detail-context';
 const AUTOSAVE_MS = 600;
 const HISTORY_LIMIT = 50;
 
-function savedLabel(status: 'idle' | 'saving' | 'saved' | 'error', savedAt: Date | null) {
-  if (status === 'saving') return 'Saving...';
-  if (status === 'error') return 'Save failed';
-  if (status === 'saved' && savedAt) return 'Saved just now';
-  return 'Saved';
-}
-
 export function FormBuilderPage() {
-  const { form, setForm } = useFormDetail();
+  const { form, setForm, setSaveState } = useFormDetail();
   const [template, setTemplate] = React.useState<FormTemplate>(form.schema);
   const [past, setPast] = React.useState<FormTemplate[]>([]);
   const [future, setFuture] = React.useState<FormTemplate[]>([]);
-  const [saveStatus, setSaveStatus] = React.useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [savedAt, setSavedAt] = React.useState<Date | null>(null);
   const initialRender = React.useRef(true);
+
+  // Clear the autosave indicator if we leave the builder so the
+  // shared header doesn't keep showing a stale "Saved just now".
+  React.useEffect(() => {
+    return () => setSaveState('idle', null);
+  }, [setSaveState]);
 
   const patchSchema = React.useCallback(
     async (schema: FormTemplate) => {
-      setSaveStatus('saving');
+      setSaveState('saving');
       const res = await fetch(`/api/forms/${form.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -35,15 +32,14 @@ export function FormBuilderPage() {
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setSaveStatus('error');
+        setSaveState('error');
         toast.error(payload.error || 'Form autosave failed');
         return;
       }
       setForm(payload.form);
-      setSaveStatus('saved');
-      setSavedAt(new Date());
+      setSaveState('saved');
     },
-    [form.id, setForm],
+    [form.id, setForm, setSaveState],
   );
 
   React.useEffect(() => {
@@ -104,8 +100,11 @@ export function FormBuilderPage() {
     return () => window.removeEventListener('keydown', handler);
   }, [redo, undo]);
 
+  // Inside the email-style layout: the parent layout uses
+  // `flex flex-col h-[calc(100vh-2rem)]` with the header at top and
+  // this pane filling the rest. No fixed-height wrapper needed here.
   return (
-    <div className="h-[calc(100vh-7.5rem)] p-3">
+    <div className="flex-1 min-h-0 flex gap-4">
       <FormEditorShell
         template={template}
         onChange={handleChange}
@@ -115,7 +114,6 @@ export function FormBuilderPage() {
         onRedo={redo}
         publicUrl={`/f/${form.slug}`}
         embedSnippet={form.embedSnippet}
-        saveLabel={savedLabel(saveStatus, savedAt)}
       />
     </div>
   );

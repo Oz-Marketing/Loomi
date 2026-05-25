@@ -1,14 +1,18 @@
 'use client';
 
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
-import Link from 'next/link';
+import { useMemo, useState } from 'react';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { PlusIcon, RectangleStackIcon } from '@heroicons/react/24/outline';
 import { AdminOnly } from '@/components/route-guard';
 import { useAccount } from '@/contexts/account-context';
-import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
+import { useListView } from '@/components/view-switcher';
+import { ListToolbar } from '@/components/list-toolbar';
+import type { StatusFilterValue } from '@/components/status-filter';
+import { LandingPageCard } from '@/components/landing-pages/landing-page-card';
+import { LandingPagesTable } from '@/components/landing-pages/landing-pages-table';
+import { NewLandingPageModal } from '@/components/landing-pages/new-landing-page-modal';
 import type { LandingPageSummary } from '@/lib/services/landing-pages';
 
 const fetcher = async (url: string) => {
@@ -17,58 +21,123 @@ const fetcher = async (url: string) => {
   return res.json();
 };
 
-/**
- * PR1 list page — minimal table of landing pages with a "New" button.
- * Cards view, table view, status filter, search, templates picker etc.
- * arrive in LP-PR3. The shape mirrors the Forms list page so the future
- * upgrade is mechanical.
- */
 export default function LandingPagesPage() {
-  const router = useRouter();
-  const subHref = useSubaccountHref();
-  const { accountKey } = useAccount();
-  const [creating, setCreating] = useState(false);
+  const { accountKey, accounts } = useAccount();
+  const { confirm } = useLoomiDialog();
+  const [view, setView] = useListView('loomi.landing-pages.view', 'cards');
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all');
+  const [newOpen, setNewOpen] = useState(false);
+  const [publishingIds, setPublishingIds] = useState<Set<string>>(new Set());
 
-  const { data, isLoading, mutate } = useSWR<{ pages: LandingPageSummary[] }>(
+  const { data, error, mutate, isLoading } = useSWR<{ pages: LandingPageSummary[] }>(
     '/api/landing-pages',
     fetcher,
   );
-  const pages = (data?.pages ?? []).filter(
-    (p) => !accountKey || p.accountKey === accountKey,
+  const pages = data?.pages ?? [];
+
+  // Visible list — filtered by account, status, and search.
+  const visible = useMemo(() => {
+    let next = pages;
+    if (accountKey) next = next.filter((p) => p.accountKey === accountKey);
+    if (statusFilter !== 'all') {
+      next = next.filter((p) => p.status === statusFilter);
+    }
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      next = next.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          p.slug.toLowerCase().includes(q),
+      );
+    }
+    return next;
+  }, [pages, accountKey, statusFilter, search]);
+
+  // `accounts` is a Record<accountKey, AccountData> — index in rather
+  // than find.
+  const accountName = useMemo(
+    () => (accountKey ? accounts[accountKey]?.dealer : undefined),
+    [accountKey, accounts],
   );
 
-  async function createBlank() {
-    if (creating) return;
-    if (!accountKey) {
-      toast.error('Pick an account first.');
-      return;
-    }
-    setCreating(true);
+  async function togglePublish(page: LandingPageSummary, next: 'published' | 'draft') {
+    setPublishingIds((prev) => new Set([...prev, page.id]));
     try {
-      const res = await fetch('/api/landing-pages', {
-        method: 'POST',
+      const res = await fetch(`/api/landing-pages/${page.id}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: 'Untitled landing page',
-          accountKey,
-        }),
+        body: JSON.stringify({ status: next }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(payload.error || 'Could not create landing page.');
+        toast.error(payload.error || 'Could not update status.');
         return;
       }
+      toast.success(next === 'published' ? 'Page published.' : 'Page moved to draft.');
       await mutate();
-      router.push(subHref(`/websites/landing-pages/${payload.page.id}/edit`));
     } finally {
-      setCreating(false);
+      setPublishingIds((prev) => {
+        const out = new Set(prev);
+        out.delete(page.id);
+        return out;
+      });
     }
+  }
+
+  async function duplicate(page: LandingPageSummary) {
+    const res = await fetch('/api/landing-pages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        accountKey: page.accountKey,
+        name: `${page.name || 'Untitled'} (copy)`,
+        templateId: 'blank',
+      }),
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(payload.error || 'Could not duplicate.');
+      return;
+    }
+    // Now PATCH the new page with the source's schema. We don't have a
+    // dedicated /clone endpoint yet; the two-step flow keeps PR3 small.
+    const patchRes = await fetch(`/api/landing-pages/${payload.page.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schema: page.schema }),
+    });
+    if (!patchRes.ok) {
+      const p2 = await patchRes.json().catch(() => ({}));
+      toast.error(p2.error || 'Duplicate created but schema copy failed.');
+    } else {
+      toast.success('Page duplicated.');
+    }
+    await mutate();
+  }
+
+  async function destroy(page: LandingPageSummary) {
+    const ok = await confirm({
+      title: `Delete "${page.name || 'Untitled'}"?`,
+      message: 'This removes the landing page permanently. Cannot be undone.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
+    const res = await fetch(`/api/landing-pages/${page.id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      toast.error(payload.error || 'Could not delete.');
+      return;
+    }
+    toast.success('Page deleted.');
+    await mutate();
   }
 
   return (
     <AdminOnly>
-      <div className="px-8 py-8 max-w-6xl mx-auto">
-        <header className="flex items-center justify-between mb-8">
+      <div className="px-8 py-8 max-w-7xl mx-auto">
+        <header className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-2xl font-semibold text-[var(--foreground)]">
               Landing Pages
@@ -79,34 +148,83 @@ export default function LandingPagesPage() {
           </div>
           <button
             type="button"
-            onClick={createBlank}
-            disabled={creating || !accountKey}
+            onClick={() => setNewOpen(true)}
+            disabled={!accountKey}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
             <PlusIcon className="w-4 h-4" />
-            {creating ? 'Creating…' : 'New Landing Page'}
+            New Landing Page
           </button>
         </header>
 
-        {isLoading ? (
+        {pages.length > 0 && (
+          <div className="mb-4">
+            <ListToolbar
+              view={view}
+              onViewChange={setView}
+              search={search}
+              onSearchChange={setSearch}
+              searchPlaceholder="Search landing pages…"
+              status={statusFilter}
+              onStatusChange={setStatusFilter}
+              statusOptions={[
+                { value: 'all', label: 'All' },
+                { value: 'draft', label: 'Draft' },
+                { value: 'published', label: 'Published' },
+              ]}
+            />
+          </div>
+        )}
+
+        {error ? (
+          <div className="glass-card rounded-2xl p-6 text-sm text-rose-300">
+            Landing pages could not be loaded.
+          </div>
+        ) : isLoading ? (
           <div className="text-sm text-[var(--muted-foreground)]">Loading…</div>
         ) : pages.length === 0 ? (
-          <EmptyState onCreate={createBlank} creating={creating} accountReady={Boolean(accountKey)} />
+          <EmptyState onCreate={() => setNewOpen(true)} accountReady={!!accountKey} />
+        ) : visible.length === 0 ? (
+          <FilterEmptyState />
+        ) : view === 'cards' ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+            {visible.map((page) => (
+              <LandingPageCard
+                key={page.id}
+                page={page}
+                accountName={accountName}
+                onTogglePublish={togglePublish}
+                onDuplicate={duplicate}
+                onDelete={destroy}
+                isPublishUpdating={publishingIds.has(page.id)}
+              />
+            ))}
+          </div>
         ) : (
-          <PageList pages={pages} subHref={subHref} />
+          <LandingPagesTable
+            pages={visible}
+            onTogglePublish={togglePublish}
+            onDuplicate={duplicate}
+            onDelete={destroy}
+            isPublishUpdating={(id) => publishingIds.has(id)}
+          />
         )}
       </div>
+
+      <NewLandingPageModal
+        open={newOpen}
+        onClose={() => setNewOpen(false)}
+        accountKey={accountKey}
+      />
     </AdminOnly>
   );
 }
 
 function EmptyState({
   onCreate,
-  creating,
   accountReady,
 }: {
   onCreate: () => void;
-  creating: boolean;
   accountReady: boolean;
 }) {
   return (
@@ -123,69 +241,20 @@ function EmptyState({
       <button
         type="button"
         onClick={onCreate}
-        disabled={creating || !accountReady}
+        disabled={!accountReady}
         className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
       >
         <PlusIcon className="w-4 h-4" />
-        {creating ? 'Creating…' : 'Create your first landing page'}
+        Create your first landing page
       </button>
     </div>
   );
 }
 
-function PageList({
-  pages,
-  subHref,
-}: {
-  pages: LandingPageSummary[];
-  subHref: (path: string) => string;
-}) {
+function FilterEmptyState() {
   return (
-    <div className="glass-card rounded-2xl overflow-hidden">
-      <table className="w-full text-sm">
-        <thead className="border-b border-[var(--border)] bg-[var(--muted)]/40">
-          <tr className="text-left text-xs uppercase tracking-wider text-[var(--muted-foreground)]">
-            <th className="px-4 py-3 font-medium">Name</th>
-            <th className="px-4 py-3 font-medium">Slug</th>
-            <th className="px-4 py-3 font-medium">Status</th>
-            <th className="px-4 py-3 font-medium">Updated</th>
-          </tr>
-        </thead>
-        <tbody>
-          {pages.map((page) => (
-            <tr
-              key={page.id}
-              className="border-t border-[var(--border)] hover:bg-[var(--muted)]/30 transition-colors"
-            >
-              <td className="px-4 py-3">
-                <Link
-                  href={subHref(`/websites/landing-pages/${page.id}`)}
-                  className="font-medium text-[var(--foreground)] hover:text-[var(--primary)]"
-                >
-                  {page.name || 'Untitled'}
-                </Link>
-              </td>
-              <td className="px-4 py-3 font-mono text-xs text-[var(--muted-foreground)]">
-                /lp/{page.slug}
-              </td>
-              <td className="px-4 py-3">
-                <span
-                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${
-                    page.status === 'published'
-                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-                      : 'border-zinc-500/30 bg-zinc-500/10 text-zinc-300'
-                  }`}
-                >
-                  {page.status}
-                </span>
-              </td>
-              <td className="px-4 py-3 text-xs text-[var(--muted-foreground)]">
-                {new Date(page.updatedAt).toLocaleDateString()}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="glass-card rounded-2xl p-10 text-center text-sm text-[var(--muted-foreground)]">
+      No landing pages match the current filters.
     </div>
   );
 }

@@ -33,17 +33,51 @@ function makeId(prefix: string, idx: number): string {
 }
 
 // ── Blank ────────────────────────────────────────────────────────
+//
+// "From scratch" — minimal but not empty. Seeds a heading + email
+// field + submit button so the canvas isn't a blank rectangle when
+// the user lands in the builder. The user can wipe it and drag from
+// the palette, or tweak it from here. Keeping the seed tight (3
+// blocks) so it still reads as a starting point, not a template.
 
 const BLANK: FormTemplatePreset = {
   id: 'blank',
   name: 'Start from scratch',
-  description: 'Empty canvas. Drag in the fields you need.',
-  fieldCount: 0,
+  description: 'Heading + email + submit. A clean starting point to build on.',
+  fieldCount: 1,
   icon: 'sparkles',
   build: () => ({
     version: '1',
     settings: { ...DEFAULT_FORM_SETTINGS },
-    blocks: [],
+    blocks: [
+      {
+        id: makeId('h', 1),
+        type: 'heading',
+        props: {
+          text: 'Your form title',
+          level: 2,
+          fontSize: 26,
+          fontWeight: 700,
+          align: 'left',
+          marginBottom: 16,
+        },
+      },
+      {
+        id: makeId('f', 1),
+        type: 'field_email',
+        props: {
+          label: 'Email',
+          placeholder: 'you@example.com',
+          required: true,
+          name: 'email',
+        },
+      },
+      {
+        id: makeId('s', 1),
+        type: 'submit_button',
+        props: { text: 'Submit', fullWidth: false, align: 'left' },
+      },
+    ],
   }),
 };
 

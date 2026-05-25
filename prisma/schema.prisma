@@ -160,6 +160,10 @@ model Account {
 model Template {
   id                String    @id @default(cuid())
   slug              String    @unique // "service-reminder", "modern-dark"
+  // null = shared library template, non-null = owned by a specific subaccount
+  // (created in / cloned to that subaccount). Subaccount-owned templates are
+  // only visible inside their subaccount.
+  accountKey        String?
   title             String // "Service Reminder", "Modern Dark"
   type              String // "lifecycle" | "design"
   category          String? // "service", "sales", "loyalty", etc.
@@ -181,6 +185,7 @@ model Template {
   emails          AccountEmail[]
 
   @@index([published])
+  @@index([accountKey])
 }
 
 model TemplateVersion {

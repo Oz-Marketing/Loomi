@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, requireRole } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
+import { hasUnrestrictedAccountAccess } from '@/lib/roles';
 import { parseTemplate } from '@/lib/template-parser';
 import { serializeTemplate } from '@/lib/template-serializer';
 import { getStarterTemplate } from '@/lib/template-starters';
@@ -27,13 +28,19 @@ export async function GET(req: NextRequest) {
   if (error) return error;
 
   const role = session!.user.role;
+  const userAccountKeys = session!.user.accountKeys ?? [];
   const isClient = role === 'client';
+  const unrestricted = hasUnrestrictedAccountAccess(role, userAccountKeys);
 
   const design = req.nextUrl.searchParams.get('design');
   const format = req.nextUrl.searchParams.get('format'); // 'raw' for raw HTML
   const type = req.nextUrl.searchParams.get('type'); // 'lifecycle' | 'design'
-  // Clients only ever see published templates; management roles can opt in.
-  const publishedOnly = isClient
+  const accountKeyParam = req.nextUrl.searchParams.get('accountKey'); // scope to a specific subaccount
+  const scopeParam = req.nextUrl.searchParams.get('scope'); // 'library' | 'subaccount' | 'all'
+  // Clients only ever see published templates from the library. For
+  // subaccount-owned templates the published flag is meaningless, so we don't
+  // apply that filter when listing within an accountKey scope.
+  const publishedOnly = isClient && !accountKeyParam
     ? true
     : req.nextUrl.searchParams.get('publishedOnly') === 'true';
 
@@ -44,8 +51,13 @@ export async function GET(req: NextRequest) {
       if (!template) {
         return NextResponse.json({ error: 'Template not found' }, { status: 404 });
       }
-      // Hide unpublished templates from client role even when targeted by slug.
-      if (isClient && !template.published) {
+      // Enforce access: subaccount-owned templates require account access.
+      if (template.accountKey) {
+        if (!unrestricted && !userAccountKeys.includes(template.accountKey)) {
+          return NextResponse.json({ error: 'Template not found' }, { status: 404 });
+        }
+      } else if (isClient && !template.published) {
+        // Library templates: hide drafts from client role.
         return NextResponse.json({ error: 'Template not found' }, { status: 404 });
       }
 
@@ -60,15 +72,37 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // List templates
-  const templates = await templateService.getTemplatesWithContent({
+  // Resolve list scoping. Order of precedence:
+  //   1. ?accountKey=<key> → templates owned by that subaccount (access-checked)
+  //   2. ?scope=library|subaccount|all → explicit scope
+  //   3. default → library (preserves the canonical /email/templates list)
+  let listOptions: Parameters<typeof templateService.getTemplatesWithContent>[0] = {
     type: type || undefined,
     publishedOnly,
-  });
+  };
+
+  if (accountKeyParam) {
+    if (!unrestricted && !userAccountKeys.includes(accountKeyParam)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    listOptions = { ...listOptions, accountKey: accountKeyParam };
+  } else if (scopeParam === 'subaccount' || scopeParam === 'all') {
+    // 'subaccount' / 'all' scopes are management-only — exposing every
+    // subaccount's templates to a client would leak across tenants.
+    if (!unrestricted) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    listOptions = { ...listOptions, scope: scopeParam };
+  } else {
+    listOptions = { ...listOptions, scope: 'library' };
+  }
+
+  const templates = await templateService.getTemplatesWithContent(listOptions);
   return NextResponse.json(
     templates.map((t) => ({
       id: t.id,
       design: t.slug,
+      accountKey: t.accountKey,
       name: extractFrontmatterTitle(t.content) || t.title,
       editorType: hasVisualTemplateScaffold(t.content) ? 'visual' : 'code',
       type: t.type,
@@ -143,10 +177,23 @@ export async function POST(req: NextRequest) {
   if (error) return error;
 
   try {
-    const { design, type: templateType, mode } = await req.json();
+    const { design, type: templateType, mode, accountKey } = await req.json();
 
     if (!design) {
       return NextResponse.json({ error: 'Missing design name' }, { status: 400 });
+    }
+
+    const role = session!.user.role;
+    const userAccountKeys = session!.user.accountKeys ?? [];
+    const unrestricted = hasUnrestrictedAccountAccess(role, userAccountKeys);
+
+    let resolvedAccountKey: string | null = null;
+    if (typeof accountKey === 'string' && accountKey.trim()) {
+      const key = accountKey.trim();
+      if (!unrestricted && !userAccountKeys.includes(key)) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      }
+      resolvedAccountKey = key;
     }
 
     const safeSlug = design
@@ -160,6 +207,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid design name' }, { status: 400 });
     }
 
+    // For subaccount-owned templates, prefix the slug to keep it unique from
+    // library templates that might share a name (slug is globally unique).
+    const finalSlug = resolvedAccountKey
+      ? await findAvailableSlug(`${resolvedAccountKey}-${safeSlug}`)
+      : safeSlug;
+
     const designLabel = safeSlug
       .split('-')
       .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
@@ -169,20 +222,31 @@ export async function POST(req: NextRequest) {
     const starter = getStarterTemplate(createMode, designLabel);
 
     await templateService.createTemplate({
-      slug: safeSlug,
+      slug: finalSlug,
       title: designLabel,
       type: templateType || 'design',
       content: starter,
       createdByUserId: session!.user.id,
+      accountKey: resolvedAccountKey,
     });
 
-    return NextResponse.json({ design: safeSlug });
+    return NextResponse.json({ design: finalSlug });
   } catch (err: any) {
     if (err?.code === 'P2002') {
       return NextResponse.json({ error: 'Template already exists' }, { status: 409 });
     }
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
+}
+
+async function findAvailableSlug(base: string): Promise<string> {
+  let slug = base;
+  let attempt = 1;
+  while (await templateService.getTemplate(slug)) {
+    attempt += 1;
+    slug = `${base}-${attempt}`;
+  }
+  return slug;
 }
 
 export async function DELETE(req: NextRequest) {

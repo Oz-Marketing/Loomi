@@ -16,8 +16,10 @@ import {
   type FormsTableRow,
   type BulkActionContext,
 } from '@/components/forms/forms-table';
-import { ViewSwitcher, useListView } from '@/components/view-switcher';
+import { useListView } from '@/components/view-switcher';
+import { ListToolbar } from '@/components/list-toolbar';
 import type { BulkActionDockItem } from '@/components/bulk-action-dock';
+import type { StatusFilterValue } from '@/components/status-filter';
 import type { FormSummary } from '@/lib/services/forms';
 
 const fetcher = async (url: string) => {
@@ -32,6 +34,11 @@ export default function FormsPage() {
   const subHref = useSubaccountHref();
   const { confirm } = useLoomiDialog();
   const [view, setView] = useListView('loomi.forms.view', 'cards');
+  // Unified toolbar state — search + status filter drive both views.
+  // Forms don't have an "archived" status today (just draft / published),
+  // so we surface only those values in the StatusFilter.
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all');
 
   const query = accountKey ? `?accountKey=${encodeURIComponent(accountKey)}` : '';
   const { data, isLoading, error, mutate } = useSWR<{
@@ -68,6 +75,20 @@ export default function FormsPage() {
   // Hide the Sub-Account column when the user has already filtered
   // down to a single account — mirrors FlowsTable's behavior.
   const showAccountColumn = !accountKey;
+
+  // Page-level filter — applied to both cards + table so the unified
+  // toolbar drives both views from the same state.
+  const visibleForms = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return forms.filter((f) => {
+      if (statusFilter === 'draft' && f.status !== 'draft') return false;
+      if (statusFilter === 'published' && f.status !== 'published') return false;
+      // Forms have no archived state today; treat 'archived' as empty.
+      if (statusFilter === 'archived') return false;
+      if (!q) return true;
+      return `${f.name} ${f.slug} ${f.status}`.toLowerCase().includes(q);
+    });
+  }, [forms, search, statusFilter]);
 
   // ── Single-row action handlers (used by the table's 3-dot menu) ──
 
@@ -214,12 +235,23 @@ export default function FormsPage() {
         disabledReason="Select a sub-account before creating a form."
       />
 
-      {/* Toolbar — Cards / Table toggle. Sits between the page header
-          and the list so it shows up consistently regardless of which
-          view is active. */}
-      <div className="flex items-center justify-end pb-3">
-        <ViewSwitcher value={view} onChange={setView} />
-      </div>
+      {/* Unified toolbar — Cards/Table toggle, search, status filter.
+          Forms only have draft/published states; we surface those plus
+          'all' in the StatusFilter and skip 'archived'. */}
+      <ListToolbar
+        view={view}
+        onViewChange={setView}
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search forms…"
+        status={statusFilter}
+        onStatusChange={setStatusFilter}
+        statusOptions={[
+          { value: 'all', label: 'All' },
+          { value: 'draft', label: 'Draft' },
+          { value: 'published', label: 'Published' },
+        ]}
+      />
 
       {error ? (
         <div className="glass-card rounded-2xl p-6 text-sm text-rose-300">
@@ -227,7 +259,7 @@ export default function FormsPage() {
         </div>
       ) : view === 'cards' ? (
         <FormsList
-          forms={forms}
+          forms={visibleForms}
           loading={isLoading}
           accountNames={accountNames}
           onTogglePublish={(form, next) => void handleTogglePublish(form, next)}
@@ -247,7 +279,7 @@ export default function FormsPage() {
         />
       ) : (
         <FormsTable
-          forms={forms as FormsTableRow[]}
+          forms={visibleForms as FormsTableRow[]}
           loading={isLoading}
           accountMeta={accountMeta}
           showAccountColumn={showAccountColumn}
@@ -261,6 +293,10 @@ export default function FormsPage() {
           bulkActions={buildBulkActions}
           onRowEdit={handleRowEdit}
           onRowDelete={handleRowDelete}
+          // Toolbar lives at the page level now.
+          hideToolbar
+          search={search}
+          onSearchChange={setSearch}
         />
       )}
     </AdminOnly>

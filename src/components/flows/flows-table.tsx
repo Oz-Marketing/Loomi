@@ -84,6 +84,14 @@ interface FlowsTableProps {
    *  API fetch. */
   statusFilter?: StatusFilterValue;
   onStatusFilterChange?: (next: StatusFilterValue) => void;
+  /** Controlled search. When provided the table reads this value
+   *  instead of its internal state — lets a shared ListToolbar above
+   *  the table drive both card + table views from the same string. */
+  search?: string;
+  onSearchChange?: (next: string) => void;
+  /** Hide the internal toolbar (count + search + status filter).
+   *  Caller is expected to render its own toolbar above the table. */
+  hideToolbar?: boolean;
   /** Row-level action handlers. When any are provided, the table
    *  renders an Actions column with a 3-dot menu per row. The page
    *  owns the dialogs/modals these trigger so we don't duplicate
@@ -164,6 +172,9 @@ export function FlowsTable({
   onRowDelete,
   statusFilter,
   onStatusFilterChange,
+  search: controlledSearch,
+  onSearchChange,
+  hideToolbar = false,
 }: FlowsTableProps) {
   // Whether any row-level action is wired. Drives the Actions column
   // header + per-row menu visibility.
@@ -174,7 +185,13 @@ export function FlowsTable({
     !!onRowArchive ||
     !!onRowRestore ||
     !!onRowDelete;
-  const [search, setSearch] = useState('');
+  // Search: controlled if the caller wired the props, otherwise local.
+  const [internalSearch, setInternalSearch] = useState('');
+  const search = controlledSearch ?? internalSearch;
+  const setSearch = (next: string) => {
+    if (onSearchChange) onSearchChange(next);
+    else setInternalSearch(next);
+  };
   const [sortKey, setSortKey] = useState<SortKey>('updatedAt');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [page, setPage] = useState(1);
@@ -296,47 +313,48 @@ export function FlowsTable({
 
   return (
     <div className="animate-fade-in-up animate-stagger-3">
-      {/* Toolbar — count + search, mirroring the contacts-page rhythm */}
-      <div className="flex items-center justify-between gap-4 pb-3">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)]">
-          <span className="tabular-nums">
-            {filtered.length !== workflows.length
-              ? `${filtered.length} / ${workflows.length}`
-              : workflows.length}{' '}
-            {workflows.length === 1 ? 'flow' : 'flows'}
-          </span>
-          {hasMultiplePages && (
-            <span className="ml-1 opacity-60">
-              · Page {safePage} of {totalPages}
+      {!hideToolbar && (
+        <div className="flex items-center justify-between gap-4 pb-3">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)]">
+            <span className="tabular-nums">
+              {filtered.length !== workflows.length
+                ? `${filtered.length} / ${workflows.length}`
+                : workflows.length}{' '}
+              {workflows.length === 1 ? 'flow' : 'flows'}
             </span>
-          )}
-        </div>
+            {hasMultiplePages && (
+              <span className="ml-1 opacity-60">
+                · Page {safePage} of {totalPages}
+              </span>
+            )}
+          </div>
 
-        <div className="flex items-center gap-2">
-          {statusFilter !== undefined && onStatusFilterChange && (
-            <StatusFilter
-              value={statusFilter}
-              onChange={(next) => {
-                onStatusFilterChange(next);
-                setPage(1);
-              }}
-            />
-          )}
-          <div className="relative">
-            <MagnifyingGlassIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              placeholder="Search flows..."
-              className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
-            />
+          <div className="flex items-center gap-2">
+            {statusFilter !== undefined && onStatusFilterChange && (
+              <StatusFilter
+                value={statusFilter}
+                onChange={(next) => {
+                  onStatusFilterChange(next);
+                  setPage(1);
+                }}
+              />
+            )}
+            <div className="relative">
+              <MagnifyingGlassIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Search flows..."
+                className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
+              />
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {paged.length === 0 ? (
         <div className="text-center py-12">

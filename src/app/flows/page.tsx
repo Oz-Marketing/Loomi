@@ -16,7 +16,8 @@ import {
 import { FlowCard, type FlowCardWorkflow } from '@/components/flows/flow-card';
 import { CloneFlowModal } from '@/components/flows/clone-flow-modal';
 import { PickTemplateModal } from '@/components/flows/pick-template-modal';
-import { ViewSwitcher, useListView } from '@/components/view-switcher';
+import { useListView } from '@/components/view-switcher';
+import { ListToolbar } from '@/components/list-toolbar';
 import type { StatusFilterValue } from '@/components/status-filter';
 import type { BulkActionDockItem } from '@/components/bulk-action-dock';
 import {
@@ -239,6 +240,9 @@ function FlowsPageBody({
   // Per-card 3-dot menu state — one open at a time. FlowCard expects
   // the parent to track this so the menus can't stack.
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  // Search string — lifted to the page so the unified ListToolbar can
+  // drive both the cards grid and the FlowsTable from the same value.
+  const [search, setSearch] = useState('');
 
   const queryParams = new URLSearchParams();
   if (presetAccountKey) queryParams.set('accountKey', presetAccountKey);
@@ -311,6 +315,18 @@ function FlowsPageBody({
   const hiddenInstanceCount = hideInstances
     ? allRows.length - rows.length
     : 0;
+
+  // Page-level search filter — applied to both the cards grid and the
+  // FlowsTable so the unified toolbar drives both surfaces. Lower-cases
+  // and matches against name + dealer + status, same haystack the
+  // FlowsTable used internally before we lifted state up.
+  const visibleRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter((r) =>
+      `${r.name} ${r.dealer ?? ''} ${r.status}`.toLowerCase().includes(q),
+    );
+  }, [rows, search]);
 
   const handleCreate = async () => {
     setCreating(true);
@@ -638,16 +654,22 @@ function FlowsPageBody({
         </p>
       )}
 
-      {/* Cards / Table toggle — table-first (the default), with cards
-          as an alternative grid view powered by the existing FlowList
-          + FlowCard components. */}
-      <div className="flex items-center justify-end pb-3">
-        <ViewSwitcher value={view} onChange={setView} />
-      </div>
+      {/* Unified toolbar — Cards/Table toggle, search, status filter.
+          Both card and table views render below this so the controls
+          stay in the same place no matter which view is active. */}
+      <ListToolbar
+        view={view}
+        onViewChange={setView}
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search flows..."
+        status={statusFilter}
+        onStatusChange={setStatusFilter}
+      />
 
       {view === 'table' ? (
         <FlowsTable
-          workflows={rows}
+          workflows={visibleRows}
           loading={isLoading}
           accountMeta={accountMeta}
           showAccountColumn={presetAccountKey === null}
@@ -665,8 +687,14 @@ function FlowsPageBody({
           onRowArchive={isAdminView ? undefined : handleRowArchive}
           onRowRestore={handleRowRestore}
           onRowDelete={handleRowDelete}
-          statusFilter={statusFilter}
-          onStatusFilterChange={setStatusFilter}
+          // Toolbar lives at the page level now; the table just renders the grid.
+          hideToolbar
+          // Keep the props plumbed so the prefilter logic still works
+          // (FlowsTable internally re-filters by search) — passing the
+          // same controlled value is a no-op here but keeps the source
+          // of truth in one place if we ever drop the page-level filter.
+          search={search}
+          onSearchChange={setSearch}
         />
       ) : isLoading ? (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -677,7 +705,7 @@ function FlowsPageBody({
             />
           ))}
         </div>
-      ) : rows.length === 0 ? (
+      ) : visibleRows.length === 0 ? (
         <div className="glass-card rounded-2xl px-6 py-14 text-center">
           <h3 className="text-lg font-semibold">{emptyState.title}</h3>
           <p className="text-sm text-[var(--muted-foreground)] mt-1">
@@ -686,7 +714,7 @@ function FlowsPageBody({
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-          {rows.map((flow) => {
+          {visibleRows.map((flow) => {
             const workflow: FlowCardWorkflow = {
               id: flow.id,
               name: flow.name,
@@ -714,10 +742,28 @@ function FlowsPageBody({
                 }
                 onToggleLoomiStatus={(_w, next) =>
                   // FlowCardWorkflow doesn't carry every FlowsTableRow
-                  // field — re-hydrate from the row we already have.
+                  // field — re-hydrate from the row we already have
+                  // for each handler below too.
                   void handleToggleStatus(flow, next)
                 }
                 hrefBuilder={(w) => subHref(`/flows/${w.id}`)}
+                onEdit={() => handleRowEdit(flow)}
+                onRename={() => void handleRowRename(flow)}
+                onClone={() => handleRowClone(flow)}
+                // Match the table: admin view hides Archive (templates
+                // aren't part of the publish lifecycle). Restore only
+                // makes sense on already-archived rows.
+                onArchive={
+                  !isAdminView && flow.status !== 'archived'
+                    ? () => void handleRowArchive(flow)
+                    : undefined
+                }
+                onRestore={
+                  flow.status === 'archived'
+                    ? () => void handleRowRestore(flow)
+                    : undefined
+                }
+                onDelete={() => void handleRowDelete(flow)}
               />
             );
           })}

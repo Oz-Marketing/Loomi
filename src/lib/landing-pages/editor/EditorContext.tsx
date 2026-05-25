@@ -34,6 +34,10 @@ interface EditorActions {
   /** Reorder a block within its current parent. `targetIndex` is the
    *  desired final position (post-removal). Used by drag-and-drop. */
   reorderInParent: (id: string, targetIndex: number) => void;
+  /** Move a block to a new position anywhere in the tree. Rejects
+   *  moves that would create a cycle (dropping a block onto its own
+   *  descendant). Returns `false` if the move was rejected. */
+  moveBlockTo: (id: string, position: InsertPosition) => boolean;
   deleteBlock: (id: string) => void;
   duplicateBlock: (id: string) => void;
 }
@@ -89,6 +93,23 @@ function removeBlock(blocks: Block[], id: string): Block[] {
   return blocks
     .filter((b) => b.id !== id)
     .map((b) => (b.children ? { ...b, children: removeBlock(b.children, id) } : b));
+}
+
+/** Returns true if `descendantId` is the same as `ancestorId` or
+ *  nested anywhere inside the subtree rooted at `ancestorId`. Used to
+ *  reject drag-into-self moves. */
+function isDescendant(blocks: Block[], ancestorId: string, descendantId: string): boolean {
+  if (ancestorId === descendantId) return true;
+  const ancestor = findBlock(blocks, ancestorId);
+  if (!ancestor?.children) return false;
+  const walk = (nodes: Block[]): boolean => {
+    for (const n of nodes) {
+      if (n.id === descendantId) return true;
+      if (n.children && walk(n.children)) return true;
+    }
+    return false;
+  };
+  return walk(ancestor.children);
 }
 
 function findBlock(blocks: Block[], id: string): Block | undefined {
@@ -282,6 +303,27 @@ export function LandingPageEditorProvider({ template, onChange, children }: Prov
     [update],
   );
 
+  const moveBlockTo = React.useCallback(
+    (id: string, position: InsertPosition): boolean => {
+      // Reject drag-into-self / drag-into-descendant. Without this
+      // check, moving a Section onto one of its child leaves would
+      // remove the Section from the tree and then fail to re-insert
+      // (because the target parent no longer exists), corrupting the
+      // template.
+      if (position.parentId && isDescendant(template.blocks, id, position.parentId)) {
+        return false;
+      }
+      const source = findBlock(template.blocks, id);
+      if (!source) return false;
+      update((t) => {
+        const without = removeBlock(t.blocks, id);
+        return { ...t, blocks: insertAt(without, source, position) };
+      });
+      return true;
+    },
+    [template, update],
+  );
+
   const deleteBlock = React.useCallback(
     (id: string) => {
       update((t) => ({ ...t, blocks: removeBlock(t.blocks, id) }));
@@ -319,6 +361,7 @@ export function LandingPageEditorProvider({ template, onChange, children }: Prov
     insertBlock,
     moveBlock,
     reorderInParent,
+    moveBlockTo,
     deleteBlock,
     duplicateBlock,
   };

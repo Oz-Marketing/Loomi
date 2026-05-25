@@ -38,7 +38,7 @@ export function LandingPageEditorShell({
 }
 
 function DndShell() {
-  const { template, reorderInParent } = useLandingPageEditor();
+  const { template, reorderInParent, moveBlockTo } = useLandingPageEditor();
 
   // PointerSensor with an 8px activation distance so a click on a
   // block selects (and never accidentally starts a drag). Drags fire
@@ -51,20 +51,33 @@ function DndShell() {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
-    // Walk the tree to find both ids' parents. We only reorder when
-    // they share a parent — cross-container moves are deferred. The
-    // SortableContexts use stable string ids ('root', `section:<id>`,
-    // `column:<id>`) so we can detect same-list moves cheaply.
-    const activeParentList = findContainingList(template.blocks, String(active.id));
-    const overParentList = findContainingList(template.blocks, String(over.id));
-    if (!activeParentList || !overParentList) return;
-    if (activeParentList.parentId !== overParentList.parentId) return;
+    const activeId = String(active.id);
+    const overId = String(over.id);
 
-    const targetIndex = activeParentList.siblings.findIndex(
-      (b) => b.id === String(over.id),
-    );
-    if (targetIndex === -1) return;
-    reorderInParent(String(active.id), targetIndex);
+    const activeParentList = findContainingList(template.blocks, activeId);
+    const overParentList = findContainingList(template.blocks, overId);
+    if (!activeParentList || !overParentList) return;
+
+    // Same-parent reorder — preferred fast path since it doesn't
+    // require remove-then-insert.
+    if (activeParentList.parentId === overParentList.parentId) {
+      const targetIndex = activeParentList.siblings.findIndex(
+        (b) => b.id === overId,
+      );
+      if (targetIndex === -1) return;
+      reorderInParent(activeId, targetIndex);
+      return;
+    }
+
+    // Cross-container drag — the user is moving a block from one
+    // Section/column slot to a different one (or out to top level).
+    // Insert after the hovered block within ITS parent. cycle-prevention
+    // lives in moveBlockTo (rejects dropping a Section onto its own
+    // descendant — would corrupt the tree).
+    moveBlockTo(activeId, {
+      parentId: overParentList.parentId,
+      afterId: overId,
+    });
   };
 
   return (

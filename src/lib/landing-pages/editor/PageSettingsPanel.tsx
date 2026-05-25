@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { useLandingPageEditor } from './EditorContext';
 import { SLIDER_CLASS } from './slider-style';
+import { SpacingBox } from '@/lib/forms/editor/PropertyControls';
 
 const inputClass =
   'w-full px-3 py-2 text-sm bg-transparent text-[var(--foreground)] border border-[var(--border)] rounded-md outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] transition-colors';
@@ -17,10 +18,9 @@ const FONT_FAMILY_OPTIONS = [
 
 /**
  * Page-level settings rendered inside the left sidebar's Settings
- * tab. Mirrors the forms editor's FormSettings panel structure —
- * stacked sections, schema-driven inputs, no outer chrome (the
- * Sidebar wraps everything in the same glass-card frame the rest of
- * the editor uses).
+ * tab. All per-side spacing uses the canonical SpacingBox (4 inputs
+ * + link icon) imported from the forms editor — see
+ * feedback_spacing_box_only.md in memory for the standing rule.
  */
 export function PageSettingsPanel() {
   const { template, updateSettings } = useLandingPageEditor();
@@ -62,6 +62,50 @@ export function PageSettingsPanel() {
             unit="px"
           />
         </Stacked>
+      </Section>
+
+      <Section name="Padding">
+        <p className="text-[10px] text-[var(--muted-foreground)] -mt-1 mb-2">
+          Inside the content card, between its edges and the first/last block.
+        </p>
+        <SpacingBox
+          values={{
+            top: settings.contentPaddingTop ?? 0,
+            right: settings.contentPaddingRight ?? 0,
+            bottom: settings.contentPaddingBottom ?? 0,
+            left: settings.contentPaddingLeft ?? 0,
+          }}
+          onChange={(sides) =>
+            updateSettings({
+              contentPaddingTop: sides.top,
+              contentPaddingRight: sides.right,
+              contentPaddingBottom: sides.bottom,
+              contentPaddingLeft: sides.left,
+            })
+          }
+        />
+      </Section>
+
+      <Section name="Margin">
+        <p className="text-[10px] text-[var(--muted-foreground)] -mt-1 mb-2">
+          Outside the content card — adds breathing room against the page edges.
+        </p>
+        <SpacingBox
+          values={{
+            top: settings.contentMarginTop ?? 0,
+            right: settings.contentMarginRight ?? 0,
+            bottom: settings.contentMarginBottom ?? 0,
+            left: settings.contentMarginLeft ?? 0,
+          }}
+          onChange={(sides) =>
+            updateSettings({
+              contentMarginTop: sides.top,
+              contentMarginRight: sides.right,
+              contentMarginBottom: sides.bottom,
+              contentMarginLeft: sides.left,
+            })
+          }
+        />
       </Section>
 
       <Section name="Brand">

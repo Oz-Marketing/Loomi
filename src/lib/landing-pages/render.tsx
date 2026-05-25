@@ -13,6 +13,7 @@
 import * as React from 'react';
 import type { Block, LandingPageTemplate } from './types';
 import { BLOCK_COMPONENTS } from './components';
+import { blockSpacingStyle } from './block-spacing';
 import type { FormTemplate } from '@/lib/forms/types';
 
 export interface PreloadedForm {
@@ -85,16 +86,28 @@ function RenderedBlock({ block }: { block: Block }) {
   const Component = BLOCK_COMPONENTS[block.type] as React.ComponentType<Record<string, unknown> & { children?: React.ReactNode }> | undefined;
   if (!Component) return null;
 
+  // Every block sits inside a thin wrapper that carries its
+  // margin / padding from the block's spacing props. Section skips
+  // padding here — Section's own component applies it internally so
+  // the background colors the padded area.
+  const wrapperStyle = blockSpacingStyle(block);
+
   if (block.type === 'section' || block.type === 'columns') {
     const children = block.children ?? [];
     return (
-      <Component {...block.props}>
-        {children.map((child) => (
-          <RenderedBlock key={child.id} block={child} />
-        ))}
-      </Component>
+      <div style={wrapperStyle}>
+        <Component {...block.props}>
+          {children.map((child) => (
+            <RenderedBlock key={child.id} block={child} />
+          ))}
+        </Component>
+      </div>
     );
   }
 
-  return <Component {...block.props} />;
+  return (
+    <div style={wrapperStyle}>
+      <Component {...block.props} />
+    </div>
+  );
 }

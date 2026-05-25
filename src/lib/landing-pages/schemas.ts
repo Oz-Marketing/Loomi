@@ -508,6 +508,37 @@ export const HTML_SCHEMA: BlockSchema = {
   ],
 };
 
+// ── Universal spacing props ────────────────────────────────────────
+//
+// Every block gets paddingTop/Right/Bottom/Left + marginTop/Right/
+// Bottom/Left from this list. They're applied at the renderer/canvas
+// wrapper layer (see RenderedBlock in render.tsx and EditableBlock in
+// Canvas.tsx) so individual block components don't need to read them
+// — the wrapper takes care of layout-level spacing for every block
+// uniformly.
+//
+// Section is the one exception: it already declares its own
+// paddingTop/Right/Bottom/Left to wrap its children with the
+// section's background color visible in the padded area, so we
+// dedupe by `key` when merging.
+const SPACING_PROPS: PropSchema[] = [
+  { key: 'marginTop', label: 'Margin Top', type: 'number', default: 0, half: true, group: 'spacing', slider: true, sliderMin: 0, sliderMax: 160 },
+  { key: 'marginRight', label: 'Margin Right', type: 'number', default: 0, half: true, group: 'spacing', slider: true, sliderMin: 0, sliderMax: 160 },
+  { key: 'marginBottom', label: 'Margin Bottom', type: 'number', default: 0, half: true, group: 'spacing', slider: true, sliderMin: 0, sliderMax: 160 },
+  { key: 'marginLeft', label: 'Margin Left', type: 'number', default: 0, half: true, group: 'spacing', slider: true, sliderMin: 0, sliderMax: 160 },
+  { key: 'paddingTop', label: 'Padding Top', type: 'number', default: 0, half: true, group: 'spacing', slider: true, sliderMin: 0, sliderMax: 160 },
+  { key: 'paddingRight', label: 'Padding Right', type: 'number', default: 0, half: true, group: 'spacing', slider: true, sliderMin: 0, sliderMax: 160 },
+  { key: 'paddingBottom', label: 'Padding Bottom', type: 'number', default: 0, half: true, group: 'spacing', slider: true, sliderMin: 0, sliderMax: 160 },
+  { key: 'paddingLeft', label: 'Padding Left', type: 'number', default: 0, half: true, group: 'spacing', slider: true, sliderMin: 0, sliderMax: 160 },
+];
+
+function withSpacing(schema: BlockSchema): BlockSchema {
+  const existingKeys = new Set(schema.props.map((p) => p.key));
+  const additions = SPACING_PROPS.filter((p) => !existingKeys.has(p.key));
+  if (additions.length === 0) return schema;
+  return { ...schema, props: [...schema.props, ...additions] };
+}
+
 // ── Registry ───────────────────────────────────────────────────────
 
 export const ALL_BLOCK_SCHEMAS: BlockSchema[] = [
@@ -528,7 +559,7 @@ export const ALL_BLOCK_SCHEMAS: BlockSchema[] = [
   LOGO_STRIP_SCHEMA,
   EMBEDDED_FORM_SCHEMA,
   HTML_SCHEMA,
-];
+].map(withSpacing);
 
 export const BLOCK_SCHEMA_BY_TYPE: Record<LandingPageBlockType, BlockSchema> = ALL_BLOCK_SCHEMAS.reduce(
   (acc, schema) => {

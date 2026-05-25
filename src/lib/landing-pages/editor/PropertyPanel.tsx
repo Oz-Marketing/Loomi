@@ -11,7 +11,15 @@ import { BLOCK_SCHEMA_BY_TYPE, type PropSchema } from '../schemas';
 import { FormPickerInput } from './FormPickerInput';
 import { ItemArrayEditor } from './ItemArrayEditor';
 import { SLIDER_CLASS } from './slider-style';
+import { SpacingBox } from '@/lib/forms/editor/PropertyControls';
 import type { Block } from '../types';
+
+// Padding / margin in the LP editor always renders as the canonical
+// SpacingBox (4 inputs in a row + link icon to lock sides). Detected
+// by these key sets when bucketing the schema's `spacing` group.
+const PADDING_KEYS = ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft'] as const;
+const MARGIN_KEYS = ['marginTop', 'marginRight', 'marginBottom', 'marginLeft'] as const;
+const SPACING_PROP_KEYS = new Set<string>([...PADDING_KEYS, ...MARGIN_KEYS]);
 
 type PropertyTab = 'general' | 'styling' | 'advanced';
 
@@ -134,27 +142,112 @@ export function BlockProperties() {
           onChange={setActiveTab}
         />
       )}
-      {Object.entries(subGroups).map(([group, props]) => (
-        <div
-          key={group}
-          className="px-4 py-3 border-b border-[var(--border)] space-y-3 last:border-b-0"
-        >
-          <h4 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">
-            {group}
-          </h4>
-          <div className="grid grid-cols-2 gap-3">
-            {props.map((p) => (
-              <div key={p.key} className={p.half ? 'col-span-1' : 'col-span-2'}>
-                <PropEditor
-                  prop={p}
-                  value={(block.props[p.key] as unknown) ?? p.default}
-                  onChange={(value) => updateBlockProps(block.id, { [p.key]: value })}
-                />
-              </div>
-            ))}
+      {Object.entries(subGroups).map(([group, props]) => {
+        // The `spacing` group always renders as SpacingBoxes — one
+        // for Margin (4 sides + link icon) and one for Padding
+        // (same). Any spacing props the schema declares OUTSIDE
+        // those 8 keys (e.g. Section's `gap`) still render through
+        // the generic PropEditor below.
+        if (group === 'spacing') {
+          const extras = props.filter((p) => !SPACING_PROP_KEYS.has(p.key));
+          return (
+            <div
+              key={group}
+              className="px-4 py-3 border-b border-[var(--border)] space-y-4 last:border-b-0"
+            >
+              <h4 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">
+                {group}
+              </h4>
+              <SpacingGroup
+                label="Margin"
+                values={readSides(block, 'margin')}
+                onChange={(sides) =>
+                  updateBlockProps(block.id, {
+                    marginTop: sides.top,
+                    marginRight: sides.right,
+                    marginBottom: sides.bottom,
+                    marginLeft: sides.left,
+                  })
+                }
+              />
+              <SpacingGroup
+                label="Padding"
+                values={readSides(block, 'padding')}
+                onChange={(sides) =>
+                  updateBlockProps(block.id, {
+                    paddingTop: sides.top,
+                    paddingRight: sides.right,
+                    paddingBottom: sides.bottom,
+                    paddingLeft: sides.left,
+                  })
+                }
+              />
+              {extras.length > 0 && (
+                <div className="grid grid-cols-2 gap-3">
+                  {extras.map((p) => (
+                    <div key={p.key} className={p.half ? 'col-span-1' : 'col-span-2'}>
+                      <PropEditor
+                        prop={p}
+                        value={(block.props[p.key] as unknown) ?? p.default}
+                        onChange={(value) => updateBlockProps(block.id, { [p.key]: value })}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        }
+        return (
+          <div
+            key={group}
+            className="px-4 py-3 border-b border-[var(--border)] space-y-3 last:border-b-0"
+          >
+            <h4 className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--muted-foreground)]">
+              {group}
+            </h4>
+            <div className="grid grid-cols-2 gap-3">
+              {props.map((p) => (
+                <div key={p.key} className={p.half ? 'col-span-1' : 'col-span-2'}>
+                  <PropEditor
+                    prop={p}
+                    value={(block.props[p.key] as unknown) ?? p.default}
+                    onChange={(value) => updateBlockProps(block.id, { [p.key]: value })}
+                  />
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
+    </div>
+  );
+}
+
+function readSides(block: Block, prefix: 'padding' | 'margin') {
+  const p = block.props as Record<string, unknown>;
+  const num = (key: string): number => (typeof p[key] === 'number' ? (p[key] as number) : 0);
+  return {
+    top: num(`${prefix}Top`),
+    right: num(`${prefix}Right`),
+    bottom: num(`${prefix}Bottom`),
+    left: num(`${prefix}Left`),
+  };
+}
+
+function SpacingGroup({
+  label,
+  values,
+  onChange,
+}: {
+  label: string;
+  values: { top: number; right: number; bottom: number; left: number };
+  onChange: (sides: { top: number; right: number; bottom: number; left: number }) => void;
+}) {
+  return (
+    <div>
+      <div className="text-[11px] font-medium text-[var(--foreground)] mb-1.5">{label}</div>
+      <SpacingBox values={values} onChange={onChange} />
     </div>
   );
 }

@@ -20,6 +20,7 @@ import { useLandingPageEditor } from './EditorContext';
 import { BLOCK_COMPONENTS } from '../components';
 import { SectionBlock } from '../components/Section';
 import { ColumnsBlock } from '../components/Columns';
+import { blockSpacingStyle } from '../block-spacing';
 import type { Block } from '../types';
 
 /**
@@ -233,10 +234,15 @@ function EditableBlock({
     isDragging,
   } = useSortable({ id: block.id });
 
+  // Block-level spacing (padding + margin from the block's props)
+  // rides the same wrapper as the selection ring + drag transform.
+  // Section skips padding here so its component can paint the bg
+  // into its own padded area; see blockSpacingStyle.
   const dragStyle: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.4 : 1,
+    ...blockSpacingStyle(block),
   };
 
   let body: React.ReactNode = null;

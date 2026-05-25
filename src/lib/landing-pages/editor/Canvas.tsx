@@ -6,7 +6,14 @@ import {
   ChevronDownIcon,
   DocumentDuplicateIcon,
   TrashIcon,
+  Bars3Icon,
 } from '@heroicons/react/24/outline';
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useLandingPageEditor } from './EditorContext';
 import { BLOCK_COMPONENTS } from '../components';
 import { SectionBlock } from '../components/Section';
@@ -15,14 +22,17 @@ import type { Block } from '../types';
 
 /**
  * Editor canvas. Renders the template using the real block
- * components, but wraps each block in an EditableBlock that adds:
+ * components, wraps each block in an EditableBlock that adds:
  *  - selection ring on click
  *  - hover halo
- *  - floating control rail (up/down/duplicate/delete)
+ *  - floating control rail (drag-handle / up / down / duplicate /
+ *    delete)
  *
- * Section blocks recurse into EditableBlocks for their children, so
- * a heading sitting inside a section can be clicked and edited
- * directly. Columns render each column's contents the same way.
+ * Each container (top level, Section children, column-slot children)
+ * is a SortableContext, so blocks reorder via drag-and-drop within
+ * their immediate parent. Cross-container drags aren't supported in
+ * this iteration — the DnD handler in LandingPageEditorShell rejects
+ * drops that would move a block between parents.
  *
  * Page-level settings (bg, font, max width, brand color) wrap the
  * tree so the editor matches LandingPageRenderer pixel-for-pixel.
@@ -68,14 +78,19 @@ export function Canvas() {
           {template.blocks.length === 0 ? (
             <EmptyCanvasState />
           ) : (
-            template.blocks.map((block, idx) => (
-              <EditableBlock
-                key={block.id}
-                block={block}
-                index={idx}
-                total={template.blocks.length}
-              />
-            ))
+            <SortableContext
+              items={template.blocks.map((b) => b.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              {template.blocks.map((block, idx) => (
+                <EditableBlock
+                  key={block.id}
+                  block={block}
+                  index={idx}
+                  total={template.blocks.length}
+                />
+              ))}
+            </SortableContext>
           )}
         </div>
       </div>
@@ -85,11 +100,9 @@ export function Canvas() {
 
 /**
  * Recursive wrapper that adds editor affordances around any block.
- * - Leaf blocks render their component as-is.
- * - Section blocks render their children as EditableBlocks (or an
- *   empty-drop-zone when childless).
- * - Columns render each of their column slots, with EditableBlocks
- *   inside each column.
+ * Top-level + nested blocks share this component — the block's
+ * sortable wiring uses the same id regardless of depth, because
+ * each container hosts its own SortableContext.
  */
 function EditableBlock({
   block,
@@ -104,6 +117,21 @@ function EditableBlock({
     useLandingPageEditor();
   const selected = selectedId === block.id;
 
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: block.id });
+
+  const dragStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  };
+
   let body: React.ReactNode = null;
 
   if (block.type === 'section') {
@@ -113,14 +141,19 @@ function EditableBlock({
         {children.length === 0 ? (
           <EmptyContainerDropZone parentId={block.id} />
         ) : (
-          children.map((child, i) => (
-            <EditableBlock
-              key={child.id}
-              block={child}
-              index={i}
-              total={children.length}
-            />
-          ))
+          <SortableContext
+            items={children.map((c) => c.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            {children.map((child, i) => (
+              <EditableBlock
+                key={child.id}
+                block={child}
+                index={i}
+                total={children.length}
+              />
+            ))}
+          </SortableContext>
         )}
       </SectionBlock>
     );
@@ -142,8 +175,10 @@ function EditableBlock({
 
   return (
     <div
+      ref={setNodeRef}
       className="relative group/block"
       style={{
+        ...dragStyle,
         outline: selected ? '2px solid var(--primary)' : '2px solid transparent',
         outlineOffset: -2,
       }}
@@ -151,6 +186,7 @@ function EditableBlock({
         e.stopPropagation();
         selectBlock(block.id);
       }}
+      {...attributes}
     >
       {!selected && (
         <div className="pointer-events-none absolute inset-0 opacity-0 group-hover/block:opacity-100 transition-opacity ring-1 ring-inset ring-[var(--primary)]/40" />
@@ -160,8 +196,25 @@ function EditableBlock({
         <div
           data-lp-editor-control
           className="absolute -top-9 right-2 z-10 flex items-center gap-0.5 px-1 py-1 rounded-md bg-[var(--card)] border border-[var(--border)] shadow-sm"
+          // Stop dnd-kit from hijacking the toolbar pointer events into
+          // a drag — without this, the up/down/delete buttons can
+          // get swallowed by the sortable activation.
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => e.stopPropagation()}
         >
+          {/* Drag handle — the only place that opts into the
+              sortable listeners. The rest of the block is click-to-
+              select; drag only fires when you grab this icon. */}
+          <button
+            type="button"
+            data-lp-editor-control
+            title="Drag to reorder"
+            aria-label="Drag to reorder"
+            className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--muted-foreground)] hover:bg-[var(--muted)] cursor-grab active:cursor-grabbing"
+            {...listeners}
+          >
+            <Bars3Icon className="w-3.5 h-3.5" />
+          </button>
           <Rail
             label="Move up"
             disabled={index === 0}
@@ -195,13 +248,8 @@ function EditableBlock({
 /**
  * Render one column inside a Columns block. The column is itself a
  * Section under the hood — we render its background/padding via
- * SectionBlock, and its children as EditableBlocks. Selecting a
- * child works the same as a top-level selection.
- *
- * The column wrapper isn't independently selectable to keep the UX
- * simple: users edit the parent Columns block (column count, gap,
- * align) and the leaf blocks inside the columns. The pseudo-Section
- * column is structural, not editorial.
+ * SectionBlock, and its children as EditableBlocks. Each column
+ * carries its own SortableContext so reorder is column-scoped.
  */
 function ColumnSlot({ column }: { column: Block }) {
   const children = column.children ?? [];
@@ -210,14 +258,19 @@ function ColumnSlot({ column }: { column: Block }) {
       {children.length === 0 ? (
         <EmptyContainerDropZone parentId={column.id} small />
       ) : (
-        children.map((child, i) => (
-          <EditableBlock
-            key={child.id}
-            block={child}
-            index={i}
-            total={children.length}
-          />
-        ))
+        <SortableContext
+          items={children.map((c) => c.id)}
+          strategy={verticalListSortingStrategy}
+        >
+          {children.map((child, i) => (
+            <EditableBlock
+              key={child.id}
+              block={child}
+              index={i}
+              total={children.length}
+            />
+          ))}
+        </SortableContext>
       )}
     </SectionBlock>
   );
@@ -232,8 +285,8 @@ function EmptyContainerDropZone({
 }) {
   // Selecting the parent (Section / column-slot) marks it as the
   // insertion target — clicking a block in the left palette will then
-  // append into THIS parent, since EditorContext.insertBlock infers
-  // "container selected → append-into".
+  // append into THIS parent (EditorContext.insertBlock infers
+  // "container selected → append-into").
   const { selectBlock, selectedId } = useLandingPageEditor();
   const active = selectedId === parentId;
   return (

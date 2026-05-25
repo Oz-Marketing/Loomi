@@ -31,6 +31,9 @@ interface EditorActions {
    *  inserted-after. */
   insertBlock: (type: LandingPageBlockType, position?: InsertPosition) => void;
   moveBlock: (id: string, direction: 'up' | 'down') => void;
+  /** Reorder a block within its current parent. `targetIndex` is the
+   *  desired final position (post-removal). Used by drag-and-drop. */
+  reorderInParent: (id: string, targetIndex: number) => void;
   deleteBlock: (id: string) => void;
   duplicateBlock: (id: string) => void;
 }
@@ -253,6 +256,32 @@ export function LandingPageEditorProvider({ template, onChange, children }: Prov
     [update],
   );
 
+  const reorderInParent = React.useCallback(
+    (id: string, targetIndex: number) => {
+      update((t) => {
+        const loc = locate(t.blocks, id);
+        if (!loc) return t;
+        const siblings = loc.parent?.children ?? t.blocks;
+        if (targetIndex < 0 || targetIndex >= siblings.length) return t;
+        if (targetIndex === loc.index) return t;
+        const without = siblings.filter((_, i) => i !== loc.index);
+        const next = [
+          ...without.slice(0, targetIndex),
+          siblings[loc.index],
+          ...without.slice(targetIndex),
+        ];
+        if (!loc.parent) return { ...t, blocks: next };
+        return {
+          ...t,
+          blocks: mapBlocks(t.blocks, (b) =>
+            b.id === loc.parent?.id ? { ...b, children: next } : b,
+          ),
+        };
+      });
+    },
+    [update],
+  );
+
   const deleteBlock = React.useCallback(
     (id: string) => {
       update((t) => ({ ...t, blocks: removeBlock(t.blocks, id) }));
@@ -289,6 +318,7 @@ export function LandingPageEditorProvider({ template, onChange, children }: Prov
     updateSettings,
     insertBlock,
     moveBlock,
+    reorderInParent,
     deleteBlock,
     duplicateBlock,
   };

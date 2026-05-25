@@ -6,6 +6,21 @@ import { BLOCK_SCHEMA_BY_TYPE, type PropSchema } from '../schemas';
 import { PageSettingsPanel } from './PageSettingsPanel';
 import { FormPickerInput } from './FormPickerInput';
 import { ItemArrayEditor } from './ItemArrayEditor';
+import type { Block } from '../types';
+
+/** Walk the block tree to find a block by id. The editor used to
+ *  search only the top level — that broke as soon as we wired up
+ *  nested editing. */
+function findBlockDeep(blocks: Block[], id: string): Block | undefined {
+  for (const b of blocks) {
+    if (b.id === id) return b;
+    if (b.children) {
+      const inner = findBlockDeep(b.children, id);
+      if (inner) return inner;
+    }
+  }
+  return undefined;
+}
 
 const inputClass =
   'w-full px-3 py-2 text-sm bg-transparent text-[var(--foreground)] border border-[var(--border)] rounded-md outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] transition-colors';
@@ -22,11 +37,9 @@ const inputClass =
 export function PropertyPanel() {
   const { template, selectedId, updateBlockProps } = useLandingPageEditor();
 
-  // Find selected block (top-level only for PR2 — nested editing is
-  // a follow-up).
-  const block = selectedId
-    ? template.blocks.find((b) => b.id === selectedId)
-    : null;
+  // Find the selected block anywhere in the tree (top-level or
+  // nested inside a Section / column slot).
+  const block = selectedId ? findBlockDeep(template.blocks, selectedId) : undefined;
 
   if (!block) {
     return <PageSettingsPanel />;

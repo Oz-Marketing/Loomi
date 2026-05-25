@@ -20,7 +20,7 @@ const CATEGORY_LABEL: Record<BlockSchema['category'], string> = {
  * from-palette is a follow-up.
  */
 export function BlockPalette() {
-  const { insertBlock, selectedId } = useLandingPageEditor();
+  const { insertBlock } = useLandingPageEditor();
 
   const groups = React.useMemo(() => {
     const buckets: Record<BlockSchema['category'], BlockSchema[]> = {
@@ -53,7 +53,7 @@ export function BlockPalette() {
               <button
                 key={schema.type}
                 type="button"
-                onClick={() => insertBlock(schema.type, selectedId)}
+                onClick={() => insertBlock(schema.type)}
                 className="flex flex-col items-center gap-1.5 px-2 py-3 rounded-lg border border-[var(--border)] bg-[var(--background)] hover:border-[var(--primary)] hover:bg-[var(--primary)]/5 transition-colors group"
                 title={schema.description}
               >

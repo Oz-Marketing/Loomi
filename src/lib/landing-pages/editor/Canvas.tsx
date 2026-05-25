@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 import {
+  ArrowUturnLeftIcon,
+  ArrowUturnRightIcon,
   ChevronUpIcon,
   ChevronDownIcon,
   ComputerDesktopIcon,
@@ -42,7 +44,14 @@ import { effectiveProps, type Block } from '../types';
  */
 const MOBILE_PREVIEW_WIDTH = 390;
 
-export function Canvas() {
+interface CanvasProps {
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
+}
+
+export function Canvas({ canUndo, canRedo, onUndo, onRedo }: CanvasProps = {}) {
   const { template, selectBlock, activeDevice, setActiveDevice } = useLandingPageEditor();
   const s = template.settings;
 
@@ -53,7 +62,14 @@ export function Canvas() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <CanvasActionBar previewWidth={activeDevice} onChange={setActiveDevice} />
+      <CanvasActionBar
+        previewWidth={activeDevice}
+        onChange={setActiveDevice}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={onUndo}
+        onRedo={onRedo}
+      />
       <div
         className={`flex-1 overflow-auto bg-[var(--muted)]/30 ${
           activeDevice === 'mobile' ? 'loomi-lp-canvas-mobile' : ''
@@ -143,15 +159,25 @@ export function Canvas() {
 function CanvasActionBar({
   previewWidth,
   onChange,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
 }: {
   previewWidth: 'desktop' | 'mobile';
   onChange: (w: 'desktop' | 'mobile') => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }) {
-  // Bare bar — no background, no separator. The toggle itself is the
-  // only chrome on this row. Same pill-tab idiom the sidebar uses.
+  // Bare bar — no background, no separator. Centered pill toggle
+  // for desktop/mobile, with undo/redo pinned to the right end the
+  // same way FormActionBar does. Same pill idiom the sidebar uses.
   return (
-    <div className="flex items-center justify-center px-4 py-2 flex-shrink-0">
-      <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-1 gap-0.5">
+    <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-4 py-2 flex-shrink-0">
+      <div />
+      <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-1 gap-0.5 justify-self-center">
         <PreviewToggleButton
           active={previewWidth === 'desktop'}
           onClick={() => onChange('desktop')}
@@ -167,7 +193,54 @@ function CanvasActionBar({
           label="Mobile"
         />
       </div>
+      <div className="flex items-center justify-end gap-0.5">
+        {onUndo && (
+          <ActionIconButton
+            label="Undo"
+            shortcut="⌘Z"
+            disabled={!canUndo}
+            onClick={onUndo}
+            icon={<ArrowUturnLeftIcon className="w-4 h-4" />}
+          />
+        )}
+        {onRedo && (
+          <ActionIconButton
+            label="Redo"
+            shortcut="⌘⇧Z"
+            disabled={!canRedo}
+            onClick={onRedo}
+            icon={<ArrowUturnRightIcon className="w-4 h-4" />}
+          />
+        )}
+      </div>
     </div>
+  );
+}
+
+function ActionIconButton({
+  label,
+  shortcut,
+  icon,
+  onClick,
+  disabled,
+}: {
+  label: string;
+  shortcut?: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={shortcut ? `${label} (${shortcut})` : label}
+      aria-label={label}
+      className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+    >
+      {icon}
+    </button>
   );
 }
 

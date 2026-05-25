@@ -24,6 +24,12 @@ import type { LandingPageTemplate } from '../types';
 export interface LandingPageEditorShellProps {
   template: LandingPageTemplate;
   onChange: (next: LandingPageTemplate) => void;
+  /** Undo/redo plumbing — surfaced in the canvas action bar, the
+   *  same way the forms editor's FormActionBar exposes them. */
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }
 
 // Sidebar width constants — same shape as the forms editor.
@@ -35,15 +41,29 @@ const SIDEBAR_STEP_PX = 24;
 export function LandingPageEditorShell({
   template,
   onChange,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
 }: LandingPageEditorShellProps) {
   return (
     <LandingPageEditorProvider template={template} onChange={onChange}>
-      <DndShell />
+      <DndShell
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={onUndo}
+        onRedo={onRedo}
+      />
     </LandingPageEditorProvider>
   );
 }
 
-function DndShell() {
+function DndShell({
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
+}: Pick<LandingPageEditorShellProps, 'canUndo' | 'canRedo' | 'onUndo' | 'onRedo'>) {
   const {
     template,
     selectedId,
@@ -236,7 +256,7 @@ function DndShell() {
         </div>
 
         <div className="flex-1 min-w-0 min-h-0 flex flex-col border border-[var(--border)] rounded-xl overflow-hidden bg-[var(--card)]">
-          <Canvas />
+          <Canvas canUndo={canUndo} canRedo={canRedo} onUndo={onUndo} onRedo={onRedo} />
         </div>
       </div>
     </DndContext>

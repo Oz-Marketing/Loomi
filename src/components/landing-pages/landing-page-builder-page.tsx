@@ -2,14 +2,12 @@
 
 import * as React from 'react';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
-  ArrowUturnLeftIcon,
-  ArrowUturnRightIcon,
+  ArrowTopRightOnSquareIcon,
   CheckIcon,
   ClockIcon,
   Cog6ToothIcon,
@@ -246,21 +244,77 @@ export function LandingPageBuilderPage({ id }: { id: string }) {
   const canRedo = future.length > 0;
   const saveDescriptor = describeSaveStatus(saveStatus, savedAt);
 
+  // ── Click-to-edit title (mirrors FormDetailHeader.commitTitle) ──
+  const [editingTitle, setEditingTitle] = React.useState(false);
+  const [titleDraft, setTitleDraft] = React.useState(page?.name ?? '');
+  React.useEffect(() => {
+    if (!editingTitle) setTitleDraft(page?.name ?? '');
+  }, [page?.name, editingTitle]);
+
+  const commitTitle = async () => {
+    setEditingTitle(false);
+    if (!page) return;
+    const next = titleDraft.trim();
+    if (!next || next === page.name) {
+      setTitleDraft(page.name);
+      return;
+    }
+    const res = await fetch(`/api/landing-pages/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: next }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      toast.error(body.error || 'Could not rename page.');
+      setTitleDraft(page.name);
+      return;
+    }
+    const body = (await res.json()) as { page: LandingPageDetail };
+    void mutate({ page: body.page }, { revalidate: false });
+  };
+
+  // ── Publish toggle (mirrors FormDetailHeader.togglePublish) ─────
+  const [publishing, setPublishing] = React.useState(false);
+  const togglePublish = async () => {
+    if (publishing || !page) return;
+    setPublishing(true);
+    const nextStatus = page.status === 'published' ? 'draft' : 'published';
+    const res = await fetch(`/api/landing-pages/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: nextStatus }),
+    });
+    setPublishing(false);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      toast.error(body.error || 'Could not update status.');
+      return;
+    }
+    const body = (await res.json()) as { page: LandingPageDetail };
+    void mutate({ page: body.page }, { revalidate: false });
+    toast.success(nextStatus === 'published' ? 'Page published.' : 'Page moved to draft.');
+  };
+
+  const published = page?.status === 'published';
+
   return (
     <AdminOnly>
-      <div className="px-6 py-3 flex items-center justify-between border-b border-[var(--border)] flex-shrink-0">
-        <div className="flex items-center gap-3">
+      <div className="grid grid-cols-[minmax(260px,1fr)_auto_minmax(260px,1fr)] items-center gap-3 px-6 pt-3 pb-4 flex-shrink-0">
+        {/* LEFT — back · status · autosave (mirrors forms header) */}
+        <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
             onClick={() => router.push(subHref(`/websites/landing-pages/${id}`))}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-[var(--foreground)] hover:bg-[var(--muted)]"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex-shrink-0"
+            title="Back to overview"
           >
             <ArrowLeftIcon className="w-4 h-4" />
             Back
           </button>
           <span
             className={`inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${
-              page?.status === 'published'
+              published
                 ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
                 : 'border-zinc-500/30 bg-zinc-500/10 text-zinc-300'
             }`}
@@ -271,48 +325,81 @@ export function LandingPageBuilderPage({ id }: { id: string }) {
             <saveDescriptor.Icon
               className={`w-3.5 h-3.5 ${saveDescriptor.spin ? 'animate-spin' : ''}`}
             />
-            {saveDescriptor.label}
+            <span>{saveDescriptor.label}</span>
           </span>
         </div>
-        <div className="text-sm font-medium capitalize">
-          {page?.name || 'Loading…'}
-        </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-0.5 mr-1">
-            <HeaderIconButton
-              label="Undo"
-              shortcut="⌘Z"
-              disabled={!canUndo}
-              onClick={undo}
-              icon={<ArrowUturnLeftIcon className="w-4 h-4" />}
-            />
-            <HeaderIconButton
-              label="Redo"
-              shortcut="⌘⇧Z"
-              disabled={!canRedo}
-              onClick={redo}
-              icon={<ArrowUturnRightIcon className="w-4 h-4" />}
-            />
+
+        {/* CENTER — click-to-edit title + slug */}
+        <div className="min-w-0 max-w-[720px] justify-self-center">
+          <div className="min-w-0 text-center">
+            {editingTitle ? (
+              <input
+                type="text"
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                size={Math.min(Math.max(titleDraft.length || 12, 12), 48)}
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void commitTitle();
+                  else if (e.key === 'Escape') {
+                    setTitleDraft(page?.name ?? '');
+                    setEditingTitle(false);
+                  }
+                }}
+                onBlur={() => void commitTitle()}
+                className="max-w-[min(44rem,64vw)] rounded-xl border border-[var(--primary)] bg-[var(--background)]/80 px-4 py-1.5 text-center text-2xl font-bold text-[var(--foreground)] shadow-[0_0_0_1px_rgba(99,102,241,0.18)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)]/20"
+              />
+            ) : (
+              <h2
+                role="button"
+                tabIndex={0}
+                onClick={() => setEditingTitle(true)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setEditingTitle(true);
+                  }
+                }}
+                title="Click to rename"
+                className="text-2xl font-bold capitalize truncate max-w-[40rem] mx-auto cursor-text rounded-md px-3 py-1 hover:bg-[var(--muted)] focus:outline-none focus:bg-[var(--muted)] focus:ring-1 focus:ring-[var(--primary)]/30 transition-colors"
+              >
+                {page?.name || 'Untitled landing page'}
+              </h2>
+            )}
+            <p className="text-xs text-[var(--muted-foreground)] truncate">/lp/{page?.slug ?? ''}</p>
           </div>
-          {page?.status === 'published' && (
-            <Link
+        </div>
+
+        {/* RIGHT — open live · settings cog · publish */}
+        <div className="flex items-center justify-end gap-2 min-w-0">
+          {published && page && (
+            <a
               href={`/lp/${page.slug}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs text-[var(--muted-foreground)] hover:text-[var(--primary)]"
+              title="Open live page"
+              className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--muted)] hover:bg-[var(--accent)] text-[var(--foreground)] transition-colors"
             >
-              Open live ↗
-            </Link>
+              <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+            </a>
           )}
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
             disabled={!page}
-            aria-label="Page settings"
             title="Page settings"
-            className="inline-flex items-center justify-center w-8 h-8 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-40"
+            aria-label="Page settings"
+            className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--muted)] hover:bg-[var(--accent)] text-[var(--foreground)] disabled:opacity-40 transition-colors"
           >
             <Cog6ToothIcon className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void togglePublish()}
+            disabled={publishing || !page}
+            className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+          >
+            {published ? 'Move to Draft' : 'Publish'}
           </button>
         </div>
       </div>
@@ -322,7 +409,14 @@ export function LandingPageBuilderPage({ id }: { id: string }) {
           Loading editor…
         </div>
       ) : (
-        <LandingPageEditorShell template={template} onChange={applyChange} />
+        <LandingPageEditorShell
+          template={template}
+          onChange={applyChange}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={undo}
+          onRedo={redo}
+        />
       )}
 
       <LandingPageSettingsModal
@@ -332,33 +426,6 @@ export function LandingPageBuilderPage({ id }: { id: string }) {
         onUpdated={(next) => void mutate({ page: next }, { revalidate: false })}
       />
     </AdminOnly>
-  );
-}
-
-function HeaderIconButton({
-  label,
-  shortcut,
-  icon,
-  onClick,
-  disabled,
-}: {
-  label: string;
-  shortcut?: string;
-  icon: React.ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={shortcut ? `${label} (${shortcut})` : label}
-      aria-label={label}
-      className="inline-flex items-center justify-center w-8 h-8 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-    >
-      {icon}
-    </button>
   );
 }
 

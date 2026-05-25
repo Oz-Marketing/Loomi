@@ -468,183 +468,156 @@ interface PropEditorProps {
   onChange: (value: unknown) => void;
 }
 
+// PropEditor renders ONLY the control. The surrounding PropertyField
+// owns the label (with device icon + reset affordance), so duplicating
+// labels here would double them in stacked layout.
 function PropEditor({ prop, value, onChange }: PropEditorProps) {
-  const label = (
-    <label className="block text-[11px] font-medium text-[var(--foreground)] mb-1">
-      {prop.label}
-    </label>
-  );
-
   switch (prop.type) {
     case 'text':
     case 'url':
       return (
-        <div>
-          {label}
-          <input
-            type={prop.type === 'url' ? 'url' : 'text'}
-            value={typeof value === 'string' ? value : ''}
-            placeholder={prop.placeholder}
-            onChange={(e) => onChange(e.target.value)}
-            className={inputClass}
-          />
-        </div>
+        <input
+          type={prop.type === 'url' ? 'url' : 'text'}
+          value={typeof value === 'string' ? value : ''}
+          placeholder={prop.placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          className={inputClass}
+        />
       );
 
     case 'textarea':
       return (
-        <div>
-          {label}
-          <textarea
-            rows={3}
-            value={typeof value === 'string' ? value : ''}
-            placeholder={prop.placeholder}
-            onChange={(e) => onChange(e.target.value)}
-            className={`${inputClass} resize-y`}
-          />
-        </div>
+        <textarea
+          rows={3}
+          value={typeof value === 'string' ? value : ''}
+          placeholder={prop.placeholder}
+          onChange={(e) => onChange(e.target.value)}
+          className={`${inputClass} resize-y`}
+        />
       );
 
     case 'color':
       return (
-        <div>
-          {label}
-          <div className="flex items-center gap-2">
-            <input
-              type="color"
-              value={typeof value === 'string' && value ? value : '#000000'}
-              onChange={(e) => onChange(e.target.value)}
-              className="w-8 h-8 rounded border border-[var(--border)] cursor-pointer"
-            />
-            <input
-              type="text"
-              value={typeof value === 'string' ? value : ''}
-              onChange={(e) => onChange(e.target.value)}
-              placeholder="#000000 or transparent"
-              className={inputClass}
-            />
-          </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            value={typeof value === 'string' && value ? value : '#000000'}
+            onChange={(e) => onChange(e.target.value)}
+            className="w-8 h-8 rounded border border-[var(--border)] cursor-pointer"
+          />
+          <input
+            type="text"
+            value={typeof value === 'string' ? value : ''}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="#000000 or transparent"
+            className={inputClass}
+          />
         </div>
       );
 
     case 'image':
       return (
-        <div>
-          {label}
-          <input
-            type="url"
-            value={typeof value === 'string' ? value : ''}
-            placeholder="https://…/image.jpg"
-            onChange={(e) => onChange(e.target.value)}
-            className={inputClass}
-          />
-        </div>
+        <input
+          type="url"
+          value={typeof value === 'string' ? value : ''}
+          placeholder="https://…/image.jpg"
+          onChange={(e) => onChange(e.target.value)}
+          className={inputClass}
+        />
       );
 
     case 'select':
       return (
-        <div>
-          {label}
-          <select
-            value={typeof value === 'string' || typeof value === 'number' ? String(value) : ''}
-            onChange={(e) => {
-              const opt = prop.options?.find((o) => String(o.value) === e.target.value);
-              onChange(opt ? opt.value : e.target.value);
-            }}
-            className={inputClass}
-          >
-            {prop.options?.map((opt) => (
-              <option key={String(opt.value)} value={String(opt.value)}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        <select
+          value={typeof value === 'string' || typeof value === 'number' ? String(value) : ''}
+          onChange={(e) => {
+            const opt = prop.options?.find((o) => String(o.value) === e.target.value);
+            onChange(opt ? opt.value : e.target.value);
+          }}
+          className={inputClass}
+        >
+          {prop.options?.map((opt) => (
+            <option key={String(opt.value)} value={String(opt.value)}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
       );
 
     case 'toggle':
+      // Toggle is a special case — when used inline, the outer label
+      // is hidden by PropertyField (toggle pairs are rendered with
+      // their own internal "label · switch" layout). Render the
+      // switch on the right with no label here.
       return (
-        <div className="flex items-center justify-between gap-3">
-          <span className="text-[11px] font-medium text-[var(--foreground)]">
-            {prop.label}
-          </span>
-          <button
-            type="button"
-            onClick={() => onChange(!value)}
-            role="switch"
-            aria-checked={Boolean(value)}
-            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-              value ? 'bg-[var(--primary)]' : 'bg-[var(--muted)] border border-[var(--border)]'
+        <button
+          type="button"
+          onClick={() => onChange(!value)}
+          role="switch"
+          aria-checked={Boolean(value)}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+            value ? 'bg-[var(--primary)]' : 'bg-[var(--muted)] border border-[var(--border)]'
+          }`}
+        >
+          <span
+            className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+              value ? 'translate-x-5' : 'translate-x-1'
             }`}
-          >
-            <span
-              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
-                value ? 'translate-x-5' : 'translate-x-1'
-              }`}
-            />
-          </button>
-        </div>
+          />
+        </button>
       );
 
     case 'number':
     case 'range':
     case 'unit': {
       const numeric = typeof value === 'number' ? value : Number(value ?? prop.default ?? 0) || 0;
-      return (
-        <div>
-          {label}
-          {prop.slider ? (
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                min={prop.sliderMin ?? prop.min ?? 0}
-                max={prop.sliderMax ?? prop.max ?? 200}
-                value={numeric}
-                onChange={(e) => onChange(Number(e.target.value))}
-                className={`flex-1 ${SLIDER_CLASS}`}
-              />
-              <input
-                type="number"
-                value={numeric}
-                onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))}
-                className={`${inputClass} w-16 text-center`}
-              />
-            </div>
-          ) : (
+      if (prop.slider) {
+        return (
+          <div className="flex items-center gap-2">
+            <input
+              type="range"
+              min={prop.sliderMin ?? prop.min ?? 0}
+              max={prop.sliderMax ?? prop.max ?? 200}
+              value={numeric}
+              onChange={(e) => onChange(Number(e.target.value))}
+              className={`flex-1 ${SLIDER_CLASS}`}
+            />
             <input
               type="number"
-              min={prop.min}
-              max={prop.max}
               value={numeric}
               onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))}
-              className={inputClass}
+              className={`${inputClass} w-16 text-center`}
             />
-          )}
-        </div>
+          </div>
+        );
+      }
+      return (
+        <input
+          type="number"
+          min={prop.min}
+          max={prop.max}
+          value={numeric}
+          onChange={(e) => onChange(e.target.value === '' ? 0 : Number(e.target.value))}
+          className={inputClass}
+        />
       );
     }
 
     case 'form-picker':
       return (
-        <div>
-          {label}
-          <FormPickerInput
-            value={typeof value === 'string' ? value : ''}
-            onChange={onChange}
-          />
-        </div>
+        <FormPickerInput
+          value={typeof value === 'string' ? value : ''}
+          onChange={onChange}
+        />
       );
 
     case 'item-array':
       return (
-        <div>
-          {label}
-          <ItemArrayEditor
-            prop={prop}
-            value={value}
-            onChange={(next) => onChange(next)}
-          />
-        </div>
+        <ItemArrayEditor
+          prop={prop}
+          value={value}
+          onChange={(next) => onChange(next)}
+        />
       );
 
     default:

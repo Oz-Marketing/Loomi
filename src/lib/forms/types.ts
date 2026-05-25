@@ -58,6 +58,8 @@ export interface FormSettings {
   contentMarginRight: number;
   contentMarginBottom: number;
   contentMarginLeft: number;
+  /** Corner radius of the form container, in px. Default 12. */
+  contentBorderRadius: number;
   fontFamily: string;    // default font stack
   textColor: string;     // default body text color
   // Whether the public page strips outer chrome (used by ?embed=1 and
@@ -85,6 +87,7 @@ export const DEFAULT_FORM_SETTINGS: FormSettings = {
   contentMarginRight: 32,
   contentMarginBottom: 32,
   contentMarginLeft: 32,
+  contentBorderRadius: 12,
   fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
   textColor: '#1a1a1a',
 };

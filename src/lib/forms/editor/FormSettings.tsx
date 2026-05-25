@@ -71,6 +71,18 @@ export function FormSettings() {
             sliderMax={1024}
           />
         </StackedField>
+        <StackedField label="Border Radius">
+          <NumberInput
+            value={settings.contentBorderRadius ?? 12}
+            onChange={(v) => updateSettings({ contentBorderRadius: v })}
+            min={0}
+            max={64}
+            unit="px"
+            slider
+            sliderMin={0}
+            sliderMax={48}
+          />
+        </StackedField>
       </div>
 
       {/* Padding — per-side, matches the SpacingBox UX the email editor

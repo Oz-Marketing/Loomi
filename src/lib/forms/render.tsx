@@ -51,7 +51,7 @@ export function FormRenderer({ template, options }: FormRendererProps) {
             maxWidth: `${s.contentWidth}px`,
             margin: '0 auto',
             backgroundColor: s.contentBg,
-            borderRadius: 12,
+            borderRadius: s.contentBorderRadius ?? 12,
             padding,
           }}
         >

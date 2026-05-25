@@ -121,6 +121,7 @@ export function Canvas({ previewWidth = 'desktop', zoom = 100, previewValues }: 
           fontFamily: template.settings.fontFamily,
           color: template.settings.textColor,
           padding: canvasPadding,
+          borderRadius: `${template.settings.contentBorderRadius ?? 12}px`,
           transform: `scale(${zoom / 100})`,
           transformOrigin: 'top center',
           transition: 'max-width 150ms ease, transform 120ms ease',

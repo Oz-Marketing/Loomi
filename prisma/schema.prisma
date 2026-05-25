@@ -146,6 +146,7 @@ model Account {
   contactLists             ContactList[]
   loomiFlows               LoomiFlow[]
   forms                    Form[]
+  landingPages             LandingPage[]
   mediaAssets              MediaAsset[]
   metaAdsPacerPlan         MetaAdsPacerPlan?
   metaAdsPacerAccountNotes MetaAdsPacerAccountNote[]
@@ -607,6 +608,45 @@ model FormSubmission {
 
   @@index([formId, createdAt])
   @@index([contactId])
+}
+
+// ─────────────────────────────────────────────────────
+// Landing Pages (block-based, public-rendered)
+//
+// Mirrors the Form model — same lifecycle (draft → published), same
+// /<short-path>/[slug] public routing pattern (here: /lp/[slug]), same
+// block-based JSON schema (defined in src/lib/landing-pages/types.ts).
+// Differs from Form in that submissions aren't owned at this level —
+// LPs can embed an existing Form via the EmbeddedForm block, and that
+// embedded form owns its own submissions.
+// ─────────────────────────────────────────────────────
+
+model LandingPage {
+  id              String   @id @default(cuid())
+  accountKey      String
+  account         Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  name            String
+  // Public URL slug — served at /lp/[slug]. Globally unique so links
+  // resolve without an account prefix (same approach as Form.slug).
+  slug            String   @unique
+  status          String   @default("draft") // draft | published
+  // v1 LandingPageTemplate JSON: { version, settings, blocks[] }.
+  // Block types are dedicated marketing primitives (hero, features,
+  // testimonial, faq, etc.) plus a form_embed block that references a
+  // Form by id.
+  schema          Json
+  // Optional SEO/share metadata. Falls back to the page's first heading
+  // + a generated description when null.
+  seoTitle        String?
+  seoDescription  String?
+  ogImageUrl      String?
+  createdByUserId String?
+  publishedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([accountKey])
+  @@index([accountKey, status])
 }
 
 // ─────────────────────────────────────────────────────

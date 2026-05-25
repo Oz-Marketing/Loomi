@@ -296,7 +296,7 @@ export function FormOverview() {
           submissions data fetch / pagination / CSV export all live in
           the table component itself, so embedding it here is a one-liner. */}
       <section>
-        <SubmissionsTable formId={form.id} />
+        <SubmissionsTable formId={form.id} schema={form.schema} />
       </section>
     </div>
   );

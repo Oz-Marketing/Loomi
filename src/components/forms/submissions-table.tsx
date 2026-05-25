@@ -34,7 +34,8 @@ export function SubmissionsTable({ formId }: { formId: string }) {
         </div>
         <h3 className="text-lg font-semibold">No submissions yet</h3>
         <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Once the public submission pipeline lands, captured entries will appear here.
+          Publish the form and share its link or embed snippet — captured
+          entries appear here in real time.
         </p>
       </div>
     );

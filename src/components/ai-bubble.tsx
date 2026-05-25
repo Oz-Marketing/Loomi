@@ -56,7 +56,10 @@ export function AiBubble() {
     /^\/flows\/[^/]+$/.test(pathname) ||
     /^\/subaccount\/[^/]+\/flows\/[^/]+$/.test(pathname);
   const isFullScreen =
-    pathname.startsWith('/preview') || pathname.startsWith('/login');
+    pathname.startsWith('/preview') ||
+    pathname.startsWith('/login') ||
+    // Public hosted forms — no app chrome, no AI affordance.
+    pathname.startsWith('/f/');
 
   // ── Keyboard shortcut: Cmd/Ctrl+J ──
   useEffect(() => {

@@ -88,6 +88,15 @@ export function Canvas({ previewWidth = 'desktop', zoom = 100, previewValues }: 
           stack ColumnsBlock columns the same way the public renderer will. */}
       <style>{`
         .loomi-v2-canvas a { pointer-events: none !important; cursor: inherit !important; }
+        /* Make form inputs preview-only inside the editor canvas — clicks
+           bubble to EditableBlock for selection, and we don't want users
+           typing into "placeholder" inputs during design. */
+        .loomi-v2-canvas input,
+        .loomi-v2-canvas select,
+        .loomi-v2-canvas textarea,
+        .loomi-v2-canvas button[type="submit"] {
+          pointer-events: none !important;
+        }
         .loomi-v2-canvas-mobile .loomi-form-stack {
           flex-basis: 100% !important;
           width: 100% !important;

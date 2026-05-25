@@ -148,7 +148,6 @@ export const FieldText: React.FC<FieldTextProps> = (props) => {
         placeholder={props.placeholder}
         required={props.required}
         style={inputStyle(props)}
-        readOnly
       />
     </FieldShell>
   );
@@ -165,7 +164,6 @@ export const FieldEmail: React.FC<FieldTextProps> = (props) => {
         placeholder={props.placeholder}
         required={props.required}
         style={inputStyle(props)}
-        readOnly
       />
     </FieldShell>
   );
@@ -182,7 +180,6 @@ export const FieldPhone: React.FC<FieldTextProps> = (props) => {
         placeholder={props.placeholder}
         required={props.required}
         style={inputStyle(props)}
-        readOnly
       />
     </FieldShell>
   );
@@ -203,7 +200,6 @@ export const FieldTextarea: React.FC<FieldTextareaProps> = (props) => {
         required={props.required}
         rows={props.rows ?? 4}
         style={{ ...inputStyle(props), resize: 'vertical', minHeight: 80 }}
-        readOnly
       />
     </FieldShell>
   );
@@ -227,7 +223,6 @@ export const FieldSelect: React.FC<FieldSelectProps> = (props) => {
         required={props.required}
         style={inputStyle(props)}
         defaultValue=""
-        disabled
       >
         {props.placeholder && (
           <option value="" disabled>
@@ -267,9 +262,8 @@ export const FieldCheckbox: React.FC<FieldCheckboxProps> = (props) => {
           >
             <input
               type="checkbox"
-              name={`${props.name}[]`}
+              name={props.name}
               value={opt.value}
-              disabled
               style={{ width: 16, height: 16 }}
             />
             {opt.label}
@@ -304,7 +298,6 @@ export const FieldRadio: React.FC<FieldRadioProps> = (props) => {
               type="radio"
               name={props.name}
               value={opt.value}
-              disabled
               style={{ width: 16, height: 16 }}
             />
             {opt.label}
@@ -339,7 +332,6 @@ export const FieldConsent: React.FC<FieldConsentProps> = (props) => {
         type="checkbox"
         name={props.name || 'consent'}
         required={props.required}
-        disabled
         style={{ width: 16, height: 16, marginTop: 3, flexShrink: 0 }}
       />
       <label

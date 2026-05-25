@@ -33,7 +33,9 @@ export function FormSettingsForm() {
   });
   const [lists, setLists] = React.useState<ContactListOption[]>([]);
   const [saving, setSaving] = React.useState<string | null>(null);
-  const [copied, setCopied] = React.useState(false);
+  // Tracks which copy button was last clicked so each shows its own
+  // momentary "Copied" feedback. `null` = no recent copy.
+  const [copied, setCopied] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     setDraft({
@@ -85,10 +87,14 @@ export function FormSettingsForm() {
     }
   }
 
-  async function copySnippet() {
-    await navigator.clipboard.writeText(form.embedSnippet);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1400);
+  async function copyText(key: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(key);
+      setTimeout(() => setCopied(null), 1400);
+    } catch {
+      // Clipboard blocked — textareas are selectable as a manual fallback.
+    }
   }
 
   async function deleteCurrentForm() {
@@ -230,24 +236,94 @@ export function FormSettingsForm() {
         </div>
 
         <aside className="space-y-4">
-          <section className="glass-card rounded-2xl p-5">
-            <div className="flex items-center justify-between gap-3">
+          <section className="glass-card rounded-2xl p-5 space-y-5">
+            <div>
               <h2 className="text-lg font-semibold">Embed</h2>
-              <button
-                type="button"
-                onClick={copySnippet}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs hover:border-[var(--primary)]"
-              >
-                <ClipboardIcon className="w-3.5 h-3.5" />
-                {copied ? 'Copied' : 'Copy'}
-              </button>
+              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                Pick the snippet that fits the page you&apos;re embedding on.
+                Drop it anywhere in the page&apos;s HTML.
+              </p>
             </div>
-            <textarea
-              readOnly
-              value={form.embedSnippet}
-              rows={7}
-              className="mt-3 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 font-mono text-xs text-[var(--muted-foreground)]"
-            />
+
+            {/* Script tag — the recommended embed. Renders inline, auto-resizes. */}
+            <div>
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-sm font-semibold">Script tag</span>
+                  <span className="rounded-full bg-[var(--primary)]/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--primary)]">
+                    Recommended
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => copyText('script', form.embedSnippets.script)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs hover:border-[var(--primary)]"
+                >
+                  <ClipboardIcon className="w-3.5 h-3.5" />
+                  {copied === 'script' ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <textarea
+                readOnly
+                value={form.embedSnippets.script}
+                rows={3}
+                onFocus={(e) => e.currentTarget.select()}
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 font-mono text-xs text-[var(--muted-foreground)] resize-none"
+              />
+              <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">
+                Auto-resizes to fit your form&apos;s content. Best on most sites.
+              </p>
+            </div>
+
+            {/* Iframe — the fallback for environments that strip <script>. */}
+            <div>
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <span className="text-sm font-semibold">Iframe (fixed height)</span>
+                <button
+                  type="button"
+                  onClick={() => copyText('iframe', form.embedSnippets.iframe)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs hover:border-[var(--primary)]"
+                >
+                  <ClipboardIcon className="w-3.5 h-3.5" />
+                  {copied === 'iframe' ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <textarea
+                readOnly
+                value={form.embedSnippets.iframe}
+                rows={3}
+                onFocus={(e) => e.currentTarget.select()}
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 font-mono text-xs text-[var(--muted-foreground)] resize-none"
+              />
+              <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">
+                Use when the host page strips script tags. Edit the
+                <code className="mx-1 rounded bg-[var(--muted)] px-1 py-0.5">height</code>
+                if your form is taller or shorter than 600px.
+              </p>
+            </div>
+
+            {/* Direct share link */}
+            <div className="border-t border-[var(--border)] pt-4">
+              <div className="flex items-center justify-between gap-3 mb-2">
+                <span className="text-sm font-semibold">Direct link</span>
+                <button
+                  type="button"
+                  onClick={() => copyText('url', form.embedSnippets.publicUrl)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs hover:border-[var(--primary)]"
+                >
+                  <ClipboardIcon className="w-3.5 h-3.5" />
+                  {copied === 'url' ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <a
+                href={form.embedSnippets.publicUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="block break-all text-xs font-mono text-[var(--primary)] hover:underline"
+              >
+                {form.embedSnippets.publicUrl}
+              </a>
+            </div>
           </section>
 
           <section className="rounded-2xl border border-rose-500/30 bg-rose-500/5 p-5">

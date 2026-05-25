@@ -34,11 +34,23 @@ export interface FormSummary {
   updatedAt: string;
 }
 
+export interface FormEmbedSnippets {
+  /** Auto-resizing script-tag embed (recommended). */
+  script: string;
+  /** Fixed-height iframe embed (fallback for locked-down CMSes). */
+  iframe: string;
+  /** Public URL of the form (useful for sharing without embedding). */
+  publicUrl: string;
+}
+
 export interface FormDetail extends FormSummary {
   schema: FormTemplate;
   redirectUrl: string;
   successMessage: string;
+  /** Recommended embed snippet (script tag with auto-resizing iframe). */
   embedSnippet: string;
+  /** All embed variants — UI shows both with their own copy buttons. */
+  embedSnippets: FormEmbedSnippets;
 }
 
 export interface FormSubmissionRow {
@@ -127,12 +139,14 @@ function toDetail(row: {
   updatedAt: Date;
 }): FormDetail {
   const parsed = parseFormTemplate(row.schema) ?? emptyFormTemplate();
+  const snippets = getEmbedSnippets(row.slug);
   return {
     ...toSummary(row),
     schema: parsed,
     redirectUrl: row.redirectUrl ?? '',
     successMessage: row.successMessage ?? DEFAULT_SUCCESS_MESSAGE,
-    embedSnippet: getEmbedSnippet(row.slug),
+    embedSnippet: snippets.script,
+    embedSnippets: snippets,
   };
 }
 
@@ -348,10 +362,35 @@ export async function deleteForm(id: string, accountKeys: string[] | null): Prom
   await prisma.form.delete({ where: { id } });
 }
 
+function publicHost(): string {
+  return (process.env.NEXT_PUBLIC_APP_URL || 'https://studio.loomilm.com').replace(
+    /\/+$/,
+    '',
+  );
+}
+
+/**
+ * Returns both embed variants for a form slug.
+ *
+ * - `script` — recommended. Single <script> tag that injects an
+ *   iframe and resizes it via postMessage as the form's content
+ *   changes. Looks inline on customer sites, no CSS leakage.
+ * - `iframe` — fallback. Plain iframe with fixed height for
+ *   environments that strip <script> tags (locked-down CMSes,
+ *   email signature blocks, etc.).
+ */
+export function getEmbedSnippets(slug: string): FormEmbedSnippets {
+  const host = publicHost();
+  return {
+    script: `<script src="${host}/loomi-form.js" data-form="${slug}" async></script>`,
+    iframe: `<iframe src="${host}/f/${slug}?embed=1" width="100%" height="600" style="border:0;display:block;width:100%;" loading="lazy"></iframe>`,
+    publicUrl: `${host}/f/${slug}`,
+  };
+}
+
+/** Back-compat — returns the recommended (script) snippet. */
 export function getEmbedSnippet(slug: string): string {
-  const host = (process.env.NEXT_PUBLIC_APP_URL || 'https://studio.loomilm.com')
-    .replace(/\/+$/, '');
-  return `<iframe src="${host}/f/${slug}?embed=1" width="100%" height="600" style="border:0;display:block;width:100%;" loading="lazy"></iframe>`;
+  return getEmbedSnippets(slug).script;
 }
 
 export async function listFormSubmissions(options: {

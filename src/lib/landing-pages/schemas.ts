@@ -24,7 +24,8 @@ export type FieldType =
   | 'number'
   | 'range'
   | 'unit'
-  | 'form-picker'; // LP-specific: dropdown of the account's Forms
+  | 'form-picker' // LP-specific: dropdown of the account's Forms
+  | 'item-array'; // ordered list of objects (FeatureGrid items, FAQ items, etc.)
 
 export interface PropSchema {
   key: string;
@@ -41,6 +42,17 @@ export interface PropSchema {
   slider?: boolean;
   sliderMin?: number;
   sliderMax?: number;
+  /** For `item-array` props: schema for each item's fields. */
+  itemSchema?: PropSchema[];
+  /** For `item-array` props: defaults applied when "Add item" is
+   *  clicked. */
+  itemDefault?: Record<string, unknown>;
+  /** For `item-array` props: which item field to use as the
+   *  collapsed-item summary label. Defaults to 'heading' or
+   *  'question'. */
+  itemLabelKey?: string;
+  /** For `item-array` props: noun used in the "Add <noun>" button. */
+  itemNoun?: string;
 }
 
 export interface BlockSchema {
@@ -308,7 +320,20 @@ export const FEATURE_GRID_SCHEMA: BlockSchema = {
     { key: 'columns', label: 'Columns', type: 'number', default: 3, min: 2, max: 4, group: 'layout' },
     { key: 'heading', label: 'Heading', type: 'text', default: 'Everything you need', group: 'content' },
     { key: 'subheading', label: 'Subheading', type: 'textarea', default: '', group: 'content' },
-    // `items` is an array prop edited via a dedicated panel (TBD in PR2).
+    {
+      key: 'items',
+      label: 'Features',
+      type: 'item-array',
+      group: 'items',
+      itemNoun: 'feature',
+      itemLabelKey: 'heading',
+      itemDefault: { heading: 'New feature', body: 'Describe it here.', iconSrc: '' },
+      itemSchema: [
+        { key: 'heading', label: 'Heading', type: 'text', default: '' },
+        { key: 'body', label: 'Body', type: 'textarea', default: '' },
+        { key: 'iconSrc', label: 'Icon / Image URL', type: 'image', default: '' },
+      ],
+    },
   ],
 };
 
@@ -378,7 +403,19 @@ export const FAQ_SCHEMA: BlockSchema = {
   },
   props: [
     { key: 'heading', label: 'Heading', type: 'text', default: 'Frequently asked questions', group: 'content' },
-    // `items` array edited via dedicated panel (PR2).
+    {
+      key: 'items',
+      label: 'Questions',
+      type: 'item-array',
+      group: 'items',
+      itemNoun: 'question',
+      itemLabelKey: 'question',
+      itemDefault: { question: 'New question?', answer: 'Type the answer here.' },
+      itemSchema: [
+        { key: 'question', label: 'Question', type: 'text', default: '' },
+        { key: 'answer', label: 'Answer', type: 'textarea', default: '' },
+      ],
+    },
   ],
 };
 
@@ -422,7 +459,20 @@ export const LOGO_STRIP_SCHEMA: BlockSchema = {
   props: [
     { key: 'heading', label: 'Heading', type: 'text', default: 'Trusted by teams everywhere', group: 'content' },
     { key: 'grayscale', label: 'Grayscale', type: 'toggle', default: true, group: 'style' },
-    // `logos` array edited via dedicated panel (PR2).
+    {
+      key: 'logos',
+      label: 'Logos',
+      type: 'item-array',
+      group: 'items',
+      itemNoun: 'logo',
+      itemLabelKey: 'alt',
+      itemDefault: { src: '', alt: 'New logo', href: '' },
+      itemSchema: [
+        { key: 'src', label: 'Logo URL', type: 'image', default: '' },
+        { key: 'alt', label: 'Alt text', type: 'text', default: '' },
+        { key: 'href', label: 'Link URL (optional)', type: 'url', default: '' },
+      ],
+    },
   ],
 };
 

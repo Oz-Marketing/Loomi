@@ -5,6 +5,7 @@ import { useLandingPageEditor } from './EditorContext';
 import { BLOCK_SCHEMA_BY_TYPE, type PropSchema } from '../schemas';
 import { PageSettingsPanel } from './PageSettingsPanel';
 import { FormPickerInput } from './FormPickerInput';
+import { ItemArrayEditor } from './ItemArrayEditor';
 
 const inputClass =
   'w-full px-3 py-2 text-sm bg-transparent text-[var(--foreground)] border border-[var(--border)] rounded-md outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] transition-colors';
@@ -256,6 +257,18 @@ function PropEditor({ prop, value, onChange }: PropEditorProps) {
           <FormPickerInput
             value={typeof value === 'string' ? value : ''}
             onChange={onChange}
+          />
+        </div>
+      );
+
+    case 'item-array':
+      return (
+        <div>
+          {label}
+          <ItemArrayEditor
+            prop={prop}
+            value={value}
+            onChange={(next) => onChange(next)}
           />
         </div>
       );

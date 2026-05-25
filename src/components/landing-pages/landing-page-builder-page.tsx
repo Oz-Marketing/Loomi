@@ -10,11 +10,13 @@ import {
   ArrowPathIcon,
   CheckIcon,
   ClockIcon,
+  Cog6ToothIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 import { AdminOnly } from '@/components/route-guard';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { LandingPageEditorShell } from '@/lib/landing-pages/editor/LandingPageEditorShell';
+import { LandingPageSettingsModal } from '@/components/landing-pages/landing-page-settings-modal';
 import {
   emptyLandingPageTemplate,
   parseLandingPageTemplate,
@@ -54,6 +56,7 @@ export function LandingPageBuilderPage({ id }: { id: string }) {
   const [template, setTemplate] = React.useState<LandingPageTemplate | null>(null);
   const [saveStatus, setSaveStatus] = React.useState<SaveStatus>('idle');
   const [savedAt, setSavedAt] = React.useState<Date | null>(null);
+  const [settingsOpen, setSettingsOpen] = React.useState(false);
 
   // When the API response first lands, seed local template state.
   // After that, the user's edits drive `template` and we autosave
@@ -215,6 +218,16 @@ export function LandingPageBuilderPage({ id }: { id: string }) {
               Open live ↗
             </Link>
           )}
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            disabled={!page}
+            aria-label="Page settings"
+            title="Page settings"
+            className="inline-flex items-center justify-center w-8 h-8 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-40"
+          >
+            <Cog6ToothIcon className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
@@ -225,6 +238,13 @@ export function LandingPageBuilderPage({ id }: { id: string }) {
       ) : (
         <LandingPageEditorShell template={template} onChange={setTemplate} />
       )}
+
+      <LandingPageSettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        page={page ?? null}
+        onUpdated={(next) => void mutate({ page: next }, { revalidate: false })}
+      />
     </AdminOnly>
   );
 }

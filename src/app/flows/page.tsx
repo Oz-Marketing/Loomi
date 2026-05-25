@@ -13,8 +13,10 @@ import {
   type FlowsTableRow,
   type BulkActionContext,
 } from '@/components/flows/flows-table';
+import { FlowList } from '@/components/flows/flow-list';
 import { CloneFlowModal } from '@/components/flows/clone-flow-modal';
 import { PickTemplateModal } from '@/components/flows/pick-template-modal';
+import { ViewSwitcher, useListView } from '@/components/view-switcher';
 import type { StatusFilterValue } from '@/components/status-filter';
 import type { BulkActionDockItem } from '@/components/bulk-action-dock';
 import {
@@ -230,6 +232,10 @@ function FlowsPageBody({
   // archived). Selecting 'archived' lets the user recover something
   // before the 30-day purge job sweeps it.
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all');
+  // Cards / Table toggle — sticky in localStorage. Defaults to 'table'
+  // since flows has always been table-first; the card grid is the new
+  // alternative.
+  const [view, setView] = useListView('loomi.flows.view', 'table');
 
   const queryParams = new URLSearchParams();
   if (presetAccountKey) queryParams.set('accountKey', presetAccountKey);
@@ -629,28 +635,47 @@ function FlowsPageBody({
         </p>
       )}
 
-      <FlowsTable
-        workflows={rows}
-        loading={isLoading}
-        accountMeta={accountMeta}
-        showAccountColumn={presetAccountKey === null}
-        onToggleStatus={handleToggleStatus}
-        updatingStatusFlowIds={updatingIds}
-        emptyState={emptyState}
-        bulkActions={buildBulkActions}
-        adoption={adoptionMap}
-        onRowEdit={handleRowEdit}
-        onRowRename={handleRowRename}
-        onRowClone={handleRowClone}
-        // Admin row menu has no Archive — templates aren't part of the
-        // publish/pause/archive lifecycle. Sub-account view keeps it
-        // since instances there are real publishable flows.
-        onRowArchive={isAdminView ? undefined : handleRowArchive}
-        onRowRestore={handleRowRestore}
-        onRowDelete={handleRowDelete}
-        statusFilter={statusFilter}
-        onStatusFilterChange={setStatusFilter}
-      />
+      {/* Cards / Table toggle — table-first (the default), with cards
+          as an alternative grid view powered by the existing FlowList
+          + FlowCard components. */}
+      <div className="flex items-center justify-end pb-3">
+        <ViewSwitcher value={view} onChange={setView} />
+      </div>
+
+      {view === 'table' ? (
+        <FlowsTable
+          workflows={rows}
+          loading={isLoading}
+          accountMeta={accountMeta}
+          showAccountColumn={presetAccountKey === null}
+          onToggleStatus={handleToggleStatus}
+          updatingStatusFlowIds={updatingIds}
+          emptyState={emptyState}
+          bulkActions={buildBulkActions}
+          adoption={adoptionMap}
+          onRowEdit={handleRowEdit}
+          onRowRename={handleRowRename}
+          onRowClone={handleRowClone}
+          // Admin row menu has no Archive — templates aren't part of the
+          // publish/pause/archive lifecycle. Sub-account view keeps it
+          // since instances there are real publishable flows.
+          onRowArchive={isAdminView ? undefined : handleRowArchive}
+          onRowRestore={handleRowRestore}
+          onRowDelete={handleRowDelete}
+          statusFilter={statusFilter}
+          onStatusFilterChange={setStatusFilter}
+        />
+      ) : (
+        <FlowList
+          workflows={rows}
+          loading={isLoading}
+          accountNames={accountNames}
+          accountMeta={accountMeta}
+          onToggleLoomiStatus={handleToggleStatus}
+          updatingStatusFlowIds={updatingIds}
+          emptyState={emptyState}
+        />
+      )}
 
       {presetAccountKey && (
         <PickTemplateModal

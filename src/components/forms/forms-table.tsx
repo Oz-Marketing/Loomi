@@ -11,7 +11,6 @@ import {
   MagnifyingGlassIcon,
   EllipsisHorizontalIcon,
   PencilSquareIcon,
-  DocumentTextIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -59,9 +58,9 @@ interface FormsTableProps {
   emptyState: { title: string; subtitle: string };
   /** Wires the checkbox column + BulkActionDock. */
   bulkActions?: (ctx: BulkActionContext) => BulkActionDockItem[];
-  /** Row 3-dot menu — caller owns the actual handlers. */
+  /** Row 3-dot menu — caller owns the actual handlers. The row itself
+   *  is clickable to the overview, so the menu only needs Edit + Delete. */
   onRowEdit?: (form: FormsTableRow) => void;
-  onRowOpenOverview?: (form: FormsTableRow) => void;
   onRowDelete?: (form: FormsTableRow) => void;
 }
 
@@ -109,7 +108,6 @@ export function FormsTable({
   emptyState,
   bulkActions,
   onRowEdit,
-  onRowOpenOverview,
   onRowDelete,
 }: FormsTableProps) {
   const [search, setSearch] = React.useState('');
@@ -198,7 +196,7 @@ export function FormsTable({
       })
     : [];
 
-  const hasRowActions = !!onRowEdit || !!onRowOpenOverview || !!onRowDelete;
+  const hasRowActions = !!onRowEdit || !!onRowDelete;
 
   if (loading) {
     return (
@@ -338,7 +336,6 @@ export function FormsTable({
                     isSelected={selectedIds.has(form.id)}
                     onToggleSelect={() => toggleRowSelection(form.id)}
                     onEdit={onRowEdit}
-                    onOpenOverview={onRowOpenOverview}
                     onDelete={onRowDelete}
                   />
                 ))}
@@ -443,7 +440,6 @@ function FormRow({
   isSelected,
   onToggleSelect,
   onEdit,
-  onOpenOverview,
   onDelete,
 }: {
   form: FormsTableRow;
@@ -455,7 +451,6 @@ function FormRow({
   isSelected: boolean;
   onToggleSelect: () => void;
   onEdit?: (form: FormsTableRow) => void;
-  onOpenOverview?: (form: FormsTableRow) => void;
   onDelete?: (form: FormsTableRow) => void;
 }) {
   const router = useRouter();
@@ -463,7 +458,7 @@ function FormRow({
   const published = form.status === 'published';
   const statusClass = STATUS_STYLES[form.status] || 'bg-zinc-500/15 text-zinc-400';
   const meta = form.accountKey ? accountMeta[form.accountKey] : undefined;
-  const hasRowActions = !!onEdit || !!onOpenOverview || !!onDelete;
+  const hasRowActions = !!onEdit || !!onDelete;
 
   return (
     <tr
@@ -578,7 +573,6 @@ function FormRow({
           <FormRowActionsMenu
             form={form}
             onEdit={onEdit}
-            onOpenOverview={onOpenOverview}
             onDelete={onDelete}
           />
         </td>
@@ -592,12 +586,10 @@ function FormRow({
 function FormRowActionsMenu({
   form,
   onEdit,
-  onOpenOverview,
   onDelete,
 }: {
   form: FormsTableRow;
   onEdit?: (form: FormsTableRow) => void;
-  onOpenOverview?: (form: FormsTableRow) => void;
   onDelete?: (form: FormsTableRow) => void;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -638,16 +630,6 @@ function FormRowActionsMenu({
           role="menu"
           className="absolute right-0 top-full mt-1 z-30 w-44 glass-dropdown shadow-lg"
         >
-          {onOpenOverview && (
-            <MenuItem
-              icon={<DocumentTextIcon className="w-3.5 h-3.5" />}
-              label="Open overview"
-              onClick={() => {
-                setOpen(false);
-                onOpenOverview(form);
-              }}
-            />
-          )}
           {onEdit && (
             <MenuItem
               icon={<PencilSquareIcon className="w-3.5 h-3.5" />}

@@ -97,9 +97,6 @@ export default function FormsPage() {
   const handleRowEdit = (form: FormsTableRow) => {
     router.push(subHref(`/websites/forms/${form.id}/edit`));
   };
-  const handleRowOpenOverview = (form: FormsTableRow) => {
-    router.push(subHref(`/websites/forms/${form.id}`));
-  };
   const handleRowDelete = async (form: FormsTableRow) => {
     const ok = await confirm({
       title: 'Delete form?',
@@ -263,7 +260,6 @@ export default function FormsPage() {
           }}
           bulkActions={buildBulkActions}
           onRowEdit={handleRowEdit}
-          onRowOpenOverview={handleRowOpenOverview}
           onRowDelete={handleRowDelete}
         />
       )}

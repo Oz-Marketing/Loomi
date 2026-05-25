@@ -108,7 +108,6 @@ export function FormCard({
             )}
             <CardMenu
               form={form}
-              overviewHref={overviewHref}
               editHref={subHref(`/websites/forms/${form.id}/edit`)}
               onDelete={onDelete}
             />
@@ -180,12 +179,10 @@ function PublishSwitch({
 
 function CardMenu({
   form,
-  overviewHref,
   editHref,
   onDelete,
 }: {
   form: FormSummary;
-  overviewHref: string;
   editHref: string;
   onDelete?: (form: FormSummary) => void;
 }) {
@@ -232,14 +229,6 @@ function CardMenu({
           className="absolute right-0 top-full mt-1 z-50 w-44 glass-dropdown shadow-lg p-1"
           onClick={(e) => e.stopPropagation()}
         >
-          <Link
-            href={overviewHref}
-            className="flex items-center gap-2 px-2.5 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-            onClick={() => setOpen(false)}
-          >
-            <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" />
-            Open overview
-          </Link>
           <Link
             href={editHref}
             className="flex items-center gap-2 px-2.5 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"

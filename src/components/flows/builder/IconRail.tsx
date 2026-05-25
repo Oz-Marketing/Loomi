@@ -64,6 +64,9 @@ interface IconRailProps {
    *  dataTransfer payload; FlowBuilder's existing `onDrop` reads it
    *  and creates the sticky-note node. */
   onStickyNoteDragStart: (e: React.DragEvent) => void;
+  /** Optional unread-style count badges per feature. Currently used by
+   *  `error_log` to surface the number of active validation errors. */
+  badges?: Partial<Record<RailFeature, number>>;
 }
 
 export function IconRail({
@@ -71,6 +74,7 @@ export function IconRail({
   toggleStates,
   onSelect,
   onStickyNoteDragStart,
+  badges,
 }: IconRailProps) {
   const irisActive = !!toggleStates.iris;
   return (
@@ -119,6 +123,18 @@ export function IconRail({
             } ${item.draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
           >
             <item.Icon className="w-6 h-6" />
+            {(() => {
+              const count = badges?.[item.feature] ?? 0;
+              if (count <= 0) return null;
+              return (
+                <span
+                  aria-label={`${count} ${item.label} ${count === 1 ? 'item' : 'items'}`}
+                  className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center tabular-nums shadow-sm"
+                >
+                  {count > 9 ? '9+' : count}
+                </span>
+              );
+            })()}
             {/* Custom tooltip — anchors to the right of the icon, fades
                 in on hover with a slight delay (so brushing past the
                 rail doesn't flash tooltips). pointer-events-none so

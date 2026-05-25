@@ -1,15 +1,37 @@
 import { prisma } from '@/lib/prisma';
 import { createVersion } from './template-versions';
 
+type TemplateScope = 'library' | 'subaccount' | 'all';
+
 interface TemplateListOptions {
   type?: string;
   publishedOnly?: boolean;
+  // Filter by ownership. When provided, only templates owned by this
+  // subaccount are returned (and `scope` is ignored).
+  accountKey?: string;
+  // When `accountKey` is not provided, controls global scope:
+  //   - 'library' (default): only shared library templates (accountKey IS NULL)
+  //   - 'subaccount': only subaccount-owned templates (accountKey IS NOT NULL)
+  //   - 'all': no scope filter — both library and subaccount-owned templates
+  scope?: TemplateScope;
 }
 
 function buildWhere(options: TemplateListOptions = {}) {
-  const where: { type?: string; published?: boolean } = {};
+  const where: {
+    type?: string;
+    published?: boolean;
+    accountKey?: string | null | { not: null };
+  } = {};
   if (options.type) where.type = options.type;
   if (options.publishedOnly) where.published = true;
+  if (options.accountKey) {
+    where.accountKey = options.accountKey;
+  } else {
+    const scope = options.scope ?? 'library';
+    if (scope === 'library') where.accountKey = null;
+    else if (scope === 'subaccount') where.accountKey = { not: null };
+    // 'all' → no accountKey filter
+  }
   return Object.keys(where).length > 0 ? where : undefined;
 }
 
@@ -22,6 +44,7 @@ export async function getTemplates(typeOrOptions?: string | TemplateListOptions)
     select: {
       id: true,
       slug: true,
+      accountKey: true,
       title: true,
       type: true,
       category: true,
@@ -52,6 +75,7 @@ export async function getTemplatesWithContent(typeOrOptions?: string | TemplateL
     select: {
       id: true,
       slug: true,
+      accountKey: true,
       title: true,
       content: true,
       type: true,
@@ -90,6 +114,7 @@ export async function createTemplate(data: {
   category?: string;
   preheader?: string;
   createdByUserId?: string;
+  accountKey?: string | null;
 }) {
   return prisma.template.create({ data });
 }
@@ -153,8 +178,10 @@ export async function setPublished(slug: string, published: boolean, userId?: st
 
 export async function setPublishedBulk(slugs: string[], published: boolean, userId?: string) {
   if (slugs.length === 0) return { count: 0 };
+  // Publish is library-only. Subaccount-owned templates are already private
+  // to their account, so silently exclude them from bulk publish actions.
   return prisma.template.updateMany({
-    where: { slug: { in: slugs } },
+    where: { slug: { in: slugs }, accountKey: null },
     data: {
       published,
       publishedAt: published ? new Date() : null,
@@ -163,7 +190,12 @@ export async function setPublishedBulk(slugs: string[], published: boolean, user
   });
 }
 
-export async function cloneTemplate(sourceSlug: string, targetSlug?: string, userId?: string) {
+export async function cloneTemplate(
+  sourceSlug: string,
+  targetSlug?: string,
+  userId?: string,
+  accountKey?: string | null,
+) {
   const source = await prisma.template.findUnique({ where: { slug: sourceSlug } });
   if (!source) throw new Error(`Template "${sourceSlug}" not found`);
 
@@ -180,6 +212,11 @@ export async function cloneTemplate(sourceSlug: string, targetSlug?: string, use
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ');
 
+  // When cloning into a subaccount the new copy is owned by that subaccount
+  // and is a draft regardless of the source's publish state — `published` is
+  // a library-only concept.
+  const targetAccountKey = accountKey ?? source.accountKey ?? null;
+
   return prisma.template.create({
     data: {
       slug,
@@ -188,6 +225,7 @@ export async function cloneTemplate(sourceSlug: string, targetSlug?: string, use
       category: source.category,
       content: source.content,
       preheader: source.preheader,
+      accountKey: targetAccountKey,
       createdByUserId: userId || null,
     },
   });

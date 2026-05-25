@@ -343,7 +343,11 @@ body {
   position: sticky;
   top: 0;
   z-index: 30;
-  padding: 0.75rem 1rem;
+  /* Flush look at rest — the header reads as inline page content
+     until the user scrolls and it actually pins to the viewport edge,
+     at which point the rule below adds padding + frosted card chrome.
+     Animates via the transition below for a smooth handoff. */
+  padding: 0;
   border: 1px solid transparent;
   border-radius: 0.75rem;
   transition:
@@ -354,9 +358,9 @@ body {
     backdrop-filter 0.2s ease;
 }
 
-/* Used by pages that want a flush look at the top of the page — the
-   header sits inline with no card chrome until the page scrolls and the
-   header actually pins to the viewport edge. */
+/* Back-compat alias — `.pad-on-scroll` used to be opt-in for this
+   behaviour; it's now the default. Kept as a no-op so existing
+   call sites don't need to be swept. */
 .page-sticky-header.pad-on-scroll {
   padding: 0;
 }

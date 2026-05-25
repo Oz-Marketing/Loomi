@@ -32,7 +32,7 @@ model User {
   templatesUpdated   Template[]                  @relation("TemplateUpdatedBy")
   templatesPublished Template[]                  @relation("TemplatePublishedBy")
   templateVersions   TemplateVersion[]           @relation("TemplateVersionCreatedBy")
-  dashboardLayouts DashboardLayoutPreference[]
+  dashboardLayouts   DashboardLayoutPreference[]
 
   metaPacerOwnerAds            MetaAdsPacerAd[]          @relation("MetaPacerOwner")
   metaPacerDesignerAds         MetaAdsPacerAd[]          @relation("MetaPacerDesigner")
@@ -80,73 +80,74 @@ model DashboardLayoutPreference {
 // ─────────────────────────────────────────────────────
 
 model Account {
-  id           String   @id @default(cuid())
-  key          String   @unique // "youngHonda", "smithToyota"
-  slug         String?  @unique // URL-safe kebab-case: "young-honda"
-  dealer       String // "Young Honda"
-  category     String? // "Automotive", "Healthcare", etc.
-  oem          String? // single OEM key
-  oems         String? // JSON array of OEM keys for multi-brand dealers
-  email        String?
-  phone        String?
-  salesPhone   String?
-  servicePhone String?
-  partsPhone   String?
-  address      String?
-  city         String?
-  state        String?
-  postalCode   String?
-  website      String?
-  timezone     String?
-  logos        String? // JSON: { light, dark, white?, black? }
-  branding     String? // JSON: { colors: { primary, secondary, ... }, fonts: { heading, body } }
-  customValues String? // JSON: Record<string, { name, value }>
+  id                        String    @id @default(cuid())
+  key                       String    @unique // "youngHonda", "smithToyota"
+  slug                      String?   @unique // URL-safe kebab-case: "young-honda"
+  dealer                    String // "Young Honda"
+  category                  String? // "Automotive", "Healthcare", etc.
+  oem                       String? // single OEM key
+  oems                      String? // JSON array of OEM keys for multi-brand dealers
+  email                     String?
+  phone                     String?
+  salesPhone                String?
+  servicePhone              String?
+  partsPhone                String?
+  address                   String?
+  city                      String?
+  state                     String?
+  postalCode                String?
+  website                   String?
+  timezone                  String?
+  logos                     String? // JSON: { light, dark, white?, black? }
+  branding                  String? // JSON: { colors: { primary, secondary, ... }, fonts: { heading, body } }
+  customValues              String? // JSON: Record<string, { name, value }>
   // Markup rate used by Meta Ads Pacer budget math: actual spend =
   // client gross × markup. Falls back to the global default (0.77) when
   // null. Settable per-account so stores with non-standard markups don't
   // need code changes.
-  markup       Float?
+  markup                    Float?
   // Sending identity for Loomi-native email sends. When null, falls back to
   // SMTP_FROM / global defaults. Configure per-subaccount once DKIM/SPF for
   // sendingDomain is set up in the client's DNS.
-  senderEmail   String?
-  senderName    String?
-  sendingDomain String?
-  replyToEmail  String?
+  senderEmail               String?
+  senderName                String?
+  sendingDomain             String?
+  replyToEmail              String?
   // Per-sub-account SendGrid API key (AES-256-GCM encrypted at rest via
   // src/lib/crypto/encryption.ts). When present, the worker sends through
   // SendGrid instead of falling back to SMTP. sendgridFromDomain stores the
   // verified sender domain so we can warn at send time if senderEmail isn't
   // authenticated.
-  sendgridApiKey     String?
-  sendgridFromDomain String?
+  sendgridApiKey            String?
+  sendgridFromDomain        String?
   // Per-sub-account Twilio credentials. accountSid + authToken are
   // encrypted at rest with the same helper as the SendGrid key. The
   // worker prefers messagingServiceSid (Twilio's recommendation for
   // scaled sending — handles A2P 10DLC registration + sticky sender +
   // automatic phone-number failover) and falls back to the single
   // phoneNumber when no service is configured.
-  twilioAccountSid           String?
-  twilioAuthToken            String?
-  twilioPhoneNumber          String?
-  twilioMessagingServiceSid  String?
-  accountRepId String?
-  accountRep   User?    @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
+  twilioAccountSid          String?
+  twilioAuthToken           String?
+  twilioPhoneNumber         String?
+  twilioMessagingServiceSid String?
+  accountRepId              String?
+  accountRep                User?     @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
   // Marker for the one-time bootstrap that seeds Loomi's six lifecycle
   // audiences (service overdue, lease ending, etc.) into automotive
   // accounts. Set once on first visit to /contacts/segments. Powersports
   // and other categories stay null and never get seeded.
-  lifecyclePresetsSeededAt DateTime?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  lifecyclePresetsSeededAt  DateTime?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
 
-  emails                  AccountEmail[]
-  audiences               Audience[]
-  contacts                Contact[]
-  contactLists            ContactList[]
-  loomiFlows              LoomiFlow[]
-  mediaAssets             MediaAsset[]
-  metaAdsPacerPlan        MetaAdsPacerPlan?
+  emails                   AccountEmail[]
+  audiences                Audience[]
+  contacts                 Contact[]
+  contactLists             ContactList[]
+  loomiFlows               LoomiFlow[]
+  forms                    Form[]
+  mediaAssets              MediaAsset[]
+  metaAdsPacerPlan         MetaAdsPacerPlan?
   metaAdsPacerAccountNotes MetaAdsPacerAccountNote[]
   metaAdsPacerBudgetLogs   MetaAdsPacerBudgetLog[]
 
@@ -160,6 +161,10 @@ model Account {
 model Template {
   id                String    @id @default(cuid())
   slug              String    @unique // "service-reminder", "modern-dark"
+  // null = shared library template, non-null = owned by a specific subaccount
+  // (created in / cloned to that subaccount). Subaccount-owned templates are
+  // only visible inside their subaccount.
+  accountKey        String?
   title             String // "Service Reminder", "Modern Dark"
   type              String // "lifecycle" | "design"
   category          String? // "service", "sales", "loyalty", etc.
@@ -181,6 +186,7 @@ model Template {
   emails          AccountEmail[]
 
   @@index([published])
+  @@index([accountKey])
 }
 
 model TemplateVersion {
@@ -231,6 +237,10 @@ model AccountEmail {
   name       String // "Service Reminder - Young Honda"
   content    String? // null = use library template, non-null = customized copy
   status     String       @default("draft") // draft | active | archived
+  // Set when status transitions to 'archived'. Drives the global
+  // 30-day purge job — rows where archivedAt < now − 30d get hard-
+  // deleted by the daily worker task. Null on non-archived rows.
+  archivedAt DateTime?
   folderId   String?
   folder     EmailFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
   createdAt  DateTime     @default(now())
@@ -238,6 +248,7 @@ model AccountEmail {
 
   @@index([accountKey])
   @@index([templateId])
+  @@index([status, archivedAt])
 }
 
 // ─────────────────────────────────────────────────────
@@ -295,37 +306,37 @@ model Audience {
 // ─────────────────────────────────────────────────────
 
 model Contact {
-  id           String   @id @default(cuid())
-  accountKey   String
-  account      Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
 
-  email        String?
-  phone        String?
-  firstName    String?
-  lastName     String?
-  fullName     String?
+  email     String?
+  phone     String?
+  firstName String?
+  lastName  String?
+  fullName  String?
 
-  address1     String?
-  city         String?
-  state        String?
-  postalCode   String?
-  country      String?
+  address1   String?
+  city       String?
+  state      String?
+  postalCode String?
+  country    String?
 
-  source       String?
-  tags         Json     @default("[]")
-  dateAdded    DateTime?
+  source    String?
+  tags      Json      @default("[]")
+  dateAdded DateTime?
 
-  vehicleYear     String?
-  vehicleMake     String?
-  vehicleModel    String?
-  vehicleVin      String?
-  vehicleMileage  String?
+  vehicleYear    String?
+  vehicleMake    String?
+  vehicleModel   String?
+  vehicleVin     String?
+  vehicleMileage String?
 
-  lastServiceDate  DateTime?
-  nextServiceDate  DateTime?
-  leaseEndDate     DateTime?
-  warrantyEndDate  DateTime?
-  purchaseDate     DateTime?
+  lastServiceDate DateTime?
+  nextServiceDate DateTime?
+  leaseEndDate    DateTime?
+  warrantyEndDate DateTime?
+  purchaseDate    DateTime?
 
   // Catch-all for CSV columns the canonical schema doesn't cover.
   // Stored as a flat string-keyed JSON object; the filter UI ignores
@@ -334,12 +345,13 @@ model Contact {
 
   // Minimal DND state: { email?: bool, sms?: bool } — Email and SMS
   // are the only channels Loomi sends on.
-  dnd          Json?
+  dnd Json?
 
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   listMemberships ContactListMembership[]
+  formSubmissions FormSubmission[]
 
   @@unique([accountKey, email])
   @@unique([accountKey, phone])
@@ -367,6 +379,7 @@ model ContactList {
   updatedAt       DateTime @updatedAt
 
   memberships ContactListMembership[]
+  forms       Form[]
 
   @@unique([accountKey, name])
   @@index([accountKey])
@@ -400,6 +413,17 @@ model LoomiFlow {
   sourceAudienceId String?
   sourceFilter     String?
   metadata         String?
+  // Template lineage. When an admin deploys a template to a sub-account
+  // we duplicate the template and set parentTemplateId on the new
+  // instance so we can: (a) show "deployed from template X" on the
+  // instance, (b) compute adoption (which accounts have this template),
+  // (c) re-push template updates onto stale instances. Null on
+  // standalone flows + on the templates themselves. Self-referential
+  // relation with SetNull on delete so deleting a template leaves
+  // orphaned instances rather than cascading.
+  parentTemplateId String?
+  parentTemplate   LoomiFlow?  @relation("FlowTemplateInstances", fields: [parentTemplateId], references: [id], onDelete: SetNull)
+  instances        LoomiFlow[] @relation("FlowTemplateInstances")
   // JSON-serialised flow-level defaults: re-entry policy, quiet
   // hours, goal/exit-on-conversion condition, max-enrollment
   // duration, DND handling. Shape lives in `FlowSettings` in
@@ -408,6 +432,10 @@ model LoomiFlow {
   settings         String?
   publishedAt      DateTime?
   archivedAt       DateTime?
+  // Last time the instance's graph was sync'd from its parent
+  // template. Compared against parent.updatedAt to surface an
+  // "Update available" banner. Null on flows that don't have a parent.
+  lastSyncedAt     DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -419,6 +447,8 @@ model LoomiFlow {
   @@index([accountKey])
   @@index([status])
   @@index([createdAt])
+  @@index([parentTemplateId])
+  @@index([status, archivedAt])
 }
 
 // One drawing-canvas node in a flow's graph. `config` is JSON sized to
@@ -519,6 +549,67 @@ model LoomiFlowEnrollmentStep {
 }
 
 // ─────────────────────────────────────────────────────
+// Websites — Forms
+//
+// Drag-and-drop form builder. `schema` stores a v1 FormTemplate
+// (block-based JSON, defined in src/lib/forms/types.ts). Submissions
+// upsert into the Contact model and can fire `form_submission`
+// LoomiFlowTriggers via the formId stored in trigger config JSON.
+// ─────────────────────────────────────────────────────
+
+model Form {
+  id              String       @id @default(cuid())
+  accountKey      String
+  account         Account      @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  name            String
+  // Public URL slug — served at /f/[slug]. Globally unique so iframe
+  // embeds resolve without an account prefix.
+  slug            String       @unique
+  status          String       @default("draft") // draft | published
+  // v1 FormTemplate JSON: { version, settings, blocks[] }.
+  schema          Json
+  // Post-submit destination — when set, the public form redirects
+  // here. Otherwise we show `successMessage` inline.
+  redirectUrl     String?
+  successMessage  String?
+  // Optional ContactList to attach upserted contacts to on submit.
+  // Uses the same no-overwrite semantics as importContacts(listId).
+  listId          String?
+  list            ContactList? @relation(fields: [listId], references: [id], onDelete: SetNull)
+  submissionCount Int          @default(0)
+  createdByUserId String?
+  publishedAt     DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  submissions FormSubmission[]
+
+  @@index([accountKey])
+  @@index([accountKey, status])
+}
+
+model FormSubmission {
+  id        String   @id @default(cuid())
+  formId    String
+  form      Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
+  // Set when the submission matched/created a Contact (email or phone
+  // present and accepted by the upsert). Null for anonymous submissions
+  // where neither identifier was supplied.
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  // Raw field-id → value map captured from the submit POST. The Form's
+  // schema is the source of truth for what these field ids mean.
+  data      Json
+  ipAddress String?
+  userAgent String?
+  referrer  String?
+  createdAt DateTime @default(now())
+
+  @@index([formId, createdAt])
+  @@index([contactId])
+}
+
+// ─────────────────────────────────────────────────────
 // SMS Campaigns (bulk + scheduled outbound)
 // ─────────────────────────────────────────────────────
 
@@ -550,6 +641,10 @@ model SmsCampaign {
   failedCount      Int       @default(0)
   metadata         String?
   error            String?
+  // Set when the campaign is archived via /archive. The daily purge
+  // job hard-deletes rows where archivedAt < now − 30d. Null on live
+  // (non-archived) rows.
+  archivedAt       DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -557,6 +652,7 @@ model SmsCampaign {
 
   @@index([status, scheduledFor])
   @@index([createdAt])
+  @@index([archivedAt])
 }
 
 model SmsCampaignRecipient {
@@ -589,21 +685,21 @@ model SmsCampaignRecipient {
 // recipientId is nullable so inbound STOP messages and out-of-band
 // sends still get logged for audit.
 model SmsEvent {
-  id                String   @id @default(cuid())
-  campaignId        String?
-  recipientId       String?
-  recipient         SmsCampaignRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
-  accountKey        String?
-  eventType         String   // queued | sent | delivered | undelivered | failed | received | stop | unsub
-  twilioMessageSid  String?
-  from              String?
-  to                String?
-  body              String?
-  errorCode         String?
-  errorMessage      String?
-  raw               String   // full webhook payload (form-encoded → JSON serialised)
-  timestamp         DateTime
-  createdAt         DateTime @default(now())
+  id               String                @id @default(cuid())
+  campaignId       String?
+  recipientId      String?
+  recipient        SmsCampaignRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+  accountKey       String?
+  eventType        String // queued | sent | delivered | undelivered | failed | received | stop | unsub
+  twilioMessageSid String?
+  from             String?
+  to               String?
+  body             String?
+  errorCode        String?
+  errorMessage     String?
+  raw              String // full webhook payload (form-encoded → JSON serialised)
+  timestamp        DateTime
+  createdAt        DateTime              @default(now())
 
   @@index([campaignId, eventType])
   @@index([recipientId])
@@ -667,6 +763,10 @@ model EmailCampaign {
   failedCount      Int       @default(0)
   metadata         String?
   error            String?
+  // Set when the campaign is archived via /archive. The daily purge
+  // job hard-deletes rows where archivedAt < now − 30d. Null on live
+  // (non-archived) rows.
+  archivedAt       DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -674,6 +774,7 @@ model EmailCampaign {
 
   @@index([status, scheduledFor])
   @@index([createdAt])
+  @@index([archivedAt])
 }
 
 model EmailCampaignRecipient {
@@ -704,13 +805,13 @@ model EmailCampaignRecipient {
 // produced by a Loomi campaign (e.g. transactional sends by the client
 // through the same API key) — they're still logged for audit.
 model EmailEvent {
-  id          String   @id @default(cuid())
+  id          String                  @id @default(cuid())
   campaignId  String?
   recipientId String?
   recipient   EmailCampaignRecipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
   accountKey  String?
   eventType   String // delivered | open | click | bounce | dropped | spamreport | unsubscribe | deferred | processed
-  sgEventId   String   @unique // SendGrid's sg_event_id; the idempotency key
+  sgEventId   String                  @unique // SendGrid's sg_event_id; the idempotency key
   sgMessageId String?
   email       String?
   timestamp   DateTime
@@ -719,7 +820,7 @@ model EmailEvent {
   userAgent   String?
   ip          String?
   raw         String // full event payload as JSON for forensics
-  createdAt   DateTime @default(now())
+  createdAt   DateTime                @default(now())
 
   @@index([campaignId, eventType])
   @@index([recipientId])
@@ -837,12 +938,12 @@ model MetaAdsPacerAd {
   accountRep       User?   @relation("MetaPacerAccountRep", fields: [accountRepUserId], references: [id], onDelete: SetNull)
 
   // Planning
-  period       String  @default("") // YYYY-MM bucket — primary planning axis
-  month        String? // legacy month-name tag, retained for backwards compat
-  actionNeeded String?
-  recurring    String  @default("No") // Yes | No | Unknown
-  coop         String  @default("No") // Yes | No | Unknown
-  budgetType   String  @default("Daily") // Daily | Lifetime
+  period          String  @default("") // YYYY-MM bucket — primary planning axis
+  month           String? // legacy month-name tag, retained for backwards compat
+  actionNeeded    String?
+  recurring       String  @default("No") // Yes | No | Unknown
+  coop            String  @default("No") // Yes | No | Unknown
+  budgetType      String  @default("Daily") // Daily | Lifetime
   // base | added | split. When "split", the ad's allocation is divided
   // between the two budget pools — splitBaseAmount goes to Base, the
   // rest goes to Added. pacerActual splits proportionally to keep both
@@ -875,9 +976,9 @@ model MetaAdsPacerAd {
   pacerEndDate   String?
 
   // Other
-  creativeLink    String?
-  clientName      String?
-  digitalDetails  String? // long-form notes from the rep about the ad goal/plan
+  creativeLink   String?
+  clientName     String?
+  digitalDetails String? // long-form notes from the rep about the ad goal/plan
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -23,6 +23,9 @@ import {
   ChatBubbleLeftRightIcon,
   ListBulletIcon,
   FunnelIcon,
+  GlobeAltIcon,
+  DocumentTextIcon,
+  RectangleStackIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
@@ -112,6 +115,19 @@ const messagingNav: NavItem = {
   ],
 };
 
+// Websites group — public-facing surfaces. Forms and Landing Pages both
+// live here. Admin/developer only (clients consume submissions via
+// Contacts, not via the Forms admin UI).
+const websitesNav: NavItem = {
+  href: '/websites/forms',
+  label: 'Websites',
+  icon: GlobeAltIcon,
+  children: [
+    { href: '/websites/forms', label: 'Forms', icon: DocumentTextIcon },
+    { href: '/websites/landing-pages', label: 'Landing Pages', icon: RectangleStackIcon },
+  ],
+};
+
 // Contacts group. The parent is a toggle; "All Contacts" routes to the
 // existing /contacts table, Lists + Segments are first-class destinations.
 const contactsNav: NavItem = {
@@ -131,6 +147,7 @@ const adminNavItems: NavItem[] = [
   contactsNav,
   messagingNav,
   flowsNavItem,
+  websitesNav,
   { href: '/media', label: 'Media', icon: PhotoIcon },
   toolsNavItem,
 ];
@@ -141,6 +158,7 @@ const subaccountAdminNavItems: NavItem[] = [
   contactsNav,
   messagingNav,
   flowsNavItem,
+  websitesNav,
   { href: '/media', label: 'Media', icon: PhotoIcon },
   toolsNavItem,
 ];

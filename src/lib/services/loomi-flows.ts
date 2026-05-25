@@ -7,56 +7,30 @@ import {
   normalizeEmailAddress,
 } from '@/lib/contact-hygiene';
 import { getMessagingSummaryForContacts } from '@/lib/contacts/queries';
+import {
+  ANNOTATION_NODE_TYPES,
+  EXECUTABLE_NODE_TYPES,
+  FlowValidationError,
+  validateFlowGraph,
+  type FlowValidationIssue,
+  type NodeType,
+  type TriggerType,
+} from '@/lib/flows/validation';
+
+// Re-export so existing callers keep working.
+export {
+  ANNOTATION_NODE_TYPES,
+  EXECUTABLE_NODE_TYPES,
+  FlowValidationError,
+  validateFlowGraph,
+};
+export type { FlowValidationIssue, NodeType, TriggerType };
 
 // ─────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────
 
 export type FlowStatus = 'draft' | 'active' | 'paused' | 'archived';
-// NodeType mirrors the BuilderNodeType union on the frontend. Storage
-// is a free-form string column so adding new types here doesn't require
-// a schema migration; the worker's executor + the validator below are
-// the gates that decide which types are usable end-to-end.
-export type NodeType =
-  | 'trigger'
-  | 'email'
-  | 'sms'
-  | 'add_tag'
-  | 'remove_tag'
-  | 'update_field'
-  | 'add_to_list'
-  | 'remove_from_list'
-  | 'add_note'
-  | 'create_task'
-  | 'wait'
-  | 'wait_until'
-  | 'condition'
-  | 'split'
-  | 'webhook'
-  | 'exit'
-  | 'sticky_note';
-
-// Node types the worker can actually execute today. Used by the
-// validator below to block publish for flows that contain types we
-// haven't wired up yet. Keep this in sync with the switch statement
-// in processEnrollmentTick.
-const EXECUTABLE_NODE_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
-  'trigger',
-  'email',
-  'wait',
-  'condition',
-  'split',
-  'exit',
-]);
-
-// Annotation-only nodes — visible on the canvas, never executed, no
-// edges in or out. The validator skips them for both the
-// executable-type check and the outgoing-connection check.
-const ANNOTATION_NODE_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
-  'sticky_note',
-]);
-
-export type TriggerType = 'list' | 'audience' | 'manual' | 'event';
 export type EnrollmentStatus = 'active' | 'completed' | 'exited' | 'failed';
 
 export interface FlowSummary {
@@ -73,6 +47,40 @@ export interface FlowSummary {
   nodeCount: number;
   /** Derived: count of active enrollments. */
   activeEnrollments: number;
+  /** Set on template instances (deploys); empty string on templates +
+   *  standalone flows. */
+  parentTemplateId: string;
+  /** Last time an instance's graph was sync'd from its parent
+   *  template. Empty string when not applicable. */
+  lastSyncedAt: string;
+}
+
+/** Lineage info for a flow that was deployed from a template. */
+export interface FlowParentTemplate {
+  id: string;
+  name: string;
+  /** When the parent template was last edited. Compared against the
+   *  instance's lastSyncedAt to compute outOfDate. */
+  updatedAt: string;
+}
+
+/** One adoption row for a template — describes one of its deployed
+ *  instances. Surfaced on FlowDetail (when the flow is a template) and
+ *  used to power the adoption column + "update available" banner. */
+export interface FlowInstanceRef {
+  id: string;
+  accountKey: string;
+  status: FlowStatus;
+  lastSyncedAt: string;
+  /** True when the parent template has been updated since the last
+   *  sync (template.updatedAt > instance.lastSyncedAt). */
+  outOfDate: boolean;
+  /** Count of active enrollments on this instance. Lets the template
+   *  overview show per-deploy engagement at a glance. */
+  activeEnrollments: number;
+  /** Last time the instance was edited — drives the "edited X ago"
+   *  hint in the deployments list. */
+  updatedAt: string;
 }
 
 export interface FlowGraphNode {
@@ -102,6 +110,11 @@ export interface FlowDetail extends FlowSummary {
   edges: FlowGraphEdge[];
   triggers: FlowTrigger[];
   settings: FlowSettings;
+  /** Populated when this flow was deployed from a template. */
+  parentTemplate: FlowParentTemplate | null;
+  /** Populated when this flow IS a template — one entry per deployed
+   *  instance. Empty array on instances + standalone flows. */
+  instances: FlowInstanceRef[];
 }
 
 // ── Flow-level settings ──
@@ -193,6 +206,8 @@ function toFlowSummary(row: {
   description: string | null;
   status: string;
   accountKey: string | null;
+  parentTemplateId?: string | null;
+  lastSyncedAt?: Date | null;
   publishedAt: Date | null;
   archivedAt: Date | null;
   createdAt: Date;
@@ -208,6 +223,8 @@ function toFlowSummary(row: {
     description: row.description || '',
     status: row.status as FlowStatus,
     accountKey: row.accountKey || '',
+    parentTemplateId: row.parentTemplateId || '',
+    lastSyncedAt: row.lastSyncedAt?.toISOString() || '',
     publishedAt: row.publishedAt?.toISOString() || '',
     archivedAt: row.archivedAt?.toISOString() || '',
     createdAt: row.createdAt.toISOString(),
@@ -221,15 +238,44 @@ function toFlowSummary(row: {
 // CRUD
 // ─────────────────────────────────────────────────────
 
+/** Status filter passed to listFlows from the API. `all` means
+ *  "everything except archived" (the default — keeps soft-deleted rows
+ *  out of view). `draft` covers both 'draft' and 'paused' DB statuses
+ *  since we no longer surface 'paused' as its own state in the UI. */
+export type FlowStatusFilter = 'all' | 'draft' | 'published' | 'archived';
+
+function statusFilterWhere(filter: FlowStatusFilter | undefined): Record<string, unknown> {
+  switch (filter) {
+    case 'draft':
+      return { status: { in: ['draft', 'paused'] } };
+    case 'published':
+      return { status: 'active' };
+    case 'archived':
+      return { status: 'archived' };
+    case 'all':
+    case undefined:
+    default:
+      return { status: { not: 'archived' } };
+  }
+}
+
 export async function listFlows(options?: {
   accountKeys?: string[] | null;
+  /** Pre-merge call sites still pass includeArchived — when true,
+   *  treated as { statusFilter: 'all' } modulo archived inclusion.
+   *  New callers should prefer statusFilter. */
   includeArchived?: boolean;
+  statusFilter?: FlowStatusFilter;
 }): Promise<FlowSummary[]> {
   const where: Record<string, unknown> = {};
   if (options?.accountKeys && options.accountKeys.length > 0) {
     where.accountKey = { in: options.accountKeys };
   }
-  if (!options?.includeArchived) {
+  // Status filter takes precedence; fall back to the legacy
+  // includeArchived behaviour so existing callers don't break.
+  if (options?.statusFilter) {
+    Object.assign(where, statusFilterWhere(options.statusFilter));
+  } else if (!options?.includeArchived) {
     where.status = { not: 'archived' };
   }
 
@@ -274,6 +320,25 @@ export async function getFlow(
       edges: true,
       triggers: true,
       _count: { select: { nodes: true } },
+      // Parent template (only set on deployed instances) — used to
+      // surface the "Deployed from template X" banner + drive the
+      // outOfDate check via updatedAt.
+      parentTemplate: { select: { id: true, name: true, updatedAt: true } },
+      // Deployed instances (only populated on templates) — used to
+      // power the adoption + "update available" banners. Skip archived
+      // instances so deleted-but-not-purged copies don't bloat the
+      // list.
+      instances: {
+        where: { status: { not: 'archived' } },
+        select: {
+          id: true,
+          accountKey: true,
+          status: true,
+          lastSyncedAt: true,
+          updatedAt: true,
+        },
+        orderBy: { createdAt: 'asc' },
+      },
     },
   });
   if (!row) return null;
@@ -288,6 +353,55 @@ export async function getFlow(
 
   const activeEnrollments = await prisma.loomiFlowEnrollment.count({
     where: { flowId: row.id, status: 'active' },
+  });
+
+  const parentTemplate: FlowParentTemplate | null = row.parentTemplate
+    ? {
+        id: row.parentTemplate.id,
+        name: row.parentTemplate.name,
+        updatedAt: row.parentTemplate.updatedAt.toISOString(),
+      }
+    : null;
+
+  // Per-instance enrollment counts in one grouped query so the
+  // template overview can show engagement per deploy without
+  // round-tripping once per instance.
+  const instanceEnrollmentCounts =
+    row.instances.length > 0
+      ? await prisma.loomiFlowEnrollment.groupBy({
+          by: ['flowId'],
+          where: {
+            flowId: { in: row.instances.map((i) => i.id) },
+            status: 'active',
+          },
+          _count: { _all: true },
+        })
+      : [];
+  const instanceEnrollmentByFlow = new Map(
+    instanceEnrollmentCounts.map((c) => [c.flowId, c._count._all]),
+  );
+
+  // Templates always have row.accountKey === null. We still compute
+  // the adoption list unconditionally so consumers don't have to
+  // branch — it'll be empty for non-templates anyway.
+  const instances: FlowInstanceRef[] = row.instances.map((inst) => {
+    const lastSyncedAt = inst.lastSyncedAt?.toISOString() || '';
+    // outOfDate iff the parent has been edited *after* the last sync.
+    // No sync timestamp → treat as out of date so the user is nudged
+    // to do an initial sync. (In practice deploys stamp this so it
+    // shouldn't be empty, but legacy rows could lack it.)
+    const outOfDate = lastSyncedAt
+      ? row.updatedAt.toISOString() > lastSyncedAt
+      : true;
+    return {
+      id: inst.id,
+      accountKey: inst.accountKey || '',
+      status: inst.status as FlowStatus,
+      lastSyncedAt,
+      outOfDate,
+      activeEnrollments: instanceEnrollmentByFlow.get(inst.id) ?? 0,
+      updatedAt: inst.updatedAt.toISOString(),
+    };
   });
 
   return {
@@ -312,6 +426,8 @@ export async function getFlow(
       enabled: t.enabled,
     })),
     settings: parseFlowSettings(row.settings),
+    parentTemplate,
+    instances,
   };
 }
 
@@ -492,22 +608,84 @@ export async function archiveFlow(id: string): Promise<FlowSummary> {
   return toFlowSummary(updated);
 }
 
+// Inverse of archiveFlow. Pops the row back to 'draft' (the UI's
+// unified inactive state — 'paused' is no longer surfaced as a
+// distinct vocabulary) and clears the archivedAt timestamp so the
+// 30-day purge job leaves it alone.
+export async function restoreFlow(id: string): Promise<FlowSummary> {
+  const updated = await prisma.loomiFlow.update({
+    where: { id },
+    data: { status: 'draft', archivedAt: null },
+    include: { _count: { select: { nodes: true } } },
+  });
+  return toFlowSummary(updated);
+}
+
+// Hard-delete archived flows older than the retention window. Cascades
+// wipe nodes/edges/triggers/enrollments and orphan any instances via
+// the SetNull rule on parentTemplateId. Invoked by the daily purge
+// job. Returns the deleted-row count for logging.
+export async function purgeOldArchivedFlows(
+  retentionDays = 30,
+): Promise<number> {
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+  const result = await prisma.loomiFlow.deleteMany({
+    where: {
+      status: 'archived',
+      archivedAt: { not: null, lt: cutoff },
+    },
+  });
+  return result.count;
+}
+
 export async function duplicateFlow(
   id: string,
-  options?: { name?: string; createdByUserId?: string | null },
+  options?: {
+    name?: string;
+    createdByUserId?: string | null;
+    /** When provided, the clone is created under this accountKey
+     *  instead of inheriting the source's. Pass `null` to explicitly
+     *  detach (i.e. clone an account flow as a template). */
+    accountKeyOverride?: string | null;
+    /** JSON-serialisable metadata to stamp on the clone — used by
+     *  template deploys to record arbitrary annotation data
+     *  (parentTemplateId now lives on its own column, but this
+     *  stays available for free-form notes). */
+    metadata?: Record<string, unknown>;
+    /** Whether to carry over the source flow's settings JSON. Default
+     *  false to preserve existing duplicateFlow callers' behaviour;
+     *  template → instance deploys flip this to true so quiet hours,
+     *  goal config, etc. propagate. */
+    preserveSettings?: boolean;
+    /** Stamp parent template lineage on the clone. Used by template
+     *  deploys so adoption + re-push can find instances later. */
+    parentTemplateId?: string | null;
+  },
 ): Promise<FlowDetail> {
   const source = await getFlow(id);
   if (!source) throw new Error('Source flow not found');
+
+  const accountKey =
+    options?.accountKeyOverride === undefined
+      ? source.accountKey || null
+      : options.accountKeyOverride;
 
   const clone = await prisma.loomiFlow.create({
     data: {
       name: options?.name ?? `${source.name} (copy)`,
       description: source.description || null,
-      accountKey: source.accountKey || null,
+      accountKey,
       createdByUserId: options?.createdByUserId ?? null,
       status: 'draft',
       sourceAudienceId: null,
       sourceFilter: null,
+      metadata: options?.metadata ? JSON.stringify(options.metadata) : null,
+      settings: options?.preserveSettings ? JSON.stringify(source.settings) : null,
+      parentTemplateId: options?.parentTemplateId ?? null,
+      // Stamp lastSyncedAt at create time on instances so the
+      // "update available" banner only triggers if the template is
+      // edited *after* this deploy.
+      lastSyncedAt: options?.parentTemplateId ? new Date() : null,
     },
   });
 
@@ -556,6 +734,168 @@ export async function duplicateFlow(
   const detail = await getFlow(clone.id);
   if (!detail) throw new Error('Failed to load duplicate flow');
   return detail;
+}
+
+// ─────────────────────────────────────────────────────
+// Template deploys
+// ─────────────────────────────────────────────────────
+//
+// A "template" is a flow with no accountKey. Deploying duplicates it
+// once per target sub-account, stamps parentTemplateId into the
+// instance's metadata, and preserves the template's settings JSON so
+// quiet hours / goals / re-entry policy carry over.
+
+export interface DeployResult {
+  /** Created flow instances, one per target account. */
+  flows: FlowDetail[];
+  /** Per-account failures (key → error message). Successes are in
+   *  `flows`; this surfaces partial-failure cases to the UI. */
+  failures: Array<{ accountKey: string; error: string }>;
+}
+
+export async function deployFlowToAccounts(
+  sourceFlowId: string,
+  targetAccountKeys: string[],
+  options?: { createdByUserId?: string | null },
+): Promise<DeployResult> {
+  const source = await getFlow(sourceFlowId);
+  if (!source) throw new Error('Source flow not found');
+  if (source.accountKey) {
+    throw new Error(
+      'Only template flows (no accountKey) can be deployed to sub-accounts.',
+    );
+  }
+
+  const flows: FlowDetail[] = [];
+  const failures: Array<{ accountKey: string; error: string }> = [];
+
+  // De-dupe targets so accidental double-selects don't create two
+  // copies in the same account.
+  const uniqueTargets = [...new Set(targetAccountKeys)];
+
+  for (const accountKey of uniqueTargets) {
+    try {
+      const instance = await duplicateFlow(sourceFlowId, {
+        name: source.name,
+        createdByUserId: options?.createdByUserId ?? null,
+        accountKeyOverride: accountKey,
+        preserveSettings: true,
+        parentTemplateId: sourceFlowId,
+        metadata: {
+          deployedAt: new Date().toISOString(),
+        },
+      });
+      flows.push(instance);
+    } catch (err) {
+      failures.push({
+        accountKey,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
+  }
+
+  return { flows, failures };
+}
+
+/**
+ * Re-syncs an instance flow from its parent template — replaces the
+ * instance's nodes, edges, and settings with the template's current
+ * state. Preserves the instance's identity (id, accountKey, name,
+ * status, triggers). Used by the "Update instances" affordance on
+ * template overviews.
+ *
+ * Rejects if the flow has no parentTemplateId (i.e. isn't a deployed
+ * instance) or if the parent has been deleted.
+ */
+export async function syncFlowFromTemplate(instanceId: string): Promise<FlowDetail> {
+  const instance = await prisma.loomiFlow.findUnique({
+    where: { id: instanceId },
+    select: { id: true, parentTemplateId: true },
+  });
+  if (!instance) throw new Error('Instance flow not found');
+  if (!instance.parentTemplateId) {
+    throw new Error('Flow is not a template instance — nothing to sync from.');
+  }
+  const template = await getFlow(instance.parentTemplateId);
+  if (!template) {
+    throw new Error('Parent template no longer exists.');
+  }
+
+  // Wipe the instance graph + replace from the template in a single
+  // transaction so a partial replay can't leave the instance in a
+  // half-rebuilt state.
+  await prisma.$transaction(async (tx) => {
+    await tx.loomiFlowEdge.deleteMany({ where: { flowId: instanceId } });
+    await tx.loomiFlowNode.deleteMany({ where: { flowId: instanceId } });
+
+    // Re-create nodes; keep a local id map so edges reattach.
+    const idMap = new Map<string, string>();
+    for (const node of template.nodes) {
+      const created = await tx.loomiFlowNode.create({
+        data: {
+          flowId: instanceId,
+          type: node.type,
+          config: stringifyConfig(node.config),
+          x: node.x,
+          y: node.y,
+        },
+      });
+      idMap.set(node.id, created.id);
+    }
+    for (const edge of template.edges) {
+      const from = idMap.get(edge.fromNodeId);
+      const to = idMap.get(edge.toNodeId);
+      if (!from || !to) continue;
+      await tx.loomiFlowEdge.create({
+        data: { flowId: instanceId, fromNodeId: from, toNodeId: to, branch: edge.branch },
+      });
+    }
+
+    // Mirror template settings so quiet hours / goal / re-entry
+    // policy stays in sync. Triggers, name, status, accountKey are
+    // explicitly NOT touched — they belong to the instance.
+    await tx.loomiFlow.update({
+      where: { id: instanceId },
+      data: {
+        settings: JSON.stringify(template.settings),
+        lastSyncedAt: new Date(),
+      },
+    });
+  });
+
+  const refreshed = await getFlow(instanceId);
+  if (!refreshed) throw new Error('Failed to reload instance after sync.');
+  return refreshed;
+}
+
+/**
+ * Convenience: re-sync every instance of a template that is currently
+ * out-of-date. Returns a deploy-style summary of successes + failures
+ * so the UI can present partial outcomes.
+ */
+export async function syncAllOutOfDateInstances(
+  templateId: string,
+): Promise<DeployResult> {
+  const template = await getFlow(templateId);
+  if (!template) throw new Error('Template not found');
+  if (template.accountKey) {
+    throw new Error('Only template flows can be bulk-sync\'d.');
+  }
+  const targets = template.instances.filter((i) => i.outOfDate);
+  const flows: FlowDetail[] = [];
+  const failures: Array<{ accountKey: string; error: string }> = [];
+  for (const target of targets) {
+    try {
+      const synced = await syncFlowFromTemplate(target.id);
+      flows.push(synced);
+    } catch (err) {
+      failures.push({
+        accountKey: target.accountKey,
+        error: err instanceof Error ? err.message : 'Unknown error',
+      });
+    }
+  }
+  return { flows, failures };
 }
 
 // ─────────────────────────────────────────────────────
@@ -1749,110 +2089,7 @@ export async function getFlowNodeStats(
   return byNode;
 }
 
-// ─────────────────────────────────────────────────────
-// Graph validation
-// ─────────────────────────────────────────────────────
-
-export interface FlowValidationIssue {
-  /** Node this issue is anchored to, or null for graph-level problems
-   *  (e.g. "flow must contain a trigger"). Drives the red highlight in
-   *  the builder — the client filters issues by nodeId. */
-  nodeId: string | null;
-  message: string;
-}
-
-export class FlowValidationError extends Error {
-  constructor(public issues: FlowValidationIssue[]) {
-    super(issues.map((i) => i.message).join('; '));
-    this.name = 'FlowValidationError';
-  }
-}
-
-export function validateFlowGraph(graph: {
-  nodes: { id: string; type: NodeType; config: Record<string, unknown> }[];
-  edges: { fromNodeId: string; toNodeId: string; branch: string | null }[];
-}): { ok: boolean; issues: FlowValidationIssue[] } {
-  const issues: FlowValidationIssue[] = [];
-  const push = (nodeId: string | null, message: string) =>
-    issues.push({ nodeId, message });
-
-  const edgesByFrom = new Map<string, typeof graph.edges>();
-  for (const edge of graph.edges) {
-    const arr = edgesByFrom.get(edge.fromNodeId) ?? [];
-    arr.push(edge);
-    edgesByFrom.set(edge.fromNodeId, arr);
-  }
-
-  const hasTrigger = graph.nodes.some((n) => n.type === 'trigger');
-  if (!hasTrigger) push(null, 'Flow must contain a trigger entry node.');
-
-  // Reject palette-only step types that don't have a working worker
-  // implementation yet (SMS, webhooks, notes, tasks, etc.). Annotation
-  // nodes (sticky notes) are exempt — they're authoring aids, never
-  // executed, and we want them to ride along through publish.
-  for (const node of graph.nodes) {
-    if (ANNOTATION_NODE_TYPES.has(node.type)) continue;
-    if (!EXECUTABLE_NODE_TYPES.has(node.type)) {
-      push(
-        node.id,
-        `"${node.type}" step can't be published yet — execution support is on the roadmap.`,
-      );
-    }
-  }
-
-  for (const node of graph.nodes) {
-    if (node.type === 'exit') continue;
-    // Annotation nodes deliberately have no outgoing edges (they're
-    // standalone). Skip the orphan check for them.
-    if (ANNOTATION_NODE_TYPES.has(node.type)) continue;
-    const outgoing = edgesByFrom.get(node.id) ?? [];
-    if (outgoing.length === 0) {
-      push(node.id, `This step has no outgoing connection.`);
-      continue;
-    }
-    if (node.type === 'condition') {
-      const cfg = node.config as { branches?: Array<{ id: string; label?: string; rules?: unknown[] }> };
-      const branches = Array.isArray(cfg.branches) ? cfg.branches : [];
-      if (branches.length === 0) {
-        push(node.id, 'Needs at least one branch.');
-      }
-      const edgeBranches = new Set(outgoing.map((e) => e.branch));
-      for (const b of branches) {
-        if (!b.id) {
-          push(node.id, 'A branch is missing its id.');
-          continue;
-        }
-        const branchName = b.label || b.id;
-        if (!Array.isArray(b.rules) || b.rules.length === 0) {
-          push(node.id, `Branch "${branchName}" needs at least one rule.`);
-        }
-        if (!edgeBranches.has(b.id)) {
-          push(node.id, `Branch "${branchName}" has no outgoing connection.`);
-        }
-      }
-      if (!edgeBranches.has('else')) {
-        push(node.id, 'Missing an "else" connection for unmatched contacts.');
-      }
-    }
-    if (node.type === 'split') {
-      const weights = Array.isArray(node.config.weights) ? node.config.weights : [];
-      const sum = weights.reduce((a: number, w) => a + (Number(w) || 0), 0);
-      if (Math.abs(sum - 1) > 0.01) {
-        push(node.id, `Split weights must sum to 100% (got ${Math.round(sum * 100)}%).`);
-      }
-    }
-    if (node.type === 'email') {
-      if (!node.config.templateId && !node.config.html) {
-        push(node.id, 'Pick a template or set inline HTML.');
-      }
-    }
-    if (node.type === 'wait') {
-      const ms = Number(node.config.ms || 0);
-      if (!Number.isFinite(ms) || ms <= 0) {
-        push(node.id, 'Wait duration must be greater than 0.');
-      }
-    }
-  }
-
-  return { ok: issues.length === 0, issues };
-}
+// Graph validation lives in @/lib/flows/validation (client-safe).
+// FlowValidationIssue, FlowValidationError, validateFlowGraph, plus
+// the NodeType / TriggerType unions are re-exported from this module
+// at the top of the file for backwards compatibility.

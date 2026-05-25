@@ -1,6 +1,13 @@
 'use client';
 
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { createContext, useContext, useEffect, useState, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
+
+// Slot for header-area actions on the embedded templates view (when
+// the parent owns the page title + tabs). ManagementView portals its
+// Create Template + overflow menu into here so the affordances sit
+// in the page header rather than below the tabs.
+const TemplatesHeaderActionsContext = createContext<HTMLElement | null>(null);
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   PlusIcon,
@@ -42,6 +49,7 @@ import PrimaryButton from '@/components/primary-button';
 
 interface TemplateEntry {
   design: string;
+  accountKey?: string | null;
   name: string;
   editorType?: 'code' | 'visual' | string | null;
   category?: string | null;
@@ -661,12 +669,27 @@ function CategoryEditorPopover({
 
 export default function TemplateLibraryPage() {
   const searchParams = useSearchParams();
-  const { userRole } = useAccount();
+  const { userRole, account, accountKey, accountData } = useAccount();
   const campaignDraftQuery = searchParams.get('campaignDraft') === '1' ? '?campaignDraft=1' : '';
 
   const isClient = userRole === 'client';
   // developer, super_admin, and admin all get full management access to the library.
   const canManage = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
+
+  // When viewing inside a subaccount, swap to the tabbed view that separates
+  // "Subaccount Templates" (owned by this subaccount) from the shared
+  // "Template Library".
+  if (account.mode === 'account' && accountKey) {
+    return (
+      <SubaccountTabsView
+        accountKey={accountKey}
+        accountLabel={accountData?.dealer ?? accountKey}
+        canManage={canManage}
+        isClient={isClient}
+        campaignDraftQuery={campaignDraftQuery}
+      />
+    );
+  }
 
   return (
     <div>
@@ -677,12 +700,186 @@ export default function TemplateLibraryPage() {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// ── Subaccount Tabs View ──
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Shell for the templates page when viewing inside a subaccount. Renders the
+ * sticky title + tab switcher and swaps between the subaccount-scoped view
+ * and the shared library (read-only published templates) below.
+ */
+function SubaccountTabsView({
+  accountKey,
+  accountLabel,
+  canManage,
+  isClient,
+  campaignDraftQuery,
+}: {
+  accountKey: string;
+  accountLabel: string;
+  canManage: boolean;
+  isClient: boolean;
+  campaignDraftQuery: string;
+}) {
+  const [tab, setTab] = useState<'subaccount' | 'library'>('subaccount');
+  // Force-remount the subaccount view when a library copy completes so the
+  // freshly-cloned template appears immediately on tab switch.
+  const [subaccountRefreshKey, setSubaccountRefreshKey] = useState(0);
+  // Slot element for header-aligned action buttons. ManagementView
+  // portals its Create + overflow buttons into this div via the
+  // TemplatesHeaderActionsContext below.
+  const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
+
+  const subaccountSubtitle = `Templates owned by ${accountLabel}.`;
+  const librarySubtitle = 'Published templates from the shared library.';
+
+  return (
+    <TemplatesHeaderActionsContext.Provider value={actionsSlot}>
+    <div>
+      <div className="page-sticky-header mb-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <BookOpenIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />
+            <div className="min-w-0">
+              <h1 className="text-2xl font-bold">Templates</h1>
+              <p className="text-[var(--muted-foreground)] text-sm mt-0.5 truncate">
+                {tab === 'subaccount' ? subaccountSubtitle : librarySubtitle}
+              </p>
+            </div>
+          </div>
+          {/* Right-aligned action slot. ManagementView's Create
+              Template + overflow buttons portal in here when active. */}
+          <div
+            ref={setActionsSlot}
+            className="flex items-center gap-2 flex-shrink-0"
+          />
+        </div>
+        <div className="mt-4 flex items-center gap-1 border-b border-[var(--border)]">
+          {([
+            { id: 'subaccount' as const, label: 'Subaccount Templates' },
+            { id: 'library' as const, label: 'Template Library' },
+          ]).map((t) => {
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  active
+                    ? 'border-[var(--primary)] text-[var(--foreground)]'
+                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {tab === 'subaccount' ? (
+        canManage ? (
+          <ManagementView
+            key={`mgmt-${subaccountRefreshKey}`}
+            campaignDraftQuery={campaignDraftQuery}
+            accountKey={accountKey}
+            embedded
+          />
+        ) : isClient ? (
+          <ReadOnlyView
+            key={`ro-${subaccountRefreshKey}`}
+            campaignDraftQuery={campaignDraftQuery}
+            accountKey={accountKey}
+            embedded
+          />
+        ) : null
+      ) : (
+        <ReadOnlyView
+          campaignDraftQuery={campaignDraftQuery}
+          copyTargetAccountKey={accountKey}
+          copyTargetAccountLabel={accountLabel}
+          onCopyComplete={() => {
+            setSubaccountRefreshKey((n) => n + 1);
+            setTab('subaccount');
+          }}
+          embedded
+        />
+      )}
+    </div>
+    </TemplatesHeaderActionsContext.Provider>
+  );
+}
+
+// Portals Create Template + overflow menu into the slot the parent
+// SubaccountTabsView reserves in its sticky header. Renders nothing
+// (returns null) until the slot DOM node is available on first
+// render after mount.
+function EmbeddedHeaderActions({
+  showOverflowMenu,
+  overflowMenuRef,
+  onToggleOverflowMenu,
+  onManageTags,
+  onCreate,
+}: {
+  showOverflowMenu: boolean;
+  overflowMenuRef: React.RefObject<HTMLDivElement | null>;
+  onToggleOverflowMenu: () => void;
+  onManageTags: () => void;
+  onCreate: () => void;
+}) {
+  const slot = useContext(TemplatesHeaderActionsContext);
+  if (!slot) return null;
+  return createPortal(
+    <>
+      <div className="relative" ref={showOverflowMenu ? overflowMenuRef : undefined}>
+        <button
+          onClick={onToggleOverflowMenu}
+          className="flex items-center justify-center w-9 h-9 rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+          title="More actions"
+          aria-label="More actions"
+        >
+          <EllipsisHorizontalIcon className="w-4 h-4" />
+        </button>
+        {showOverflowMenu && (
+          <div className="absolute right-0 top-full mt-1 z-30 w-48 glass-dropdown">
+            <button
+              onClick={onManageTags}
+              className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2"
+            >
+              <TagIcon className="w-4 h-4" />
+              Manage tags
+            </button>
+          </div>
+        )}
+      </div>
+      <PrimaryButton onClick={onCreate}>
+        <PlusIcon className="w-4 h-4" />
+        Create Template
+      </PrimaryButton>
+    </>,
+    slot,
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // ── Management View (full management — developer, super_admin, admin) ──
 // ═══════════════════════════════════════════════════════════════════
 
-function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) {
+function ManagementView({
+  campaignDraftQuery,
+  accountKey,
+  embedded,
+}: {
+  campaignDraftQuery: string;
+  // When set, scopes the view to this subaccount's templates (no publish UI).
+  accountKey?: string;
+  // When true, the parent renders the page header so this view hides its own.
+  embedded?: boolean;
+}) {
   const router = useRouter();
   const { confirm } = useLoomiDialog();
+  const scoped = Boolean(accountKey);
   const [templates, setTemplates] = useState<TemplateEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [showCreateChoice, setShowCreateChoice] = useState(false);
@@ -720,8 +917,11 @@ function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) 
 
   const loadTemplates = async () => {
     try {
+      const listUrl = accountKey
+        ? `/api/templates?accountKey=${encodeURIComponent(accountKey)}`
+        : '/api/templates';
       const [tRes, tagRes] = await Promise.all([
-        fetch('/api/templates'),
+        fetch(listUrl),
         fetch('/api/template-tags'),
       ]);
       const tData = await tRes.json();
@@ -958,7 +1158,11 @@ function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) 
       const res = await fetch('/api/templates', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ design: defaultName, mode }),
+        body: JSON.stringify({
+          design: defaultName,
+          mode,
+          ...(accountKey ? { accountKey } : {}),
+        }),
       });
       const data = await res.json();
       if (!res.ok) { toast.error(data.error || 'Failed to create'); setSaving(false); return; }
@@ -1187,45 +1391,62 @@ function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) 
 
   return (
     <div>
-      {/* Sticky header — page title + primary actions */}
-      <div className="page-sticky-header mb-6 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3 min-w-0">
-          <BookOpenIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold">Templates</h1>
-            <p className="text-[var(--muted-foreground)] text-sm mt-0.5 truncate">
-              Shared template library. Publish templates to make them available to sub-accounts.
-            </p>
+      {/* Sticky header — page title + primary actions. Hidden when embedded
+          (parent component already renders a header above tabs). */}
+      {!embedded && (
+        <div className="page-sticky-header mb-6 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <BookOpenIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />
+            <div className="min-w-0">
+              <h1 className="text-2xl font-bold">Templates</h1>
+              <p className="text-[var(--muted-foreground)] text-sm mt-0.5 truncate">
+                Shared template library. Publish templates to make them available to sub-accounts.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="relative" ref={showOverflowMenu ? overflowMenuRef : undefined}>
+              <button
+                onClick={() => setShowOverflowMenu(!showOverflowMenu)}
+                className="flex items-center justify-center w-9 h-9 rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                title="More actions"
+                aria-label="More actions"
+              >
+                <EllipsisHorizontalIcon className="w-4 h-4" />
+              </button>
+              {showOverflowMenu && (
+                <div className="absolute right-0 top-full mt-1 z-30 w-48 glass-dropdown">
+                  <button
+                    onClick={() => { setShowTagModal(true); setShowOverflowMenu(false); }}
+                    className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2"
+                  >
+                    <TagIcon className="w-4 h-4" />
+                    Manage tags
+                  </button>
+                </div>
+              )}
+            </div>
+            <PrimaryButton onClick={() => setShowCreateChoice(true)}>
+              <PlusIcon className="w-4 h-4" />
+              Create Template
+            </PrimaryButton>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          <div className="relative" ref={showOverflowMenu ? overflowMenuRef : undefined}>
-            <button
-              onClick={() => setShowOverflowMenu(!showOverflowMenu)}
-              className="flex items-center justify-center w-9 h-9 rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-              title="More actions"
-              aria-label="More actions"
-            >
-              <EllipsisHorizontalIcon className="w-4 h-4" />
-            </button>
-            {showOverflowMenu && (
-              <div className="absolute right-0 top-full mt-1 z-30 w-48 glass-dropdown">
-                <button
-                  onClick={() => { setShowTagModal(true); setShowOverflowMenu(false); }}
-                  className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2"
-                >
-                  <TagIcon className="w-4 h-4" />
-                  Manage tags
-                </button>
-              </div>
-            )}
-          </div>
-          <PrimaryButton onClick={() => setShowCreateChoice(true)}>
-            <PlusIcon className="w-4 h-4" />
-            Create Template
-          </PrimaryButton>
-        </div>
-      </div>
+      )}
+
+      {/* Embedded actions — when the parent owns the header, portal
+          the Create + overflow buttons into the header's right-side
+          slot via TemplatesHeaderActionsContext. The buttons sit next
+          to the page title instead of below the tabs. */}
+      {embedded && (
+        <EmbeddedHeaderActions
+          showOverflowMenu={showOverflowMenu}
+          overflowMenuRef={overflowMenuRef}
+          onToggleOverflowMenu={() => setShowOverflowMenu(!showOverflowMenu)}
+          onManageTags={() => { setShowTagModal(true); setShowOverflowMenu(false); }}
+          onCreate={() => setShowCreateChoice(true)}
+        />
+      )}
 
       {/* Toolbar */}
       <div className="mb-4 space-y-2">
@@ -1242,15 +1463,17 @@ function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) 
                 />
               </div>
 
-              <SegmentedPicker
-                value={publishFilter}
-                onChange={setPublishFilter}
-                options={[
-                  { value: 'all', label: 'All', count: templates.length },
-                  { value: 'published', label: 'Published', count: publishedCount },
-                  { value: 'draft', label: 'Drafts', count: draftCount },
-                ]}
-              />
+              {!scoped && (
+                <SegmentedPicker
+                  value={publishFilter}
+                  onChange={setPublishFilter}
+                  options={[
+                    { value: 'all', label: 'All', count: templates.length },
+                    { value: 'published', label: 'Published', count: publishedCount },
+                    { value: 'draft', label: 'Drafts', count: draftCount },
+                  ]}
+                />
+              )}
 
               <FilterDropdown
                 label="Filter"
@@ -1514,26 +1737,28 @@ function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) 
                               <Square2StackIcon className="w-4 h-4" />
                               Clone
                             </button>
-                            <button
-                              onClick={() => {
-                                setMenuOpen(null);
-                                void setPublishedState([t.design], !isPublished);
-                              }}
-                              disabled={isPublishing}
-                              className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2 disabled:opacity-60"
-                            >
-                              {isPublished ? (
-                                <>
-                                  <PencilSquareIcon className="w-4 h-4" />
-                                  Unpublish
-                                </>
-                              ) : (
-                                <>
-                                  <CheckCircleIcon className="w-4 h-4" />
-                                  Publish to Library
-                                </>
-                              )}
-                            </button>
+                            {!scoped && (
+                              <button
+                                onClick={() => {
+                                  setMenuOpen(null);
+                                  void setPublishedState([t.design], !isPublished);
+                                }}
+                                disabled={isPublishing}
+                                className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2 disabled:opacity-60"
+                              >
+                                {isPublished ? (
+                                  <>
+                                    <PencilSquareIcon className="w-4 h-4" />
+                                    Unpublish
+                                  </>
+                                ) : (
+                                  <>
+                                    <CheckCircleIcon className="w-4 h-4" />
+                                    Publish to Library
+                                  </>
+                                )}
+                              </button>
+                            )}
                             <button
                               onClick={() => { deleteTemplate(t.design); setMenuOpen(null); }}
                               className="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-2"
@@ -1550,27 +1775,29 @@ function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) 
                     <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
                       {templateTypeLabel}
                     </span>
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (isPublishing) return;
-                        void setPublishedState([t.design], !isPublished);
-                      }}
-                      disabled={isPublishing}
-                      title={isPublished ? 'Click to unpublish' : 'Click to publish to library'}
-                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors disabled:cursor-default ${
-                        isPublished
-                          ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25'
-                          : 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/25'
-                      }`}
-                    >
-                      {isPublishing ? (
-                        <ArrowPathIcon className="w-3 h-3 animate-spin" />
-                      ) : isPublished ? (
-                        <CheckCircleIcon className="w-3 h-3" />
-                      ) : null}
-                      {isPublished ? 'Published' : 'Draft'}
-                    </button>
+                    {!scoped && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isPublishing) return;
+                          void setPublishedState([t.design], !isPublished);
+                        }}
+                        disabled={isPublishing}
+                        title={isPublished ? 'Click to unpublish' : 'Click to publish to library'}
+                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors disabled:cursor-default ${
+                          isPublished
+                            ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25'
+                            : 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/25'
+                        }`}
+                      >
+                        {isPublishing ? (
+                          <ArrowPathIcon className="w-3 h-3 animate-spin" />
+                        ) : isPublished ? (
+                          <CheckCircleIcon className="w-3 h-3" />
+                        ) : null}
+                        {isPublished ? 'Published' : 'Draft'}
+                      </button>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-1 mt-1.5 flex-wrap">
@@ -1803,24 +2030,28 @@ function ManagementView({ campaignDraftQuery }: { campaignDraftQuery: string }) 
                   }
                 },
               },
-              {
-                id: 'publish',
-                label: 'Publish',
-                icon: <CheckCircleIcon className="w-4 h-4" />,
-                onClick: async () => {
-                  await setPublishedState(slugs, true);
-                  setSelectedDesigns(new Set());
-                },
-              },
-              {
-                id: 'unpublish',
-                label: 'Unpublish',
-                icon: <PencilSquareIcon className="w-4 h-4" />,
-                onClick: async () => {
-                  await setPublishedState(slugs, false);
-                  setSelectedDesigns(new Set());
-                },
-              },
+              ...(scoped
+                ? []
+                : [
+                    {
+                      id: 'publish',
+                      label: 'Publish',
+                      icon: <CheckCircleIcon className="w-4 h-4" />,
+                      onClick: async () => {
+                        await setPublishedState(slugs, true);
+                        setSelectedDesigns(new Set());
+                      },
+                    },
+                    {
+                      id: 'unpublish',
+                      label: 'Unpublish',
+                      icon: <PencilSquareIcon className="w-4 h-4" />,
+                      onClick: async () => {
+                        await setPublishedState(slugs, false);
+                        setSelectedDesigns(new Set());
+                      },
+                    },
+                  ]),
               {
                 id: 'tag',
                 label: 'Tag',
@@ -1994,7 +2225,26 @@ function BulkTagModal({
 // ── Read-Only View (client role: only published templates, no edit) ──
 // ═══════════════════════════════════════════════════════════════════
 
-function ReadOnlyView({ campaignDraftQuery }: { campaignDraftQuery: string }) {
+function ReadOnlyView({
+  campaignDraftQuery,
+  accountKey,
+  embedded,
+  copyTargetAccountKey,
+  copyTargetAccountLabel,
+  onCopyComplete,
+}: {
+  campaignDraftQuery: string;
+  // When set, fetch templates owned by this subaccount (no publishedOnly).
+  // When unset, fetch published library templates.
+  accountKey?: string;
+  embedded?: boolean;
+  // When set, show a "Copy to Subaccount" action that clones the library
+  // template into this subaccount. Ignored when `accountKey` is set
+  // (subaccount-scoped views don't show this action).
+  copyTargetAccountKey?: string;
+  copyTargetAccountLabel?: string;
+  onCopyComplete?: () => void;
+}) {
   const router = useRouter();
   const [templates, setTemplates] = useState<TemplateEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -2006,19 +2256,48 @@ function ReadOnlyView({ campaignDraftQuery }: { campaignDraftQuery: string }) {
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [previewDesign, setPreviewDesign] = useState<string | null>(null);
+  const [copyingDesign, setCopyingDesign] = useState<string | null>(null);
   const filterPopoverRef = useRef<HTMLDivElement>(null);
   const isCampaignDraft = campaignDraftQuery.length > 0;
+  const showCopyAction = Boolean(copyTargetAccountKey) && !accountKey;
 
   useEffect(() => {
+    const listUrl = accountKey
+      ? `/api/templates?accountKey=${encodeURIComponent(accountKey)}`
+      : '/api/templates?publishedOnly=true';
     Promise.all([
-      fetch('/api/templates?publishedOnly=true').then((r) => r.json()),
+      fetch(listUrl).then((r) => r.json()),
       fetch('/api/template-tags').then((r) => r.json()),
     ]).then(([tData, tagResult]) => {
       setTemplates(Array.isArray(tData) ? tData : []);
       setTagData(parseTemplateTagsPayload(tagResult));
       setLoaded(true);
     }).catch(() => setLoaded(true));
-  }, []);
+  }, [accountKey]);
+
+  const copyToSubaccount = async (design: string) => {
+    if (!copyTargetAccountKey || copyingDesign) return;
+    setCopyingDesign(design);
+    try {
+      const res = await fetch('/api/templates/clone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceDesign: design, accountKey: copyTargetAccountKey }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to copy template');
+        return;
+      }
+      const label = copyTargetAccountLabel || 'subaccount';
+      toast.success(`Copied to ${label}`);
+      onCopyComplete?.();
+    } catch {
+      toast.error('Failed to copy template');
+    } finally {
+      setCopyingDesign(null);
+    }
+  };
 
   useEffect(() => {
     if (!showFilterMenu) return;
@@ -2095,18 +2374,19 @@ function ReadOnlyView({ campaignDraftQuery }: { campaignDraftQuery: string }) {
 
   return (
     <div>
-      {/* Sticky header — page title */}
-      <div className="page-sticky-header mb-6">
-        <div className="flex items-center gap-3">
-          <BookOpenIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold">Templates</h1>
-            <p className="text-[var(--muted-foreground)] text-sm mt-0.5">
-              Browse the shared template library.
-            </p>
+      {!embedded && (
+        <div className="page-sticky-header mb-6">
+          <div className="flex items-center gap-3">
+            <BookOpenIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />
+            <div className="min-w-0">
+              <h1 className="text-2xl font-bold">Templates</h1>
+              <p className="text-[var(--muted-foreground)] text-sm mt-0.5">
+                Browse the shared template library.
+              </p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {isCampaignDraft && (
         <div className="mb-4 rounded-xl border border-[var(--primary)]/30 bg-[var(--primary)]/10 px-3 py-2 text-xs text-[var(--muted-foreground)]">
@@ -2232,9 +2512,30 @@ function ReadOnlyView({ campaignDraftQuery }: { campaignDraftQuery: string }) {
               >
                 <TemplatePreview design={t.design} height={220} />
                 <div className="p-3">
-                  <p className="text-sm font-medium truncate">
-                    {t.name || formatDesign(t.design)}
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium truncate">
+                      {t.name || formatDesign(t.design)}
+                    </p>
+                    {showCopyAction && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void copyToSubaccount(t.design);
+                        }}
+                        disabled={copyingDesign === t.design}
+                        title={copyTargetAccountLabel ? `Copy to ${copyTargetAccountLabel}` : 'Copy to subaccount'}
+                        className="flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--primary)] hover:border-[var(--primary)]/40 hover:bg-[var(--primary)]/5 transition-colors disabled:opacity-60 disabled:cursor-wait"
+                      >
+                        {copyingDesign === t.design ? (
+                          <ArrowPathIcon className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Square2StackIcon className="w-3 h-3" />
+                        )}
+                        Copy
+                      </button>
+                    )}
+                  </div>
                   <div className="mt-1.5">
                     <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
                       {templateTypeLabel}

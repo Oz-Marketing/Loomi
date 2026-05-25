@@ -38,6 +38,12 @@ import { IconRail, type RailFeature } from './IconRail';
 import { FeatureDrawer } from './FeatureDrawer';
 import { BuilderPopout } from './BuilderPopout';
 import { FlowSettingsPanel } from './FlowSettingsPanel';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import {
+  validateFlowGraph,
+  type FlowValidationIssue,
+  type NodeType,
+} from '@/lib/flows/validation';
 import type { FlowAiAction, FlowSnapshot } from '@/lib/ai/flow-tools';
 import {
   NODE_META,
@@ -118,7 +124,7 @@ export function FlowBuilder({ flowId }: { flowId: string }) {
 }
 
 function FlowBuilderInner({ flowId }: { flowId: string }) {
-  const { screenToFlowPosition, zoomIn, zoomOut, fitView } = useReactFlow();
+  const { screenToFlowPosition, zoomIn, zoomOut, fitView, setCenter } = useReactFlow();
 
   const [detail, setDetail] = useState<FlowApiDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -293,6 +299,67 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
   // ref-driven history changes — otherwise canUndo/canRedo would be
   // stale on the buttons.
   void historyVersion;
+
+  // ── Live validation ──
+  // Re-validates whenever the graph changes so the Error Log drawer
+  // (and the rail badge) always reflects the current state without
+  // requiring a publish attempt. Sticky-note nodes are skipped by the
+  // validator itself.
+  const liveIssues = useMemo<FlowValidationIssue[]>(() => {
+    const graphNodes = nodes
+      // Strip sticky notes — the validator's annotation exemption
+      // would skip them anyway, but filtering up front keeps the
+      // NodeType cast clean.
+      .filter((n) => n.data.type !== 'sticky_note')
+      .map((n) => ({
+        id: n.id,
+        type: n.data.type as NodeType,
+        config: n.data.config,
+      }));
+    const graphEdges = edges.map((e) => ({
+      fromNodeId: e.source,
+      toNodeId: e.target,
+      branch: (e.data as { branch?: string } | undefined)?.branch ?? null,
+    }));
+    return validateFlowGraph({ nodes: graphNodes, edges: graphEdges }).issues;
+  }, [nodes, edges]);
+
+  const errorCount = useMemo(
+    () => liveIssues.filter((i) => (i.severity ?? 'error') === 'error').length,
+    [liveIssues],
+  );
+
+  // Friendly label for an issue's node — used in the Error Log entries.
+  const issueNodeLabel = useCallback(
+    (nodeId: string): string => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return 'Step';
+      const cfgLabel =
+        typeof node.data.config?.label === 'string' && node.data.config.label
+          ? (node.data.config.label as string)
+          : '';
+      const typeLabel = NODE_META[node.data.type]?.label || node.data.type;
+      return cfgLabel || typeLabel;
+    },
+    [nodes],
+  );
+
+  // Centers a node on the canvas and opens its inspector. Used by the
+  // Error Log drawer when the user clicks an issue.
+  const focusNode = useCallback(
+    (nodeId: string) => {
+      const node = nodes.find((n) => n.id === nodeId);
+      if (!node) return;
+      const w = node.measured?.width ?? 240;
+      const h = node.measured?.height ?? 80;
+      setCenter(node.position.x + w / 2, node.position.y + h / 2, {
+        zoom: 1.1,
+        duration: 300,
+      });
+      setSelectedNodeId(nodeId);
+    },
+    [nodes, setCenter],
+  );
 
   // Keyboard: Cmd/Ctrl+Z = undo, Cmd/Ctrl+Shift+Z (or Cmd/Ctrl+Y) = redo.
   // Suppressed when focus is inside a form field so typing isn't hijacked.
@@ -1450,6 +1517,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
                 toggleStates={{ iris: aiOpen, stats: statsOverlayOn }}
                 onSelect={onSelectRailFeature}
                 onStickyNoteDragStart={onStickyNoteDragStart}
+                badges={{ error_log: errorCount }}
               />
             </div>
           )}
@@ -1471,6 +1539,9 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
                 <FeatureDrawer
                   feature={activeDrawer}
                   onClose={() => setActiveDrawer(null)}
+                  issues={activeDrawer === 'error_log' ? liveIssues : undefined}
+                  nodeLabel={activeDrawer === 'error_log' ? issueNodeLabel : undefined}
+                  onFocusNode={activeDrawer === 'error_log' ? focusNode : undefined}
                 />
               ) : null}
             </div>
@@ -1634,13 +1705,14 @@ function FloatingTitleGroup({
 }) {
   const [name, setName] = useState(flow.name);
   useEffect(() => setName(flow.name), [flow.name]);
+  const subHref = useSubaccountHref();
 
   return (
     <header className="absolute top-4 left-4 z-20 inline-flex items-center gap-2 px-2 py-1.5 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] backdrop-blur-2xl backdrop-saturate-150 shadow-md">
       <Link
-        href="/flows"
+        href={subHref(`/flows/${flow.id}`)}
         className="inline-flex items-center justify-center w-9 h-9 rounded-md hover:bg-[var(--muted)] transition-colors flex-shrink-0"
-        title="Back to flows"
+        title="Back to flow overview"
       >
         <ArrowLeftIcon className="w-5 h-5" />
       </Link>

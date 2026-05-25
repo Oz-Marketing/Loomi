@@ -114,9 +114,9 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
 
   // Flow builder owns its own chrome (its own top bar lives in
   // FlowBuilder.tsx) so we hide the sidebar + TopUtilityBar entirely.
-  // Matches /flows/<id> but explicitly NOT /flows/analytics or the list page.
-  const isFlowBuilder =
-    /^\/flows\/[^/]+$/.test(builderProbe) && builderProbe !== '/flows/analytics';
+  // Matches /flows/<id>/edit only — the overview at /flows/<id> renders
+  // inside the regular app shell.
+  const isFlowBuilder = /^\/flows\/[^/]+\/edit$/.test(builderProbe);
 
   useEffect(() => {
     if (isFullScreen || isTemplateEditor || isCampaignBuilder || isFlowBuilder) {

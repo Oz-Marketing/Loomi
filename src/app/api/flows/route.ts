@@ -1,6 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
-import { createFlow, listFlows } from '@/lib/services/loomi-flows';
+import {
+  createFlow,
+  listFlows,
+  type FlowStatusFilter,
+} from '@/lib/services/loomi-flows';
+
+const ALLOWED_STATUS_FILTERS = new Set<FlowStatusFilter>([
+  'all',
+  'draft',
+  'published',
+  'archived',
+]);
+function parseStatusFilter(value: string | null): FlowStatusFilter | undefined {
+  if (!value) return undefined;
+  return ALLOWED_STATUS_FILTERS.has(value as FlowStatusFilter)
+    ? (value as FlowStatusFilter)
+    : undefined;
+}
 
 function clientAccountKeysFromSession(session: {
   user: { role: string; accountKeys?: string[] };
@@ -16,8 +33,30 @@ export async function GET(req: NextRequest) {
   if (error) return error;
 
   const accountKeyParam = req.nextUrl.searchParams.get('accountKey');
+  // Preferred filter shape: ?status=all|draft|published|archived.
+  // Legacy ?includeArchived=1 still understood for any caller that
+  // hasn't migrated.
+  const statusFilter = parseStatusFilter(req.nextUrl.searchParams.get('status'));
   const includeArchived = req.nextUrl.searchParams.get('includeArchived') === '1';
+  // ?templates=1 bypasses accountKey scoping and returns only flows
+  // with no accountKey (templates). Used by the sub-account "Add
+  // Template" picker — templates are intentionally global and visible
+  // to any authenticated user, since adopting one is opt-in.
+  const templatesOnly = req.nextUrl.searchParams.get('templates') === '1';
   const scoped = clientAccountKeysFromSession(session!);
+
+  if (templatesOnly) {
+    // Templates are global. Skip accountKey scoping but keep the
+    // status filter (sub-account picker defaults to status=published).
+    const all = await listFlows({
+      accountKeys: null,
+      statusFilter,
+      includeArchived,
+    });
+    const flows = all.filter((f) => !f.accountKey);
+    return NextResponse.json({ flows });
+  }
+
   const accountKeys = accountKeyParam ? [accountKeyParam] : scoped;
 
   // If role is account-scoped (client / admin with assignments) make
@@ -29,6 +68,7 @@ export async function GET(req: NextRequest) {
 
   const flows = await listFlows({
     accountKeys: accountKeys ?? null,
+    statusFilter,
     includeArchived,
   });
   return NextResponse.json({ flows });

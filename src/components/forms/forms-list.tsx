@@ -4,22 +4,32 @@ import { DocumentTextIcon } from '@heroicons/react/24/outline';
 import type { FormSummary } from '@/lib/services/forms';
 import { FormCard } from '@/components/forms/form-card';
 
+interface FormsListProps {
+  forms: FormSummary[];
+  loading?: boolean;
+  accountNames?: Record<string, string>;
+  /** Plumbed through to FormCard so the inline publish toggle can fire. */
+  onTogglePublish?: (form: FormSummary, next: 'published' | 'draft') => void;
+  onDelete?: (form: FormSummary) => void;
+  /** IDs whose publish toggle should render as in-flight. */
+  publishingIds?: string[];
+}
+
 export function FormsList({
   forms,
   loading,
   accountNames,
-}: {
-  forms: FormSummary[];
-  loading?: boolean;
-  accountNames?: Record<string, string>;
-}) {
+  onTogglePublish,
+  onDelete,
+  publishingIds,
+}: FormsListProps) {
   if (loading) {
     return (
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {Array.from({ length: 6 }).map((_, index) => (
           <div
             key={index}
-            className="glass-card rounded-xl p-4 h-40 animate-pulse bg-[var(--muted)]/30"
+            className="glass-card rounded-xl h-72 animate-pulse bg-[var(--muted)]/30"
           />
         ))}
       </div>
@@ -47,6 +57,9 @@ export function FormsList({
           key={form.id}
           form={form}
           accountName={accountNames?.[form.accountKey]}
+          onTogglePublish={onTogglePublish}
+          onDelete={onDelete}
+          isPublishUpdating={publishingIds?.includes(form.id) ?? false}
         />
       ))}
     </div>

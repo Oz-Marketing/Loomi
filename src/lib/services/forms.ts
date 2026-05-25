@@ -32,6 +32,11 @@ export interface FormSummary {
   publishedAt: string;
   createdAt: string;
   updatedAt: string;
+  /** Parsed FormTemplate — included on every list response so the
+   *  card view can render a preview thumbnail without an extra
+   *  per-card fetch. Falls back to an empty template if the row's
+   *  schema JSON is malformed. */
+  schema: FormTemplate;
 }
 
 export interface FormEmbedSnippets {
@@ -106,6 +111,7 @@ function toSummary(row: {
   publishedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  schema?: Prisma.JsonValue;
 }): FormSummary {
   return {
     id: row.id,
@@ -116,6 +122,10 @@ function toSummary(row: {
     submissionCount: row.submissionCount,
     listId: row.listId ?? '',
     createdByUserId: row.createdByUserId ?? '',
+    schema:
+      row.schema !== undefined
+        ? (parseFormTemplate(row.schema as unknown) ?? emptyFormTemplate())
+        : emptyFormTemplate(),
     publishedAt: dateToIso(row.publishedAt),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),

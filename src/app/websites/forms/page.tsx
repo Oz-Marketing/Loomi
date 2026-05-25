@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import { toast } from 'sonner';
@@ -71,15 +71,21 @@ export default function FormsPage() {
 
   // ── Single-row action handlers (used by the table's 3-dot menu) ──
 
+  // Tracks which form's publish toggle is mid-flight so the card /
+  // table row can render a disabled state without rerendering the rest.
+  const [publishingIds, setPublishingIds] = useState<string[]>([]);
+
   const handleTogglePublish = async (
-    form: FormsTableRow,
+    form: { id: string },
     nextStatus: 'published' | 'draft',
   ) => {
+    setPublishingIds((prev) => [...prev, form.id]);
     const res = await fetch(`/api/forms/${form.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: nextStatus }),
     });
+    setPublishingIds((prev) => prev.filter((id) => id !== form.id));
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       toast.error(body.error || 'Could not update status.');
@@ -227,6 +233,20 @@ export default function FormsPage() {
           forms={forms}
           loading={isLoading}
           accountNames={accountNames}
+          onTogglePublish={(form, next) => void handleTogglePublish(form, next)}
+          onDelete={(form) =>
+            void handleRowDelete({
+              id: form.id,
+              name: form.name,
+              slug: form.slug,
+              status: form.status,
+              submissionCount: form.submissionCount,
+              accountKey: form.accountKey,
+              createdAt: form.createdAt,
+              updatedAt: form.updatedAt,
+            })
+          }
+          publishingIds={publishingIds}
         />
       ) : (
         <FormsTable
@@ -235,6 +255,7 @@ export default function FormsPage() {
           accountMeta={accountMeta}
           showAccountColumn={showAccountColumn}
           onTogglePublish={handleTogglePublish}
+          updatingFormIds={publishingIds}
           emptyState={{
             title: 'No forms yet',
             subtitle:

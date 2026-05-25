@@ -4,6 +4,8 @@ import * as React from 'react';
 import {
   ChevronUpIcon,
   ChevronDownIcon,
+  ComputerDesktopIcon,
+  DevicePhoneMobileIcon,
   DocumentDuplicateIcon,
   TrashIcon,
   Bars3Icon,
@@ -37,44 +39,71 @@ import type { Block } from '../types';
  * Page-level settings (bg, font, max width, brand color) wrap the
  * tree so the editor matches LandingPageRenderer pixel-for-pixel.
  */
+type PreviewWidth = 'desktop' | 'mobile';
+
+const MOBILE_PREVIEW_WIDTH = 390;
+
 export function Canvas() {
   const { template, selectBlock } = useLandingPageEditor();
   const s = template.settings;
+  const [previewWidth, setPreviewWidth] = React.useState<PreviewWidth>('desktop');
+
+  const effectiveMaxWidth =
+    previewWidth === 'mobile'
+      ? Math.min(MOBILE_PREVIEW_WIDTH, s.contentWidth)
+      : s.contentWidth;
 
   return (
-    <div
-      className="flex-1 overflow-auto bg-[var(--muted)]/30"
-      onClick={() => selectBlock(null)}
-    >
-      <style>{`
-        /* Disable link navigation + form interactions inside the canvas.
-           Clicks bubble to EditableBlock for selection. */
-        .loomi-lp-canvas a { pointer-events: none !important; }
-        .loomi-lp-canvas button:not([data-lp-editor-control]) {
-          pointer-events: none !important;
-        }
-        .loomi-lp-canvas input,
-        .loomi-lp-canvas select,
-        .loomi-lp-canvas textarea {
-          pointer-events: none !important;
-        }
-      `}</style>
-      <div className="py-6">
-        <div
-          className="loomi-lp-canvas shadow-sm mx-auto bg-white"
-          style={{
-            maxWidth: `${s.contentWidth}px`,
-            backgroundColor: s.contentBg,
-            color: s.textColor,
-            fontFamily: s.fontFamily,
-            borderRadius: s.contentBorderRadius ?? 0,
-            ['--loomi-lp-primary' as never]: s.primaryColor,
-            padding: `${s.contentPaddingTop ?? 0}px ${s.contentPaddingRight ?? 0}px ${s.contentPaddingBottom ?? 0}px ${s.contentPaddingLeft ?? 0}px`,
-            margin: `${s.contentMarginTop ?? 0}px ${s.contentMarginRight ?? 0}px ${s.contentMarginBottom ?? 0}px ${s.contentMarginLeft ?? 0}px`,
-            transition: 'max-width 150ms ease',
-            overflow: 'hidden',
-          }}
-        >
+    <div className="flex-1 flex flex-col min-h-0">
+      <CanvasActionBar previewWidth={previewWidth} onChange={setPreviewWidth} />
+      <div
+        className={`flex-1 overflow-auto bg-[var(--muted)]/30 ${
+          previewWidth === 'mobile' ? 'loomi-lp-canvas-mobile' : ''
+        }`}
+        onClick={() => selectBlock(null)}
+      >
+        <style>{`
+          /* Disable link navigation + form interactions inside the canvas.
+             Clicks bubble to EditableBlock for selection. */
+          .loomi-lp-canvas a { pointer-events: none !important; }
+          .loomi-lp-canvas button:not([data-lp-editor-control]) {
+            pointer-events: none !important;
+          }
+          .loomi-lp-canvas input,
+          .loomi-lp-canvas select,
+          .loomi-lp-canvas textarea {
+            pointer-events: none !important;
+          }
+          /* Mobile preview: mirror what /lp/[slug]/layout.tsx does on
+             phones so the editor preview matches the live page —
+             stack columns + collapse multi-column grids. */
+          .loomi-lp-canvas-mobile [data-lp-columns-row] {
+            flex-direction: column !important;
+          }
+          .loomi-lp-canvas-mobile .loomi-lp-column {
+            flex: 1 1 100% !important;
+            width: 100% !important;
+          }
+          .loomi-lp-canvas-mobile [style*="grid-template-columns"] {
+            grid-template-columns: 1fr !important;
+          }
+        `}</style>
+        <div className="py-6">
+          <div
+            className="loomi-lp-canvas shadow-sm mx-auto bg-white"
+            style={{
+              maxWidth: `${effectiveMaxWidth}px`,
+              backgroundColor: s.contentBg,
+              color: s.textColor,
+              fontFamily: s.fontFamily,
+              borderRadius: s.contentBorderRadius ?? 0,
+              ['--loomi-lp-primary' as never]: s.primaryColor,
+              padding: `${s.contentPaddingTop ?? 0}px ${s.contentPaddingRight ?? 0}px ${s.contentPaddingBottom ?? 0}px ${s.contentPaddingLeft ?? 0}px`,
+              margin: `${s.contentMarginTop ?? 0}px ${s.contentMarginRight ?? 0}px ${s.contentMarginBottom ?? 0}px ${s.contentMarginLeft ?? 0}px`,
+              transition: 'max-width 150ms ease',
+              overflow: 'hidden',
+            }}
+          >
           {template.blocks.length === 0 ? (
             <EmptyCanvasState />
           ) : (
@@ -92,9 +121,64 @@ export function Canvas() {
               ))}
             </SortableContext>
           )}
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function CanvasActionBar({
+  previewWidth,
+  onChange,
+}: {
+  previewWidth: PreviewWidth;
+  onChange: (w: PreviewWidth) => void;
+}) {
+  return (
+    <div className="flex items-center justify-center gap-1 px-4 py-2 border-b border-[var(--border)] bg-[var(--muted)] flex-shrink-0">
+      <PreviewToggleButton
+        active={previewWidth === 'desktop'}
+        onClick={() => onChange('desktop')}
+        title="Desktop preview"
+        icon={<ComputerDesktopIcon className="w-4 h-4" />}
+      />
+      <PreviewToggleButton
+        active={previewWidth === 'mobile'}
+        onClick={() => onChange('mobile')}
+        title="Mobile preview"
+        icon={<DevicePhoneMobileIcon className="w-4 h-4" />}
+      />
+    </div>
+  );
+}
+
+function PreviewToggleButton({
+  active,
+  onClick,
+  title,
+  icon,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  icon: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      aria-pressed={active}
+      className={`inline-flex items-center justify-center w-8 h-8 rounded-md transition-colors ${
+        active
+          ? 'bg-[var(--card)] text-[var(--foreground)] shadow-sm'
+          : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--card)]/50'
+      }`}
+    >
+      {icon}
+    </button>
   );
 }
 

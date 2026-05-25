@@ -1,15 +1,21 @@
 'use client';
 
 import * as React from 'react';
-import { ArrowLeftIcon, Cog6ToothIcon, Squares2X2Icon } from '@heroicons/react/24/outline';
+import {
+  ArrowLeftIcon,
+  Cog6ToothIcon,
+  ListBulletIcon,
+  Squares2X2Icon,
+} from '@heroicons/react/24/outline';
 import { useLandingPageEditor } from './EditorContext';
 import { BlockPalette } from './BlockPalette';
 import { BlockProperties } from './PropertyPanel';
 import { PageSettingsPanel } from './PageSettingsPanel';
+import { OutlinePanel } from './OutlinePanel';
 import { BLOCK_SCHEMA_BY_TYPE } from '../schemas';
 import type { Block } from '../types';
 
-type SidebarTab = 'content' | 'settings';
+type SidebarTab = 'content' | 'outline' | 'settings';
 
 /**
  * Left sidebar — single panel housing the block palette, page
@@ -43,6 +49,8 @@ export function Sidebar() {
           <BlockProperties />
         ) : tab === 'content' ? (
           <BlockPalette />
+        ) : tab === 'outline' ? (
+          <OutlinePanel />
         ) : (
           <PageSettingsPanel />
         )}
@@ -96,6 +104,12 @@ function SidebarTabs({
         onClick={() => onTabChange('content')}
         icon={<Squares2X2Icon className="w-4 h-4" />}
         label="Content"
+      />
+      <TabButton
+        active={tab === 'outline'}
+        onClick={() => onTabChange('outline')}
+        icon={<ListBulletIcon className="w-4 h-4" />}
+        label="Outline"
       />
       <TabButton
         active={tab === 'settings'}

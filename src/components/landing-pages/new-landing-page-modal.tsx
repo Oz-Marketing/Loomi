@@ -13,6 +13,8 @@ import {
 } from '@heroicons/react/24/outline';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { LP_TEMPLATE_PRESETS, type LandingPageTemplatePreset } from '@/lib/landing-pages/templates';
+import { LandingPagePreviewThumbnail } from '@/components/landing-pages/landing-page-preview-thumbnail';
+import type { LandingPageTemplate } from '@/lib/landing-pages/types';
 
 const ICON_MAP: Record<LandingPageTemplatePreset['icon'], React.ComponentType<{ className?: string }>> = {
   sparkles: SparklesIcon,
@@ -146,69 +148,126 @@ export function NewLandingPageModal({
             <label className="block text-xs font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-2">
               Starting point
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {LP_TEMPLATE_PRESETS.map((tpl) => {
-                const Icon = ICON_MAP[tpl.icon];
-                const active = selectedId === tpl.id;
-                return (
-                  <button
-                    key={tpl.id}
-                    type="button"
-                    onClick={() => setSelectedId(tpl.id)}
-                    className={`text-left rounded-xl border-2 p-3.5 flex items-start gap-3 transition-all ${
-                      active
-                        ? 'border-[var(--primary)] bg-[var(--primary)]/[0.05]'
-                        : 'border-[var(--border)] hover:border-[var(--muted-foreground)]'
-                    }`}
-                  >
-                    <div
-                      className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                        active
-                          ? 'bg-[var(--primary)]/10 text-[var(--primary)]'
-                          : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
-                      }`}
-                    >
-                      <Icon className="w-4 h-4" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium truncate">{tpl.name}</p>
-                      <p className="text-xs text-[var(--muted-foreground)] mt-0.5 line-clamp-2">
-                        {tpl.description}
-                      </p>
-                      <p className="text-[10px] text-[var(--muted-foreground)] mt-1 tabular-nums">
-                        {tpl.meta}
-                      </p>
-                    </div>
-                  </button>
-                );
-              })}
+            <div className="grid grid-cols-2 gap-3">
+              {LP_TEMPLATE_PRESETS.map((tpl) => (
+                <TemplateCard
+                  key={tpl.id}
+                  preset={tpl}
+                  active={selectedId === tpl.id}
+                  onSelect={() => setSelectedId(tpl.id)}
+                />
+              ))}
             </div>
           </div>
         </div>
 
-        <footer className="flex items-center justify-end gap-2 px-6 py-4 border-t border-[var(--border)] flex-shrink-0">
-          <button
-            type="button"
-            onClick={() => !submitting && onClose()}
-            disabled={submitting}
-            className="px-4 h-10 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--muted-foreground)] disabled:opacity-40"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canSubmit}
-            className="px-4 h-10 text-sm font-semibold rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {submitting
-              ? 'Creating…'
-              : selectedId === 'blank'
-                ? 'Create + open builder'
-                : 'Create landing page'}
-          </button>
-        </footer>
+        <Footer
+          onClose={onClose}
+          handleSubmit={handleSubmit}
+          submitting={submitting}
+          canSubmit={canSubmit}
+          isBlank={selectedId === 'blank'}
+        />
       </div>
     </div>
+  );
+}
+
+/**
+ * Individual template chip in the picker. Renders a scaled-down
+ * LandingPagePreviewThumbnail of the preset's built schema, with
+ * the icon + name + description below.
+ *
+ * Each preset's `build()` is called once via useMemo so the
+ * preview reuses the same template across re-renders (and so block
+ * ids stay stable in the displayed preview).
+ */
+function TemplateCard({
+  preset,
+  active,
+  onSelect,
+}: {
+  preset: LandingPageTemplatePreset;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const Icon = ICON_MAP[preset.icon];
+  const template = React.useMemo<LandingPageTemplate>(
+    () => preset.build(),
+    [preset],
+  );
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`text-left rounded-xl border-2 overflow-hidden transition-all ${
+        active
+          ? 'border-[var(--primary)] shadow-[0_0_0_1px_var(--primary)]'
+          : 'border-[var(--border)] hover:border-[var(--muted-foreground)]'
+      }`}
+    >
+      <div className="relative">
+        <LandingPagePreviewThumbnail template={template} height={140} />
+        {active && (
+          <div className="absolute inset-0 bg-[var(--primary)]/8 pointer-events-none" />
+        )}
+      </div>
+      <div className="flex items-start gap-3 p-3 bg-[var(--card)] border-t border-[var(--border)]">
+        <div
+          className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+            active
+              ? 'bg-[var(--primary)]/10 text-[var(--primary)]'
+              : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
+          }`}
+        >
+          <Icon className="w-4 h-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium truncate">{preset.name}</p>
+          <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5 line-clamp-2">
+            {preset.description}
+          </p>
+          <p className="text-[10px] text-[var(--muted-foreground)] mt-1 tabular-nums">
+            {preset.meta}
+          </p>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function Footer({
+  onClose,
+  handleSubmit,
+  submitting,
+  canSubmit,
+  isBlank,
+}: {
+  onClose: () => void;
+  handleSubmit: () => void;
+  submitting: boolean;
+  canSubmit: boolean;
+  isBlank: boolean;
+}) {
+  return (
+    <footer className="flex items-center justify-end gap-2 px-6 py-4 border-t border-[var(--border)] flex-shrink-0">
+      <button
+        type="button"
+        onClick={() => !submitting && onClose()}
+        disabled={submitting}
+        className="px-4 h-10 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--muted-foreground)] disabled:opacity-40"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        onClick={handleSubmit}
+        disabled={!canSubmit}
+        className="px-4 h-10 text-sm font-semibold rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {submitting ? 'Creating…' : isBlank ? 'Create + open builder' : 'Create landing page'}
+      </button>
+    </footer>
   );
 }

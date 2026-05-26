@@ -135,7 +135,12 @@ jobs:
             # Load env vars for build/runtime (Prisma needs DATABASE_URL, etc.)
             set -a && source .env.local && set +a
 
-            npm run build
+            # Bump Node heap for the build only — the TypeScript check
+            # phase OOMs at the droplet's ~1GB default once the bundle
+            # grows past a certain size. 4GB is well above what we
+            # actually use and well below what the swap can absorb.
+            # Runtime keeps its leaner 768MB limit set further below.
+            NODE_OPTIONS="--max-old-space-size=4096" npm run build
 
             echo "=== Build complete, .next dir size ==="
             du -sh .next

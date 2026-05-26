@@ -1,14 +1,27 @@
 'use client';
 
+import * as React from 'react';
 import Link from 'next/link';
 import {
   ArrowTopRightOnSquareIcon,
-  CheckCircleIcon,
   ClockIcon,
-  DocumentTextIcon,
+  EllipsisVerticalIcon,
   InboxStackIcon,
+  PencilSquareIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import type { FormSummary } from '@/lib/services/forms';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import { FormPreviewThumbnail } from '@/components/forms/form-preview-thumbnail';
+
+interface FormCardProps {
+  form: FormSummary;
+  accountName?: string;
+  onTogglePublish?: (form: FormSummary, next: 'published' | 'draft') => void;
+  onDelete?: (form: FormSummary) => void;
+  /** Soft-disable the toggle while a PATCH is mid-flight. */
+  isPublishUpdating?: boolean;
+}
 
 function formatRelativeDate(dateStr: string): string {
   if (!dateStr) return '—';
@@ -24,91 +37,240 @@ function formatRelativeDate(dateStr: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+/**
+ * Form card. Mirrors the email template card shape: a live preview
+ * thumbnail at the top, a meta strip at the bottom with name +
+ * publish toggle + 3-dot menu.
+ *
+ * The whole card is a link to the form's overview; the toggle and
+ * menu stop propagation so they don't follow the link.
+ */
 export function FormCard({
   form,
   accountName,
-}: {
-  form: FormSummary;
-  accountName?: string;
-}) {
+  onTogglePublish,
+  onDelete,
+  isPublishUpdating = false,
+}: FormCardProps) {
+  const subHref = useSubaccountHref();
   const published = form.status === 'published';
-  const StatusIcon = published ? CheckCircleIcon : DocumentTextIcon;
+  const overviewHref = subHref(`/websites/forms/${form.id}`);
 
   return (
-    <Link
-      href={`/websites/forms/${form.id}`}
-      className="glass-card group block rounded-xl p-4 transition-all hover:border-[var(--primary)]/40 hover:shadow-lg"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 flex items-start gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center flex-shrink-0">
-            <DocumentTextIcon className="w-5 h-5 text-[var(--primary)]" />
-          </div>
+    <div className="glass-card group relative rounded-xl overflow-hidden transition-all hover:border-[var(--primary)]/40 hover:shadow-lg">
+      {/* Full-card click target — the menu / toggle stopPropagation so
+          they don't double-trigger as a navigation event. */}
+      <Link
+        href={overviewHref}
+        className="absolute inset-0 z-0"
+        aria-label={`Open ${form.name || 'Untitled form'}`}
+      />
+
+      {/* Preview thumbnail — pointer-events disabled so clicks fall
+          through to the absolute Link underneath. */}
+      <div className="relative pointer-events-none">
+        <FormPreviewThumbnail template={form.schema} height={200} />
+
+        {/* Status pill — bottom-left corner of the preview so it doesn't
+            clash with the meta strip below. */}
+        <span
+          className={`absolute bottom-2.5 left-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium capitalize backdrop-blur-sm ${
+            published
+              ? 'bg-emerald-500/90 text-white'
+              : 'bg-black/40 text-zinc-100'
+          }`}
+        >
+          {form.status}
+        </span>
+      </div>
+
+      {/* Meta strip — non-interactive areas pass clicks through to
+          the Link; only the toggle + menu opt back in. */}
+      <div className="relative z-10 p-3 border-t border-[var(--border)] bg-[var(--card)]/70 backdrop-blur-sm pointer-events-none">
+        <div className="flex items-start justify-between gap-2 mb-2">
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold truncate" title={form.name}>
+            <h3
+              className="text-sm font-semibold truncate text-[var(--foreground)]"
+              title={form.name}
+            >
               {form.name || 'Untitled form'}
             </h3>
-            <p className="mt-1 text-xs text-[var(--muted-foreground)] truncate">
+            <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)] font-mono truncate">
               /f/{form.slug}
             </p>
-            {accountName && (
-              <p className="mt-1 text-[11px] text-[var(--muted-foreground)] truncate">
-                {accountName}
-              </p>
+          </div>
+
+          <div className="flex items-center gap-1 flex-shrink-0 pointer-events-auto">
+            {onTogglePublish && (
+              <PublishSwitch
+                active={published}
+                disabled={isPublishUpdating}
+                onToggle={(next) => onTogglePublish(form, next)}
+              />
             )}
+            <CardMenu
+              form={form}
+              editHref={subHref(`/websites/forms/${form.id}/edit`)}
+              onDelete={onDelete}
+            />
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          {/* Open-live-form shortcut. Only meaningful when the form is
-              published — draft forms 404 on the public route. Stops
-              propagation so clicking it doesn't also fire the card link. */}
+        <div className="flex items-center gap-3 text-[11px] text-[var(--muted-foreground)]">
+          <span className="inline-flex items-center gap-1">
+            <InboxStackIcon className="w-3 h-3" />
+            <span className="tabular-nums">
+              {form.submissionCount.toLocaleString()}
+            </span>
+            <span className="text-[var(--muted-foreground)]/60">
+              {form.submissionCount === 1 ? 'submission' : 'submissions'}
+            </span>
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <ClockIcon className="w-3 h-3" />
+            {formatRelativeDate(form.updatedAt)}
+          </span>
+          {accountName && (
+            <span className="truncate text-[var(--muted-foreground)]/60">
+              · {accountName}
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Publish switch ──────────────────────────────────────────────
+
+function PublishSwitch({
+  active,
+  disabled,
+  onToggle,
+}: {
+  active: boolean;
+  disabled: boolean;
+  onToggle: (next: 'published' | 'draft') => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={active}
+      aria-label={active ? 'Move to draft' : 'Publish form'}
+      title={active ? 'Move to draft' : 'Publish form'}
+      disabled={disabled}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onToggle(active ? 'draft' : 'published');
+      }}
+      className={`relative inline-flex w-8 h-[18px] rounded-full transition-colors disabled:opacity-50 ${
+        active ? 'bg-emerald-500' : 'bg-[var(--muted-foreground)]/30'
+      }`}
+    >
+      <span
+        className="absolute top-[2px] w-3.5 h-3.5 rounded-full bg-white shadow transition-[left] duration-150 ease-out"
+        style={{ left: active ? '16px' : '2px' }}
+      />
+    </button>
+  );
+}
+
+// ── 3-dot menu ──────────────────────────────────────────────────
+
+function CardMenu({
+  form,
+  editHref,
+  onDelete,
+}: {
+  form: FormSummary;
+  editHref: string;
+  onDelete?: (form: FormSummary) => void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef<HTMLDivElement | null>(null);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      if (!ref.current || ref.current.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const published = form.status === 'published';
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="More actions"
+        className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+      >
+        <EllipsisVerticalIcon className="w-4 h-4" />
+      </button>
+      {open && (
+        <div
+          className="absolute right-0 top-full mt-1 z-50 w-44 glass-dropdown shadow-lg p-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Link
+            href={editHref}
+            className="flex items-center gap-2 px-2.5 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+            onClick={() => setOpen(false)}
+          >
+            <PencilSquareIcon className="w-3.5 h-3.5" />
+            Edit form
+          </Link>
           {published && (
             <a
               href={`/f/${form.slug}`}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={(e) => e.stopPropagation()}
-              title="Open live form"
-              aria-label="Open live form in new tab"
-              className="inline-flex items-center justify-center w-6 h-6 rounded-md text-[var(--muted-foreground)] hover:text-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
+              className="flex items-center gap-2 px-2.5 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+              onClick={() => setOpen(false)}
             >
               <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" />
+              Open live form
             </a>
           )}
-          <span
-            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium capitalize ${
-              published
-                ? 'bg-green-500/10 text-green-400'
-                : 'bg-zinc-500/10 text-zinc-400'
-            }`}
-          >
-            <StatusIcon className="w-3 h-3" />
-            {form.status}
-          </span>
+          {onDelete && (
+            <>
+              <div className="my-1 h-px bg-[var(--border)]" />
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setOpen(false);
+                  onDelete(form);
+                }}
+                className="w-full flex items-center gap-2 px-2.5 py-2 text-xs rounded-md text-rose-300 hover:bg-rose-500/10 transition-colors"
+              >
+                <TrashIcon className="w-3.5 h-3.5" />
+                Delete
+              </button>
+            </>
+          )}
         </div>
-      </div>
-
-      <div className="mt-5 grid grid-cols-2 gap-3 text-xs">
-        <div className="rounded-lg border border-[var(--border)]/70 bg-[var(--muted)]/30 px-3 py-2">
-          <div className="flex items-center gap-1.5 text-[var(--muted-foreground)]">
-            <InboxStackIcon className="w-3.5 h-3.5" />
-            Submissions
-          </div>
-          <div className="mt-1 text-lg font-semibold tabular-nums">
-            {form.submissionCount}
-          </div>
-        </div>
-        <div className="rounded-lg border border-[var(--border)]/70 bg-[var(--muted)]/30 px-3 py-2">
-          <div className="flex items-center gap-1.5 text-[var(--muted-foreground)]">
-            <ClockIcon className="w-3.5 h-3.5" />
-            Updated
-          </div>
-          <div className="mt-1 text-sm font-semibold">
-            {formatRelativeDate(form.updatedAt)}
-          </div>
-        </div>
-      </div>
-    </Link>
+      )}
+    </div>
   );
 }

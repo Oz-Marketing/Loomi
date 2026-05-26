@@ -9,7 +9,7 @@ import { CampaignPageList, type AccountMeta } from '@/components/campaigns/campa
 import type { CampaignFilterState, CampaignFilterOptions, RepFilterOption } from '@/components/filters/campaign-toolbar';
 import { CampaignFilterSidebar } from '@/components/filters/campaign-filter-sidebar';
 import { DashboardToolbar, type CustomDateRange } from '@/components/filters/dashboard-toolbar';
-import { StatusFilter } from '@/components/status-filter';
+import { ListToolbar } from '@/components/list-toolbar';
 import { DEFAULT_DATE_RANGE, getDateRangeBounds, type DateRangeKey } from '@/lib/date-ranges';
 import { resolveAccountLocationId, resolveAccountProvider } from '@/lib/account-resolvers';
 import {
@@ -128,6 +128,9 @@ function AdminCampaignsPage() {
   // list toolbar and the ?status= param on the loomi list endpoint.
   // Campaigns only support 'all' (live) and 'archived' for now.
   const [campaignsStatusFilter, setCampaignsStatusFilter] = useState<'all' | 'archived'>('all');
+  // Lifted page-level search so the unified ListToolbar drives
+  // CampaignPageList from the same value.
+  const [campaignsSearch, setCampaignsSearch] = useState('');
   useEffect(() => {
     let cancelled = false;
     setCampaignsLoading(true);
@@ -475,57 +478,83 @@ function AdminCampaignsPage() {
           )}
 
           {activeTab === 'list' && (
-            <CampaignPageList
-              campaigns={filteredCampaigns}
-              loading={loading}
-              accountNames={accountNames}
-              accountMeta={accountMeta}
-              accountProviders={accountProviders}
-              emptyState={campaignEmptyState}
-              toolbarExtras={
-                <>
-                  <StatusFilter
-                    value={campaignsStatusFilter}
-                    onChange={(next) =>
-                      setCampaignsStatusFilter(
-                        next === 'archived' ? 'archived' : 'all',
-                      )
-                    }
-                    options={[
-                      { value: 'all', label: 'All' },
-                      { value: 'archived', label: 'Archived' },
-                    ]}
-                  />
-                  <DashboardToolbar
-                    dateRange={dateRange}
-                    onDateRangeChange={setDateRange}
-                    customRange={customRange}
-                    onCustomRangeChange={setCustomRange}
-                    showReset={false}
-                    triggerSize="compact"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setFiltersOpen((prev) => !prev)}
-                    className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
-                      filtersOpen
-                        ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
-                        : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
-                    }`}
-                    aria-pressed={filtersOpen}
-                  >
-                    <FunnelIcon className="w-3.5 h-3.5" />
-                    Filters
-                    {activeFilterCount > 0 && (
-                      <span className="w-4 h-4 rounded-full bg-[var(--primary)] text-white text-[9px] flex items-center justify-center">
-                        {activeFilterCount}
-                      </span>
-                    )}
-                  </button>
-                </>
-              }
-              statusFilter={campaignsStatusFilter}
-            />
+            <>
+              {/* Unified toolbar — only renders when there's at least
+                  one campaign. Count text takes the left slot since
+                  campaigns don't have a Cards/Table choice. */}
+              {campaigns.length > 0 && (
+                <ListToolbar
+                  leading={
+                    <span className="text-sm text-[var(--muted-foreground)]">
+                      <span className="text-[var(--foreground)] font-medium tabular-nums">
+                        {filteredCampaigns.length}
+                      </span>{' '}
+                      campaign{filteredCampaigns.length === 1 ? '' : 's'}
+                      {filteredCampaigns.length !== campaigns.length && (
+                        <span className="opacity-60"> / {campaigns.length}</span>
+                      )}
+                    </span>
+                  }
+                  search={campaignsSearch}
+                  onSearchChange={setCampaignsSearch}
+                  searchPlaceholder="Search campaigns…"
+                  status={campaignsStatusFilter}
+                  onStatusChange={(next) =>
+                    setCampaignsStatusFilter(
+                      next === 'archived' ? 'archived' : 'all',
+                    )
+                  }
+                  statusOptions={[
+                    { value: 'all', label: 'All' },
+                    { value: 'archived', label: 'Archived' },
+                  ]}
+                  trailing={
+                    <>
+                      <DashboardToolbar
+                        dateRange={dateRange}
+                        onDateRangeChange={setDateRange}
+                        customRange={customRange}
+                        onCustomRangeChange={setCustomRange}
+                        showReset={false}
+                        triggerSize="compact"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setFiltersOpen((prev) => !prev)}
+                        className={`inline-flex items-center gap-1.5 px-2.5 h-9 text-xs rounded-lg border transition-colors ${
+                          filtersOpen
+                            ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+                            : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
+                        }`}
+                        aria-pressed={filtersOpen}
+                      >
+                        <FunnelIcon className="w-3.5 h-3.5" />
+                        Filters
+                        {activeFilterCount > 0 && (
+                          <span className="w-4 h-4 rounded-full bg-[var(--primary)] text-white text-[9px] flex items-center justify-center">
+                            {activeFilterCount}
+                          </span>
+                        )}
+                      </button>
+                    </>
+                  }
+                />
+              )}
+              <CampaignPageList
+                campaigns={filteredCampaigns}
+                loading={loading}
+                accountNames={accountNames}
+                accountMeta={accountMeta}
+                accountProviders={accountProviders}
+                emptyState={campaignEmptyState}
+                statusFilter={campaignsStatusFilter}
+                // Page renders the unified ListToolbar above; the
+                // internal toolbar is hidden so the two don't stack.
+                hideToolbar={campaigns.length > 0}
+                search={campaignsSearch}
+                onSearchChange={setCampaignsSearch}
+              />
+            </>
           )}
         </div>
 
@@ -567,6 +596,9 @@ function AccountCampaignsPage() {
   // Status filter — drives the StatusFilter dropdown in the campaign
   // list toolbar + the ?status= param on the loomi list endpoint.
   const [campaignsStatusFilter, setCampaignsStatusFilter] = useState<'all' | 'archived'>('all');
+  // Lifted search so the unified ListToolbar drives CampaignPageList
+  // from the same value.
+  const [campaignsSearch, setCampaignsSearch] = useState('');
 
   useEffect(() => {
     if (!accountKey) return;
@@ -779,40 +811,62 @@ function AccountCampaignsPage() {
         )}
 
         {activeTab === 'list' && (
-          <CampaignPageList
-            campaigns={dateFiltered}
-            loading={loading}
-            accountNames={accountNames}
-            accountMeta={accountMeta}
-            accountProviders={accountProviders}
-            emptyState={accountListEmptyState}
-            singleAccountMode
-            toolbarExtras={
-              <>
-                <StatusFilter
-                  value={campaignsStatusFilter}
-                  onChange={(next) =>
-                    setCampaignsStatusFilter(
-                      next === 'archived' ? 'archived' : 'all',
-                    )
-                  }
-                  options={[
-                    { value: 'all', label: 'All' },
-                    { value: 'archived', label: 'Archived' },
-                  ]}
-                />
-                <DashboardToolbar
-                  dateRange={dateRange}
-                  onDateRangeChange={setDateRange}
-                  customRange={customRange}
-                  onCustomRangeChange={setCustomRange}
-                  showReset={false}
-                  triggerSize="compact"
-                />
-              </>
-            }
-            statusFilter={campaignsStatusFilter}
-          />
+          <>
+            {/* Unified toolbar — same shape as forms / flows but with
+                a count text on the left instead of a Cards/Table toggle
+                (campaigns has only the table view). */}
+            {campaigns.length > 0 && (
+              <ListToolbar
+                leading={
+                  <span className="text-sm text-[var(--muted-foreground)]">
+                    <span className="text-[var(--foreground)] font-medium tabular-nums">
+                      {dateFiltered.length}
+                    </span>{' '}
+                    campaign{dateFiltered.length === 1 ? '' : 's'}
+                    {dateFiltered.length !== campaigns.length && (
+                      <span className="opacity-60"> / {campaigns.length}</span>
+                    )}
+                  </span>
+                }
+                search={campaignsSearch}
+                onSearchChange={setCampaignsSearch}
+                searchPlaceholder="Search campaigns…"
+                status={campaignsStatusFilter}
+                onStatusChange={(next) =>
+                  setCampaignsStatusFilter(
+                    next === 'archived' ? 'archived' : 'all',
+                  )
+                }
+                statusOptions={[
+                  { value: 'all', label: 'All' },
+                  { value: 'archived', label: 'Archived' },
+                ]}
+                trailing={
+                  <DashboardToolbar
+                    dateRange={dateRange}
+                    onDateRangeChange={setDateRange}
+                    customRange={customRange}
+                    onCustomRangeChange={setCustomRange}
+                    showReset={false}
+                    triggerSize="compact"
+                  />
+                }
+              />
+            )}
+            <CampaignPageList
+              campaigns={dateFiltered}
+              loading={loading}
+              accountNames={accountNames}
+              accountMeta={accountMeta}
+              accountProviders={accountProviders}
+              emptyState={accountListEmptyState}
+              singleAccountMode
+              statusFilter={campaignsStatusFilter}
+              hideToolbar={campaigns.length > 0}
+              search={campaignsSearch}
+              onSearchChange={setCampaignsSearch}
+            />
+          </>
         )}
       </div>
     </div>

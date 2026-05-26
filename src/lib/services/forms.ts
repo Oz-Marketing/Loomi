@@ -32,13 +32,30 @@ export interface FormSummary {
   publishedAt: string;
   createdAt: string;
   updatedAt: string;
+  /** Parsed FormTemplate — included on every list response so the
+   *  card view can render a preview thumbnail without an extra
+   *  per-card fetch. Falls back to an empty template if the row's
+   *  schema JSON is malformed. */
+  schema: FormTemplate;
+}
+
+export interface FormEmbedSnippets {
+  /** Auto-resizing script-tag embed (recommended). */
+  script: string;
+  /** Fixed-height iframe embed (fallback for locked-down CMSes). */
+  iframe: string;
+  /** Public URL of the form (useful for sharing without embedding). */
+  publicUrl: string;
 }
 
 export interface FormDetail extends FormSummary {
   schema: FormTemplate;
   redirectUrl: string;
   successMessage: string;
+  /** Recommended embed snippet (script tag with auto-resizing iframe). */
   embedSnippet: string;
+  /** All embed variants — UI shows both with their own copy buttons. */
+  embedSnippets: FormEmbedSnippets;
 }
 
 export interface FormSubmissionRow {
@@ -94,6 +111,7 @@ function toSummary(row: {
   publishedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  schema?: Prisma.JsonValue;
 }): FormSummary {
   return {
     id: row.id,
@@ -104,6 +122,10 @@ function toSummary(row: {
     submissionCount: row.submissionCount,
     listId: row.listId ?? '',
     createdByUserId: row.createdByUserId ?? '',
+    schema:
+      row.schema !== undefined
+        ? (parseFormTemplate(row.schema as unknown) ?? emptyFormTemplate())
+        : emptyFormTemplate(),
     publishedAt: dateToIso(row.publishedAt),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -127,12 +149,14 @@ function toDetail(row: {
   updatedAt: Date;
 }): FormDetail {
   const parsed = parseFormTemplate(row.schema) ?? emptyFormTemplate();
+  const snippets = getEmbedSnippets(row.slug);
   return {
     ...toSummary(row),
     schema: parsed,
     redirectUrl: row.redirectUrl ?? '',
     successMessage: row.successMessage ?? DEFAULT_SUCCESS_MESSAGE,
-    embedSnippet: getEmbedSnippet(row.slug),
+    embedSnippet: snippets.script,
+    embedSnippets: snippets,
   };
 }
 
@@ -193,6 +217,8 @@ export async function createForm(input: {
   accountKey: string;
   name: string;
   createdByUserId?: string | null;
+  /** Pre-built FormTemplate to seed the new form. Defaults to empty. */
+  schema?: FormTemplate;
 }): Promise<FormDetail> {
   const name = input.name.trim();
   if (!name) throw new FormServiceError('name is required');
@@ -204,13 +230,14 @@ export async function createForm(input: {
   if (!account) throw new FormServiceError('Account not found', 404);
 
   const slug = await ensureUniqueSlug(slugify(name) || 'untitled-form');
+  const schema = (input.schema ?? emptyFormTemplate()) as unknown as Prisma.InputJsonValue;
   const created = await prisma.form.create({
     data: {
       accountKey: input.accountKey,
       name,
       slug,
       status: 'draft',
-      schema: emptyFormTemplate() as unknown as Prisma.InputJsonValue,
+      schema,
       successMessage: DEFAULT_SUCCESS_MESSAGE,
       createdByUserId: input.createdByUserId ?? null,
     },
@@ -233,6 +260,18 @@ export async function getForm(
 
 export async function getPublishedFormBySlug(slug: string): Promise<FormDetail | null> {
   const row = await prisma.form.findUnique({ where: { slug } });
+  if (!row || row.status !== 'published') return null;
+  return toDetail(row);
+}
+
+/**
+ * Public-render lookup by id: returns a form only if it's published.
+ * Used by the landing-page server renderer to pre-fetch the schema of
+ * `embedded_form` blocks so they render inline (no client round-trip,
+ * no auth required on the public LP).
+ */
+export async function getPublishedFormById(id: string): Promise<FormDetail | null> {
+  const row = await prisma.form.findUnique({ where: { id } });
   if (!row || row.status !== 'published') return null;
   return toDetail(row);
 }
@@ -348,10 +387,35 @@ export async function deleteForm(id: string, accountKeys: string[] | null): Prom
   await prisma.form.delete({ where: { id } });
 }
 
+function publicHost(): string {
+  return (process.env.NEXT_PUBLIC_APP_URL || 'https://studio.loomilm.com').replace(
+    /\/+$/,
+    '',
+  );
+}
+
+/**
+ * Returns both embed variants for a form slug.
+ *
+ * - `script` — recommended. Single <script> tag that injects an
+ *   iframe and resizes it via postMessage as the form's content
+ *   changes. Looks inline on customer sites, no CSS leakage.
+ * - `iframe` — fallback. Plain iframe with fixed height for
+ *   environments that strip <script> tags (locked-down CMSes,
+ *   email signature blocks, etc.).
+ */
+export function getEmbedSnippets(slug: string): FormEmbedSnippets {
+  const host = publicHost();
+  return {
+    script: `<script src="${host}/loomi-form.js" data-form="${slug}" async></script>`,
+    iframe: `<iframe src="${host}/f/${slug}?embed=1" width="100%" height="600" style="border:0;display:block;width:100%;" loading="lazy"></iframe>`,
+    publicUrl: `${host}/f/${slug}`,
+  };
+}
+
+/** Back-compat — returns the recommended (script) snippet. */
 export function getEmbedSnippet(slug: string): string {
-  const host = (process.env.NEXT_PUBLIC_APP_URL || 'https://studio.loomilm.com')
-    .replace(/\/+$/, '');
-  return `<iframe src="${host}/f/${slug}?embed=1" width="100%" height="600" style="border:0;display:block;width:100%;" loading="lazy"></iframe>`;
+  return getEmbedSnippets(slug).script;
 }
 
 export async function listFormSubmissions(options: {

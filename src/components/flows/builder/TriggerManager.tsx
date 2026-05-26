@@ -8,6 +8,7 @@ import {
   UsersIcon,
   HandRaisedIcon,
   BoltIcon,
+  DocumentTextIcon,
   ArrowLeftIcon,
   MagnifyingGlassIcon,
   ChevronRightIcon,
@@ -71,6 +72,15 @@ const TRIGGER_TYPE_META: Record<TriggerType, TriggerTypeMeta> = {
     color: 'text-zinc-400',
     bg: 'bg-zinc-500/15',
     executable: false,
+  },
+  form_submission: {
+    label: 'Form Submitted',
+    description: 'Fires when a Loomi form receives a submission.',
+    category: 'event',
+    Icon: DocumentTextIcon,
+    color: 'text-violet-300',
+    bg: 'bg-violet-500/15',
+    executable: true,
   },
 };
 
@@ -419,6 +429,13 @@ function TriggerCard({
             Event triggers are not active yet.
           </p>
         )}
+        {trigger.type === 'form_submission' && (
+          <FormConfig
+            accountKey={accountKey}
+            value={typeof trigger.config.formId === 'string' ? trigger.config.formId : ''}
+            onChange={(formId) => updateConfig({ formId })}
+          />
+        )}
       </div>
     </div>
   );
@@ -498,6 +515,72 @@ function AudienceConfig({
       {audiences.map((a) => (
         <option key={a.id} value={a.id}>
           {a.name}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function FormConfig({
+  accountKey,
+  value,
+  onChange,
+}: {
+  accountKey: string | null;
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  type FormOption = { id: string; name: string; slug: string; status: string };
+  const [forms, setForms] = useState<FormOption[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    // /api/forms is already account-scoped by the caller's session.
+    // For developer / super_admin users without an accountKey filter,
+    // we pass through the flow's accountKey so we only see forms in
+    // the same account the flow lives in.
+    const url = accountKey
+      ? `/api/forms?accountKey=${encodeURIComponent(accountKey)}`
+      : '/api/forms';
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : { forms: [] }))
+      .then((data) => {
+        const rows = Array.isArray(data?.forms) ? data.forms : [];
+        setForms(rows);
+        setLoading(false);
+      })
+      .catch(() => {
+        setLoading(false);
+      });
+  }, [accountKey]);
+
+  if (loading) {
+    return (
+      <p className="text-[11px] text-[var(--muted-foreground)] italic">
+        Loading forms…
+      </p>
+    );
+  }
+
+  if (forms.length === 0) {
+    return (
+      <p className="text-[11px] text-[var(--muted-foreground)] italic">
+        No forms in this account yet. Create one under Websites → Forms.
+      </p>
+    );
+  }
+
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+    >
+      <option value="">— Select a form —</option>
+      {forms.map((f) => (
+        <option key={f.id} value={f.id}>
+          {f.name || f.slug}
+          {f.status === 'draft' ? ' (draft — won’t fire)' : ''}
         </option>
       ))}
     </select>

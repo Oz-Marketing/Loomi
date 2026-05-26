@@ -42,8 +42,6 @@ interface FormEditorShellProps {
   publicUrl?: string | null;
   /** Iframe embed snippet — drives the copy-snippet button in the action bar. */
   embedSnippet?: string | null;
-  /** Small persistence indicator rendered in the action bar. */
-  saveLabel?: string | null;
 }
 
 /**
@@ -364,7 +362,6 @@ function CanvasArea(props: FormEditorShellProps) {
           onRedo={props.onRedo}
           publicUrl={props.publicUrl}
           embedSnippet={props.embedSnippet}
-          saveLabel={props.saveLabel}
           outlineOpen={outlineOpen}
           onToggleOutline={() => setOutlineOpen((v) => !v)}
         />

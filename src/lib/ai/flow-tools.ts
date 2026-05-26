@@ -44,7 +44,8 @@ export interface AiGraphEdge {
 
 export interface AiTrigger {
   id: string;
-  type: 'list' | 'audience' | 'manual' | 'event';
+  // Keep in sync with TriggerType in src/lib/flows/validation.ts.
+  type: 'list' | 'audience' | 'manual' | 'event' | 'form_submission';
   config: Record<string, unknown>;
   enabled: boolean;
 }
@@ -221,15 +222,18 @@ export const FLOW_AI_TOOLS: Anthropic.Tool[] = [
   {
     name: 'add_trigger',
     description:
-      'Add a flow-level trigger (list, audience, manual, or event). Only `list` and `audience` triggers actually enroll contacts today — manual is for API enrollment and event is not active yet.',
+      'Add a flow-level trigger (list, audience, manual, event, or form_submission). Executable today: list, audience, manual (API enrollment), and form_submission (fires when a Loomi form is submitted). `event` is reserved for future webhook ingestion and is not active yet.',
     input_schema: {
       type: 'object',
       properties: {
-        trigger_type: { type: 'string', enum: ['list', 'audience', 'manual', 'event'] },
+        trigger_type: {
+          type: 'string',
+          enum: ['list', 'audience', 'manual', 'event', 'form_submission'],
+        },
         config: {
           type: 'object',
           description:
-            'For list: { listId }. For audience: { audienceId }. For manual / event: {}.',
+            'For list: { listId }. For audience: { audienceId }. For form_submission: { formId }. For manual / event: {}.',
         },
         enabled: { type: 'boolean', description: 'Whether the trigger is active. Default false.' },
       },
@@ -301,7 +305,10 @@ export const FLOW_AI_TOOLS: Anthropic.Tool[] = [
           items: {
             type: 'object',
             properties: {
-              trigger_type: { type: 'string', enum: ['list', 'audience', 'manual', 'event'] },
+              trigger_type: {
+                type: 'string',
+                enum: ['list', 'audience', 'manual', 'event', 'form_submission'],
+              },
               config: { type: 'object' },
               enabled: { type: 'boolean' },
             },
@@ -357,6 +364,7 @@ When the user describes a flow they want to build from scratch, call \`apply_gen
 - \`list\` — enrolls contacts on a given ContactList. Config: \`{ listId: string }\`.
 - \`audience\` — enrolls based on a smart audience. Config: \`{ audienceId: string }\`.
 - \`manual\` — API-only. Config: \`{}\`.
+- \`form_submission\` — fires when a Loomi form is submitted. Config: \`{ formId: string }\`. The forms submit pipeline enrolls the contact automatically; no polling.
 - \`event\` — **not active yet**.
 
 **Filterable fields** for condition rules (key — type):
@@ -557,7 +565,8 @@ function addTrigger(graph: WorkingGraph, input: Record<string, unknown>): ToolEx
     triggerType !== 'list' &&
     triggerType !== 'audience' &&
     triggerType !== 'manual' &&
-    triggerType !== 'event'
+    triggerType !== 'event' &&
+    triggerType !== 'form_submission'
   ) {
     return { resultText: `Invalid trigger_type: ${triggerType}`, isError: true };
   }
@@ -646,7 +655,8 @@ function applyGeneratedGraph(graph: WorkingGraph, input: Record<string, unknown>
       triggerType !== 'list' &&
       triggerType !== 'audience' &&
       triggerType !== 'manual' &&
-      triggerType !== 'event'
+      triggerType !== 'event' &&
+      triggerType !== 'form_submission'
     ) {
       continue;
     }

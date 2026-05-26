@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useEditor } from './EditorContext';
-import { ColorInput, NumberInput } from './PropertyControls';
+import { ColorInput, NumberInput, SpacingBox } from './PropertyControls';
 import { ComputerDesktopIcon } from '@heroicons/react/24/outline';
 
 const inputClass =
@@ -20,26 +20,14 @@ const FONT_FAMILY_OPTIONS = [
 ];
 
 export function FormSettings() {
-  const { template, updateSettings, updateTitle } = useEditor();
+  const { template, updateSettings } = useEditor();
   const { settings } = template;
 
   return (
     <div>
-      {/* General */}
-      <SectionHeader name="General" />
-      <div className="px-4 py-3 space-y-3">
-        <StackedField label="Form Name">
-          <input
-            type="text"
-            value={template.title || ''}
-            onChange={(e) => updateTitle(e.target.value)}
-            placeholder="Untitled form"
-            className={inputClass}
-          />
-        </StackedField>
-      </div>
-
-      {/* Background */}
+      {/* Background — first section. Form name is edited via the
+          click-to-edit title in the top toolbar, so we don't duplicate
+          it here. */}
       <SectionHeader name="Background" />
       <div className="px-4 py-3 space-y-3">
         <StackedField label="Page Background">
@@ -71,6 +59,62 @@ export function FormSettings() {
             sliderMax={1024}
           />
         </StackedField>
+        <StackedField label="Border Radius">
+          <NumberInput
+            value={settings.contentBorderRadius ?? 12}
+            onChange={(v) => updateSettings({ contentBorderRadius: v })}
+            min={0}
+            max={64}
+            unit="px"
+            slider
+            sliderMin={0}
+            sliderMax={48}
+          />
+        </StackedField>
+      </div>
+
+      {/* Padding — per-side, matches the SpacingBox UX the email editor
+          and block-level Section settings use. Click the link icon in
+          the box to lock all four sides together. */}
+      <SectionHeader name="Padding" />
+      <div className="px-4 py-3">
+        <SpacingBox
+          values={{
+            top: settings.contentPaddingTop ?? 32,
+            right: settings.contentPaddingRight ?? 32,
+            bottom: settings.contentPaddingBottom ?? 32,
+            left: settings.contentPaddingLeft ?? 32,
+          }}
+          onChange={({ top, right, bottom, left }) =>
+            updateSettings({
+              contentPaddingTop: top,
+              contentPaddingRight: right,
+              contentPaddingBottom: bottom,
+              contentPaddingLeft: left,
+            })
+          }
+        />
+      </div>
+
+      {/* Margin — same shape, applies to the outer page-side spacing. */}
+      <SectionHeader name="Margin" />
+      <div className="px-4 py-3">
+        <SpacingBox
+          values={{
+            top: settings.contentMarginTop ?? 32,
+            right: settings.contentMarginRight ?? 32,
+            bottom: settings.contentMarginBottom ?? 32,
+            left: settings.contentMarginLeft ?? 32,
+          }}
+          onChange={({ top, right, bottom, left }) =>
+            updateSettings({
+              contentMarginTop: top,
+              contentMarginRight: right,
+              contentMarginBottom: bottom,
+              contentMarginLeft: left,
+            })
+          }
+        />
       </div>
 
       {/* Typography */}

@@ -112,7 +112,10 @@ export interface BuilderNodeStats {
 
 export interface FlowApiTrigger {
   id: string;
-  type: 'list' | 'audience' | 'manual' | 'event';
+  // Keep in sync with TriggerType in src/lib/flows/validation.ts.
+  // `form_submission` fires from the forms submit pipeline rather
+  // than the trigger poll worker.
+  type: 'list' | 'audience' | 'manual' | 'event' | 'form_submission';
   config: Record<string, unknown>;
   enabled: boolean;
 }

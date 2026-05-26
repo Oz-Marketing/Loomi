@@ -1060,6 +1060,75 @@ export async function enrollContacts(
 }
 
 // ─────────────────────────────────────────────────────
+// Event-driven enrollment — form_submission
+// ─────────────────────────────────────────────────────
+
+/**
+ * Enroll a contact into every active flow that has an enabled
+ * `form_submission` trigger pointing at the given form.
+ *
+ * Called by the forms submit pipeline (src/lib/forms/submit.ts) right
+ * after a Contact is upserted from a submission. The trigger poll
+ * worker doesn't process this trigger type — submissions are the only
+ * source of enrollments for `form_submission` triggers.
+ *
+ * Returns a summary across all triggers fired. Soft-fails on
+ * individual flow errors so one misconfigured flow doesn't block
+ * enrollment into other flows attached to the same form.
+ */
+export async function enrollContactForFormSubmission(args: {
+  formId: string;
+  contactId: string;
+  /** Account scope guard — only triggers on flows in this account fire. */
+  accountKey: string;
+}): Promise<{
+  triggersFired: number;
+  enrolled: number;
+  skipped: number;
+}> {
+  const { formId, contactId, accountKey } = args;
+
+  // Pull every enabled form_submission trigger across active flows in
+  // the matching account. We filter on `accountKey` here rather than
+  // relying on UI gating because a form could theoretically be linked
+  // to a flow in another account if someone hand-crafts the trigger.
+  const triggers = await prisma.loomiFlowTrigger.findMany({
+    where: {
+      enabled: true,
+      type: 'form_submission',
+      flow: { status: 'active', accountKey },
+    },
+    select: { id: true, flowId: true, config: true },
+  });
+
+  let totalEnrolled = 0;
+  let totalSkipped = 0;
+  let firedCount = 0;
+
+  for (const trigger of triggers) {
+    const config = parseJson<Record<string, unknown>>(trigger.config, {});
+    if (config.formId !== formId) continue;
+    firedCount += 1;
+
+    try {
+      const result = await enrollContacts(trigger.flowId, [contactId], {
+        triggerId: trigger.id,
+      });
+      totalEnrolled += result.enrolled;
+      totalSkipped += result.skipped;
+    } catch (err) {
+      console.error(
+        `[loomi-flows] form_submission enrollment failed for trigger ${trigger.id}`,
+        err,
+      );
+      totalSkipped += 1;
+    }
+  }
+
+  return { triggersFired: firedCount, enrolled: totalEnrolled, skipped: totalSkipped };
+}
+
+// ─────────────────────────────────────────────────────
 // Trigger polling — runs every 5min in the worker
 // ─────────────────────────────────────────────────────
 

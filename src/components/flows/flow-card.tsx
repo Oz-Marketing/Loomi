@@ -9,6 +9,12 @@ import {
   BoltIcon,
   EllipsisHorizontalIcon,
   ClockIcon,
+  PencilSquareIcon,
+  PencilIcon,
+  DocumentDuplicateIcon,
+  ArchiveBoxIcon,
+  ArrowUturnLeftIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import { AccountAvatar as SharedAccountAvatar } from '@/components/account-avatar';
 
@@ -128,6 +134,12 @@ export function FlowCard({
   onToggleMenu,
   onToggleLoomiStatus,
   hrefBuilder,
+  onEdit,
+  onRename,
+  onClone,
+  onArchive,
+  onRestore,
+  onDelete,
 }: {
   workflow: FlowCardWorkflow;
   accountMeta?: FlowCardAccountMeta;
@@ -138,6 +150,15 @@ export function FlowCard({
   onToggleMenu: (workflow: FlowCardWorkflow) => void;
   onToggleLoomiStatus?: (workflow: FlowCardWorkflow, next: 'active' | 'inactive') => void;
   hrefBuilder?: (workflow: FlowCardWorkflow) => string;
+  /** Row-action callbacks — when provided, they appear in the card's
+   *  3-dot menu. Mirrors the FlowsTable per-row menu so the card view
+   *  has full parity with the table view. */
+  onEdit?: (workflow: FlowCardWorkflow) => void;
+  onRename?: (workflow: FlowCardWorkflow) => void;
+  onClone?: (workflow: FlowCardWorkflow) => void;
+  onArchive?: (workflow: FlowCardWorkflow) => void;
+  onRestore?: (workflow: FlowCardWorkflow) => void;
+  onDelete?: (workflow: FlowCardWorkflow) => void;
 }) {
   const normalized = normalizeStatus(workflow.status);
   const StatusIcon = STATUS_ICON[normalized];
@@ -151,7 +172,10 @@ export function FlowCard({
     <div className="glass-card group relative rounded-xl p-4 transition-all hover:border-[var(--primary)]/40 hover:shadow-lg">
       <Link href={href} className="absolute inset-0 rounded-xl" aria-label={`Open ${workflow.name}`} />
 
-      <div className="relative flex items-start justify-between gap-2 mb-3">
+      {/* Header row — left half is non-interactive (so clicks bubble
+          to the underlying Link); the toggle + menu cluster on the
+          right opts back into pointer events. */}
+      <div className="relative flex items-start justify-between gap-2 mb-3 pointer-events-none">
         <div className="flex items-center gap-2 min-w-0">
           <div className="w-9 h-9 rounded-lg bg-[var(--primary)]/10 flex items-center justify-center flex-shrink-0">
             <BoltIcon className="w-5 h-5 text-[var(--primary)]" />
@@ -171,7 +195,7 @@ export function FlowCard({
           </div>
         </div>
 
-        <div className="relative flex items-center gap-1 flex-shrink-0">
+        <div className="relative flex items-center gap-1 flex-shrink-0 pointer-events-auto">
           {isLoomi && (
             <PublishSwitch
               active={normalized === 'active'}
@@ -193,33 +217,91 @@ export function FlowCard({
             <EllipsisHorizontalIcon className="w-4 h-4" />
           </button>
           {isMenuOpen && (
-            <div className="absolute right-0 top-full mt-1 z-50 w-44 glass-dropdown shadow-lg p-1.5">
-              <Link
-                href={href}
-                className="block px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                onClick={(e) => e.stopPropagation()}
-              >
-                Open flow
-              </Link>
-              {canTogglePublish && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (isStatusUpdating) return;
-                    onToggleLoomiStatus?.(workflow, normalized === 'active' ? 'inactive' : 'active');
+            <div className="absolute right-0 top-full mt-1 z-50 w-44 glass-dropdown shadow-lg p-1">
+              {onEdit && (
+                <MenuButton
+                  icon={<PencilSquareIcon className="w-3.5 h-3.5" />}
+                  label="Edit flow"
+                  onClick={() => {
+                    onEdit(workflow);
                     onToggleMenu(workflow);
                   }}
+                />
+              )}
+              {onRename && (
+                <MenuButton
+                  icon={<PencilIcon className="w-3.5 h-3.5" />}
+                  label="Rename"
+                  onClick={() => {
+                    onRename(workflow);
+                    onToggleMenu(workflow);
+                  }}
+                />
+              )}
+              {onClone && (
+                <MenuButton
+                  icon={<DocumentDuplicateIcon className="w-3.5 h-3.5" />}
+                  label="Duplicate"
+                  onClick={() => {
+                    onClone(workflow);
+                    onToggleMenu(workflow);
+                  }}
+                />
+              )}
+              {canTogglePublish && (
+                <MenuButton
+                  icon={<CheckCircleIcon className="w-3.5 h-3.5" />}
+                  label={
+                    isStatusUpdating
+                      ? 'Updating…'
+                      : normalized === 'active'
+                        ? 'Unpublish'
+                        : 'Publish'
+                  }
                   disabled={isStatusUpdating}
-                  className="w-full text-left px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isStatusUpdating
-                    ? 'Updating…'
-                    : normalized === 'active'
-                      ? 'Unpublish'
-                      : 'Publish'}
-                </button>
+                  onClick={() => {
+                    if (isStatusUpdating) return;
+                    onToggleLoomiStatus?.(
+                      workflow,
+                      normalized === 'active' ? 'inactive' : 'active',
+                    );
+                    onToggleMenu(workflow);
+                  }}
+                />
+              )}
+              {(onArchive || onRestore || onDelete) && (onEdit || onRename || onClone || canTogglePublish) && (
+                <div className="my-1 h-px bg-[var(--border)]" />
+              )}
+              {onArchive && normalized !== 'archived' && (
+                <MenuButton
+                  icon={<ArchiveBoxIcon className="w-3.5 h-3.5" />}
+                  label="Archive"
+                  onClick={() => {
+                    onArchive(workflow);
+                    onToggleMenu(workflow);
+                  }}
+                />
+              )}
+              {onRestore && normalized === 'archived' && (
+                <MenuButton
+                  icon={<ArrowUturnLeftIcon className="w-3.5 h-3.5" />}
+                  label="Restore"
+                  onClick={() => {
+                    onRestore(workflow);
+                    onToggleMenu(workflow);
+                  }}
+                />
+              )}
+              {onDelete && (
+                <MenuButton
+                  icon={<TrashIcon className="w-3.5 h-3.5" />}
+                  label="Delete"
+                  danger
+                  onClick={() => {
+                    onDelete(workflow);
+                    onToggleMenu(workflow);
+                  }}
+                />
               )}
             </div>
           )}
@@ -227,7 +309,7 @@ export function FlowCard({
       </div>
 
       {showAccount && accountKey && (
-        <div className="relative flex items-center gap-2 mb-3 pb-3 border-b border-[var(--border)]">
+        <div className="relative flex items-center gap-2 mb-3 pb-3 border-b border-[var(--border)] pointer-events-none">
           <SharedAccountAvatar
             name={dealer}
             accountKey={accountKey}
@@ -240,7 +322,7 @@ export function FlowCard({
         </div>
       )}
 
-      <div className="relative flex items-center justify-between text-[11px] text-[var(--muted-foreground)]">
+      <div className="relative flex items-center justify-between text-[11px] text-[var(--muted-foreground)] pointer-events-none">
         <span className="inline-flex items-center gap-1">
           <ClockIcon className="w-3 h-3" />
           Updated {formatRelativeDate(workflow.updatedAt || workflow.createdAt)}
@@ -252,5 +334,42 @@ export function FlowCard({
         )}
       </div>
     </div>
+  );
+}
+
+// ── Menu button ──────────────────────────────────────────────────
+
+function MenuButton({
+  icon,
+  label,
+  onClick,
+  danger,
+  disabled,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (disabled) return;
+        onClick();
+      }}
+      disabled={disabled}
+      className={`w-full flex items-center gap-2 px-2.5 py-2 text-xs rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+        danger
+          ? 'text-rose-300 hover:bg-rose-500/10'
+          : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }

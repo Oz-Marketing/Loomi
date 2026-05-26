@@ -12,6 +12,7 @@ const VALID_TRIGGER_TYPES: ReadonlySet<TriggerType> = new Set([
   'audience',
   'manual',
   'event',
+  'form_submission',
 ]);
 
 export async function GET(

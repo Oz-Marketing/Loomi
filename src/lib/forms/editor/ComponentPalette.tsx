@@ -1,7 +1,7 @@
 'use client';
 
 import { useDraggable } from '@dnd-kit/core';
-import { ComponentIcon } from '@/components/icon-map';
+import { FormBlockIcon } from '@/lib/forms/block-icons';
 import { ALL_BLOCK_SCHEMAS, type BlockSchema } from '../schemas';
 import type { FormBlockType } from '../types';
 
@@ -84,7 +84,7 @@ function PaletteChip({ schema }: { schema: BlockSchema }) {
         isDragging ? 'opacity-40 cursor-grabbing' : 'cursor-grab'
       }`}
     >
-      <ComponentIcon
+      <FormBlockIcon
         name={schema.icon}
         className="w-6 h-6 text-[var(--muted-foreground)]"
       />

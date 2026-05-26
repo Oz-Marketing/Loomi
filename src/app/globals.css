@@ -471,11 +471,15 @@ main[data-scrolled='true'] .page-sticky-header {
     inset 0 0.5px 0 rgba(255, 255, 255, 0.8);
 }
 
-/* Allow dropdown panels to escape clipping containers while open. */
+/* Allow dropdown panels to escape clipping containers while open.
+   Note: tooltips/popovers that sit permanently in the DOM (hidden via
+   display:none/group-hover) must NOT participate here — they'd
+   permanently override the table's overflow:hidden and break the
+   rounded-corner clipping. Dropdown menus are fine because they only
+   exist in the DOM when open. */
 @supports selector(:has(*)) {
   .glass-modal:has(.glass-dropdown),
   .glass-table:has(.glass-dropdown),
-  .glass-table:has(.account-tooltip-popover),
   .overflow-hidden:has(.glass-dropdown),
   [class*='overflow-hidden']:has(.glass-dropdown) {
     overflow: visible;
@@ -498,6 +502,16 @@ main[data-scrolled='true'] .page-sticky-header {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15),
     0 0 0 1px rgba(99, 102, 241, 0.1),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.04);
+}
+/* When a glass-card has an open dropdown inside it, lift the whole
+   card above its siblings so the menu doesn't get painted over by
+   the next card in DOM order. Covers the flows / forms / landing-
+   pages / template card grids in one rule. */
+@supports selector(:has(*)) {
+  .glass-card:has(.glass-dropdown) {
+    position: relative;
+    z-index: 30;
+  }
 }
 [data-theme='light'] .glass-card {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04),
@@ -670,10 +684,6 @@ main[data-scrolled='true'] .page-sticky-header {
   border: 1px solid var(--border);
   border-radius: 0.75rem;
   overflow: hidden;
-}
-
-.glass-table.account-tooltip-table {
-  overflow: visible;
 }
 
 .account-avatar-stack .account-avatar-stack-item {

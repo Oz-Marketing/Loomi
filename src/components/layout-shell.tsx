@@ -85,7 +85,11 @@ function CampaignBuilderProgress({ current }: { current: BuilderStepKey }) {
   );
 }
 
-export function LayoutShell({ children }: { children: React.ReactNode }) {
+// Inner shell — every path-aware hook lives here. Split out so the
+// public form route can render raw children without instantiating any
+// of this component's hooks (LayoutShell decides which wrapper to
+// instantiate based on pathname).
+function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const normalizedPath = stripSubaccountPrefix(pathname);
@@ -118,8 +122,11 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
   // inside the regular app shell.
   const isFlowBuilder = /^\/flows\/[^/]+\/edit$/.test(builderProbe);
   const isWebsiteBuilder =
-    /^\/websites\/forms\/[^/]+$/.test(builderProbe) ||
-    /^\/websites\/landing-pages\/[^/]+$/.test(builderProbe) ||
+    // Only the builder (/edit) is a full-viewport workspace — the
+    // overview, settings, and submissions pages stay inside the
+    // standard app shell so the user keeps their sidebar context.
+    /^\/websites\/forms\/[^/]+\/edit$/.test(builderProbe) ||
+    /^\/websites\/landing-pages\/[^/]+\/edit$/.test(builderProbe) ||
     builderProbe === '/websites/landing-pages/demo';
 
   useEffect(() => {
@@ -151,8 +158,16 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
     return <div className="flex-1">{children}</div>;
   }
 
-  if (isFlowBuilder || isWebsiteBuilder) {
+  if (isFlowBuilder) {
+    // Flow builder owns its full canvas edge-to-edge — no shell padding.
     return <div className="flex-1 min-w-0">{children}</div>;
+  }
+
+  if (isWebsiteBuilder) {
+    // Mirror the email template editor wrapper (p-4 + main) so the
+    // Forms / Landing Pages builders inherit the same breathing room
+    // and the inner `h-[calc(100vh-2rem)]` math lines up correctly.
+    return <main className="flex-1 p-4">{children}</main>;
   }
 
   if (isCampaignBuilder) {
@@ -223,4 +238,23 @@ export function LayoutShell({ children }: { children: React.ReactNode }) {
       </main>
     </>
   );
+}
+
+/**
+ * Top-level layout shell.
+ *
+ * For public unauthenticated pages — public forms (/f/<slug>) and
+ * landing pages (/lp/<slug>) — we render the children raw: no
+ * sidebar, no top utility bar, no authed providers. The full AppShell
+ * (with all its hooks + session-dependent fetches) only mounts for
+ * app routes. Splitting on pathname here, rather than inside
+ * AppShell, keeps hook order stable: navigating between public and
+ * app routes unmounts one branch and mounts the other.
+ */
+export function LayoutShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  if (pathname.startsWith('/f/') || pathname.startsWith('/lp/')) {
+    return <>{children}</>;
+  }
+  return <AppShell>{children}</AppShell>;
 }

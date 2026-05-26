@@ -21,7 +21,17 @@ export type NodeType =
   | 'exit'
   | 'sticky_note';
 
-export type TriggerType = 'list' | 'audience' | 'manual' | 'event';
+export type TriggerType =
+  | 'list'
+  | 'audience'
+  | 'manual'
+  | 'event'
+  // Fires when a Loomi-native Form receives a submission. Stored
+  // config: { formId: string }. Enrollment is event-driven by the
+  // forms submit pipeline (src/lib/forms/submit.ts) — the trigger
+  // poll worker skips this type, so the flow only enrolls when a
+  // submission actually arrives.
+  | 'form_submission';
 
 // Node types the worker can actually execute today. Keep in sync with
 // the switch statement in processEnrollmentTick on the worker side.

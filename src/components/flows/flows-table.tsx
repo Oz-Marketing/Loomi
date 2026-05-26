@@ -84,6 +84,14 @@ interface FlowsTableProps {
    *  API fetch. */
   statusFilter?: StatusFilterValue;
   onStatusFilterChange?: (next: StatusFilterValue) => void;
+  /** Controlled search. When provided the table reads this value
+   *  instead of its internal state — lets a shared ListToolbar above
+   *  the table drive both card + table views from the same string. */
+  search?: string;
+  onSearchChange?: (next: string) => void;
+  /** Hide the internal toolbar (count + search + status filter).
+   *  Caller is expected to render its own toolbar above the table. */
+  hideToolbar?: boolean;
   /** Row-level action handlers. When any are provided, the table
    *  renders an Actions column with a 3-dot menu per row. The page
    *  owns the dialogs/modals these trigger so we don't duplicate
@@ -164,6 +172,9 @@ export function FlowsTable({
   onRowDelete,
   statusFilter,
   onStatusFilterChange,
+  search: controlledSearch,
+  onSearchChange,
+  hideToolbar = false,
 }: FlowsTableProps) {
   // Whether any row-level action is wired. Drives the Actions column
   // header + per-row menu visibility.
@@ -174,7 +185,13 @@ export function FlowsTable({
     !!onRowArchive ||
     !!onRowRestore ||
     !!onRowDelete;
-  const [search, setSearch] = useState('');
+  // Search: controlled if the caller wired the props, otherwise local.
+  const [internalSearch, setInternalSearch] = useState('');
+  const search = controlledSearch ?? internalSearch;
+  const setSearch = (next: string) => {
+    if (onSearchChange) onSearchChange(next);
+    else setInternalSearch(next);
+  };
   const [sortKey, setSortKey] = useState<SortKey>('updatedAt');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [page, setPage] = useState(1);
@@ -296,47 +313,48 @@ export function FlowsTable({
 
   return (
     <div className="animate-fade-in-up animate-stagger-3">
-      {/* Toolbar — count + search, mirroring the contacts-page rhythm */}
-      <div className="flex items-center justify-between gap-4 pb-3">
-        <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)]">
-          <span className="tabular-nums">
-            {filtered.length !== workflows.length
-              ? `${filtered.length} / ${workflows.length}`
-              : workflows.length}{' '}
-            {workflows.length === 1 ? 'flow' : 'flows'}
-          </span>
-          {hasMultiplePages && (
-            <span className="ml-1 opacity-60">
-              · Page {safePage} of {totalPages}
+      {!hideToolbar && (
+        <div className="flex items-center justify-between gap-4 pb-3">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)]">
+            <span className="tabular-nums">
+              {filtered.length !== workflows.length
+                ? `${filtered.length} / ${workflows.length}`
+                : workflows.length}{' '}
+              {workflows.length === 1 ? 'flow' : 'flows'}
             </span>
-          )}
-        </div>
+            {hasMultiplePages && (
+              <span className="ml-1 opacity-60">
+                · Page {safePage} of {totalPages}
+              </span>
+            )}
+          </div>
 
-        <div className="flex items-center gap-2">
-          {statusFilter !== undefined && onStatusFilterChange && (
-            <StatusFilter
-              value={statusFilter}
-              onChange={(next) => {
-                onStatusFilterChange(next);
-                setPage(1);
-              }}
-            />
-          )}
-          <div className="relative">
-            <MagnifyingGlassIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              placeholder="Search flows..."
-              className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
-            />
+          <div className="flex items-center gap-2">
+            {statusFilter !== undefined && onStatusFilterChange && (
+              <StatusFilter
+                value={statusFilter}
+                onChange={(next) => {
+                  onStatusFilterChange(next);
+                  setPage(1);
+                }}
+              />
+            )}
+            <div className="relative">
+              <MagnifyingGlassIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="Search flows..."
+                className="w-56 pl-8 pr-3 py-1.5 text-xs rounded-lg bg-[var(--muted)] border border-[var(--border)] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]"
+              />
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {paged.length === 0 ? (
         <div className="text-center py-12">
@@ -349,16 +367,17 @@ export function FlowsTable({
         </div>
       ) : (
         <>
-          {/* Table — same chrome the contacts page uses. Uses
-              `account-tooltip-table` (overflow:visible) so the
-              Adoption column's hover popover isn't clipped by the
-              scroll container, matching the users-tab pattern. */}
-          <div className="glass-table account-tooltip-table rounded-xl">
+          {/* Standard glass-table chrome — same as forms / landing
+              pages / campaigns. The Adoption column's hover popover
+              can clip when it lands inside the top row; that's an
+              acceptable tradeoff for keeping the rounded corners +
+              consistent muted-bg header across all list tables. */}
+          <div className="overflow-x-auto glass-table">
             <table className="w-full min-w-[820px]">
-              <thead>
+              <thead className="sticky top-0 z-10">
                 <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
                   {bulkEnabled && (
-                    <th className="w-10 px-3 py-3">
+                    <th className="w-10 px-3 py-2">
                       <input
                         type="checkbox"
                         aria-label={
@@ -398,7 +417,7 @@ export function FlowsTable({
                       templates (which deploy, not publish) so the
                       column is hidden there. */}
                   {!showAccountColumn && (
-                    <th className="text-left px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
+                    <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
                       Publish
                     </th>
                   )}
@@ -406,7 +425,7 @@ export function FlowsTable({
                       the user see at a glance how many contacts are
                       flowing through each instance right now. */}
                   {!showAccountColumn && (
-                    <th className="text-right px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
+                    <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider whitespace-nowrap w-32">
                       Active Enrolled
                     </th>
                   )}
@@ -434,7 +453,7 @@ export function FlowsTable({
                     onSort={handleSort}
                   />
                   {hasRowActions && (
-                    <th className="w-12 px-3 py-3" aria-label="Row actions" />
+                    <th className="w-12 px-3 py-2" aria-label="Row actions" />
                   )}
                 </tr>
               </thead>
@@ -634,7 +653,7 @@ function SortHeader({
   return (
     <th
       onClick={() => onSort(sortKey)}
-      className="text-left px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider cursor-pointer hover:text-[var(--foreground)] transition-colors select-none"
+      className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider cursor-pointer hover:text-[var(--foreground)] transition-colors select-none"
     >
       <span className="inline-flex items-center gap-1">
         {label}
@@ -701,12 +720,12 @@ function FlowRow({
   return (
     <tr
       onClick={() => router.push(`/flows/${flow.id}`)}
-      className={`border-b border-[var(--border)] transition-colors cursor-pointer ${
+      className={`border-b border-[var(--border)] last:border-b-0 transition-colors cursor-pointer ${
         isSelected ? 'bg-[var(--primary)]/8' : 'hover:bg-[var(--muted)]/50'
       }`}
     >
       {selectable && (
-        <td className="px-3 py-3">
+        <td className="px-3 py-2">
           <input
             type="checkbox"
             aria-label={`Select ${flow.name || 'flow'}`}
@@ -717,7 +736,7 @@ function FlowRow({
           />
         </td>
       )}
-      <td className="px-4 py-3">
+      <td className="px-3 py-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm font-medium text-[var(--foreground)] truncate">
             {flow.name || 'Untitled flow'}
@@ -737,7 +756,7 @@ function FlowRow({
         </div>
       </td>
       {showAccountColumn && (
-        <td className="px-4 py-3">
+        <td className="px-3 py-2">
           <span
             className={`inline-flex items-center text-[10px] uppercase tracking-wider font-medium px-2 py-0.5 rounded-full ${statusClass}`}
           >
@@ -749,7 +768,7 @@ function FlowRow({
           they don't publish; standalone flows live in their own
           sub-account where this column does show). */}
       {!showAccountColumn && (
-        <td className="px-4 py-3">
+        <td className="px-3 py-2">
           {onToggleStatus && (
             <button
               type="button"
@@ -782,7 +801,7 @@ function FlowRow({
       {/* Active Enrolled — sub-account view only. Shows the live
           count returned by the listFlows service. */}
       {!showAccountColumn && (
-        <td className="px-4 py-3 text-right tabular-nums">
+        <td className="px-3 py-2 text-right tabular-nums">
           {flow.activeEnrollments && flow.activeEnrollments > 0 ? (
             <span className="text-sm text-[var(--foreground)]">
               {flow.activeEnrollments.toLocaleString()}
@@ -793,18 +812,18 @@ function FlowRow({
         </td>
       )}
       {showAccountColumn && (
-        <td className="px-4 py-3 max-w-[220px]">
+        <td className="px-3 py-2 max-w-[220px]">
           <AdoptionCell adoption={adoption} accountMeta={accountMeta} />
         </td>
       )}
-      <td className="px-4 py-3 text-sm text-[var(--muted-foreground)] whitespace-nowrap">
+      <td className="px-3 py-2 text-sm text-[var(--muted-foreground)] whitespace-nowrap">
         {formatRelativeDate(flow.updatedAt)}
       </td>
-      <td className="px-4 py-3 text-sm text-[var(--muted-foreground)] whitespace-nowrap">
+      <td className="px-3 py-2 text-sm text-[var(--muted-foreground)] whitespace-nowrap">
         {formatRelativeDate(flow.createdAt)}
       </td>
       {hasRowActions && (
-        <td className="px-3 py-3 align-middle">
+        <td className="px-3 py-2 align-middle">
           <FlowRowActionsMenu
             flow={flow}
             onEdit={onEdit}

@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import { useEditor } from './EditorContext';
-import { ComponentIcon } from '@/components/icon-map';
+import { FormBlockIcon } from '@/lib/forms/block-icons';
 import { BLOCK_SCHEMAS } from '../schemas';
 import type { Block } from '../types';
 import { ChevronRightIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
@@ -142,7 +142,7 @@ function BlockRow({ block, depth, selectedId, onSelect }: BlockRowProps) {
           <span className="w-4 flex-shrink-0" />
         )}
         <span className="flex-shrink-0 inline-flex items-center text-[var(--muted-foreground)]">
-          <ComponentIcon name={schema?.icon || ''} className="w-3.5 h-3.5" />
+          <FormBlockIcon name={schema?.icon || ''} className="w-3.5 h-3.5" />
         </span>
         <span className="text-xs font-semibold capitalize text-[var(--foreground)] flex-shrink-0">
           {schema?.label || block.type}

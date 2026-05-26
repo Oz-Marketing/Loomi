@@ -32,8 +32,6 @@ export interface FormActionBarProps {
   publicUrl?: string | null;
   /** Iframe embed snippet — when present, exposes a copy button. */
   embedSnippet?: string | null;
-  /** Small persistence indicator rendered next to the outline toggle. */
-  saveLabel?: string | null;
 
   outlineOpen?: boolean;
   onToggleOutline?: () => void;
@@ -55,7 +53,6 @@ export function FormActionBar({
   onRedo,
   publicUrl,
   embedSnippet,
-  saveLabel,
   outlineOpen = false,
   onToggleOutline,
 }: FormActionBarProps) {
@@ -89,11 +86,6 @@ export function FormActionBar({
           >
             <ListBulletIcon className="w-4 h-4" />
           </button>
-        )}
-        {saveLabel && (
-          <span className="truncate rounded-full border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-[11px] text-[var(--muted-foreground)]">
-            {saveLabel}
-          </span>
         )}
       </div>
 

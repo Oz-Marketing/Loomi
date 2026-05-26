@@ -127,6 +127,16 @@ interface CampaignPageListProps {
    * Restore and the bulk dock surfaces Restore alongside Delete.
    */
   statusFilter?: 'all' | 'archived';
+  /**
+   * Controlled search string. When provided, the page-level ListToolbar
+   * drives search and the internal toolbar can be hidden via
+   * `hideToolbar`. Falls back to internal state when omitted so existing
+   * call sites keep working unchanged.
+   */
+  search?: string;
+  onSearchChange?: (next: string) => void;
+  /** Hide the internal header/toolbar row — caller renders its own. */
+  hideToolbar?: boolean;
 }
 
 function getCampaignKey(campaign: Campaign): string {
@@ -802,12 +812,21 @@ export function CampaignPageList({
   toolbarExtras,
   singleAccountMode = false,
   statusFilter = 'all',
+  search: controlledSearch,
+  onSearchChange,
+  hideToolbar = false,
 }: CampaignPageListProps) {
   const { alert, confirm } = useLoomiDialog();
   const router = useRouter();
 
-  // Search
-  const [search, setSearch] = useState('');
+  // Search — controlled when the caller wires the props, otherwise
+  // falls back to internal state so existing call sites keep working.
+  const [internalSearch, setInternalSearch] = useState('');
+  const search = controlledSearch ?? internalSearch;
+  const setSearch = (next: string) => {
+    if (onSearchChange) onSearchChange(next);
+    else setInternalSearch(next);
+  };
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -1500,60 +1519,62 @@ export function CampaignPageList({
   return (
     <>
       <div className="animate-fade-in-up animate-stagger-3">
-        {/* Header bar */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            {selectedAccount && !singleAccountMode && (
-              <button
-                type="button"
-                onClick={drillOut}
-                className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
-              >
-                <ChevronLeftIcon className="w-3.5 h-3.5" />
-                All Accounts
-              </button>
-            )}
-            <p className="text-sm text-[var(--muted-foreground)]">
-              {singleAccountMode ? (
-                <>
-                  {selectedCampaigns.length} campaign{selectedCampaigns.length !== 1 ? 's' : ''}
-                  {debouncedSearch ? ' found' : ''}
-                </>
-              ) : selectedAccount ? (
-                <>
-                  <span className="text-[var(--foreground)] font-medium">{selectedAccountRow?.label}</span>
-                  {' · '}
-                  {selectedCampaigns.length} campaign{selectedCampaigns.length !== 1 ? 's' : ''}
-                  {debouncedSearch ? ' found' : ''}
-                </>
-              ) : (
-                <>
-                  {sortedAccountRows.length} account{sortedAccountRows.length !== 1 ? 's' : ''}
-                  {debouncedSearch ? ' found' : ''}
-                  {' · '}
-                  {campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''}
-                </>
+        {/* Header bar — hidden when the page renders a ListToolbar above. */}
+        {!hideToolbar && (
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              {selectedAccount && !singleAccountMode && (
+                <button
+                  type="button"
+                  onClick={drillOut}
+                  className="inline-flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+                >
+                  <ChevronLeftIcon className="w-3.5 h-3.5" />
+                  All Accounts
+                </button>
               )}
-            </p>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <div className="relative">
-              <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--muted-foreground)]" />
-              <input
-                type="text"
-                value={search}
-                onChange={e => {
-                  setSearch(e.target.value);
-                  if (selectedAccount) setCampaignPage(1);
-                  else setAccountPage(1);
-                }}
-                placeholder={selectedAccount ? 'Search campaigns...' : 'Search sub-accounts...'}
-                className="w-52 pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
-              />
+              <p className="text-sm text-[var(--muted-foreground)]">
+                {singleAccountMode ? (
+                  <>
+                    {selectedCampaigns.length} campaign{selectedCampaigns.length !== 1 ? 's' : ''}
+                    {debouncedSearch ? ' found' : ''}
+                  </>
+                ) : selectedAccount ? (
+                  <>
+                    <span className="text-[var(--foreground)] font-medium">{selectedAccountRow?.label}</span>
+                    {' · '}
+                    {selectedCampaigns.length} campaign{selectedCampaigns.length !== 1 ? 's' : ''}
+                    {debouncedSearch ? ' found' : ''}
+                  </>
+                ) : (
+                  <>
+                    {sortedAccountRows.length} account{sortedAccountRows.length !== 1 ? 's' : ''}
+                    {debouncedSearch ? ' found' : ''}
+                    {' · '}
+                    {campaigns.length} campaign{campaigns.length !== 1 ? 's' : ''}
+                  </>
+                )}
+              </p>
             </div>
-            {toolbarExtras}
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="relative">
+                <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--muted-foreground)]" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={e => {
+                    setSearch(e.target.value);
+                    if (selectedAccount) setCampaignPage(1);
+                    else setAccountPage(1);
+                  }}
+                  placeholder={selectedAccount ? 'Search campaigns...' : 'Search sub-accounts...'}
+                  className="w-52 pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
+                />
+              </div>
+              {toolbarExtras}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* ── Accounts Table (Level 1) ── */}
         {!selectedAccount && (

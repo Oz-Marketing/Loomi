@@ -1,10 +1,19 @@
 import { notFound, redirect } from 'next/navigation';
 import { getAccountScope, getAuthSession } from '@/lib/api-auth';
 import { getForm } from '@/lib/services/forms';
-import { FormDetailHeader } from '@/components/forms/form-detail-header';
 import { FormDetailProvider } from '@/components/forms/form-detail-context';
-import { FormDetailTabs } from '@/components/forms/form-detail-tabs';
+import { FormSettingsModal } from '@/components/forms/form-settings-modal';
 
+/**
+ * Detail-area shell. Fetches the form once and exposes it via
+ * FormDetailProvider so the overview / builder / settings / submissions
+ * pages can share state without each one refetching.
+ *
+ * Page chrome (header, action bar) lives in the individual pages now —
+ * the overview sits in the regular app shell, while the builder owns a
+ * full-viewport workspace via /edit/layout.tsx. The IA mirrors Flows
+ * (overview at /flows/[id], builder at /flows/[id]/edit).
+ */
 export default async function FormDetailLayout({
   children,
   params,
@@ -22,11 +31,11 @@ export default async function FormDetailLayout({
 
   return (
     <FormDetailProvider initialForm={form}>
-      <div className="min-h-screen overflow-hidden bg-[var(--background)]">
-        <FormDetailHeader />
-        <FormDetailTabs formId={form.id} />
-        {children}
-      </div>
+      {children}
+      {/* Settings modal lives at the layout level so the cog buttons
+          on every page (overview, builder) can open it without each
+          page mounting its own copy. */}
+      <FormSettingsModal />
     </FormDetailProvider>
   );
 }

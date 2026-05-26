@@ -212,7 +212,7 @@ function DndShell({
 
   return (
     <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-      <div className="flex w-full h-full min-h-0 gap-2 p-4">
+      <div className="flex w-full h-full min-h-0 gap-4">
         <div
           className="flex-shrink-0 min-h-0 flex"
           style={{ width: `${sidebarWidth}px` }}

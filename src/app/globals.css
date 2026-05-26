@@ -503,6 +503,16 @@ main[data-scrolled='true'] .page-sticky-header {
     0 0 0 1px rgba(99, 102, 241, 0.1),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.04);
 }
+/* When a glass-card has an open dropdown inside it, lift the whole
+   card above its siblings so the menu doesn't get painted over by
+   the next card in DOM order. Covers the flows / forms / landing-
+   pages / template card grids in one rule. */
+@supports selector(:has(*)) {
+  .glass-card:has(.glass-dropdown) {
+    position: relative;
+    z-index: 30;
+  }
+}
 [data-theme='light'] .glass-card {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.6);

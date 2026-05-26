@@ -5,7 +5,7 @@ import useSWR from 'swr';
 import { FormRenderer } from '@/lib/forms/render';
 import { parseFormTemplate } from '@/lib/forms/types';
 import type { FormDetail } from '@/lib/services/forms';
-import { usePreloadedForm } from '../render';
+import { usePreloadedForm } from '../preloaded-forms-context';
 
 export interface EmbeddedFormProps {
   formId?: string;

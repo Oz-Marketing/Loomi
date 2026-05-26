@@ -20,26 +20,16 @@ import {
 } from './types';
 import { BLOCK_COMPONENTS } from './components';
 import { blockSpacingStyle } from './block-spacing';
-import type { FormTemplate } from '@/lib/forms/types';
+import {
+  PreloadedFormsProvider,
+  type PreloadedForm,
+} from './preloaded-forms-context';
+
+export type { PreloadedForm };
 
 /** Breakpoint shared by the editor's mobile preview and the public
  *  page's responsive CSS. Anything narrower than this is "mobile". */
 const MOBILE_BREAKPOINT_PX = 600;
-
-export interface PreloadedForm {
-  schema: FormTemplate;
-}
-
-/** Map of form id → its parsed schema, supplied by the public LP
- *  renderer. EmbeddedForm reads this first; missing entries fall
- *  through to the client SWR fetch (editor mode). */
-const PreloadedFormsContext = React.createContext<Map<string, PreloadedForm> | null>(null);
-
-export function usePreloadedForm(formId: string | undefined): PreloadedForm | null {
-  const map = React.useContext(PreloadedFormsContext);
-  if (!map || !formId) return null;
-  return map.get(formId) ?? null;
-}
 
 export interface LandingPageRendererProps {
   template: LandingPageTemplate;
@@ -102,9 +92,9 @@ export function LandingPageRenderer({ template, preloadedForms }: LandingPageRen
 
   if (preloadedForms) {
     return (
-      <PreloadedFormsContext.Provider value={preloadedForms}>
+      <PreloadedFormsProvider value={preloadedForms}>
         {inner}
-      </PreloadedFormsContext.Provider>
+      </PreloadedFormsProvider>
     );
   }
   return inner;

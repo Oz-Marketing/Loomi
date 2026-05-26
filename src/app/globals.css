@@ -471,11 +471,15 @@ main[data-scrolled='true'] .page-sticky-header {
     inset 0 0.5px 0 rgba(255, 255, 255, 0.8);
 }
 
-/* Allow dropdown panels to escape clipping containers while open. */
+/* Allow dropdown panels to escape clipping containers while open.
+   Note: tooltips/popovers that sit permanently in the DOM (hidden via
+   display:none/group-hover) must NOT participate here — they'd
+   permanently override the table's overflow:hidden and break the
+   rounded-corner clipping. Dropdown menus are fine because they only
+   exist in the DOM when open. */
 @supports selector(:has(*)) {
   .glass-modal:has(.glass-dropdown),
   .glass-table:has(.glass-dropdown),
-  .glass-table:has(.account-tooltip-popover),
   .overflow-hidden:has(.glass-dropdown),
   [class*='overflow-hidden']:has(.glass-dropdown) {
     overflow: visible;
@@ -670,10 +674,6 @@ main[data-scrolled='true'] .page-sticky-header {
   border: 1px solid var(--border);
   border-radius: 0.75rem;
   overflow: hidden;
-}
-
-.glass-table.account-tooltip-table {
-  overflow: visible;
 }
 
 .account-avatar-stack .account-avatar-stack-item {

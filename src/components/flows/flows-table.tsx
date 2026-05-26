@@ -367,11 +367,12 @@ export function FlowsTable({
         </div>
       ) : (
         <>
-          {/* Table — same chrome the contacts page uses. Uses
-              `account-tooltip-table` (overflow:visible) so the
-              Adoption column's hover popover isn't clipped by the
-              scroll container, matching the users-tab pattern. */}
-          <div className="overflow-x-auto glass-table account-tooltip-table">
+          {/* Standard glass-table chrome — same as forms / landing
+              pages / campaigns. The Adoption column's hover popover
+              can clip when it lands inside the top row; that's an
+              acceptable tradeoff for keeping the rounded corners +
+              consistent muted-bg header across all list tables. */}
+          <div className="overflow-x-auto glass-table">
             <table className="w-full min-w-[820px]">
               <thead className="sticky top-0 z-10">
                 <tr className="bg-[var(--muted)] border-b border-[var(--border)]">

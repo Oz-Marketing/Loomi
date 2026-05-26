@@ -17,7 +17,7 @@ import {
   PhotoIcon,
   SunIcon,
   MoonIcon,
-  WrenchScrewdriverIcon,
+  MegaphoneIcon,
   ChevronDownIcon,
   ChartBarSquareIcon,
   ChatBubbleLeftRightIcon,
@@ -52,8 +52,8 @@ interface NavItem {
 
 const toolsNavItem: NavItem = {
   href: '/tools',
-  label: 'Tools',
-  icon: WrenchScrewdriverIcon,
+  label: 'Ads',
+  icon: MegaphoneIcon,
   absolute: true,
   children: [
     {

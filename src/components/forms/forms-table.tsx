@@ -214,7 +214,7 @@ export function FormsTable({
 
   if (loading) {
     return (
-      <div className="glass-table rounded-xl p-10 text-center">
+      <div className="glass-table p-10 text-center">
         <p className="text-sm text-[var(--muted-foreground)]">Loading forms…</p>
       </div>
     );
@@ -264,12 +264,12 @@ export function FormsTable({
         </div>
       ) : (
         <>
-          <div className="glass-table rounded-xl">
+          <div className="overflow-x-auto glass-table">
             <table className="w-full min-w-[820px]">
-              <thead>
+              <thead className="sticky top-0 z-10">
                 <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
                   {bulkEnabled && (
-                    <th className="w-10 px-3 py-3">
+                    <th className="w-10 px-3 py-2">
                       <input
                         type="checkbox"
                         aria-label={allPageSelected ? 'Deselect page' : 'Select page'}
@@ -299,7 +299,7 @@ export function FormsTable({
                     />
                   )}
                   {!showAccountColumn && (
-                    <th className="text-left px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
+                    <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
                       Publish
                     </th>
                   )}
@@ -335,7 +335,7 @@ export function FormsTable({
                     onSort={handleSort}
                   />
                   {hasRowActions && (
-                    <th className="w-12 px-3 py-3" aria-label="Row actions" />
+                    <th className="w-12 px-3 py-2" aria-label="Row actions" />
                   )}
                 </tr>
               </thead>
@@ -424,7 +424,7 @@ function SortHeader({
   return (
     <th
       onClick={() => onSort(sortKey)}
-      className={`px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider cursor-pointer hover:text-[var(--foreground)] transition-colors select-none ${
+      className={`px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider cursor-pointer hover:text-[var(--foreground)] transition-colors select-none ${
         align === 'right' ? 'text-right' : 'text-left'
       }`}
     >
@@ -479,12 +479,12 @@ function FormRow({
   return (
     <tr
       onClick={() => router.push(subHref(`/websites/forms/${form.id}`))}
-      className={`border-b border-[var(--border)] transition-colors cursor-pointer ${
+      className={`border-b border-[var(--border)] last:border-b-0 transition-colors cursor-pointer ${
         isSelected ? 'bg-[var(--primary)]/8' : 'hover:bg-[var(--muted)]/50'
       }`}
     >
       {selectable && (
-        <td className="px-3 py-3">
+        <td className="px-3 py-2">
           <input
             type="checkbox"
             aria-label={`Select ${form.name || 'form'}`}
@@ -496,7 +496,7 @@ function FormRow({
         </td>
       )}
 
-      <td className="px-4 py-3">
+      <td className="px-3 py-2">
         <div className="min-w-0">
           <div className="text-sm font-medium text-[var(--foreground)] truncate">
             {form.name || 'Untitled form'}
@@ -508,7 +508,7 @@ function FormRow({
       </td>
 
       {showAccountColumn && (
-        <td className="px-4 py-3">
+        <td className="px-3 py-2">
           <span
             className={`inline-flex items-center text-[10px] uppercase tracking-wider font-medium px-2 py-0.5 rounded-full ${statusClass}`}
           >
@@ -518,7 +518,7 @@ function FormRow({
       )}
 
       {!showAccountColumn && (
-        <td className="px-4 py-3">
+        <td className="px-3 py-2">
           {onTogglePublish && (
             <button
               type="button"
@@ -544,7 +544,7 @@ function FormRow({
       )}
 
       {showAccountColumn && (
-        <td className="px-4 py-3">
+        <td className="px-3 py-2">
           {meta ? (
             <div className="flex items-center gap-2 min-w-0">
               <AccountAvatar
@@ -563,7 +563,7 @@ function FormRow({
         </td>
       )}
 
-      <td className="px-4 py-3 text-right tabular-nums">
+      <td className="px-3 py-2 text-right tabular-nums">
         {form.submissionCount > 0 ? (
           <span className="text-sm text-[var(--foreground)]">
             {form.submissionCount.toLocaleString()}
@@ -573,11 +573,11 @@ function FormRow({
         )}
       </td>
 
-      <td className="px-4 py-3 text-sm text-[var(--muted-foreground)] tabular-nums whitespace-nowrap">
+      <td className="px-3 py-2 text-sm text-[var(--muted-foreground)] tabular-nums whitespace-nowrap">
         {formatRelativeDate(form.updatedAt)}
       </td>
 
-      <td className="px-4 py-3 text-sm text-[var(--muted-foreground)] tabular-nums whitespace-nowrap">
+      <td className="px-3 py-2 text-sm text-[var(--muted-foreground)] tabular-nums whitespace-nowrap">
         {formatRelativeDate(form.createdAt)}
       </td>
 

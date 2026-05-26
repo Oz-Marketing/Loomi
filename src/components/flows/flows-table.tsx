@@ -371,12 +371,12 @@ export function FlowsTable({
               `account-tooltip-table` (overflow:visible) so the
               Adoption column's hover popover isn't clipped by the
               scroll container, matching the users-tab pattern. */}
-          <div className="glass-table account-tooltip-table rounded-xl">
+          <div className="overflow-x-auto glass-table account-tooltip-table">
             <table className="w-full min-w-[820px]">
-              <thead>
+              <thead className="sticky top-0 z-10">
                 <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
                   {bulkEnabled && (
-                    <th className="w-10 px-3 py-3">
+                    <th className="w-10 px-3 py-2">
                       <input
                         type="checkbox"
                         aria-label={
@@ -416,7 +416,7 @@ export function FlowsTable({
                       templates (which deploy, not publish) so the
                       column is hidden there. */}
                   {!showAccountColumn && (
-                    <th className="text-left px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
+                    <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
                       Publish
                     </th>
                   )}
@@ -424,7 +424,7 @@ export function FlowsTable({
                       the user see at a glance how many contacts are
                       flowing through each instance right now. */}
                   {!showAccountColumn && (
-                    <th className="text-right px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
+                    <th className="text-right px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
                       Active Enrolled
                     </th>
                   )}
@@ -452,7 +452,7 @@ export function FlowsTable({
                     onSort={handleSort}
                   />
                   {hasRowActions && (
-                    <th className="w-12 px-3 py-3" aria-label="Row actions" />
+                    <th className="w-12 px-3 py-2" aria-label="Row actions" />
                   )}
                 </tr>
               </thead>
@@ -652,7 +652,7 @@ function SortHeader({
   return (
     <th
       onClick={() => onSort(sortKey)}
-      className="text-left px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider cursor-pointer hover:text-[var(--foreground)] transition-colors select-none"
+      className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider cursor-pointer hover:text-[var(--foreground)] transition-colors select-none"
     >
       <span className="inline-flex items-center gap-1">
         {label}
@@ -719,12 +719,12 @@ function FlowRow({
   return (
     <tr
       onClick={() => router.push(`/flows/${flow.id}`)}
-      className={`border-b border-[var(--border)] transition-colors cursor-pointer ${
+      className={`border-b border-[var(--border)] last:border-b-0 transition-colors cursor-pointer ${
         isSelected ? 'bg-[var(--primary)]/8' : 'hover:bg-[var(--muted)]/50'
       }`}
     >
       {selectable && (
-        <td className="px-3 py-3">
+        <td className="px-3 py-2">
           <input
             type="checkbox"
             aria-label={`Select ${flow.name || 'flow'}`}
@@ -735,7 +735,7 @@ function FlowRow({
           />
         </td>
       )}
-      <td className="px-4 py-3">
+      <td className="px-3 py-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-sm font-medium text-[var(--foreground)] truncate">
             {flow.name || 'Untitled flow'}
@@ -755,7 +755,7 @@ function FlowRow({
         </div>
       </td>
       {showAccountColumn && (
-        <td className="px-4 py-3">
+        <td className="px-3 py-2">
           <span
             className={`inline-flex items-center text-[10px] uppercase tracking-wider font-medium px-2 py-0.5 rounded-full ${statusClass}`}
           >
@@ -767,7 +767,7 @@ function FlowRow({
           they don't publish; standalone flows live in their own
           sub-account where this column does show). */}
       {!showAccountColumn && (
-        <td className="px-4 py-3">
+        <td className="px-3 py-2">
           {onToggleStatus && (
             <button
               type="button"
@@ -800,7 +800,7 @@ function FlowRow({
       {/* Active Enrolled — sub-account view only. Shows the live
           count returned by the listFlows service. */}
       {!showAccountColumn && (
-        <td className="px-4 py-3 text-right tabular-nums">
+        <td className="px-3 py-2 text-right tabular-nums">
           {flow.activeEnrollments && flow.activeEnrollments > 0 ? (
             <span className="text-sm text-[var(--foreground)]">
               {flow.activeEnrollments.toLocaleString()}
@@ -811,18 +811,18 @@ function FlowRow({
         </td>
       )}
       {showAccountColumn && (
-        <td className="px-4 py-3 max-w-[220px]">
+        <td className="px-3 py-2 max-w-[220px]">
           <AdoptionCell adoption={adoption} accountMeta={accountMeta} />
         </td>
       )}
-      <td className="px-4 py-3 text-sm text-[var(--muted-foreground)] whitespace-nowrap">
+      <td className="px-3 py-2 text-sm text-[var(--muted-foreground)] whitespace-nowrap">
         {formatRelativeDate(flow.updatedAt)}
       </td>
-      <td className="px-4 py-3 text-sm text-[var(--muted-foreground)] whitespace-nowrap">
+      <td className="px-3 py-2 text-sm text-[var(--muted-foreground)] whitespace-nowrap">
         {formatRelativeDate(flow.createdAt)}
       </td>
       {hasRowActions && (
-        <td className="px-3 py-3 align-middle">
+        <td className="px-3 py-2 align-middle">
           <FlowRowActionsMenu
             flow={flow}
             onEdit={onEdit}

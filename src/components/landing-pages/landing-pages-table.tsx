@@ -37,23 +37,23 @@ export function LandingPagesTable({
   const subHref = useSubaccountHref();
 
   return (
-    <div className="glass-table rounded-xl">
+    <div className="overflow-x-auto glass-table">
       <table className="w-full text-sm">
-        <thead>
+        <thead className="sticky top-0 z-10">
           <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
-            <th className="text-left px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+            <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
               Name
             </th>
-            <th className="text-left px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+            <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
               Slug
             </th>
-            <th className="text-left px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+            <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
               Status
             </th>
-            <th className="text-left px-4 py-3 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+            <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
               Updated
             </th>
-            <th className="w-12 px-3 py-3" aria-label="Row actions" />
+            <th className="w-12 px-3 py-2" aria-label="Row actions" />
           </tr>
         </thead>
         <tbody>
@@ -97,19 +97,19 @@ function Row({
   return (
     <tr
       onClick={() => router.push(overviewHref)}
-      className="border-b border-[var(--border)] transition-colors cursor-pointer hover:bg-[var(--muted)]/50"
+      className="border-b border-[var(--border)] last:border-b-0 transition-colors cursor-pointer hover:bg-[var(--muted)]/50"
     >
-      <td className="px-4 py-3">
+      <td className="px-3 py-2">
         <div className="min-w-0">
           <div className="text-sm font-medium text-[var(--foreground)] truncate">
             {page.name || 'Untitled'}
           </div>
         </div>
       </td>
-      <td className="px-4 py-3 font-mono text-xs text-[var(--muted-foreground)]">
+      <td className="px-3 py-2 font-mono text-xs text-[var(--muted-foreground)]">
         /lp/{page.slug}
       </td>
-      <td className="px-4 py-3">
+      <td className="px-3 py-2">
         {onTogglePublish ? (
           <button
             type="button"
@@ -138,10 +138,10 @@ function Row({
           </span>
         )}
       </td>
-      <td className="px-4 py-3 text-xs text-[var(--muted-foreground)]">
+      <td className="px-3 py-2 text-xs text-[var(--muted-foreground)]">
         {new Date(page.updatedAt).toLocaleDateString()}
       </td>
-      <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+      <td className="px-3 py-2 text-right" onClick={(e) => e.stopPropagation()}>
         <RowMenu
           page={page}
           editHref={editHref}

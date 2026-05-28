@@ -23,6 +23,7 @@ import { getAccountOems, industryHasBrands } from '@/lib/oems';
 import PrimaryButton from '@/components/primary-button';
 import { CreateCampaignModal } from '@/components/campaigns/create-campaign-modal';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import { ViewAnalyticsLink } from '@/components/view-analytics-link';
 
 // ── Types ──
 
@@ -408,12 +409,14 @@ function AdminCampaignsPage() {
             </div>
           </div>
 
-          {/* Tab toggle removed — sidebar drives navigation between
-              Campaigns (/campaigns) and Analytics (/campaigns/analytics). */}
+          {/* Tab toggle removed — analytics moved out to reporting. The
+              "View Analytics" affordance below cross-links there with
+              the active account preserved. */}
           <div>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            <ViewAnalyticsLink area="engagement" />
             {/* Date + Filters live in the header for the analytics view; on
                 the list view they're rendered next to the search input
                 inside CampaignPageList (passed via toolbarExtras). */}

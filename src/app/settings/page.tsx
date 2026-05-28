@@ -35,15 +35,22 @@ export default function SettingsPage() {
   const router = useRouter();
   const pathname = usePathname();
 
-  // Determine available tabs based on role/mode
-  const tabs: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [];
+  // Determine available tabs based on role/mode. `label` is the sidebar
+  // nav text; `titleLabel` is the page-header title (singularised /
+  // suffixed with "Settings" for clean grammar).
+  const tabs: {
+    key: Tab;
+    label: string;
+    titleLabel: string;
+    icon: React.ComponentType<{ className?: string }>;
+  }[] = [];
   const hasAdminAccess = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
-  if (hasAdminAccess && isAdmin) tabs.push({ key: 'subaccounts', label: 'Sub-Accounts', icon: BuildingStorefrontIcon });
-  if (isAccount) tabs.push({ key: 'subaccount', label: 'Sub-Account', icon: BuildingStorefrontIcon });
-  if (hasAdminAccess) tabs.push({ key: 'users', label: 'Users', icon: UsersIcon });
-  if (hasAdminAccess && isAdmin) tabs.push({ key: 'knowledge', label: 'Knowledge Base', icon: SparklesIcon });
-  tabs.push({ key: 'notifications', label: 'Notifications', icon: BellIcon });
-  tabs.push({ key: 'appearance', label: 'Appearance', icon: SwatchIcon });
+  if (hasAdminAccess && isAdmin) tabs.push({ key: 'subaccounts', label: 'Sub-Accounts', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
+  if (isAccount) tabs.push({ key: 'subaccount', label: 'Sub-Account', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
+  if (hasAdminAccess) tabs.push({ key: 'users', label: 'Users', titleLabel: 'User Settings', icon: UsersIcon });
+  if (hasAdminAccess && isAdmin) tabs.push({ key: 'knowledge', label: 'Knowledge Base', titleLabel: 'Knowledge Base Settings', icon: SparklesIcon });
+  tabs.push({ key: 'notifications', label: 'Notifications', titleLabel: 'Notification Settings', icon: BellIcon });
+  tabs.push({ key: 'appearance', label: 'Appearance', titleLabel: 'Appearance Settings', icon: SwatchIcon });
 
   const pathSegments = pathname.split('/').filter(Boolean);
   const routeTab = pathSegments[0] === 'settings'
@@ -63,16 +70,26 @@ export default function SettingsPage() {
     }
   }, [routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, userRole]);
 
+  const activeTabObj = tabs.find((t) => t.key === activeTab);
+  const TitleIcon = activeTabObj?.icon ?? CogIcon;
+  const titleText = activeTabObj?.titleLabel ?? 'Settings';
+
   return (
-    <div className="animate-fade-in-up">
-      <div className="mb-6 px-1">
-        <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
-          <CogIcon className="w-6 h-6" />
-          Settings
-        </h1>
-        <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Manage your preferences and configuration
-        </p>
+    <div className="animate-fade-in-up pt-4">
+      <div className="mb-6 px-1 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
+            <TitleIcon className="w-6 h-6" />
+            {titleText}
+          </h1>
+          <p className="text-sm text-[var(--muted-foreground)] mt-1">
+            Manage your preferences and configuration
+          </p>
+        </div>
+        {/* Portal target for tab-specific action buttons (e.g. "Add User"
+            on the Users tab). Each tab calls `createPortal` into this
+            div, so swapping tabs swaps the actions. */}
+        <div id="settings-title-actions" className="flex items-center gap-2" />
       </div>
 
       <div className="border-b border-[var(--border)] mb-6" />
@@ -100,24 +117,11 @@ export default function SettingsPage() {
           ))}
         </nav>
 
-        {/* Tab content */}
+        {/* Tab content — no per-tab title bar; the active tab is
+            indicated by the highlighted item in the sidebar nav, and
+            tab-specific actions render into `#settings-title-actions`
+            up in the main Settings header. */}
         <div className="flex-1 min-w-0">
-          {/* Sticky tab title bar */}
-          {(() => {
-            const activeTabObj = tabs.find(t => t.key === activeTab);
-            if (!activeTabObj) return null;
-            const TabIcon = activeTabObj.icon;
-            return (
-              <div className="page-sticky-header pad-on-scroll flex items-center justify-between mb-6">
-                <h2 className="flex items-center gap-2 text-lg font-semibold text-[var(--foreground)]">
-                  <TabIcon className="w-5 h-5" />
-                  {activeTabObj.label}
-                </h2>
-                <div id="settings-title-actions" className="flex items-center gap-2" />
-              </div>
-            );
-          })()}
-
           {activeTab === 'subaccounts' && <AccountsList listPath="/settings/subaccounts" detailBasePath="/settings/subaccounts" />}
           {activeTab === 'subaccount' && <AccountSettingsTab />}
           {activeTab === 'users' && <UsersTab />}

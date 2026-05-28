@@ -113,6 +113,39 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         setInitialized(true);
         return;
       }
+
+      // Cross-surface account restore: ?account=<key> in the URL means
+      // "the other surface was active in this account when the user
+      // clicked the cross-link". Honor it before falling back to defaults,
+      // then strip the param from the URL so a refresh doesn't re-lock to it.
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        const accountParam = params.get('account');
+        if (accountParam) {
+          // Restrict to the user's allowed keys (clients + assignment-scoped
+          // admins). Developers / super_admins / unrestricted admins can
+          // land in any account; if accounts haven't loaded yet, we still
+          // accept the param and let `setAccount` validate on later updates.
+          const restricted =
+            (userRole === 'client' && userAccountKeys.length > 0) ||
+            (userRole === 'admin' && userAccountKeys.length > 0);
+          if (!restricted || userAccountKeys.includes(accountParam)) {
+            setAccountState({ mode: 'account', accountKey: accountParam });
+            setInitialized(true);
+            params.delete('account');
+            const q = params.toString();
+            window.history.replaceState(
+              {},
+              '',
+              window.location.pathname +
+                (q ? `?${q}` : '') +
+                window.location.hash,
+            );
+            return;
+          }
+        }
+      }
+
       if (userRole === 'client' && userAccountKeys.length > 0) {
         setAccountState({ mode: 'account', accountKey: userAccountKeys[0] });
       } else {

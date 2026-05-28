@@ -18,8 +18,11 @@ import {
   SunIcon,
   MoonIcon,
   MegaphoneIcon,
-  ChevronDownIcon,
+  ArrowTopRightOnSquareIcon,
   ChartBarSquareIcon,
+  ChevronDownIcon,
+  ChevronDoubleLeftIcon,
+  ChevronDoubleRightIcon,
   ChatBubbleLeftRightIcon,
   ListBulletIcon,
   FunnelIcon,
@@ -29,6 +32,9 @@ import {
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
+import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
+import { SidebarTooltip, SidebarPopout } from '@/components/sidebar-collapsed-ui';
+import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
 import { FlowIcon } from '@/components/icon-map';
 import { MetaLogoIcon } from '@/components/icons/meta-logo';
 import { AccountSwitcher } from '@/components/account-switcher';
@@ -84,33 +90,26 @@ const messagingGroupCampaigns: NavItem = {
   label: 'Campaigns',
   icon: ListBulletIcon,
 };
-const messagingGroupAnalytics: NavItem = {
-  href: '/messaging/analytics',
-  label: 'Analytics',
-  icon: ChartBarSquareIcon,
-};
 const messagingGroupTemplates: NavItem = {
   href: '/email/templates',
   label: 'Templates',
   icon: EnvelopeIcon,
 };
+// Flows is now a leaf nav item — analytics moved to /reporting/engagement.
 const flowsNavItem: NavItem = {
   href: '/flows',
   label: 'Flows',
   icon: FlowIcon as IconComponent,
-  children: [
-    { href: '/flows', label: 'Flows', icon: ListBulletIcon },
-    { href: '/flows/analytics', label: 'Analytics', icon: ChartBarSquareIcon },
-  ],
 };
 
 const messagingNav: NavItem = {
   href: '/messaging/campaigns',
   label: 'Messaging',
   icon: ChatBubbleLeftRightIcon,
+  // Analytics removed — lives in /reporting/engagement now. Use the
+  // "View Analytics" affordance on each creative page to jump there.
   children: [
     messagingGroupCampaigns,
-    messagingGroupAnalytics,
     messagingGroupTemplates,
   ],
 };
@@ -176,6 +175,23 @@ export function Sidebar() {
   const pathname = usePathname();
   const { userRole, isAdmin, isAccount, accountKey, accounts } = useAccount();
   const { theme, toggleTheme } = useTheme();
+  const { collapsed, toggle: toggleCollapsed } = useSidebarCollapse();
+
+  // Cross-host link to the reporting surface. Resolves after hydration
+  // so we have access to `window.location.host`; account + theme are
+  // appended as query params so reporting lands on the same account
+  // with the same theme (cookie sharing doesn't work in dev).
+  const [reportingHref, setReportingHref] = useState<string | null>(null);
+  const accountForCrossLink = useAccount().account;
+  useEffect(() => {
+    let url = getOtherSurfaceUrl('/');
+    if (!url) return;
+    if (accountForCrossLink.mode === 'account' && accountForCrossLink.accountKey) {
+      url += `?account=${encodeURIComponent(accountForCrossLink.accountKey)}`;
+    }
+    url = appendThemeParam(url, theme);
+    setReportingHref(url);
+  }, [accountForCrossLink, theme]);
 
   const isClientRole = userRole === 'client';
   const slug = accountKey ? accountKeyToSlug(accountKey, accounts) : null;
@@ -218,17 +234,45 @@ export function Sidebar() {
     pathname.startsWith('/subaccounts');
 
   return (
-    <aside className="glass-panel fixed left-3 top-3 bottom-3 w-60 rounded-2xl text-[var(--sidebar-foreground)] flex flex-col z-50 overflow-visible">
-      {/* Logo + Account Switcher */}
-      <div className="p-5 pb-4 border-b border-[var(--sidebar-border)]">
-        <div className="mb-3">
-          <AppLogo className="h-8 w-auto max-w-[150px] object-contain" />
+    <aside
+      data-collapsed={collapsed}
+      className={`glass-panel fixed left-3 top-3 bottom-3 rounded-2xl text-[var(--sidebar-foreground)] flex flex-col z-50 overflow-visible transition-[width] duration-200 ease-out ${
+        collapsed ? 'w-[4.5rem]' : 'w-60'
+      }`}
+    >
+      {/* Logo + Account Switcher + Collapse Toggle */}
+      <div className={`border-b border-[var(--sidebar-border)] ${collapsed ? 'p-2 pb-3' : 'p-5 pb-4'}`}>
+        <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between mb-3'}`}>
+          {!collapsed && <AppLogo className="h-8 w-auto max-w-[150px] object-contain" />}
+          <SidebarTooltip label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
+            <button
+              type="button"
+              onClick={toggleCollapsed}
+              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--sidebar-muted-foreground)] hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)] transition"
+            >
+              {collapsed ? (
+                <ChevronDoubleRightIcon className="w-4 h-4" />
+              ) : (
+                <ChevronDoubleLeftIcon className="w-4 h-4" />
+              )}
+            </button>
+          </SidebarTooltip>
         </div>
-        <AccountSwitcher />
+        {/* AccountSwitcher: full pill when expanded, avatar-only trigger
+            when collapsed. In compact mode the dropdown flies out to the
+            right of the rail (see AccountSwitcher position logic). */}
+        {collapsed ? (
+          <div className="mt-2">
+            <AccountSwitcher compact />
+          </div>
+        ) : (
+          <AccountSwitcher />
+        )}
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
+      <nav className={`flex-1 space-y-0.5 overflow-y-auto ${collapsed ? 'p-2' : 'p-3'}`}>
         {resolvedNavItems.map((item) => {
           if (item.children && item.children.length > 0) {
             return (
@@ -246,50 +290,93 @@ export function Sidebar() {
             itemPage === '/dashboard'
               ? normalizedPath === '/dashboard' || normalizedPath === '/'
               : normalizedPath.startsWith(itemPage);
-          return (
+          const leaf = (
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
+              className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
                 isActive
                   ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
                   : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
               }`}
             >
               {item.icon && <item.icon className="w-5 h-5" />}
-              {item.label}
+              {!collapsed && item.label}
             </Link>
           );
+          return collapsed ? (
+            <SidebarTooltip key={item.href} label={item.label}>
+              {leaf}
+            </SidebarTooltip>
+          ) : leaf;
         })}
+
+        {/* Cross-host link to the reporting surface. Lives at the
+            bottom of the main nav since "view performance" feels
+            adjacent to "build performance" rather than a settings
+            concern. Plain anchor (not next/link) because the
+            destination is a different host. */}
+        {reportingHref &&
+          (() => {
+            const analyticsLink = (
+              <a
+                href={reportingHref}
+                className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-xl text-sm font-medium transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]`}
+              >
+                <ChartBarSquareIcon className="w-5 h-5" />
+                {!collapsed && (
+                  <>
+                    <span className="flex-1 text-left">Analytics</span>
+                    <ArrowTopRightOnSquareIcon className="w-3 h-3 text-[var(--sidebar-muted-foreground)]/70" />
+                  </>
+                )}
+              </a>
+            );
+            return collapsed ? (
+              <SidebarTooltip label="Analytics">{analyticsLink}</SidebarTooltip>
+            ) : analyticsLink;
+          })()}
       </nav>
 
-      {/* Developer impersonation */}
-      <DevImpersonate />
+      {/* Developer impersonation — hidden when collapsed (too dense for narrow rail) */}
+      {!collapsed && <DevImpersonate />}
 
       {/* Settings / Theme Toggle */}
-      <div className="p-3 border-t border-[var(--sidebar-border)]">
-        {isClientRole ? (
-          <button
-            type="button"
-            onClick={toggleTheme}
-            className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]"
-          >
-            {theme === 'dark' ? <SunIcon className="w-5 h-5" /> : <MoonIcon className="w-5 h-5" />}
-            {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
-          </button>
-        ) : (
-          <Link
-            href={settingsHref}
-            className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
-              settingsActive
-                ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
-                : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
-            }`}
-          >
-            <CogIcon className="w-5 h-5" />
-            Settings
-          </Link>
-        )}
+      <div className={`border-t border-[var(--sidebar-border)] ${collapsed ? 'p-2' : 'p-3'}`}>
+        {(() => {
+          const themeLabel = theme === 'dark' ? 'Light Mode' : 'Dark Mode';
+          const themeBtn = (
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className={`w-full flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-xl text-sm font-medium transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]`}
+            >
+              {theme === 'dark' ? <SunIcon className="w-5 h-5" /> : <MoonIcon className="w-5 h-5" />}
+              {!collapsed && themeLabel}
+            </button>
+          );
+          const settingsLink = (
+            <Link
+              href={settingsHref}
+              className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
+                settingsActive
+                  ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
+                  : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
+              }`}
+            >
+              <CogIcon className="w-5 h-5" />
+              {!collapsed && 'Settings'}
+            </Link>
+          );
+          if (isClientRole) {
+            return collapsed ? (
+              <SidebarTooltip label={themeLabel}>{themeBtn}</SidebarTooltip>
+            ) : themeBtn;
+          }
+          return collapsed ? (
+            <SidebarTooltip label="Settings">{settingsLink}</SidebarTooltip>
+          ) : settingsLink;
+        })()}
       </div>
     </aside>
   );
@@ -306,6 +393,8 @@ function NavGroup({
   normalizedPath: string;
   depth: number;
 }) {
+  const { collapsed } = useSidebarCollapse();
+
   // A group is active if the URL matches any of its children's paths — children
   // can live at unrelated URL roots (Templates at /templates, Flows at /flows,
   // etc.) even though they're grouped under a parent like "Campaigns".
@@ -341,6 +430,69 @@ function NavGroup({
   const handleToggle = () => setUserOpen(!open);
 
   const isTop = depth === 0;
+
+  // When the sidebar is collapsed AND this is a top-level group, render
+  // the icon as a button that pops out the children to the right. Hover
+  // shows the group label as a tooltip; click toggles the popout.
+  if (collapsed && isTop && item.icon) {
+    return (
+      <SidebarPopout label={item.label} icon={item.icon} active={sectionActive}>
+        {/* Render children inside the popout. NavGroup children may be
+            either leaf links or nested NavGroups (e.g. Ads → Meta →
+            Ad Planner). We render leaves as direct links; nested groups
+            render their own children as a labeled section. */}
+        {item.children!.map((child) => {
+          if (child.children && child.children.length > 0) {
+            return (
+              <div key={child.label} className="pt-1.5 first:pt-0">
+                <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] flex items-center gap-1.5">
+                  {child.icon && <child.icon className="w-3.5 h-3.5" />}
+                  {child.label}
+                </div>
+                {child.children.map((grand) => {
+                  const grandPath = grand.absolute ? grand.href : grand.href.replace(prefix, '');
+                  const grandActive =
+                    normalizedPath === grandPath || normalizedPath.startsWith(`${grandPath}/`);
+                  return (
+                    <Link
+                      key={grand.href}
+                      href={grand.href}
+                      role="menuitem"
+                      className={`block px-3 py-1.5 text-[13px] rounded-md transition-colors ${
+                        grandActive
+                          ? 'text-[var(--primary)] font-semibold bg-[var(--sidebar-muted)]'
+                          : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]/60'
+                      }`}
+                    >
+                      {grand.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            );
+          }
+          const childPath = child.absolute ? child.href : child.href.replace(prefix, '');
+          const childActive =
+            normalizedPath === childPath || normalizedPath.startsWith(`${childPath}/`);
+          return (
+            <Link
+              key={child.href}
+              href={child.href}
+              role="menuitem"
+              className={`flex items-center gap-2.5 px-2 py-1.5 text-sm rounded-md transition-colors ${
+                childActive
+                  ? 'text-[var(--primary)] font-semibold bg-[var(--sidebar-muted)]'
+                  : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]/60'
+              }`}
+            >
+              {child.icon && <child.icon className="w-4 h-4" />}
+              {child.label}
+            </Link>
+          );
+        })}
+      </SidebarPopout>
+    );
+  }
 
   // Top-level groups keep the bold pill treatment. Nested groups go lighter so
   // we don't stack multiple dark pills inside each other (Tools → Meta → leaf).

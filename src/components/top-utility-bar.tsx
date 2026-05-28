@@ -17,7 +17,7 @@ import {
   UserCircleIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
-import { getOtherSurfaceUrl } from '@/lib/cross-site';
+import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
 import { useAccount } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { useTheme } from '@/contexts/theme-context';
@@ -50,7 +50,7 @@ function UtilityIconButton({
 
 export function TopUtilityBar() {
   const pathname = usePathname();
-  const { userName, userTitle, userEmail, userAvatarUrl, userRole } = useAccount();
+  const { userName, userTitle, userEmail, userAvatarUrl, userRole, account } = useAccount();
   const { confirmNavigation } = useUnsavedChanges();
   const { theme, toggleTheme } = useTheme();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -222,8 +222,15 @@ export function TopUtilityBar() {
                   {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
                 </button>
                 {(() => {
-                  const otherUrl = getOtherSurfaceUrl();
+                  let otherUrl = getOtherSurfaceUrl();
                   if (!otherUrl) return null;
+                  // Pass the active account + theme through the URL so
+                  // reporting can restore the same context on arrival.
+                  if (account.mode === 'account' && account.accountKey) {
+                    const sep = otherUrl.includes('?') ? '&' : '?';
+                    otherUrl = `${otherUrl}${sep}account=${encodeURIComponent(account.accountKey)}`;
+                  }
+                  otherUrl = appendThemeParam(otherUrl, theme);
                   return (
                     <a
                       href={otherUrl}

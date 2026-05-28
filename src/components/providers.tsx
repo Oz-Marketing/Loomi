@@ -5,6 +5,7 @@ import { AccountProvider, useAccount } from '@/contexts/account-context';
 import { ThemeProvider, useTheme } from '@/contexts/theme-context';
 import { UnsavedChangesProvider } from '@/contexts/unsaved-changes-context';
 import { LoomiDialogProvider } from '@/contexts/loomi-dialog-context';
+import { SidebarCollapseProvider } from '@/contexts/sidebar-collapse-context';
 import { Toaster } from 'sonner';
 import { AiBubble } from '@/components/ai-bubble';
 import { SunIcon, MoonIcon } from '@heroicons/react/24/outline';
@@ -71,10 +72,12 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <AccountProvider>
           <UnsavedChangesProvider>
             <LoomiDialogProvider>
-              {children}
-              <ThemedToaster />
-              <AiBubble />
-              <DevThemeToggle />
+              <SidebarCollapseProvider>
+                {children}
+                <ThemedToaster />
+                <AiBubble />
+                <DevThemeToggle />
+              </SidebarCollapseProvider>
             </LoomiDialogProvider>
           </UnsavedChangesProvider>
         </AccountProvider>

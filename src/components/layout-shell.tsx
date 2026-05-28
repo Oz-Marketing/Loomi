@@ -7,6 +7,7 @@ import { Sidebar } from '@/components/sidebar';
 import { TopUtilityBar } from '@/components/top-utility-bar';
 import { AppLogo } from '@/components/app-logo';
 import { stripSubaccountPrefix } from '@/lib/account-slugs';
+import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 
 const BUILDER_STEPS = [
   { key: 'recipients', label: 'Recipients' },
@@ -95,6 +96,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const normalizedPath = stripSubaccountPrefix(pathname);
   const mainRef = useRef<HTMLElement>(null);
   const [isMainScrolled, setIsMainScrolled] = useState(false);
+  const { collapsed: sidebarCollapsed } = useSidebarCollapse();
   const isFullScreen =
     normalizedPath.startsWith('/preview')
     || normalizedPath.startsWith('/login')
@@ -227,7 +229,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
       <main
         ref={mainRef}
         data-scrolled={isMainScrolled ? 'true' : 'false'}
-        className="flex-1 min-w-0 h-screen overflow-y-auto overflow-x-hidden overscroll-contain p-8 pl-[18.5rem]"
+        className={`flex-1 min-w-0 h-screen overflow-y-auto overflow-x-hidden overscroll-contain p-8 transition-[padding-left] duration-200 ease-out ${
+          sidebarCollapsed ? 'pl-[7.5rem]' : 'pl-[18.5rem]'
+        }`}
       >
         <TopUtilityBar />
         {children}

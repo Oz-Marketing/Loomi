@@ -30,6 +30,7 @@ import {
   Squares2X2Icon,
 } from '@heroicons/react/24/outline';
 import { FlowIcon } from '@/components/icon-map';
+import { ViewAnalyticsLink } from '@/components/view-analytics-link';
 
 // Loomi-native flows live behind `/api/flows`. Page mirrors the
 // Contacts page chrome: a single sticky header with title + primary
@@ -625,23 +626,26 @@ function FlowsPageBody({
         title="Flows"
         subtitle={subtitle}
         cta={
-          presetAccountKey ? (
-            <AddTemplateButton
-              creating={creating}
-              onPickFromTemplate={() => setPickTemplateOpen(true)}
-              onCreateFromScratch={handleCreate}
-            />
-          ) : (
-            <button
-              type="button"
-              onClick={handleCreate}
-              disabled={creating}
-              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-60"
-            >
-              <PlusIcon className="w-4 h-4" />
-              {creating ? 'Creating…' : 'Create Flow'}
-            </button>
-          )
+          <>
+            <ViewAnalyticsLink area="engagement" />
+            {presetAccountKey ? (
+              <AddTemplateButton
+                creating={creating}
+                onPickFromTemplate={() => setPickTemplateOpen(true)}
+                onCreateFromScratch={handleCreate}
+              />
+            ) : (
+              <button
+                type="button"
+                onClick={handleCreate}
+                disabled={creating}
+                className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-60"
+              >
+                <PlusIcon className="w-4 h-4" />
+                {creating ? 'Creating…' : 'Create Flow'}
+              </button>
+            )}
+          </>
         }
       />
 

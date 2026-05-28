@@ -13,6 +13,8 @@ import {
 import { useAccount, type AccountData } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { AccountAvatar } from '@/components/account-avatar';
+import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
+import { getCurrentSurface } from '@/lib/cross-site';
 import { formatAccountCityState, resolveAccountCity, resolveAccountState } from '@/lib/account-resolvers';
 import {
   accountKeyToSlug,
@@ -22,6 +24,9 @@ import {
 
 interface AccountSwitcherProps {
   onSwitch?: () => void;
+  /** When true, render only the current account's avatar as the trigger
+   *  and position the dropdown to the right (used by the collapsed sidebar). */
+  compact?: boolean;
 }
 
 const RECENT_SUBACCOUNT_STORAGE_KEY_PREFIX = 'loomi-recent-subaccounts';
@@ -168,7 +173,7 @@ function resolveAccountCityStateLabel(accountData: AccountData): string | null {
   return formatAccountCityState(accountData) || null;
 }
 
-export function AccountSwitcher({ onSwitch }: AccountSwitcherProps) {
+export function AccountSwitcher({ onSwitch, compact = false }: AccountSwitcherProps) {
   const { account, setAccount, accounts, accountsLoaded, userRole, userEmail } = useAccount();
   const { confirmNavigation } = useUnsavedChanges();
   const router = useRouter();
@@ -187,16 +192,25 @@ export function AccountSwitcher({ onSwitch }: AccountSwitcherProps) {
   const currentAccount = currentKey ? accounts[currentKey] : null;
   const recentStorageKey = getRecentSubaccountsStorageKey(userEmail);
 
-  // Position dropdown when opening
+  // Position dropdown when opening. In compact mode (collapsed sidebar)
+  // the dropdown flies out to the RIGHT of the trigger so it doesn't
+  // get clipped by the narrow rail.
   useEffect(() => {
     if (open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
-      setPos({
-        top: rect.bottom + 6,
-        left: rect.left,
-      });
+      if (compact) {
+        setPos({
+          top: rect.top,
+          left: rect.right + 12,
+        });
+      } else {
+        setPos({
+          top: rect.bottom + 6,
+          left: rect.left,
+        });
+      }
     }
-  }, [open]);
+  }, [open, compact]);
 
   // Close on outside click (checks both trigger and portal dropdown)
   useEffect(() => {
@@ -253,20 +267,31 @@ export function AccountSwitcher({ onSwitch }: AccountSwitcherProps) {
   const handleSelect = (key: string | '__admin__') => {
     const destinationLabel = key === '__admin__' ? 'Admin Account' : (accounts[key]?.dealer || key);
     confirmNavigation(() => {
+      // Reporting surface routes don't use the studio `/subaccount/<slug>/*`
+      // URL structure — pages read the active account from context and
+      // filter their data accordingly. So on reporting we update context
+      // and skip URL navigation (which would land on a 404 if we pushed
+      // a /subaccount/... path that the reporting tree doesn't have).
+      const onReporting = getCurrentSurface() === 'reporting';
+
       if (key === '__admin__') {
         setAccount({ mode: 'admin' });
-        router.push(resolveAdminPath(pathname));
+        if (!onReporting) router.push(resolveAdminPath(pathname));
       } else {
-        const slug = accountKeyToSlug(key, accounts);
-        const targetPath = slug ? resolveSubaccountPath(pathname, slug) : null;
-        // Context-scoped routes (e.g. /tools/*) keep the same path on switch
-        // — the layout doesn't pick up the slug from the URL, so we have to
-        // update the account context ourselves.
-        const stayingOnSamePath = targetPath === pathname;
-        if (stayingOnSamePath || !slug) {
+        if (onReporting) {
           setAccount({ mode: 'account', accountKey: key });
-        } else if (targetPath) {
-          router.push(targetPath);
+        } else {
+          const slug = accountKeyToSlug(key, accounts);
+          const targetPath = slug ? resolveSubaccountPath(pathname, slug) : null;
+          // Context-scoped routes (e.g. /tools/*) keep the same path on switch
+          // — the layout doesn't pick up the slug from the URL, so we have to
+          // update the account context ourselves.
+          const stayingOnSamePath = targetPath === pathname;
+          if (stayingOnSamePath || !slug) {
+            setAccount({ mode: 'account', accountKey: key });
+          } else if (targetPath) {
+            router.push(targetPath);
+          }
         }
       }
       setOpen(false);
@@ -326,6 +351,21 @@ export function AccountSwitcher({ onSwitch }: AccountSwitcherProps) {
 
   // Client-role users see a static display with no dropdown.
   if (userRole === 'client') {
+    if (compact) {
+      // Compact client view: just the avatar, centered, no dropdown.
+      const label = currentAccount?.dealer || currentKey || 'Your Sub-Account';
+      return (
+        <SidebarTooltip label={label}>
+          <div className="flex items-center justify-center w-full" aria-label={label}>
+            {currentAccount ? (
+              <AccountSwitcherAvatar account={currentAccount} accountKey={currentKey} />
+            ) : (
+              <div className="w-7 h-7 rounded-md bg-[var(--sidebar-muted)] flex-shrink-0" />
+            )}
+          </div>
+        </SidebarTooltip>
+      );
+    }
     return (
       <div className="w-full flex items-center gap-2.5">
         {currentAccount ? (
@@ -347,35 +387,56 @@ export function AccountSwitcher({ onSwitch }: AccountSwitcherProps) {
     );
   }
 
+  const triggerAvatar = isAdmin ? (
+    <div className="w-7 h-7 rounded-md bg-[var(--primary)]/15 flex items-center justify-center flex-shrink-0">
+      <ShieldCheckIcon className="w-3.5 h-3.5 text-[var(--primary)]" />
+    </div>
+  ) : currentAccount ? (
+    <AccountSwitcherAvatar account={currentAccount} accountKey={currentKey} />
+  ) : (
+    <div className="w-7 h-7 rounded-md bg-[var(--sidebar-muted)] flex-shrink-0" />
+  );
+  const triggerLabel = isAdmin
+    ? 'Admin Account'
+    : currentAccount?.dealer || currentKey || 'Select sub-account';
+
   return (
     <>
-      {/* Trigger */}
-      <button
-        ref={triggerRef}
-        onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl border border-[var(--sidebar-border)] bg-[var(--sidebar-input)] hover:bg-[var(--sidebar-muted)] transition-colors text-left"
-      >
-        {isAdmin ? (
-          <div className="w-7 h-7 rounded-md bg-[var(--primary)]/15 flex items-center justify-center flex-shrink-0">
-            <ShieldCheckIcon className="w-3.5 h-3.5 text-[var(--primary)]" />
-          </div>
-        ) : currentAccount ? (
-          <AccountSwitcherAvatar account={currentAccount} accountKey={currentKey} />
-        ) : (
-          <div className="w-7 h-7 rounded-md bg-[var(--sidebar-muted)] flex-shrink-0" />
-        )}
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium text-[var(--sidebar-foreground)] truncate">
-            {isAdmin ? 'Admin Account' : currentAccount?.dealer || currentKey || 'Select sub-account'}
-          </p>
-          {!isAdmin && currentAccount && (
-            <p className="text-[10px] text-[var(--sidebar-muted-foreground)] truncate leading-tight">
-              {getAccountAddress(currentAccount)}
+      {/* Trigger — compact mode = avatar only (collapsed sidebar);
+          expanded = full pill with label + chevron. */}
+      {compact ? (
+        <SidebarTooltip label={triggerLabel}>
+          <button
+            ref={triggerRef}
+            onClick={() => setOpen(!open)}
+            aria-label={triggerLabel}
+            aria-haspopup="menu"
+            aria-expanded={open}
+            className="w-full flex items-center justify-center p-1 rounded-xl hover:bg-[var(--sidebar-muted)] transition-colors"
+          >
+            {triggerAvatar}
+          </button>
+        </SidebarTooltip>
+      ) : (
+        <button
+          ref={triggerRef}
+          onClick={() => setOpen(!open)}
+          className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl border border-[var(--sidebar-border)] bg-[var(--sidebar-input)] hover:bg-[var(--sidebar-muted)] transition-colors text-left"
+        >
+          {triggerAvatar}
+          <div className="flex-1 min-w-0">
+            <p className="text-xs font-medium text-[var(--sidebar-foreground)] truncate">
+              {triggerLabel}
             </p>
-          )}
-        </div>
-        <ChevronUpDownIcon className="w-3.5 h-3.5 text-[var(--sidebar-muted-foreground)] flex-shrink-0" />
-      </button>
+            {!isAdmin && currentAccount && (
+              <p className="text-[10px] text-[var(--sidebar-muted-foreground)] truncate leading-tight">
+                {getAccountAddress(currentAccount)}
+              </p>
+            )}
+          </div>
+          <ChevronUpDownIcon className="w-3.5 h-3.5 text-[var(--sidebar-muted-foreground)] flex-shrink-0" />
+        </button>
+      )}
 
       {/* Portal dropdown */}
       {open && typeof document !== 'undefined' && createPortal(

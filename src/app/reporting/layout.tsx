@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation';
 import { getAuthSession } from '@/lib/api-auth';
 import { ReportingSidebar } from './_components/reporting-sidebar';
+import { ReportingTopBar } from './_components/reporting-top-bar';
+import { ReportingMain } from './_components/reporting-main';
 
 export const metadata = {
   title: 'Loomi Reporting',
@@ -14,20 +16,31 @@ export default async function ReportingLayout({
 }) {
   const session = await getAuthSession();
   if (!session?.user) {
-    redirect('/login?callbackUrl=/reporting');
+    // callbackUrl is the BROWSER-facing path on whichever host we're
+    // currently on. On reporting.loomilm.com, `/` rewrites to /reporting
+    // via middleware, so `/` is the correct value here (sending the user
+    // to `/reporting` would produce the redundant URL
+    // `reporting.loomilm.com/reporting`).
+    redirect('/login?callbackUrl=/');
   }
 
+  // Layout matches studio's AppShell structure for visual parity:
+  //   - Sidebar and main are siblings inside the root layout's flex body
+  //   - Main left-pads enough to clear the fixed sidebar
+  //   - No max-width / no centered container — content spans the full
+  //     available width, same as studio
   return (
-    <div className="flex min-h-screen flex-1">
-      <ReportingSidebar
-        name={session.user.name}
-        email={session.user.email}
-        avatarUrl={session.user.avatarUrl}
-      />
-      {/* Main content offset by the fixed sidebar width (w-60 = 15rem) + gutters */}
-      <main className="ml-[16rem] flex-1 px-8 py-10">
-        <div className="mx-auto w-full max-w-6xl">{children}</div>
-      </main>
-    </div>
+    <>
+      <ReportingSidebar />
+      <ReportingMain>
+        <ReportingTopBar
+          userName={session.user.name}
+          userEmail={session.user.email}
+          userAvatarUrl={session.user.avatarUrl}
+          userRole={session.user.role}
+        />
+        {children}
+      </ReportingMain>
+    </>
   );
 }

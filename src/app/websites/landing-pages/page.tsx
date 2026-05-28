@@ -14,6 +14,7 @@ import { LandingPageCard } from '@/components/landing-pages/landing-page-card';
 import { LandingPagesTable } from '@/components/landing-pages/landing-pages-table';
 import { NewLandingPageModal } from '@/components/landing-pages/new-landing-page-modal';
 import type { LandingPageSummary } from '@/lib/services/landing-pages';
+import { ViewAnalyticsLink } from '@/components/view-analytics-link';
 
 const fetcher = async (url: string) => {
   const res = await fetch(url);
@@ -157,15 +158,18 @@ export default function LandingPagesPage() {
                 </p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setNewOpen(true)}
-              disabled={!accountKey}
-              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <PlusIcon className="w-4 h-4" />
-              New Landing Page
-            </button>
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              <ViewAnalyticsLink area="websites" />
+              <button
+                type="button"
+                onClick={() => setNewOpen(true)}
+                disabled={!accountKey}
+                className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <PlusIcon className="w-4 h-4" />
+                New Landing Page
+              </button>
+            </div>
           </div>
         </div>
 

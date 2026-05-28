@@ -236,20 +236,36 @@ function AppShell({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Which Loomi surface the current request is being rendered for. */
+export type Surface = 'studio' | 'reporting';
+
 /**
  * Top-level layout shell.
  *
- * For public unauthenticated pages — public forms (/f/<slug>) and
- * landing pages (/lp/<slug>) — we render the children raw: no
- * sidebar, no top utility bar, no authed providers. The full AppShell
- * (with all its hooks + session-dependent fetches) only mounts for
- * app routes. Splitting on pathname here, rather than inside
- * AppShell, keeps hook order stable: navigating between public and
- * app routes unmounts one branch and mounts the other.
+ * AppShell (studio sidebar + utility bar + authed providers) only mounts
+ * for studio app routes. We bypass it for:
+ *   - the `reporting` surface (host = reporting.*) — determined server-side
+ *     in the root layout via the Host header and passed in as `surface`,
+ *     since middleware rewrites mean `usePathname()` returns the BROWSER
+ *     URL not the rewritten path
+ *   - public unauthenticated routes (`/f/<slug>`, `/lp/<slug>`) — kept on
+ *     pathname so behavior is unchanged for those
+ *   - the `/reporting/*` pathname when accessed from the studio host (rare
+ *     dev convenience — visiting localhost:3000/reporting directly)
+ *
+ * Splitting here, rather than inside AppShell, keeps hook order stable:
+ * navigating between branches unmounts one and mounts the other.
  */
-export function LayoutShell({ children }: { children: React.ReactNode }) {
+export function LayoutShell({
+  children,
+  surface = 'studio',
+}: {
+  children: React.ReactNode;
+  surface?: Surface;
+}) {
   const pathname = usePathname();
   if (
+    surface === 'reporting' ||
     pathname.startsWith('/f/') ||
     pathname.startsWith('/lp/') ||
     pathname.startsWith('/reporting')

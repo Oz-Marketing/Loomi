@@ -1,7 +1,6 @@
 import { redirect } from 'next/navigation';
-import Link from 'next/link';
 import { getAuthSession } from '@/lib/api-auth';
-import { ReportingUserMenu } from './_components/reporting-user-menu';
+import { ReportingSidebar } from './_components/reporting-sidebar';
 
 export const metadata = {
   title: 'Loomi Reporting',
@@ -19,20 +18,16 @@ export default async function ReportingLayout({
   }
 
   return (
-    <div className="flex min-h-screen flex-1 flex-col">
-      <header className="sticky top-0 z-30 border-b border-[var(--border)] bg-[var(--background)]/80 backdrop-blur">
-        <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-6">
-          <Link href="/reporting" className="text-sm font-semibold tracking-tight">
-            Loomi Reporting
-          </Link>
-          <ReportingUserMenu
-            name={session.user.name}
-            email={session.user.email}
-            avatarUrl={session.user.avatarUrl}
-          />
-        </div>
-      </header>
-      <main className="mx-auto w-full max-w-6xl flex-1 px-6 py-10">{children}</main>
+    <div className="flex min-h-screen flex-1">
+      <ReportingSidebar
+        name={session.user.name}
+        email={session.user.email}
+        avatarUrl={session.user.avatarUrl}
+      />
+      {/* Main content offset by the fixed sidebar width (w-60 = 15rem) + gutters */}
+      <main className="ml-[16rem] flex-1 px-8 py-10">
+        <div className="mx-auto w-full max-w-6xl">{children}</div>
+      </main>
     </div>
   );
 }

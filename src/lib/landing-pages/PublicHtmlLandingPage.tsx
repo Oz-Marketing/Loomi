@@ -4,24 +4,19 @@
  * The user owns the body innerHTML — we inject it via
  * `dangerouslySetInnerHTML` so their CSS, fonts, scripts, and layout
  * stand alone. Form embeds via the `<div data-loomi-form="<id>"></div>`
- * tag are server-rendered into the HTML and then hydrated client-side,
- * so visitors see the real form on first paint with no empty-div flash.
+ * tag are hydrated client-side by `FormPortalsHydrator`; each
+ * placeholder gets a `createRoot` mounted into it on the client.
  *
- * Pre-fetched form schemas are passed through PreloadedFormsProvider
- * on both server and client so the EmbeddedFormBlock takes its
- * "rendered inline" code path on both sides — server and client emit
- * identical markup, which is what hydrateRoot needs to attach cleanly.
+ * Forms are NOT server-rendered into the HTML. We tried `renderToString`
+ * here originally to avoid a brief empty-placeholder flash on first
+ * paint, but Next.js 16 hard-rejects component files whose import
+ * graph reaches `react-dom/server` ("render or return the content
+ * directly as a Server Component instead"). The hydrator handles the
+ * full form rendering on the client in <100ms, so the visible flash is
+ * negligible; the perf/security boundary Next is enforcing is worth it.
  */
-import { renderToString } from 'react-dom/server';
-import EmbeddedFormBlock from './components/EmbeddedForm';
-import {
-  PreloadedFormsProvider,
-  type PreloadedForm,
-} from './preloaded-forms-context';
-import {
-  LpAttributionProvider,
-  type LpAttribution,
-} from './lp-attribution-context';
+import type { PreloadedForm } from './preloaded-forms-context';
+import type { LpAttribution } from './lp-attribution-context';
 import { FormPortalsHydrator } from './FormPortalsHydrator';
 
 export interface PublicHtmlLandingPageProps {
@@ -39,12 +34,6 @@ export function PublicHtmlLandingPage({
   preloadedForms,
   attribution,
 }: PublicHtmlLandingPageProps) {
-  // Splice each placeholder's server-rendered form HTML into the
-  // user's body markup. Unknown form ids still get rendered (the
-  // block falls through to its "form not found" placeholder), so
-  // server and client agree on the markup either way.
-  const enrichedHtml = injectFormsIntoHtml(html, preloadedForms, attribution);
-
   // Map isn't structurally cloneable across the server/client
   // boundary — serialize it into a plain object the client can
   // re-Map on the other side.
@@ -55,7 +44,7 @@ export function PublicHtmlLandingPage({
     <>
       <div
         className="loomi-lp-html-root"
-        dangerouslySetInnerHTML={{ __html: enrichedHtml }}
+        dangerouslySetInnerHTML={{ __html: html }}
       />
       <FormPortalsHydrator
         preloadedForms={preloadedRecord}
@@ -65,32 +54,3 @@ export function PublicHtmlLandingPage({
   );
 }
 
-/** Walk the user's HTML for `<div data-loomi-form="..."></div>`
- *  placeholders and replace each placeholder's inner content with a
- *  server-rendered EmbeddedFormBlock. The regex is intentionally
- *  conservative: it matches the placeholder's outer `<div>` and a
- *  non-greedy inner body. Hand-written placeholders containing
- *  nested `<div>`s won't round-trip cleanly — the InsertForm picker
- *  inserts empty placeholders, so the common path is safe. */
-function injectFormsIntoHtml(
-  html: string,
-  preloadedForms: Map<string, PreloadedForm>,
-  attribution: LpAttribution,
-): string {
-  return html.replace(
-    /<div\b([^>]*\bdata-loomi-form\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))[^>]*)>[\s\S]*?<\/div>/gi,
-    (_match, attrs: string, q1?: string, q2?: string, q3?: string) => {
-      const id = q1 ?? q2 ?? q3 ?? '';
-      // Server output must match the client's hydrateRoot tree
-      // exactly — same providers in the same order, same props.
-      const formHtml = renderToString(
-        <LpAttributionProvider value={attribution}>
-          <PreloadedFormsProvider value={preloadedForms}>
-            <EmbeddedFormBlock formId={id} />
-          </PreloadedFormsProvider>
-        </LpAttributionProvider>,
-      );
-      return `<div${attrs}>${formHtml}</div>`;
-    },
-  );
-}

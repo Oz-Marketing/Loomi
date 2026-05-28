@@ -11,7 +11,8 @@
     "db:push": "npx prisma db push",
     "db:seed": "npx tsx prisma/seed.ts",
     "db:migrate:sqlite-to-postgres": "npx tsx scripts/migrate-sqlite-to-postgres.ts",
-    "verify": "npx tsc --noEmit && npx tsc --noEmit --noUnusedLocals --noUnusedParameters"
+    "verify": "npx tsc --noEmit && npx tsc --noEmit --noUnusedLocals --noUnusedParameters",
+    "verify:build": "npm run verify && npx prisma generate && npx next build --webpack"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"

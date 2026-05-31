@@ -7072,7 +7072,7 @@ function AdSetLinkPicker({
       </button>
 
       {open && (
-        <div className="absolute left-0 right-0 z-[120] mt-1 min-w-[260px] rounded-md border border-[var(--border)] bg-[var(--card)] shadow-lg">
+        <div className="glass-dropdown absolute left-0 right-0 z-[120] mt-1 min-w-[260px]">
           <div className="flex items-center gap-1.5 border-b border-[var(--border)] px-2 py-1.5">
             <MagnifyingGlassIcon className="w-3.5 h-3.5 flex-shrink-0 text-[var(--muted-foreground)]" />
             <input
@@ -7156,6 +7156,7 @@ function PacerRow({
   onLinkChange,
   onMuteToggle,
   onMarkOff,
+  onPushDailyBudget,
 }: {
   ad: PacerAd;
   index: number;
@@ -7171,9 +7172,37 @@ function PacerRow({
   onLinkChange: (adSetId: string | null) => void;
   onMuteToggle: () => void;
   onMarkOff: () => void;
+  /** Push the row's current daily budget to its linked Meta ad set. */
+  onPushDailyBudget: (value: string) => Promise<{ ok: boolean; text: string }>;
 }) {
   const isLifetime = ad.budgetType === 'Lifetime';
   const typeColor = isLifetime ? COLORS.lifetime : COLORS.daily;
+  // Once a row is linked to Meta and has synced, Meta owns its actual spend
+  // (read-only here) and its daily budget is edited-then-pushed, not free-typed.
+  const syncedFromMeta = !!ad.metaObjectId && !!ad.pacerSyncedAt;
+  // Daily-budget editor state: collapsed (read-only + pencil) until the user
+  // opts in; once they change the value a "Push to Meta" action appears.
+  const [dailyEditing, setDailyEditing] = useState(false);
+  const [dailyStart, setDailyStart] = useState<string | null>(null);
+  const [pushing, setPushing] = useState(false);
+  const [pushMsg, setPushMsg] = useState<{ ok: boolean; text: string } | null>(
+    null,
+  );
+  const dailyChanged =
+    dailyEditing && (ad.pacerDailyBudget ?? '') !== (dailyStart ?? '');
+  const beginDailyEdit = () => {
+    setDailyStart(ad.pacerDailyBudget ?? '');
+    setPushMsg(null);
+    setDailyEditing(true);
+  };
+  const pushDaily = async () => {
+    setPushing(true);
+    setPushMsg(null);
+    const res = await onPushDailyBudget(ad.pacerDailyBudget ?? '');
+    setPushMsg(res);
+    setPushing(false);
+    if (res.ok) setDailyStart(ad.pacerDailyBudget ?? '');
+  };
 
   // "Now" = the current instant; the day boundary that bounds the recommended
   // daily is resolved in the account's timezone inside buildPacerCalc. Captured
@@ -7435,11 +7464,27 @@ function PacerRow({
           the immutable flight end, so neither needs an input. */}
       <div className="grid grid-cols-1 md:grid-cols-[minmax(0,340px)_minmax(0,180px)] gap-4 mb-3.5">
         <Field label="Actual Spend">
-          <DollarInput
-            value={ad.pacerActual}
-            onChange={onActualChange}
-            placeholder="0.00"
-          />
+          {syncedFromMeta ? (
+            // Meta owns the spend once synced — show it read-only, not an input.
+            <div
+              className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--input)]/50 px-3 py-2 text-sm cursor-default"
+              title="Actual spend is pulled from Meta and isn't editable here. Re-run Sync from Meta to refresh."
+            >
+              <span className="tabular-nums text-[var(--foreground)]">
+                {fmt(num(ad.pacerActual) ?? 0)}
+              </span>
+              <span className="flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]">
+                <MetaLogoIcon className="w-3 h-3" />
+                from Meta
+              </span>
+            </div>
+          ) : (
+            <DollarInput
+              value={ad.pacerActual}
+              onChange={onActualChange}
+              placeholder="0.00"
+            />
+          )}
           {/* Meta ad-set link. Picking an ad set overrides the name-match;
               spend (and ABO budget) then come from "Sync from Meta". */}
           <div className="mt-1.5">
@@ -7533,12 +7578,75 @@ function PacerRow({
             >
               N/A — lifetime
             </div>
-          ) : (
+          ) : !syncedFromMeta ? (
+            // Manual / unlinked — free-typed as before.
             <DollarInput
               value={ad.pacerDailyBudget}
               onChange={onDailyBudgetChange}
               placeholder="0.00"
             />
+          ) : !dailyEditing ? (
+            // Synced — hard-coded display with a pencil to reveal the input.
+            <div className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--input)]/50 px-3 py-2 text-sm">
+              <span className="tabular-nums text-[var(--foreground)]">
+                {ad.pacerDailyBudget != null && ad.pacerDailyBudget !== ''
+                  ? fmt(num(ad.pacerDailyBudget) ?? 0)
+                  : '—'}
+              </span>
+              <button
+                type="button"
+                onClick={beginDailyEdit}
+                disabled={readOnly}
+                title="Edit daily budget"
+                aria-label="Edit daily budget"
+                className="inline-flex items-center justify-center rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <PencilSquareIcon className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            // Editing — input, then a Push to Meta action once the value changes.
+            <div className="space-y-1.5">
+              <DollarInput
+                value={ad.pacerDailyBudget}
+                onChange={onDailyBudgetChange}
+                placeholder="0.00"
+              />
+              <div className="flex items-center gap-2">
+                {dailyChanged ? (
+                  <button
+                    type="button"
+                    onClick={pushDaily}
+                    disabled={pushing || readOnly}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-[var(--primary)] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <MetaLogoIcon className="w-3 h-3" />
+                    {pushing ? 'Pushing…' : 'Push to Meta'}
+                  </button>
+                ) : (
+                  <span className="text-[10px] text-[var(--muted-foreground)]">
+                    Change the value to push it to Meta
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDailyEditing(false);
+                    setPushMsg(null);
+                  }}
+                  className="text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                >
+                  Done
+                </button>
+              </div>
+              {pushMsg && (
+                <div
+                  className={`text-[10px] ${pushMsg.ok ? 'text-[#22c55e]' : 'text-[#ef4444]'}`}
+                >
+                  {pushMsg.text}
+                </div>
+              )}
+            </div>
           )}
         </Field>
       </div>
@@ -7671,25 +7779,28 @@ function PacerRow({
               ? fmt(calc.recDaily)
               : '—'
           }
+          // First line: the formula — remaining budget ÷ remaining days — since
+          // that's exactly what the recommendation is (recDaily = remaining /
+          // max(daysLeft, 1)). The divisor floors at 1 on the final day so the
+          // tail can't blow up, labeled so the "1 day" is understood.
           sub={
             calc.budget <= 0
               ? 'set Target Spend'
               : calc.daysLeft <= 0
                 ? 'no days remaining'
-                : isOnTrack
-                  ? 'on track'
-                  : dailyDelta > 0
-                    ? `+${fmt(Math.abs(dailyDelta))}/day vs current`
-                    : `${fmt(dailyDelta)}/day vs current`
+                : calc.daysLeft >= 1
+                  ? `${fmt(calc.remaining)} remaining ÷ ${fmtDaysBasisPhrase(calc.daysLeft)} left`
+                  : `${fmt(calc.remaining)} remaining ÷ 1 day (final day)`
           }
-          // Exact basis behind the number, so a near-whole day like 1.0032 (shown
-          // as "1 day" up top) doesn't read as a miscalculation. < 1 day left is
-          // floored to the final day, so label it that way rather than a fraction.
+          // Second line (below the formula): the plain-language action — how
+          // much to add to / cut from the current daily budget to hit the rec.
           detail={
             calc.budget > 0 && calc.daysLeft > 0
-              ? calc.daysLeft >= 1
-                ? `${fmt(calc.remaining)} ÷ ${fmtDaysBasisPhrase(calc.daysLeft)} left`
-                : `${fmt(calc.remaining)} over the final day`
+              ? isOnTrack
+                ? 'On track — no change needed'
+                : dailyDelta > 0
+                  ? `Add ${fmt(Math.abs(dailyDelta))} (rec. spend) to current Daily Budget`
+                  : `Reduce current Daily Budget by ${fmt(Math.abs(dailyDelta))} (rec. spend)`
               : undefined
           }
           color={recColor}
@@ -8006,6 +8117,30 @@ function BudgetPacerPanel({
     }
   }, [accountKey, metaAdSets, adSetsLoading]);
 
+  // Write a row's edited daily budget back to its linked Meta ad set. Returns a
+  // result the row renders inline (the agency token needs `ads_management`, so
+  // a read-only token surfaces Meta's permission error here).
+  const pushDailyBudget = useCallback(
+    async (adId: string, value: string): Promise<{ ok: boolean; text: string }> => {
+      try {
+        const res = await fetch(
+          `/api/meta-ads-pacer/${accountKey}/push-budget?period=${plan.period}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ adId, dailyBudget: value }),
+          },
+        );
+        const data = await res.json().catch(() => null);
+        if (!res.ok) return { ok: false, text: data?.error || 'Push failed.' };
+        return { ok: true, text: 'Pushed to Meta ✓' };
+      } catch {
+        return { ok: false, text: 'Push failed — network error.' };
+      }
+    },
+    [accountKey, plan.period],
+  );
+
   const visibleAds = useMemo(
     () => applyFilters(plan.ads, filters, currentUserId),
     [plan.ads, filters, currentUserId],
@@ -8239,6 +8374,7 @@ function BudgetPacerPanel({
               updateAd({ ...ad, alertsMuted: !ad.alertsMuted })
             }
             onMarkOff={() => updateAd({ ...ad, adStatus: 'Off' })}
+            onPushDailyBudget={(value) => pushDailyBudget(ad.id, value)}
           />
         ))
       )}

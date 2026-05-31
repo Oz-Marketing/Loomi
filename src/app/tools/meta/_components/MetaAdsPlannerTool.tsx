@@ -6981,6 +6981,166 @@ interface MetaAdSetOption {
   campaignName: string | null;
 }
 
+/**
+ * Searchable ad-set link picker — a custom combobox replacing the native
+ * <select>. Accounts can have dozens of ad sets with long, similar names, so a
+ * type-to-filter box (matching campaign + ad set + status) is far faster than
+ * scrolling a plain dropdown. Lazy-loads the list on first open, closes on
+ * outside-click / Escape.
+ */
+function AdSetLinkPicker({
+  value,
+  options,
+  loading,
+  error,
+  onOpen,
+  onChange,
+  disabled,
+}: {
+  value: string | null;
+  options: MetaAdSetOption[] | null;
+  loading: boolean;
+  error: string | null;
+  onOpen: () => void;
+  onChange: (id: string | null) => void;
+  disabled: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const label = (o: MetaAdSetOption) =>
+    `${o.campaignName ? `${o.campaignName} › ` : ''}${o.name}`;
+  const selected = (options ?? []).find((o) => o.id === value) ?? null;
+  const buttonLabel = selected
+    ? label(selected)
+    : value
+      ? `Linked ad set (${value})`
+      : 'Not linked — match by name';
+
+  const q = query.trim().toLowerCase();
+  const filtered = (options ?? []).filter((o) =>
+    `${o.campaignName ?? ''} ${o.name} ${o.effectiveStatus ?? ''}`
+      .toLowerCase()
+      .includes(q),
+  );
+
+  const pick = (id: string | null) => {
+    onChange(id);
+    setOpen(false);
+  };
+
+  return (
+    <div className="relative" ref={rootRef}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => {
+          if (disabled) return;
+          if (!open) {
+            onOpen();
+            setQuery('');
+          }
+          setOpen((v) => !v);
+        }}
+        className="flex w-full items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-left text-[11px] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)] disabled:opacity-60 disabled:cursor-not-allowed"
+      >
+        <span
+          className={`truncate ${selected || value ? '' : 'text-[var(--muted-foreground)]'}`}
+        >
+          {loading && !options ? 'Loading ad sets…' : buttonLabel}
+        </span>
+        <ChevronDownIcon className="w-3.5 h-3.5 flex-shrink-0 text-[var(--muted-foreground)]" />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 z-[120] mt-1 min-w-[260px] rounded-md border border-[var(--border)] bg-[var(--card)] shadow-lg">
+          <div className="flex items-center gap-1.5 border-b border-[var(--border)] px-2 py-1.5">
+            <MagnifyingGlassIcon className="w-3.5 h-3.5 flex-shrink-0 text-[var(--muted-foreground)]" />
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search ad sets…"
+              className="w-full bg-transparent text-[11px] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none"
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto themed-scrollbar py-1">
+            {loading ? (
+              <div className="px-2.5 py-2 text-[11px] text-[var(--muted-foreground)]">
+                Loading ad sets…
+              </div>
+            ) : error ? (
+              <div className="px-2.5 py-2 text-[11px] text-[#ef4444]">{error}</div>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => pick(null)}
+                  className={`flex w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-[var(--muted)] ${
+                    value
+                      ? 'text-[var(--muted-foreground)]'
+                      : 'font-medium text-[var(--foreground)]'
+                  }`}
+                >
+                  Not linked — match by name
+                </button>
+                {filtered.map((o) => (
+                  <button
+                    key={o.id}
+                    type="button"
+                    onClick={() => pick(o.id)}
+                    className={`flex w-full items-start gap-2 px-2.5 py-1.5 text-left text-[11px] hover:bg-[var(--muted)] ${
+                      o.id === value ? 'bg-[var(--muted)]/60 font-medium' : ''
+                    }`}
+                  >
+                    <span className="min-w-0 flex-1 text-[var(--foreground)]">
+                      {o.campaignName && (
+                        <span className="text-[var(--muted-foreground)]">
+                          {o.campaignName} ›{' '}
+                        </span>
+                      )}
+                      {o.name}
+                    </span>
+                    {o.effectiveStatus && (
+                      <span className="flex-shrink-0 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)] mt-0.5">
+                        {o.effectiveStatus}
+                      </span>
+                    )}
+                  </button>
+                ))}
+                {filtered.length === 0 && (
+                  <div className="px-2.5 py-2 text-[11px] text-[var(--muted-foreground)]">
+                    No ad sets match “{query}”.
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PacerRow({
   ad,
   index,
@@ -7228,19 +7388,46 @@ function PacerRow({
             </div>
           </div>
         </div>
-        {ad.flightStart && ad.flightEnd && (
-          <div className="text-right flex-shrink-0">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-              Flight
+        <div className="flex flex-col items-end gap-2 flex-shrink-0">
+          {/* Per-ad alert mute (Change 9) — its own chip in the header so the
+              toggle reads as a clear control instead of getting lost among the
+              sync timestamps below. */}
+          <button
+            type="button"
+            onClick={onMuteToggle}
+            disabled={readOnly}
+            className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              ad.alertsMuted
+                ? 'border-[rgba(245,158,11,0.45)] bg-[rgba(245,158,11,0.12)] text-[#f59e0b]'
+                : 'border-[var(--border)] text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+            }`}
+            title={
+              ad.alertsMuted
+                ? 'Alerts muted for this ad — click to unmute'
+                : 'Mute pacing/dark/flight alerts for this ad'
+            }
+          >
+            {ad.alertsMuted ? (
+              <MinusCircleIcon className="w-3.5 h-3.5" />
+            ) : (
+              <ExclamationTriangleIcon className="w-3.5 h-3.5" />
+            )}
+            {ad.alertsMuted ? 'Alerts muted' : 'Mute alerts'}
+          </button>
+          {ad.flightStart && ad.flightEnd && (
+            <div className="text-right">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                Flight
+              </div>
+              <div className="text-base font-bold text-[var(--foreground)] whitespace-nowrap">
+                {fmtDate(ad.flightStart)} – {fmtDate(ad.flightEnd)}
+              </div>
+              <div className="text-[10px] text-[var(--muted-foreground)]">
+                {calcDays(ad.flightStart, ad.flightEnd)} days
+              </div>
             </div>
-            <div className="text-base font-bold text-[var(--foreground)] whitespace-nowrap">
-              {fmtDate(ad.flightStart)} – {fmtDate(ad.flightEnd)}
-            </div>
-            <div className="text-[10px] text-[var(--muted-foreground)]">
-              {calcDays(ad.flightStart, ad.flightEnd)} days
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Editable inputs row — just the two values reps actually edit.
@@ -7256,32 +7443,15 @@ function PacerRow({
           {/* Meta ad-set link. Picking an ad set overrides the name-match;
               spend (and ABO budget) then come from "Sync from Meta". */}
           <div className="mt-1.5">
-            <select
-              value={ad.metaObjectId ?? ''}
-              onFocus={onLoadAdSets}
-              onChange={(e) => onLinkChange(e.target.value || null)}
+            <AdSetLinkPicker
+              value={ad.metaObjectId}
+              options={adSets}
+              loading={adSetsLoading}
+              error={adSetsError}
+              onOpen={onLoadAdSets}
+              onChange={onLinkChange}
               disabled={readOnly}
-              className="w-full px-2 py-1 text-[11px] rounded-md border border-[var(--border)] bg-[var(--input)] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)] disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              <option value="">
-                {adSetsLoading
-                  ? 'Loading ad sets…'
-                  : 'Not linked — match by name'}
-              </option>
-              {(adSets ?? []).map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.campaignName ? `${s.campaignName} › ` : ''}
-                  {s.name}
-                  {s.effectiveStatus ? ` — ${s.effectiveStatus}` : ''}
-                </option>
-              ))}
-              {ad.metaObjectId &&
-                !(adSets ?? []).some((s) => s.id === ad.metaObjectId) && (
-                  <option value={ad.metaObjectId}>
-                    Linked ad set ({ad.metaObjectId})
-                  </option>
-                )}
-            </select>
+            />
             {adSetsError && (
               <div className="mt-1 text-[10px] text-[#ef4444]">
                 {adSetsError}
@@ -7353,26 +7523,6 @@ function PacerRow({
                 </div>
               );
             })()}
-            {/* Per-ad alert mute (Change 9) — silence pacing-family alerts for
-                a known-acceptable ad so the feed stays signal. */}
-            <button
-              type="button"
-              onClick={onMuteToggle}
-              disabled={readOnly}
-              className="mt-1.5 inline-flex items-center gap-1 text-[10px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50 disabled:cursor-not-allowed"
-              title={
-                ad.alertsMuted
-                  ? 'Alerts muted for this ad — click to unmute'
-                  : 'Mute pacing/dark/flight alerts for this ad'
-              }
-            >
-              {ad.alertsMuted ? (
-                <MinusCircleIcon className="w-3 h-3" />
-              ) : (
-                <ExclamationTriangleIcon className="w-3 h-3" />
-              )}
-              {ad.alertsMuted ? 'Alerts muted' : 'Mute alerts'}
-            </button>
           </div>
         </Field>
         <Field label="Daily Budget">

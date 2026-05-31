@@ -3,14 +3,15 @@ import { requireAuth } from '@/lib/api-auth';
 import { canAccessPacer } from '@/lib/meta-ads-pacer';
 import {
   MetaSyncError,
-  fetchCampaigns,
+  fetchAdSets,
   getAdAccountConfig,
 } from '@/lib/integrations/meta-ads';
 
 /**
- * Lists the Facebook campaigns under this account's ad account, so the pacer
- * can offer a picker for linking a pacer ad to a specific campaign (fixing
- * name-match misses). Read-only.
+ * Lists the ad sets under this account's Facebook ad account, so the pacer can
+ * offer a picker for linking a pacer row to a specific ad set — the ABO budget
+ * level, and the fix for first-sync name-match misses. The parent campaign
+ * name rides along so similarly-named ad sets can be told apart. Read-only.
  */
 export async function GET(
   _req: NextRequest,
@@ -26,12 +27,13 @@ export async function GET(
 
   try {
     const { cfg, adAccountId } = await getAdAccountConfig(accountKey);
-    const campaigns = await fetchCampaigns(cfg, adAccountId);
+    const adSets = await fetchAdSets(cfg, adAccountId);
     return NextResponse.json({
-      campaigns: campaigns.map((c) => ({
-        id: c.id,
-        name: c.name,
-        effectiveStatus: c.effective_status ?? c.status ?? null,
+      adSets: adSets.map((s) => ({
+        id: s.id,
+        name: s.name,
+        effectiveStatus: s.effective_status ?? s.status ?? null,
+        campaignName: s.campaign?.name ?? null,
       })),
     });
   } catch (err) {
@@ -40,7 +42,7 @@ export async function GET(
       return NextResponse.json({ error: err.message, code: err.code }, { status });
     }
     // eslint-disable-next-line no-console
-    console.error('[meta-ads-pacer] meta-campaigns failed', err);
-    return NextResponse.json({ error: 'Failed to load campaigns' }, { status: 500 });
+    console.error('[meta-ads-pacer] meta-adsets failed', err);
+    return NextResponse.json({ error: 'Failed to load ad sets' }, { status: 500 });
   }
 }

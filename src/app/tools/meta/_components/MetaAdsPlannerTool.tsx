@@ -6973,10 +6973,12 @@ function BulkEditModal({
 
 // ─── Pacer row ─────────────────────────────────────────────────────────────
 
-interface MetaCampaignOption {
+interface MetaAdSetOption {
   id: string;
   name: string;
   effectiveStatus: string | null;
+  /** Parent campaign, shown as context so similar ad-set names are distinct. */
+  campaignName: string | null;
 }
 
 function PacerRow({
@@ -6987,10 +6989,10 @@ function PacerRow({
   onDailyBudgetChange,
   expanded,
   onToggleExpanded,
-  campaigns,
-  campaignsLoading,
-  campaignsError,
-  onLoadCampaigns,
+  adSets,
+  adSetsLoading,
+  adSetsError,
+  onLoadAdSets,
   onLinkChange,
   onMuteToggle,
   onMarkOff,
@@ -7002,11 +7004,11 @@ function PacerRow({
   onDailyBudgetChange: (v: string | null) => void;
   expanded: boolean;
   onToggleExpanded: () => void;
-  campaigns: MetaCampaignOption[] | null;
-  campaignsLoading: boolean;
-  campaignsError: string | null;
-  onLoadCampaigns: () => void;
-  onLinkChange: (campaignId: string | null) => void;
+  adSets: MetaAdSetOption[] | null;
+  adSetsLoading: boolean;
+  adSetsError: string | null;
+  onLoadAdSets: () => void;
+  onLinkChange: (adSetId: string | null) => void;
   onMuteToggle: () => void;
   onMarkOff: () => void;
 }) {
@@ -7251,43 +7253,44 @@ function PacerRow({
             onChange={onActualChange}
             placeholder="0.00"
           />
-          {/* Facebook campaign link. Picking a campaign overrides the
-              name-match; spend then comes from "Sync from Meta". */}
+          {/* Meta ad-set link. Picking an ad set overrides the name-match;
+              spend (and ABO budget) then come from "Sync from Meta". */}
           <div className="mt-1.5">
             <select
               value={ad.metaObjectId ?? ''}
-              onFocus={onLoadCampaigns}
+              onFocus={onLoadAdSets}
               onChange={(e) => onLinkChange(e.target.value || null)}
               disabled={readOnly}
               className="w-full px-2 py-1 text-[11px] rounded-md border border-[var(--border)] bg-[var(--input)] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)] disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <option value="">
-                {campaignsLoading
-                  ? 'Loading campaigns…'
+                {adSetsLoading
+                  ? 'Loading ad sets…'
                   : 'Not linked — match by name'}
               </option>
-              {(campaigns ?? []).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                  {c.effectiveStatus ? ` — ${c.effectiveStatus}` : ''}
+              {(adSets ?? []).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.campaignName ? `${s.campaignName} › ` : ''}
+                  {s.name}
+                  {s.effectiveStatus ? ` — ${s.effectiveStatus}` : ''}
                 </option>
               ))}
               {ad.metaObjectId &&
-                !(campaigns ?? []).some((c) => c.id === ad.metaObjectId) && (
+                !(adSets ?? []).some((s) => s.id === ad.metaObjectId) && (
                   <option value={ad.metaObjectId}>
-                    Linked campaign ({ad.metaObjectId})
+                    Linked ad set ({ad.metaObjectId})
                   </option>
                 )}
             </select>
-            {campaignsError && (
+            {adSetsError && (
               <div className="mt-1 text-[10px] text-[#ef4444]">
-                {campaignsError}
+                {adSetsError}
               </div>
             )}
             {ad.metaObjectId && ad.pacerSyncedAt ? (
               <div
                 className="mt-1 flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]"
-                title="Spend pulled from the linked Meta campaign. Re-run Sync from Meta to refresh."
+                title="Spend pulled from the linked Meta ad set. Re-run Sync from Meta to refresh."
               >
                 <MetaLogoIcon className="w-3 h-3 flex-shrink-0" />
                 <span>Synced from Meta · {fmtSyncedAgo(ad.pacerSyncedAt)}</span>
@@ -7829,31 +7832,29 @@ function BudgetPacerPanel({
   const updateAd = (u: PacerAd) =>
     onChange({ ...plan, ads: plan.ads.map((a) => (a.id === u.id ? u : a)) });
 
-  // Lazy-loaded Facebook campaign list for the per-row link picker. Fetched
-  // once on first picker focus, then shared across every row.
-  const [metaCampaigns, setMetaCampaigns] = useState<MetaCampaignOption[] | null>(
-    null,
-  );
-  const [campaignsLoading, setCampaignsLoading] = useState(false);
-  const [campaignsError, setCampaignsError] = useState<string | null>(null);
-  const loadMetaCampaigns = useCallback(async () => {
-    if (metaCampaigns || campaignsLoading) return;
-    setCampaignsLoading(true);
-    setCampaignsError(null);
+  // Lazy-loaded Meta ad-set list for the per-row link picker. Fetched once on
+  // first picker focus, then shared across every row.
+  const [metaAdSets, setMetaAdSets] = useState<MetaAdSetOption[] | null>(null);
+  const [adSetsLoading, setAdSetsLoading] = useState(false);
+  const [adSetsError, setAdSetsError] = useState<string | null>(null);
+  const loadMetaAdSets = useCallback(async () => {
+    if (metaAdSets || adSetsLoading) return;
+    setAdSetsLoading(true);
+    setAdSetsError(null);
     try {
-      const res = await fetch(`/api/meta-ads-pacer/${accountKey}/meta-campaigns`);
+      const res = await fetch(`/api/meta-ads-pacer/${accountKey}/meta-adsets`);
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setCampaignsError(data?.error || 'Failed to load campaigns.');
+        setAdSetsError(data?.error || 'Failed to load ad sets.');
         return;
       }
-      setMetaCampaigns(Array.isArray(data?.campaigns) ? data.campaigns : []);
+      setMetaAdSets(Array.isArray(data?.adSets) ? data.adSets : []);
     } catch {
-      setCampaignsError('Failed to load campaigns.');
+      setAdSetsError('Failed to load ad sets.');
     } finally {
-      setCampaignsLoading(false);
+      setAdSetsLoading(false);
     }
-  }, [accountKey, metaCampaigns, campaignsLoading]);
+  }, [accountKey, metaAdSets, adSetsLoading]);
 
   const visibleAds = useMemo(
     () => applyFilters(plan.ads, filters, currentUserId),
@@ -8073,15 +8074,15 @@ function BudgetPacerPanel({
             onDailyBudgetChange={(v) => updateAd({ ...ad, pacerDailyBudget: v })}
             expanded={expandedIds.has(ad.id)}
             onToggleExpanded={() => toggleExpanded(ad.id)}
-            campaigns={metaCampaigns}
-            campaignsLoading={campaignsLoading}
-            campaignsError={campaignsError}
-            onLoadCampaigns={loadMetaCampaigns}
-            onLinkChange={(campaignId) =>
+            adSets={metaAdSets}
+            adSetsLoading={adSetsLoading}
+            adSetsError={adSetsError}
+            onLoadAdSets={loadMetaAdSets}
+            onLinkChange={(adSetId) =>
               updateAd({
                 ...ad,
-                metaObjectId: campaignId,
-                metaObjectType: campaignId ? 'campaign' : null,
+                metaObjectId: adSetId,
+                metaObjectType: adSetId ? 'adset' : null,
               })
             }
             onMuteToggle={() =>

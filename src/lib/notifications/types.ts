@@ -47,7 +47,7 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
       'Internal or client approval has been pending for more than 3 days without movement.',
     category: 'Meta Ads Planner',
     channel: 'digest',
-    defaultEnabled: true,
+    defaultEnabled: false,
   },
   {
     type: 'status_stuck',
@@ -97,7 +97,7 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     description: 'You became the owner, designer, or account rep on an ad.',
     category: 'Meta Ads Planner',
     channel: 'immediate',
-    defaultEnabled: true,
+    defaultEnabled: false,
   },
   {
     type: 'approval_changed',
@@ -105,7 +105,7 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     description: 'Account rep or client approval flipped on an ad you own or design.',
     category: 'Meta Ads Planner',
     channel: 'immediate',
-    defaultEnabled: true,
+    defaultEnabled: false,
   },
 ];
 

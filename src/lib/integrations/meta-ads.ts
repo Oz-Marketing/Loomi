@@ -136,6 +136,71 @@ async function metaGraphFetchAll<T>(
   return out;
 }
 
+/**
+ * The one write path: POST to a Graph node (params form-encoded in the body,
+ * token + appsecret_proof appended). Requires the token to carry
+ * `ads_management` — a read-only `ads_read` token returns a permissions error
+ * here, which we surface verbatim.
+ */
+async function metaGraphPost(
+  cfg: MetaConfig,
+  path: string,
+  params: Record<string, string | number | undefined>,
+): Promise<void> {
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null) body.set(key, String(value));
+  }
+  body.set('access_token', cfg.token);
+  if (cfg.appSecret) {
+    body.set('appsecret_proof', appSecretProof(cfg.token, cfg.appSecret));
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${GRAPH_BASE}/${metaApiVersion()}/${path}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      },
+      body: body.toString(),
+    });
+  } catch (err) {
+    throw new MetaSyncError(
+      `Could not reach the Facebook Graph API: ${err instanceof Error ? err.message : 'network error'}`,
+      'graph_error',
+    );
+  }
+
+  const json = (await res.json().catch(() => null)) as GraphErrorBody | null;
+  if (!res.ok || (json && json.error)) {
+    const msg = json?.error?.message || `Graph API HTTP ${res.status}`;
+    throw new MetaSyncError(`Facebook: ${msg}`, 'graph_error', res.status);
+  }
+}
+
+/**
+ * Write a new daily budget (dollars) to an ABO ad set. Meta stores budgets in
+ * minor units, so we round to cents. Throws (MetaSyncError) on an invalid
+ * amount, a CBO ad set (budget lives on the campaign), or a token without
+ * `ads_management`.
+ */
+export async function pushAdSetDailyBudget(
+  cfg: MetaConfig,
+  adSetId: string,
+  dailyBudgetDollars: number,
+): Promise<void> {
+  const cents = Math.round(dailyBudgetDollars * 100);
+  if (!Number.isFinite(cents) || cents <= 0) {
+    throw new MetaSyncError(
+      'Daily budget must be a positive amount.',
+      'graph_error',
+    );
+  }
+  await metaGraphPost(cfg, adSetId, { daily_budget: cents });
+}
+
 export interface MetaAdSet {
   id: string;
   name: string;

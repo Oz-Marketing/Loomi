@@ -1,11 +1,13 @@
 /**
  * Facebook (Meta) Marketing API client + Ad Pacer spend sync.
  *
- * Phase 1 is read-only: we pull per-campaign spend (and, when available,
+ * Phase 1 is read-only: we pull per-ad-set spend (and, when available,
  * daily/lifetime budget + delivery status) and write it onto the matching
- * MetaAdsPacerAd rows. A pacer row "links" to a Facebook campaign either by
- * a stored `metaObjectId` or, on first sync, by an exact (case-insensitive)
- * name match. Once linked, Facebook owns that row's `pacerActual`.
+ * MetaAdsPacerAd rows. We map at the ad-set level because that's where ABO
+ * budgets live (campaigns hold CBO budgets; individual ads have none). A pacer
+ * row "links" to an ad set either by a stored `metaObjectId` or, on first
+ * sync, by an exact (case-insensitive) name match. Once linked, Facebook owns
+ * that row's `pacerActual`.
  *
  * Credentials are a single agency-wide System User token in env
  * (META_SYSTEM_USER_TOKEN). Each sub-account stores only its ad-account id
@@ -134,7 +136,7 @@ async function metaGraphFetchAll<T>(
   return out;
 }
 
-export interface MetaCampaign {
+export interface MetaAdSet {
   id: string;
   name: string;
   status?: string;
@@ -142,29 +144,37 @@ export interface MetaCampaign {
   daily_budget?: string; // minor units (cents) as a string
   lifetime_budget?: string; // minor units (cents) as a string
   start_time?: string;
-  stop_time?: string;
+  end_time?: string; // ad sets expose `end_time` (campaigns use `stop_time`)
+  /** Parent campaign — surfaced so the picker can disambiguate ad sets. */
+  campaign?: { id?: string; name?: string };
 }
 
-export async function fetchCampaigns(
+/**
+ * Ad sets are the level we pace against: in ABO accounts the daily/lifetime
+ * budget lives here (not on the campaign, and never on the individual ad).
+ * `campaign{...}` is pulled for picker context. For CBO accounts the ad set's
+ * budget fields come back null — spend still syncs; the target stays manual.
+ */
+export async function fetchAdSets(
   cfg: MetaConfig,
   adAccountId: string,
-): Promise<MetaCampaign[]> {
-  return metaGraphFetchAll<MetaCampaign>(cfg, `${adAccountId}/campaigns`, {
+): Promise<MetaAdSet[]> {
+  return metaGraphFetchAll<MetaAdSet>(cfg, `${adAccountId}/adsets`, {
     fields:
-      'id,name,status,effective_status,daily_budget,lifetime_budget,start_time,stop_time',
+      'id,name,status,effective_status,daily_budget,lifetime_budget,start_time,end_time,campaign{id,name}',
   });
 }
 
 interface MetaInsightRow {
-  campaign_id?: string;
+  adset_id?: string;
   spend?: string;
 }
 
 /**
- * Returns campaignId → total spend ($) over [since, until], aggregated across
- * the whole window (time_increment=all_days).
+ * Returns adSetId → total spend ($) over [since, until], aggregated across the
+ * whole window (time_increment=all_days).
  */
-export async function fetchCampaignSpend(
+export async function fetchAdSetSpend(
   cfg: MetaConfig,
   adAccountId: string,
   since: string,
@@ -174,18 +184,18 @@ export async function fetchCampaignSpend(
     cfg,
     `${adAccountId}/insights`,
     {
-      level: 'campaign',
-      fields: 'campaign_id,spend',
+      level: 'adset',
+      fields: 'adset_id,spend',
       time_range: JSON.stringify({ since, until }),
       time_increment: 'all_days',
     },
   );
   const map = new Map<string, number>();
   for (const row of rows) {
-    if (!row.campaign_id) continue;
+    if (!row.adset_id) continue;
     const spend = Number(row.spend ?? 0);
     if (!Number.isFinite(spend)) continue;
-    map.set(row.campaign_id, (map.get(row.campaign_id) ?? 0) + spend);
+    map.set(row.adset_id, (map.get(row.adset_id) ?? 0) + spend);
   }
   return map;
 }
@@ -274,8 +284,8 @@ export interface MetaSyncAdResult {
   adId: string;
   name: string;
   matched: boolean;
-  campaignId: string | null;
-  campaignName: string | null;
+  adSetId: string | null;
+  adSetName: string | null;
   spend: number | null;
 }
 
@@ -316,13 +326,13 @@ export async function syncPeriodFromMeta(
     return { ok: true, adAccountId, since, until, total: 0, matched: 0, results: [] };
   }
 
-  const campaigns = await fetchCampaigns(cfg, adAccountId);
+  const adSets = await fetchAdSets(cfg, adAccountId);
   const spendMap = future
     ? new Map<string, number>()
-    : await fetchCampaignSpend(cfg, adAccountId, since, until);
+    : await fetchAdSetSpend(cfg, adAccountId, since, until);
 
   // Cache the ad account's timezone for the Pacer's time-left math, and use it
-  // to bucket Meta's start_time / stop_time into account-TZ calendar dates
+  // to bucket Meta's start_time / end_time into account-TZ calendar dates
   // below. Best effort: a failure here must not abort an otherwise-good sync.
   let accountTz = DEFAULT_TIME_ZONE;
   try {
@@ -338,9 +348,9 @@ export async function syncPeriodFromMeta(
     // Ignore — pacing falls back to the stored timezone / default.
   }
 
-  const byId = new Map(campaigns.map((c) => [c.id, c]));
+  const byId = new Map(adSets.map((s) => [s.id, s]));
   const byName = new Map(
-    campaigns.map((c) => [c.name.trim().toLowerCase(), c]),
+    adSets.map((s) => [s.name.trim().toLowerCase(), s]),
   );
 
   const results: MetaSyncAdResult[] = [];
@@ -350,46 +360,47 @@ export async function syncPeriodFromMeta(
   const syncedAt = new Date();
 
   for (const ad of ads) {
-    const campaign =
+    const adSet =
       (ad.metaObjectId ? byId.get(ad.metaObjectId) : undefined) ??
       (ad.name?.trim()
         ? byName.get(ad.name.trim().toLowerCase())
         : undefined);
 
-    if (!campaign) {
+    if (!adSet) {
       results.push({
         adId: ad.id,
         name: ad.name,
         matched: false,
-        campaignId: null,
-        campaignName: null,
+        adSetId: null,
+        adSetName: null,
         spend: null,
       });
       continue;
     }
 
-    const spend = spendMap.get(campaign.id) ?? 0;
+    const spend = spendMap.get(adSet.id) ?? 0;
     const data: Prisma.MetaAdsPacerAdUpdateInput = {
-      metaObjectType: 'campaign',
-      metaObjectId: campaign.id,
-      metaEffectiveStatus: campaign.effective_status ?? campaign.status ?? null,
+      metaObjectType: 'adset',
+      metaObjectId: adSet.id,
+      metaEffectiveStatus: adSet.effective_status ?? adSet.status ?? null,
       pacerActual: spend.toFixed(2),
       pacerSyncedAt: syncedAt,
-      // Actual run schedule, as account-TZ calendar dates. stop_time is often
-      // absent (open-ended campaigns) → null, which the pacer treats as "runs
-      // to month end." The pacer clamps these to the pacing month.
-      metaStartDate: metaScheduleDate(campaign.start_time, accountTz),
-      metaEndDate: metaScheduleDate(campaign.stop_time, accountTz),
+      // Actual run schedule, as account-TZ calendar dates. end_time is often
+      // absent (open-ended ad sets) → null, which the pacer treats as "runs to
+      // month end." The pacer clamps these to the pacing month.
+      metaStartDate: metaScheduleDate(adSet.start_time, accountTz),
+      metaEndDate: metaScheduleDate(adSet.end_time, accountTz),
     };
 
-    // CBO campaigns expose budget at the campaign level (ABO is null — left
-    // to manual entry). Daily for Daily ads, lifetime for Lifetime ads.
-    if (ad.budgetType !== 'Lifetime' && campaign.daily_budget != null) {
-      const dollars = Number(campaign.daily_budget) / 100;
+    // ABO ad sets expose the budget here (CBO ad sets are null — the budget
+    // sits on the campaign, so the target stays manual). Daily for Daily ads,
+    // lifetime for Lifetime ads.
+    if (ad.budgetType !== 'Lifetime' && adSet.daily_budget != null) {
+      const dollars = Number(adSet.daily_budget) / 100;
       if (Number.isFinite(dollars)) data.pacerDailyBudget = dollars.toFixed(2);
     }
-    if (ad.budgetType === 'Lifetime' && campaign.lifetime_budget != null) {
-      const dollars = Number(campaign.lifetime_budget) / 100;
+    if (ad.budgetType === 'Lifetime' && adSet.lifetime_budget != null) {
+      const dollars = Number(adSet.lifetime_budget) / 100;
       if (Number.isFinite(dollars)) data.allocation = dollars.toFixed(2);
     }
 
@@ -398,8 +409,8 @@ export async function syncPeriodFromMeta(
       adId: ad.id,
       name: ad.name,
       matched: true,
-      campaignId: campaign.id,
-      campaignName: campaign.name,
+      adSetId: adSet.id,
+      adSetName: adSet.name,
       spend,
     });
   }

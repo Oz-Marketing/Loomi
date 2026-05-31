@@ -8,6 +8,7 @@ import {
   isNotificationEnabled,
   type NotificationType,
 } from '@/lib/notifications/types';
+import { purgeOldAuditEntries } from '@/lib/meta-ads-audit';
 
 export type { NotificationType };
 export type NotificationSeverity = 'info' | 'warning' | 'critical';
@@ -144,6 +145,15 @@ export async function markAllRead(userId: string) {
 const ACTIVE_BUSINESS_DAYS_BEFORE_DUE = 2;
 const APPROVAL_PENDING_DAYS = 3;
 const STATUS_STUCK_DAYS = 2;
+// "Significant underspend with little flight left" (Change 9): under 85% of
+// expected (>15% under) with under 30% of the flight remaining — hard to
+// recover, the most valuable alert. Configurable.
+const UNDERSPEND_UNDER_PCT = 85;
+const LOW_TIME_LEFT_FRACTION = 0.3;
+// Planner statuses that mean the ad should be delivering right now.
+const PLANNER_LIVE_STATUSES = new Set(['Live', 'Live - Changes Required']);
+// Meta effective_status values that count as actively delivering.
+const META_ACTIVE_STATUSES = new Set(['ACTIVE']);
 
 const DUE_DATE_DONE_STATUSES = new Set(['Live', 'Completed Run', 'Off']);
 
@@ -221,6 +231,8 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
     allocation: string | null;
     budgetType: string;
     budgetSource: string;
+    metaEffectiveStatus: string | null;
+    alertsMuted: boolean;
     ownerUserId: string | null;
     designerUserId: string | null;
     accountRepUserId: string | null;
@@ -354,8 +366,10 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
     }
   }
 
-  // ── 4. Pacing alert (>110% over OR <50% under, with >3 days remaining) ──
+  // ── 4. Pacing alerts: overpacing, early underpacing, and (most valuable)
+  //     a significant underspend with little flight left to recover. ──
   for (const ad of ads) {
+    if (ad.alertsMuted) continue; // per-ad mute (Change 9)
     const isLifetime = ad.budgetType === 'Lifetime';
     const effectiveStart = ad.liveDate || ad.flightStart;
     if (!effectiveStart || !ad.flightEnd) continue;
@@ -367,13 +381,13 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
       0,
       Math.ceil((endD.getTime() - startD.getTime()) / 86400000) + 1,
     );
+    if (totalDays === 0) continue;
     const elapsed = Math.max(
       0,
       Math.ceil((todayDate.getTime() - startD.getTime()) / 86400000) + 1,
     );
     const remaining = Math.max(0, totalDays - elapsed);
-    if (remaining <= 3) continue; // too late to course-correct
-    if (totalDays === 0) continue;
+    const timeLeftFraction = remaining / totalDays;
 
     const allocation = Number(ad.allocation ?? '');
     if (!Number.isFinite(allocation) || allocation === 0) continue;
@@ -386,15 +400,19 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
     const pct = (actual / expectedToDate) * 100;
     let title: string | null = null;
     let severity: NotificationSeverity = 'warning';
-    if (pct > 110) {
+    if (pct < UNDERSPEND_UNDER_PCT && timeLeftFraction < LOW_TIME_LEFT_FRACTION) {
+      // Hard-to-recover underspend — fires even when little time remains.
+      title = `"${ad.name}" underspending at ${pct.toFixed(0)}% with only ${remaining}d left`;
+      severity = 'critical';
+    } else if (pct > 110 && remaining > 3) {
       title = `"${ad.name}" overpacing at ${pct.toFixed(0)}%`;
-    } else if (pct < 50) {
+    } else if (pct < 50 && remaining > 3) {
       title = `"${ad.name}" underpacing at ${pct.toFixed(0)}%`;
       severity = 'info';
     }
     if (!title) continue;
 
-    const body = `${ad.plan.account.dealer} · day ${elapsed} of ${totalDays} · ${remaining}d to course-correct`;
+    const body = `${ad.plan.account.dealer} · day ${elapsed} of ${totalDays} · ${remaining}d left`;
     const link = `/tools/meta-ads-pacer`;
     const dedupeKey = `${ad.id}:pacing_alert:${today}`;
 
@@ -414,6 +432,76 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
       if (created) {
         result.notificationsCreated += 1;
         pushToDigest(userId, { title, body, link, severity });
+      }
+    }
+  }
+
+  // ── 4b. Ad went dark: planner says Live + in-flight, but Meta now reports
+  //     it not delivering (paused/off/rejected) — easy to miss. ──
+  for (const ad of ads) {
+    if (ad.alertsMuted) continue;
+    if (!ad.metaEffectiveStatus) continue; // only when linked + synced
+    if (!PLANNER_LIVE_STATUSES.has(ad.adStatus)) continue;
+    const effectiveStart = ad.liveDate || ad.flightStart;
+    if (!effectiveStart || !ad.flightEnd) continue;
+    const startD = new Date(effectiveStart + 'T00:00:00');
+    const endD = new Date(ad.flightEnd + 'T00:00:00');
+    if (startD > todayDate || endD < todayDate) continue; // must be in flight
+    if (META_ACTIVE_STATUSES.has(ad.metaEffectiveStatus.toUpperCase())) continue;
+
+    const title = `"${ad.name}" may have gone dark`;
+    const body = `${ad.plan.account.dealer} · planner is Live but Meta shows ${ad.metaEffectiveStatus}`;
+    const link = `/tools/meta-ads-pacer`;
+    const dedupeKey = `${ad.id}:ad_dark:${today}`;
+    const recipients = adRecipients(ad);
+    for (const userId of recipients) {
+      const created = await createNotification({
+        userId,
+        type: 'ad_dark',
+        severity: 'critical',
+        title,
+        body,
+        link,
+        meta: { adId: ad.id, accountKey: ad.plan.accountKey, metaStatus: ad.metaEffectiveStatus },
+        dedupeKey,
+        dedupeWindowHours: 20,
+      });
+      if (created) {
+        result.notificationsCreated += 1;
+        pushToDigest(userId, { title, body, link, severity: 'critical' });
+      }
+    }
+  }
+
+  // ── 4c. End-of-flight approaching: active ad ending in 1–2 days. ──
+  for (const ad of ads) {
+    if (ad.alertsMuted) continue;
+    if (!ad.flightEnd) continue;
+    if (!PLANNER_LIVE_STATUSES.has(ad.adStatus)) continue;
+    const endD = new Date(ad.flightEnd + 'T00:00:00');
+    const diffDays = Math.ceil((endD.getTime() - todayDate.getTime()) / 86400000);
+    if (diffDays < 1 || diffDays > 2) continue;
+
+    const title = `"${ad.name}" flight ends in ${diffDays} day${diffDays !== 1 ? 's' : ''}`;
+    const body = `${ad.plan.account.dealer} · ends ${fmtFullDate(ad.flightEnd)} · time for a final reconciliation`;
+    const link = `/tools/meta-ads-pacer`;
+    const dedupeKey = `${ad.id}:flight_ending:${today}`;
+    const recipients = adRecipients(ad);
+    for (const userId of recipients) {
+      const created = await createNotification({
+        userId,
+        type: 'flight_ending',
+        severity: 'info',
+        title,
+        body,
+        link,
+        meta: { adId: ad.id, accountKey: ad.plan.accountKey },
+        dedupeKey,
+        dedupeWindowHours: 20,
+      });
+      if (created) {
+        result.notificationsCreated += 1;
+        pushToDigest(userId, { title, body, link, severity: 'info' });
       }
     }
   }
@@ -490,6 +578,19 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
         }
       }
     }
+  }
+
+  // ── Purge audit entries past the retention window (Change 10) ──
+  try {
+    const purged = await purgeOldAuditEntries();
+    if (purged > 0) {
+      // eslint-disable-next-line no-console
+      console.log(`[meta-ads-pacer] purged ${purged} expired audit entries`);
+    }
+  } catch (err) {
+    result.errors.push(
+      `audit_purge:${err instanceof Error ? err.message : 'unknown'}`,
+    );
   }
 
   // ── Send digest emails (one per recipient, summarising all of today's items) ──

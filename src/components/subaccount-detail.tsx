@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -18,6 +19,8 @@ import {
   ExclamationTriangleIcon,
   QuestionMarkCircleIcon,
   CogIcon,
+  PuzzlePieceIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { AdminOnly } from '@/components/route-guard';
@@ -70,7 +73,11 @@ function validHexColor(value: string, fallback: string): string {
   return /^#(?:[0-9a-fA-F]{3}){1,2}$/.test(value) ? value : fallback;
 }
 
-type DetailTab = 'company' | 'branding' | 'contacts' | 'domains' | 'users' | 'appearance';
+type DetailTab = 'company' | 'branding' | 'contacts' | 'domains' | 'integrations' | 'users' | 'appearance';
+
+/** Banner art for the Meta integration card (Meta wordmark on light bg). */
+const META_LOGO_URL =
+  'https://loomistorage.sfo3.digitaloceanspaces.com/media/_admin/9a1f951b8d3c42b9925bd23e72426eb9/meta-facebook-rebranding-name-news_dezeen_2364_col_hero2.jpg';
 type AccountImageVariant = 'light' | 'dark' | 'white' | 'black' | 'storefront';
 
 type TabDef = { key: DetailTab; label: string; icon?: React.ComponentType<{ className?: string }> };
@@ -80,6 +87,7 @@ const TABS: TabDef[] = [
   { key: 'branding', label: 'Branding', icon: PaintBrushIcon },
   { key: 'contacts', label: 'Contacts', icon: UsersIcon },
   { key: 'domains', label: 'Domains', icon: GlobeAltIcon },
+  { key: 'integrations', label: 'Integrations', icon: PuzzlePieceIcon },
 ];
 
 // Sending + Suppressions used to live here but moved into the
@@ -90,6 +98,7 @@ const SETTINGS_TABS: TabDef[] = [
   { key: 'company', label: 'Company', icon: BuildingStorefrontIcon },
   { key: 'branding', label: 'Branding', icon: PaintBrushIcon },
   { key: 'domains', label: 'Domains', icon: GlobeAltIcon },
+  { key: 'integrations', label: 'Integrations', icon: PuzzlePieceIcon },
   { key: 'users', label: 'Users', icon: UsersIcon },
   { key: 'appearance', label: 'Appearance', icon: SwatchIcon },
 ];
@@ -114,6 +123,18 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   const { markClean } = useUnsavedChanges();
 
   const [activeTab, setActiveTab] = useState<DetailTab>('company');
+  // Which integration card is open in the Integrations tab (null = no modal).
+  const [activeIntegration, setActiveIntegration] = useState<string | null>(null);
+  const [savingIntegration, setSavingIntegration] = useState(false);
+  // Close the integration modal on Escape.
+  useEffect(() => {
+    if (!activeIntegration) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setActiveIntegration(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [activeIntegration]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [account, setAccount] = useState<AccountData | null>(null);
@@ -140,6 +161,9 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   // the global default (0.77). Stored as a free-form string for the input
   // and parsed at save time so we can distinguish "" (unset) from "0".
   const [markup, setMarkup] = useState<string>('');
+  // Facebook ad account ("act_...") for the Meta Ads Pacer's Sync-from-
+  // Facebook job. Empty string = not connected.
+  const [metaAdAccountId, setMetaAdAccountId] = useState<string>('');
   const [allUsers, setAllUsers] = useState<{ id: string; name: string; title?: string | null; email: string; avatarUrl?: string | null; role?: string; accountKeys?: string[] }[]>([]);
 
   // ── Branding fields ──
@@ -187,6 +211,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
         ? String(accountData.markup)
         : '',
     );
+    setMetaAdAccountId(accountData.metaAdAccountId || '');
     // Logos
     setLogoLight(accountData.logos?.light || '');
     setLogoDark(accountData.logos?.dark || '');
@@ -412,6 +437,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
         // Markup: empty string clears the override on the server.
         // Numeric string passes through as-is (parsed server-side).
         markup: markup.trim() === '' ? null : markup,
+        // Facebook ad account id ("act_..."). Empty string clears the link.
+        metaAdAccountId: metaAdAccountId.trim(),
       };
 
       const res = await fetch(`/api/accounts/${key}`, {
@@ -436,6 +463,37 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
       toast.error('Failed to save');
     }
     setSaving(false);
+  }
+
+  // Self-contained save for the integration modal — PATCHes only the Meta
+  // fields (merge-update) so it doesn't depend on the page's form-change
+  // tracking, which intentionally ignores these account-level settings.
+  async function handleSaveIntegration() {
+    setSavingIntegration(true);
+    try {
+      const res = await fetch(`/api/accounts/${key}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          metaAdAccountId: metaAdAccountId.trim(),
+          markup: markup.trim() === '' ? null : markup,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        toast.error(data?.error || 'Failed to save');
+        return;
+      }
+      const updated = await res.json();
+      setAccount(updated as AccountData);
+      await refreshAccountList();
+      toast.success('Meta Ads settings saved');
+      setActiveIntegration(null);
+    } catch {
+      toast.error('Failed to save');
+    } finally {
+      setSavingIntegration(false);
+    }
   }
 
   // ── Delete ──
@@ -758,40 +816,6 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
 
                 <div>
                   <div className="mb-1.5 flex items-center gap-1.5">
-                    <label className={labelClass} style={{ marginBottom: 0 }}>
-                      Pacer Markup Rate
-                    </label>
-                    <span className="relative inline-flex items-center group">
-                      <QuestionMarkCircleIcon className="w-4 h-4 text-[var(--muted-foreground)]/80 hover:text-[var(--foreground)] transition-colors cursor-help" />
-                      <span className="absolute bottom-full left-1/2 z-[70] mb-1 hidden -translate-x-1/2 group-hover:block group-focus-within:block">
-                        <span className="relative block w-64 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 shadow-xl">
-                          <span className="block text-[11px] leading-4 text-[var(--foreground)]">
-                            Used by the Meta Ads Pacer budget calculator:
-                            actual spend = client billed × markup.
-                          </span>
-                          <span className="mt-1 block text-[10px] leading-4 text-[var(--muted-foreground)]">
-                            Leave blank to use the platform default (0.77).
-                          </span>
-                          <span className="absolute left-1/2 top-full -translate-x-1/2 w-0 h-0 border-x-[6px] border-x-transparent border-t-[7px] border-t-[var(--background)]" />
-                        </span>
-                      </span>
-                    </span>
-                  </div>
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    value={markup}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v === '' || /^\d*\.?\d*$/.test(v)) setMarkup(v);
-                    }}
-                    placeholder="0.77"
-                    className={`${inputClass} max-w-[160px]`}
-                  />
-                </div>
-
-                <div>
-                  <div className="mb-1.5 flex items-center gap-1.5">
                     <label className="text-xs font-medium text-[var(--muted-foreground)]">
                       Sub-Account Rep
                     </label>
@@ -1026,6 +1050,162 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
 
         {/* ════════════ DOMAINS TAB ════════════ */}
         {activeTab === 'domains' && key && <AccountDomainsTab accountKey={key} />}
+
+        {activeTab === 'integrations' && (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <button
+              type="button"
+              onClick={() => setActiveIntegration('facebook')}
+              className="group overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] text-left transition-all hover:border-[var(--primary)] hover:shadow-md"
+            >
+              <div className="h-28 w-full overflow-hidden border-b border-[var(--border)] bg-[#f5f5f7]">
+                <img
+                  src={META_LOGO_URL}
+                  alt="Meta Ads"
+                  className="h-full w-full object-cover"
+                />
+              </div>
+              <div className="p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold text-[var(--foreground)]">Meta Ads</span>
+                  <span
+                    className="inline-flex items-center gap-1 whitespace-nowrap text-[11px] font-medium"
+                    style={{ color: account?.metaAdAccountId?.trim() ? '#22c55e' : 'var(--muted-foreground)' }}
+                  >
+                    <span
+                      className="inline-block h-1.5 w-1.5 rounded-full"
+                      style={{ background: account?.metaAdAccountId?.trim() ? '#22c55e' : 'var(--muted-foreground)' }}
+                    />
+                    {account?.metaAdAccountId?.trim() ? 'Connected' : 'Not connected'}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                  Sync ad spend into the Meta Ads Pacer.
+                </p>
+              </div>
+            </button>
+          </div>
+        )}
+
+        {activeIntegration === 'facebook' &&
+          createPortal(
+            <div
+              className="fixed inset-0 z-[220] flex items-center justify-center bg-black/50 p-4"
+              onClick={() => setActiveIntegration(null)}
+              role="dialog"
+              aria-modal="true"
+            >
+              <div
+                className="glass-modal w-[560px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="relative h-28 w-full overflow-hidden bg-[#f5f5f7]">
+                  <img
+                    src={META_LOGO_URL}
+                    alt="Meta Ads"
+                    className="h-full w-full object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setActiveIntegration(null)}
+                    aria-label="Close"
+                    className="absolute right-2 top-2 rounded-full bg-black/40 p-1.5 text-white transition-colors hover:bg-black/60"
+                  >
+                    <XMarkIcon className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="p-6">
+                  <div className="flex items-center justify-between gap-3">
+                    <h3 className="text-lg font-bold text-[var(--foreground)]">Meta Ads</h3>
+                    <span
+                      className="inline-flex items-center gap-1.5 text-xs font-medium"
+                      style={{ color: account?.metaAdAccountId?.trim() ? '#22c55e' : 'var(--muted-foreground)' }}
+                    >
+                      <span
+                        className="inline-block h-1.5 w-1.5 rounded-full"
+                        style={{ background: account?.metaAdAccountId?.trim() ? '#22c55e' : 'var(--muted-foreground)' }}
+                      />
+                      {account?.metaAdAccountId?.trim() ? 'Connected' : 'Not connected'}
+                    </span>
+                  </div>
+
+                  <p className="mt-2 mb-5 text-sm leading-relaxed text-[var(--muted-foreground)]">
+                    Links this account to a Meta ad account so the{' '}
+                    <span className="font-medium text-[var(--foreground)]">Ad Pacer</span>{' '}
+                    can pull actual spend, daily budget, and delivery status
+                    automatically with its &ldquo;Sync from Facebook&rdquo; button.
+                    Spend authenticates through your agency&rsquo;s Meta System
+                    User token, configured once for all accounts.
+                  </p>
+
+                  <div className="space-y-5">
+                    <div>
+                      <label className={labelClass} style={{ marginBottom: 0 }}>
+                        Facebook Ad Account ID
+                      </label>
+                      <p className="mb-1.5 text-[11px] text-[var(--muted-foreground)]">
+                        Find it in Meta Ads Manager. Leave blank to disable syncing.
+                      </p>
+                      <input
+                        type="text"
+                        value={metaAdAccountId}
+                        onChange={(e) => setMetaAdAccountId(e.target.value)}
+                        placeholder="act_1234567890"
+                        className={`${inputClass} max-w-[280px]`}
+                      />
+                    </div>
+
+                    <div>
+                      <label className={labelClass} style={{ marginBottom: 0 }}>
+                        Pacer Markup Rate
+                      </label>
+                      <p className="mb-1.5 text-[11px] text-[var(--muted-foreground)]">
+                        Budget calculator: actual spend = client billed × markup.
+                        Blank uses the platform default (0.77).
+                      </p>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={markup}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === '' || /^\d*\.?\d*$/.test(v)) setMarkup(v);
+                        }}
+                        placeholder="0.77"
+                        className={`${inputClass} max-w-[160px]`}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-5 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 p-3.5 text-xs leading-relaxed text-[var(--muted-foreground)]">
+                    In the Ad Pacer, linked campaigns show a &ldquo;Synced from
+                    Facebook&rdquo; badge. Rows auto-link to a campaign by matching
+                    name; use the per-row dropdown to fix any mismatches.
+                  </div>
+
+                  <div className="mt-6 flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveIntegration(null)}
+                      className="h-10 rounded-lg border border-[var(--border)] bg-[var(--card)] px-4 text-sm hover:border-[var(--muted-foreground)]"
+                    >
+                      Close
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveIntegration}
+                      disabled={savingIntegration}
+                      className="h-10 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--primary)]/90 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {savingIntegration ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )}
 
         {/* ════════════ USERS TAB (settings mode only) ════════════ */}
         {settingsMode && activeTab === 'users' && <UsersTab />}

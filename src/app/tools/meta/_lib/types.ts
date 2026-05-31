@@ -69,6 +69,19 @@ export interface PacerAd {
   creativeLink: string | null;
   clientName: string | null;
   digitalDetails: string | null;
+  // Facebook (Meta) sync. Server-managed: set by the Sync-from-Facebook job,
+  // never edited in the form. `metaObjectId` set = row is linked and its
+  // spend is owned by Facebook; `pacerSyncedAt` is an ISO timestamp.
+  metaObjectType: string | null;
+  metaObjectId: string | null;
+  metaEffectiveStatus: string | null;
+  pacerSyncedAt: string | null;
+  // Actual run schedule from Meta (account-TZ YYYY-MM-DD). Server-managed;
+  // the pacer clamps these to the pacing month. metaEndDate null = open-ended.
+  metaStartDate: string | null;
+  metaEndDate: string | null;
+  // Per-ad alert mute (Change 9): silences pacing-family alerts for this ad.
+  alertsMuted: boolean;
   designNotes: DesignNote[];
   activityLog: ActivityEntry[];
 }

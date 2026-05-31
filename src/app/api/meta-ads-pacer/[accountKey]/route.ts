@@ -5,12 +5,23 @@ import {
   canAccessPacer,
   fetchPeriodPlan,
   getOrCreatePlan,
+  getPeriodPlanView,
+  getPriorOverUnder,
+  isPeriodWritable,
   isValidPeriod,
+  reconcileCompletedRuns,
 } from '@/lib/meta-ads-pacer';
 import {
   notifyAssignment,
   notifyApprovalChange,
 } from '@/lib/notifications/service';
+import {
+  type AuditInput,
+  diffTrackedAdFields,
+  newAuditGroupId,
+  summarizeDiff,
+  writeAudit,
+} from '@/lib/meta-ads-audit';
 
 interface IncomingAd {
   id?: string;
@@ -43,6 +54,13 @@ interface IncomingAd {
   creativeLink?: string | null;
   clientName?: string | null;
   digitalDetails?: string | null;
+  // Facebook link — settable from the client (campaign picker). The other
+  // Meta fields (metaEffectiveStatus, pacerSyncedAt, metaStartDate/EndDate)
+  // are sync-managed and deliberately omitted so autosave can't clobber them.
+  metaObjectId?: string | null;
+  metaObjectType?: string | null;
+  // Per-ad alert mute (Change 9) — toggled from the pacer row.
+  alertsMuted?: boolean;
 }
 
 interface IncomingPeriodPayload {
@@ -77,9 +95,24 @@ export async function GET(
     );
   }
 
-  const plan = await getOrCreatePlan(accountKey);
-  const payload = await fetchPeriodPlan(plan.id, period);
-  return NextResponse.json({ accountKey, period, ...payload });
+  const userId = session.user?.id ?? null;
+  // Status sync (Change 11): auto-complete ads whose flight has ended before
+  // building the view. Skipped on frozen months (they're read-only).
+  const planForReconcile = await getOrCreatePlan(accountKey);
+  if (await isPeriodWritable(accountKey, planForReconcile.id, period)) {
+    await reconcileCompletedRuns(accountKey, planForReconcile.id, period, userId);
+  }
+
+  // Live-vs-frozen: closed months serve their immutable snapshot (and freeze
+  // lazily on first view); live months serve current data.
+  const view = await getPeriodPlanView(accountKey, period, userId);
+  // Prior month's over/under for the carryover prompt — only on editable
+  // months (a frozen month can't take a carryover; skip to avoid freezing
+  // the month-before as a side effect of browsing history).
+  const priorOverUnder = view.frozen
+    ? null
+    : await getPriorOverUnder(accountKey, period, session.user?.id ?? null);
+  return NextResponse.json({ accountKey, period, ...view, priorOverUnder });
 }
 
 export async function PUT(
@@ -102,29 +135,53 @@ export async function PUT(
     );
   }
 
-  const body = (await req.json()) as IncomingPeriodPayload;
   const plan = await getOrCreatePlan(accountKey);
+
+  // A frozen (closed, not reopened) month is read-only — reject the save so
+  // autosave can't mutate a settled month's record.
+  if (!(await isPeriodWritable(accountKey, plan.id, period))) {
+    return NextResponse.json(
+      { error: 'This month is frozen. Reopen it to make changes.', code: 'month_frozen' },
+      { status: 409 },
+    );
+  }
+
+  const body = (await req.json()) as IncomingPeriodPayload;
 
   const incomingAds: IncomingAd[] = Array.isArray(body.ads) ? body.ads : [];
   const incomingIds = incomingAds.map((ad) => ad.id).filter(Boolean) as string[];
 
-  // Snapshot the current state of the ads we're about to upsert so we can
-  // detect assignment/approval changes after the transaction commits.
-  const existingAds =
-    incomingIds.length > 0
-      ? await prisma.metaAdsPacerAd.findMany({
-          where: { planId: plan.id, id: { in: incomingIds } },
-          select: {
-            id: true,
-            ownerUserId: true,
-            designerUserId: true,
-            accountRepUserId: true,
-            internalApproval: true,
-            clientApproval: true,
-          },
-        })
-      : [];
+  // Snapshot the current state of ALL ads in this period before the upsert so
+  // we can (a) detect assignment/approval changes for notifications and (b)
+  // diff tracked fields for the automatic audit log (Change 10), including
+  // ads that are about to be deleted.
+  const existingAds = await prisma.metaAdsPacerAd.findMany({
+    where: { planId: plan.id, period },
+    select: {
+      id: true,
+      name: true,
+      ownerUserId: true,
+      designerUserId: true,
+      accountRepUserId: true,
+      internalApproval: true,
+      clientApproval: true,
+      pacerDailyBudget: true,
+      pacerActual: true,
+      allocation: true,
+      budgetType: true,
+      budgetSource: true,
+      splitBaseAmount: true,
+      adStatus: true,
+      flightStart: true,
+      flightEnd: true,
+      liveDate: true,
+    },
+  });
   const existingById = new Map(existingAds.map((a) => [a.id, a]));
+  const existingBudget = await prisma.metaAdsPacerPeriodBudget.findUnique({
+    where: { planId_period: { planId: plan.id, period } },
+    select: { baseBudgetGoal: true, addedBudgetGoal: true },
+  });
   const accountDealer =
     (await prisma.account.findUnique({
       where: { key: accountKey },
@@ -191,6 +248,9 @@ export async function PUT(
         creativeLink: nullable(ad.creativeLink),
         clientName: nullable(ad.clientName),
         digitalDetails: nullable(ad.digitalDetails),
+        metaObjectId: nullable(ad.metaObjectId),
+        metaObjectType: nullable(ad.metaObjectType),
+        alertsMuted: ad.alertsMuted === true,
       };
 
       if (ad.id) {
@@ -280,6 +340,58 @@ export async function PUT(
         });
       }
     }
+  }
+
+  // ── Automatic audit log (Change 10) ──
+  // Diff tracked fields per ad, plus creations/deletions and budget-goal
+  // changes. One groupId ties this save together (so a bulk "Set all" reads as
+  // a single grouped action). Best-effort; never blocks the save.
+  {
+    const authorUserId = session.user?.id ?? null;
+    const groupId = newAuditGroupId();
+    const entries: AuditInput[] = [];
+    const base = { accountKey, planId: plan.id, period, groupId, authorUserId };
+
+    const goalDiffs: Array<[string, string, string | null, string | null]> = [
+      ['baseBudgetGoal', 'Base budget goal', existingBudget?.baseBudgetGoal ?? null, nullable(body.baseBudgetGoal)],
+      ['addedBudgetGoal', 'Added budget goal', existingBudget?.addedBudgetGoal ?? null, nullable(body.addedBudgetGoal)],
+    ];
+    for (const [field, label, from, to] of goalDiffs) {
+      if (from !== to) {
+        const f = (v: string | null) => (v == null ? '—' : `$${Number(v).toFixed(2)}`);
+        entries.push({ ...base, action: 'edit', field, fromValue: from, toValue: to, summary: `${label} ${f(from)} → ${f(to)}` });
+      }
+    }
+
+    const incomingIdSet = new Set(incomingIds);
+    for (const ad of incomingAds) {
+      const before = ad.id ? existingById.get(ad.id) : undefined;
+      const name = ad.name || before?.name || 'Untitled Ad';
+      if (!before) {
+        entries.push({ ...base, adId: ad.id ?? null, adName: name, action: 'created', summary: `Created "${name}"` });
+        continue;
+      }
+      const beforeRec = before as unknown as Record<string, unknown>;
+      const afterRec = ad as unknown as Record<string, unknown>;
+      for (const d of diffTrackedAdFields(beforeRec, afterRec)) {
+        entries.push({
+          ...base,
+          adId: ad.id ?? null,
+          adName: name,
+          action: 'edit',
+          field: d.field,
+          fromValue: d.from,
+          toValue: d.to,
+          summary: summarizeDiff(name, d),
+        });
+      }
+    }
+    for (const ex of existingAds) {
+      if (!incomingIdSet.has(ex.id)) {
+        entries.push({ ...base, adId: ex.id, adName: ex.name || 'Untitled Ad', action: 'deleted', summary: `Deleted "${ex.name || 'Untitled Ad'}"` });
+      }
+    }
+    await writeAudit(entries);
   }
 
   const payload = await fetchPeriodPlan(plan.id, period);

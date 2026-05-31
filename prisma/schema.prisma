@@ -130,6 +130,18 @@ model Account {
   twilioAuthToken           String?
   twilioPhoneNumber         String?
   twilioMessagingServiceSid String?
+  // Facebook (Meta) ad account this sub-account's campaigns live under, e.g.
+  // "act_1234567890". Used by the Meta Ads Pacer's Sync-from-Facebook job to
+  // pull spend. The access token itself is a single agency-wide System User
+  // token in env (META_SYSTEM_USER_TOKEN), not per-account.
+  metaAdAccountId           String?
+  // IANA timezone of the Meta ad account (e.g. "America/New_York"), cached
+  // from the Marketing API on each sync. Meta resets the daily budget at
+  // midnight in THIS zone, so the Pacer's time-left math runs against it.
+  // Authoritative for pacing; distinct from the hand-entered `timezone`
+  // business field above. Falls back to `timezone` (if a valid IANA zone),
+  // then America/Denver, when unset.
+  metaTimezone              String?
   accountRepId              String?
   accountRep                User?     @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
   // Marker for the one-time bootstrap that seeds Loomi's six lifecycle
@@ -1173,8 +1185,62 @@ model MetaAdsPacerPlan {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  ads           MetaAdsPacerAd[]
-  periodBudgets MetaAdsPacerPeriodBudget[]
+  ads            MetaAdsPacerAd[]
+  periodBudgets  MetaAdsPacerPeriodBudget[]
+  monthSnapshots MetaAdsPacerMonthSnapshot[]
+  auditEntries   MetaAdsPacerAuditEntry[]
+}
+
+/**
+ * Automatic audit log (Change 10). Every tracked change — daily budget, actual
+ * spend, allocation, budget goals, status, flight dates, carryover, freeze/
+ * reopen, bulk applies, Meta syncs — is recorded here with who/what/from→to/
+ * when, no button press. The manual "Log Budget" snapshot (MetaAdsPacerBudgetLog)
+ * is a separate, deliberate checkpoint layered on top. Purged after 1 year.
+ */
+model MetaAdsPacerAuditEntry {
+  id           String           @id @default(cuid())
+  accountKey   String
+  planId       String
+  plan         MetaAdsPacerPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  period       String // YYYY-MM
+  adId         String? // null for period-level (budget goals) / account-level events
+  adName       String? // denormalized so the trail survives ad deletion
+  action       String // edit | created | deleted | carryover | freeze | reopen | sync
+  field        String? // e.g. pacerDailyBudget, adStatus
+  fromValue    String?
+  toValue      String?
+  summary      String // human-readable one-liner
+  groupId      String? // ties a multi-entry action together (one save / bulk apply)
+  authorUserId String?
+  createdAt    DateTime         @default(now())
+
+  @@index([accountKey, period, createdAt])
+  @@index([adId, createdAt])
+  @@index([createdAt])
+}
+
+/**
+ * Immutable end-of-month freeze (Change 5). Once a month has fully settled
+ * (past the grace period after month-end), the pacer captures the exact plan
+ * payload — per-ad spend, effective flight dates, target, budget goals,
+ * markup, timezone — so a closed month stays a faithful record even if the
+ * live ad rows are later edited. `reopenedAt` set = an admin reopened it for
+ * correction, so the live rows are served (editable) until it re-freezes.
+ */
+model MetaAdsPacerMonthSnapshot {
+  id             String           @id @default(cuid())
+  planId         String
+  plan           MetaAdsPacerPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  period         String // YYYY-MM
+  payloadJson    String // frozen plan payload (ads + budget goals + markup + timeZone)
+  frozenAt       DateTime         @default(now())
+  frozenByUserId String?
+  reopenedAt     DateTime?
+  reopenedByUserId String?
+
+  @@unique([planId, period])
+  @@index([planId])
 }
 
 model MetaAdsPacerPeriodBudget {
@@ -1184,6 +1250,13 @@ model MetaAdsPacerPeriodBudget {
   period          String // YYYY-MM, e.g. "2026-04"
   baseBudgetGoal  String?
   addedBudgetGoal String?
+  // Carryover applied from the prior month's over/under (Change 7), in
+  // actual-spend dollars, per bucket. Opt-in (null = none). Added to the
+  // DERIVED spend target only (target = clientBudget × markup + carryover);
+  // it NEVER modifies the typed budget goals above, which stay the billing
+  // record. Single-month: set once on approval, not auto-chained.
+  baseCarryover   String?
+  addedCarryover  String?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
@@ -1245,6 +1318,31 @@ model MetaAdsPacerAd {
   pacerTodayDate String?
   pacerEndDate   String?
 
+  // Facebook (Meta) Ads sync. When `metaObjectId` is set the row is "linked"
+  // to a Facebook object and the Sync-from-Facebook job owns its spend:
+  // pacerActual (and, when available, pacerDailyBudget / allocation) are
+  // overwritten from the Marketing API. metaEffectiveStatus mirrors the FB
+  // delivery status for mismatch display only — it never touches adStatus.
+  // pacerSyncedAt timestamps the last successful pull (drives the "synced
+  // Xh ago" badge). All three are server-managed: the client PUT spreads
+  // them back but the route ignores them, so autosave can't clobber a sync.
+  metaObjectType      String? // "campaign" | "adset" | "ad"
+  metaObjectId        String?
+  metaEffectiveStatus String?
+  pacerSyncedAt       DateTime?
+  // Actual run schedule from Meta (start_time / stop_time), stored as the
+  // ad-account-timezone calendar date (YYYY-MM-DD) at sync time. Server-
+  // managed, kept separate from the planner's flightStart/flightEnd so Meta's
+  // truth never clobbers planning intent. The pacer clamps these to the
+  // pacing month: effective_end = min(metaEndDate ?? flightEnd, month_end).
+  // metaEndDate is null for campaigns Meta reports with no stop_time.
+  metaStartDate       String?
+  metaEndDate         String?
+  // Per-ad alert mute (Change 9): when true, the pacing-family scanners
+  // (underspend/overpace, went-dark, flight-ending) skip this ad so a
+  // known-acceptable case stops pinging. Workflow alerts are unaffected.
+  alertsMuted         Boolean @default(false)
+
   // Other
   creativeLink   String?
   clientName     String?
@@ -1299,12 +1397,16 @@ model MetaAdsPacerAccountNote {
   id           String   @id @default(cuid())
   accountKey   String
   account      Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  // Month (YYYY-MM) the comment was written in — comments are scoped to their
+  // month, so May notes only show in May and June starts a fresh log. Nullable
+  // for pre-existing account-wide notes (which won't surface in a month view).
+  period       String?
   text         String
   authorUserId String?
   author       User?    @relation("MetaPacerAccountNoteAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
   createdAt    DateTime @default(now())
 
-  @@index([accountKey, createdAt])
+  @@index([accountKey, period, createdAt])
 }
 
 // Budget log — point-in-time snapshot of the pacer's spend + client

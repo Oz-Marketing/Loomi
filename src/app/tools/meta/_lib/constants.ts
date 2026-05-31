@@ -72,6 +72,13 @@ export const AD_COLORS = [
 export const MARKUP = 0.77;
 
 /**
+ * A closed month whose |over/under| (actual − spend target) meets this is
+ * flagged for carryover into the next month (Change 7). Configurable later;
+ * a single agency-wide default for now.
+ */
+export const CARRYOVER_THRESHOLD = 25;
+
+/**
  * Solid bg + white text for ad statuses (Monday-style "filled" tags).
  * Other status palettes (DESIGN_STATUS_COLORS, APPROVAL_STATUS_COLORS) keep
  * the translucent treatment — saturation here is reserved for the primary

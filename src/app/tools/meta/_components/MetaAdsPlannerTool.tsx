@@ -7007,14 +7007,47 @@ function AdSetLinkPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(
+    null,
+  );
+
+  // Portal the panel to <body> with fixed coords so it escapes the card's
+  // overflow-hidden + backdrop-filter and any scroll container that would
+  // otherwise clip an absolutely-positioned dropdown. Flips above the trigger
+  // when there isn't room below.
+  const updatePosition = useCallback(() => {
+    if (!triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    const margin = 8;
+    const estHeight = 340;
+    let top = rect.bottom + 4;
+    if (top + estHeight > window.innerHeight - margin) {
+      top = Math.max(margin, rect.top - estHeight - 4);
+    }
+    setPos({ top, left: rect.left, width: rect.width });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    updatePosition();
+    const onScroll = () => updatePosition();
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onScroll);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onScroll);
+    };
+  }, [open, updatePosition]);
 
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+      const t = e.target as Node;
+      if (popoverRef.current?.contains(t)) return;
+      if (triggerRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setOpen(false);
@@ -7049,8 +7082,9 @@ function AdSetLinkPicker({
   };
 
   return (
-    <div className="relative" ref={rootRef}>
+    <>
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => {
@@ -7071,73 +7105,82 @@ function AdSetLinkPicker({
         <ChevronDownIcon className="w-3.5 h-3.5 flex-shrink-0 text-[var(--muted-foreground)]" />
       </button>
 
-      {open && (
-        <div className="glass-dropdown absolute left-0 right-0 z-[120] mt-1 min-w-[260px]">
-          <div className="flex items-center gap-1.5 border-b border-[var(--border)] px-2 py-1.5">
-            <MagnifyingGlassIcon className="w-3.5 h-3.5 flex-shrink-0 text-[var(--muted-foreground)]" />
-            <input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search ad sets…"
-              className="w-full bg-transparent text-[11px] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none"
-            />
-          </div>
-          <div className="max-h-64 overflow-y-auto themed-scrollbar py-1">
-            {loading ? (
-              <div className="px-2.5 py-2 text-[11px] text-[var(--muted-foreground)]">
-                Loading ad sets…
+      {open && pos && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              ref={popoverRef}
+              className="glass-dropdown fixed z-[200]"
+              style={{ top: pos.top, left: pos.left, width: Math.max(pos.width, 260) }}
+            >
+              <div className="flex items-center gap-1.5 border-b border-[var(--border)] px-2 py-1.5">
+                <MagnifyingGlassIcon className="w-3.5 h-3.5 flex-shrink-0 text-[var(--muted-foreground)]" />
+                <input
+                  autoFocus
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search ad sets…"
+                  className="w-full bg-transparent text-[11px] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none"
+                />
               </div>
-            ) : error ? (
-              <div className="px-2.5 py-2 text-[11px] text-[#ef4444]">{error}</div>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={() => pick(null)}
-                  className={`flex w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-[var(--muted)] ${
-                    value
-                      ? 'text-[var(--muted-foreground)]'
-                      : 'font-medium text-[var(--foreground)]'
-                  }`}
-                >
-                  Not linked — match by name
-                </button>
-                {filtered.map((o) => (
-                  <button
-                    key={o.id}
-                    type="button"
-                    onClick={() => pick(o.id)}
-                    className={`flex w-full items-start gap-2 px-2.5 py-1.5 text-left text-[11px] hover:bg-[var(--muted)] ${
-                      o.id === value ? 'bg-[var(--muted)]/60 font-medium' : ''
-                    }`}
-                  >
-                    <span className="min-w-0 flex-1 text-[var(--foreground)]">
-                      {o.campaignName && (
-                        <span className="text-[var(--muted-foreground)]">
-                          {o.campaignName} ›{' '}
-                        </span>
-                      )}
-                      {o.name}
-                    </span>
-                    {o.effectiveStatus && (
-                      <span className="flex-shrink-0 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)] mt-0.5">
-                        {o.effectiveStatus}
-                      </span>
-                    )}
-                  </button>
-                ))}
-                {filtered.length === 0 && (
+              <div className="max-h-64 overflow-y-auto themed-scrollbar py-1">
+                {loading ? (
                   <div className="px-2.5 py-2 text-[11px] text-[var(--muted-foreground)]">
-                    No ad sets match “{query}”.
+                    Loading ad sets…
                   </div>
+                ) : error ? (
+                  <div className="px-2.5 py-2 text-[11px] text-[#ef4444]">
+                    {error}
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => pick(null)}
+                      className={`flex w-full px-2.5 py-1.5 text-left text-[11px] hover:bg-[var(--muted)] ${
+                        value
+                          ? 'text-[var(--muted-foreground)]'
+                          : 'font-medium text-[var(--foreground)]'
+                      }`}
+                    >
+                      Not linked — match by name
+                    </button>
+                    {filtered.map((o) => (
+                      <button
+                        key={o.id}
+                        type="button"
+                        onClick={() => pick(o.id)}
+                        className={`flex w-full items-start gap-2 px-2.5 py-1.5 text-left text-[11px] hover:bg-[var(--muted)] ${
+                          o.id === value ? 'bg-[var(--muted)]/60 font-medium' : ''
+                        }`}
+                      >
+                        <span className="min-w-0 flex-1 text-[var(--foreground)]">
+                          {o.campaignName && (
+                            <span className="text-[var(--muted-foreground)]">
+                              {o.campaignName} ›{' '}
+                            </span>
+                          )}
+                          {o.name}
+                        </span>
+                        {o.effectiveStatus && (
+                          <span className="flex-shrink-0 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)] mt-0.5">
+                            {o.effectiveStatus}
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                    {filtered.length === 0 && (
+                      <div className="px-2.5 py-2 text-[11px] text-[var(--muted-foreground)]">
+                        No ad sets match “{query}”.
+                      </div>
+                    )}
+                  </>
                 )}
-              </>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
 
@@ -7202,6 +7245,13 @@ function PacerRow({
     setPushMsg(res);
     setPushing(false);
     if (res.ok) setDailyStart(ad.pacerDailyBudget ?? '');
+  };
+  // Discard edits — restore the value captured when editing began so a changed
+  // mind (or an accidental clear) can't wipe the budget.
+  const cancelDailyEdit = () => {
+    onDailyBudgetChange(dailyStart);
+    setPushMsg(null);
+    setDailyEditing(false);
   };
 
   // "Now" = the current instant; the day boundary that bounds the recommended
@@ -7628,16 +7678,28 @@ function PacerRow({
                     Change the value to push it to Meta
                   </span>
                 )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDailyEditing(false);
-                    setPushMsg(null);
-                  }}
-                  className="text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-                >
-                  Done
-                </button>
+                <div className="ml-auto flex items-center gap-2">
+                  {/* Cancel restores the original value; Done keeps the edit. */}
+                  <button
+                    type="button"
+                    onClick={cancelDailyEdit}
+                    disabled={pushing}
+                    className="text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDailyEditing(false);
+                      setPushMsg(null);
+                    }}
+                    disabled={pushing}
+                    className="text-[10px] font-semibold text-[var(--foreground)] hover:opacity-80 disabled:opacity-50"
+                  >
+                    Done
+                  </button>
+                </div>
               </div>
               {pushMsg && (
                 <div
@@ -7799,8 +7861,8 @@ function PacerRow({
               ? isOnTrack
                 ? 'On track — no change needed'
                 : dailyDelta > 0
-                  ? `Add ${fmt(Math.abs(dailyDelta))} (rec. spend) to current Daily Budget`
-                  : `Reduce current Daily Budget by ${fmt(Math.abs(dailyDelta))} (rec. spend)`
+                  ? `Add ${fmt(Math.abs(dailyDelta))} to current Daily Budget`
+                  : `Reduce current Daily Budget by ${fmt(Math.abs(dailyDelta))}`
               : undefined
           }
           color={recColor}

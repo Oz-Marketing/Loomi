@@ -9258,60 +9258,12 @@ function OverviewView({
     return 0;
   });
 
-  // Grand billing total across all accounts for the month — the combined
-  // Base+Added is the headline figure billing reconciles against, with the
-  // two components shown so the sum is verifiable (Change 8). True client
-  // budget (gross) only — never carryover/pacing-adjusted.
-  const grand = accounts.reduce(
-    (acc, a) => {
-      acc.base += num(a.baseBudgetGoal) ?? 0;
-      acc.added += num(a.addedBudgetGoal) ?? 0;
-      return acc;
-    },
-    { base: 0, added: 0 },
-  );
-  const grandTotal = grand.base + grand.added;
-  const fundedCount = accounts.filter(
-    (a) => (num(a.baseBudgetGoal) ?? 0) + (num(a.addedBudgetGoal) ?? 0) > 0,
-  ).length;
-
   return (
     <div className="space-y-2.5">
       <SectionLabel
         icon={<ClipboardDocumentListIcon className="w-3 h-3" />}
         text={`All Accounts · ${fmtPeriodLong(period)}`}
       />
-      {grandTotal > 0 && (
-        <div className="glass-section-card rounded-xl px-4 py-3 mb-1 flex items-center justify-between gap-4 flex-wrap">
-          <div className="min-w-0">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-              Total client budget ({fundedCount} account
-              {fundedCount === 1 ? '' : 's'})
-            </div>
-            <div className="text-2xl font-bold tabular-nums text-[var(--foreground)]">
-              {fmt(grandTotal)}
-            </div>
-          </div>
-          <div className="flex items-center gap-4 text-right tabular-nums">
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                Base
-              </div>
-              <div className="text-base font-bold" style={{ color: COLORS.base }}>
-                {fmt(grand.base)}
-              </div>
-            </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                Added
-              </div>
-              <div className="text-base font-bold" style={{ color: COLORS.added }}>
-                {fmt(grand.added)}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
       {sorted.map((acct) => (
         <OverviewAccountRow
           key={acct.accountKey}

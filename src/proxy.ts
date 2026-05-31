@@ -143,6 +143,11 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith('/api/auth') ||
     pathname.startsWith('/api/onboarding/') ||
     pathname.startsWith('/api/webhooks/') ||
+    // Internal job endpoints (cron-triggered) authenticate themselves with the
+    // x-internal-job-secret header via requireInternalJobAuth — they have no
+    // NextAuth session, so they must skip the session gate here or the proxy
+    // 401s them before the route's own secret check can run.
+    pathname.startsWith('/api/internal/') ||
     pathname.startsWith('/login') ||
     pathname.startsWith('/onboarding') ||
     pathname.startsWith('/_next') ||

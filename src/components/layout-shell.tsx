@@ -233,8 +233,14 @@ function AppShell({ children }: { children: React.ReactNode }) {
           sidebarCollapsed ? 'pl-[7.5rem]' : 'pl-[18.5rem]'
         }`}
       >
-        <TopUtilityBar />
-        {children}
+        {/* Cap content width so pages don't stretch edge-to-edge on wide
+            monitors. Centered in the space to the right of the sidebar.
+            Only the standard app shell is constrained — the builder/editor
+            branches above stay full-bleed by design. */}
+        <div className="mx-auto w-full max-w-[1600px]">
+          <TopUtilityBar />
+          {children}
+        </div>
       </main>
     </>
   );

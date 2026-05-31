@@ -4,11 +4,21 @@
  * it so both views always show the same numbers for the same ad.
  */
 
-import { toIso } from '@/components/ui/date-picker';
 import { calcDays, calcElapsed, num } from './helpers';
+import {
+  fractionalDaysRemaining,
+  monthBoundsIso,
+  zonedTodayIso,
+} from '@/lib/timezone';
 import type { PacerAd, PacingStatus } from './types';
 
 export interface PacerCalc {
+  /**
+   * FRACTIONAL days left until the flight's budget-reset boundary, measured
+   * to the current moment in the account's timezone (e.g. 2.23, not 3). Drives
+   * `recDaily`/`projected`; round only for display, never re-sum the rounded
+   * value. 0 once the flight is over.
+   */
   daysLeft: number;
   remaining: number;
   recDaily: number;
@@ -19,6 +29,14 @@ export interface PacerCalc {
   hasDates: boolean;
   endsBeforeToday: boolean;
   /**
+   * The flight window actually being paced: the intersection of the Meta /
+   * planned schedule and the pacing month (ad.period). `effectiveEnd` is what
+   * days-remaining counts down to — clamped to month-end so a multi-month
+   * campaign is never paced over its whole span against one month's budget.
+   */
+  effectiveStart: string | null;
+  effectiveEnd: string | null;
+  /**
    * Lifetime-only: spend pacing relative to elapsed flight time. 100 = on
    * track, >100 = overpacing, <100 = underpacing. null when we can't
    * compute (no budget, no flight start, or period hasn't started).
@@ -26,10 +44,17 @@ export interface PacerCalc {
   lifetimePacingPct: number | null;
 }
 
+/**
+ * Pacing math for one ad. `nowMs` is the absolute current instant (epoch ms,
+ * timezone-independent) and `timeZone` is the ad account's IANA zone — Meta
+ * resets the daily budget at midnight there, so that's the boundary that
+ * decides how much of today is still controllable. The flight end always
+ * comes from `ad.flightEnd` (the per-ad today/end cursors are retired).
+ */
 export function buildPacerCalc(
   ad: PacerAd,
-  todayIso: string | null,
-  endIso: string | null,
+  nowMs: number,
+  timeZone: string,
 ): PacerCalc {
   const isLifetime = ad.budgetType === 'Lifetime';
   const budget = num(ad.allocation) ?? 0;
@@ -37,24 +62,47 @@ export function buildPacerCalc(
   // Lifetime ads don't have a daily-rate column — projection collapses to
   // whatever's been spent rather than extrapolating with a phantom rate.
   const dailyBudget = isLifetime ? 0 : num(ad.pacerDailyBudget) ?? 0;
-  const today = todayIso ? new Date(todayIso + 'T00:00:00') : null;
-  const end = endIso ? new Date(endIso + 'T00:00:00') : null;
-  const hasDates = !!(today && end);
-  const endsBeforeToday = !!(today && end && end.getTime() < today.getTime());
-  const daysLeft =
-    hasDates && !endsBeforeToday
-      ? Math.round((end!.getTime() - today!.getTime()) / 86400000) + 1
-      : 0;
-  const remaining = Math.max(0, budget - spent);
-  const recDaily = daysLeft > 0 ? remaining / daysLeft : 0;
-  const projected = spent + dailyBudget * Math.max(daysLeft, 0);
 
-  // Lifetime pacing %: spent / (budget × daysElapsed / totalDays).
+  // Effective flight window = (Meta / planned schedule) ∩ (pacing month).
+  // Meta's actual dates win over the planner's when present; clamping to the
+  // month is the multi-month guard. YYYY-MM-DD strings compare chronologically
+  // so min/max are plain `<`/`>`. A no-end campaign (metaEndDate null,
+  // flightEnd null) paces to month-end.
+  const { effectiveStart, effectiveEnd } = clampToMonth(ad);
+  const endIso = effectiveEnd;
+  const hasDates = !!endIso;
+  // Fraction of the flight still ahead of us, in the account TZ. A flight
+  // ending today still has the rest of today left (a fraction < 1), so the
+  // tool no longer treats a nearly-over day as a full controllable day.
+  const rawDaysLeft = fractionalDaysRemaining(endIso, nowMs, timeZone);
+  const endsBeforeToday = rawDaysLeft != null && rawDaysLeft <= 0;
+  const daysLeft = rawDaysLeft != null && rawDaysLeft > 0 ? rawDaysLeft : 0;
+
+  const remaining = Math.max(0, budget - spent);
+  // Recommended daily is a per-calendar-day budget, so never divide by less
+  // than one whole day. Otherwise the last hours/minutes of a flight
+  // (daysLeft → 0) blow the recommendation up to absurd values — e.g. $316
+  // remaining ÷ 0.0056 days ≈ $56,752/day. Flooring the divisor at 1 caps it
+  // at "spend the rest in the final day", the largest sensible daily; days ≥ 1
+  // keep their fractional precision.
+  const recDaily = daysLeft > 0 ? remaining / Math.max(daysLeft, 1) : 0;
+  // Projection of *actual* spend keeps the true fractional days — it's a
+  // forecast, not a budget you type into Meta, so the partial day is correct.
+  const projected = spent + dailyBudget * daysLeft;
+
+  // Lifetime pacing %: spent / (budget × daysElapsed / totalDays). Uses the
+  // month-clamped window so a campaign extending past the month is paced only
+  // over the part that falls in the budget's month, and anchors "today" to the
+  // account-zone calendar so elapsed days match the budget-reset clock.
   let lifetimePacingPct: number | null = null;
   if (isLifetime && budget > 0 && hasDates) {
-    const startIso = ad.liveDate || ad.flightStart;
-    const start = startIso ? new Date(startIso + 'T00:00:00') : null;
-    if (start && end && today) {
+    const todayIso = zonedTodayIso(nowMs, timeZone);
+    const start = effectiveStart
+      ? new Date(effectiveStart + 'T00:00:00')
+      : null;
+    const end = endIso ? new Date(endIso + 'T00:00:00') : null;
+    const today = new Date(todayIso + 'T00:00:00');
+    if (start && end) {
       const totalDays =
         Math.round((end.getTime() - start.getTime()) / 86400000) + 1;
       const daysElapsed = Math.min(
@@ -81,7 +129,36 @@ export function buildPacerCalc(
     dailyBudget,
     hasDates,
     endsBeforeToday,
+    effectiveStart,
+    effectiveEnd,
     lifetimePacingPct,
+  };
+}
+
+/**
+ * Intersect an ad's run schedule with its pacing month (`ad.period`):
+ *   effective_start = max(metaStartDate ?? liveDate ?? flightStart, month_start)
+ *   effective_end   = min(metaEndDate   ?? flightEnd,               month_end)
+ * Meta's actual dates take precedence over the planner's. Clamping to the
+ * month keeps a multi-month campaign scoped to a single month's budget, and a
+ * late launch (metaStartDate after month_start) naturally shrinks the window
+ * without any budget pro-rating. Returns the raw schedule unclamped if the
+ * period is malformed (shouldn't happen for a real pacer row).
+ */
+export function clampToMonth(ad: PacerAd): {
+  effectiveStart: string | null;
+  effectiveEnd: string | null;
+} {
+  const rawStart = ad.metaStartDate ?? ad.liveDate ?? ad.flightStart;
+  const rawEnd = ad.metaEndDate ?? ad.flightEnd;
+  const bounds = ad.period ? monthBoundsIso(ad.period) : null;
+  if (!bounds) return { effectiveStart: rawStart, effectiveEnd: rawEnd };
+  return {
+    // max(rawStart, month_start) — never start before the month opens.
+    effectiveStart:
+      rawStart && rawStart > bounds.start ? rawStart : bounds.start,
+    // min(rawEnd, month_end) — never pace past the month's budget window.
+    effectiveEnd: rawEnd && rawEnd < bounds.end ? rawEnd : bounds.end,
   };
 }
 
@@ -109,15 +186,21 @@ export interface AdCalc {
 
 /**
  * Computes the AdCalc snapshot used by the Summary tab. Numbers come from
- * `buildPacerCalc()` (with the same per-ad pacerTodayDate / pacerEndDate
- * cursors), so the two views always show the same projection, remaining,
- * and recommended daily figures for a given ad.
+ * `buildPacerCalc()` (same `nowMs` + account `timeZone`), so the Summary and
+ * Pacer views always show the same projection, remaining, and recommended
+ * daily figures for a given ad.
  */
-export function buildAdCalc(ad: PacerAd): AdCalc {
+export function buildAdCalc(
+  ad: PacerAd,
+  nowMs: number,
+  timeZone: string,
+): AdCalc {
   const isLifetime = ad.budgetType === 'Lifetime';
-  const effectiveStart = ad.liveDate || ad.flightStart;
-  const days = calcDays(effectiveStart, ad.flightEnd);
-  const daysElapsed = calcElapsed(effectiveStart, ad.flightEnd);
+  // Month-clamped window (same as buildPacerCalc) so the Summary's day counts,
+  // implied daily, and expected-to-date stay scoped to the pacing month.
+  const { effectiveStart, effectiveEnd } = clampToMonth(ad);
+  const days = calcDays(effectiveStart, effectiveEnd);
+  const daysElapsed = calcElapsed(effectiveStart, effectiveEnd);
   const isLate = !!(
     ad.liveDate &&
     ad.flightStart &&
@@ -125,9 +208,7 @@ export function buildAdCalc(ad: PacerAd): AdCalc {
   );
   const daysLate = isLate ? calcDays(ad.flightStart, ad.liveDate) - 1 : 0;
 
-  const todayIso = ad.pacerTodayDate ?? toIso(new Date());
-  const endIso = ad.pacerEndDate ?? ad.flightEnd;
-  const pacer = buildPacerCalc(ad, todayIso, endIso);
+  const pacer = buildPacerCalc(ad, nowMs, timeZone);
 
   const allocation = pacer.budget;
   const dailyBudget = isLifetime ? null : num(ad.pacerDailyBudget);

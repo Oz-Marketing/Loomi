@@ -134,6 +134,13 @@ export function makeAd(position: number, period: string): PacerAd {
     creativeLink: null,
     clientName: null,
     digitalDetails: null,
+    metaObjectType: null,
+    metaObjectId: null,
+    metaEffectiveStatus: null,
+    pacerSyncedAt: null,
+    metaStartDate: null,
+    metaEndDate: null,
+    alertsMuted: false,
     designNotes: [],
     activityLog: [],
   };

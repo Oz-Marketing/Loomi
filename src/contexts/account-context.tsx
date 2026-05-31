@@ -58,6 +58,9 @@ export interface AccountData {
   // When null/undefined, the calculator falls back to the global default
   // (0.77). Actual spend = client gross × markup.
   markup?: number | null;
+  // Facebook ad account ("act_...") for the Meta Ads Pacer's Sync-from-
+  // Facebook job. Empty/undefined = not connected.
+  metaAdAccountId?: string | null;
   // Loomi-native sending identity. Used by EmailCampaign sends when set;
   // otherwise the global SMTP_FROM env var is used.
   senderEmail?: string | null;

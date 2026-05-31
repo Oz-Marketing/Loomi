@@ -6,6 +6,8 @@ export type NotificationType =
   | 'approval_pending'
   | 'status_stuck'
   | 'pacing_alert'
+  | 'ad_dark'
+  | 'flight_ending'
   | 'period_over_allocated'
   | 'ad_assigned'
   | 'approval_changed';
@@ -59,7 +61,24 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     type: 'pacing_alert',
     label: 'Pacing off-track',
     description:
-      'Mid-flight ad is over-pacing (>110%) or under-pacing (<50%) with time to course-correct.',
+      'Over-pacing (>110%), early under-pacing (<50%), or a significant underspend (>15% under) with little flight left to recover.',
+    category: 'Meta Ads Planner',
+    channel: 'digest',
+    defaultEnabled: true,
+  },
+  {
+    type: 'ad_dark',
+    label: 'Ad went dark',
+    description:
+      'A live, in-flight ad that Meta now reports as paused/off — it may have stopped delivering unnoticed.',
+    category: 'Meta Ads Planner',
+    channel: 'digest',
+    defaultEnabled: true,
+  },
+  {
+    type: 'flight_ending',
+    label: 'Flight ending soon',
+    description: 'An active ad is ending in the next day or two — time for a final reconciliation.',
     category: 'Meta Ads Planner',
     channel: 'digest',
     defaultEnabled: true,

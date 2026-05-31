@@ -53,7 +53,7 @@ export async function PATCH(
     const updatePayload: Record<string, string | number | null | undefined> = {};
 
     // Simple string fields
-    const stringFields = ['dealer', 'category', 'oem', 'email', 'phone', 'salesPhone', 'servicePhone', 'partsPhone', 'address', 'city', 'state', 'postalCode', 'website', 'timezone', 'senderEmail', 'senderName', 'sendingDomain', 'replyToEmail'] as const;
+    const stringFields = ['dealer', 'category', 'oem', 'email', 'phone', 'salesPhone', 'servicePhone', 'partsPhone', 'address', 'city', 'state', 'postalCode', 'website', 'timezone', 'senderEmail', 'senderName', 'sendingDomain', 'replyToEmail', 'metaAdAccountId'] as const;
     for (const field of stringFields) {
       if (field in body) {
         const value = body[field];

@@ -1,0 +1,310 @@
+# Staging deploy — mirrors deploy.yml (production) almost exactly.
+#
+# Because staging runs on a SEPARATE droplet, there are no port/process/path
+# collisions with prod, so the only differences from deploy.yml are:
+#   1. Trigger branch:        staging  (prod: main)
+#   2. Target host:           secrets.DO_HOST scoped to the `staging` Environment
+#   3. environment: staging   (so secrets resolve to the staging values)
+#   4. A STAGING_ENABLED gate so this is a no-op until the droplet is provisioned
+#
+# Everything the droplet differs in (database, third-party API keys, domain)
+# lives in that droplet's /var/www/loomi-studio/shared/.env.local and its nginx
+# server block — NOT in this file. Keep this body in sync with deploy.yml.
+name: Deploy to Staging
+
+on:
+  push:
+    branches:
+      - staging
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Skipped until the staging droplet exists and you set the repo Actions
+    # variable STAGING_ENABLED=true. Until then, pushes to `staging` won't
+    # attempt a (failing) deploy — the job shows as skipped, not red.
+    if: ${{ vars.STAGING_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 20
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: root
+          key: ${{ secrets.DO_SSH_KEY }}
+          command_timeout: 15m
+          script: |
+            set -Eeuo pipefail
+
+            APP_ROOT=/var/www/loomi-studio
+            RELEASES_DIR="$APP_ROOT/releases"
+            SHARED_DIR="$APP_ROOT/shared"
+            SHARED_ENV="$SHARED_DIR/.env.local"
+            SHARED_AVATARS_DIR="$SHARED_DIR/avatars"
+            ACTIVE_PORT_FILE="$APP_ROOT/.active-port"
+            CURRENT_LINK="$APP_ROOT/current"
+            NGINX_UPSTREAM_CONF=/etc/nginx/conf.d/loomi-upstream.conf
+            DEPLOY_BRANCH=staging
+
+            mkdir -p "$RELEASES_DIR" "$SHARED_DIR" "$SHARED_AVATARS_DIR"
+
+            # Ensure nginx allows uploads up to 10MB (default is 1MB)
+            if [ ! -f /etc/nginx/conf.d/client-max-body-size.conf ]; then
+              echo 'client_max_body_size 10m;' > /etc/nginx/conf.d/client-max-body-size.conf
+              nginx -t && systemctl reload nginx
+            fi
+
+            # Keep a shared env file that all releases can reuse.
+            if [ -f "$APP_ROOT/.env.local" ] && [ ! -f "$SHARED_ENV" ]; then
+              cp "$APP_ROOT/.env.local" "$SHARED_ENV"
+            fi
+            if [ ! -f "$SHARED_ENV" ]; then
+              echo "ERROR: Missing shared env file at $SHARED_ENV"
+              exit 1
+            fi
+
+            cd "$APP_ROOT"
+
+            echo "=== Pre-deploy: current commit ==="
+            git log --oneline -1
+
+            git fetch origin "$DEPLOY_BRANCH"
+            NEW_SHA=$(git rev-parse "origin/$DEPLOY_BRANCH")
+            SHORT_SHA=$(echo "$NEW_SHA" | cut -c1-7)
+            RELEASE_ID="$(date +%Y%m%d%H%M%S)-$SHORT_SHA"
+            NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
+
+            # Reset any locally-modified tracked files (e.g. package-lock.json
+            # dirtied by npm install) so git pull doesn't abort.
+            git checkout -- .
+            git pull --ff-only origin "$DEPLOY_BRANCH"
+
+            echo "=== Post-pull: latest commit ==="
+            git log --oneline -1
+
+            mkdir -p "$NEW_RELEASE"
+            git archive "$NEW_SHA" | tar -x -C "$NEW_RELEASE"
+            cp "$SHARED_ENV" "$NEW_RELEASE/.env.local"
+
+            # Keep user avatars across releases by storing them in shared storage.
+            # The app writes to process.cwd()/data/avatars, so each release needs
+            # that path to resolve to a shared directory.
+            if [ -d "$CURRENT_LINK/data/avatars" ]; then
+              cp -an "$CURRENT_LINK/data/avatars/." "$SHARED_AVATARS_DIR/" || true
+            fi
+            if [ -d "$APP_ROOT/public/avatars" ]; then
+              cp -an "$APP_ROOT/public/avatars/." "$SHARED_AVATARS_DIR/" || true
+            fi
+            mkdir -p "$NEW_RELEASE/data"
+            rm -rf "$NEW_RELEASE/data/avatars"
+            ln -sfn "$SHARED_AVATARS_DIR" "$NEW_RELEASE/data/avatars"
+
+            cd "$NEW_RELEASE"
+
+            # Determine which slot is active so we can stop the idle one
+            CURRENT_PORT=3000
+            if [ -f "$ACTIVE_PORT_FILE" ]; then
+              CURRENT_PORT=$(cat "$ACTIVE_PORT_FILE")
+            fi
+            if [ "$CURRENT_PORT" != "3000" ] && [ "$CURRENT_PORT" != "3001" ]; then
+              CURRENT_PORT=3000
+            fi
+
+            if [ "$CURRENT_PORT" = "3000" ]; then
+              NEXT_PORT=3001
+              NEXT_APP=loomi-studio-green
+              OLD_APP=loomi-studio-blue
+            else
+              NEXT_PORT=3000
+              NEXT_APP=loomi-studio-blue
+              OLD_APP=loomi-studio-green
+            fi
+
+            # Ensure swap exists so npm ci / next build don't get OOM-killed
+            if [ ! -f /swapfile ]; then
+              echo "=== Creating 2G swap ==="
+              fallocate -l 2G /swapfile
+              chmod 600 /swapfile
+              mkswap /swapfile
+              swapon /swapfile
+              echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            elif ! swapon --show | grep -q /swapfile; then
+              swapon /swapfile || true
+            fi
+
+            # Install pm2-logrotate if not already present (prevents disk fill)
+            pm2 describe pm2-logrotate > /dev/null 2>&1 || pm2 install pm2-logrotate
+            pm2 set pm2-logrotate:max_size 10M
+            pm2 set pm2-logrotate:retain 5
+            pm2 set pm2-logrotate:compress true
+
+            # Free memory: stop the idle PM2 slot (will be replaced after build)
+            pm2 stop "$NEXT_APP" 2>/dev/null || true
+            pm2 delete "$NEXT_APP" 2>/dev/null || true
+
+            npm ci --legacy-peer-deps --no-audit --no-fund
+
+            # Load env vars for build/runtime (Prisma needs DATABASE_URL, etc.)
+            set -a && source .env.local && set +a
+
+            # Bump Node heap for the build only — the TypeScript check
+            # phase OOMs at the droplet's ~1GB default once the bundle
+            # grows past a certain size. 4GB is well above what we
+            # actually use and well below what the swap can absorb.
+            # Runtime keeps its leaner 768MB limit set further below.
+            NODE_OPTIONS="--max-old-space-size=4096" npm run build
+
+            echo "=== Build complete, .next dir size ==="
+            du -sh .next
+
+            # One-time folder-store migration: import legacy JSON folders into
+            # Postgres. Only fires when the previous release still ships the
+            # JSON file (i.e. this is the first deploy with the Postgres-backed
+            # store). After this deploy the new release no longer contains the
+            # JSON, so the `if -f` guard turns the block into a no-op on
+            # subsequent deploys — safe to leave in.
+            LEGACY_FOLDERS_JSON="$CURRENT_LINK/src/data/esp-template-folders.json"
+            if [ -f "$LEGACY_FOLDERS_JSON" ]; then
+              echo "=== Found legacy folder JSON — importing into Postgres ==="
+              cp "$LEGACY_FOLDERS_JSON" /tmp/loomi-folders-backup.json
+              npx tsx scripts/migrate-template-folders-to-db.ts /tmp/loomi-folders-backup.json --confirm
+              echo "=== Folder import complete ==="
+            else
+              echo "=== No legacy folder JSON at $LEGACY_FOLDERS_JSON — skipping import ==="
+            fi
+
+            echo "=== Starting candidate app: $NEXT_APP on port $NEXT_PORT ==="
+            pm2 stop "$NEXT_APP" || true
+            pm2 delete "$NEXT_APP" || true
+            NODE_ENV=production NODE_OPTIONS="--max-old-space-size=768" pm2 start ./node_modules/.bin/next \
+              --name "$NEXT_APP" \
+              --cwd "$NEW_RELEASE" \
+              --max-memory-restart 512M \
+              --merge-logs \
+              -- start -p "$NEXT_PORT"
+
+            echo "=== Waiting for candidate health ==="
+            CANDIDATE_OK=0
+            i=0
+            while [ $i -lt 60 ]; do
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$NEXT_PORT/api/auth/session" || true)
+              if [ "$CODE" -ge 200 ] && [ "$CODE" -lt 500 ]; then
+                CANDIDATE_OK=1
+                break
+              fi
+              sleep 2
+              i=$((i + 1))
+            done
+            if [ "$CANDIDATE_OK" -ne 1 ]; then
+              echo "ERROR: Candidate never became healthy on port $NEXT_PORT"
+              echo "=== PM2 logs for $NEXT_APP ==="
+              pm2 logs "$NEXT_APP" --nostream --lines 40 || true
+              pm2 stop "$NEXT_APP" || true
+              pm2 delete "$NEXT_APP" || true
+              exit 1
+            fi
+
+            echo "=== Updating nginx upstream to port $NEXT_PORT ==="
+            TARGET_CONF_COUNT=$(grep -RslE "proxy_pass http://(127\\.0\\.0\\.1|localhost):(3000|3001);|proxy_pass http://loomi_upstream;" /etc/nginx/sites-enabled /etc/nginx/conf.d | wc -l || true)
+            if [ "$TARGET_CONF_COUNT" -eq 0 ]; then
+              echo "ERROR: Could not find Loomi nginx proxy_pass block"
+              exit 1
+            fi
+
+            grep -RslE "proxy_pass http://(127\\.0\\.0\\.1|localhost):(3000|3001);|proxy_pass http://loomi_upstream;" /etc/nginx/sites-enabled /etc/nginx/conf.d | while read -r file; do
+              sed -i -E "s#proxy_pass http://(127\\.0\\.0\\.1|localhost):(3000|3001);#proxy_pass http://loomi_upstream;#g" "$file"
+            done
+
+            if [ -f "$NGINX_UPSTREAM_CONF" ]; then
+              cp "$NGINX_UPSTREAM_CONF" "${NGINX_UPSTREAM_CONF}.bak"
+            fi
+            cat > "$NGINX_UPSTREAM_CONF" <<EOF
+            upstream loomi_upstream {
+              server 127.0.0.1:${NEXT_PORT};
+              keepalive 64;
+            }
+            EOF
+
+            if ! nginx -t; then
+              echo "ERROR: nginx config test failed"
+              if [ -f "${NGINX_UPSTREAM_CONF}.bak" ]; then
+                mv "${NGINX_UPSTREAM_CONF}.bak" "$NGINX_UPSTREAM_CONF"
+              fi
+              exit 1
+            fi
+            systemctl reload nginx
+            rm -f "${NGINX_UPSTREAM_CONF}.bak" || true
+
+            ln -sfn "$NEW_RELEASE" "$CURRENT_LINK"
+            echo "$NEXT_PORT" > "$ACTIVE_PORT_FILE"
+
+            echo "=== Edge health check after cutover ==="
+            EDGE_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1/api/auth/session" || true)
+            if [ "$EDGE_CODE" -lt 200 ] || [ "$EDGE_CODE" -ge 500 ]; then
+              echo "ERROR: Edge health failed with HTTP $EDGE_CODE, rolling back traffic"
+              cat > "$NGINX_UPSTREAM_CONF" <<EOF
+            upstream loomi_upstream {
+              server 127.0.0.1:${CURRENT_PORT};
+              keepalive 64;
+            }
+            EOF
+              nginx -t && systemctl reload nginx
+              pm2 stop "$NEXT_APP" || true
+              pm2 delete "$NEXT_APP" || true
+              echo "$CURRENT_PORT" > "$ACTIVE_PORT_FILE"
+              exit 1
+            fi
+
+            echo "=== Cutover complete, stopping old app ==="
+            pm2 stop "$OLD_APP" || true
+            pm2 delete "$OLD_APP" || true
+            # Legacy process name from old deploy flow.
+            pm2 stop loomi-studio || true
+            pm2 delete loomi-studio || true
+
+            # Loomi-native send-engine worker. Singleton (not blue/green) —
+            # a brief restart is fine since pg-boss persists jobs in
+            # Postgres and the worker re-scans on boot. Delete + start (vs
+            # reload) so pm2 re-resolves the `current` symlink to the new
+            # release path. `--update-env` is load-bearing: the pm2 daemon
+            # was almost certainly started at droplet boot before any
+            # .env.local was sourced, so its cached env is empty and
+            # children would inherit that emptiness without an explicit
+            # refresh. Without it, Prisma silently falls back to the dev
+            # default `127.0.0.1:5432/loomi_studio` and every job throws
+            # P1001 even though pg-boss itself (lazy-init in main()) works
+            # fine.
+            echo "=== Restarting loomi-studio-worker on new release ==="
+            pm2 stop loomi-studio-worker 2>/dev/null || true
+            pm2 delete loomi-studio-worker 2>/dev/null || true
+            pm2 start "$CURRENT_LINK/ecosystem.config.js" --only loomi-studio-worker --update-env
+
+            echo "=== Worker health: waiting for pg-boss ==="
+            WORKER_OK=0
+            for i in $(seq 1 15); do
+              if pm2 logs loomi-studio-worker --nostream --lines 50 2>/dev/null | grep -q "\[worker\] pg-boss started"; then
+                WORKER_OK=1
+                break
+              fi
+              sleep 1
+            done
+            if [ "$WORKER_OK" -ne 1 ]; then
+              echo "WARN: worker did not log 'pg-boss started' within 15s; check pm2 logs loomi-studio-worker"
+              pm2 logs loomi-studio-worker --nostream --lines 40 || true
+            fi
+
+            echo "=== PM2 process status ==="
+            pm2 save
+            pm2 list
+
+            echo "=== Release cleanup (keep latest 5) ==="
+            OLD_RELEASES=$(ls -1dt "$RELEASES_DIR"/* 2>/dev/null | tail -n +6 || true)
+            if [ -n "$OLD_RELEASES" ]; then
+              echo "$OLD_RELEASES" | xargs rm -rf
+            fi

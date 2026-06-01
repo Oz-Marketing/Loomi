@@ -1312,6 +1312,11 @@ model MetaAdsPacerAd {
   allocation       String?
   pacerActual      String?
   pacerDailyBudget String?
+  // Full-run actual spend across the linked ad set's entire flight (Meta
+  // date_preset=maximum), not just the current pacing month. Informational —
+  // surfaced for multi-month ads so the full date-range spend is visible; never
+  // drives the month's pacing math.
+  pacerRunSpend    String?
 
   // Pacer-only date scoping: lets the user adjust "today" and "end" per ad
   // without affecting the Ad Planner flight dates.
@@ -1320,8 +1325,9 @@ model MetaAdsPacerAd {
 
   // Facebook (Meta) Ads sync. When `metaObjectId` is set the row is "linked"
   // to a Facebook object and the Sync-from-Facebook job owns its spend:
-  // pacerActual (and, when available, pacerDailyBudget / allocation) are
-  // overwritten from the Marketing API. metaEffectiveStatus mirrors the FB
+  // pacerActual (and, for Daily ads, pacerDailyBudget) are overwritten from the
+  // Marketing API. `allocation` is the PLANNED target spend and is never
+  // touched by sync. metaEffectiveStatus mirrors the FB
   // delivery status for mismatch display only — it never touches adStatus.
   // pacerSyncedAt timestamps the last successful pull (drives the "synced
   // Xh ago" badge). All three are server-managed: the client PUT spreads

@@ -76,6 +76,8 @@ export interface PacerAd {
   metaObjectId: string | null;
   metaEffectiveStatus: string | null;
   pacerSyncedAt: string | null;
+  /** Full-run (all-time) spend across the ad set's whole flight; informational. */
+  pacerRunSpend: string | null;
   // Actual run schedule from Meta (account-TZ YYYY-MM-DD). Server-managed;
   // the pacer clamps these to the pacing month. metaEndDate null = open-ended.
   metaStartDate: string | null;

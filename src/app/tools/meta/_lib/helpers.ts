@@ -138,6 +138,7 @@ export function makeAd(position: number, period: string): PacerAd {
     metaObjectId: null,
     metaEffectiveStatus: null,
     pacerSyncedAt: null,
+    pacerRunSpend: null,
     metaStartDate: null,
     metaEndDate: null,
     alertsMuted: false,

@@ -414,6 +414,8 @@ interface PacerAd {
   metaObjectId: string | null;
   metaEffectiveStatus: string | null;
   pacerSyncedAt: string | null;
+  /** Full-run (all-time) spend across the ad set's whole flight; informational. */
+  pacerRunSpend: string | null;
   metaStartDate: string | null;
   metaEndDate: string | null;
   alertsMuted: boolean;
@@ -606,6 +608,7 @@ function makeAd(position: number, period: string): PacerAd {
     metaObjectId: null,
     metaEffectiveStatus: null,
     pacerSyncedAt: null,
+    pacerRunSpend: null,
     metaStartDate: null,
     metaEndDate: null,
     alertsMuted: false,
@@ -7586,6 +7589,36 @@ function PacerRow({
                 </span>
               </div>
             )}
+            {/* Full-run (all-month) spend — surfaced only when the ad's total
+                run exceeds this month's spend, i.e. a multi-month ad whose full
+                date-range spend isn't captured by the monthly Actual above. The
+                monthly figure is still what drives this month's pacing. */}
+            {(() => {
+              const run = num(ad.pacerRunSpend);
+              const month = num(ad.pacerActual) ?? 0;
+              if (run == null || run <= month + 0.005) return null;
+              return (
+                <div
+                  className="mt-1 flex items-start gap-1 text-[10px] text-[var(--muted-foreground)]"
+                  title="Total spend across the ad's entire flight (all months), pulled from Meta. The monthly Actual above is what drives this month's pacing."
+                >
+                  <MetaLogoIcon className="w-3 h-3 flex-shrink-0 mt-px" />
+                  <span>
+                    Full run:{' '}
+                    <span className="font-semibold tabular-nums text-[var(--foreground)]">
+                      {fmt(run)}
+                    </span>
+                    {(ad.metaStartDate || ad.metaEndDate) && (
+                      <>
+                        {' '}·{' '}
+                        {ad.metaStartDate ? fmtDate(ad.metaStartDate) : '—'} →{' '}
+                        {ad.metaEndDate ? fmtDate(ad.metaEndDate) : 'ongoing'}
+                      </>
+                    )}
+                  </span>
+                </div>
+              );
+            })()}
             {/* Meta status mismatch (Change 11): Meta reports the ad not
                 delivering while the planner still says Live and it's mid-flight.
                 Don't auto-flip (Meta "paused" can be a daily cap / billing hold)
@@ -10474,8 +10507,9 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
               </Tooltip>
             </>
           )}
-          {/* Sync from Meta sits to the right of the icons. */}
-          {activeKey && (
+          {/* Sync from Meta sits to the right of the icons. Pacer only — the
+              planner is for planning, so it doesn't pull actual spend. */}
+          {activeKey && mode === 'pacer' && (
             <button
               type="button"
               onClick={handleSyncMeta}

@@ -265,6 +265,35 @@ export async function fetchAdSetSpend(
   return map;
 }
 
+/**
+ * Returns adSetId → full-run spend ($): the ad set's all-time spend across its
+ * entire flight (date_preset=maximum), not just the current month. Lets the
+ * pacer surface a multi-month ad's total even when you're viewing one month.
+ */
+export async function fetchAdSetRunSpend(
+  cfg: MetaConfig,
+  adAccountId: string,
+): Promise<Map<string, number>> {
+  const rows = await metaGraphFetchAll<MetaInsightRow>(
+    cfg,
+    `${adAccountId}/insights`,
+    {
+      level: 'adset',
+      fields: 'adset_id,spend',
+      date_preset: 'maximum',
+      time_increment: 'all_days',
+    },
+  );
+  const map = new Map<string, number>();
+  for (const row of rows) {
+    if (!row.adset_id) continue;
+    const spend = Number(row.spend ?? 0);
+    if (!Number.isFinite(spend)) continue;
+    map.set(row.adset_id, (map.get(row.adset_id) ?? 0) + spend);
+  }
+  return map;
+}
+
 interface MetaAdAccountMeta {
   timezone_name?: string;
 }
@@ -395,6 +424,12 @@ export async function syncPeriodFromMeta(
   const spendMap = future
     ? new Map<string, number>()
     : await fetchAdSetSpend(cfg, adAccountId, since, until);
+  // Full-run (all-time) spend per ad set, so multi-month ads can show their
+  // total alongside the current month. Best-effort: a failure here must not
+  // abort the month sync, so fall back to an empty map.
+  const runSpendMap = future
+    ? new Map<string, number>()
+    : await fetchAdSetRunSpend(cfg, adAccountId).catch(() => new Map<string, number>());
 
   // Cache the ad account's timezone for the Pacer's time-left math, and use it
   // to bucket Meta's start_time / end_time into account-TZ calendar dates
@@ -444,11 +479,15 @@ export async function syncPeriodFromMeta(
     }
 
     const spend = spendMap.get(adSet.id) ?? 0;
+    const runSpend = runSpendMap.get(adSet.id);
     const data: Prisma.MetaAdsPacerAdUpdateInput = {
       metaObjectType: 'adset',
       metaObjectId: adSet.id,
       metaEffectiveStatus: adSet.effective_status ?? adSet.status ?? null,
       pacerActual: spend.toFixed(2),
+      // Full-run total (all-time) — informational; null if the run-spend pull
+      // failed or returned nothing for this ad set.
+      pacerRunSpend: runSpend != null ? runSpend.toFixed(2) : null,
       pacerSyncedAt: syncedAt,
       // Actual run schedule, as account-TZ calendar dates. end_time is often
       // absent (open-ended ad sets) → null, which the pacer treats as "runs to

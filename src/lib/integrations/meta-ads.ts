@@ -294,6 +294,44 @@ export async function fetchAdSetRunSpend(
   return map;
 }
 
+interface MetaMonthlyRow {
+  spend?: string;
+  date_start?: string; // YYYY-MM-DD, the month bucket's start
+}
+
+/**
+ * Account-total spend per calendar month over [since, until] (one Graph call,
+ * time_increment=monthly). Returns YYYY-MM → total spend ($). Used to backfill
+ * actual spend for months before the pacer existed so year reconciliation has
+ * complete data. Account-level only — not split by ad set or Base/Added bucket.
+ * Pass `since` as a month-start (YYYY-MM-01) so buckets align to calendar months.
+ */
+export async function fetchAccountMonthlySpend(
+  cfg: MetaConfig,
+  adAccountId: string,
+  since: string,
+  until: string,
+): Promise<Map<string, number>> {
+  const rows = await metaGraphFetchAll<MetaMonthlyRow>(
+    cfg,
+    `${adAccountId}/insights`,
+    {
+      fields: 'spend',
+      time_range: JSON.stringify({ since, until }),
+      time_increment: 'monthly',
+    },
+  );
+  const map = new Map<string, number>();
+  for (const row of rows) {
+    if (!row.date_start) continue;
+    const month = row.date_start.slice(0, 7); // YYYY-MM
+    const spend = Number(row.spend ?? 0);
+    if (!Number.isFinite(spend)) continue;
+    map.set(month, (map.get(month) ?? 0) + spend);
+  }
+  return map;
+}
+
 interface MetaAdAccountMeta {
   timezone_name?: string;
 }

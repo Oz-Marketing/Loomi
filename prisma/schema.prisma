@@ -1185,10 +1185,11 @@ model MetaAdsPacerPlan {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  ads            MetaAdsPacerAd[]
-  periodBudgets  MetaAdsPacerPeriodBudget[]
-  monthSnapshots MetaAdsPacerMonthSnapshot[]
-  auditEntries   MetaAdsPacerAuditEntry[]
+  ads                   MetaAdsPacerAd[]
+  periodBudgets         MetaAdsPacerPeriodBudget[]
+  monthSnapshots        MetaAdsPacerMonthSnapshot[]
+  auditEntries          MetaAdsPacerAuditEntry[]
+  carryoverApplications MetaAdsPacerCarryoverApplication[]
 }
 
 /**
@@ -1257,11 +1258,36 @@ model MetaAdsPacerPeriodBudget {
   // record. Single-month: set once on approval, not auto-chained.
   baseCarryover   String?
   addedCarryover  String?
+  // Backfilled actual spend for a pre-pacer month (account-total from Meta,
+  // combined — not bucket-split). Lets year reconciliation include months from
+  // before the tool existed. Null for normally-tracked months (their actual is
+  // Σ ad pacerActual). The client budget for these months is entered later into
+  // baseBudgetGoal, so over/under = historicalActual − baseBudgetGoal × markup.
+  historicalActual String?
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
 
   @@unique([planId, period])
   @@index([planId, period])
+}
+
+/// One application of a month's settled over/under into a later month's spend
+/// target (reconciliation). The ledger is the source of truth for how much of a
+/// given source month's over/under has been consumed, so the YTD net and each
+/// month's unapplied remainder stay honest across arbitrary apply actions.
+model MetaAdsPacerCarryoverApplication {
+  id              String           @id @default(cuid())
+  planId          String
+  plan            MetaAdsPacerPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  bucket          String // "base" | "added" — the target month bucket it lands in
+  sourceMonth     String // YYYY-MM the over/under came from
+  targetMonth     String // YYYY-MM it was applied into
+  amount          String // actual-spend dollars applied (signed)
+  appliedByUserId String? // recorded for display; no FK so plan delete cascades cleanly
+  appliedAt       DateTime @default(now())
+
+  @@index([planId, sourceMonth])
+  @@index([planId, targetMonth])
 }
 
 model MetaAdsPacerAd {

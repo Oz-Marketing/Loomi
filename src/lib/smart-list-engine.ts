@@ -1,19 +1,34 @@
-import type { FilterDefinition, FilterCondition, FilterGroup } from './smart-list-types';
+import type {
+  FilterDefinition,
+  FilterCondition,
+  FilterGroup,
+  FieldDefinition,
+  FieldType,
+} from './smart-list-types';
 import type { Contact } from '@/lib/contacts/types';
 
 /**
  * Evaluate a FilterDefinition against a list of contacts.
  * All filtering is client-side against already-fetched data.
+ *
+ * `fields` is the merged field set (built-ins + the account's custom
+ * fields). When provided, the engine routes custom-field reads to
+ * `contact.customFields[key]` and uses the field's declared type to
+ * pick the operator family. When omitted, the engine falls back to
+ * legacy direct-property reads — built-in fields still work, but
+ * custom fields are silently ignored.
  */
 export function evaluateFilter(
   contacts: Contact[],
   definition: FilterDefinition,
+  fields?: FieldDefinition[],
 ): Contact[] {
   if (!definition.groups.length) return contacts;
+  const fieldMap = buildFieldMap(fields);
 
   return contacts.filter((contact) => {
     const groupResults = definition.groups.map((group) =>
-      evaluateGroup(contact, group),
+      evaluateGroup(contact, group, fieldMap),
     );
 
     return definition.logic === 'AND'
@@ -22,11 +37,24 @@ export function evaluateFilter(
   });
 }
 
-function evaluateGroup(contact: Contact, group: FilterGroup): boolean {
+function buildFieldMap(
+  fields: FieldDefinition[] | undefined,
+): Map<string, FieldDefinition> | null {
+  if (!fields) return null;
+  const map = new Map<string, FieldDefinition>();
+  for (const f of fields) map.set(f.key, f);
+  return map;
+}
+
+function evaluateGroup(
+  contact: Contact,
+  group: FilterGroup,
+  fieldMap: Map<string, FieldDefinition> | null,
+): boolean {
   if (!group.conditions.length) return true;
 
   const results = group.conditions.map((condition) =>
-    evaluateCondition(contact, condition),
+    evaluateCondition(contact, condition, fieldMap),
   );
 
   return group.logic === 'AND'
@@ -34,32 +62,109 @@ function evaluateGroup(contact: Contact, group: FilterGroup): boolean {
     : results.some(Boolean);
 }
 
-function evaluateCondition(contact: Contact, condition: FilterCondition): boolean {
+function evaluateCondition(
+  contact: Contact,
+  condition: FilterCondition,
+  fieldMap: Map<string, FieldDefinition> | null,
+): boolean {
   const { field, operator, value, value2 } = condition;
+  const def = fieldMap?.get(field) ?? null;
 
-  // Get the raw field value from the contact
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const raw = (contact as any)[field];
-
-  // Tags field is an array
-  if (field === 'tags') {
-    const tags = Array.isArray(raw) ? (raw as string[]) : [];
-    return evaluateTagsCondition(tags, operator, value);
+  // Read the raw value from the right place: custom fields live under
+  // the `customFields` JSON blob, everything else is a direct property.
+  let raw: unknown;
+  if (def?.isCustom) {
+    const blob = (contact as Contact & { customFields?: Record<string, unknown> })
+      .customFields;
+    raw = blob ? blob[field] : undefined;
+  } else {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    raw = (contact as any)[field];
   }
 
-  if (operator === 'is_true' || operator === 'is_false') {
-    return evaluateBooleanCondition(raw, operator);
+  // When a definition is available, route by the declared field type.
+  // Without a definition, fall back to legacy operator-name dispatch
+  // so callers that don't pass fields still get the original behavior
+  // for built-in fields.
+  const type: FieldType | null = def?.type ?? inferTypeFromOperator(operator);
+
+  switch (type) {
+    case 'tags':
+    case 'multiselect':
+      return evaluateTagsCondition(toStringArray(raw), operator, value);
+    case 'boolean':
+      return evaluateBooleanCondition(raw, operator);
+    case 'date':
+      return evaluateDateCondition(toScalarString(raw), operator, value, value2);
+    case 'number':
+      return evaluateNumberCondition(raw, operator, value, value2);
+    case 'select':
+      return evaluateSelectCondition(toScalarString(raw), operator, value);
+    case 'text':
+    default:
+      return evaluateTextCondition(toScalarString(raw), operator, value);
   }
+}
 
-  const fieldValue = raw == null ? '' : String(raw).trim();
-
-  // Determine if this is a date field by checking the operator type
-  const dateOperators = ['before', 'after', 'between', 'within_days', 'overdue'];
-  if (dateOperators.includes(operator)) {
-    return evaluateDateCondition(fieldValue, operator, value, value2);
+// Operator-name → FieldType fallback for callers that don't pass a
+// field map. Mirrors the original dispatch order (date operators win
+// before text). New numeric and select operators are mapped too so a
+// stale caller without a field map still routes correctly when
+// editing custom fields by key alone.
+function inferTypeFromOperator(operator: string): FieldType {
+  if (operator === 'is_true' || operator === 'is_false') return 'boolean';
+  if (
+    operator === 'includes_any' ||
+    operator === 'includes_all' ||
+    operator === 'excludes'
+  ) {
+    return 'tags';
   }
+  if (operator === 'is_one_of' || operator === 'is_not_one_of') return 'select';
+  if (
+    operator === 'num_equals' ||
+    operator === 'num_not_equals' ||
+    operator === 'num_gt' ||
+    operator === 'num_lt' ||
+    operator === 'num_gte' ||
+    operator === 'num_lte' ||
+    operator === 'num_between'
+  ) {
+    return 'number';
+  }
+  if (
+    operator === 'before' ||
+    operator === 'after' ||
+    operator === 'between' ||
+    operator === 'within_days' ||
+    operator === 'overdue'
+  ) {
+    return 'date';
+  }
+  return 'text';
+}
 
-  return evaluateTextCondition(fieldValue, operator, value);
+function toScalarString(raw: unknown): string {
+  if (raw == null) return '';
+  if (typeof raw === 'string') return raw.trim();
+  if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw);
+  if (raw instanceof Date) return raw.toISOString();
+  return '';
+}
+
+function toStringArray(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((entry) => (typeof entry === 'string' ? entry : String(entry)))
+      .filter(Boolean);
+  }
+  if (typeof raw === 'string' && raw.trim()) {
+    // Comma-separated stored value (custom multiselect imports often
+    // arrive this way). Split conservatively so a tag value like
+    // "loyalty, gold" stays as two entries.
+    return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  }
+  return [];
 }
 
 // ── Text Operators ──
@@ -88,6 +193,60 @@ function evaluateTextCondition(
     default:
       return true;
   }
+}
+
+// ── Number Operators ──
+
+// Number fields are stored as strings on the wire (everything in
+// `Contact.customFields` is JSON-stringified), so we coerce on read.
+// `value` from the UI is also a string for the same reason — single
+// source of stringification rules across the codebase.
+function evaluateNumberCondition(
+  raw: unknown,
+  operator: string,
+  value: string,
+  value2: string | undefined,
+): boolean {
+  const target = parseNumeric(value);
+  const target2 = parseNumeric(value2);
+  const actual = parseNumeric(typeof raw === 'string' ? raw : String(raw ?? ''));
+
+  switch (operator) {
+    case 'is_empty':
+      return actual == null;
+    case 'is_not_empty':
+      return actual != null;
+    case 'num_equals':
+      return actual != null && target != null && actual === target;
+    case 'num_not_equals':
+      return actual != null && target != null && actual !== target;
+    case 'num_gt':
+      return actual != null && target != null && actual > target;
+    case 'num_lt':
+      return actual != null && target != null && actual < target;
+    case 'num_gte':
+      return actual != null && target != null && actual >= target;
+    case 'num_lte':
+      return actual != null && target != null && actual <= target;
+    case 'num_between':
+      return (
+        actual != null &&
+        target != null &&
+        target2 != null &&
+        actual >= target &&
+        actual <= target2
+      );
+    default:
+      return true;
+  }
+}
+
+function parseNumeric(value: string | null | undefined): number | null {
+  if (value == null) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const n = Number(trimmed);
+  return Number.isFinite(n) ? n : null;
 }
 
 // ── Boolean Operators ──
@@ -241,4 +400,33 @@ function parseTagList(value: string): string[] {
     .split(',')
     .map((t) => t.trim().toLowerCase())
     .filter(Boolean);
+}
+
+// ── Select Operators ──
+
+// Select fields store a single value matched against a declared option
+// list. `is_one_of` / `is_not_one_of` accept comma-separated targets
+// for symmetry with the tags multi-input UX.
+function evaluateSelectCondition(
+  fieldValue: string,
+  operator: string,
+  value: string,
+): boolean {
+  const lower = fieldValue.toLowerCase();
+  switch (operator) {
+    case 'is_empty':
+      return fieldValue === '';
+    case 'is_not_empty':
+      return fieldValue !== '';
+    case 'is_one_of': {
+      const targets = parseTagList(value);
+      return targets.includes(lower);
+    }
+    case 'is_not_one_of': {
+      const targets = parseTagList(value);
+      return !targets.includes(lower);
+    }
+    default:
+      return true;
+  }
 }

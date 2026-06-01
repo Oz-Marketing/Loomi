@@ -14,6 +14,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import type { Contact } from '@/lib/contacts/types';
 import { LIFECYCLE_PRESETS } from '@/lib/smart-list-presets';
 import { evaluateFilter } from '@/lib/smart-list-engine';
@@ -90,6 +91,9 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
   const [draftLoading, setDraftLoading] = useState(true);
 
   const [selectedAccountKey, setSelectedAccountKey] = useState('');
+  // Source sub-account's custom fields — fed into evaluateFilter so
+  // saved audiences referencing custom keys filter at count time.
+  const { fields: filterableFields } = useFilterableFields(selectedAccountKey || null);
   const [tab, setTab] = useState<AudienceTab>('segments');
   const [selection, setSelection] = useState<AudienceSelection>({ kind: 'all' });
 
@@ -312,8 +316,8 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
       const idSet = new Set(selection.ids);
       return sendable.filter((c) => idSet.has(c.id)).length;
     }
-    return evaluateFilter(sendable, selection.filter).length;
-  }, [contacts, contactsLoading, selection, listMemberIds]);
+    return evaluateFilter(sendable, selection.filter, filterableFields).length;
+  }, [contacts, contactsLoading, selection, listMemberIds, filterableFields]);
 
   async function persistSelection() {
     if (!draft) return;
@@ -634,6 +638,7 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
 
       {showFilterBuilder && (
         <FilterBuilder
+          fields={filterableFields}
           onApply={(definition) => {
             setSelection({
               kind: 'segment',

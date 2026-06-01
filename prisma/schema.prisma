@@ -156,6 +156,7 @@ model Account {
   audiences                Audience[]
   contacts                 Contact[]
   contactLists             ContactList[]
+  contactCustomFields      ContactCustomField[]
   loomiFlows               LoomiFlow[]
   forms                    Form[]
   landingPages             LandingPage[]
@@ -373,6 +374,14 @@ model Contact {
   @@unique([accountKey, phone])
   @@index([accountKey])
   @@index([accountKey, dateAdded])
+  // GIN index on the customFields jsonb blob so filter queries against
+  // declared custom field keys (e.g. `customFields @> '{"tier":"gold"}'`,
+  // `customFields ? 'lifetime_value'`) don't fall back to a full table
+  // scan once dealer datasets push past low five-figures per account.
+  // `jsonb_path_ops` is the smaller, faster variant for containment-only
+  // queries — the filter engine never needs the full `jsonb_ops` operator
+  // set, and dropping it shrinks the index significantly.
+  @@index([customFields(ops: JsonbPathOps)], type: Gin)
 }
 
 // ─────────────────────────────────────────────────────
@@ -412,6 +421,114 @@ model ContactListMembership {
   @@id([listId, contactId])
   @@index([listId])
   @@index([contactId])
+}
+
+// ─────────────────────────────────────────────────────
+// Contact Custom Fields
+//
+// Account-extensible properties stored as JSON on Contact.customFields,
+// declared as first-class rows so the filter engine, CSV importer, and
+// contact UI can treat them as real fields with a type + operators.
+//
+// One model, two roles via nullable accountKey:
+//   - accountKey = null → admin blueprint. Lives outside any sub-account
+//     and serves as a deployable template. Lets us ship "Automotive
+//     defaults" (last_purchase_date, last_service_date, ...) once and
+//     push to every automotive sub-account.
+//   - accountKey set    → sub-account-owned instance. The only kind the
+//     filter engine + CSV importer ever read against contacts.
+//
+// Mirrors the LoomiFlow parentTemplate pattern: when a blueprint is
+// deployed, we duplicate the row, set parentBlueprintId on the copy,
+// and timestamp lastSyncedAt. The settings UI can then surface "Update
+// available" when parent.updatedAt > instance.lastSyncedAt.
+//
+// The actual values live on Contact.customFields (Json) keyed by `key`.
+// Adding/removing this row never rewrites contact rows — orphan keys
+// stay in customFields and are simply ignored by the filter engine
+// until the field is re-declared. That's deliberate: easy to recover
+// from accidental deletes.
+// ─────────────────────────────────────────────────────
+
+model ContactCustomField {
+  id          String   @id @default(cuid())
+  // null = admin blueprint (no sub-account owns it). Non-null = sub-
+  // account-owned field. The (accountKey, key) uniqueness pair below
+  // works for both — Postgres treats NULL as distinct, so multiple
+  // blueprints with the same key need to be guarded at the API layer
+  // (we already validate this in the blueprint create handler).
+  accountKey  String?
+  account     Account? @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  // Snake_case identifier used as the JSON property name in
+  // Contact.customFields. Lower-cased + validated [a-z0-9_]+ at the
+  // API layer. Renaming a key DOES NOT rewrite existing contact rows
+  // — handle data migrations explicitly.
+  key         String
+
+  // Display name shown wherever a human sees the field.
+  label       String
+
+  // Optional helper text shown beneath the input on the contact-detail
+  // edit form.
+  description String?
+
+  // 'text' | 'number' | 'date' | 'boolean' | 'select' | 'multiselect'.
+  // Drives operator selection in the filter builder + input rendering
+  // in the contact form + value coercion in the CSV importer.
+  type        String
+
+  // For 'select' / 'multiselect': JSON array of { value, label } pairs.
+  // Null for other types.
+  options     Json?
+
+  // Optional grouping label shown in the filter dropdown
+  // ("Service", "Lifecycle Extras", etc.). Defaults to "Custom" in
+  // the UI when null.
+  category    String?
+
+  // PII flag — surfaces a lock icon in admin UIs and (in future)
+  // redacts the value in audit logs / non-elevated views.
+  isPii       Boolean  @default(false)
+
+  // For ordering within the settings tab + filter dropdown.
+  sortOrder   Int      @default(0)
+
+  // Blueprint lineage. When an admin deploys a blueprint to a sub-
+  // account we copy the row and set parentBlueprintId on the new
+  // instance so we can: (a) badge "from blueprint X", (b) compute
+  // adoption (how many sub-accounts use this blueprint), (c) push
+  // label/options/type updates to stale instances. Self-referential
+  // SetNull-on-delete so deleting a blueprint leaves orphaned
+  // instances rather than cascade-deleting them.
+  parentBlueprintId String?
+  parentBlueprint   ContactCustomField?  @relation("BlueprintInstances", fields: [parentBlueprintId], references: [id], onDelete: SetNull)
+  instances         ContactCustomField[] @relation("BlueprintInstances")
+
+  // Last time the instance was synced from its blueprint. Compared
+  // against parentBlueprint.updatedAt to surface "Update available"
+  // in the sub-account settings tab. Null on standalone fields +
+  // on the blueprints themselves.
+  lastSyncedAt DateTime?
+
+  // Industry tag on blueprints (e.g. "Automotive", "Healthcare").
+  // Lets the admin UI offer "Apply all Automotive blueprints to every
+  // Automotive sub-account" as a one-click bulk action. Null = ungrouped.
+  industryTag String?
+
+  // CSV header aliases for the auto-mapper. JSON string[] — e.g.
+  // ["lastPurchase", "purchasedate", "soldon"]. Merged with the
+  // canonical HEADER_ALIASES at import time, but only for sub-accounts
+  // that have this custom field declared. Empty array = no auto-mapping.
+  csvAliases  Json     @default("[]")
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([accountKey, key])
+  @@index([accountKey])
+  @@index([parentBlueprintId])
+  @@index([industryTag])
 }
 
 // ─────────────────────────────────────────────────────

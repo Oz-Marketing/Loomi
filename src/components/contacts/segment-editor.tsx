@@ -20,9 +20,11 @@ import {
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import { toast } from '@/lib/toast';
 import type {
+  FieldDefinition,
   FieldType,
   FilterCondition,
   FilterDefinition,
@@ -43,21 +45,22 @@ function uid(): string {
   return `f${Date.now()}-${uidCounter++}`;
 }
 
-function emptyCondition(): FilterCondition {
+function emptyCondition(fields: FieldDefinition[]): FilterCondition {
+  const first = fields[0] ?? FILTERABLE_FIELDS[0];
   return {
     id: uid(),
-    field: FILTERABLE_FIELDS[0].key,
-    operator: 'contains',
+    field: first.key,
+    operator: OPERATORS_BY_TYPE[first.type][0],
     value: '',
   };
 }
 
-function emptyGroup(): FilterGroup {
-  return { id: uid(), logic: 'AND', conditions: [emptyCondition()] };
+function emptyGroup(fields: FieldDefinition[]): FilterGroup {
+  return { id: uid(), logic: 'AND', conditions: [emptyCondition(fields)] };
 }
 
-function emptyDefinition(): FilterDefinition {
-  return { version: 1, logic: 'AND', groups: [emptyGroup()] };
+function emptyDefinition(fields: FieldDefinition[]): FilterDefinition {
+  return { version: 1, logic: 'AND', groups: [emptyGroup(fields)] };
 }
 
 function rehydrateIds(def: FilterDefinition): FilterDefinition {
@@ -106,16 +109,26 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const subHref = useSubaccountHref();
   const segmentsHref = subHref('/contacts/segments');
 
+  // Sub-account custom fields are only meaningful inside a single
+  // account. Admin / org-wide mode keeps just the built-ins (custom
+  // field keys mean different things in different sub-accounts, so
+  // mixing them in a portfolio segment is misleading).
+  const { fields } = useFilterableFields(isAccount ? accountKey : null);
+
   // ── Form state ─────────────────────────────────────────────
   const initialDef = useMemo<FilterDefinition>(() => {
-    if (!initial?.filters) return emptyDefinition();
+    if (!initial?.filters) return emptyDefinition(fields);
     try {
       const parsed = JSON.parse(initial.filters) as FilterDefinition;
-      if (parsed.version !== 1 || !Array.isArray(parsed.groups)) return emptyDefinition();
+      if (parsed.version !== 1 || !Array.isArray(parsed.groups)) return emptyDefinition(fields);
       return rehydrateIds(parsed);
     } catch {
-      return emptyDefinition();
+      return emptyDefinition(fields);
     }
+    // `fields` only matters for the *empty* seed; once a filter is
+    // hydrated from JSON we keep the user's existing conditions. So
+    // exhaustive-deps is intentionally omitted here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initial?.filters]);
 
   const [name, setName] = useState(initial?.name ?? '');
@@ -175,8 +188,8 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const cleaned = useMemo(() => cleanForSave(definition), [definition]);
   const matches = useMemo(() => {
     if (cleaned.groups.length === 0) return contacts;
-    return evaluateFilter(contacts, cleaned);
-  }, [cleaned, contacts]);
+    return evaluateFilter(contacts, cleaned, fields);
+  }, [cleaned, contacts, fields]);
 
   // ── Mutations ──────────────────────────────────────────────
   const updateDef = useCallback(
@@ -201,7 +214,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   }
 
   function handleFieldChange(groupId: string, condId: string, fieldKey: string) {
-    const field = FILTERABLE_FIELDS.find((f) => f.key === fieldKey);
+    const field = fields.find((f) => f.key === fieldKey);
     const fieldType: FieldType = field?.type ?? 'text';
     const operator = OPERATORS_BY_TYPE[fieldType][0];
     updateCondition(groupId, condId, { field: fieldKey, operator, value: '', value2: undefined });
@@ -211,7 +224,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
     updateDef((prev) => ({
       ...prev,
       groups: prev.groups.map((g) =>
-        g.id !== groupId ? g : { ...g, conditions: [...g.conditions, emptyCondition()] },
+        g.id !== groupId ? g : { ...g, conditions: [...g.conditions, emptyCondition(fields)] },
       ),
     }));
   }
@@ -235,7 +248,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   }
 
   function addGroup() {
-    updateDef((prev) => ({ ...prev, groups: [...prev.groups, emptyGroup()] }));
+    updateDef((prev) => ({ ...prev, groups: [...prev.groups, emptyGroup(fields)] }));
   }
 
   function removeGroup(groupId: string) {
@@ -400,6 +413,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               key={group.id}
               group={group}
               index={idx}
+              fields={fields}
               removable={definition.groups.length > 1}
               onToggleLogic={() => toggleGroupLogic(group.id)}
               onFieldChange={(cid, fk) => handleFieldChange(group.id, cid, fk)}
@@ -452,6 +466,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
 interface GroupCardProps {
   group: FilterGroup;
   index: number;
+  fields: FieldDefinition[];
   removable: boolean;
   onToggleLogic: () => void;
   onFieldChange: (condId: string, fieldKey: string) => void;
@@ -466,6 +481,7 @@ interface GroupCardProps {
 function GroupCard({
   group,
   index,
+  fields,
   removable,
   onToggleLogic,
   onFieldChange,
@@ -519,6 +535,7 @@ function GroupCard({
             )}
             <ConditionRow
               condition={condition}
+              fields={fields}
               onFieldChange={(fk) => onFieldChange(condition.id, fk)}
               onOperatorChange={(op) => onOperatorChange(condition.id, op)}
               onValueChange={(v) => onValueChange(condition.id, v)}
@@ -547,6 +564,7 @@ function GroupCard({
 
 interface ConditionRowProps {
   condition: FilterCondition;
+  fields: FieldDefinition[];
   onFieldChange: (fieldKey: string) => void;
   onOperatorChange: (op: FilterOperator) => void;
   onValueChange: (value: string) => void;
@@ -556,38 +574,54 @@ interface ConditionRowProps {
 
 function ConditionRow({
   condition,
+  fields,
   onFieldChange,
   onOperatorChange,
   onValueChange,
   onValue2Change,
   onRemove,
 }: ConditionRowProps) {
-  const field = FILTERABLE_FIELDS.find((f) => f.key === condition.field);
+  const field = fields.find((f) => f.key === condition.field);
   const fieldType: FieldType = field?.type ?? 'text';
   const operators = OPERATORS_BY_TYPE[fieldType];
   const needsValue = !NO_VALUE_OPERATORS.includes(condition.operator);
-  const needsValue2 = condition.operator === 'between';
+  const needsValue2 =
+    condition.operator === 'between' || condition.operator === 'num_between';
   const missingValue = needsValue && !condition.value.trim();
 
-  const inputType =
-    fieldType === 'date' && condition.operator !== 'within_days' ? 'date' : 'text';
+  // Select fields with declared options + a single-target operator
+  // render as a real dropdown; multi-target ops (is_one_of) keep the
+  // comma-list input. Number fields get type="number".
+  const hasOptions = field?.options && field.options.length > 0;
+  const isSingleSelectInput =
+    fieldType === 'select' &&
+    condition.operator !== 'is_one_of' &&
+    condition.operator !== 'is_not_one_of' &&
+    hasOptions;
+  const isNumberInput = fieldType === 'number';
+  const isDateInput = fieldType === 'date' && condition.operator !== 'within_days';
+
+  const inputType = isNumberInput ? 'number' : isDateInput ? 'date' : 'text';
   const placeholder =
     condition.operator === 'within_days'
       ? 'days (e.g. 30)'
-      : fieldType === 'tags'
+      : fieldType === 'tags' || fieldType === 'multiselect'
         ? 'tag1, tag2'
-        : 'value';
+        : fieldType === 'select'
+          ? 'value1, value2'
+          : fieldType === 'number'
+            ? 'number'
+            : 'value';
 
   const fieldGroups = useMemo(
     () =>
       FIELD_CATEGORIES.map((cat) => ({
         label: cat.label,
-        options: FILTERABLE_FIELDS.filter((f) => f.category === cat.key).map((f) => ({
-          value: f.key,
-          label: f.label,
-        })),
-      })),
-    [],
+        options: fields
+          .filter((f) => f.category === cat.key)
+          .map((f) => ({ value: f.key, label: f.label })),
+      })).filter((g) => g.options.length > 0),
+    [fields],
   );
 
   const operatorOptions = useMemo(
@@ -611,22 +645,41 @@ function ConditionRow({
       />
       {needsValue ? (
         <div className="flex items-stretch gap-2 flex-1 min-w-[150px]">
-          <input
-            type={inputType}
-            value={condition.value}
-            onChange={(e) => onValueChange(e.target.value)}
-            placeholder={placeholder}
-            className={`flex-1 px-3 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
-              missingValue
-                ? 'border-amber-500/50 focus:border-amber-500'
-                : 'border-[var(--border)] focus:border-[var(--primary)]'
-            }`}
-          />
+          {isSingleSelectInput ? (
+            <select
+              value={condition.value}
+              onChange={(e) => onValueChange(e.target.value)}
+              className={`flex-1 px-3 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
+                missingValue
+                  ? 'border-amber-500/50 focus:border-amber-500'
+                  : 'border-[var(--border)] focus:border-[var(--primary)]'
+              }`}
+            >
+              <option value="">Select…</option>
+              {field?.options?.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <input
+              type={inputType}
+              value={condition.value}
+              onChange={(e) => onValueChange(e.target.value)}
+              placeholder={placeholder}
+              className={`flex-1 px-3 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
+                missingValue
+                  ? 'border-amber-500/50 focus:border-amber-500'
+                  : 'border-[var(--border)] focus:border-[var(--primary)]'
+              }`}
+            />
+          )}
           {needsValue2 && (
             <>
               <span className="self-center text-[11px] text-[var(--muted-foreground)]">and</span>
               <input
-                type="date"
+                type={isNumberInput ? 'number' : 'date'}
                 value={condition.value2 ?? ''}
                 onChange={(e) => onValue2Change(e.target.value)}
                 className="flex-1 px-3 h-9 text-sm rounded-lg border border-[var(--border)] bg-transparent focus:outline-none focus:border-[var(--primary)] transition-colors"

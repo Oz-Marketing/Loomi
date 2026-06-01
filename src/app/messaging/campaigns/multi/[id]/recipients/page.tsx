@@ -17,6 +17,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import type { Contact } from '@/lib/contacts/types';
 import { LIFECYCLE_PRESETS } from '@/lib/smart-list-presets';
 import { evaluateFilter } from '@/lib/smart-list-engine';
@@ -170,6 +171,9 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
   const [loading, setLoading] = useState(true);
 
   const [selectedAccountKey, setSelectedAccountKey] = useState('');
+  // Source sub-account's custom fields — both rails share a single
+  // source account, so one fetch covers email + SMS evaluateFilter().
+  const { fields: filterableFields } = useFilterableFields(selectedAccountKey || null);
 
   // Split-audience model: each rail tracks its own selection. When
   // splitAudiences is false, smsSelection is ignored for persistence and
@@ -444,7 +448,7 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
         const idSet = new Set(emailSelection.ids);
         return emailOk.filter((c) => idSet.has(c.id)).length;
       }
-      return evaluateFilter(emailOk, emailSelection.filter).length;
+      return evaluateFilter(emailOk, emailSelection.filter, filterableFields).length;
     };
 
     const resolveSms = () => {
@@ -458,11 +462,11 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
         const idSet = new Set(sel.ids);
         return smsOk.filter((c) => idSet.has(c.id)).length;
       }
-      return evaluateFilter(smsOk, sel.filter).length;
+      return evaluateFilter(smsOk, sel.filter, filterableFields).length;
     };
 
     return { emailSendable: resolveEmail(), smsSendable: resolveSms() };
-  }, [contacts, contactsLoading, emailSelection, effectiveSmsSelection, emailListMembers, smsListMembers]);
+  }, [contacts, contactsLoading, emailSelection, effectiveSmsSelection, emailListMembers, smsListMembers, filterableFields]);
 
   function buildPayload(sel: AudienceSelection): Record<string, unknown> {
     const payload: Record<string, unknown> = {
@@ -775,6 +779,7 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
 
       {showFilterBuilder && (
         <FilterBuilder
+          fields={filterableFields}
           onApply={(definition) => {
             applySelection(modalRail, {
               kind: 'segment',

@@ -7,7 +7,7 @@ import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import {
   BuildingStorefrontIcon,
   UsersIcon, SwatchIcon, SparklesIcon,
-  CogIcon, BellIcon,
+  CogIcon, BellIcon, TagIcon, Squares2X2Icon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { CodeEditor } from '@/components/code-editor';
@@ -18,6 +18,8 @@ import { getAccountOems, industryHasBrands, brandsForIndustry } from '@/lib/oems
 import { UsersTab } from '@/components/settings/users-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { NotificationsTab } from '@/components/settings/notifications-tab';
+import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
+import { CustomFieldBlueprintsTab } from '@/components/settings/custom-field-blueprints-tab';
 
 const CATEGORY_SUGGESTIONS = ['Automotive', 'Powersports', 'Ecommerce', 'Healthcare', 'Real Estate', 'Hospitality', 'Retail', 'General'];
 
@@ -26,6 +28,8 @@ type Tab =
   | 'subaccount'
   | 'users'
   | 'knowledge'
+  | 'contact-fields'
+  | 'contact-field-blueprints'
   | 'notifications'
   | 'appearance';
 
@@ -47,6 +51,8 @@ export default function SettingsPage() {
   const hasAdminAccess = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
   if (hasAdminAccess && isAdmin) tabs.push({ key: 'subaccounts', label: 'Sub-Accounts', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
   if (isAccount) tabs.push({ key: 'subaccount', label: 'Sub-Account', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
+  if (hasAdminAccess && isAccount) tabs.push({ key: 'contact-fields', label: 'Custom Fields', titleLabel: 'Contact Custom Fields', icon: TagIcon });
+  if (hasAdminAccess && isAdmin) tabs.push({ key: 'contact-field-blueprints', label: 'Field Blueprints', titleLabel: 'Contact Field Blueprints', icon: Squares2X2Icon });
   if (hasAdminAccess) tabs.push({ key: 'users', label: 'Users', titleLabel: 'User Settings', icon: UsersIcon });
   if (hasAdminAccess && isAdmin) tabs.push({ key: 'knowledge', label: 'Knowledge Base', titleLabel: 'Knowledge Base Settings', icon: SparklesIcon });
   tabs.push({ key: 'notifications', label: 'Notifications', titleLabel: 'Notification Settings', icon: BellIcon });
@@ -124,6 +130,8 @@ export default function SettingsPage() {
         <div className="flex-1 min-w-0">
           {activeTab === 'subaccounts' && <AccountsList listPath="/settings/subaccounts" detailBasePath="/settings/subaccounts" />}
           {activeTab === 'subaccount' && <AccountSettingsTab />}
+          {activeTab === 'contact-fields' && hasAdminAccess && isAccount && <CustomFieldsTab />}
+          {activeTab === 'contact-field-blueprints' && hasAdminAccess && isAdmin && <CustomFieldBlueprintsTab />}
           {activeTab === 'users' && <UsersTab />}
           {activeTab === 'knowledge' && hasAdminAccess && isAdmin && <KnowledgeBaseTab />}
           {activeTab === 'notifications' && <NotificationsTab />}

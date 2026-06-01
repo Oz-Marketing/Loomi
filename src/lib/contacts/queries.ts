@@ -109,7 +109,16 @@ export function serializeContact(
     hasReceivedSms: summary?.hasReceivedSms ?? false,
     hasOpenedEmail: summary?.hasOpenedEmail ?? false,
     lastMessageDate: summary?.lastMessageDate ?? '',
+    customFields: customFieldsFromJson(row.customFields),
   };
+}
+
+/** Coerce the Prisma jsonb cell into the always-an-object shape the
+ *  API surface promises. Anything other than a flat object becomes {}
+ *  so consumers can read `contact.customFields[key]` without guarding. */
+function customFieldsFromJson(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
 }
 
 // ── Search builder ──

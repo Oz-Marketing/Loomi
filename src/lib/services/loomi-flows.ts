@@ -3,8 +3,15 @@ import { decryptToken } from '@/lib/crypto/encryption';
 import { sendEmailViaSendGrid, SendGridError } from '@/lib/sending/sendgrid';
 import { buildUnsubscribeFooter } from '@/lib/sending/unsubscribe-footer';
 import {
+  resolveTwilioConfig,
+  sendSmsViaTwilio,
+  TwilioError,
+} from '@/lib/sending/twilio';
+import {
   isLikelyDeliverableEmail,
+  isLikelyDialablePhone,
   normalizeEmailAddress,
+  normalizePhoneNumber,
 } from '@/lib/contact-hygiene';
 import { getMessagingSummaryForContacts } from '@/lib/contacts/queries';
 import {
@@ -1385,6 +1392,42 @@ export async function processEnrollmentTick(enrollmentId: string): Promise<void>
       await advanceEnrollment(enrollmentId, next, null);
       return;
     }
+    case 'sms': {
+      await executeSmsNode(enrollment, node);
+      const next = pickNextNode(node, edgesByFromId, null);
+      await advanceEnrollment(enrollmentId, next, null);
+      return;
+    }
+    case 'webhook': {
+      await executeWebhookNode(enrollment, node);
+      const next = pickNextNode(node, edgesByFromId, null);
+      await advanceEnrollment(enrollmentId, next, null);
+      return;
+    }
+    case 'wait_until': {
+      const decision = await evaluateWaitUntil(enrollment, node);
+      if (decision.kind === 'wait') {
+        await prisma.loomiFlowEnrollment.update({
+          where: { id: enrollmentId },
+          data: { nextRunAt: decision.fireAt },
+        });
+        return;
+      }
+      // 'fire' (already past target) or 'skip' (contact has no anchor
+      // value). In both cases we log + advance — refusing to advance
+      // on a missing anchor would strand contacts in the flow forever.
+      await prisma.loomiFlowEnrollmentStep.create({
+        data: {
+          enrollmentId,
+          nodeId: node.id,
+          status: decision.kind === 'skip' ? 'skipped' : 'waited',
+          metadata: decision.reason ? stringifyConfig({ reason: decision.reason }) : null,
+        },
+      });
+      const next = pickNextNode(node, edgesByFromId, null);
+      await advanceEnrollment(enrollmentId, next, null);
+      return;
+    }
     case 'wait': {
       const ms = readNumber(node.config.ms, 0);
       // Has the wait elapsed? If not, push nextRunAt to fire time and
@@ -2162,3 +2205,403 @@ export async function getFlowNodeStats(
 // FlowValidationIssue, FlowValidationError, validateFlowGraph, plus
 // the NodeType / TriggerType unions are re-exported from this module
 // at the top of the file for backwards compatibility.
+
+// ─────────────────────────────────────────────────────────────────
+// SMS / Webhook / Wait-Until execution
+//
+// These three landed after the initial email-only enrollment engine.
+// SMS mirrors `executeEmailNode`: load the contact, gate on DND +
+// suppression, resolve per-account Twilio credentials, attach the
+// send to a wrapper SmsCampaign so status-callback webhooks route
+// SmsEvent rows back to a real recipient. Webhook fires an HTTP
+// request with mergetag-interpolated body, with a single 5xx/timeout
+// retry. Wait-until anchors against a Contact date field + offset.
+// ─────────────────────────────────────────────────────────────────
+
+const FLOW_MERGETAG_PATTERN = /\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g;
+
+interface MergetagContext {
+  firstName: string;
+  lastName: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  contactId: string;
+  accountKey: string;
+  flowId: string;
+  enrollmentId: string;
+  nodeId: string;
+}
+
+/** Substitute `{{key}}` placeholders against a known-key dict. Unknown
+ *  keys are left intact so the user can spot typos in the rendered
+ *  output instead of having values silently disappear. */
+function applyMergetags(input: string, ctx: MergetagContext): string {
+  if (!input) return '';
+  return input.replace(FLOW_MERGETAG_PATTERN, (match, rawKey: string) => {
+    const key = rawKey as keyof MergetagContext;
+    const value = ctx[key];
+    return value == null ? match : String(value);
+  });
+}
+
+/** Twilio status-callback URL keyed by accountKey so the webhook
+ *  resolver pulls the right Auth Token. Returns null when no public
+ *  origin is configured (local dev without a tunnel) — callbacks are
+ *  noise in that mode. */
+function flowStatusCallbackUrl(accountKey: string): string | undefined {
+  const origin = process.env.APP_PUBLIC_URL || process.env.NEXTAUTH_URL || '';
+  if (!origin) return undefined;
+  return `${origin.replace(/\/$/, '')}/api/webhooks/twilio/status?accountKey=${encodeURIComponent(accountKey)}`;
+}
+
+async function executeSmsNode(
+  enrollment: { id: string; contactId: string; flowId: string },
+  node: NodeForExecution,
+): Promise<void> {
+  const rawMessage = String(node.config.message || '').trim();
+  if (!rawMessage) {
+    await recordStepFailure(enrollment.id, node.id, 'sms node has no message body');
+    return;
+  }
+
+  const contact = await prisma.contact.findUnique({
+    where: { id: enrollment.contactId },
+    select: {
+      id: true,
+      accountKey: true,
+      email: true,
+      phone: true,
+      firstName: true,
+      lastName: true,
+      fullName: true,
+      dnd: true,
+    },
+  });
+  if (!contact) {
+    await recordStepFailure(enrollment.id, node.id, 'contact missing');
+    return;
+  }
+
+  const normalizedPhone = normalizePhoneNumber(contact.phone || '');
+  if (!isLikelyDialablePhone(normalizedPhone)) {
+    await recordStepFailure(enrollment.id, node.id, 'no dialable phone');
+    return;
+  }
+  const dnd = contact.dnd as Record<string, unknown> | null;
+  if (dnd && dnd.sms === true) {
+    await recordStepFailure(enrollment.id, node.id, 'contact opted out (dnd.sms)');
+    return;
+  }
+  const suppression = await prisma.smsSuppression.findUnique({
+    where: { accountKey_phone: { accountKey: contact.accountKey, phone: normalizedPhone } },
+  });
+  if (suppression) {
+    await recordStepFailure(enrollment.id, node.id, `suppressed: ${suppression.reason}`);
+    return;
+  }
+
+  const twilio = await resolveTwilioConfig(contact.accountKey);
+  if (!twilio) {
+    await recordStepFailure(
+      enrollment.id,
+      node.id,
+      'No Twilio credentials configured for this sub-account',
+    );
+    return;
+  }
+
+  const body = applyMergetags(rawMessage, mergetagCtx(enrollment, node, contact));
+
+  const wrapperCampaign = await getOrCreateFlowWrapperSmsCampaign(
+    enrollment.flowId,
+    node.id,
+    body,
+    contact.accountKey,
+  );
+
+  const recipient = await prisma.smsCampaignRecipient.create({
+    data: {
+      campaignId: wrapperCampaign.id,
+      contactId: contact.id,
+      accountKey: contact.accountKey,
+      phone: normalizedPhone,
+      fullName: contact.fullName || `${contact.firstName ?? ''} ${contact.lastName ?? ''}`.trim() || null,
+      status: 'pending',
+    },
+  });
+
+  try {
+    const result = await sendSmsViaTwilio({
+      accountSid: twilio.accountSid,
+      authToken: twilio.authToken,
+      from: {
+        phoneNumber: twilio.phoneNumber,
+        messagingServiceSid: twilio.messagingServiceSid,
+      },
+      to: normalizedPhone,
+      body,
+      statusCallback: flowStatusCallbackUrl(contact.accountKey),
+    });
+    await prisma.smsCampaignRecipient.update({
+      where: { id: recipient.id },
+      data: {
+        status: 'sent',
+        messageId: result.messageSid,
+        sentAt: new Date(),
+        error: null,
+      },
+    });
+    await prisma.loomiFlowEnrollmentStep.create({
+      data: {
+        enrollmentId: enrollment.id,
+        nodeId: node.id,
+        status: 'sent',
+      },
+    });
+  } catch (err) {
+    const errorMessage =
+      err instanceof TwilioError
+        ? `Twilio: ${err.message}`
+        : err instanceof Error
+          ? err.message
+          : 'Twilio send failed';
+    await prisma.smsCampaignRecipient.update({
+      where: { id: recipient.id },
+      data: { status: 'failed', error: errorMessage },
+    });
+    await recordStepFailure(enrollment.id, node.id, errorMessage);
+  }
+}
+
+/** Persistent wrapper-campaign per (flow node) for SMS — mirrors the
+ *  email pattern so Twilio status-callback events flow back to the
+ *  same SmsEvent / SmsCampaignRecipient join the campaign analytics
+ *  surface already understands. */
+async function getOrCreateFlowWrapperSmsCampaign(
+  flowId: string,
+  nodeId: string,
+  message: string,
+  accountKey: string,
+): Promise<{ id: string }> {
+  const name = `Flow:${flowId}/Node:${nodeId}`;
+  const existing = await prisma.smsCampaign.findFirst({
+    where: { name },
+    select: { id: true },
+  });
+  if (existing) return existing;
+  return prisma.smsCampaign.create({
+    data: {
+      name,
+      message: message || 'Flow SMS',
+      status: 'processing',
+      accountKeys: JSON.stringify([accountKey]),
+    },
+    select: { id: true },
+  });
+}
+
+const WEBHOOK_TIMEOUT_MS = 10_000;
+
+async function executeWebhookNode(
+  enrollment: { id: string; contactId: string; flowId: string },
+  node: NodeForExecution,
+): Promise<void> {
+  const url = String(node.config.url || '').trim();
+  if (!url || !/^https?:\/\//i.test(url)) {
+    await recordStepFailure(enrollment.id, node.id, 'webhook URL missing or not http(s)');
+    return;
+  }
+  const method = String(node.config.method || 'POST').toUpperCase();
+  if (!['POST', 'PUT', 'PATCH', 'GET', 'DELETE'].includes(method)) {
+    await recordStepFailure(enrollment.id, node.id, `unsupported method: ${method}`);
+    return;
+  }
+
+  const contact = await prisma.contact.findUnique({
+    where: { id: enrollment.contactId },
+    select: {
+      id: true,
+      accountKey: true,
+      email: true,
+      phone: true,
+      firstName: true,
+      lastName: true,
+      fullName: true,
+    },
+  });
+  if (!contact) {
+    await recordStepFailure(enrollment.id, node.id, 'contact missing');
+    return;
+  }
+
+  const ctx = mergetagCtx(enrollment, node, contact);
+
+  // Apply mergetags to both the URL and the body so callers can build
+  // per-contact endpoints (e.g. `https://crm/api/contacts/{{contactId}}`).
+  const interpolatedUrl = applyMergetags(url, ctx);
+
+  let body: string | undefined;
+  if (method !== 'GET' && method !== 'DELETE') {
+    const raw = typeof node.config.body === 'string' ? node.config.body : '';
+    if (raw.trim()) {
+      body = applyMergetags(raw, ctx);
+      // Validate JSON-ness post-interpolation; if a mergetag broke the
+      // syntax we want a clean failure rather than letting the server
+      // receive malformed JSON.
+      try {
+        JSON.parse(body);
+      } catch (err) {
+        await recordStepFailure(
+          enrollment.id,
+          node.id,
+          `webhook body is invalid JSON after mergetag interpolation: ${err instanceof Error ? err.message : 'parse error'}`,
+        );
+        return;
+      }
+    }
+  }
+
+  const attempt = async (): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
+    try {
+      return await fetch(interpolatedUrl, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body,
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  // One retry on timeout or 5xx — anything else (404, 422, etc.) is
+  // a caller-side problem and shouldn't be retried.
+  let response: Response;
+  try {
+    response = await attempt();
+    if (response.status >= 500 && response.status < 600) {
+      response = await attempt();
+    }
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      try {
+        response = await attempt();
+      } catch (retryErr) {
+        await recordStepFailure(
+          enrollment.id,
+          node.id,
+          `webhook timed out after ${WEBHOOK_TIMEOUT_MS}ms (retry failed: ${retryErr instanceof Error ? retryErr.message : 'unknown'})`,
+        );
+        return;
+      }
+    } else {
+      await recordStepFailure(
+        enrollment.id,
+        node.id,
+        `webhook fetch error: ${err instanceof Error ? err.message : 'unknown'}`,
+      );
+      return;
+    }
+  }
+
+  if (!response.ok) {
+    await recordStepFailure(
+      enrollment.id,
+      node.id,
+      `webhook ${method} ${interpolatedUrl} returned ${response.status}`,
+    );
+    return;
+  }
+
+  await prisma.loomiFlowEnrollmentStep.create({
+    data: {
+      enrollmentId: enrollment.id,
+      nodeId: node.id,
+      status: 'sent',
+      metadata: stringifyConfig({
+        url: interpolatedUrl,
+        method,
+        status: response.status,
+      }),
+    },
+  });
+}
+
+/**
+ * Decide what to do at a wait_until node:
+ *   - 'wait': anchor date is in the future → set nextRunAt = anchor.
+ *   - 'fire': anchor date is now or past → log + advance immediately.
+ *   - 'skip': contact has no value for the configured field → log
+ *             "skipped" and advance (we don't strand contacts forever
+ *             on missing anchors; the alternative is silently failing
+ *             every contact whose data is incomplete).
+ */
+async function evaluateWaitUntil(
+  enrollment: { id: string; contactId: string },
+  node: NodeForExecution,
+): Promise<
+  | { kind: 'wait'; fireAt: Date }
+  | { kind: 'fire'; reason?: string }
+  | { kind: 'skip'; reason: string }
+> {
+  const field = String(node.config.field || '').trim();
+  if (!field) return { kind: 'skip', reason: 'wait_until missing field' };
+
+  // Only the date fields the validator allows are pulled — keeps the
+  // worker's surface area small + matches what the UI exposes.
+  const contact = await prisma.contact.findUnique({
+    where: { id: enrollment.contactId },
+    select: {
+      nextServiceDate: true,
+      lastServiceDate: true,
+      leaseEndDate: true,
+      warrantyEndDate: true,
+      purchaseDate: true,
+      dateAdded: true,
+    },
+  });
+  if (!contact) return { kind: 'skip', reason: 'contact missing' };
+
+  const anchor = (contact as Record<string, Date | null>)[field];
+  if (!anchor) return { kind: 'skip', reason: `${field} not set on contact` };
+
+  const offsetDays = Number(node.config.offsetDays);
+  const safeOffset = Number.isFinite(offsetDays) ? offsetDays : 0;
+  const fireAt = new Date(anchor.getTime() + safeOffset * 24 * 60 * 60 * 1000);
+
+  if (fireAt.getTime() <= Date.now()) {
+    return { kind: 'fire', reason: 'target date already past' };
+  }
+  return { kind: 'wait', fireAt };
+}
+
+function mergetagCtx(
+  enrollment: { id: string; contactId: string; flowId: string },
+  node: NodeForExecution,
+  contact: {
+    accountKey: string;
+    email: string | null;
+    phone: string | null;
+    firstName: string | null;
+    lastName: string | null;
+    fullName: string | null;
+  },
+): MergetagContext {
+  return {
+    firstName: contact.firstName ?? '',
+    lastName: contact.lastName ?? '',
+    fullName:
+      contact.fullName?.trim() ||
+      `${contact.firstName ?? ''} ${contact.lastName ?? ''}`.trim(),
+    email: contact.email ?? '',
+    phone: contact.phone ?? '',
+    contactId: enrollment.contactId,
+    accountKey: contact.accountKey,
+    flowId: enrollment.flowId,
+    enrollmentId: enrollment.id,
+    nodeId: node.id,
+  };
+}

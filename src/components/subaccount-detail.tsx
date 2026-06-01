@@ -20,12 +20,14 @@ import {
   QuestionMarkCircleIcon,
   CogIcon,
   PuzzlePieceIcon,
+  TagIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { AdminOnly } from '@/components/route-guard';
 import { UsersTab } from '@/components/settings/users-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
+import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
 import { AccountDomainsTab } from '@/components/account-domains-tab';
 // Sending + Suppressions tabs now live under /messaging/settings.
 import { OemMultiSelect } from '@/components/oem-multi-select';
@@ -73,7 +75,7 @@ function validHexColor(value: string, fallback: string): string {
   return /^#(?:[0-9a-fA-F]{3}){1,2}$/.test(value) ? value : fallback;
 }
 
-type DetailTab = 'company' | 'branding' | 'contacts' | 'domains' | 'integrations' | 'users' | 'appearance';
+type DetailTab = 'company' | 'branding' | 'contacts' | 'contact-fields' | 'domains' | 'integrations' | 'users' | 'appearance';
 
 /** Banner art for the Meta integration card (Meta wordmark on light bg). */
 const META_LOGO_URL =
@@ -99,6 +101,7 @@ const SETTINGS_TABS: TabDef[] = [
   { key: 'branding', label: 'Branding', icon: PaintBrushIcon },
   { key: 'domains', label: 'Domains', icon: GlobeAltIcon },
   { key: 'integrations', label: 'Integrations', icon: PuzzlePieceIcon },
+  { key: 'contact-fields', label: 'Custom Fields', icon: TagIcon },
   { key: 'users', label: 'Users', icon: UsersIcon },
   { key: 'appearance', label: 'Appearance', icon: SwatchIcon },
 ];
@@ -1209,6 +1212,13 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
 
         {/* ════════════ USERS TAB (settings mode only) ════════════ */}
         {settingsMode && activeTab === 'users' && <UsersTab />}
+
+        {/* ════════════ CUSTOM FIELDS TAB (settings mode only) ════════════
+            Sub-account-scoped — declares contact custom fields that the
+            filter engine, CSV importer, and contact detail page all
+            surface. Admin-level blueprints live at /settings under the
+            top-level Field Blueprints tab. */}
+        {settingsMode && activeTab === 'contact-fields' && <CustomFieldsTab />}
 
         {/* ════════════ APPEARANCE TAB (settings mode only) ════════════ */}
         {settingsMode && activeTab === 'appearance' && <AppearanceTab />}

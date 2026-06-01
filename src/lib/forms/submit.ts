@@ -11,6 +11,11 @@ import { prisma } from '@/lib/prisma';
 import { parseFormTemplate } from './types';
 import { validateSubmission, FormValidationError } from './validate';
 import { enrollContactForFormSubmission } from '@/lib/services/loomi-flows';
+import {
+  TURNSTILE_RESPONSE_FIELD,
+  isTurnstileConfigured,
+  verifyTurnstileToken,
+} from './turnstile';
 
 export interface SubmitContext {
   ipAddress?: string | null;
@@ -64,6 +69,31 @@ export async function submitForm(args: {
   const template = parseFormTemplate(form.schema as unknown);
   if (!template) {
     throw new FormSubmitError('Form schema is malformed', 500);
+  }
+
+  // CAPTCHA verification runs before schema validation so a failed
+  // challenge doesn't leak which fields are required (and so we don't
+  // burn a Prisma round-trip on a bot submission). When Turnstile
+  // isn't configured we skip silently and fall back to honeypot-only.
+  //
+  // The token is plucked off rawData before validation regardless of
+  // configuration so it never ends up in submission.data — the
+  // honeypot pattern.
+  const turnstileToken =
+    typeof rawData[TURNSTILE_RESPONSE_FIELD] === 'string'
+      ? (rawData[TURNSTILE_RESPONSE_FIELD] as string)
+      : null;
+  delete rawData[TURNSTILE_RESPONSE_FIELD];
+
+  if (isTurnstileConfigured()) {
+    const verdict = await verifyTurnstileToken(turnstileToken, context.ipAddress);
+    if (!verdict.ok) {
+      throw new FormSubmitError(
+        verdict.message || 'Verification failed. Please try again.',
+        400,
+        [{ field: '_form', message: verdict.message || 'Verification failed.' }],
+      );
+    }
   }
 
   // Validate first — throws FormValidationError on bad input.

@@ -215,7 +215,7 @@ export const NODE_META: Record<BuilderNodeType, NodeMetaEntry> = {
 
   // ── Messaging ──
   email: meta('messaging', 'Send Email', 'Send an email from a template.'),
-  sms: meta('messaging', 'Send SMS', 'Send a text via Twilio. Execution coming soon.', false),
+  sms: meta('messaging', 'Send SMS', 'Send a text via Twilio.'),
 
   // ── Contact ops ──
   add_tag: meta('contact', 'Add Tag', 'Add a tag to the contact.'),
@@ -237,7 +237,7 @@ export const NODE_META: Record<BuilderNodeType, NodeMetaEntry> = {
   wait_until: meta('wait', 'Wait Until Date', 'Pause until a contact field date is reached.'),
 
   // ── Integrations ──
-  webhook: meta('integrations', 'Webhook', 'POST to an external URL. Execution coming soon.', false),
+  webhook: meta('integrations', 'Webhook', 'Call an external URL with mergetag-templated body.'),
 
   // ── End ──
   exit: meta('end', 'Exit', 'End of the flow — contact is marked completed.'),

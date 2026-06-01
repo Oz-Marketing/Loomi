@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ExclamationTriangleIcon,
   PlusIcon,
@@ -18,6 +18,7 @@ import {
   type FieldType,
   type FilterOperator,
 } from '@/lib/smart-list-types';
+import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import {
   NODE_META,
   type BuilderNodeData,
@@ -164,7 +165,7 @@ function NodeConfigForm({
     case 'wait':
       return <WaitForm config={config} onChange={onChange} />;
     case 'condition':
-      return <ConditionForm config={config} onChange={onChange} />;
+      return <ConditionForm config={config} onChange={onChange} accountKey={accountKey} />;
     case 'split':
       return <SplitForm config={config} onChange={onChange} />;
     case 'sms':
@@ -173,7 +174,7 @@ function NodeConfigForm({
     case 'remove_tag':
       return <TagForm config={config} onChange={onChange} />;
     case 'update_field':
-      return <UpdateFieldForm config={config} onChange={onChange} />;
+      return <UpdateFieldForm config={config} onChange={onChange} accountKey={accountKey} />;
     case 'add_to_list':
     case 'remove_from_list':
       return <ListMembershipForm config={config} onChange={onChange} />;
@@ -406,27 +407,32 @@ function WaitForm({
 // (AND/OR-combined) over any field in FILTERABLE_FIELDS. Branches
 // evaluate top-to-bottom at runtime; the first whose rules match wins.
 // Contacts that match nothing flow down the implicit "else" edge.
+//
+// Resolved field set for the active flow's scope.
+//
+// Library / cross-account flows (accountKey=null) keep just the built-
+// in fields — there's no single account whose customs to merge in.
+// Account-scoped flows pull in that account's declared custom fields
+// via useFilterableFields so condition branches can target e.g.
+// `last_purchase_date`. A condition that references a stale custom
+// key still renders (text input, default operators) so deleting a
+// custom field doesn't blow up an existing branch.
 
-const FIELDS_BY_KEY: Record<string, FieldDefinition> = FILTERABLE_FIELDS.reduce(
-  (acc, f) => {
-    acc[f.key] = f;
-    return acc;
-  },
-  {} as Record<string, FieldDefinition>,
-);
-
-function operatorsForField(fieldKey: string): FilterOperator[] {
-  const field = FIELDS_BY_KEY[fieldKey];
+function operatorsFor(
+  fieldKey: string,
+  fieldsByKey: Record<string, FieldDefinition>,
+): FilterOperator[] {
+  const field = fieldsByKey[fieldKey];
   if (!field) return OPERATORS_BY_TYPE.text;
   return OPERATORS_BY_TYPE[field.type];
 }
 
-function makeEmptyRule(): ConditionRule {
-  const firstField = FILTERABLE_FIELDS[0];
+function makeEmptyRule(fields: FieldDefinition[]): ConditionRule {
+  const firstField = fields[0] ?? FILTERABLE_FIELDS[0];
   return {
     id: uid('r'),
     field: firstField.key,
-    operator: operatorsForField(firstField.key)[0],
+    operator: OPERATORS_BY_TYPE[firstField.type][0],
     value: '',
   };
 }
@@ -439,13 +445,25 @@ function parseBranches(config: Record<string, unknown>): ConditionBranch[] {
 function ConditionForm({
   config,
   onChange,
+  accountKey,
 }: {
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
+  accountKey: string | null;
 }) {
   const branches = parseBranches(config);
   const fallbackLabel = String((config as ConditionConfig).fallbackLabel || 'else');
   const title = String((config as ConditionConfig).title || '');
+
+  // Account-aware field set. Library flows (null accountKey) keep
+  // built-ins only. The hook handles the null case internally and
+  // returns FILTERABLE_FIELDS when there's no account scope.
+  const { fields } = useFilterableFields(accountKey);
+  const fieldsByKey = useMemo<Record<string, FieldDefinition>>(() => {
+    const out: Record<string, FieldDefinition> = {};
+    for (const f of fields) out[f.key] = f;
+    return out;
+  }, [fields]);
 
   function commit(
     nextBranches: ConditionBranch[],
@@ -476,7 +494,7 @@ function ConditionForm({
     const label = `Branch ${id.toUpperCase()}`;
     commit([
       ...branches,
-      { id, label, logic: 'AND', rules: [makeEmptyRule()] },
+      { id, label, logic: 'AND', rules: [makeEmptyRule(fields)] },
     ]);
   }
 
@@ -493,7 +511,7 @@ function ConditionForm({
   function addRule(branchId: string) {
     commit(
       branches.map((b) =>
-        b.id === branchId ? { ...b, rules: [...b.rules, makeEmptyRule()] } : b,
+        b.id === branchId ? { ...b, rules: [...b.rules, makeEmptyRule(fields)] } : b,
       ),
     );
   }
@@ -543,6 +561,8 @@ function ConditionForm({
           key={branch.id}
           branch={branch}
           index={index}
+          fields={fields}
+          fieldsByKey={fieldsByKey}
           onLabelChange={(label) => updateBranch(branch.id, { label })}
           onLogicChange={(logic) => updateBranch(branch.id, { logic })}
           onAddRule={() => addRule(branch.id)}
@@ -576,6 +596,8 @@ function ConditionForm({
 function BranchCard({
   branch,
   index,
+  fields,
+  fieldsByKey,
   onLabelChange,
   onLogicChange,
   onAddRule,
@@ -585,6 +607,8 @@ function BranchCard({
 }: {
   branch: ConditionBranch;
   index: number;
+  fields: FieldDefinition[];
+  fieldsByKey: Record<string, FieldDefinition>;
   onLabelChange: (label: string) => void;
   onLogicChange: (logic: 'AND' | 'OR') => void;
   onAddRule: () => void;
@@ -633,6 +657,8 @@ function BranchCard({
           <RuleRow
             key={rule.id}
             rule={rule}
+            fields={fields}
+            fieldsByKey={fieldsByKey}
             onChange={(next) => onUpdateRule(rule.id, next)}
             onDelete={() => onDeleteRule(rule.id)}
           />
@@ -653,29 +679,37 @@ function BranchCard({
 
 function RuleRow({
   rule,
+  fields,
+  fieldsByKey,
   onChange,
   onDelete,
 }: {
   rule: ConditionRule;
+  fields: FieldDefinition[];
+  fieldsByKey: Record<string, FieldDefinition>;
   onChange: (next: Partial<ConditionRule>) => void;
   onDelete: () => void;
 }) {
-  const field = FIELDS_BY_KEY[rule.field];
+  const field = fieldsByKey[rule.field];
   const fieldType: FieldType = field?.type ?? 'text';
-  const operators = operatorsForField(rule.field);
+  const operators = operatorsFor(rule.field, fieldsByKey);
   const needsValue = !NO_VALUE_OPERATORS.includes(rule.operator);
-  const needsValue2 = rule.operator === 'between';
+  const needsValue2 = rule.operator === 'between' || rule.operator === 'num_between';
 
   // Build the field options list once per render — grouping by
-  // category so the dropdown renders the same Contact / Vehicle /
-  // Lifecycle / Messaging / Meta sections as the native version did.
-  const fieldOptions: SearchableSelectOption[] = FIELD_CATEGORIES.flatMap((cat) =>
-    FILTERABLE_FIELDS.filter((f) => f.category === cat.key).map((f) => ({
+  // category so the dropdown shows Contact / Vehicle / Lifecycle /
+  // Messaging / Meta / Custom in the same shape as the segments UI.
+  // Empty categories drop out so the "Custom" group only appears when
+  // the active flow's account has declared fields.
+  const fieldOptions: SearchableSelectOption[] = FIELD_CATEGORIES.flatMap((cat) => {
+    const inCategory = fields.filter((f) => f.category === cat.key);
+    if (inCategory.length === 0) return [];
+    return inCategory.map((f) => ({
       value: f.key,
       label: f.label,
       group: cat.label,
-    })),
-  );
+    }));
+  });
   const operatorOptions: SearchableSelectOption[] = operators.map((op) => ({
     value: op,
     label: OPERATOR_LABELS[op],
@@ -691,7 +725,7 @@ function RuleRow({
             placeholder="Pick a field…"
             searchable
             onChange={(nextField) => {
-              const nextOps = operatorsForField(nextField);
+              const nextOps = operatorsFor(nextField, fieldsByKey);
               // Reset operator if the current one isn't valid for the
               // new field type — picking 'is_true' on a text field
               // would be immediately invalid, so we snap to the first
@@ -884,10 +918,6 @@ function SmsForm({
   }
   return (
     <>
-      <ComingSoonNote>
-        SMS sending is not executable yet — flows containing this step
-        can&apos;t be published. Backend wiring is on the roadmap.
-      </ComingSoonNote>
       <Field label="Message">
         <textarea
           value={state.message}
@@ -901,6 +931,11 @@ function SmsForm({
           className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
         />
       </Field>
+      <p className="text-[10px] text-[var(--muted-foreground)] leading-relaxed">
+        Mergetags: <code>{'{{firstName}}'}</code>, <code>{'{{lastName}}'}</code>,
+        <code>{'{{fullName}}'}</code>, <code>{'{{email}}'}</code>,
+        <code>{'{{phone}}'}</code>. Twilio caps the body at 1,600 chars.
+      </p>
     </>
   );
 }
@@ -932,11 +967,17 @@ function TagForm({
 
 // ── Update field form ──
 //
-// Allowlist matches the simple scalar fields on Contact that we can
-// safely overwrite from a worker. Add more as the underlying schema
-// surfaces them.
+// Two-section picker:
+//   - Canonical fields = direct columns on the Contact model that the
+//     worker can overwrite safely.
+//   - Custom fields = the active account's declared ContactCustomField
+//     rows. Each carries a type so the value input adapts (date picker
+//     for dates, dropdown for selects, etc.).
+//
+// Library flows (no account scope) only show canonical fields because
+// custom fields are per-sub-account by definition.
 
-const UPDATABLE_FIELDS = [
+const CANONICAL_UPDATABLE_FIELDS = [
   'firstName',
   'lastName',
   'fullName',
@@ -954,14 +995,38 @@ const UPDATABLE_FIELDS = [
 function UpdateFieldForm({
   config,
   onChange,
+  accountKey,
 }: {
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
+  accountKey: string | null;
 }) {
   const [state, setField] = useFieldState(config, ['field', 'value']);
   function commit(next: Partial<typeof state>) {
     onChange({ ...config, ...state, ...next });
   }
+
+  // Pull this account's custom fields so they show up as first-class
+  // pickable targets. Library / cross-account flows pass accountKey=null,
+  // which makes the hook return built-ins-only — meaning the Custom
+  // optgroup just won't render.
+  const { customFields } = useFilterableFields(accountKey);
+
+  // Look up the selected field's type so we can render the right value
+  // input. Canonical fields default to text; custom fields use the
+  // declared type from the blueprint/instance.
+  const selectedCustom = useMemo(
+    () => customFields.find((cf) => `custom:${cf.key}` === state.field),
+    [customFields, state.field],
+  );
+  const selectedType = selectedCustom?.type ?? 'text';
+  const selectedOptions = selectedCustom?.options ?? null;
+
+  // Plain checkbox for booleans persists the literal string "true" /
+  // "false" so the value column stays stringy (matches how mergetags +
+  // canonical-field updates look on the wire).
+  const booleanChecked = state.value === 'true';
+
   return (
     <>
       <Field label="Field">
@@ -969,29 +1034,97 @@ function UpdateFieldForm({
           value={state.field}
           onChange={(e) => {
             setField('field', e.target.value);
-            commit({ field: e.target.value });
+            // Reset value when switching fields — the previous value
+            // almost certainly doesn't fit the new field's shape (date
+            // → text, select → number, etc.).
+            commit({ field: e.target.value, value: '' });
           }}
           className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
         >
           <option value="">— Select a field —</option>
-          {UPDATABLE_FIELDS.map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
-          ))}
+          <optgroup label="Contact fields">
+            {CANONICAL_UPDATABLE_FIELDS.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </optgroup>
+          {customFields.length > 0 && (
+            <optgroup label="Custom fields">
+              {customFields.map((cf) => (
+                <option key={cf.key} value={`custom:${cf.key}`}>
+                  {cf.label}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
       </Field>
       <Field label="New value">
-        <input
-          value={state.value}
-          onChange={(e) => {
-            setField('value', e.target.value);
-            commit({ value: e.target.value });
-          }}
-          placeholder="e.g. {{firstName}} or a literal"
-          className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
-        />
+        {selectedType === 'select' && selectedOptions && selectedOptions.length > 0 ? (
+          <select
+            value={state.value}
+            onChange={(e) => {
+              setField('value', e.target.value);
+              commit({ value: e.target.value });
+            }}
+            className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+          >
+            <option value="">— Select —</option>
+            {selectedOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        ) : selectedType === 'multiselect' && selectedOptions && selectedOptions.length > 0 ? (
+          <input
+            value={state.value}
+            onChange={(e) => {
+              setField('value', e.target.value);
+              commit({ value: e.target.value });
+            }}
+            placeholder="comma-separated values"
+            className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+          />
+        ) : selectedType === 'boolean' ? (
+          <label className="inline-flex items-center gap-2 h-7 cursor-pointer text-xs">
+            <input
+              type="checkbox"
+              checked={booleanChecked}
+              onChange={(e) => {
+                const next = e.target.checked ? 'true' : 'false';
+                setField('value', next);
+                commit({ value: next });
+              }}
+              className="rounded border-[var(--border)]"
+            />
+            {booleanChecked ? 'Yes' : 'No'}
+          </label>
+        ) : (
+          <input
+            type={selectedType === 'date' ? 'date' : selectedType === 'number' ? 'number' : 'text'}
+            value={state.value}
+            onChange={(e) => {
+              setField('value', e.target.value);
+              commit({ value: e.target.value });
+            }}
+            placeholder={
+              selectedType === 'number'
+                ? 'e.g. 12500'
+                : selectedType === 'date'
+                  ? ''
+                  : 'e.g. {{firstName}} or a literal'
+            }
+            className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+          />
+        )}
       </Field>
+      {selectedCustom?.description && (
+        <p className="text-[10px] text-[var(--muted-foreground)] -mt-2">
+          {selectedCustom.description}
+        </p>
+      )}
     </>
   );
 }
@@ -1206,10 +1339,6 @@ function WebhookForm({
   }
   return (
     <>
-      <ComingSoonNote>
-        Webhook execution isn&apos;t wired up yet — we&apos;ll need to
-        decide on auth headers + retries before this goes live.
-      </ComingSoonNote>
       <Field label="URL">
         <input
           value={state.url}
@@ -1234,6 +1363,7 @@ function WebhookForm({
           <option value="PUT">PUT</option>
           <option value="PATCH">PATCH</option>
           <option value="GET">GET</option>
+          <option value="DELETE">DELETE</option>
         </select>
       </Field>
       <Field label="Body (JSON)">
@@ -1248,6 +1378,15 @@ function WebhookForm({
           className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs font-mono"
         />
       </Field>
+      <p className="text-[10px] text-[var(--muted-foreground)] leading-relaxed">
+        Mergetags inside the body: <code>{'{{contactId}}'}</code>,
+        <code>{'{{firstName}}'}</code>, <code>{'{{lastName}}'}</code>,
+        <code>{'{{email}}'}</code>, <code>{'{{phone}}'}</code>,
+        <code>{'{{accountKey}}'}</code>, <code>{'{{flowId}}'}</code>,
+        <code>{'{{enrollmentId}}'}</code>. Request times out after 10s; one
+        retry is attempted on 5xx / timeout. Non-2xx after retry marks
+        the step failed but does not exit the enrollment.
+      </p>
     </>
   );
 }

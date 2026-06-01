@@ -17,6 +17,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useAccount } from '@/contexts/account-context';
+import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import type { Contact } from '@/lib/contacts/types';
@@ -61,6 +62,9 @@ export default function SegmentsPage() {
   const router = useRouter();
   const { isAccount, accountKey, accounts, accountData } = useAccount();
   const subHref = useSubaccountHref();
+  // Match SegmentEditor: pull custom fields when scoped to a single
+  // sub-account; the org-wide / aggregate view falls back to built-ins.
+  const { fields } = useFilterableFields(isAccount ? accountKey : null);
 
   const [savedSegments, setSavedSegments] = useState<SavedSegment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -152,10 +156,10 @@ export default function SegmentsPage() {
     if (contactsLoading || !contacts.length) return map;
     for (const segment of savedSegments) {
       const def = parseDefinition(segment.filters);
-      if (def) map.set(segment.id, evaluateFilter(contacts, def).length);
+      if (def) map.set(segment.id, evaluateFilter(contacts, def, fields).length);
     }
     return map;
-  }, [contacts, contactsLoading, savedSegments]);
+  }, [contacts, contactsLoading, savedSegments, fields]);
 
   // ── Search filtering ─────────────────────────────────────────────
   const visibleSavedSegments = useMemo(() => {

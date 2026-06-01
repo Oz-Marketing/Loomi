@@ -2,22 +2,29 @@
 
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
   ArrowTopRightOnSquareIcon,
-  PaperAirplaneIcon,
   EnvelopeIcon,
   DevicePhoneMobileIcon,
   PhoneIcon,
   MapPinIcon,
-  ClockIcon,
-  ChatBubbleLeftRightIcon,
+  TagIcon,
 } from '@heroicons/react/24/outline';
-import PrimaryButton from '@/components/primary-button';
+import {
+  InlineEditableField,
+  type EditableFieldType,
+} from '@/components/contacts/contact-inline-edit';
+import {
+  ContactActivityThread,
+  type ConvoMessage as ThreadConvoMessage,
+  type ConvoStats as ThreadConvoStats,
+} from '@/components/contacts/contact-activity-thread';
 
 // ── Types ──
 
@@ -46,6 +53,9 @@ interface ContactDetail {
   leaseEndDate: string;
   warrantyEndDate: string;
   purchaseDate: string;
+  // Account-extensible properties keyed by the custom field's `key`.
+  // Empty object when the contact has no custom data.
+  customFields?: Record<string, unknown>;
 }
 
 interface AccountSummary {
@@ -77,21 +87,12 @@ interface ConvoStats {
   lastMessageDirection: string | null;
 }
 
-type ComposeMessageChannel = 'SMS' | 'MMS';
-
 interface DndState {
   email: boolean;
   sms: boolean;
 }
 
 // ── Helpers ──
-
-function daysUntil(dateStr: string): number | null {
-  if (!dateStr) return null;
-  const d = new Date(dateStr);
-  if (isNaN(d.getTime())) return null;
-  return Math.ceil((d.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
-}
 
 function formatRelativeDate(iso: string) {
   if (!iso) return '';
@@ -112,6 +113,71 @@ function formatDate(dateStr: string) {
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return '';
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/** Coerce a user-edited value into the shape the PATCH endpoint
+ *  expects on the wire. Empty strings become null so a cleared field
+ *  round-trips as "unset" instead of staying as "". Arrays pass
+ *  through (the API stores them in customFields as-is). */
+function normalizeForWire(value: unknown): unknown {
+  if (value === undefined) return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed === '' ? null : trimmed;
+  }
+  return value;
+}
+
+/** Type-aware formatter for a contact's stored value against a declared
+ *  custom field. Falls back to "—" for empty / unparseable cells so the
+ *  Custom section never blanks out a row. For select / multiselect we
+ *  look up the option label so the UI shows "Gold" instead of "tier_2". */
+function formatCustomFieldValue(
+  raw: unknown,
+  type: import('@/lib/contacts/custom-field-types').CustomFieldType,
+  options: import('@/lib/contacts/custom-field-types').CustomFieldOption[] | null,
+): string {
+  if (raw === null || raw === undefined || raw === '') return '—';
+
+  if (type === 'boolean') {
+    if (typeof raw === 'boolean') return raw ? 'Yes' : 'No';
+    const lower = String(raw).trim().toLowerCase();
+    if (['true', 'yes', 'y', '1'].includes(lower)) return 'Yes';
+    if (['false', 'no', 'n', '0'].includes(lower)) return 'No';
+    return '—';
+  }
+
+  if (type === 'date') {
+    const formatted = formatDate(String(raw));
+    return formatted || '—';
+  }
+
+  if (type === 'number') {
+    const n = Number(String(raw).trim());
+    return Number.isFinite(n) ? n.toLocaleString() : '—';
+  }
+
+  if (type === 'select' || type === 'multiselect') {
+    const labelFor = (val: string): string => {
+      const opt = options?.find((o) => o.value === val);
+      return opt ? opt.label : val;
+    };
+    if (type === 'select') return labelFor(String(raw).trim()) || '—';
+    // Multiselect can arrive as an array or as a comma-separated
+    // string from CSV imports — normalise both to a label list.
+    const items = Array.isArray(raw)
+      ? raw.map((v) => String(v).trim()).filter(Boolean)
+      : String(raw)
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+    if (items.length === 0) return '—';
+    return items.map(labelFor).join(', ');
+  }
+
+  // text + anything unrecognised.
+  const str = typeof raw === 'string' ? raw : String(raw);
+  return str.trim() || '—';
 }
 
 function toText(value: unknown): string {
@@ -137,19 +203,6 @@ function parseDndPayload(value: unknown): DndState {
   if (typeof row.email === 'boolean') out.email = row.email;
   if (typeof row.sms === 'boolean') out.sms = row.sms;
   return out;
-}
-
-function parseMediaUrlInput(raw: string): string[] {
-  if (!raw.trim()) return [];
-  return [
-    ...new Set(
-      raw
-        .split(/[\n,\s]+/g)
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .filter((item) => /^https?:\/\/\S+$/i.test(item)),
-    ),
-  ];
 }
 
 function normalizeAccountSummary(value: unknown): AccountSummary | null {
@@ -198,6 +251,11 @@ export default function ContactDetailPage() {
   const contactId = Array.isArray(params.contactId) ? params.contactId[0] : params.contactId;
   const accountKey = searchParams.get('accountKey') || '';
 
+  // Declared custom fields for this contact's owning sub-account.
+  // Drives the "Custom" detail section: each row shows the field's
+  // label + the contact's value (or "—"), formatted per declared type.
+  const { customFields: declaredCustomFields } = useFilterableFields(accountKey || null);
+
   const [contact, setContact] = useState<ContactDetail | null>(null);
   const [account, setAccount] = useState<AccountSummary | null>(null);
   const [contactLoading, setContactLoading] = useState(true);
@@ -212,13 +270,6 @@ export default function ContactDetailPage() {
   const [dndSaving, setDndSaving] = useState(false);
   const [dndError, setDndError] = useState<string | null>(null);
   const [dndSuccess, setDndSuccess] = useState<string | null>(null);
-
-  const [smsChannel, setSmsChannel] = useState<ComposeMessageChannel>('SMS');
-  const [smsMediaUrlsText, setSmsMediaUrlsText] = useState('');
-  const [smsDraft, setSmsDraft] = useState('');
-  const [smsSending, setSmsSending] = useState(false);
-  const [smsError, setSmsError] = useState<string | null>(null);
-  const [smsSuccess, setSmsSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     if (!contactId || !accountKey) {
@@ -289,11 +340,6 @@ export default function ContactDetailPage() {
     return contact.fullName || `${contact.firstName} ${contact.lastName}`.trim() || 'Unknown Contact';
   }, [contact]);
 
-  const vehicleStr = useMemo(() => {
-    if (!contact) return '';
-    return [contact.vehicleYear, contact.vehicleMake, contact.vehicleModel].filter(Boolean).join(' ');
-  }, [contact]);
-
   const addedDateLabel = useMemo(() => {
     if (!contact?.dateAdded) return '';
     return formatRelativeDate(contact.dateAdded) || formatDate(contact.dateAdded);
@@ -301,6 +347,57 @@ export default function ContactDetailPage() {
 
   const accountLogo = useMemo(() => accountLogoUrl(account), [account]);
   const accountAddress = useMemo(() => accountAddressLine(account), [account]);
+
+  // PATCH a single field on the contact (canonical column OR custom
+  // field under custom:<key>). Optimistically updates local state,
+  // re-syncs from the server response, and re-throws on error so the
+  // inline-edit component can surface the failure.
+  const patchContact = useCallback(
+    async (input:
+      | { kind: 'canonical'; column: string; value: unknown }
+      | { kind: 'custom'; key: string; value: unknown }
+    ): Promise<void> => {
+      if (!contactId || !accountKey || !contact) {
+        throw new Error('Contact not loaded yet.');
+      }
+      const body: Record<string, unknown> = {};
+      if (input.kind === 'canonical') {
+        body[input.column] = normalizeForWire(input.value);
+      } else {
+        // Merge with existing custom fields rather than overwriting the
+        // whole blob — partial updates are the API contract for any
+        // sane custom-field editor.
+        const next: Record<string, unknown> = { ...(contact.customFields ?? {}) };
+        const wireValue = normalizeForWire(input.value);
+        if (wireValue === null || wireValue === '') {
+          delete next[input.key];
+        } else {
+          next[input.key] = wireValue;
+        }
+        body.customFields = next;
+      }
+
+      const res = await fetch(
+        `/api/contacts/${encodeURIComponent(contactId)}?accountKey=${encodeURIComponent(accountKey)}`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof data.error === 'string' ? data.error : 'Failed to save');
+      }
+      // Server is authoritative. Re-hydrate the contact so the UI
+      // reflects whatever normalization the API performed (date
+      // canonicalization, etc.).
+      if (data.contact) {
+        setContact(data.contact as ContactDetail);
+      }
+    },
+    [contactId, accountKey, contact],
+  );
 
   async function toggleSuppression(channel: 'email' | 'sms', enabled: boolean) {
     if (!contactId || !accountKey) return;
@@ -336,39 +433,26 @@ export default function ContactDetailPage() {
     }
   }
 
-  async function sendSmsMessage() {
-    if (!contactId || !accountKey) return;
-    const message = smsDraft.trim();
-    const mediaUrls = parseMediaUrlInput(smsMediaUrlsText);
+  // 1:1 send hook for the activity thread. Re-throws on failure so
+  // the thread component can surface the error inline; on success it
+  // appends the new outbound bubble to local state so the user sees
+  // their message immediately without waiting for a refetch.
+  const handleThreadSend = useCallback(
+    async (input: { channel: 'SMS' | 'MMS'; message: string; mediaUrls: string[] }) => {
+      if (!contactId || !accountKey) {
+        throw new Error('Contact not loaded yet.');
+      }
+      const trimmed = input.message.trim();
+      if (trimmed.length > 640) {
+        throw new Error(`${input.channel} must be 640 characters or fewer.`);
+      }
 
-    if (!contact?.phone) {
-      setSmsError('Contact has no phone number on file.');
-      return;
-    }
-    if (!message && mediaUrls.length === 0) {
-      setSmsError(`Enter a ${smsChannel} message or at least one media URL.`);
-      return;
-    }
-    if (message.length > 640) {
-      setSmsError(`${smsChannel} must be 640 characters or fewer.`);
-      return;
-    }
-    if (dnd.sms) {
-      setSmsError('This contact has SMS suppressed. Unblock SMS first.');
-      return;
-    }
-
-    setSmsSending(true);
-    setSmsError(null);
-    setSmsSuccess(null);
-
-    try {
       const res = await fetch(
         `/api/contacts/${encodeURIComponent(contactId)}/sms?accountKey=${encodeURIComponent(accountKey)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ channel: smsChannel, message, mediaUrls }),
+          body: JSON.stringify({ channel: input.channel, message: trimmed, mediaUrls: input.mediaUrls }),
         },
       );
       const data = await res.json().catch(() => ({}));
@@ -376,7 +460,9 @@ export default function ContactDetailPage() {
         throw new Error(typeof data.error === 'string' ? data.error : 'Failed to send message');
       }
 
-      const sentMessage = (data?.message && typeof data.message === 'object') ? data.message as ConvoMessage : null;
+      const sentMessage = data?.message && typeof data.message === 'object'
+        ? (data.message as ConvoMessage)
+        : null;
       if (sentMessage) {
         setMessages((prev) => [sentMessage, ...prev]);
         setStats((prev) => {
@@ -391,15 +477,43 @@ export default function ContactDetailPage() {
           };
         });
       }
-      setSmsDraft('');
-      setSmsMediaUrlsText('');
-      setSmsSuccess(`${smsChannel} sent.`);
-    } catch (err) {
-      setSmsError(err instanceof Error ? err.message : `Failed to send ${smsChannel}`);
-    } finally {
-      setSmsSending(false);
-    }
-  }
+    },
+    [contactId, accountKey],
+  );
+
+  // Adapt the page's loose ConvoMessage (subject/contentType typed as
+  // `unknown` for resilience to API drift) to the thread's tighter
+  // shape. Done once per messages list change rather than per render
+  // so the thread's memoised day-grouping stays cheap.
+  const messagesForThread = useMemo<ThreadConvoMessage[]>(
+    () =>
+      messages.map((m) => ({
+        id: toText(m.id),
+        channel: (toText(m.channel).toUpperCase() as ThreadConvoMessage['channel']) || 'SMS',
+        direction: toText(m.direction).toLowerCase() === 'inbound' ? 'inbound' : 'outbound',
+        body: toText(m.body),
+        dateAdded: toText(m.dateAdded),
+        subject: toText(m.subject) || undefined,
+      })),
+    [messages],
+  );
+
+  // Narrow the page's looser ConvoStats (lastMessageDirection: string)
+  // to the thread's tighter shape ('inbound' | 'outbound' | null).
+  // API drift would surface here as 'inbound'/'outbound' literals
+  // anyway; the cast keeps types honest.
+  const statsForThread = useMemo<ThreadConvoStats | null>(() => {
+    if (!stats) return null;
+    const dir = stats.lastMessageDirection;
+    return {
+      totalMessages: stats.totalMessages,
+      smsCount: stats.smsCount,
+      emailCount: stats.emailCount,
+      lastMessageDate: stats.lastMessageDate,
+      lastMessageDirection:
+        dir === 'inbound' || dir === 'outbound' ? dir : null,
+    };
+  }, [stats]);
 
   const hasPhone = Boolean(contact?.phone);
 
@@ -518,186 +632,73 @@ export default function ContactDetailPage() {
               )}
             </section>
 
-            {/* Vehicle */}
-            <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">
-              <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3">Vehicle</h3>
-              <div className="grid gap-3 sm:grid-cols-3 text-sm">
-                <StatTile label="Primary Vehicle" value={vehicleStr || 'No vehicle data'} />
-                <StatTile label="VIN" value={contact.vehicleVin || '—'} mono />
-                <StatTile label="Mileage" value={contact.vehicleMileage || '—'} />
-              </div>
-            </section>
-
-            {/* Lifecycle */}
-            <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">
-              <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3 flex items-center gap-1.5">
-                <ClockIcon className="w-3.5 h-3.5" />
-                Lifecycle
-              </h3>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <LifecycleItem label="Last Service" dateStr={contact.lastServiceDate} type="past" />
-                <LifecycleItem label="Next Service" dateStr={contact.nextServiceDate} type="future" />
-                <LifecycleItem label="Purchase Date" dateStr={contact.purchaseDate} type="past" />
-                <LifecycleItem label="Lease End" dateStr={contact.leaseEndDate} type="future" />
-                <LifecycleItem label="Warranty End" dateStr={contact.warrantyEndDate} type="future" />
-              </div>
-            </section>
+            {/* Custom fields — always renders so reps see where to
+                declare account-specific data. Hardcoded Vehicle +
+                Lifecycle sections used to live here; those columns
+                still exist on Contact for the filter engine + legacy
+                data, but the detail page is now custom-fields-first.
+                Declare a "Vehicle Make" or "Next Service Date"
+                blueprint to bring them back as proper account-scoped
+                fields. */}
+            <SectionCard
+              title="Custom Fields"
+              icon={<TagIcon className="w-3.5 h-3.5" />}
+              action={
+                <Link
+                  href={subHref('/settings/contact-fields')}
+                  className="text-[11px] text-[var(--primary)] hover:underline"
+                >
+                  Manage fields →
+                </Link>
+              }
+            >
+              {declaredCustomFields.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-[var(--border)] bg-[var(--muted)]/15 px-4 py-6 text-center">
+                  <p className="text-xs text-[var(--foreground)] mb-1">
+                    No custom fields declared yet
+                  </p>
+                  <p className="text-[11px] text-[var(--muted-foreground)] max-w-[280px] mx-auto">
+                    Declare fields like <span className="font-mono">last_service_date</span> or{' '}
+                    <span className="font-mono">lifetime_value</span> in Settings → Custom Fields,
+                    or have an admin deploy a blueprint.
+                  </p>
+                </div>
+              ) : (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {declaredCustomFields.map((cf) => {
+                    const raw = contact.customFields?.[cf.key];
+                    return (
+                      <InlineEditableField
+                        key={cf.id}
+                        label={cf.label}
+                        type={cf.type as EditableFieldType}
+                        options={cf.options}
+                        mono={cf.type === 'number'}
+                        hint={cf.description ?? undefined}
+                        displayValue={formatCustomFieldValue(raw, cf.type, cf.options)}
+                        rawValue={raw}
+                        fieldRef={{ kind: 'custom', key: cf.key }}
+                        onSave={(v) => patchContact({ kind: 'custom', key: cf.key, value: v })}
+                      />
+                    );
+                  })}
+                </div>
+              )}
+            </SectionCard>
           </div>
 
-          {/* Activity / 1:1 send */}
-          <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70 h-fit">
-            <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] mb-3 flex items-center gap-1.5">
-              <ChatBubbleLeftRightIcon className="w-3.5 h-3.5" />
-              Activity
-            </h3>
-
-            {/* 1:1 send composer */}
-            <div className="mb-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/20 p-2.5">
-              <div className="flex items-center justify-between gap-2 mb-1.5">
-                <p className="text-[11px] font-medium">Send 1:1 Message</p>
-                {dnd.sms && <span className="text-[10px] text-amber-300">SMS suppressed</span>}
-                {!hasPhone && <span className="text-[10px] text-amber-300">No phone on file</span>}
-              </div>
-
-              <div className="mb-2 flex items-center gap-1.5">
-                {(['SMS', 'MMS'] as const).map((ch) => (
-                  <button
-                    key={ch}
-                    type="button"
-                    onClick={() => setSmsChannel(ch)}
-                    disabled={smsSending}
-                    className={`px-2 py-1 text-[10px] rounded border ${
-                      smsChannel === ch
-                        ? 'border-[var(--primary)] bg-[var(--primary)]/15 text-[var(--primary)]'
-                        : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                    }`}
-                  >
-                    {ch}
-                  </button>
-                ))}
-              </div>
-
-              <textarea
-                value={smsDraft}
-                onChange={(event) => {
-                  setSmsDraft(event.target.value);
-                  if (smsError) setSmsError(null);
-                  if (smsSuccess) setSmsSuccess(null);
-                }}
-                placeholder={smsChannel === 'MMS' ? 'Write an MMS caption (optional if media URLs provided)...' : 'Write an SMS message...'}
-                rows={3}
-                maxLength={640}
-                className="w-full text-xs rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-2 focus:outline-none focus:border-[var(--primary)]"
-              />
-
-              {smsChannel === 'MMS' && (
-                <textarea
-                  value={smsMediaUrlsText}
-                  onChange={(event) => {
-                    setSmsMediaUrlsText(event.target.value);
-                    if (smsError) setSmsError(null);
-                    if (smsSuccess) setSmsSuccess(null);
-                  }}
-                  placeholder="Media URLs (one per line)"
-                  rows={2}
-                  className="mt-2 w-full text-xs rounded-lg border border-[var(--border)] bg-[var(--card)] px-2.5 py-2 focus:outline-none focus:border-[var(--primary)]"
-                />
-              )}
-
-              <div className="mt-2 flex items-center justify-between gap-2">
-                <span className="text-[10px] text-[var(--muted-foreground)]">{smsDraft.trim().length}/640</span>
-                <PrimaryButton
-                  type="button"
-                  onClick={sendSmsMessage}
-                  disabled={
-                    smsSending ||
-                    !hasPhone ||
-                    dnd.sms ||
-                    (!smsDraft.trim() && (smsChannel !== 'MMS' || parseMediaUrlInput(smsMediaUrlsText).length === 0))
-                  }
-                >
-                  {smsSending ? (
-                    <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <PaperAirplaneIcon className="w-3.5 h-3.5" />
-                  )}
-                  {smsSending ? 'Sending...' : `Send ${smsChannel}`}
-                </PrimaryButton>
-              </div>
-
-              {smsError && <p className="mt-2 text-[11px] text-red-300">{smsError}</p>}
-              {smsSuccess && !smsError && <p className="mt-2 text-[11px] text-emerald-300">{smsSuccess}</p>}
-            </div>
-
-            {messagesLoading && (
-              <div className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
-                <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
-                Loading activity...
-              </div>
-            )}
-
-            {!messagesLoading && stats && stats.totalMessages > 0 && (
-              <div className="flex items-center gap-3 text-[11px] text-[var(--muted-foreground)] mb-3">
-                <span>{stats.totalMessages} events</span>
-                {stats.smsCount > 0 && <span>{stats.smsCount} SMS</span>}
-                {stats.emailCount > 0 && <span>{stats.emailCount} email</span>}
-              </div>
-            )}
-
-            {!messagesLoading && messagesError && messages.length === 0 && (
-              <p className="text-xs text-[var(--muted-foreground)] italic">{messagesError}</p>
-            )}
-
-            {!messagesLoading && !messagesError && messages.length === 0 && (
-              <p className="text-xs text-[var(--muted-foreground)] italic">
-                No activity yet. Sends, opens, clicks, and replies will show up here.
-              </p>
-            )}
-
-            {messages.length > 0 && (
-              <div className="space-y-2 max-h-[540px] overflow-y-auto pr-1">
-                {messages.slice(0, 50).map((msg) => {
-                  const direction = toText(msg.direction).toLowerCase();
-                  const channel = toText(msg.channel).toUpperCase();
-                  const typeLabel = channel === 'EMAIL' ? 'Email' : channel === 'MMS' ? 'MMS' : 'SMS';
-                  const subjectText = toText(msg.subject);
-                  const dateLabel = formatRelativeDate(toText(msg.dateAdded));
-                  const isInbound = direction.includes('inbound');
-                  const isEmail = channel === 'EMAIL';
-                  const bodyText = toText(msg.body) || 'No content';
-                  const metaLabel = `${isInbound ? 'Inbound' : 'Outbound'} • ${typeLabel}`;
-                  const channelIcon = isEmail
-                    ? <EnvelopeIcon className="w-3.5 h-3.5" />
-                    : <DevicePhoneMobileIcon className="w-3.5 h-3.5" />;
-
-                  return (
-                    <div
-                      key={toText(msg.id)}
-                      className={`rounded-lg p-2.5 border ${
-                        isInbound
-                          ? 'bg-[var(--primary)]/6 border-[var(--primary)]/25'
-                          : 'bg-[var(--muted)]/30 border-[var(--border)]'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-2 text-[10px] mb-1.5">
-                        <span className="font-medium inline-flex items-center gap-1.5">
-                          {channelIcon}
-                          {metaLabel}
-                        </span>
-                        <span className="text-[var(--muted-foreground)]">{dateLabel}</span>
-                      </div>
-                      {subjectText && subjectText !== bodyText && (
-                        <p className="text-[11px] font-medium mb-1 truncate">{subjectText}</p>
-                      )}
-                      <p className="text-[11px] text-[var(--muted-foreground)] line-clamp-3">
-                        {bodyText}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </section>
+          {/* Activity thread — pinned chat-style panel with composer at
+              bottom. The page still owns the message list + send call
+              so the thread component stays presentational. */}
+          <ContactActivityThread
+            messages={messagesForThread}
+            stats={statsForThread}
+            loading={messagesLoading}
+            error={messagesError}
+            hasPhone={hasPhone}
+            smsSuppressed={dnd.sms}
+            onSend={handleThreadSend}
+          />
         </div>
       )}
     </div>
@@ -780,55 +781,32 @@ function SuppressionTile({
   );
 }
 
-function StatTile({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)]/25 px-3 py-2.5">
-      <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">{label}</p>
-      <p className={`mt-1 text-sm ${mono ? 'font-mono text-xs break-all' : ''}`}>{value}</p>
-    </div>
-  );
-}
-
-function LifecycleItem({
-  label,
-  dateStr,
-  type,
+/** Section shell with consistent card chrome + header. Replaces the
+ *  ad-hoc <section className="glass-card …"> wrappers so every panel
+ *  on the page reads as the same visual primitive. */
+function SectionCard({
+  title,
+  icon,
+  children,
+  action,
 }: {
-  label: string;
-  dateStr: string;
-  type: 'past' | 'future';
+  title: string;
+  icon?: React.ReactNode;
+  children: React.ReactNode;
+  /** Optional inline-right control (link, button) rendered next to the title. */
+  action?: React.ReactNode;
 }) {
-  if (!dateStr) {
-    return (
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)]/25 px-3 py-2.5">
-        <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">{label}</p>
-        <p className="mt-1 text-xs text-[var(--muted-foreground)]">No data</p>
-      </div>
-    );
-  }
-
-  const days = daysUntil(dateStr);
-  let status = '';
-  let statusClass = 'text-[var(--muted-foreground)]';
-  if (type === 'future' && days !== null) {
-    if (days < 0) {
-      status = `${Math.abs(days)}d overdue`;
-      statusClass = 'text-red-400';
-    } else if (days <= 30) {
-      status = `${days}d`;
-      statusClass = 'text-amber-400';
-    } else {
-      status = `${days}d`;
-    }
-  }
-
   return (
-    <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)]/25 px-3 py-2.5">
-      <p className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">{label}</p>
-      <div className="mt-1 flex items-center justify-between gap-2">
-        <span className="text-sm">{formatDate(dateStr)}</span>
-        {status ? <span className={`text-[11px] font-medium ${statusClass}`}>{status}</span> : null}
+    <section className="glass-card rounded-2xl p-4 border border-[var(--border)]/70">
+      <div className="flex items-center justify-between gap-3 mb-3">
+        <h3 className="text-xs uppercase tracking-wider text-[var(--muted-foreground)] flex items-center gap-1.5">
+          {icon}
+          {title}
+        </h3>
+        {action}
       </div>
-    </div>
+      {children}
+    </section>
   );
 }
+

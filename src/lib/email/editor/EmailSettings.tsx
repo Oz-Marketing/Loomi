@@ -3,7 +3,9 @@
 import * as React from 'react';
 import { useEditor } from './EditorContext';
 import { ColorInput, NumberInput } from './PropertyControls';
-import { ComputerDesktopIcon } from '@heroicons/react/24/outline';
+import { ComputerDesktopIcon, SparklesIcon } from '@heroicons/react/24/outline';
+import { AiVariantsPopover } from './AiVariantsPopover';
+import { extractTemplateText } from './template-text';
 
 const inputClass =
   'w-full px-3 py-2 text-sm bg-transparent text-[var(--foreground)] border border-[var(--border)] rounded-md outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] transition-colors';
@@ -30,12 +32,53 @@ export function EmailSettings() {
   const { template, updateSettings, updateMeta } = useEditor();
   const { settings } = template;
 
+  // Two separate popovers — they can't be open at the same time and
+  // each anchors against its own sparkles button. The fetchers close
+  // over `template` so they always pull the latest body text + meta.
+  const [openPicker, setOpenPicker] = React.useState<'subject' | 'preview' | null>(null);
+  const subjectAnchorRef = React.useRef<HTMLButtonElement>(null);
+  const previewAnchorRef = React.useRef<HTMLButtonElement>(null);
+
+  const fetchMeta = React.useCallback(
+    async (field: 'subject' | 'previewText', brief: string): Promise<string[]> => {
+      const bodyText = extractTemplateText(template).join('\n\n');
+      const res = await fetch('/api/ai/generate-email-meta', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          field,
+          emailTextContent: bodyText,
+          currentSubject: template.subject || '',
+          currentPreviewText: template.preheader || '',
+          brief,
+          count: 3,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        results?: string[];
+        error?: string;
+      };
+      if (!res.ok) throw new Error(data.error || 'AI request failed');
+      return Array.isArray(data.results) ? data.results : [];
+    },
+    [template],
+  );
+
   return (
     <div>
       {/* General — subject + preheader */}
       <SectionHeader name="General" />
       <div className="px-4 py-3 space-y-3">
-        <StackedField label="Subject Line">
+        <StackedField
+          label="Subject Line"
+          action={
+            <SparklesButton
+              ref={subjectAnchorRef}
+              onClick={() => setOpenPicker(openPicker === 'subject' ? null : 'subject')}
+              active={openPicker === 'subject'}
+            />
+          }
+        >
           <input
             type="text"
             value={template.subject || ''}
@@ -44,7 +87,16 @@ export function EmailSettings() {
             className={inputClass}
           />
         </StackedField>
-        <StackedField label="Preview Text">
+        <StackedField
+          label="Preview Text"
+          action={
+            <SparklesButton
+              ref={previewAnchorRef}
+              onClick={() => setOpenPicker(openPicker === 'preview' ? null : 'preview')}
+              active={openPicker === 'preview'}
+            />
+          }
+        >
           <input
             type="text"
             value={template.preheader || ''}
@@ -54,6 +106,25 @@ export function EmailSettings() {
           />
         </StackedField>
       </div>
+
+      <AiVariantsPopover
+        open={openPicker === 'subject'}
+        onClose={() => setOpenPicker(null)}
+        anchorRef={subjectAnchorRef}
+        title="Subject line ideas"
+        enableBrief
+        fetcher={(brief) => fetchMeta('subject', brief)}
+        onPick={(text) => updateMeta({ subject: text })}
+      />
+      <AiVariantsPopover
+        open={openPicker === 'preview'}
+        onClose={() => setOpenPicker(null)}
+        anchorRef={previewAnchorRef}
+        title="Preview text ideas"
+        enableBrief
+        fetcher={(brief) => fetchMeta('previewText', brief)}
+        onPick={(text) => updateMeta({ preheader: text })}
+      />
 
       {/* Background */}
       <SectionHeader name="Background" />
@@ -129,14 +200,49 @@ function SectionHeader({ name }: { name: string }) {
   );
 }
 
-function StackedField({ label, children }: { label: string; children: React.ReactNode }) {
+function StackedField({
+  label,
+  children,
+  action,
+}: {
+  label: string;
+  children: React.ReactNode;
+  /** Optional inline-right control rendered next to the label —
+   *  primarily for the AI sparkles button. */
+  action?: React.ReactNode;
+}) {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label name={label} />
+      <div className="flex items-center justify-between gap-2">
+        <Label name={label} />
+        {action}
+      </div>
       {children}
     </div>
   );
 }
+
+const SparklesButton = React.forwardRef<
+  HTMLButtonElement,
+  { onClick: () => void; active: boolean }
+>(function SparklesButton({ onClick, active }, ref) {
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={onClick}
+      title="Generate suggestions with AI"
+      aria-label="Generate suggestions with AI"
+      className={`inline-flex items-center justify-center w-6 h-6 rounded-md transition-colors ${
+        active
+          ? 'bg-[var(--primary)]/15 text-[var(--primary)]'
+          : 'text-[var(--muted-foreground)] hover:text-[var(--primary)] hover:bg-[var(--muted)]'
+      }`}
+    >
+      <SparklesIcon className="w-3.5 h-3.5" />
+    </button>
+  );
+});
 
 function InlineField({ label, children }: { label: string; children: React.ReactNode }) {
   return (

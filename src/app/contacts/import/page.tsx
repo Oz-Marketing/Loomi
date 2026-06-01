@@ -14,10 +14,12 @@ import {
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
 import { CONTACT_FIELDS, IGNORE_FIELD, type ContactField } from '@/lib/contacts/normalize';
 import { consumePendingImportFile } from '@/lib/contacts/pending-import';
+import type { CustomFieldDto } from '@/lib/contacts/custom-field-types';
 
 // ── Types ──
 
@@ -28,7 +30,9 @@ interface ParseResponse {
   headers: string[];
   totalRows: number;
   sampleRows: Record<string, string>[];
-  suggestedMapping: Record<string, ContactField>;
+  // Canonical field name OR a "custom:<key>" reference when the server
+  // matched a header against a declared custom field's csvAliases.
+  suggestedMapping: Record<string, ContactField | `custom:${string}`>;
   canonicalFields: readonly ContactField[];
 }
 
@@ -130,6 +134,12 @@ export default function ContactsImportPage() {
     if (isAccount && accountKey) return accountKey;
     return accountOptions[0]?.key ?? '';
   });
+
+  // Surface this account's declared custom fields in the mapper
+  // dropdown so users don't have to remember the key — they pick from
+  // a list, same as canonical fields. The blueprint pre-deployment
+  // also lets CSV header aliases auto-map at parse time on the server.
+  const { customFields } = useFilterableFields(selectedAccountKey || null);
 
   // When a list target loads, lock the import to that list's account.
   useEffect(() => {
@@ -460,6 +470,7 @@ export default function ContactsImportPage() {
                           value={mapping[header] ?? IGNORE_FIELD}
                           mapping={mapping}
                           header={header}
+                          declaredCustoms={customFields}
                           onChange={(target) => updateMappingFor(header, target)}
                         />
                       </td>
@@ -545,15 +556,22 @@ export default function ContactsImportPage() {
 
 // ── FieldSelect ──
 
+// Sentinel option values used by the select; kept short so the
+// onChange dispatch reads cleanly.
+const SELECT_DECLARED_PREFIX = '__declared:';
+const SELECT_NEW_CUSTOM = '__custom';
+
 function FieldSelect({
   value,
   mapping,
   header,
+  declaredCustoms,
   onChange,
 }: {
   value: MappingTarget;
   mapping: Mapping;
   header: string;
+  declaredCustoms: CustomFieldDto[];
   onChange: (target: MappingTarget) => void;
 }) {
   // Which canonical fields are already claimed by another header.
@@ -571,23 +589,51 @@ function FieldSelect({
     return out;
   }, [mapping, header]);
 
+  // Same idea for declared custom fields — show "owned by X" hint when
+  // another header is already pulling into that custom key.
+  const claimedCustomKeyBy = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const [otherHeader, target] of Object.entries(mapping)) {
+      if (otherHeader === header) continue;
+      if (typeof target === 'string' && target.startsWith('custom:')) {
+        const key = target.slice('custom:'.length).trim();
+        if (key) out[key] = otherHeader;
+      }
+    }
+    return out;
+  }, [mapping, header]);
+
   const isCustom = typeof value === 'string' && value.startsWith('custom:');
   const customKey = isCustom ? value.slice('custom:'.length) : '';
+  const isDeclared = isCustom && declaredCustoms.some((c) => c.key === customKey);
+  const isAdHocCustom = isCustom && !isDeclared;
+
   // A column counts as mapped when it points somewhere actionable. A
   // custom: prefix without a key still surfaces in the API as invalid,
   // so we treat it as unmapped for visual feedback.
   const isMapped = value !== IGNORE_FIELD && !(isCustom && customKey.trim() === '');
 
+  // The <select> driver value: route declared customs through a
+  // synthetic `__declared:<key>` value so a single onChange handles all
+  // three modes (canonical, declared custom, new ad-hoc custom).
+  const selectValue = isDeclared
+    ? `${SELECT_DECLARED_PREFIX}${customKey}`
+    : isAdHocCustom
+      ? SELECT_NEW_CUSTOM
+      : value;
+
   return (
     <div className="flex items-center gap-2 flex-wrap">
       <select
-        value={isCustom ? '__custom' : value}
+        value={selectValue}
         onChange={(e) => {
           const next = e.target.value;
-          if (next === '__custom') {
+          if (next === SELECT_NEW_CUSTOM) {
             // Default the custom key to the original CSV header so
             // users can tweak it rather than start from scratch.
             onChange(`custom:${header}`);
+          } else if (next.startsWith(SELECT_DECLARED_PREFIX)) {
+            onChange(`custom:${next.slice(SELECT_DECLARED_PREFIX.length)}`);
           } else if (next === IGNORE_FIELD) {
             onChange(IGNORE_FIELD);
           } else {
@@ -612,10 +658,23 @@ function FieldSelect({
             );
           })}
         </optgroup>
-        <option value="__custom">Custom field…</option>
+        {declaredCustoms.length > 0 && (
+          <optgroup label="Custom fields">
+            {declaredCustoms.map((cf) => {
+              const owned = claimedCustomKeyBy[cf.key];
+              return (
+                <option key={cf.key} value={`${SELECT_DECLARED_PREFIX}${cf.key}`}>
+                  {cf.label}
+                  {owned ? ` (currently: ${owned})` : ''}
+                </option>
+              );
+            })}
+          </optgroup>
+        )}
+        <option value={SELECT_NEW_CUSTOM}>Custom field (ad-hoc)…</option>
       </select>
 
-      {isCustom && (
+      {isAdHocCustom && (
         <input
           type="text"
           value={customKey}

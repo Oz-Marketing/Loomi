@@ -50,6 +50,11 @@ export interface Contact {
   hasReceivedSms: boolean;
   hasOpenedEmail: boolean;
   lastMessageDate: string;
+  /** Account-extensible properties keyed by the custom field's `key`.
+   *  Empty object when the contact has no custom data. Values are
+   *  intentionally loose — the filter engine + UI normalise per the
+   *  declared ContactCustomField type at consumption time. */
+  customFields: Record<string, unknown>;
   _accountKey?: string;
   _dealer?: string;
   _accounts?: ContactAccountRef[];

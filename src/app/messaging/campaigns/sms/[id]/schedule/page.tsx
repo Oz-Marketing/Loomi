@@ -15,6 +15,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
+import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import type { Contact } from '@/lib/contacts/types';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
@@ -154,6 +155,9 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
 
   const accountKey = draft?.accountKeys[0] || '';
   const account = accountKey ? accounts[accountKey] : null;
+  // Source sub-account's custom fields, fed into the filter engine so
+  // saved audiences referencing custom keys resolve correctly.
+  const { fields: filterableFields } = useFilterableFields(accountKey || null);
 
   useEffect(() => {
     if (!accountKey) return;
@@ -240,7 +244,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
       matched = sendable.filter((c) => listMemberIds.has(c.id));
     } else {
       const filter = draft.sourceFilter ? parseFilterDefinition(draft.sourceFilter) : null;
-      matched = filter ? evaluateFilter(sendable, filter) : sendable;
+      matched = filter ? evaluateFilter(sendable, filter, filterableFields) : sendable;
     }
     return matched.map((c) => ({
       contactId: String(c.id).trim(),
@@ -248,7 +252,7 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
       phone: normalizePhoneNumber(String(c.phone || '')),
       fullName: String(c.fullName || '').trim(),
     }));
-  }, [draft, contacts, accountKey, listMemberIds]);
+  }, [draft, contacts, accountKey, listMemberIds, filterableFields]);
 
   async function handleSchedule() {
     if (!draft) return;

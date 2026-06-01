@@ -38,11 +38,27 @@ export type TriggerType =
 export const EXECUTABLE_NODE_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
   'trigger',
   'email',
+  'sms',
   'wait',
+  'wait_until',
   'condition',
   'split',
+  'webhook',
   'exit',
 ]);
+
+// Date fields on Contact that the wait_until node may anchor against.
+// Mirrors the picker in BuilderInspector's WaitUntilForm — the
+// validator + worker both look this list up rather than hard-coding it
+// in three places.
+export const WAIT_UNTIL_DATE_FIELDS: readonly string[] = [
+  'nextServiceDate',
+  'lastServiceDate',
+  'leaseEndDate',
+  'warrantyEndDate',
+  'purchaseDate',
+  'dateAdded',
+];
 
 // Annotation-only nodes — visible on the canvas, never executed, no
 // edges in or out. The validator skips them for both the
@@ -199,6 +215,88 @@ export function validateFlowGraph(graph: {
           'Wait duration must be greater than 0.',
           'Open the step and set a non-zero wait duration (e.g. 1 hour, 2 days).',
         );
+      }
+    }
+    if (node.type === 'wait_until') {
+      const field = String(node.config.field || '').trim();
+      if (!field) {
+        push(
+          node.id,
+          'Pick a date field to wait until.',
+          'Open the step and choose a date field on the contact (e.g. nextServiceDate).',
+        );
+      } else if (!WAIT_UNTIL_DATE_FIELDS.includes(field)) {
+        push(
+          node.id,
+          `Unknown date field "${field}".`,
+          `Open the step and pick one of: ${WAIT_UNTIL_DATE_FIELDS.join(', ')}.`,
+        );
+      }
+      const offsetDays = Number(node.config.offsetDays);
+      if (
+        node.config.offsetDays !== undefined &&
+        node.config.offsetDays !== '' &&
+        !Number.isFinite(offsetDays)
+      ) {
+        push(
+          node.id,
+          'Offset must be a whole number of days.',
+          'Open the step and enter a number — negative to fire before the date, positive to fire after.',
+        );
+      }
+    }
+    if (node.type === 'sms') {
+      const message = String(node.config.message || '').trim();
+      if (!message) {
+        push(
+          node.id,
+          'Set an SMS message body.',
+          'Open the step and type the text to send. Mergetags like {{firstName}} are supported.',
+        );
+      } else if (message.length > 1600) {
+        push(
+          node.id,
+          'SMS message exceeds Twilio\'s 1600-character limit.',
+          'Trim the message body — most carriers cap at 160 chars per segment and Twilio chains up to 10 segments.',
+        );
+      }
+    }
+    if (node.type === 'webhook') {
+      const url = String(node.config.url || '').trim();
+      if (!url) {
+        push(
+          node.id,
+          'Webhook URL is required.',
+          'Open the step and paste the URL the worker should POST to.',
+        );
+      } else if (!/^https?:\/\//i.test(url)) {
+        push(
+          node.id,
+          'Webhook URL must start with http:// or https://.',
+          'Fix the URL in the step inspector — only http and https are allowed.',
+        );
+      }
+      const method = String(node.config.method || 'POST').toUpperCase();
+      if (!['POST', 'PUT', 'PATCH', 'GET', 'DELETE'].includes(method)) {
+        push(
+          node.id,
+          `Unsupported HTTP method "${method}".`,
+          'Open the step and pick POST, PUT, PATCH, GET, or DELETE.',
+        );
+      }
+      // Body is only sent for write methods; reject obvious JSON
+      // syntax errors up front so the worker doesn't fail silently.
+      const body = node.config.body;
+      if (typeof body === 'string' && body.trim() && method !== 'GET' && method !== 'DELETE') {
+        try {
+          JSON.parse(body);
+        } catch {
+          push(
+            node.id,
+            'Webhook body must be valid JSON.',
+            'Open the step and fix the JSON syntax, or clear the body if no payload is needed.',
+          );
+        }
       }
     }
   }

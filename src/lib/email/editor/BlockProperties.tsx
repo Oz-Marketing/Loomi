@@ -10,8 +10,11 @@ import {
   PhotoIcon,
   Squares2X2Icon,
   ComputerDesktopIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { MediaPickerModal } from '@/components/media-picker-modal';
+import { AiVariantsPopover } from './AiVariantsPopover';
+import { extractTemplateText } from './template-text';
 import {
   AlignmentControl,
   ColorInput,
@@ -43,10 +46,22 @@ const GROUP_TO_TAB: Record<string, TabKey> = {
   spacing: 'layout',
 };
 
+// Block types whose canonical `text` prop is rewrite-worthy. Mirrors
+// TEXT_BEARING_TYPES in template-text.ts — kept locally because we
+// also need it for type-narrowing the AI fetch.
+type AiTextBlockKind = 'heading' | 'text' | 'button';
+const AI_TEXT_BLOCK_TYPES: ReadonlySet<string> = new Set<AiTextBlockKind>([
+  'heading',
+  'text',
+  'button',
+]);
+
 export function BlockProperties() {
   const { template, selectedId, selectBlock, updateBlockProps } = useEditor();
   const selectedBlock = selectedId ? findBlock(template.blocks, selectedId) : null;
   const [activeTab, setActiveTab] = React.useState<TabKey>('content');
+  const [aiOpen, setAiOpen] = React.useState(false);
+  const aiAnchorRef = React.useRef<HTMLButtonElement>(null);
 
   if (!selectedBlock) return null;
 
@@ -144,6 +159,72 @@ export function BlockProperties() {
 
       {/* Body */}
       <div className="flex-1 overflow-y-auto">
+        {/* AI copy generator — only renders for text-bearing blocks on
+            the Content tab. Anchored against the button so the variants
+            popover sits underneath it inline with the property list. */}
+        {effectiveTab === 'content' && AI_TEXT_BLOCK_TYPES.has(selectedBlock.type) && (
+          <div className="px-4 pt-4 pb-1">
+            <button
+              ref={aiAnchorRef}
+              type="button"
+              onClick={() => setAiOpen((v) => !v)}
+              className={`w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-xs font-medium border transition-colors ${
+                aiOpen
+                  ? 'bg-[var(--primary)]/15 text-[var(--primary)] border-[var(--primary)]/40'
+                  : 'bg-transparent text-[var(--foreground)] border-[var(--border)] hover:border-[var(--primary)]/40 hover:text-[var(--primary)]'
+              }`}
+            >
+              <SparklesIcon className="w-3.5 h-3.5" />
+              {String(selectedBlock.props.text ?? '').trim()
+                ? 'Rewrite with AI'
+                : 'Write with AI'}
+            </button>
+            <AiVariantsPopover
+              open={aiOpen}
+              onClose={() => setAiOpen(false)}
+              anchorRef={aiAnchorRef}
+              title={`${schema.label} ideas`}
+              enableBrief
+              monospace={selectedBlock.type === 'button'}
+              fetcher={async (brief) => {
+                // Pull surrounding text *excluding* this block so the
+                // AI doesn't echo the seed back as "context".
+                const surrounding = extractTemplateText(template, selectedBlock.id);
+                const res = await fetch('/api/ai/generate-block-copy', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    blockType: selectedBlock.type as AiTextBlockKind,
+                    currentText: String(selectedBlock.props.text ?? ''),
+                    emailSubject: template.subject ?? null,
+                    emailPreheader: template.preheader ?? null,
+                    otherBlocksText: surrounding,
+                    brief,
+                    count: 3,
+                  }),
+                });
+                const data = (await res.json().catch(() => ({}))) as {
+                  results?: string[];
+                  error?: string;
+                };
+                if (!res.ok) throw new Error(data.error || 'AI request failed');
+                return Array.isArray(data.results) ? data.results : [];
+              }}
+              onPick={(text) => {
+                // For text blocks the prop is HTML (the formatting
+                // toolbar edits inline), so AI output replaces it
+                // with a paragraph wrapper. Heading + button props
+                // are plain strings; pass through as-is.
+                const next =
+                  selectedBlock.type === 'text'
+                    ? wrapAsHtmlParagraphs(text)
+                    : text;
+                updateBlockProps(selectedBlock.id, { text: next });
+              }}
+            />
+          </div>
+        )}
+
         <PropertyList
           props={propsForTab}
           block={selectedBlock}
@@ -155,6 +236,24 @@ export function BlockProperties() {
       </div>
     </div>
   );
+}
+
+/** Convert AI plain-text output into the lightweight HTML shape the
+ *  text block expects (the formatting toolbar produces & consumes
+ *  HTML). Single paragraphs become `<p>...</p>`; blank-line-separated
+ *  paragraphs become `<p>...</p><p>...</p>`; single newlines become
+ *  `<br/>`. Keep it dumb — full markdown parsing isn't worth it for
+ *  a 1-3 sentence rewrite. */
+function wrapAsHtmlParagraphs(text: string): string {
+  const escaped = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  return escaped
+    .split(/\n\s*\n/)
+    .map((para) => `<p>${para.trim().replace(/\n/g, '<br/>')}</p>`)
+    .filter((p) => p !== '<p></p>')
+    .join('');
 }
 
 // ── Property group rendering — Elementor-style with section header bars ─

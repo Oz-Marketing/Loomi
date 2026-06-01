@@ -15,6 +15,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
+import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import type { Contact } from '@/lib/contacts/types';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
@@ -183,6 +184,10 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
 
   const accountKey = emailDraft?.accountKeys[0] || smsDraft?.accountKeys[0] || '';
   const account = accountKey ? accounts[accountKey] : null;
+  // Source sub-account's custom fields — feeds both email + SMS
+  // evaluateFilter calls below so saved audiences referencing custom
+  // keys resolve correctly across both rails.
+  const { fields: filterableFields } = useFilterableFields(accountKey || null);
 
   useEffect(() => {
     if (!accountKey) return;
@@ -268,7 +273,7 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
       matched = sendable.filter((c) => members.has(c.id));
     } else {
       const filter = emailDraft.sourceFilter ? parseFilterDefinition(emailDraft.sourceFilter) : null;
-      matched = filter ? evaluateFilter(sendable, filter) : sendable;
+      matched = filter ? evaluateFilter(sendable, filter, filterableFields) : sendable;
     }
     return matched.map((c) => ({
       contactId: String(c.id).trim(),
@@ -276,7 +281,7 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
       email: String(c.email || '').trim(),
       fullName: String(c.fullName || '').trim(),
     }));
-  }, [emailDraft, contacts, accountKey, listMembersById]);
+  }, [emailDraft, contacts, accountKey, listMembersById, filterableFields]);
 
   const smsRecipients = useMemo(() => {
     if (!smsDraft) return [] as Array<{ contactId: string; accountKey: string; phone: string; fullName: string }>;
@@ -293,7 +298,7 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
       matched = sendable.filter((c) => members.has(c.id));
     } else {
       const filter = smsDraft.sourceFilter ? parseFilterDefinition(smsDraft.sourceFilter) : null;
-      matched = filter ? evaluateFilter(sendable, filter) : sendable;
+      matched = filter ? evaluateFilter(sendable, filter, filterableFields) : sendable;
     }
     return matched.map((c) => ({
       contactId: String(c.id).trim(),
@@ -301,7 +306,7 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
       phone: normalizePhoneNumber(String(c.phone || '')),
       fullName: String(c.fullName || '').trim(),
     }));
-  }, [smsDraft, contacts, accountKey, listMembersById]);
+  }, [smsDraft, contacts, accountKey, listMembersById, filterableFields]);
 
   async function handleSchedule() {
     if (!emailDraft || !smsDraft) return;

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Contact } from '@/lib/contacts/types';
 import { evaluateFilter } from '@/lib/smart-list-engine';
+import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import {
   ArrowPathIcon,
@@ -102,6 +103,14 @@ export function EmailCampaignModal({
   accountKey = null,
   onRequestSmsModal,
 }: EmailCampaignModalProps) {
+  // Pull the source sub-account's custom fields so saved audiences
+  // that reference custom keys evaluate to the right recipient count
+  // in the modal's preview. Only meaningful when a single account is
+  // in scope; otherwise null → built-ins only.
+  const singleScopedAccountKey =
+    accountKey || (selectedAccountKeys?.length === 1 ? selectedAccountKeys[0] : null);
+  const { fields: filterableFields } = useFilterableFields(singleScopedAccountKey);
+
   const [step, setStep] = useState<'source' | 'compose'>('source');
   const [sourceType, setSourceType] = useState<EmailCampaignSourceType>('template-library');
   const [campaignName, setCampaignName] = useState('');
@@ -221,8 +230,8 @@ export function EmailCampaignModal({
 
   const audienceContacts = useMemo(() => {
     if (!selectedAudience || !selectedAudience.definition) return baseContacts;
-    return evaluateFilter(baseContacts, selectedAudience.definition);
-  }, [baseContacts, selectedAudience]);
+    return evaluateFilter(baseContacts, selectedAudience.definition, filterableFields);
+  }, [baseContacts, selectedAudience, filterableFields]);
 
   const recipients = useMemo(
     () =>

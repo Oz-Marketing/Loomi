@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { parseCsv, importContacts, type ImportMapping } from '@/lib/contacts/import';
 import { CONTACT_FIELDS, IGNORE_FIELD, type ContactField } from '@/lib/contacts/normalize';
+import { listFieldsForAccount } from '@/lib/services/contact-custom-fields';
 
 // CSV upload pipeline. Three modes:
 //
@@ -80,11 +81,22 @@ export async function POST(req: NextRequest) {
 
   if (mode === 'parse') {
     const preview = parseCsv(csvText);
+
+    // Overlay declared-custom-field aliases on top of the canonical
+    // auto-map. Canonical wins — if the CSV column already matched
+    // `email`, we don't try to re-route it to a custom field even if
+    // someone's blueprint declared "email" as an alias by mistake.
+    const merged: Record<string, string> = { ...preview.suggestedMapping };
+    const customAutomap = await buildCustomFieldAutomap(accountKey, preview.headers);
+    for (const [header, customMapping] of Object.entries(customAutomap)) {
+      if (!merged[header]) merged[header] = customMapping;
+    }
+
     return NextResponse.json({
       headers: preview.headers,
       totalRows: preview.totalRows,
       sampleRows: preview.sampleRows,
-      suggestedMapping: preview.suggestedMapping,
+      suggestedMapping: merged,
       canonicalFields: CONTACT_FIELDS,
     });
   }
@@ -166,5 +178,58 @@ function parseMapping(raw: string): ImportMapping {
     }
   }
 
+  return out;
+}
+
+// ── Custom-field alias auto-map ────────────────────────────────
+
+/** Lower-case + strip spaces / dashes / underscores / dots so header
+ *  alias matching is forgiving across "Last Service", "last_service",
+ *  "last-service". Mirrors the canonical normaliser in normalize.ts. */
+function normaliseHeaderKey(header: string): string {
+  return header.toLowerCase().replace(/[\s_\-.]+/g, '');
+}
+
+/**
+ * Build `header → "custom:<key>"` suggestions from the account's
+ * declared custom-field csvAliases. Returns only the matches —
+ * canonical auto-map runs first and wins on collisions.
+ *
+ * First-match-wins per header so an alias declared on two blueprints
+ * doesn't ping-pong. Returns {} when the account has no custom fields.
+ */
+async function buildCustomFieldAutomap(
+  accountKey: string,
+  headers: readonly string[],
+): Promise<Record<string, string>> {
+  const fields = await listFieldsForAccount(accountKey);
+  if (fields.length === 0) return {};
+
+  // Pre-index aliases for O(1) lookup. Each entry is the normalised
+  // alias → the canonical field key it maps to.
+  const aliasIndex = new Map<string, string>();
+  for (const field of fields) {
+    const aliases = Array.isArray(field.csvAliases) ? field.csvAliases : [];
+    for (const alias of aliases) {
+      if (typeof alias !== 'string') continue;
+      const normalised = normaliseHeaderKey(alias);
+      if (!normalised) continue;
+      if (!aliasIndex.has(normalised)) aliasIndex.set(normalised, field.key);
+    }
+    // Also let the custom-field key itself auto-match when the CSV
+    // column happens to use the same identifier.
+    const keyNormalised = normaliseHeaderKey(field.key);
+    if (keyNormalised && !aliasIndex.has(keyNormalised)) {
+      aliasIndex.set(keyNormalised, field.key);
+    }
+  }
+
+  const out: Record<string, string> = {};
+  for (const header of headers) {
+    const key = normaliseHeaderKey(header);
+    if (!key) continue;
+    const customKey = aliasIndex.get(key);
+    if (customKey) out[header] = `custom:${customKey}`;
+  }
   return out;
 }

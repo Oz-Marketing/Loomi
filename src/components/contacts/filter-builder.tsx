@@ -12,6 +12,7 @@ import type {
   FilterDefinition,
   FilterGroup,
   FilterCondition,
+  FieldDefinition,
   FieldType,
   FilterOperator,
 } from '@/lib/smart-list-types';
@@ -25,6 +26,10 @@ import {
 
 interface FilterBuilderProps {
   initialDefinition?: FilterDefinition;
+  /** Merged field set (built-ins + custom fields for the active
+   *  account). Defaults to the static built-ins so callers without
+   *  account context still work. */
+  fields?: FieldDefinition[];
   onApply: (definition: FilterDefinition) => void;
   onSave: (name: string, definition: FilterDefinition) => void;
   onClose: () => void;
@@ -35,39 +40,42 @@ function uid() {
   return `f${Date.now()}-${nextId++}`;
 }
 
-function createEmptyCondition(): FilterCondition {
+function createEmptyCondition(fields: FieldDefinition[]): FilterCondition {
+  const first = fields[0] ?? FILTERABLE_FIELDS[0];
+  const firstOperator = OPERATORS_BY_TYPE[first.type][0];
   return {
     id: uid(),
-    field: FILTERABLE_FIELDS[0].key,
-    operator: 'contains',
+    field: first.key,
+    operator: firstOperator,
     value: '',
   };
 }
 
-function createEmptyGroup(): FilterGroup {
+function createEmptyGroup(fields: FieldDefinition[]): FilterGroup {
   return {
     id: uid(),
     logic: 'AND',
-    conditions: [createEmptyCondition()],
+    conditions: [createEmptyCondition(fields)],
   };
 }
 
-function createEmptyDefinition(): FilterDefinition {
+function createEmptyDefinition(fields: FieldDefinition[]): FilterDefinition {
   return {
     version: 1,
     logic: 'AND',
-    groups: [createEmptyGroup()],
+    groups: [createEmptyGroup(fields)],
   };
 }
 
 export function FilterBuilder({
   initialDefinition,
+  fields = FILTERABLE_FIELDS,
   onApply,
   onSave,
   onClose,
 }: FilterBuilderProps) {
   const [definition, setDefinition] = useState<FilterDefinition>(
-    initialDefinition ?? createEmptyDefinition(),
+    initialDefinition ?? createEmptyDefinition(fields),
   );
   const [showSave, setShowSave] = useState(false);
   const [saveName, setSaveName] = useState('');
@@ -123,7 +131,7 @@ export function FilterBuilder({
       ...prev,
       groups: prev.groups.map((g) =>
         g.id === groupId
-          ? { ...g, conditions: [...g.conditions, createEmptyCondition()] }
+          ? { ...g, conditions: [...g.conditions, createEmptyCondition(fields)] }
           : g,
       ),
     }));
@@ -143,7 +151,7 @@ export function FilterBuilder({
   function addGroup() {
     setDefinition((prev) => ({
       ...prev,
-      groups: [...prev.groups, createEmptyGroup()],
+      groups: [...prev.groups, createEmptyGroup(fields)],
     }));
   }
 
@@ -166,7 +174,7 @@ export function FilterBuilder({
     conditionId: string,
     fieldKey: string,
   ) {
-    const field = FILTERABLE_FIELDS.find((f) => f.key === fieldKey);
+    const field = fields.find((f) => f.key === fieldKey);
     const fieldType: FieldType = field?.type ?? 'text';
     const operators = OPERATORS_BY_TYPE[fieldType];
     updateCondition(groupId, conditionId, {
@@ -283,6 +291,7 @@ export function FilterBuilder({
                   <ConditionRow
                     key={condition.id}
                     condition={condition}
+                    fields={fields}
                     onFieldChange={(fieldKey) =>
                       handleFieldChange(group.id, condition.id, fieldKey)
                     }
@@ -383,6 +392,7 @@ export function FilterBuilder({
 
 function ConditionRow({
   condition,
+  fields,
   onFieldChange,
   onOperatorChange,
   onValueChange,
@@ -390,17 +400,40 @@ function ConditionRow({
   onRemove,
 }: {
   condition: FilterCondition;
+  fields: FieldDefinition[];
   onFieldChange: (fieldKey: string) => void;
   onOperatorChange: (op: FilterOperator) => void;
   onValueChange: (value: string) => void;
   onValue2Change: (value: string) => void;
   onRemove?: () => void;
 }) {
-  const field = FILTERABLE_FIELDS.find((f) => f.key === condition.field);
+  const field = fields.find((f) => f.key === condition.field);
   const fieldType: FieldType = field?.type ?? 'text';
   const operators = OPERATORS_BY_TYPE[fieldType];
   const needsValue = !NO_VALUE_OPERATORS.includes(condition.operator);
-  const needsValue2 = condition.operator === 'between';
+  const needsValue2 =
+    condition.operator === 'between' || condition.operator === 'num_between';
+
+  // Single-select with declared options gets a real <select>; the
+  // multi-style ops (is_one_of, is_not_one_of) keep the comma list
+  // input for now since the sidebar is too narrow for a chip picker.
+  const hasOptions = field?.options && field.options.length > 0;
+  const isSingleSelectInput =
+    fieldType === 'select' &&
+    condition.operator !== 'is_one_of' &&
+    condition.operator !== 'is_not_one_of' &&
+    hasOptions;
+
+  const isNumberInput =
+    fieldType === 'number' &&
+    condition.operator !== 'is_empty' &&
+    condition.operator !== 'is_not_empty';
+
+  const isDateInput =
+    fieldType === 'date' &&
+    condition.operator !== 'within_days' &&
+    condition.operator !== 'is_empty' &&
+    condition.operator !== 'is_not_empty';
 
   return (
     <div className="border border-[var(--sidebar-border)] rounded-lg p-2 space-y-1.5">
@@ -411,15 +444,19 @@ function ConditionRow({
           onChange={(e) => onFieldChange(e.target.value)}
           className="flex-1 px-2 py-1.5 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
         >
-          {FIELD_CATEGORIES.map((cat) => (
-            <optgroup key={cat.key} label={cat.label}>
-              {FILTERABLE_FIELDS.filter((f) => f.category === cat.key).map((f) => (
-                <option key={f.key} value={f.key}>
-                  {f.label}
-                </option>
-              ))}
-            </optgroup>
-          ))}
+          {FIELD_CATEGORIES.map((cat) => {
+            const inCategory = fields.filter((f) => f.category === cat.key);
+            if (inCategory.length === 0) return null;
+            return (
+              <optgroup key={cat.key} label={cat.label}>
+                {inCategory.map((f) => (
+                  <option key={f.key} value={f.key}>
+                    {f.label}
+                  </option>
+                ))}
+              </optgroup>
+            );
+          })}
         </select>
         {onRemove && (
           <button
@@ -446,25 +483,34 @@ function ConditionRow({
 
       {/* Row 3: Value input(s) */}
       {needsValue && (
-        <input
-          type={fieldType === 'date' && condition.operator !== 'within_days' ? 'date' : 'text'}
-          value={condition.value}
-          onChange={(e) => onValueChange(e.target.value)}
-          placeholder={
-            condition.operator === 'within_days'
-              ? 'days'
-              : fieldType === 'tags'
-              ? 'tag1, tag2, ...'
-              : 'value'
-          }
-          className="w-full px-2 py-1.5 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
-        />
+        isSingleSelectInput ? (
+          <select
+            value={condition.value}
+            onChange={(e) => onValueChange(e.target.value)}
+            className="w-full px-2 py-1.5 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
+          >
+            <option value="">Select…</option>
+            {field?.options?.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type={isNumberInput ? 'number' : isDateInput ? 'date' : 'text'}
+            value={condition.value}
+            onChange={(e) => onValueChange(e.target.value)}
+            placeholder={placeholderFor(fieldType, condition.operator)}
+            className="w-full px-2 py-1.5 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
+          />
+        )
       )}
       {needsValue2 && (
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] text-[var(--sidebar-muted-foreground)]">and</span>
           <input
-            type="date"
+            type={fieldType === 'number' ? 'number' : 'date'}
             value={condition.value2 || ''}
             onChange={(e) => onValue2Change(e.target.value)}
             className="flex-1 px-2 py-1.5 text-xs rounded-lg border border-[var(--sidebar-border)] bg-transparent focus:outline-none focus:border-[var(--primary)]"
@@ -473,4 +519,12 @@ function ConditionRow({
       )}
     </div>
   );
+}
+
+function placeholderFor(type: FieldType, operator: string): string {
+  if (operator === 'within_days') return 'days';
+  if (type === 'tags' || type === 'multiselect') return 'tag1, tag2, ...';
+  if (type === 'select') return 'value1, value2, ...';
+  if (type === 'number') return 'number';
+  return 'value';
 }

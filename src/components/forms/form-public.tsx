@@ -21,6 +21,40 @@ interface FormPublicProps {
    * cookie that LpTracker sets — they're picked up at submit time.
    */
   attribution?: { pageId: string; pageSlug: string };
+  /**
+   * Cloudflare Turnstile public site key. When set, the form renders
+   * a Turnstile widget that produces a token; the server-side
+   * submit pipeline verifies the token before processing. Null = no
+   * widget renders (honeypot-only spam defense). The server's
+   * `isTurnstileConfigured()` check is the source of truth for
+   * whether a token is required — this prop is purely for the
+   * client-side render.
+   */
+  turnstileSiteKey?: string | null;
+}
+
+const TURNSTILE_API_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+
+/** Augment window with Cloudflare's runtime — added by the api.js
+ *  script once it loads. `turnstile.render` mounts a widget into the
+ *  given container and returns a widget id we can use for `reset`. */
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (
+        container: HTMLElement | string,
+        opts: {
+          sitekey: string;
+          theme?: 'light' | 'dark' | 'auto';
+          callback?: (token: string) => void;
+          'expired-callback'?: () => void;
+          'error-callback'?: () => void;
+        },
+      ) => string;
+      reset: (widgetIdOrContainer?: string | HTMLElement) => void;
+      remove: (widgetIdOrContainer: string | HTMLElement) => void;
+    };
+  }
 }
 
 interface SubmitResponse {
@@ -50,12 +84,108 @@ type Phase = 'idle' | 'submitting' | 'success' | 'error';
  * When in embed mode we also broadcast our scroll height to the parent
  * window so the iframe loader can match its height to ours.
  */
-export function FormPublic({ slug, template, embed, attribution }: FormPublicProps) {
+export function FormPublic({
+  slug,
+  template,
+  embed,
+  attribution,
+  turnstileSiteKey,
+}: FormPublicProps) {
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
   const [topError, setTopError] = React.useState<string | null>(null);
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
+  const [turnstileToken, setTurnstileToken] = React.useState<string | null>(null);
   const rootRef = React.useRef<HTMLDivElement>(null);
+  const turnstileContainerRef = React.useRef<HTMLDivElement>(null);
+  const turnstileWidgetIdRef = React.useRef<string | null>(null);
+
+  // Mount the Turnstile widget once api.js has loaded. We load the
+  // script once per page (guarded by a data attribute) and render in
+  // explicit mode so we can reset after a failed submission instead
+  // of forcing a page refresh.
+  React.useEffect(() => {
+    if (!turnstileSiteKey || typeof window === 'undefined') return;
+
+    let cancelled = false;
+    const mount = () => {
+      if (cancelled) return;
+      if (!window.turnstile || !turnstileContainerRef.current) return;
+      // Defensive: if a previous mount already rendered into this
+      // container (HMR), remove it before re-rendering.
+      if (turnstileWidgetIdRef.current) {
+        try {
+          window.turnstile.remove(turnstileWidgetIdRef.current);
+        } catch {
+          /* widget already gone */
+        }
+      }
+      turnstileWidgetIdRef.current = window.turnstile.render(
+        turnstileContainerRef.current,
+        {
+          sitekey: turnstileSiteKey,
+          callback: (token) => setTurnstileToken(token),
+          'expired-callback': () => setTurnstileToken(null),
+          'error-callback': () => setTurnstileToken(null),
+        },
+      );
+    };
+
+    if (window.turnstile) {
+      mount();
+    } else {
+      const existing = document.querySelector<HTMLScriptElement>(
+        `script[data-loomi-turnstile="1"]`,
+      );
+      if (existing) {
+        // Script tag already injected by a sibling form (multi-form
+        // landing page). Wait for the global to appear.
+        const poll = setInterval(() => {
+          if (window.turnstile) {
+            clearInterval(poll);
+            mount();
+          }
+        }, 50);
+        return () => {
+          cancelled = true;
+          clearInterval(poll);
+        };
+      }
+      const script = document.createElement('script');
+      script.src = TURNSTILE_API_SRC;
+      script.async = true;
+      script.defer = true;
+      script.dataset.loomiTurnstile = '1';
+      script.onload = mount;
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      cancelled = true;
+      if (turnstileWidgetIdRef.current && window.turnstile) {
+        try {
+          window.turnstile.remove(turnstileWidgetIdRef.current);
+        } catch {
+          /* widget already gone */
+        }
+        turnstileWidgetIdRef.current = null;
+      }
+    };
+  }, [turnstileSiteKey]);
+
+  // Reset the widget whenever the form returns to an idle state after
+  // a failed submission — Turnstile tokens are single-use, so the next
+  // submit needs a fresh one.
+  React.useEffect(() => {
+    if (phase !== 'error') return;
+    if (!turnstileWidgetIdRef.current || !window.turnstile) return;
+    try {
+      window.turnstile.reset(turnstileWidgetIdRef.current);
+    } catch {
+      /* widget gone */
+    }
+    setTurnstileToken(null);
+  }, [phase]);
 
   // postMessage height broadcasts — only run in embed mode. Mutation
   // observer + window resize cover the typical reasons the form's
@@ -93,6 +223,20 @@ export function FormPublic({ slug, template, embed, attribution }: FormPublicPro
     setFieldErrors({});
 
     const formData = new FormData(event.currentTarget);
+
+    // Turnstile token. The widget renders a hidden input named
+    // `cf-turnstile-response` that FormData picks up automatically,
+    // but we set it explicitly here too in case the user submitted
+    // via Enter before the widget's hidden input was injected — the
+    // state value is the source of truth after the callback fires.
+    if (turnstileSiteKey) {
+      if (!turnstileToken) {
+        setPhase('error');
+        setTopError('Please complete the verification widget before submitting.');
+        return;
+      }
+      formData.set('cf-turnstile-response', turnstileToken);
+    }
 
     // Attach LP attribution (id + slug from React context) and UTMs
     // (from the loomi_lp_utm cookie LpTracker maintains) as hidden
@@ -227,6 +371,22 @@ export function FormPublic({ slug, template, embed, attribution }: FormPublicPro
         />
 
         <FormRenderer template={template} options={{ errors: fieldErrors }} />
+
+        {turnstileSiteKey && (
+          <div
+            style={{
+              maxWidth: `${template.settings.contentWidth}px`,
+              margin: '0 auto 16px',
+              padding: '0 16px',
+              display: 'flex',
+              justifyContent: 'center',
+            }}
+          >
+            {/* Cloudflare renders the widget into this div after
+                api.js loads. Container is empty server-side. */}
+            <div ref={turnstileContainerRef} />
+          </div>
+        )}
 
         {topError && (
           <div

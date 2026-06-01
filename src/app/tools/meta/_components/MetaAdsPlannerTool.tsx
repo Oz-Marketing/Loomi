@@ -3681,13 +3681,26 @@ function TotalAllocationHeader({ plan }: { plan: PacerPlan }) {
   );
   const totalActual = totalBase + totalAdded;
   if (totalActual === 0) return null;
-  const totalGross = Math.round((totalActual / MARKUP) * 100) / 100;
+  // Match BudgetPanel exactly so the total bar agrees with the per-source
+  // cards: per-account markup, and carryover folded into each source's spend
+  // target (target = goal × markup + carryover). The total budget is the SUM of
+  // the two cards' targets — applying an over/under carryover therefore grows
+  // the total allocation cap the same way it grows the source card it lands in.
+  const effMarkup =
+    plan.markup != null && Number.isFinite(plan.markup) && plan.markup > 0
+      ? plan.markup
+      : MARKUP;
+  const totalGross = Math.round((totalActual / effMarkup) * 100) / 100;
   const baseGoal = num(plan.baseBudgetGoal);
   const addedGoal = num(plan.addedBudgetGoal);
-  const combinedGoal =
-    baseGoal != null || addedGoal != null ? (baseGoal ?? 0) + (addedGoal ?? 0) : null;
+  const baseCarry = num(plan.baseCarryover) ?? 0;
+  const addedCarry = num(plan.addedCarryover) ?? 0;
+  const baseTarget = baseGoal != null ? baseGoal * effMarkup + baseCarry : null;
+  const addedTarget = addedGoal != null ? addedGoal * effMarkup + addedCarry : null;
   const combinedActualBudget =
-    combinedGoal != null ? Math.round(combinedGoal * MARKUP * 100) / 100 : null;
+    baseTarget != null || addedTarget != null
+      ? Math.round(((baseTarget ?? 0) + (addedTarget ?? 0)) * 100) / 100
+      : null;
   const allocPct =
     combinedActualBudget != null && combinedActualBudget > 0
       ? (totalActual / combinedActualBudget) * 100

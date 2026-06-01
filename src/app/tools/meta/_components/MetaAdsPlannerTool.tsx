@@ -10663,7 +10663,10 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                   const appliedBase = num(plan.baseCarryover);
                   const appliedAdded = num(plan.addedCarryover);
                   const applied = appliedBase != null || appliedAdded != null;
-                  if (!applied && (!prior || !prior.exceedsThreshold || carryoverDismissed)) {
+                  // Always surface an unapplied prior over/under so you can
+                  // decide whether to fold it in — even below the threshold.
+                  // Only hide when there's nothing meaningful to show.
+                  if (!applied && (!prior || Math.abs(prior.variance) < 0.005)) {
                     return null;
                   }
                   const fromLabel = fmtPeriodShort(shiftPeriod(period, -1));
@@ -10695,10 +10698,55 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                       </div>
                     );
                   }
-                  // Not applied — show the prompt for a flagged prior month.
+                  // Not applied — surface the prior month's over/under.
                   const variance = prior!.variance;
                   const under = variance < 0;
                   const carry = prior!.carryover;
+                  // Prominent (loud amber) only when it crosses the threshold and
+                  // hasn't been dismissed; otherwise a quiet, always-visible line.
+                  const prominent = prior!.exceedsThreshold && !carryoverDismissed;
+                  if (!prominent) {
+                    return (
+                      <div className="flex items-center justify-between gap-3 flex-wrap rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-4 py-2.5">
+                        <div className="flex items-center gap-2 min-w-0 text-xs text-[var(--muted-foreground)]">
+                          <ScaleIcon className="w-3.5 h-3.5 flex-shrink-0" />
+                          <span>
+                            <span className="font-semibold text-[var(--foreground)]">
+                              {fromLabel}
+                            </span>{' '}
+                            {under ? 'underspent' : 'overspent'} by{' '}
+                            <span className="font-semibold text-[var(--foreground)]">
+                              {fmt(Math.abs(variance))}
+                            </span>{' '}
+                            vs target.
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <select
+                            value={carryoverBucket}
+                            onChange={(e) =>
+                              setCarryoverBucket(e.target.value === 'added' ? 'added' : 'base')
+                            }
+                            className="px-2 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--input)] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)]"
+                            aria-label="Carryover bucket"
+                          >
+                            <option value="base">Base</option>
+                            <option value="added">Added</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => handleApplyCarryover(carryoverBucket, false)}
+                            disabled={applyingCarryover}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-60 disabled:cursor-not-allowed"
+                          >
+                            {applyingCarryover
+                              ? 'Applying…'
+                              : `Apply ${carry >= 0 ? '+' : '−'}${fmt(Math.abs(carry))}`}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
                   return (
                     <div
                       className="flex items-center justify-between gap-3 flex-wrap rounded-xl border px-4 py-3"

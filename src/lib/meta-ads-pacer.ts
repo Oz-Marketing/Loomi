@@ -412,10 +412,16 @@ export async function getPriorOverUnder(
 }
 
 /**
- * Apply (or clear) a carryover into a live month's bucket. The amount is
- * recomputed server-side from the prior month's settled over/under so it
- * can't be tampered with; `clear` removes it. Writes only the carryover
- * column — never the typed budget goal.
+ * Apply (or clear) the PRIOR month's over/under as a carryover into a live
+ * month's bucket (the Phase 1 planner banner). The amount is recomputed
+ * server-side from the prior month's settled over/under so it can't be
+ * tampered with; `clear` removes it.
+ *
+ * The ledger (MetaAdsPacerCarryoverApplication) is the source of truth: this
+ * writes a prior→period ledger row and then recomputes the period's
+ * baseCarryover/addedCarryover columns (a derived cache the pacing math reads).
+ * Routing the banner through the same ledger as the Reconciliation view keeps
+ * the two in sync and prevents the prior month being double-counted.
  */
 export async function setCarryover(
   accountKey: string,
@@ -425,25 +431,65 @@ export async function setCarryover(
   clear: boolean,
   userId: string | null,
 ): Promise<{ applied: number }> {
-  let amount = 0;
-  if (!clear) {
-    const prior = await getPriorOverUnder(accountKey, period, userId);
-    if (!prior) throw new Error('No settled prior month to carry over from.');
-    amount = Math.round(prior.carryover * 100) / 100;
-  }
-  const value = clear ? null : amount.toFixed(2);
-  // Exclusive: the combined over/under lands in exactly ONE bucket, so set the
-  // chosen bucket and clear the other (prevents double-counting on re-apply).
-  const data = {
-    baseCarryover: clear ? null : bucket === 'base' ? value : null,
-    addedCarryover: clear ? null : bucket === 'added' ? value : null,
-  };
-  await prisma.metaAdsPacerPeriodBudget.upsert({
-    where: { planId_period: { planId, period } },
-    create: { planId, period, ...data },
-    update: data,
+  const prior = previousPeriod(period);
+  // Clear any existing prior→period application first — covers both an explicit
+  // clear and a bucket switch (re-apply lands in the newly chosen bucket).
+  await prisma.metaAdsPacerCarryoverApplication.deleteMany({
+    where: { planId, sourceMonth: prior, targetMonth: period },
   });
-  return { applied: clear ? 0 : amount };
+  let applied = 0;
+  if (!clear) {
+    const po = await getPriorOverUnder(accountKey, period, userId);
+    if (!po) throw new Error('No settled prior month to carry over from.');
+    applied = Math.round(po.carryover * 100) / 100;
+    await prisma.metaAdsPacerCarryoverApplication.create({
+      data: {
+        planId,
+        bucket,
+        sourceMonth: prior,
+        targetMonth: period,
+        amount: applied.toFixed(2),
+        appliedByUserId: userId,
+      },
+    });
+  }
+  await recomputeCarryoverColumns(planId, period);
+  return { applied };
+}
+
+/**
+ * Recompute a target month's baseCarryover/addedCarryover columns from the
+ * ledger (Σ applied amounts per bucket landing in that month). Called after any
+ * ledger mutation so the cached columns the pacing math reads stay correct.
+ */
+async function recomputeCarryoverColumns(
+  planId: string,
+  targetMonth: string,
+): Promise<void> {
+  const entries = await prisma.metaAdsPacerCarryoverApplication.findMany({
+    where: { planId, targetMonth },
+    select: { bucket: true, amount: true },
+  });
+  let base = 0;
+  let added = 0;
+  for (const e of entries) {
+    const a = Number(e.amount ?? 0);
+    if (isNaN(a)) continue;
+    if (e.bucket === 'added') added += a;
+    else base += a;
+  }
+  const baseVal = base !== 0 ? base.toFixed(2) : null;
+  const addedVal = added !== 0 ? added.toFixed(2) : null;
+  await prisma.metaAdsPacerPeriodBudget.upsert({
+    where: { planId_period: { planId, period: targetMonth } },
+    create: {
+      planId,
+      period: targetMonth,
+      baseCarryover: baseVal,
+      addedCarryover: addedVal,
+    },
+    update: { baseCarryover: baseVal, addedCarryover: addedVal },
+  });
 }
 
 /** Re-snapshot a period and clear any reopen flag (manual / re-freeze). */
@@ -687,6 +733,332 @@ export async function fetchYearSummary(
     spendTarget: targetByPeriod.get(period) ?? 0,
     actual: actualByPeriod.get(period) ?? 0,
   }));
+}
+
+// ─── Year reconciliation (Phase 2b) ─────────────────────────────────────────
+
+export interface ReconciliationMonth {
+  period: string; // YYYY-MM
+  state: MonthState;
+  /** No tracked ads — actual comes from the backfilled historicalActual. */
+  isBackfilled: boolean;
+  /** A client budget (target) is set for this month. */
+  hasTarget: boolean;
+  /** Actual spend data exists (tracked ads or a backfilled figure). */
+  hasActual: boolean;
+  clientBudget: number; // gross (base + added) client budget
+  spendTarget: number; // clientBudget × markup — the variance basis
+  actual: number; // Σ pacerActual, or historicalActual for backfilled months
+  variance: number; // actual − spendTarget (>0 overspent, <0 underspent)
+  carryover: number; // −variance (>0 = "spend this much more", <0 = "less")
+  exceedsThreshold: boolean;
+  appliedOut: number; // Σ ledger amount sourced FROM this month (consumed)
+  unapplied: number; // carryover − appliedOut (still reconcilable)
+  appliedIn: number; // Σ ledger amount applied INTO this month
+}
+
+export interface YearReconciliation {
+  year: number;
+  markup: number;
+  /** The live month carryovers land in; '' when the year has no live month. */
+  targetPeriod: string;
+  months: ReconciliationMonth[];
+  ytdVariance: number; // Σ variance over settled months before the target
+  ytdCarryover: number; // Σ carryover over settled months before the target
+  ytdUnapplied: number; // Σ unapplied over settled months before the target
+  appliedThisMonth: { base: number; added: number; total: number };
+}
+
+/**
+ * Per-month over/under for a calendar year, enriched for the Reconciliation
+ * view: tracked months use Σ pacerActual vs (base + added) × markup;
+ * pre-tool months use the backfilled historicalActual vs the client budget
+ * entered into baseBudgetGoal × markup. Each month also carries how much of its
+ * over/under has already been applied (consumed) via the ledger, so the UI can
+ * offer single + apply-all actions and show a YTD net still to reconcile.
+ *
+ * Reads live tables (not frozen snapshots) so historical targets stay editable
+ * and the numbers match the Over/Under tab. Variance basis is the
+ * margin-adjusted spend target, never the gross client budget.
+ */
+export async function getYearReconciliation(
+  accountKey: string,
+  year: number,
+  _userId: string | null,
+): Promise<YearReconciliation> {
+  const plan = await getOrCreatePlan(accountKey);
+  const tz = await accountTimeZone(accountKey);
+  const account = await prisma.account.findUnique({
+    where: { key: accountKey },
+    select: { markup: true },
+  });
+  const markup =
+    account?.markup != null &&
+    Number.isFinite(account.markup) &&
+    account.markup > 0
+      ? account.markup
+      : DEFAULT_MARKUP;
+
+  const curPeriod = zonedTodayIso(Date.now(), tz).slice(0, 7);
+  const curYear = Number(curPeriod.slice(0, 4));
+  // Months in scope: Jan → current month (this year), else all 12 (past year).
+  const lastMonth = year < curYear ? 12 : year > curYear ? 0 : Number(curPeriod.slice(5, 7));
+  const periods: string[] = [];
+  for (let m = 1; m <= lastMonth; m++) {
+    periods.push(`${year}-${String(m).padStart(2, '0')}`);
+  }
+  const targetPeriod = year === curYear ? curPeriod : '';
+
+  if (periods.length === 0) {
+    return {
+      year,
+      markup,
+      targetPeriod,
+      months: [],
+      ytdVariance: 0,
+      ytdCarryover: 0,
+      ytdUnapplied: 0,
+      appliedThisMonth: { base: 0, added: 0, total: 0 },
+    };
+  }
+
+  const [budgets, adRows, ledger] = await Promise.all([
+    prisma.metaAdsPacerPeriodBudget.findMany({
+      where: { planId: plan.id, period: { in: periods } },
+      select: {
+        period: true,
+        baseBudgetGoal: true,
+        addedBudgetGoal: true,
+        historicalActual: true,
+      },
+    }),
+    prisma.metaAdsPacerAd.findMany({
+      where: { planId: plan.id, period: { in: periods } },
+      select: { period: true, pacerActual: true },
+    }),
+    prisma.metaAdsPacerCarryoverApplication.findMany({
+      where: {
+        planId: plan.id,
+        OR: [{ sourceMonth: { in: periods } }, { targetMonth: { in: periods } }],
+      },
+      select: { bucket: true, sourceMonth: true, targetMonth: true, amount: true },
+    }),
+  ]);
+
+  const budgetByPeriod = new Map(budgets.map((b) => [b.period, b]));
+  const adCountByPeriod = new Map<string, number>();
+  const actualByPeriod = new Map<string, number>();
+  for (const a of adRows) {
+    adCountByPeriod.set(a.period, (adCountByPeriod.get(a.period) ?? 0) + 1);
+    const n = Number(a.pacerActual ?? 0);
+    if (!isNaN(n)) actualByPeriod.set(a.period, (actualByPeriod.get(a.period) ?? 0) + n);
+  }
+  const appliedOutByPeriod = new Map<string, number>();
+  const appliedInByPeriod = new Map<string, number>();
+  for (const e of ledger) {
+    const amt = Number(e.amount ?? 0);
+    if (isNaN(amt)) continue;
+    appliedOutByPeriod.set(e.sourceMonth, (appliedOutByPeriod.get(e.sourceMonth) ?? 0) + amt);
+    appliedInByPeriod.set(e.targetMonth, (appliedInByPeriod.get(e.targetMonth) ?? 0) + amt);
+  }
+
+  const months: ReconciliationMonth[] = periods.map((period) => {
+    const b = budgetByPeriod.get(period);
+    const tracked = (adCountByPeriod.get(period) ?? 0) > 0;
+    const base = Number(b?.baseBudgetGoal ?? 0);
+    const added = Number(b?.addedBudgetGoal ?? 0);
+    const clientBudget = (isNaN(base) ? 0 : base) + (isNaN(added) ? 0 : added);
+    const histActual = b?.historicalActual != null ? Number(b.historicalActual) : null;
+    const isBackfilled = !tracked && histActual != null && !isNaN(histActual);
+    const actual = tracked
+      ? actualByPeriod.get(period) ?? 0
+      : isBackfilled
+        ? (histActual as number)
+        : 0;
+    const hasActual = tracked ? actualByPeriod.has(period) : isBackfilled;
+    const spendTarget = clientBudget * markup;
+    const variance = actual - spendTarget;
+    const carryover = -variance;
+    const appliedOut = appliedOutByPeriod.get(period) ?? 0;
+    return {
+      period,
+      state: monthState(period, tz),
+      isBackfilled,
+      hasTarget: clientBudget > 0,
+      hasActual,
+      clientBudget,
+      spendTarget,
+      actual,
+      variance,
+      carryover,
+      exceedsThreshold: Math.abs(variance) >= CARRYOVER_THRESHOLD,
+      appliedOut,
+      unapplied: carryover - appliedOut,
+      appliedIn: appliedInByPeriod.get(period) ?? 0,
+    };
+  });
+
+  // YTD aggregates over SETTLED months strictly before the live target month —
+  // the live month's own variance is still in-progress, not reconcilable.
+  const settled = months.filter(
+    (m) =>
+      (targetPeriod ? m.period < targetPeriod : true) &&
+      (m.hasActual || m.hasTarget),
+  );
+  const ytdVariance = settled.reduce((s, m) => s + m.variance, 0);
+  const ytdCarryover = settled.reduce((s, m) => s + m.carryover, 0);
+  const ytdUnapplied = settled.reduce((s, m) => s + m.unapplied, 0);
+
+  let appliedBase = 0;
+  let appliedAdded = 0;
+  if (targetPeriod) {
+    for (const e of ledger) {
+      if (e.targetMonth !== targetPeriod) continue;
+      const amt = Number(e.amount ?? 0);
+      if (isNaN(amt)) continue;
+      if (e.bucket === 'added') appliedAdded += amt;
+      else appliedBase += amt;
+    }
+  }
+
+  return {
+    year,
+    markup,
+    targetPeriod,
+    months,
+    ytdVariance,
+    ytdCarryover,
+    ytdUnapplied,
+    appliedThisMonth: {
+      base: appliedBase,
+      added: appliedAdded,
+      total: appliedBase + appliedAdded,
+    },
+  };
+}
+
+/**
+ * Apply one settled month's unapplied over/under into the target (live) month's
+ * bucket, recording it in the ledger and refreshing the cached carryover
+ * columns. Idempotent — a month with nothing left to apply is a no-op.
+ */
+export async function applyCarryover(
+  accountKey: string,
+  planId: string,
+  sourceMonth: string,
+  targetMonth: string,
+  bucket: 'base' | 'added',
+  userId: string | null,
+): Promise<{ applied: number }> {
+  const recon = await getYearReconciliation(
+    accountKey,
+    Number(sourceMonth.slice(0, 4)),
+    userId,
+  );
+  const m = recon.months.find((x) => x.period === sourceMonth);
+  if (!m) throw new Error('Month not found for carryover.');
+  const amount = Math.round(m.unapplied * 100) / 100;
+  if (Math.abs(amount) < 0.005) return { applied: 0 };
+  await prisma.metaAdsPacerCarryoverApplication.create({
+    data: {
+      planId,
+      bucket,
+      sourceMonth,
+      targetMonth,
+      amount: amount.toFixed(2),
+      appliedByUserId: userId,
+    },
+  });
+  await recomputeCarryoverColumns(planId, targetMonth);
+  return { applied: amount };
+}
+
+/**
+ * Apply every settled month's unapplied over/under (before the target month)
+ * into the target month's bucket in one pass — the "correct the whole year"
+ * action. Returns the net dollars applied and how many months contributed.
+ */
+export async function applyAllUnapplied(
+  accountKey: string,
+  planId: string,
+  targetMonth: string,
+  bucket: 'base' | 'added',
+  userId: string | null,
+): Promise<{ applied: number; count: number }> {
+  const recon = await getYearReconciliation(
+    accountKey,
+    Number(targetMonth.slice(0, 4)),
+    userId,
+  );
+  let total = 0;
+  let count = 0;
+  for (const m of recon.months) {
+    if (!m.period || m.period >= targetMonth) continue;
+    const amount = Math.round(m.unapplied * 100) / 100;
+    if (Math.abs(amount) < 0.005) continue;
+    await prisma.metaAdsPacerCarryoverApplication.create({
+      data: {
+        planId,
+        bucket,
+        sourceMonth: m.period,
+        targetMonth,
+        amount: amount.toFixed(2),
+        appliedByUserId: userId,
+      },
+    });
+    total += amount;
+    count++;
+  }
+  if (count > 0) await recomputeCarryoverColumns(planId, targetMonth);
+  return { applied: total, count };
+}
+
+/**
+ * Undo carryover applications landing in `targetMonth`. With `sourceMonth`,
+ * removes just that month's application; without it, clears them all. Then
+ * refreshes the cached columns.
+ */
+export async function unapplyCarryover(
+  planId: string,
+  targetMonth: string,
+  sourceMonth: string | null,
+): Promise<void> {
+  await prisma.metaAdsPacerCarryoverApplication.deleteMany({
+    where: {
+      planId,
+      targetMonth,
+      ...(sourceMonth ? { sourceMonth } : {}),
+    },
+  });
+  await recomputeCarryoverColumns(planId, targetMonth);
+}
+
+/**
+ * Set (or clear) the client budget / target for a pre-tool month. Stored in
+ * baseBudgetGoal (combined — backfilled months aren't bucket-split), per the
+ * historicalActual design. Only meaningful for months with no tracked ads;
+ * tracked months get their target from the planner.
+ */
+export async function setHistoricalTarget(
+  planId: string,
+  period: string,
+  clientBudget: number | null,
+): Promise<void> {
+  const value =
+    clientBudget != null && Number.isFinite(clientBudget) && clientBudget > 0
+      ? clientBudget.toFixed(2)
+      : null;
+  await prisma.metaAdsPacerPeriodBudget.upsert({
+    where: { planId_period: { planId, period } },
+    create: { planId, period, baseBudgetGoal: value },
+    update: { baseBudgetGoal: value },
+  });
+}
+
+/** The current live pacing month (YYYY-MM) in the account's timezone. */
+export async function getCurrentPacerPeriod(accountKey: string): Promise<string> {
+  const tz = await accountTimeZone(accountKey);
+  return zonedTodayIso(Date.now(), tz).slice(0, 7);
 }
 
 /** Lists periods that have at least one ad or one budget row. */

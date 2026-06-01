@@ -8749,6 +8749,454 @@ function SummaryPanel({ plan }: { plan: PacerPlan }) {
   );
 }
 
+// ─── Reconciliation panel (Phase 2b) ───────────────────────────────────────
+interface ReconMonth {
+  period: string;
+  state: 'current' | 'grace' | 'closed' | 'future';
+  isBackfilled: boolean;
+  hasTarget: boolean;
+  hasActual: boolean;
+  clientBudget: number;
+  spendTarget: number;
+  actual: number;
+  variance: number;
+  carryover: number;
+  exceedsThreshold: boolean;
+  appliedOut: number;
+  unapplied: number;
+  appliedIn: number;
+}
+interface ReconData {
+  year: number;
+  markup: number;
+  targetPeriod: string;
+  months: ReconMonth[];
+  ytdVariance: number;
+  ytdCarryover: number;
+  ytdUnapplied: number;
+  appliedThisMonth: { base: number; added: number; total: number };
+}
+
+/**
+ * Year reconciliation: per-month over/under (tracked + backfilled), a YTD net
+ * still to reconcile, and apply/undo controls. Applying rolls a month's (or all
+ * months') over/under into the live month's bucket via the ledger, correcting
+ * the account's running annual variance.
+ */
+function ReconciliationPanel({ accountKey }: { accountKey: string }) {
+  const [year, setYear] = useState<number>(() =>
+    Number(currentPeriod().slice(0, 4)),
+  );
+  const [data, setData] = useState<ReconData | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [bucket, setBucket] = useState<'base' | 'added'>('base');
+  const [backfilling, setBackfilling] = useState(false);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+
+  const load = useCallback(() => {
+    setData(null);
+    setLoadError(null);
+    fetch(`/api/meta-ads-pacer/${accountKey}/reconciliation?year=${year}`)
+      .then(async (r) => {
+        if (!r.ok) {
+          const t = await r.text().catch(() => '');
+          throw new Error(`HTTP ${r.status} ${t.slice(0, 160)}`);
+        }
+        return r.json();
+      })
+      .then((json: ReconData) => setData(json))
+      .catch((err) =>
+        setLoadError(
+          err instanceof Error ? err.message : 'Failed to load reconciliation.',
+        ),
+      );
+  }, [accountKey, year]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const post = async (body: Record<string, unknown>, key: string) => {
+    setBusy(key);
+    setActionError(null);
+    try {
+      const r = await fetch(
+        `/api/meta-ads-pacer/${accountKey}/reconciliation?year=${year}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        },
+      );
+      const json = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(json?.error || `HTTP ${r.status}`);
+      setData(json as ReconData);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Action failed.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const backfill = async () => {
+    setBackfilling(true);
+    setActionError(null);
+    try {
+      const r = await fetch(
+        `/api/meta-ads-pacer/${accountKey}/backfill-history?year=${year}`,
+        { method: 'POST' },
+      );
+      const json = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(json?.error || `HTTP ${r.status}`);
+      load();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Backfill failed.');
+    } finally {
+      setBackfilling(false);
+    }
+  };
+
+  // variance > 0 = overspent (warn); < 0 = underspent (lifetime/blue).
+  const overUnder = (v: number) =>
+    Math.abs(v) < 0.005
+      ? { text: 'On target', color: 'var(--muted-foreground)' }
+      : v > 0
+        ? { text: `${fmt(v)} over`, color: COLORS.warn }
+        : { text: `${fmt(-v)} under`, color: COLORS.lifetime };
+
+  const net = data?.ytdUnapplied ?? 0;
+  const netReconciled = Math.abs(net) < 0.005;
+  const canApply = !!data?.targetPeriod && !netReconciled;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-4 mb-6 flex-wrap">
+        <h2 className="m-0 flex items-center gap-2 text-base font-bold tracking-tight text-[var(--foreground)]">
+          <CalculatorIcon className="w-4 h-4" />
+          Reconciliation
+        </h2>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)]">
+            <button
+              type="button"
+              onClick={() => setYear((y) => y - 1)}
+              className="px-2.5 py-1.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+              aria-label="Previous year"
+            >
+              <ChevronLeftIcon className="w-4 h-4" />
+            </button>
+            <span className="px-2 text-sm font-semibold text-[var(--foreground)] tabular-nums">
+              {year}
+            </span>
+            <button
+              type="button"
+              onClick={() => setYear((y) => y + 1)}
+              disabled={year >= Number(currentPeriod().slice(0, 4))}
+              className="px-2.5 py-1.5 text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-30 disabled:cursor-not-allowed"
+              aria-label="Next year"
+            >
+              <ChevronRightIcon className="w-4 h-4" />
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={backfill}
+            disabled={backfilling}
+            title="Pull account-total monthly spend from Meta for pre-tool months this year"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-50"
+          >
+            <ArrowPathIcon className={`w-3.5 h-3.5 ${backfilling ? 'animate-spin' : ''}`} />
+            {backfilling ? 'Backfilling…' : 'Backfill historical spend'}
+          </button>
+        </div>
+      </div>
+
+      {loadError ? (
+        <div className="text-center py-12 text-xs text-red-400">{loadError}</div>
+      ) : !data ? (
+        <div className="text-center py-12 text-xs text-[var(--muted-foreground)]">
+          Loading…
+        </div>
+      ) : (
+        <>
+          {/* YTD net + apply-all controls */}
+          <div className="mb-6 rounded-xl border border-[var(--border)] bg-[var(--card)] p-5 flex items-start justify-between gap-5 flex-wrap">
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                {year} net still to reconcile
+              </div>
+              <div
+                className="text-3xl font-bold tabular-nums leading-tight mt-1"
+                style={{
+                  color: netReconciled
+                    ? COLORS.success
+                    : net > 0
+                      ? COLORS.lifetime
+                      : COLORS.warn,
+                }}
+              >
+                {netReconciled
+                  ? 'Fully reconciled'
+                  : `${net > 0 ? '' : '−'}${fmt(Math.abs(net))}`}
+              </div>
+              <div className="text-xs text-[var(--muted-foreground)] mt-1">
+                {netReconciled
+                  ? 'No outstanding over/under across settled months.'
+                  : net > 0
+                    ? `Underspent overall — apply to add ${fmt(net)} to ${data.targetPeriod ? fmtPeriodLong(data.targetPeriod) : 'the live month'}.`
+                    : `Overspent overall — apply to pull ${fmt(-net)} from ${data.targetPeriod ? fmtPeriodLong(data.targetPeriod) : 'the live month'}.`}
+              </div>
+              {data.appliedThisMonth.total !== 0 && data.targetPeriod && (
+                <div className="text-[11px] text-[var(--muted-foreground)] mt-2 flex items-center gap-2 flex-wrap">
+                  <span>
+                    Applied into {fmtPeriodLong(data.targetPeriod)}:{' '}
+                    <span className="font-semibold text-[var(--foreground)] tabular-nums">
+                      {data.appliedThisMonth.total > 0 ? '+' : '−'}
+                      {fmt(Math.abs(data.appliedThisMonth.total))}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => post({ type: 'unapply' }, 'clear-all')}
+                    disabled={busy === 'clear-all'}
+                    className="text-[var(--primary)] hover:underline disabled:opacity-50"
+                  >
+                    {busy === 'clear-all' ? 'Clearing…' : 'Clear all'}
+                  </button>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col items-end gap-2">
+              <div className="flex items-center rounded-lg border border-[var(--border)] bg-[var(--background)] p-1">
+                {(['base', 'added'] as const).map((b) => (
+                  <button
+                    key={b}
+                    type="button"
+                    onClick={() => setBucket(b)}
+                    className={`px-3 py-1 text-[11px] font-medium rounded transition-colors ${
+                      bucket === b
+                        ? 'bg-[var(--primary)] text-white'
+                        : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    {b === 'base' ? 'Base' : 'Added'}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => post({ type: 'apply-all', bucket }, 'apply-all')}
+                disabled={!canApply || busy === 'apply-all'}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3.5 py-2 text-[11px] font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {busy === 'apply-all'
+                  ? 'Applying…'
+                  : `Apply all unapplied → ${bucket === 'base' ? 'Base' : 'Added'}`}
+              </button>
+              <span className="text-[10px] text-[var(--muted-foreground)] text-right max-w-[200px]">
+                Carryover lands in the {bucket === 'base' ? 'Base' : 'Added'} bucket of the live month.
+              </span>
+            </div>
+          </div>
+
+          {actionError && (
+            <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-400">
+              {actionError}
+            </div>
+          )}
+
+          {/* Per-month table */}
+          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-[var(--border)] text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                  <th className="text-left font-semibold px-3 py-2.5">Month</th>
+                  <th className="text-right font-semibold px-3 py-2.5">Spend Target</th>
+                  <th className="text-right font-semibold px-3 py-2.5">Actual</th>
+                  <th className="text-right font-semibold px-3 py-2.5">Over / Under</th>
+                  <th className="text-right font-semibold px-3 py-2.5 w-[200px]">Reconcile</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.months.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="px-3 py-8 text-center text-[var(--muted-foreground)]">
+                      No months to show for {year} yet.
+                    </td>
+                  </tr>
+                )}
+                {data.months.map((m) => {
+                  const isLive = m.period === data.targetPeriod;
+                  const noData = !m.hasActual && !m.hasTarget;
+                  const needsTarget = m.isBackfilled && !m.hasTarget;
+                  const applied = Math.abs(m.appliedOut) >= 0.005;
+                  const reconcilable =
+                    !isLive &&
+                    m.period < data.targetPeriod &&
+                    Math.abs(m.unapplied) >= 0.005 &&
+                    m.hasActual &&
+                    m.hasTarget;
+                  const ou = overUnder(m.variance);
+                  return (
+                    <tr
+                      key={m.period}
+                      className={`border-b border-[var(--border)] last:border-0 ${
+                        isLive ? 'bg-[var(--primary)]/5' : ''
+                      }`}
+                    >
+                      <td className="px-3 py-2.5">
+                        <div className="font-semibold text-[var(--foreground)] flex items-center gap-2">
+                          {fmtPeriodLong(m.period)}
+                          {isLive && (
+                            <span className="text-[9px] font-medium uppercase tracking-wider rounded px-1.5 py-0.5 bg-[var(--primary)]/15 text-[var(--primary)]">
+                              Live
+                            </span>
+                          )}
+                          {m.isBackfilled && (
+                            <span
+                              className="text-[9px] font-medium uppercase tracking-wider rounded px-1.5 py-0.5 bg-[var(--muted)] text-[var(--muted-foreground)]"
+                              title="Pre-tool month — actual pulled from Meta account spend"
+                            >
+                              Backfilled
+                            </span>
+                          )}
+                        </div>
+                        {m.appliedIn !== 0 && (
+                          <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
+                            received {m.appliedIn > 0 ? '+' : '−'}
+                            {fmt(Math.abs(m.appliedIn))} carryover
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">
+                        {needsTarget ? (
+                          <div className="flex items-center justify-end gap-1">
+                            <span className="text-[var(--muted-foreground)]">$</span>
+                            <input
+                              value={drafts[m.period] ?? ''}
+                              onChange={(e) =>
+                                setDrafts((d) => ({ ...d, [m.period]: e.target.value }))
+                              }
+                              placeholder="budget"
+                              inputMode="decimal"
+                              className="w-20 rounded border border-[var(--border)] bg-[var(--background)] px-1.5 py-1 text-right text-xs text-[var(--foreground)]"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                post(
+                                  {
+                                    type: 'set-target',
+                                    period: m.period,
+                                    clientBudget: drafts[m.period] ?? '',
+                                  },
+                                  `target:${m.period}`,
+                                )
+                              }
+                              disabled={busy === `target:${m.period}`}
+                              className="text-[10px] text-[var(--primary)] hover:underline disabled:opacity-50"
+                            >
+                              Save
+                            </button>
+                          </div>
+                        ) : m.hasTarget ? (
+                          <>
+                            <div className="text-[var(--foreground)]">
+                              {fmt(m.spendTarget)}
+                            </div>
+                            <div className="text-[9px] text-[var(--muted-foreground)]">
+                              {fmt(m.clientBudget)} × {Math.round(data.markup * 100)}%
+                            </div>
+                          </>
+                        ) : (
+                          <span className="text-[var(--muted-foreground)]">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums text-[var(--foreground)]">
+                        {m.hasActual ? fmt(m.actual) : <span className="text-[var(--muted-foreground)]">—</span>}
+                      </td>
+                      <td className="px-3 py-2.5 text-right tabular-nums">
+                        {noData || !m.hasTarget || !m.hasActual ? (
+                          <span className="text-[var(--muted-foreground)]">—</span>
+                        ) : (
+                          <span style={{ color: ou.color }} className="font-semibold">
+                            {ou.text}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-2.5 text-right">
+                        {isLive ? (
+                          <span className="text-[10px] text-[var(--muted-foreground)]">
+                            In progress
+                          </span>
+                        ) : applied ? (
+                          <div className="flex items-center justify-end gap-2">
+                            <span
+                              className="text-[10px] font-medium"
+                              style={{ color: COLORS.success }}
+                            >
+                              Applied
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                post(
+                                  { type: 'unapply', sourceMonth: m.period },
+                                  `unapply:${m.period}`,
+                                )
+                              }
+                              disabled={busy === `unapply:${m.period}`}
+                              className="text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:underline disabled:opacity-50"
+                            >
+                              {busy === `unapply:${m.period}` ? '…' : 'Undo'}
+                            </button>
+                          </div>
+                        ) : reconcilable ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              post(
+                                { type: 'apply', sourceMonth: m.period, bucket },
+                                `apply:${m.period}`,
+                              )
+                            }
+                            disabled={!data.targetPeriod || busy === `apply:${m.period}`}
+                            className="inline-flex items-center gap-1 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/10 px-2.5 py-1 text-[10px] font-semibold text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            {busy === `apply:${m.period}` ? 'Applying…' : 'Apply'}
+                          </button>
+                        ) : noData ? (
+                          <span className="text-[10px] text-[var(--muted-foreground)]">
+                            No data
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-[var(--muted-foreground)]">
+                            —
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 text-[10px] text-[var(--muted-foreground)] leading-relaxed">
+            Over/under is measured against the margin-adjusted spend target
+            (client budget × {Math.round(data.markup * 100)}%). Applying a month
+            rolls its over/under into the live month&apos;s budget via an
+            auditable ledger entry — it never edits the original month&apos;s
+            billing record. Backfilled months pull account-total spend from Meta;
+            enter their client budget to compute a variance.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Over/Under Spend panel ────────────────────────────────────────────────
 interface YearMonthRow {
   period: string;
@@ -9697,7 +10145,7 @@ function OverviewView({
  * header gets a Pacer | Summary toggle that swaps the body content.
  */
 type MetaToolMode = 'planner' | 'pacer';
-type PacerInnerTab = 'pacer' | 'summary' | 'compare';
+type PacerInnerTab = 'pacer' | 'summary' | 'compare' | 'reconcile';
 
 export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
   const { accountKey, accounts, setAccount } = useAccount();
@@ -9763,7 +10211,9 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
       ? 'summary'
       : urlPacerTab === 'compare'
         ? 'compare'
-        : 'pacer',
+        : urlPacerTab === 'reconcile'
+          ? 'reconcile'
+          : 'pacer',
   );
 
   // Mirror state changes back into the URL (replace, not push, so the
@@ -10475,6 +10925,20 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
             <ScaleIcon className="w-3.5 h-3.5" />
             Over/Under Spend
           </button>
+          {activeKey && (
+            <button
+              type="button"
+              onClick={() => setPacerTab('reconcile')}
+              className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                pacerTab === 'reconcile'
+                  ? 'border-[var(--primary)] text-[var(--primary)]'
+                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              <CalculatorIcon className="w-3.5 h-3.5" />
+              Reconciliation
+            </button>
+          )}
         </div>
       )}
 
@@ -10899,6 +11363,8 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                 />
               ) : pacerTab === 'compare' ? (
                 <ComparePanel accountKey={activeKey} />
+              ) : pacerTab === 'reconcile' ? (
+                <ReconciliationPanel accountKey={activeKey} />
               ) : (
                 <SummaryPanel plan={plan} />
               );

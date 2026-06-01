@@ -4898,13 +4898,14 @@ function BudgetCalculatorModal({
                   ad.budgetType === 'Daily' && flightDays > 0
                     ? allocated / flightDays
                     : null;
-                // Donor rows are auto-handled (status Off / Completed Run)
-                // — their allocation locks at pacerActual regardless of mode.
-                // The mode/value controls are inert for these.
+                // Donor rows are auto-handled (status Off / Completed Run) —
+                // their allocation locks at pacerActual and is excluded from
+                // "Entered" in BOTH modes (computeAllocations / enteredSoFar
+                // aren't mode-gated). So lock + label the row in Setup too,
+                // matching mid-flight, instead of showing an editable control
+                // that's silently ignored.
                 const adIsDonor =
-                  calcMode === 'midflight' &&
-                  (ad.adStatus === 'Off' ||
-                    ad.adStatus === 'Completed Run');
+                  ad.adStatus === 'Off' || ad.adStatus === 'Completed Run';
                 // Block applying an allocation below what's already been spent;
                 // the input flag turns red and the modal-level Apply disables.
                 const underSpent =

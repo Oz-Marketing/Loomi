@@ -7357,36 +7357,6 @@ function PacerRow({
           {ad.adStatus || 'No status'}
         </span>
       </div>
-      {/* Mute alerts — inline icon toggle, its own aligned column to the left
-          of Actual. Bell = alerts on; bell-with-slash (amber) = muted. Stops
-          propagation so it doesn't expand the row. */}
-      <span className="flex items-center justify-center flex-shrink-0 w-7">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onMuteToggle();
-          }}
-          disabled={readOnly}
-          title={
-            ad.alertsMuted
-              ? 'Alerts muted for this ad — click to unmute'
-              : 'Mute pacing / dark / flight alerts for this ad'
-          }
-          aria-label={ad.alertsMuted ? 'Unmute alerts' : 'Mute alerts'}
-          className={`inline-flex items-center justify-center rounded p-1 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-            ad.alertsMuted
-              ? 'text-[#f59e0b] hover:text-[#f59e0b]/80'
-              : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-          }`}
-        >
-          {ad.alertsMuted ? (
-            <BellOffIcon className="w-4 h-4" />
-          ) : (
-            <BellIcon className="w-4 h-4" />
-          )}
-        </button>
-      </span>
       {/* Actual spend — labelled so the bare number isn't ambiguous. Fixed
           width + right-aligned so it forms a consistent column down the list. */}
       <span className="hidden sm:inline-flex items-baseline justify-end gap-1 text-[11px] tabular-nums whitespace-nowrap flex-shrink-0 w-[132px]">
@@ -7515,7 +7485,7 @@ function PacerRow({
             </div>
           </div>
         </div>
-        {/* Mute alerts now lives inline on the summary row (left of Actual),
+        {/* Mute alerts lives in the expanded-card footer (bottom-right),
             so the header just carries the Flight window. */}
         {ad.flightStart && ad.flightEnd && (
           <div className="text-right flex-shrink-0">
@@ -7931,14 +7901,17 @@ function PacerRow({
         />
       </div>
 
-      {/* Plain-English insight — same logic as the standalone calculator. */}
-      {(() => {
+      {/* Footer — plain-English insight on the left, Mute alerts toggle on the
+          right in its own area. */}
+      <div className="mt-3 pt-3 border-t border-[var(--border)] flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0 flex-1">
+          {(() => {
         if (calc.budget <= 0) return null;
         if (!calc.hasDates) return null;
         if (calc.spent >= calc.budget) {
           return (
             <p
-              className="m-0 mt-3 pt-3 border-t border-[var(--border)] text-[11px] leading-relaxed"
+              className="m-0 text-[11px] leading-relaxed"
               style={{ color: COLORS.error }}
             >
               Budget already fully spent
@@ -7951,7 +7924,7 @@ function PacerRow({
         }
         if (isLifetime) {
           return (
-            <p className="m-0 mt-3 pt-3 border-t border-[var(--border)] text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+            <p className="m-0 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
               {fmt(calc.remaining)} of the lifetime budget left across{' '}
               {fmtDaysLeft(calc.daysLeft)}. To finish on time, average ~
               {fmt(calc.recDaily)}/day.
@@ -7963,7 +7936,7 @@ function PacerRow({
         if (calc.projected > overspendThreshold) {
           return (
             <p
-              className="m-0 mt-3 pt-3 border-t border-[var(--border)] text-[11px] leading-relaxed"
+              className="m-0 text-[11px] leading-relaxed"
               style={{ color: COLORS.warn }}
             >
               At your current rate of {fmt(calc.dailyBudget)}/day you&apos;re
@@ -7977,7 +7950,7 @@ function PacerRow({
         if (calc.projected < underspendThreshold) {
           return (
             <p
-              className="m-0 mt-3 pt-3 border-t border-[var(--border)] text-[11px] leading-relaxed"
+              className="m-0 text-[11px] leading-relaxed"
               style={{ color: COLORS.lifetime }}
             >
               At your current rate you&apos;ll underspend by{' '}
@@ -7989,7 +7962,7 @@ function PacerRow({
         }
         return (
           <p
-            className="m-0 mt-3 pt-3 border-t border-[var(--border)] text-[11px] leading-relaxed"
+            className="m-0 text-[11px] leading-relaxed"
             style={{ color: COLORS.success }}
           >
             Pacing well — a small adjustment keeps you on track for{' '}
@@ -7997,6 +7970,32 @@ function PacerRow({
           </p>
         );
       })()}
+        </div>
+        {/* Mute alerts — text button in the card footer (bell = on,
+            bell-with-slash + amber = muted). */}
+        <button
+          type="button"
+          onClick={onMuteToggle}
+          disabled={readOnly}
+          title={
+            ad.alertsMuted
+              ? 'Alerts muted for this ad — click to unmute'
+              : 'Mute pacing / dark / flight alerts for this ad'
+          }
+          className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            ad.alertsMuted
+              ? 'border-[rgba(245,158,11,0.45)] bg-[rgba(245,158,11,0.12)] text-[#f59e0b]'
+              : 'border-[var(--border)] text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+          }`}
+        >
+          {ad.alertsMuted ? (
+            <BellOffIcon className="w-3.5 h-3.5" />
+          ) : (
+            <BellIcon className="w-3.5 h-3.5" />
+          )}
+          {ad.alertsMuted ? 'Alerts muted' : 'Mute alerts'}
+        </button>
+      </div>
         </>
       )}
         </div>

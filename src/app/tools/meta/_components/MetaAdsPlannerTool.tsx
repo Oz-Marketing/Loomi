@@ -10403,16 +10403,16 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
             + Pacer are account-scoped; Over/Under Spend also runs against the
             admin overview. */}
         {mode === 'pacer' && (
-          <div className="flex items-center rounded-xl border border-[var(--border)] bg-[var(--card)] p-1">
+          <div className="flex items-center gap-1 border-b border-[var(--border)]">
             {activeKey && (
               <>
                 <button
                   type="button"
                   onClick={() => setPacerTab('summary')}
-                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
                     pacerTab === 'summary'
-                      ? 'bg-[var(--primary)] text-white'
-                      : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                      ? 'border-[var(--primary)] text-[var(--primary)]'
+                      : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                   }`}
                 >
                   <TableCellsIcon className="w-3.5 h-3.5" />
@@ -10421,10 +10421,10 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                 <button
                   type="button"
                   onClick={() => setPacerTab('pacer')}
-                  className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
                     pacerTab === 'pacer'
-                      ? 'bg-[var(--primary)] text-white'
-                      : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                      ? 'border-[var(--primary)] text-[var(--primary)]'
+                      : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                   }`}
                 >
                   <AdjustmentsHorizontalIcon className="w-3.5 h-3.5" />
@@ -10435,10 +10435,10 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
             <button
               type="button"
               onClick={() => setPacerTab('compare')}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
                 pacerTab === 'compare'
-                  ? 'bg-[var(--primary)] text-white'
-                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                  ? 'border-[var(--primary)] text-[var(--primary)]'
+                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
               }`}
             >
               <ScaleIcon className="w-3.5 h-3.5" />

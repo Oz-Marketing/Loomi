@@ -10383,7 +10383,11 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
     <PacerReadOnlyContext.Provider value={!!plan?.frozen}>
     <div className="animate-fade-in-up">
       {/* Page header */}
-      <div className="page-sticky-header pad-on-scroll mb-10 flex items-center justify-between gap-4 flex-wrap">
+      <div
+        className={`page-sticky-header pad-on-scroll flex items-center justify-between gap-4 flex-wrap ${
+          mode === 'pacer' ? 'mb-6' : 'mb-10'
+        }`}
+      >
         <div className="flex items-center gap-3">
           <MetaLogoIcon className="w-8 h-8" />
           <div>
@@ -10397,55 +10401,6 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
             </p>
           </div>
         </div>
-
-        {/* Pacer page: Pacer | Summary | Over/Under Spend sub-tabs in the
-            header center, styled like the platform's primary toggle. Summary
-            + Pacer are account-scoped; Over/Under Spend also runs against the
-            admin overview. */}
-        {mode === 'pacer' && (
-          <div className="flex items-center gap-1 border-b border-[var(--border)]">
-            {activeKey && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => setPacerTab('summary')}
-                  className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                    pacerTab === 'summary'
-                      ? 'border-[var(--primary)] text-[var(--primary)]'
-                      : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                  }`}
-                >
-                  <TableCellsIcon className="w-3.5 h-3.5" />
-                  Summary
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPacerTab('pacer')}
-                  className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                    pacerTab === 'pacer'
-                      ? 'border-[var(--primary)] text-[var(--primary)]'
-                      : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                  }`}
-                >
-                  <AdjustmentsHorizontalIcon className="w-3.5 h-3.5" />
-                  Pacer
-                </button>
-              </>
-            )}
-            <button
-              type="button"
-              onClick={() => setPacerTab('compare')}
-              className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                pacerTab === 'compare'
-                  ? 'border-[var(--primary)] text-[var(--primary)]'
-                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              <ScaleIcon className="w-3.5 h-3.5" />
-              Over/Under Spend
-            </button>
-          </div>
-        )}
 
         {/* Month + general filters live up here in the title row (replacing
             the old auto-save indicator). */}
@@ -10475,6 +10430,53 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           </button>
         </div>
       </div>
+
+      {/* Pacer sub-tabs — their own full-width row, sitting between the page
+          title above and the account name + actions row below. */}
+      {mode === 'pacer' && (
+        <div className="mb-8 flex items-center gap-1 border-b border-[var(--border)]">
+          {activeKey && (
+            <>
+              <button
+                type="button"
+                onClick={() => setPacerTab('summary')}
+                className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  pacerTab === 'summary'
+                    ? 'border-[var(--primary)] text-[var(--primary)]'
+                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                <TableCellsIcon className="w-3.5 h-3.5" />
+                Summary
+              </button>
+              <button
+                type="button"
+                onClick={() => setPacerTab('pacer')}
+                className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  pacerTab === 'pacer'
+                    ? 'border-[var(--primary)] text-[var(--primary)]'
+                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                <AdjustmentsHorizontalIcon className="w-3.5 h-3.5" />
+                Pacer
+              </button>
+            </>
+          )}
+          <button
+            type="button"
+            onClick={() => setPacerTab('compare')}
+            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              pacerTab === 'compare'
+                ? 'border-[var(--primary)] text-[var(--primary)]'
+                : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+            }`}
+          >
+            <ScaleIcon className="w-3.5 h-3.5" />
+            Over/Under Spend
+          </button>
+        </div>
+      )}
 
       {/* Scope row — avatar + account name + status battery on the left;
           period + filters on the right */}

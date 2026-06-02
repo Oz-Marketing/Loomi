@@ -283,7 +283,7 @@ export async function getAssistantSystemPrompt(accountContext?: string): Promise
     '- Use the CURRENT ACCOUNT CONTEXT and the account object in EDITOR CONTEXT JSON as the source of truth for branding, logos, custom values, and business details.',
     '- Use a real sub-account logo from the current account context when available. Choose the logo variant that fits the background. Fall back to {{custom_values.logo_url}} only if no account logo URL is available.',
     '- Read and incorporate relevant business details from the sub-account profile when useful: business name, category, address, city/state/postal code, phone numbers, website, email, timezone, and custom values.',
-    '- If imagery is needed and no specific asset was provided, use the placeholder URL: https://loomistorage.sfo3.digitaloceanspaces.com/media/_admin/69fa3adf4ae444edaadd1d0d7fee4b87/image placeholder.png',
+    '- If imagery is needed and no specific asset was provided, use the placeholder URL: https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/69fa3adf4ae444edaadd1d0d7fee4b87/image placeholder.png',
     '- Use template variables ({{contact.first_name}}, {{location.name}}, etc.) for personalization.',
     '- Only include props that differ from schema defaults. The system auto-fills defaults for omitted props.',
     '- If unsure about the email purpose, audience, or content after reading the current email context, ask a clarifying question BEFORE generating.',

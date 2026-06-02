@@ -26,7 +26,7 @@ export type FieldType =
   | 'range';
 
 export const IMAGE_PLACEHOLDER =
-  'https://loomistorage.sfo3.digitaloceanspaces.com/media/_admin/69fa3adf4ae444edaadd1d0d7fee4b87/image placeholder.png';
+  'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/69fa3adf4ae444edaadd1d0d7fee4b87/image placeholder.png';
 
 export interface PropSchema {
   key: string;

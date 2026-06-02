@@ -79,7 +79,7 @@ type DetailTab = 'company' | 'branding' | 'contacts' | 'contact-fields' | 'domai
 
 /** Banner art for the Meta integration card (Meta wordmark on light bg). */
 const META_LOGO_URL =
-  'https://loomistorage.sfo3.digitaloceanspaces.com/media/_admin/9a1f951b8d3c42b9925bd23e72426eb9/meta-facebook-rebranding-name-news_dezeen_2364_col_hero2.jpg';
+  'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/9a1f951b8d3c42b9925bd23e72426eb9/meta-facebook-rebranding-name-news_dezeen_2364_col_hero2.jpg';
 type AccountImageVariant = 'light' | 'dark' | 'white' | 'black' | 'storefront';
 
 type TabDef = { key: DetailTab; label: string; icon?: React.ComponentType<{ className?: string }> };

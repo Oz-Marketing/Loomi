@@ -19,7 +19,7 @@ export interface ImageBlockProps {
 }
 
 const PLACEHOLDER =
-  'https://loomistorage.sfo3.digitaloceanspaces.com/media/_admin/69fa3adf4ae444edaadd1d0d7fee4b87/image%20placeholder.png';
+  'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/69fa3adf4ae444edaadd1d0d7fee4b87/image%20placeholder.png';
 
 export const ImageBlock: React.FC<ImageBlockProps> = ({
   src,

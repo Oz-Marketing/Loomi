@@ -1,19 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
+import { forbidTemplateMutation } from '@/lib/flows/route-guards';
 import {
   getFlow,
   updateFlowGraph,
   type NodeType,
 } from '@/lib/services/loomi-flows';
-
-const VALID_NODE_TYPES: ReadonlySet<NodeType> = new Set([
-  'trigger',
-  'email',
-  'wait',
-  'condition',
-  'split',
-  'exit',
-]);
+// Persistence whitelist — the full set of node types the builder can
+// place on the canvas. Sourced from validation.ts so it can't drift out
+// of sync (a stale local copy here used to silently drop sms/add_tag/
+// remove_tag nodes on save, orphaning their edges). Publish-time
+// executability is enforced separately.
+import { KNOWN_NODE_TYPES } from '@/lib/flows/validation';
 
 interface IncomingNode {
   id?: string;
@@ -36,7 +34,7 @@ function normalizeNodes(raw: unknown): IncomingNode[] {
     if (!item || typeof item !== 'object') continue;
     const row = item as Record<string, unknown>;
     const type = String(row.type || '');
-    if (!VALID_NODE_TYPES.has(type as NodeType)) continue;
+    if (!KNOWN_NODE_TYPES.has(type as NodeType)) continue;
     nodes.push({
       id: typeof row.id === 'string' ? row.id : undefined,
       type: type as NodeType,
@@ -85,6 +83,8 @@ export async function PUT(
       : null;
   const existing = await getFlow(id, scope);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const templateGuard = forbidTemplateMutation(existing.accountKey, scope);
+  if (templateGuard) return templateGuard;
 
   if (existing.status === 'active') {
     return NextResponse.json(
@@ -99,7 +99,14 @@ export async function PUT(
   const body = await req.json().catch(() => ({}));
   const nodes = normalizeNodes(body?.nodes);
   const edges = normalizeEdges(body?.edges);
-  const { flow, idMap } = await updateFlowGraph(id, { nodes, edges });
+  // Drop edges that reference a node not in the payload — belt-and-
+  // suspenders so a dropped/unknown node can never leave a dangling edge
+  // (which is what corrupted graphs when the node whitelist was stale).
+  const nodeIds = new Set(nodes.map((n) => n.id).filter((v): v is string => !!v));
+  const connectedEdges = edges.filter(
+    (e) => nodeIds.has(e.fromNodeId) && nodeIds.has(e.toNodeId),
+  );
+  const { flow, idMap } = await updateFlowGraph(id, { nodes, edges: connectedEdges });
   // `idMap` lets the builder translate publish-time validation
   // errors (keyed by the new DB cuids) back to the local `client-*`
   // IDs without remounting the entire canvas.

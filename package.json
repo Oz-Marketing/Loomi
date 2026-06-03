@@ -12,7 +12,9 @@
     "db:seed": "npx tsx prisma/seed.ts",
     "db:migrate:sqlite-to-postgres": "npx tsx scripts/migrate-sqlite-to-postgres.ts",
     "verify": "npx tsc --noEmit && npx tsc --noEmit --noUnusedLocals --noUnusedParameters",
-    "verify:build": "npm run verify && npx prisma generate && npx next build --webpack"
+    "verify:build": "npm run verify && npx prisma generate && npx next build --webpack",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"
@@ -69,7 +71,8 @@
     "dotenv": "^17.3.1",
     "monaco-editor": "^0.55.1",
     "prisma": "^7.4.0",
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "vitest": "^4.1.8"
   },
   "overrides": {
     "next-auth": {

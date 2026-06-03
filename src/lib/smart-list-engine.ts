@@ -137,6 +137,8 @@ function inferTypeFromOperator(operator: string): FieldType {
     operator === 'after' ||
     operator === 'between' ||
     operator === 'within_days' ||
+    operator === 'within_last_days' ||
+    operator === 'more_than_days_ago' ||
     operator === 'overdue'
   ) {
     return 'date';
@@ -320,6 +322,27 @@ function evaluateDateCondition(
       const future = endOfDay(new Date(todayStart.getTime() + days * 24 * 60 * 60 * 1000));
       // within_days: date is between start of today and end of Nth day.
       return parsedDate.getTime() >= todayStart.getTime() && parsedDate.getTime() <= future.getTime();
+    }
+    case 'within_last_days': {
+      // Past-only: the date falls in [N days ago 00:00 .. end of today].
+      // This is what "Last X Date is After N Days" means in the lifecycle
+      // specs — the event happened within the last N days.
+      if (!parsedDate || !value) return false;
+      const days = parseInt(value, 10);
+      if (isNaN(days)) return false;
+      const lower = todayStart.getTime() - days * 24 * 60 * 60 * 1000;
+      const upper = endOfDay(new Date(todayStart)).getTime();
+      return parsedDate.getTime() >= lower && parsedDate.getTime() <= upper;
+    }
+    case 'more_than_days_ago': {
+      // Past-only, beyond N: the date is strictly older than N days ago
+      // (calendar-day comparison). Powers lapse gates ("lapsed more than
+      // 6 months"). Future dates never match.
+      if (!parsedDate || !value) return false;
+      const days = parseInt(value, 10);
+      if (isNaN(days)) return false;
+      const cutoff = todayStart.getTime() - days * 24 * 60 * 60 * 1000;
+      return startOfDay(parsedDate).getTime() < cutoff;
     }
     default:
       return true;

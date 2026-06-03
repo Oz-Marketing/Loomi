@@ -34,6 +34,41 @@ function getBucket(): string {
   return bucket;
 }
 
+/**
+ * Whether object storage is configured. Lets callers (logo/avatar uploads)
+ * fail with a clean 503 instead of a raw error when running without S3 creds
+ * (e.g. local dev that hasn't set up Spaces).
+ */
+export function isS3Configured(): boolean {
+  return Boolean(
+    process.env.S3_ACCESS_KEY_ID && process.env.S3_SECRET_ACCESS_KEY && process.env.S3_BUCKET,
+  );
+}
+
+/**
+ * Reverse of {@link s3PublicUrl}: recover the object key from a public URL we
+ * previously stored, so a replaced image can be deleted. Returns null when the
+ * URL isn't one of ours (e.g. a legacy /api/logos path or an external URL).
+ */
+export function s3KeyFromPublicUrl(url: string | null | undefined): string | null {
+  if (!url || typeof url !== 'string') return null;
+  const prefix = process.env.S3_PUBLIC_URL_PREFIX;
+  const candidates = [
+    prefix ? `${prefix.replace(/\/$/, '')}/` : null,
+    process.env.S3_BUCKET
+      ? `https://${process.env.S3_BUCKET}.s3.${process.env.S3_REGION || 'us-east-1'}.amazonaws.com/`
+      : null,
+  ].filter((c): c is string => Boolean(c));
+
+  for (const base of candidates) {
+    if (url.startsWith(base)) {
+      const key = url.slice(base.length).split('?')[0];
+      return key || null;
+    }
+  }
+  return null;
+}
+
 /** Resolve the public URL for an S3 object key. */
 export function s3PublicUrl(key: string): string {
   const prefix = process.env.S3_PUBLIC_URL_PREFIX;

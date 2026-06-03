@@ -18,6 +18,10 @@
 
 import type Anthropic from '@anthropic-ai/sdk';
 import type { BuilderNodeType } from '@/components/flows/builder/types';
+// Runtime value (a plain Set) from the pure validation module — used to
+// keep the prompt's "executable today" list in lockstep with what the
+// worker can actually run, so the two can't drift.
+import { EXECUTABLE_NODE_TYPES } from '@/lib/flows/validation';
 
 // ── Shapes mirrored from the builder ──
 // We keep a separate copy here (rather than importing the builder types)
@@ -45,7 +49,15 @@ export interface AiGraphEdge {
 export interface AiTrigger {
   id: string;
   // Keep in sync with TriggerType in src/lib/flows/validation.ts.
-  type: 'list' | 'audience' | 'manual' | 'event' | 'form_submission';
+  type:
+    | 'list'
+    | 'audience'
+    | 'manual'
+    | 'event'
+    | 'form_submission'
+    | 'date_reminder'
+    | 'birthday'
+    | 'tag_added';
   config: Record<string, unknown>;
   enabled: boolean;
 }
@@ -228,7 +240,7 @@ export const FLOW_AI_TOOLS: Anthropic.Tool[] = [
       properties: {
         trigger_type: {
           type: 'string',
-          enum: ['list', 'audience', 'manual', 'event', 'form_submission'],
+          enum: ['list', 'audience', 'manual', 'event', 'form_submission', 'date_reminder', 'birthday', 'tag_added'],
         },
         config: {
           type: 'object',
@@ -307,7 +319,7 @@ export const FLOW_AI_TOOLS: Anthropic.Tool[] = [
             properties: {
               trigger_type: {
                 type: 'string',
-                enum: ['list', 'audience', 'manual', 'event', 'form_submission'],
+                enum: ['list', 'audience', 'manual', 'event', 'form_submission', 'date_reminder', 'birthday', 'tag_added'],
               },
               config: { type: 'object' },
               enabled: { type: 'boolean' },
@@ -341,22 +353,22 @@ When the user describes a flow they want to build from scratch, call \`apply_gen
 
 - \`trigger\` — entry point. Config: \`{}\`. The flow's actual enrollment triggers live in a separate \`triggers\` list (see below), not on this node.
 - \`email\` — send an email. Config: \`{ subject: string, templateId?: string, html?: string }\`.
-- \`sms\` — send a text. Config: \`{ message: string }\`. **Coming soon — does not execute yet.**
+- \`sms\` — send a text. Config: \`{ message: string }\`.
 - \`add_tag\` — add a tag. Config: \`{ tag: string }\`.
 - \`remove_tag\` — remove a tag. Config: \`{ tag: string }\`.
-- \`update_field\` — set a contact field. Config: \`{ field: string, value: string }\`.
-- \`add_to_list\` — add to a static list. Config: \`{ listId: string }\`.
-- \`remove_from_list\` — remove from a static list. Config: \`{ listId: string }\`.
+- \`update_field\` — set a contact field. Config: \`{ field: string, value: string }\`. **Coming soon.**
+- \`add_to_list\` — add to a static list. Config: \`{ listId: string }\`. **Coming soon.**
+- \`remove_from_list\` — remove from a static list. Config: \`{ listId: string }\`. **Coming soon.**
 - \`add_note\` — attach a note. Config: \`{ note: string }\`. **Coming soon.**
 - \`create_task\` — create a task. Config: \`{ title: string, dueAt?: string }\`. **Coming soon.**
 - \`wait\` — pause for a duration. Config: \`{ ms: number }\` where \`ms\` is milliseconds. Common values: hour = 3600000, day = 86400000.
-- \`wait_until\` — pause until a contact-field date. Config: \`{ field: string, offsetDays: number }\`. **Coming soon.**
+- \`wait_until\` — pause until a contact-field date. Config: \`{ field: string, offsetDays: number }\`.
 - \`condition\` — branch on contact predicates. Config: \`{ branches: ConditionBranch[], fallbackLabel?: string }\`. A \`ConditionBranch\` is \`{ id: string, label: string, logic: 'AND'|'OR', rules: ConditionRule[] }\`. A \`ConditionRule\` is \`{ id: string, field: string, operator: FilterOperator, value: string, value2?: string }\`. Branches evaluate top-to-bottom; the first match wins. There's an implicit "else" branch with id \`"else"\`.
 - \`split\` — A/B percentage split. Config: \`{ weights: number[], labels: string[] }\`.
-- \`webhook\` — POST to a URL. Config: \`{ url: string, method: 'POST', body: string }\`. **Coming soon.**
+- \`webhook\` — POST to a URL. Config: \`{ url: string, method: 'POST', body: string }\`.
 - \`exit\` — end of flow. Config: \`{}\`.
 
-**Executable today**: trigger, email, wait, condition, split, exit, add_tag, remove_tag, update_field, add_to_list, remove_from_list. The rest render but block publish.
+**Executable today**: ${[...EXECUTABLE_NODE_TYPES].join(', ')}. The rest render but block publish.
 
 **Edges**: directed, optionally with a \`branch\` matching a condition branch id (or "else") or a split label.
 
@@ -566,7 +578,10 @@ function addTrigger(graph: WorkingGraph, input: Record<string, unknown>): ToolEx
     triggerType !== 'audience' &&
     triggerType !== 'manual' &&
     triggerType !== 'event' &&
-    triggerType !== 'form_submission'
+    triggerType !== 'form_submission' &&
+    triggerType !== 'date_reminder' &&
+    triggerType !== 'birthday' &&
+    triggerType !== 'tag_added'
   ) {
     return { resultText: `Invalid trigger_type: ${triggerType}`, isError: true };
   }
@@ -656,7 +671,10 @@ function applyGeneratedGraph(graph: WorkingGraph, input: Record<string, unknown>
       triggerType !== 'audience' &&
       triggerType !== 'manual' &&
       triggerType !== 'event' &&
-      triggerType !== 'form_submission'
+      triggerType !== 'form_submission' &&
+      triggerType !== 'date_reminder' &&
+      triggerType !== 'birthday' &&
+      triggerType !== 'tag_added'
     ) {
       continue;
     }

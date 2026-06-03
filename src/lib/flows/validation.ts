@@ -26,6 +26,21 @@ export type TriggerType =
   | 'audience'
   | 'manual'
   | 'event'
+  // Fires when a contact's anchor date field (a custom field like
+  // last_purchase_date, or the native dateOfBirth/lifecycle columns)
+  // reaches anchor + offsetDays. `recurAnnually` matches on month/day
+  // (ignoring year) for recurring milestones like anniversaries.
+  // Config: { field: string, offsetDays: number, recurAnnually: boolean }
+  | 'date_reminder'
+  // Fires `daysBefore` days before a contact's birthday (native
+  // dateOfBirth), recurring annually. Config: { daysBefore: number }
+  | 'birthday'
+  // Fires when a contact carries a given tag (the template-friendly
+  // stand-in for GHL's "Contact Tag Added" — config carries the tag, so
+  // it deploys cleanly without a per-account audience). Re-entry policy
+  // + the flow removing the tag at the end govern re-firing.
+  // Config: { tag: string }
+  | 'tag_added'
   // Fires when a Loomi-native Form receives a submission. Stored
   // config: { formId: string }. Enrollment is event-driven by the
   // forms submit pipeline (src/lib/forms/submit.ts) — the trigger
@@ -33,12 +48,43 @@ export type TriggerType =
   // submission actually arrives.
   | 'form_submission';
 
+// Every node type the builder can place on the canvas. This is the
+// PERSISTENCE whitelist — the graph-save route accepts any of these so
+// drafts can hold not-yet-executable steps (add_note, create_task, …)
+// and annotations (sticky_note) without losing them on autosave.
+// Executability is enforced separately at publish time
+// (EXECUTABLE_NODE_TYPES below). Keeping this list here — rather than a
+// hand-maintained copy in the API route — is what stops the two from
+// drifting apart (a stale route whitelist silently dropped sms/add_tag/
+// remove_tag nodes on save, orphaning their edges).
+export const KNOWN_NODE_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
+  'trigger',
+  'email',
+  'sms',
+  'add_tag',
+  'remove_tag',
+  'update_field',
+  'add_to_list',
+  'remove_from_list',
+  'add_note',
+  'create_task',
+  'wait',
+  'wait_until',
+  'condition',
+  'split',
+  'webhook',
+  'exit',
+  'sticky_note',
+]);
+
 // Node types the worker can actually execute today. Keep in sync with
 // the switch statement in processEnrollmentTick on the worker side.
 export const EXECUTABLE_NODE_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
   'trigger',
   'email',
   'sms',
+  'add_tag',
+  'remove_tag',
   'wait',
   'wait_until',
   'condition',
@@ -209,11 +255,18 @@ export function validateFlowGraph(graph: {
     }
     if (node.type === 'wait') {
       const ms = Number(node.config.ms || 0);
+      const MAX_WAIT_MS = 365 * 24 * 60 * 60 * 1000; // 1 year
       if (!Number.isFinite(ms) || ms <= 0) {
         push(
           node.id,
           'Wait duration must be greater than 0.',
           'Open the step and set a non-zero wait duration (e.g. 1 hour, 2 days).',
+        );
+      } else if (ms > MAX_WAIT_MS) {
+        push(
+          node.id,
+          'Wait duration is longer than 1 year.',
+          'Shorten the wait — a value this large would strand the contact (and can overflow the schedule).',
         );
       }
     }
@@ -242,6 +295,16 @@ export function validateFlowGraph(graph: {
           node.id,
           'Offset must be a whole number of days.',
           'Open the step and enter a number — negative to fire before the date, positive to fire after.',
+        );
+      }
+    }
+    if (node.type === 'add_tag' || node.type === 'remove_tag') {
+      const tag = String(node.config.tag || '').trim();
+      if (!tag) {
+        push(
+          node.id,
+          'Set a tag name.',
+          `Open the step and type the tag to ${node.type === 'add_tag' ? 'add to' : 'remove from'} the contact.`,
         );
       }
     }
@@ -274,6 +337,13 @@ export function validateFlowGraph(graph: {
           node.id,
           'Webhook URL must start with http:// or https://.',
           'Fix the URL in the step inspector — only http and https are allowed.',
+        );
+      } else if (/^http:\/\//i.test(url)) {
+        push(
+          node.id,
+          'Webhook URL is not HTTPS — contact data would be sent unencrypted.',
+          'Use an https:// endpoint. Mergetags like {{email}} in the URL travel in plaintext over http.',
+          'warning',
         );
       }
       const method = String(node.config.method || 'POST').toUpperCase();
@@ -325,6 +395,98 @@ export function validateFlowGraph(graph: {
   // ok = no errors. Warnings don't block publish.
   const ok = !issues.some((i) => (i.severity ?? 'error') === 'error');
   return { ok, issues };
+}
+
+// ─────────────────────────────────────────────────────
+// Publish-time checks that need data the graph alone doesn't carry —
+// the flow's enrollment triggers and the account's declared fields.
+// Kept pure (no DB) so the service layer feeds them and they're
+// unit-testable; publishFlow runs them alongside validateFlowGraph.
+// ─────────────────────────────────────────────────────
+
+export interface TriggerForValidation {
+  type: TriggerType;
+  enabled: boolean;
+  config: Record<string, unknown>;
+}
+
+/** A flow can pass graph validation yet enroll nobody — no enabled
+ *  trigger, or an enabled trigger missing its required config (an empty
+ *  tag, no list/audience/form, no date field). Returns blocking issues
+ *  so publish fails loudly instead of going live inert. */
+export function validateTriggersForPublish(
+  triggers: TriggerForValidation[],
+): FlowValidationIssue[] {
+  const issues: FlowValidationIssue[] = [];
+  const enabled = triggers.filter((t) => t.enabled);
+  if (enabled.length === 0) {
+    issues.push({
+      nodeId: null,
+      message: 'Flow has no enabled trigger — it would never enroll anyone.',
+      severity: 'error',
+      fix: 'Open the Trigger step, add a trigger, configure it, and toggle it on before publishing.',
+    });
+    return issues;
+  }
+  const hasText = (config: Record<string, unknown>, key: string): boolean =>
+    typeof config[key] === 'string' && (config[key] as string).trim() !== '';
+  for (const t of enabled) {
+    const cfg = t.config ?? {};
+    const bad = (what: string) =>
+      issues.push({
+        nodeId: null,
+        message: `The "${t.type}" trigger is enabled but ${what}.`,
+        severity: 'error',
+        fix: 'Open the Trigger step and finish configuring it, or disable it.',
+      });
+    switch (t.type) {
+      case 'list':
+        if (!hasText(cfg, 'listId')) bad('no list is selected');
+        break;
+      case 'audience':
+        if (!hasText(cfg, 'audienceId')) bad('no audience is selected');
+        break;
+      case 'form_submission':
+        if (!hasText(cfg, 'formId')) bad('no form is selected');
+        break;
+      case 'tag_added':
+        if (!hasText(cfg, 'tag')) bad('no tag is set');
+        break;
+      case 'date_reminder':
+        if (!hasText(cfg, 'field')) bad('no date field is set');
+        break;
+      // manual (API-driven), birthday (daysBefore defaults to 0), and
+      // event (rejected at creation in v1) need no extra config.
+      case 'manual':
+      case 'birthday':
+      case 'event':
+        break;
+    }
+  }
+  return issues;
+}
+
+/** Field keys referenced by condition-node rules. Used at publish to
+ *  confirm every referenced field actually exists for the account —
+ *  otherwise the rule reads undefined and silently routes everyone down
+ *  the else branch. */
+export function collectConditionFieldKeys(
+  nodes: { type: NodeType; config: Record<string, unknown> }[],
+): string[] {
+  const keys = new Set<string>();
+  for (const node of nodes) {
+    if (node.type !== 'condition') continue;
+    const branches = Array.isArray((node.config as { branches?: unknown }).branches)
+      ? ((node.config as { branches: unknown[] }).branches as Array<{ rules?: unknown }>)
+      : [];
+    for (const branch of branches) {
+      const rules = Array.isArray(branch?.rules) ? (branch.rules as Array<{ field?: unknown }>) : [];
+      for (const rule of rules) {
+        if (typeof rule?.field === 'string' && rule.field.trim()) keys.add(rule.field.trim());
+      }
+    }
+  }
+  return [...keys];
 }
 
 // Helper to count by severity, useful for badges + section headers.

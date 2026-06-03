@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
+import { forbidTemplateMutation } from '@/lib/flows/route-guards';
 import {
   archiveFlow,
   getFlow,
@@ -40,8 +41,11 @@ export async function PATCH(
   const { id } = await context.params;
   // Confirm the flow exists + is accessible to this caller before
   // we let them mutate it.
-  const existing = await getFlow(id, accountScope(session!));
+  const scope = accountScope(session!);
+  const existing = await getFlow(id, scope);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const templateGuard = forbidTemplateMutation(existing.accountKey, scope);
+  if (templateGuard) return templateGuard;
 
   const body = await req.json().catch(() => ({}));
   const data: {
@@ -81,8 +85,11 @@ export async function DELETE(
   if (error) return error;
 
   const { id } = await context.params;
-  const existing = await getFlow(id, accountScope(session!));
+  const scope = accountScope(session!);
+  const existing = await getFlow(id, scope);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const templateGuard = forbidTemplateMutation(existing.accountKey, scope);
+  if (templateGuard) return templateGuard;
 
   const purge = req.nextUrl.searchParams.get('purge') === 'true';
   if (purge) {

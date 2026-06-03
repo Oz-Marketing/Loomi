@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
+import { forbidTemplateMutation } from '@/lib/flows/route-guards';
 import { prisma } from '@/lib/prisma';
 import { enrollContacts, getFlow } from '@/lib/services/loomi-flows';
 
@@ -26,6 +27,8 @@ export async function POST(
       : null;
   const existing = await getFlow(id, scope);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const templateGuard = forbidTemplateMutation(existing.accountKey, scope);
+  if (templateGuard) return templateGuard;
 
   const body = await req.json().catch(() => ({}));
 
@@ -36,9 +39,12 @@ export async function POST(
       .map((v: string) => v.trim())
       .filter(Boolean);
   } else if (typeof body?.listId === 'string' && body.listId.trim()) {
+    // take 1001 so we can reject an over-limit list WITHOUT loading the
+    // entire membership table into memory first (the 1000 cap below).
     const memberships = await prisma.contactListMembership.findMany({
       where: { listId: body.listId.trim() },
       select: { contactId: true },
+      take: 1001,
     });
     contactIds = memberships.map((m) => m.contactId);
   } else {

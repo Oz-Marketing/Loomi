@@ -11,6 +11,7 @@ import {
   useEdgesState,
   useNodesState,
   useReactFlow,
+  useViewport,
   type Connection,
   type Edge,
   type Node,
@@ -120,6 +121,43 @@ export function FlowBuilder({ flowId }: { flowId: string }) {
     <ReactFlowProvider>
       <FlowBuilderInner flowId={flowId} />
     </ReactFlowProvider>
+  );
+}
+
+// Inspector popout anchored to the selected node's LIVE position. The
+// viewport subscription lives here (not in FlowBuilderInner) so only
+// this thin wrapper re-renders as the canvas pans/zooms — the popout
+// tracks the node instead of sitting statically over the canvas, and the
+// heavy inspector content (passed as `children`, a stable element from
+// the parent) is not re-rendered on every pan frame.
+function NodeAnchoredInspector({
+  node,
+  containerBounds,
+  onClose,
+  children,
+}: {
+  node: Node<BuilderNodeData>;
+  containerBounds?: { width: number; height: number };
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const viewport = useViewport();
+  const nodeWidth = node.measured?.width ?? 240;
+  // Flow coords → canvas-wrapper pixels via the live viewport transform.
+  // Anchored just off the node's top-right; BuilderPopout flips/clamps
+  // into bounds if there isn't room on that side.
+  const x = (node.position.x + nodeWidth) * viewport.zoom + viewport.x + 16;
+  const y = node.position.y * viewport.zoom + viewport.y;
+  return (
+    <BuilderPopout
+      x={x}
+      y={y}
+      width={440}
+      containerBounds={containerBounds}
+      onClose={onClose}
+    >
+      {children}
+    </BuilderPopout>
   );
 }
 
@@ -319,7 +357,16 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
     const graphEdges = edges.map((e) => ({
       fromNodeId: e.source,
       toNodeId: e.target,
-      branch: (e.data as { branch?: string } | undefined)?.branch ?? null,
+      // Branch lives in `sourceHandle` — that's the canonical field both
+      // load (detailToReactFlow), save (saveGraph), and onConnect use.
+      // Reading `data.branch` here was the outlier: loaded edges (and
+      // even freshly-connected ones) carry the branch on `sourceHandle`,
+      // not `data.branch`, so validation saw every condition branch as
+      // unconnected and falsely blocked publish.
+      branch:
+        (e.sourceHandle as string | null) ??
+        (e.data as { branch?: string } | undefined)?.branch ??
+        null,
     }));
     return validateFlowGraph({ nodes: graphNodes, edges: graphEdges }).issues;
   }, [nodes, edges]);
@@ -606,9 +653,28 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
           n.id === nodeId ? { ...n, data: { ...n.data, config } } : n,
         ),
       );
+      // If a condition's branches changed (a branch was deleted or its id
+      // renamed), prune any outgoing edge whose sourceHandle no longer maps
+      // to a live branch. Otherwise it lingers as an orphan that the worker
+      // could route contacts down via the outgoing[0] fallback.
+      const branches = Array.isArray((config as { branches?: unknown }).branches)
+        ? (config as { branches: Array<{ id?: unknown }> }).branches
+        : null;
+      if (branches) {
+        const valid = new Set<string>(['else']); // implicit fallback handle
+        for (const b of branches) if (typeof b?.id === 'string') valid.add(b.id);
+        setEdges((existing) =>
+          existing.filter(
+            (e) =>
+              e.source !== nodeId ||
+              !e.sourceHandle ||
+              valid.has(e.sourceHandle as string),
+          ),
+        );
+      }
       setDirty(true);
     },
-    [setNodes],
+    [setNodes, setEdges],
   );
 
   const handleNodeDelete = useCallback(
@@ -1607,10 +1673,10 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
             busy={busy}
           />
 
-          {/* Inspector popout — click-anchored floating card sitting
-              right where the user clicked the node. Anchors top-left
-              at the click; BuilderPopout flips into bounds if (x, y)
-              would push it off the canvas. */}
+          {/* Inspector popout — anchored to the selected node's live
+              position so it pans/zooms with the node instead of staying
+              static over the canvas. BuilderPopout flips into bounds if
+              the node sits too close to an edge. */}
           {inspectorOpen &&
             inspectorNode &&
             inspectorPos &&
@@ -1618,10 +1684,8 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
             // (color picker, trash, drag handle, textarea), so they
             // never open the right-side inspector popout.
             inspectorNode.data.type !== 'sticky_note' && (
-            <BuilderPopout
-              x={inspectorPos.x}
-              y={inspectorPos.y}
-              width={440}
+            <NodeAnchoredInspector
+              node={inspectorNode}
               containerBounds={
                 reactFlowWrapper.current
                   ? {
@@ -1643,7 +1707,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
                 triggers={triggers}
                 onTriggersChanged={setTriggers}
               />
-            </BuilderPopout>
+            </NodeAnchoredInspector>
           )}
 
           {/* Flow-level settings popout — anchored top-right just

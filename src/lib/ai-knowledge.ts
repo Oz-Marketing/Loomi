@@ -1,16 +1,11 @@
-import fs from 'fs';
-import path from 'path';
 import { componentSchemas } from './component-schemas';
 import { prisma } from './prisma';
+import { getSetting, KNOWLEDGE_SETTING_KEY } from './services/app-settings';
 
-// ── Paths ──
-const STUDIO_ROOT = process.cwd();
-const KNOWLEDGE_FILE = path.join(STUDIO_ROOT, 'loomi-knowledge.md');
-
-// ── Read files safely ──
-function readFileOrEmpty(filePath: string): string {
+// ── Read the knowledge base (Postgres AppSetting; formerly loomi-knowledge.md) ──
+async function readKnowledgeBase(): Promise<string> {
   try {
-    return fs.readFileSync(filePath, 'utf-8');
+    return (await getSetting(KNOWLEDGE_SETTING_KEY)) ?? '';
   } catch {
     return '';
   }
@@ -88,7 +83,7 @@ async function buildDynamicData(): Promise<string> {
 
 // ── Build the full knowledge context ──
 export async function buildKnowledgeContext(): Promise<string> {
-  const knowledgeBase = readFileOrEmpty(KNOWLEDGE_FILE);
+  const knowledgeBase = await readKnowledgeBase();
   const dynamicData = await buildDynamicData();
 
   if (!knowledgeBase && !dynamicData) {

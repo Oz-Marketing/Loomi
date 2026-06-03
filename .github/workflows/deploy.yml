@@ -145,21 +145,35 @@ jobs:
             echo "=== Build complete, .next dir size ==="
             du -sh .next
 
-            # One-time folder-store migration: import legacy JSON folders into
-            # Postgres. Only fires when the previous release still ships the
-            # JSON file (i.e. this is the first deploy with the Postgres-backed
-            # store). After this deploy the new release no longer contains the
-            # JSON, so the `if -f` guard turns the block into a no-op on
-            # subsequent deploys — safe to leave in.
-            LEGACY_FOLDERS_JSON="$CURRENT_LINK/src/data/esp-template-folders.json"
-            if [ -f "$LEGACY_FOLDERS_JSON" ]; then
-              echo "=== Found legacy folder JSON — importing into Postgres ==="
-              cp "$LEGACY_FOLDERS_JSON" /tmp/loomi-folders-backup.json
-              npx tsx scripts/migrate-template-folders-to-db.ts /tmp/loomi-folders-backup.json --confirm
-              echo "=== Folder import complete ==="
+            # One-time data backfill: lift the old file-based stores into
+            # Postgres / Spaces before this release (which no longer writes
+            # them to disk) takes over. Reads from the PREVIOUS release
+            # ($CURRENT_LINK is still the old one until the cutover below) and
+            # the shared avatars dir. Runs after `npm run build`, so the
+            # AppSetting table created by `prisma db push` already exists.
+            # Every script is idempotent and made non-fatal here, so this block
+            # is safe to leave in permanently — it no-ops once everything is
+            # migrated, and a backfill bug can never abort a deploy.
+            echo "=== One-time data backfill (rooftops/knowledge/logos/avatars) ==="
+            if [ -e "$CURRENT_LINK" ]; then
+              npx tsx scripts/backfill-rooftops-to-accounts.ts "$CURRENT_LINK/data/rooftops.json" --confirm \
+                || echo "WARN: rooftops backfill failed (non-fatal)"
+              npx tsx scripts/backfill-knowledge-to-db.ts "$CURRENT_LINK/loomi-knowledge.md" --confirm \
+                || echo "WARN: knowledge backfill failed (non-fatal)"
+              npx tsx scripts/backfill-logos-to-spaces.ts "$CURRENT_LINK/data/logos" "$CURRENT_LINK/public/logos" --confirm \
+                || echo "WARN: logos backfill failed (non-fatal)"
             else
-              echo "=== No legacy folder JSON at $LEGACY_FOLDERS_JSON — skipping import ==="
+              echo "=== No previous release at $CURRENT_LINK — skipping file backfills ==="
             fi
+            # Fallback knowledge seed from this release's committed
+            # loomi-knowledge.md — covers a fresh environment with no previous
+            # release to read from. Runs after the $CURRENT_LINK seed, so the
+            # fresher runtime copy wins; no-ops once the row exists.
+            npx tsx scripts/backfill-knowledge-to-db.ts "loomi-knowledge.md" --confirm \
+              || echo "WARN: knowledge fallback seed failed (non-fatal)"
+            npx tsx scripts/backfill-avatars-to-spaces.ts "$SHARED_AVATARS_DIR" --confirm \
+              || echo "WARN: avatars backfill failed (non-fatal)"
+            echo "=== Data backfill complete ==="
 
             echo "=== Starting candidate app: $NEXT_APP on port $NEXT_PORT ==="
             pm2 stop "$NEXT_APP" || true

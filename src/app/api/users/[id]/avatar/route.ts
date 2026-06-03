@@ -1,33 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
-import fs from 'fs';
-import path from 'path';
-
-const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
-const MAX_SIZE = 5 * 1024 * 1024; // 5MB
-
-function extensionFromMimeType(mimeType: string): string | null {
-  const extensions: Record<string, string> = {
-    'image/png': 'png',
-    'image/jpeg': 'jpg',
-    'image/jpg': 'jpg',
-    'image/webp': 'webp',
-  };
-
-  return extensions[mimeType] || null;
-}
-
-function clearAvatarFiles(userId: string, avatarDir: string) {
-  if (!fs.existsSync(avatarDir)) return;
-
-  const files = fs.readdirSync(avatarDir);
-  for (const file of files) {
-    if (file.startsWith(`${userId}-`)) {
-      fs.unlinkSync(path.join(avatarDir, file));
-    }
-  }
-}
+import { isS3Configured } from '@/lib/s3';
+import {
+  AVATAR_ALLOWED_TYPES,
+  AVATAR_MAX_SIZE,
+  avatarExtFromMime,
+  setUserAvatar,
+  clearUserAvatar,
+} from '@/lib/services/avatars';
 
 export async function POST(
   req: NextRequest,
@@ -37,6 +18,13 @@ export async function POST(
   if (error) return error;
 
   try {
+    if (!isS3Configured()) {
+      return NextResponse.json(
+        { error: 'Object storage is not configured on the server. Missing S3 credentials or bucket.' },
+        { status: 503 },
+      );
+    }
+
     const { id } = await params;
     const user = await prisma.user.findUnique({ where: { id }, select: { id: true } });
     if (!user) {
@@ -49,47 +37,20 @@ export async function POST(
     if (!(file instanceof File)) {
       return NextResponse.json({ error: 'Missing file upload' }, { status: 400 });
     }
-
-    if (!ALLOWED_TYPES.includes(file.type)) {
-      return NextResponse.json(
-        { error: 'Invalid file type. Allowed: PNG, JPG, WebP' },
-        { status: 400 },
-      );
+    if (!AVATAR_ALLOWED_TYPES.includes(file.type)) {
+      return NextResponse.json({ error: 'Invalid file type. Allowed: PNG, JPG, WebP' }, { status: 400 });
+    }
+    if (file.size > AVATAR_MAX_SIZE) {
+      return NextResponse.json({ error: 'File too large. Maximum size is 5MB' }, { status: 400 });
     }
 
-    if (file.size > MAX_SIZE) {
-      return NextResponse.json(
-        { error: 'File too large. Maximum size is 5MB' },
-        { status: 400 },
-      );
-    }
-
-    const ext = extensionFromMimeType(file.type);
+    const ext = avatarExtFromMime(file.type);
     if (!ext) {
       return NextResponse.json({ error: 'Unsupported image format' }, { status: 400 });
     }
 
-    // Store in data/avatars (Next.js doesn't serve files added to /public after build)
-    const avatarDir = path.join(process.cwd(), 'data', 'avatars');
-    if (!fs.existsSync(avatarDir)) {
-      fs.mkdirSync(avatarDir, { recursive: true });
-    }
-
-    clearAvatarFiles(id, avatarDir);
-    // Also clean legacy public/avatars
-    clearAvatarFiles(id, path.join(process.cwd(), 'public', 'avatars'));
-
-    const fileName = `${id}-${Date.now()}.${ext}`;
-    const filePath = path.join(avatarDir, fileName);
     const buffer = Buffer.from(await file.arrayBuffer());
-    fs.writeFileSync(filePath, buffer);
-
-    const avatarUrl = `/api/avatars/${fileName}`;
-
-    await prisma.user.update({
-      where: { id },
-      data: { avatarUrl },
-    });
+    const avatarUrl = await setUserAvatar(id, buffer, ext, file.type);
 
     return NextResponse.json({ avatarUrl });
   } catch (err) {
@@ -115,15 +76,7 @@ export async function DELETE(
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Clean from both data/avatars and legacy public/avatars
-    clearAvatarFiles(id, path.join(process.cwd(), 'data', 'avatars'));
-    clearAvatarFiles(id, path.join(process.cwd(), 'public', 'avatars'));
-
-    await prisma.user.update({
-      where: { id },
-      data: { avatarUrl: null },
-    });
-
+    await clearUserAvatar(id);
     return NextResponse.json({ success: true });
   } catch (err) {
     console.error('Avatar delete failed:', err);

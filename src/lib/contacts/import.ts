@@ -27,6 +27,7 @@ import {
   type RowIssue,
   autoMapHeaders,
   normaliseRow,
+  parseDateCell,
 } from './normalize';
 
 // ── Phase 1: parse ──
@@ -116,6 +117,20 @@ export async function importContacts({
   const rows = parsed.data;
   const totalRows = rows.length;
 
+  // Date-typed custom fields for this account. Values mapped into these
+  // keys are coerced to canonical ISO date-only (UTC) below, so the flow
+  // date triggers — which read the stored value with getUTC* — see a
+  // consistent calendar day no matter what date format the source CSV
+  // used. Unparseable values are left as-is.
+  const dateCustomFieldKeys = new Set(
+    (
+      await prisma.contactCustomField.findMany({
+        where: { accountKey, type: 'date' },
+        select: { key: true },
+      })
+    ).map((f) => f.key),
+  );
+
   const issues: RowIssue[] = [];
   let imported = 0;
   let updated = 0;
@@ -154,6 +169,15 @@ export async function importContacts({
     }
 
     const parsedRow = result.row;
+
+    // Normalize date-typed custom-field values to ISO date-only (UTC).
+    if (parsedRow.customFields && dateCustomFieldKeys.size > 0) {
+      for (const key of Object.keys(parsedRow.customFields)) {
+        if (!dateCustomFieldKeys.has(key)) continue;
+        const d = parseDateCell(parsedRow.customFields[key]);
+        if (d) parsedRow.customFields[key] = d.toISOString().slice(0, 10);
+      }
+    }
 
     if (dryRun) {
       // Count create vs update against the snapshot we pre-fetched.

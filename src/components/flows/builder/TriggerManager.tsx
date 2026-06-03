@@ -5,6 +5,7 @@ import {
   PlusIcon,
   TrashIcon,
   ListBulletIcon,
+  TagIcon,
   UsersIcon,
   HandRaisedIcon,
   BoltIcon,
@@ -12,8 +13,11 @@ import {
   ArrowLeftIcon,
   MagnifyingGlassIcon,
   ChevronRightIcon,
+  CalendarDaysIcon,
+  CakeIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
+import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import type { FlowApiTrigger } from './types';
 
 // ── Trigger type catalog ──
@@ -29,7 +33,7 @@ type TriggerType = FlowApiTrigger['type'];
 interface TriggerTypeMeta {
   label: string;
   description: string;
-  category: 'contact' | 'manual' | 'event';
+  category: 'contact' | 'manual' | 'event' | 'date';
   Icon: React.ComponentType<{ className?: string }>;
   color: string;
   bg: string;
@@ -53,6 +57,15 @@ const TRIGGER_TYPE_META: Record<TriggerType, TriggerTypeMeta> = {
     Icon: UsersIcon,
     color: 'text-emerald-300',
     bg: 'bg-emerald-500/15',
+    executable: true,
+  },
+  tag_added: {
+    label: 'Has Tag',
+    description: 'Fires when a contact carries a given tag (e.g. loomi-yag-purchased).',
+    category: 'contact',
+    Icon: TagIcon,
+    color: 'text-teal-300',
+    bg: 'bg-teal-500/15',
     executable: true,
   },
   manual: {
@@ -82,10 +95,30 @@ const TRIGGER_TYPE_META: Record<TriggerType, TriggerTypeMeta> = {
     bg: 'bg-violet-500/15',
     executable: true,
   },
+  date_reminder: {
+    label: 'Date Reminder',
+    description:
+      'Fires when a contact date field (e.g. Last Purchase Date) reaches a chosen offset — anniversary, lease end, service due, warranty.',
+    category: 'date',
+    Icon: CalendarDaysIcon,
+    color: 'text-rose-300',
+    bg: 'bg-rose-500/15',
+    executable: true,
+  },
+  birthday: {
+    label: 'Birthday',
+    description: 'Fires a chosen number of days before a contact’s birthday, every year.',
+    category: 'date',
+    Icon: CakeIcon,
+    color: 'text-pink-300',
+    bg: 'bg-pink-500/15',
+    executable: true,
+  },
 };
 
 const PICKER_SECTIONS: { category: TriggerTypeMeta['category']; label: string }[] = [
   { category: 'contact', label: 'Contact' },
+  { category: 'date', label: 'Date-based' },
   { category: 'manual', label: 'Manual' },
   { category: 'event', label: 'Event' },
 ];
@@ -436,6 +469,19 @@ function TriggerCard({
             onChange={(formId) => updateConfig({ formId })}
           />
         )}
+        {trigger.type === 'date_reminder' && (
+          <DateReminderConfig
+            accountKey={accountKey}
+            value={trigger.config}
+            onChange={updateConfig}
+          />
+        )}
+        {trigger.type === 'birthday' && (
+          <BirthdayConfig value={trigger.config} onChange={updateConfig} />
+        )}
+        {trigger.type === 'tag_added' && (
+          <TagAddedConfig value={trigger.config} onChange={updateConfig} />
+        )}
       </div>
     </div>
   );
@@ -518,6 +564,141 @@ function AudienceConfig({
         </option>
       ))}
     </select>
+  );
+}
+
+// ── Date-based trigger config forms ──
+
+function DateReminderConfig({
+  accountKey,
+  value,
+  onChange,
+}: {
+  accountKey: string | null;
+  value: Record<string, unknown>;
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const { fields } = useFilterableFields(accountKey);
+  const dateFields = fields.filter((f) => f.type === 'date');
+
+  const field = typeof value.field === 'string' ? value.field : '';
+  const recurAnnually = value.recurAnnually === true;
+  const initialOffset =
+    typeof value.offsetDays === 'number' ? value.offsetDays : 0;
+  const [offset, setOffset] = useState(String(initialOffset));
+
+  const commit = (patch: Record<string, unknown>) =>
+    onChange({
+      field,
+      offsetDays: Number(offset) || 0,
+      recurAnnually,
+      ...patch,
+    });
+
+  return (
+    <div className="space-y-2">
+      <select
+        value={field}
+        onChange={(e) => commit({ field: e.target.value })}
+        className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+      >
+        <option value="">— Select a date field —</option>
+        {dateFields.map((f) => (
+          <option key={f.key} value={f.key}>
+            {f.label}
+          </option>
+        ))}
+      </select>
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          value={offset}
+          onChange={(e) => setOffset(e.target.value)}
+          onBlur={() => commit({ offsetDays: Number(offset) || 0 })}
+          className="w-20 px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+        />
+        <span className="text-[10px] text-[var(--muted-foreground)]">
+          offset in days (negative = before the date, positive = after)
+        </span>
+      </div>
+      <label className="inline-flex items-center gap-1.5 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={recurAnnually}
+          onChange={(e) => commit({ recurAnnually: e.target.checked })}
+          className="accent-[var(--primary)]"
+        />
+        <span className="text-[11px] text-[var(--muted-foreground)]">
+          Recurs annually (match month/day, ignore year)
+        </span>
+      </label>
+      {!field && (
+        <p className="text-[10px] text-amber-400">
+          Pick a date field to enable this trigger.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function TagAddedConfig({
+  value,
+  onChange,
+}: {
+  value: Record<string, unknown>;
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const [tag, setTag] = useState(typeof value.tag === 'string' ? value.tag : '');
+  return (
+    <div className="space-y-1">
+      <input
+        type="text"
+        value={tag}
+        placeholder="e.g. loomi-yag-purchased"
+        onChange={(e) => setTag(e.target.value)}
+        onBlur={() => onChange({ tag: tag.trim() })}
+        className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+      />
+      <p className="text-[10px] text-[var(--muted-foreground)]">
+        Fires for contacts carrying this tag. Remove the tag at the end of the
+        flow if it should re-fire when re-applied.
+      </p>
+      {!tag.trim() && (
+        <p className="text-[10px] text-amber-400">Enter a tag to enable this trigger.</p>
+      )}
+    </div>
+  );
+}
+
+function BirthdayConfig({
+  value,
+  onChange,
+}: {
+  value: Record<string, unknown>;
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const initial = typeof value.daysBefore === 'number' ? value.daysBefore : 0;
+  const [daysBefore, setDaysBefore] = useState(String(initial));
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          min={0}
+          value={daysBefore}
+          onChange={(e) => setDaysBefore(e.target.value)}
+          onBlur={() => onChange({ daysBefore: Math.max(0, Number(daysBefore) || 0) })}
+          className="w-20 px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+        />
+        <span className="text-[10px] text-[var(--muted-foreground)]">
+          days before the birthday (0 = on the day)
+        </span>
+      </div>
+      <p className="text-[10px] text-[var(--muted-foreground)]">
+        Requires a Date of Birth on the contact.
+      </p>
+    </div>
   );
 }
 

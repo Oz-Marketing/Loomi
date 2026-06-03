@@ -41,6 +41,13 @@ export type DateOperator =
   | 'after'
   | 'between'
   | 'within_days'
+  // Directional, past-only relative operators. `within_days` is
+  // bidirectional (matches dates within N days in either direction);
+  // these two disambiguate "happened in the last N days" vs "happened
+  // more than N days ago" — the date-math the lifecycle flows need for
+  // goal-checks ("Last X Date is After N Days") and lapse gates.
+  | 'within_last_days'
+  | 'more_than_days_ago'
   | 'overdue'
   | 'is_empty'
   | 'is_not_empty';
@@ -87,6 +94,8 @@ export const OPERATOR_LABELS: Record<FilterOperator, string> = {
   after: 'is after',
   between: 'is between',
   within_days: 'is within (days)',
+  within_last_days: 'is within the last (days)',
+  more_than_days_ago: 'is more than (days) ago',
   overdue: 'is overdue',
   includes_any: 'includes any of',
   includes_all: 'includes all of',
@@ -111,7 +120,17 @@ export const OPERATORS_BY_TYPE: Record<FieldType, FilterOperator[]> = {
     'is_empty',
     'is_not_empty',
   ],
-  date: ['before', 'after', 'between', 'within_days', 'overdue', 'is_empty', 'is_not_empty'],
+  date: [
+    'before',
+    'after',
+    'between',
+    'within_days',
+    'within_last_days',
+    'more_than_days_ago',
+    'overdue',
+    'is_empty',
+    'is_not_empty',
+  ],
   tags: ['includes_any', 'includes_all', 'excludes', 'is_empty', 'is_not_empty'],
   boolean: ['is_true', 'is_false'],
   select: ['is_one_of', 'is_not_one_of', 'is_empty', 'is_not_empty'],
@@ -210,6 +229,7 @@ export const FILTERABLE_FIELDS: FieldDefinition[] = [
   { key: 'nextServiceDate', label: 'Next Service Date', type: 'date', category: 'lifecycle' },
   { key: 'leaseEndDate', label: 'Lease End Date', type: 'date', category: 'lifecycle' },
   { key: 'warrantyEndDate', label: 'Warranty End Date', type: 'date', category: 'lifecycle' },
+  { key: 'dateOfBirth', label: 'Date of Birth', type: 'date', category: 'lifecycle' },
 
   // Messaging
   { key: 'hasReceivedMessage', label: 'Has Received Any Message', type: 'boolean', category: 'messaging' },

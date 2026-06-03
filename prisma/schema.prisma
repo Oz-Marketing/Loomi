@@ -355,6 +355,12 @@ model Contact {
   warrantyEndDate DateTime?
   purchaseDate    DateTime?
 
+  // Date of Birth is a first-class column (unlike the automotive
+  // lifecycle fields, which live in customFields) because the birthday
+  // flow trigger matches on month/day across the whole roster — a
+  // queryable column avoids scanning the customFields JSON blob.
+  dateOfBirth     DateTime?
+
   // Catch-all for CSV columns the canonical schema doesn't cover.
   // Stored as a flat string-keyed JSON object; the filter UI ignores
   // it for now but the API surfaces it on the contact detail page.
@@ -374,6 +380,12 @@ model Contact {
   @@unique([accountKey, phone])
   @@index([accountKey])
   @@index([accountKey, dateAdded])
+  // Makes the keyset (id-cursor) contact scans in the trigger resolvers a
+  // pure index range scan instead of an accountKey-filter-then-sort.
+  @@index([accountKey, id])
+  // Lets the birthday resolver's `dateOfBirth IS NOT NULL` prune instead
+  // of scanning every contact in the account.
+  @@index([accountKey, dateOfBirth])
   // GIN index on the customFields jsonb blob so filter queries against
   // declared custom field keys (e.g. `customFields @> '{"tier":"gold"}'`,
   // `customFields ? 'lifetime_value'`) don't fall back to a full table
@@ -661,6 +673,9 @@ model LoomiFlowEnrollment {
   @@index([status, nextRunAt])
   @@index([flowId, status])
   @@index([contactId])
+  // Serves excludeEnrolledToday's {flowId, contactId in [...], enrolledAt
+  // >= todayStart} once-per-day re-entry guard.
+  @@index([flowId, enrolledAt])
 }
 
 // Step-execution audit trail per enrollment. One row each time a node
@@ -1014,6 +1029,8 @@ model LandingPageEvent {
 model SmsCampaign {
   id               String    @id @default(cuid())
   name             String?
+  // Per-(flow,node) wrapper key — see EmailCampaign.flowNodeKey.
+  flowNodeKey      String?   @unique
   message          String
   status           String    @default("queued") // queued | scheduled | processing | completed | partial | failed | canceled
   scheduledFor     DateTime?
@@ -1131,6 +1148,11 @@ model SmsSuppression {
 model EmailCampaign {
   id               String    @id @default(cuid())
   name             String?
+  // Set ONLY on the per-(flow,node) wrapper campaigns the flow engine
+  // creates ("Flow:<id>/Node:<id>"). Unique so concurrent first-sends
+  // upsert to one row instead of racing two duplicate wrappers. Null on
+  // all normal campaigns (Postgres treats nulls as distinct).
+  flowNodeKey      String?   @unique
   subject          String
   previewText      String?
   htmlContent      String
@@ -1614,4 +1636,19 @@ model NotificationPreference {
 
   @@unique([userId, type])
   @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────
+// App Settings (singleton key/value store)
+// ─────────────────────────────────────────────────────
+
+// Small key/value store for app-level singletons that used to live as files
+// on the release filesystem (and were silently lost on every deploy — see
+// the local-disk data-loss fix). First tenant: the "loomi-knowledge" key,
+// holding the AI knowledge-base markdown formerly at loomi-knowledge.md.
+// `value` is plain text (markdown/JSON/etc.); callers own the encoding.
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
 }

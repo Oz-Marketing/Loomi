@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
+import { forbidTemplateMutation } from '@/lib/flows/route-guards';
 import { getFlow, pauseFlow } from '@/lib/services/loomi-flows';
 
 export async function POST(
@@ -16,6 +17,8 @@ export async function POST(
       : null;
   const existing = await getFlow(id, scope);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const templateGuard = forbidTemplateMutation(existing.accountKey, scope);
+  if (templateGuard) return templateGuard;
 
   const flow = await pauseFlow(id);
   return NextResponse.json({ flow });

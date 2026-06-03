@@ -115,7 +115,15 @@ export interface FlowApiTrigger {
   // Keep in sync with TriggerType in src/lib/flows/validation.ts.
   // `form_submission` fires from the forms submit pipeline rather
   // than the trigger poll worker.
-  type: 'list' | 'audience' | 'manual' | 'event' | 'form_submission';
+  type:
+    | 'list'
+    | 'audience'
+    | 'manual'
+    | 'event'
+    | 'form_submission'
+    | 'date_reminder'
+    | 'birthday'
+    | 'tag_added';
   config: Record<string, unknown>;
   enabled: boolean;
 }
@@ -220,9 +228,9 @@ export const NODE_META: Record<BuilderNodeType, NodeMetaEntry> = {
   // ── Contact ops ──
   add_tag: meta('contact', 'Add Tag', 'Add a tag to the contact.'),
   remove_tag: meta('contact', 'Remove Tag', 'Remove a tag from the contact.'),
-  update_field: meta('contact', 'Update Field', 'Set a value on a contact field.'),
-  add_to_list: meta('contact', 'Add to List', 'Add the contact to a static list.'),
-  remove_from_list: meta('contact', 'Remove from List', 'Remove the contact from a static list.'),
+  update_field: meta('contact', 'Update Field', 'Set a value on a contact field. Execution coming soon.', false),
+  add_to_list: meta('contact', 'Add to List', 'Add the contact to a static list. Execution coming soon.', false),
+  remove_from_list: meta('contact', 'Remove from List', 'Remove the contact from a static list. Execution coming soon.', false),
   add_note: meta('contact', 'Add Note', 'Attach a note to the contact. Execution coming soon.', false),
 
   // ── Tasks ──

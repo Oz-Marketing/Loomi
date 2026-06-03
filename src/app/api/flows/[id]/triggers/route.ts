@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
+import { forbidTemplateMutation } from '@/lib/flows/route-guards';
 import {
   createTrigger,
   getFlow,
@@ -13,6 +14,9 @@ const VALID_TRIGGER_TYPES: ReadonlySet<TriggerType> = new Set([
   'manual',
   'event',
   'form_submission',
+  'date_reminder',
+  'birthday',
+  'tag_added',
 ]);
 
 export async function GET(
@@ -48,6 +52,8 @@ export async function POST(
       : null;
   const existing = await getFlow(id, scope);
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const templateGuard = forbidTemplateMutation(existing.accountKey, scope);
+  if (templateGuard) return templateGuard;
 
   const body = await req.json().catch(() => ({}));
   const type = String(body?.type || '') as TriggerType;

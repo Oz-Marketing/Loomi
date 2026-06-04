@@ -25,9 +25,10 @@ import { SubmissionsTable } from '@/components/forms/submissions-table';
 import { HelpTip } from '@/components/ui/help-tip';
 import type { FormSubmissionRow } from '@/lib/services/forms';
 
-type DetailTab = 'overview' | 'settings';
+type DetailTab = 'overview' | 'submissions' | 'settings';
 const TABS: { key: DetailTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
   { key: 'overview', label: 'Overview', icon: Squares2X2Icon },
+  { key: 'submissions', label: 'Submissions', icon: InboxStackIcon },
   { key: 'settings', label: 'Settings', icon: Cog6ToothIcon },
 ];
 
@@ -39,9 +40,9 @@ const fetcher = async (url: string) => {
 
 /**
  * Form overview page — the landing page for a single form. Mirrors the
- * Flow overview pattern (`/flows/[id]`): stat cards across the top,
- * live form preview, embed snippet, and the full submissions table at
- * the bottom. The cog opens the settings modal (no separate page).
+ * Flow overview pattern (`/flows/[id]`), split across three tabs:
+ * Overview (stat cards + live preview + embed snippet), Submissions
+ * (the full submissions table), and Settings (the settings form).
  */
 export function FormOverview() {
   const { form, setForm } = useFormDetail();
@@ -205,28 +206,26 @@ export function FormOverview() {
         })}
       </div>
 
-      {activeTab === 'settings' ? (
-        <FormSettingsForm />
-      ) : (
-        <OverviewBody />
-      )}
+      {activeTab === 'overview' && <OverviewBody />}
+      {activeTab === 'submissions' && <SubmissionsBody />}
+      {activeTab === 'settings' && <FormSettingsForm />}
     </div>
   );
 }
 
 /**
- * Overview-tab body — the form's stats, preview, embed snippet, and
- * the recent-submissions table. Lifted out so the tab switch in
- * FormOverview is a single ternary at the bottom; state still lives
- * in the parent via `useFormDetail()`.
+ * Overview-tab body — the form's stat cards, live preview, and embed
+ * snippet. The submissions table lives on its own tab (SubmissionsBody).
+ * Lifted out so the tab switch in FormOverview stays declarative; state
+ * still lives in the parent via `useFormDetail()`.
  */
 function OverviewBody() {
   const { form, setForm } = useFormDetail();
   const subHref = useSubaccountHref();
   const [copiedKey, setCopiedKey] = React.useState<string | null>(null);
 
-  // Just for the stat cards — the full submissions table embedded at
-  // the bottom does its own fetch with pagination.
+  // Just for the stat cards — the Submissions tab's table does its own
+  // fetch with pagination, independent of this summary query.
   const { data: submissionsPayload } = useSWR<{
     submissions: FormSubmissionRow[];
     total: number;
@@ -404,14 +403,21 @@ function OverviewBody() {
           </div>
         </section>
       </div>
-
-      {/* Submissions — full table at the bottom of the overview. The
-          submissions data fetch / pagination / CSV export all live in
-          the table component itself, so embedding it here is a one-liner. */}
-      <section>
-        <SubmissionsTable formId={form.id} schema={form.schema} />
-      </section>
     </>
+  );
+}
+
+/**
+ * Submissions-tab body — the full submissions table. The data fetch,
+ * pagination, and CSV export all live in the table component itself, so
+ * this tab is a thin wrapper that just feeds it the form id + schema.
+ */
+function SubmissionsBody() {
+  const { form } = useFormDetail();
+  return (
+    <section>
+      <SubmissionsTable formId={form.id} schema={form.schema} />
+    </section>
   );
 }
 

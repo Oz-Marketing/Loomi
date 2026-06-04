@@ -35,18 +35,18 @@ interface Destination {
   recentDeliveries: DeliveryRow[];
 }
 
-const PROVIDERS: { value: string; label: string; blurb: string; banner: string }[] = [
+const PROVIDERS: { value: string; label: string; blurb: string; logo: string }[] = [
   {
     value: 'tekion',
     label: 'Tekion',
     blurb: 'Forward form leads into Tekion ARC.',
-    banner: 'linear-gradient(135deg,#0b1b3a,#1e3a8a)',
+    logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/7a452ef16a8a428ea19c6cd5fc16d245/tekion_logo.jpg',
   },
   {
     value: 'vinsolutions',
     label: 'VinSolutions',
     blurb: 'Forward form leads into VinSolutions.',
-    banner: 'linear-gradient(135deg,#7c2d12,#b91c1c)',
+    logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/c4be6d0fe861482ea4b045ed02e299d7/vinsolutions_logo.png',
   },
 ];
 
@@ -76,11 +76,13 @@ export function CrmIntegrationCards({ accountKey }: { accountKey: string }) {
             onClick={() => setActive(p.value)}
             className="group overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] text-left transition-all hover:border-[var(--primary)] hover:shadow-md"
           >
-            <div
-              className="flex h-28 w-full items-center justify-center border-b border-[var(--border)]"
-              style={{ background: p.banner }}
-            >
-              <span className="text-xl font-bold tracking-tight text-white">{p.label}</span>
+            <div className="flex h-28 w-full items-center justify-center border-b border-[var(--border)] bg-white px-8 py-6">
+              <img
+                src={p.logo}
+                alt={`${p.label} logo`}
+                loading="lazy"
+                className="max-h-12 w-auto max-w-[75%] object-contain"
+              />
             </div>
             <div className="p-4">
               <div className="flex items-center justify-between gap-2">
@@ -99,7 +101,7 @@ export function CrmIntegrationCards({ accountKey }: { accountKey: string }) {
             accountKey={accountKey}
             provider={activeMeta.value}
             label={activeMeta.label}
-            banner={activeMeta.banner}
+            logo={activeMeta.logo}
             destination={byProvider.get(activeMeta.value) ?? null}
             onClose={() => setActive(null)}
             onChanged={() => void mutate()}
@@ -129,7 +131,7 @@ function ProviderModal({
   accountKey,
   provider,
   label,
-  banner,
+  logo,
   destination,
   onClose,
   onChanged,
@@ -137,7 +139,7 @@ function ProviderModal({
   accountKey: string;
   provider: string;
   label: string;
-  banner: string;
+  logo: string;
   destination: Destination | null;
   onClose: () => void;
   onChanged: () => void;
@@ -256,8 +258,12 @@ function ProviderModal({
         className="glass-modal w-[560px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="relative flex h-28 w-full items-center justify-center" style={{ background: banner }}>
-          <span className="text-2xl font-bold tracking-tight text-white">{label}</span>
+        <div className="relative flex h-28 w-full items-center justify-center border-b border-[var(--border)] bg-white px-8 py-6">
+          <img
+            src={logo}
+            alt={`${label} logo`}
+            className="max-h-14 w-auto max-w-[60%] object-contain"
+          />
           <button
             type="button"
             onClick={onClose}

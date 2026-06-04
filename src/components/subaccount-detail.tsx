@@ -29,6 +29,7 @@ import { UsersTab } from '@/components/settings/users-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
 import { AccountDomainsTab } from '@/components/account-domains-tab';
+import { CrmIntegrationCards } from '@/components/crm-integration-cards';
 // Sending + Suppressions tabs now live under /messaging/settings.
 import { OemMultiSelect } from '@/components/oem-multi-select';
 import { UserAvatar } from '@/components/user-avatar';
@@ -1087,6 +1088,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                 </p>
               </div>
             </button>
+
+            {key && <CrmIntegrationCards accountKey={key} />}
           </div>
         )}
 

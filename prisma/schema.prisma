@@ -159,6 +159,7 @@ model Account {
   contactCustomFields      ContactCustomField[]
   loomiFlows               LoomiFlow[]
   forms                    Form[]
+  crmDestinations          CrmDestination[]
   landingPages             LandingPage[]
   landingPageTemplates     AccountLandingPageTemplate[]
   accountDomains           AccountDomain[]
@@ -724,6 +725,10 @@ model Form {
   // Uses the same no-overwrite semantics as importContacts(listId).
   listId          String?
   list            ContactList? @relation(fields: [listId], references: [id], onDelete: SetNull)
+  // When true, each submission is forwarded as an ADF lead to the
+  // account's configured CRM destination(s) (Tekion / VinSolutions).
+  // When false (default) leads are kept in Loomi only.
+  forwardToCrm    Boolean      @default(false)
   submissionCount Int          @default(0)
   createdByUserId String?
   publishedAt     DateTime?
@@ -773,6 +778,60 @@ model FormSubmission {
   @@index([formId, createdAt])
   @@index([contactId])
   @@index([lpId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────
+// Websites — Forms → CRM lead routing
+//
+// Forwards form leads to a dealer's CRM (Tekion / VinSolutions) as an
+// ADF/XML email — the automotive-industry standard lead format. Each
+// account configures one CrmDestination per provider (the CRM's lead
+// intake email). When a form has `forwardToCrm` enabled, submit.ts
+// enqueues one pg-boss delivery job per enabled destination; the worker
+// builds the ADF document, emails it via the account's sending identity,
+// and records the outcome on CrmDelivery.
+// ─────────────────────────────────────────────────────
+
+model CrmDestination {
+  id              String   @id @default(cuid())
+  accountKey      String
+  account         Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  // CRM platform — drives the card label and any provider-specific quirks.
+  provider        String // tekion | vinsolutions
+  // The CRM's ADF lead-intake email address (dealer-specific, issued by
+  // the CRM). Leads are routed to the right store by this address.
+  leadEmail       String
+  enabled         Boolean  @default(true)
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  deliveries CrmDelivery[]
+
+  // One destination per CRM per account — each provider is a single
+  // "connect" in the integrations grid (Tekion card, VinSolutions card).
+  @@unique([accountKey, provider])
+  @@index([accountKey, enabled])
+}
+
+model CrmDelivery {
+  id            String         @id @default(cuid())
+  destinationId String
+  destination   CrmDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
+  // FormSubmission.id this delivery is for. No relation — submissions can
+  // be pruned independently and we don't want a cascade to wipe the log.
+  submissionId  String
+  status        String         @default("pending") // pending | sent | failed
+  attempts      Int            @default(0)
+  // Provider message id from the email send (SendGrid X-Message-Id or the
+  // SMTP messageId), kept for tracing a lead through to the CRM.
+  messageId     String?
+  lastError     String?
+  createdAt     DateTime       @default(now())
+  sentAt        DateTime?
+
+  @@index([destinationId, createdAt])
+  @@index([submissionId])
 }
 
 // ─────────────────────────────────────────────────────

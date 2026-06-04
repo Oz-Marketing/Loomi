@@ -28,6 +28,9 @@ export interface FormSummary {
   status: FormStatus;
   submissionCount: number;
   listId: string;
+  /** When true, submissions are forwarded as ADF leads to the account's
+   *  configured CRM destination(s). */
+  forwardToCrm: boolean;
   createdByUserId: string;
   publishedAt: string;
   createdAt: string;
@@ -107,6 +110,7 @@ function toSummary(row: {
   status: string;
   submissionCount: number;
   listId: string | null;
+  forwardToCrm: boolean;
   createdByUserId: string | null;
   publishedAt: Date | null;
   createdAt: Date;
@@ -121,6 +125,7 @@ function toSummary(row: {
     status: row.status === 'published' ? 'published' : 'draft',
     submissionCount: row.submissionCount,
     listId: row.listId ?? '',
+    forwardToCrm: row.forwardToCrm,
     createdByUserId: row.createdByUserId ?? '',
     schema:
       row.schema !== undefined
@@ -142,6 +147,7 @@ function toDetail(row: {
   redirectUrl: string | null;
   successMessage: string | null;
   listId: string | null;
+  forwardToCrm: boolean;
   submissionCount: number;
   createdByUserId: string | null;
   publishedAt: Date | null;
@@ -287,6 +293,7 @@ export async function updateForm(
     redirectUrl?: unknown;
     successMessage?: unknown;
     listId?: unknown;
+    forwardToCrm?: unknown;
   },
 ): Promise<FormDetail> {
   const existing = await prisma.form.findUnique({ where: { id } });
@@ -369,6 +376,13 @@ export async function updateForm(
     } else {
       throw new FormServiceError('listId must be a string or null');
     }
+  }
+
+  if (patch.forwardToCrm !== undefined) {
+    if (typeof patch.forwardToCrm !== 'boolean') {
+      throw new FormServiceError('forwardToCrm must be a boolean');
+    }
+    data.forwardToCrm = patch.forwardToCrm;
   }
 
   const updated = await prisma.form.update({ where: { id }, data });

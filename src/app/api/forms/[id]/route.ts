@@ -45,6 +45,7 @@ export async function PATCH(
       redirectUrl: body?.redirectUrl,
       successMessage: body?.successMessage,
       listId: body?.listId,
+      forwardToCrm: body?.forwardToCrm,
     });
     return NextResponse.json({ form });
   } catch (err) {

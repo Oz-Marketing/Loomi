@@ -22,6 +22,14 @@ export function getBoss(): Promise<PgBoss> {
     return boss;
   })();
 
+  // If startup fails (e.g. a transient DB outage on first use), don't cache
+  // the rejected promise — clear it so the next getBoss() retries instead of
+  // returning the same permanent rejection for the life of the process.
+  // (The current caller still receives this rejection.)
+  bossPromise.catch(() => {
+    bossPromise = null;
+  });
+
   return bossPromise;
 }
 

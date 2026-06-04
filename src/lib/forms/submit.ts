@@ -11,6 +11,7 @@ import { prisma } from '@/lib/prisma';
 import { parseFormTemplate } from './types';
 import { validateSubmission, FormValidationError } from './validate';
 import { enrollContactForFormSubmission } from '@/lib/services/loomi-flows';
+import { enqueueFormSubmissionCrmLeads } from '@/lib/integrations/crm/dispatch';
 import {
   TURNSTILE_RESPONSE_FIELD,
   isTurnstileConfigured,
@@ -156,6 +157,17 @@ export async function submitForm(args: {
     } catch (err) {
       console.error('[forms/submit] flow-trigger enrollment failed', err);
     }
+  }
+
+  // Forward the lead to the account's CRM (Tekion/VinSolutions) when the
+  // form opts in. Unlike flow triggers this fires for anonymous
+  // submissions too — a lead with no email/phone match still matters to a
+  // CRM. Enqueue-only + try/catch'd so a queue hiccup can never roll back
+  // the persisted submission.
+  try {
+    await enqueueFormSubmissionCrmLeads({ form, submission });
+  } catch (err) {
+    console.error('[forms/submit] CRM lead enqueue failed', err);
   }
 
   return {

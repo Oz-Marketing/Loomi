@@ -30,6 +30,11 @@ import {
 import { purgeOldArchivedEmails } from '@/lib/services/account-emails';
 import { purgeOldArchivedEmailCampaigns } from '@/lib/services/email-campaigns';
 import { purgeOldArchivedSmsCampaigns } from '@/lib/services/sms-campaigns';
+import {
+  DELIVER_CRM_LEAD_QUEUE,
+  type DeliverCrmLeadJob,
+} from '@/lib/integrations/crm/dispatch';
+import { deliverCrmLead } from '@/lib/integrations/crm/deliver';
 
 const PROCESS_DUE_CAMPAIGNS_QUEUE = 'loomi.process-due-campaigns';
 const PROCESS_FLOW_ENROLLMENTS_QUEUE = 'loomi.process-flow-enrollments';
@@ -138,6 +143,26 @@ async function main(): Promise<void> {
   await boss.work(PURGE_ARCHIVED_QUEUE, async () => {
     await runPurgeArchived();
   });
+
+  // Form → CRM lead delivery (ADF email). Event-driven (no schedule):
+  // submitForm enqueues one job per enabled destination. Retries/backoff
+  // are carried on the job itself (see dispatch.ts), so a failing mail
+  // provider reschedules without blocking the submit path.
+  await boss.createQueue(DELIVER_CRM_LEAD_QUEUE);
+  // Assumes the default batchSize of 1 (one job per invocation): deliverCrmLead
+  // THROWS on a transient failure so pg-boss retries that job. If batchSize is
+  // ever raised, a throw here fails the WHOLE batch (pg-boss fails all jobIds),
+  // re-running already-sent jobs — so batching would need per-job error
+  // isolation that still surfaces a retry signal, not a blanket try/catch
+  // (which would swallow the throw and silently kill retries).
+  await boss.work<DeliverCrmLeadJob>(
+    DELIVER_CRM_LEAD_QUEUE,
+    async (jobs) => {
+      for (const job of jobs) {
+        await deliverCrmLead(job.data.deliveryId);
+      }
+    },
+  );
 
   // Recurring schedule: every minute. pg-boss is idempotent on schedule
   // creation, so this is safe to call on every boot.

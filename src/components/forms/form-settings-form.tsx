@@ -33,6 +33,7 @@ export function FormSettingsForm() {
     redirectUrl: form.redirectUrl,
     successMessage: form.successMessage,
     listId: form.listId,
+    forwardToCrm: form.forwardToCrm,
   });
   const [lists, setLists] = React.useState<ContactListOption[]>([]);
   const [saving, setSaving] = React.useState<string | null>(null);
@@ -48,6 +49,7 @@ export function FormSettingsForm() {
       redirectUrl: form.redirectUrl,
       successMessage: form.successMessage,
       listId: form.listId,
+      forwardToCrm: form.forwardToCrm,
     });
   }, [form]);
 
@@ -79,6 +81,7 @@ export function FormSettingsForm() {
         redirectUrl: form.redirectUrl,
         successMessage: form.successMessage,
         listId: form.listId,
+        forwardToCrm: form.forwardToCrm,
       });
       return;
     }
@@ -233,6 +236,38 @@ export function FormSettingsForm() {
                     </option>
                   ))}
                 </select>
+              </label>
+
+              <label className="flex items-center justify-between rounded-xl border border-[var(--border)] px-3 py-3">
+                <span>
+                  <span className="block text-sm font-medium">Forward leads to CRM</span>
+                  <span className="block text-xs text-[var(--muted-foreground)]">
+                    Send each submission to this account&apos;s CRM (Tekion / VinSolutions). Off
+                    keeps leads in Loomi only. Configure the destination in the account&apos;s
+                    Integrations settings.
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={draft.forwardToCrm}
+                  onClick={() => {
+                    const next = !draft.forwardToCrm;
+                    setDraft((d) => ({ ...d, forwardToCrm: next }));
+                    void patch('forwardToCrm', next);
+                  }}
+                  className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${
+                    draft.forwardToCrm
+                      ? 'bg-green-500'
+                      : 'bg-[var(--muted)] border border-[var(--border)]'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      draft.forwardToCrm ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
               </label>
             </div>
           </section>

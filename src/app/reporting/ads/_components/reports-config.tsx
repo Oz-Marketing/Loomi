@@ -40,7 +40,7 @@ export interface ReportDef {
 export const DIGITAL_ADS_REPORTS: ReportDef[] = [
   { key: 'meta', label: 'Meta', blurb: 'Facebook & Instagram paid performance', icon: MegaphoneIcon, status: 'live' },
   { key: 'stackadapt', label: 'OTT / CTV', blurb: 'StackAdapt programmatic display & connected TV', icon: TvIcon, status: 'live' },
-  { key: 'google', label: 'Google Ads', blurb: 'Search, Display & Performance Max', icon: MagnifyingGlassIcon, status: 'soon' },
+  { key: 'google', label: 'Google Ads', blurb: 'Search, Display & Performance Max', icon: MagnifyingGlassIcon, status: 'live' },
   { key: 'email', label: 'Email Campaigns', blurb: 'GoHighLevel email performance', icon: EnvelopeIcon, status: 'soon' },
 ];
 

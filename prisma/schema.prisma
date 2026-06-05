@@ -147,6 +147,12 @@ model Account {
   // per-org stackadapt_advertiser_id / stackadapt_margin.
   stackadaptAdvertiserId    String?
   stackadaptMargin          Float?
+  // Google Ads customer this sub-account reports on (digits, dashes stripped),
+  // plus its reporting margin (percent, same markup math as the others). The
+  // Google Ads API credentials (developer token + OAuth) are agency-wide in env.
+  // Ported from Oz Dealer Tools' per-org google_ads_customer_id / google_ads_margin.
+  googleAdsCustomerId       String?
+  googleAdsMargin           Float?
   // IANA timezone of the Meta ad account (e.g. "America/New_York"), cached
   // from the Marketing API on each sync. Meta resets the daily budget at
   // midnight in THIS zone, so the Pacer's time-left math runs against it.

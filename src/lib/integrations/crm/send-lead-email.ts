@@ -32,17 +32,22 @@ function formatFrom(email: string, name: string | null): string {
 }
 
 /**
- * Deliver the ADF document to `to`. Returns the provider message id.
- * Throws LeadEmailError when the account has no usable sender (neither a
- * SendGrid key + verified sender, nor SMTP env configured).
+ * Deliver the ADF document to every address in `to` (one message per address —
+ * each CRM intake inbox gets its own copy). Returns the joined provider message
+ * ids. Throws LeadEmailError when there's no recipient, or when the account has
+ * no usable sender (neither a SendGrid key + verified sender, nor SMTP env).
  */
 export async function sendLeadEmail(args: {
   accountKey: string;
-  to: string;
+  to: string[];
   subject: string;
   xml: string;
 }): Promise<{ messageId: string }> {
-  const { accountKey, to, subject, xml } = args;
+  const { accountKey, subject, xml } = args;
+  const recipients = args.to.map((t) => t.trim()).filter(Boolean);
+  if (recipients.length === 0) {
+    throw new LeadEmailError('No CRM lead address configured.');
+  }
 
   const account = await prisma.account.findUnique({
     where: { key: accountKey },
@@ -54,19 +59,23 @@ export async function sendLeadEmail(args: {
   // Prefer SendGrid when the account has a key AND a verified sender.
   const sg = await resolveSendGridConfig(accountKey);
   if (sg && senderEmail) {
-    const result = await sendEmailViaSendGrid({
-      apiKey: sg.apiKey,
-      from: { email: senderEmail, name: senderName || undefined },
-      replyTo: account?.replyToEmail ? { email: account.replyToEmail } : undefined,
-      to: { email: to },
-      subject,
-      text: xml,
-      html: htmlWrap(xml),
-      categories: ['crm-lead'],
-      // No `unsubscribe` → SendGrid skips subscription tracking; correct
-      // for a transactional CRM lead.
-    });
-    return { messageId: result.messageId };
+    const ids: string[] = [];
+    for (const rcpt of recipients) {
+      const result = await sendEmailViaSendGrid({
+        apiKey: sg.apiKey,
+        from: { email: senderEmail, name: senderName || undefined },
+        replyTo: account?.replyToEmail ? { email: account.replyToEmail } : undefined,
+        to: { email: rcpt },
+        subject,
+        text: xml,
+        html: htmlWrap(xml),
+        categories: ['crm-lead'],
+        // No `unsubscribe` → SendGrid skips subscription tracking; correct
+        // for a transactional CRM lead.
+      });
+      ids.push(result.messageId);
+    }
+    return { messageId: ids.join(', ') };
   }
 
   // SMTP fallback (nodemailer). Uses the same env the campaign worker reads.
@@ -88,14 +97,17 @@ export async function sendLeadEmail(args: {
     auth: { user: smtpUser, pass: smtpPass },
   });
 
-  const info = await transporter.sendMail({
-    from: formatFrom(smtpFrom, senderName),
-    to,
-    ...(account?.replyToEmail ? { replyTo: account.replyToEmail } : {}),
-    subject,
-    text: xml,
-    html: htmlWrap(xml),
-  });
-
-  return { messageId: info.messageId || 'smtp-sent' };
+  const ids: string[] = [];
+  for (const rcpt of recipients) {
+    const info = await transporter.sendMail({
+      from: formatFrom(smtpFrom, senderName),
+      to: rcpt,
+      ...(account?.replyToEmail ? { replyTo: account.replyToEmail } : {}),
+      subject,
+      text: xml,
+      html: htmlWrap(xml),
+    });
+    ids.push(info.messageId || 'smtp-sent');
+  }
+  return { messageId: ids.join(', ') };
 }

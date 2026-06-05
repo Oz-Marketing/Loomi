@@ -22,6 +22,7 @@
 import { prisma } from '@/lib/prisma';
 import { buildAdfXml, buildAdfSubject, hasUsableProspect } from './adf';
 import { sendLeadEmail, LeadEmailError } from './send-lead-email';
+import { parseLeadEmails } from './lead-emails';
 import { MAX_DELIVERY_ATTEMPTS } from './dispatch';
 
 /** Thrown to signal pg-boss the job should be retried. */
@@ -101,7 +102,7 @@ export async function deliverCrmLead(deliveryId: string): Promise<void> {
   try {
     const { messageId } = await sendLeadEmail({
       accountKey: form.accountKey,
-      to: destination.leadEmail,
+      to: parseLeadEmails(destination.leadEmails),
       subject,
       xml,
     });

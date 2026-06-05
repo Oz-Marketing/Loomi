@@ -17,7 +17,7 @@ import * as React from 'react';
 import { createPortal } from 'react-dom';
 import useSWR from 'swr';
 import { toast } from 'sonner';
-import { ArrowPathIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 
 interface DeliveryRow {
   id: string;
@@ -30,7 +30,7 @@ interface DeliveryRow {
 interface Destination {
   id: string;
   provider: string;
-  leadEmail: string;
+  leadEmails: string[];
   enabled: boolean;
   recentDeliveries: DeliveryRow[];
 }
@@ -144,10 +144,19 @@ function ProviderModal({
   onClose: () => void;
   onChanged: () => void;
 }) {
-  const [leadEmail, setLeadEmail] = React.useState(destination?.leadEmail ?? '');
+  const [emails, setEmails] = React.useState<string[]>(
+    destination?.leadEmails?.length ? destination.leadEmails : [''],
+  );
   const [busy, setBusy] = React.useState(false);
   const [testing, setTesting] = React.useState(false);
   const crmBase = `/api/accounts/${encodeURIComponent(accountKey)}/crm`;
+
+  const cleanEmails = emails.map((e) => e.trim()).filter(Boolean);
+  const updateEmail = (i: number, v: string) =>
+    setEmails((prev) => prev.map((e, idx) => (idx === i ? v : e)));
+  const addEmail = () => setEmails((prev) => [...prev, '']);
+  const removeEmail = (i: number) =>
+    setEmails((prev) => (prev.length === 1 ? prev : prev.filter((_, idx) => idx !== i)));
 
   React.useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -158,7 +167,7 @@ function ProviderModal({
   }, [onClose]);
 
   const save = async () => {
-    if (busy || !leadEmail.trim()) return;
+    if (busy || cleanEmails.length === 0) return;
     setBusy(true);
     try {
       // Existing destination → PATCH (and re-enable); otherwise create.
@@ -166,12 +175,12 @@ function ProviderModal({
         ? await fetch(`${crmBase}/${destination.id}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ leadEmail: leadEmail.trim(), enabled: true }),
+            body: JSON.stringify({ leadEmails: cleanEmails, enabled: true }),
           })
         : await fetch(crmBase, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider, leadEmail: leadEmail.trim() }),
+            body: JSON.stringify({ provider, leadEmails: cleanEmails }),
           });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -286,27 +295,51 @@ function ProviderModal({
             on are emailed there as ADF/XML. We retry with backoff if delivery fails.
           </p>
 
-          <label className="block">
-            <span className="text-sm font-medium">Lead-intake email</span>
-            <input
-              type="email"
-              value={leadEmail}
-              onChange={(e) => setLeadEmail(e.target.value)}
-              placeholder={`leads@${provider}.example.com`}
-              autoComplete="off"
-              spellCheck={false}
-              className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 font-mono text-sm outline-none focus:border-[var(--primary)]"
-            />
-            <span className="mt-1 block text-[11px] text-[var(--muted-foreground)]">
-              This is the lead address your CRM provides for inbound ADF — not a person&apos;s inbox.
+          <div className="block">
+            <span className="text-sm font-medium">Lead-intake emails</span>
+            <div className="mt-1 space-y-2">
+              {emails.map((email, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => updateEmail(i, e.target.value)}
+                    placeholder={`leads@${provider}.example.com`}
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="flex-1 rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 font-mono text-sm outline-none focus:border-[var(--primary)]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeEmail(i)}
+                    disabled={emails.length === 1}
+                    aria-label="Remove email"
+                    className="flex-shrink-0 rounded-lg border border-[var(--border)] p-2 text-[var(--muted-foreground)] transition-colors hover:border-rose-500/40 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <XMarkIcon className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={addEmail}
+              className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-[var(--primary)] hover:underline"
+            >
+              <PlusIcon className="h-3.5 w-3.5" />
+              Add another email
+            </button>
+            <span className="mt-2 block text-[11px] text-[var(--muted-foreground)]">
+              These are the lead addresses your CRM provides for inbound ADF — not people&apos;s inboxes.
+              Each one gets a copy of every forwarded lead.
             </span>
-          </label>
+          </div>
 
           <div className="mt-5 flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={save}
-              disabled={busy || !leadEmail.trim()}
+              disabled={busy || cleanEmails.length === 0}
               className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
               {busy ? 'Saving…' : destination ? 'Save' : 'Connect'}

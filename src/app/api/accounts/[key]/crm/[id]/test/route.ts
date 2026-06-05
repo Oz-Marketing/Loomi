@@ -9,6 +9,7 @@ import {
 import { prisma } from '@/lib/prisma';
 import { buildAdfXml, buildAdfSubject } from '@/lib/integrations/crm/adf';
 import { sendLeadEmail, LeadEmailError } from '@/lib/integrations/crm/send-lead-email';
+import { parseLeadEmails } from '@/lib/integrations/crm/lead-emails';
 
 interface RouteParams {
   params: Promise<{ key: string; id: string }>;
@@ -75,7 +76,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
   try {
     const { messageId } = await sendLeadEmail({
       accountKey: key,
-      to: destination.leadEmail,
+      to: parseLeadEmails(destination.leadEmails),
       subject: buildAdfSubject(adfInput),
       xml: buildAdfXml(adfInput),
     });

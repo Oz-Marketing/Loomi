@@ -798,9 +798,10 @@ model CrmDestination {
   account         Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
   // CRM platform — drives the card label and any provider-specific quirks.
   provider        String // tekion | vinsolutions
-  // The CRM's ADF lead-intake email address (dealer-specific, issued by
-  // the CRM). Leads are routed to the right store by this address.
-  leadEmail       String
+  // The CRM's ADF lead-intake email address(es) (dealer-specific, issued by
+  // the CRM). Stored as a JSON array of strings; each lead is emailed to every
+  // address, so one provider can fan out to multiple intake inboxes.
+  leadEmails      String   @default("[]")
   enabled         Boolean  @default(true)
   createdByUserId String?
   createdAt       DateTime @default(now())

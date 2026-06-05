@@ -6,6 +6,11 @@ import {
   requireRole,
 } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
+import {
+  normalizeLeadEmails,
+  parseLeadEmails,
+  stringifyLeadEmails,
+} from '@/lib/integrations/crm/lead-emails';
 
 interface RouteParams {
   params: Promise<{ key: string; id: string }>;
@@ -37,7 +42,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
   }
 
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
-  const data: { leadEmail?: string; enabled?: boolean } = {};
+  const data: { leadEmails?: string; enabled?: boolean } = {};
 
   // provider is immutable. Each card is bound to one CRM and there's a
   // unique (accountKey, provider) constraint — allowing a provider edit
@@ -50,12 +55,18 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
     );
   }
 
-  if ('leadEmail' in body) {
-    const leadEmail = typeof body.leadEmail === 'string' ? body.leadEmail.trim() : '';
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(leadEmail)) {
-      return NextResponse.json({ error: 'A valid CRM lead email is required.' }, { status: 400 });
+  if ('leadEmails' in body || 'leadEmail' in body) {
+    const { emails, invalid } = normalizeLeadEmails(body.leadEmails ?? body.leadEmail);
+    if (invalid.length > 0) {
+      return NextResponse.json(
+        { error: `Invalid email${invalid.length > 1 ? 's' : ''}: ${invalid.join(', ')}` },
+        { status: 400 },
+      );
     }
-    data.leadEmail = leadEmail;
+    if (emails.length === 0) {
+      return NextResponse.json({ error: 'At least one valid CRM lead email is required.' }, { status: 400 });
+    }
+    data.leadEmails = stringifyLeadEmails(emails);
   }
 
   if ('enabled' in body) {
@@ -71,7 +82,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
     destination: {
       id: updated.id,
       provider: updated.provider,
-      leadEmail: updated.leadEmail,
+      leadEmails: parseLeadEmails(updated.leadEmails),
       enabled: updated.enabled,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,

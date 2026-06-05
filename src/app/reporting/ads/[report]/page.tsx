@@ -15,19 +15,21 @@ import { useTheme } from '@/contexts/theme-context';
 import { ReportingPageHeader } from '../../_components/page-header';
 import { EmptyState, RangeControls } from '../_components/shared';
 import { findReport, LIVE_REPORTS } from '../_components/reports-config';
+import { REPORT_COMPONENTS } from '../_components/report-components';
 import { useRange } from '../_components/range-context';
 
 export default function DigitalAdsReportPage() {
   const params = useParams();
   const key = String(params.report);
   const def = findReport(key);
+  const Report = REPORT_COMPONENTS[key];
 
   const { accountKey, accountData } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const range = useRange();
 
-  if (!def || def.status !== 'live' || !def.Report) {
+  if (!def || def.status !== 'live' || !Report) {
     return (
       <>
         <ReportingPageHeader eyebrow="Digital Ads" title="Report not found" subtitle="" />
@@ -41,7 +43,6 @@ export default function DigitalAdsReportPage() {
     );
   }
 
-  const Report = def.Report;
   const dealer = accountData?.dealer || 'all accounts';
 
   return (

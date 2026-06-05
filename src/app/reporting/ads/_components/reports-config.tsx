@@ -1,11 +1,12 @@
-'use client';
-
 /**
- * Digital Ads report registry. The single source of truth for the hub cards,
- * the per-report tab bar, and the /reporting/ads/[report] routes. Adding a
- * platform is one entry here (+ its Report component); flip `status` to 'live'
- * when it's ready. New report GROUPS later reuse the same hub/layout machinery
- * with their own array.
+ * Digital Ads report registry — METADATA ONLY (no component imports), so it's
+ * cheap to pull into the sidebar/nav without dragging the chart-heavy report
+ * components into the global chrome bundle. The key→component map lives in
+ * report-components.tsx and is imported only by the [report] route.
+ *
+ * Single source of truth for the sidebar dropdown, the per-report tab bar, and
+ * the /reporting/ads/[report] routes. Adding a platform is one entry here; flip
+ * `status` to 'live' and add its component to report-components.tsx.
  */
 
 import type { ComponentType, SVGProps } from 'react';
@@ -16,8 +17,6 @@ import {
   EnvelopeIcon,
 } from '@heroicons/react/24/outline';
 import type { DateRangeKey } from './shared';
-import { MetaReport } from './meta-report';
-import { StackAdaptReport } from './stackadapt-report';
 
 export interface ReportComponentProps {
   accountKey: string;
@@ -34,42 +33,15 @@ export interface ReportDef {
   label: string;
   blurb: string;
   icon: ComponentType<SVGProps<SVGSVGElement>>;
-  /** 'live' renders Report; 'soon' shows a disabled "coming soon" card. */
+  /** 'live' is navigable; 'soon' shows as a disabled nav row. */
   status: 'live' | 'soon';
-  Report?: ComponentType<ReportComponentProps>;
 }
 
 export const DIGITAL_ADS_REPORTS: ReportDef[] = [
-  {
-    key: 'meta',
-    label: 'Meta',
-    blurb: 'Facebook & Instagram paid performance',
-    icon: MegaphoneIcon,
-    status: 'live',
-    Report: MetaReport,
-  },
-  {
-    key: 'stackadapt',
-    label: 'OTT / CTV',
-    blurb: 'StackAdapt programmatic display & connected TV',
-    icon: TvIcon,
-    status: 'live',
-    Report: StackAdaptReport,
-  },
-  {
-    key: 'google',
-    label: 'Google Ads',
-    blurb: 'Search, Display & Performance Max',
-    icon: MagnifyingGlassIcon,
-    status: 'soon',
-  },
-  {
-    key: 'email',
-    label: 'Email Campaigns',
-    blurb: 'GoHighLevel email performance',
-    icon: EnvelopeIcon,
-    status: 'soon',
-  },
+  { key: 'meta', label: 'Meta', blurb: 'Facebook & Instagram paid performance', icon: MegaphoneIcon, status: 'live' },
+  { key: 'stackadapt', label: 'OTT / CTV', blurb: 'StackAdapt programmatic display & connected TV', icon: TvIcon, status: 'live' },
+  { key: 'google', label: 'Google Ads', blurb: 'Search, Display & Performance Max', icon: MagnifyingGlassIcon, status: 'soon' },
+  { key: 'email', label: 'Email Campaigns', blurb: 'GoHighLevel email performance', icon: EnvelopeIcon, status: 'soon' },
 ];
 
 export function findReport(key: string): ReportDef | undefined {

@@ -186,6 +186,8 @@ function NodeConfigForm({
       return <WaitUntilForm config={config} onChange={onChange} />;
     case 'webhook':
       return <WebhookForm config={config} onChange={onChange} />;
+    case 'push_to_crm':
+      return <PushToCrmForm config={config} onChange={onChange} />;
     case 'trigger':
       return (
         <TriggerManager
@@ -1386,6 +1388,44 @@ function WebhookForm({
         <code>{'{{enrollmentId}}'}</code>. Request times out after 10s; one
         retry is attempted on 5xx / timeout. Non-2xx after retry marks
         the step failed but does not exit the enrollment.
+      </p>
+    </>
+  );
+}
+
+function PushToCrmForm({
+  config,
+  onChange,
+}: {
+  config: Record<string, unknown>;
+  onChange: (config: Record<string, unknown>) => void;
+}) {
+  const [state, setField] = useFieldState(config, ['provider']);
+  const provider = state.provider || 'hubspot';
+  function commit(next: Partial<typeof state>) {
+    onChange({ ...config, ...state, ...next });
+  }
+  return (
+    <>
+      <Field label="CRM">
+        <select
+          value={provider}
+          onChange={(e) => {
+            setField('provider', e.target.value);
+            commit({ provider: e.target.value });
+          }}
+          className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
+        >
+          <option value="hubspot">HubSpot</option>
+        </select>
+      </Field>
+      <p className="text-[10px] text-[var(--muted-foreground)] leading-relaxed">
+        Hands the contact off to this account&apos;s connected HubSpot
+        integration as a qualified lead — an idempotent upsert by email, so a
+        contact that passes through more than once just refreshes the same
+        record. Connect HubSpot under the account&apos;s Integrations (the
+        HubSpot card). If no HubSpot CRM is connected, the step is skipped and
+        the contact continues through the flow.
       </p>
     </>
   );

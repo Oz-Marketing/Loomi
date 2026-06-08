@@ -49,49 +49,48 @@ export async function enqueueFormSubmissionCrmLeads(args: {
 
   const destinations = await prisma.crmDestination.findMany({
     where: { accountKey: form.accountKey, enabled: true },
-    select: { id: true, leadEmails: true },
+    select: { id: true, provider: true, leadEmails: true },
   });
   if (destinations.length === 0) return;
 
-  // Fan out to one delivery per (destination, intake address). Tracking each
-  // address separately means a retry only re-sends to the address that failed,
-  // not to every inbox on the destination.
-  const targets: { destinationId: string; recipientEmail: string }[] = [];
+  // Build the delivery targets per destination:
+  //   • API providers (hubspot) → one delivery, no recipient address. The
+  //     worker upserts the contact by email (idempotent), so there's nothing
+  //     to fan out.
+  //   • ADF providers → one delivery per intake address. Tracking each address
+  //     separately means a retry only re-sends to the address that failed, not
+  //     to every inbox on the destination.
+  const targets: { destinationId: string; recipientEmail: string | null }[] = [];
   for (const destination of destinations) {
+    if (destination.provider === 'hubspot') {
+      targets.push({ destinationId: destination.id, recipientEmail: null });
+      continue;
+    }
     for (const recipientEmail of parseLeadEmails(destination.leadEmails)) {
       targets.push({ destinationId: destination.id, recipientEmail });
     }
   }
   if (targets.length === 0) return;
 
-  await ensureQueue();
-  const boss = await getBoss();
-
   for (const target of targets) {
     const delivery = await prisma.crmDelivery.create({
       data: {
         destinationId: target.destinationId,
+        source: 'form',
         submissionId: submission.id,
         recipientEmail: target.recipientEmail,
       },
       select: { id: true },
     });
-    const job: DeliverCrmLeadJob = { deliveryId: delivery.id };
     try {
-      // retryLimit is retries ON TOP of the initial run, so MAX-1 retries
-      // = MAX total executions — matching deliver.ts's attempt cap.
-      await boss.send(DELIVER_CRM_LEAD_QUEUE, job, {
-        retryLimit: MAX_DELIVERY_ATTEMPTS - 1,
-        retryDelay: 30,
-        retryBackoff: true,
-      });
+      await enqueueCrmDeliveryJob(delivery.id);
     } catch (err) {
       // The row was created before the enqueue; if the enqueue fails we
       // mark it failed rather than leave an orphaned `pending` row that no
       // worker will ever pick up. Other destinations still get their shot.
       //
-      // This only covers boss.send() THROWING. If the process is killed in
-      // the gap between create() and a successful send(), the row is left
+      // This only covers the enqueue THROWING. If the process is killed in
+      // the gap between create() and a successful enqueue, the row is left
       // `pending` with no backing job. That's a rare crash window; a future
       // reconciliation sweep (re-enqueue or expire pending rows older than
       // N minutes) would close it — tracked as a follow-up.
@@ -106,4 +105,23 @@ export async function enqueueFormSubmissionCrmLeads(args: {
         .catch(() => {});
     }
   }
+}
+
+/**
+ * Enqueue the pg-boss delivery job for an already-created CrmDelivery row.
+ * Shared by the form-submission dispatch above and the push_to_crm flow node
+ * so both go through the worker (and its retry/backoff) the same way.
+ *
+ * retryLimit is retries ON TOP of the initial run, so MAX-1 retries = MAX
+ * total executions — matching deliver.ts's attempt cap.
+ */
+export async function enqueueCrmDeliveryJob(deliveryId: string): Promise<void> {
+  await ensureQueue();
+  const boss = await getBoss();
+  const job: DeliverCrmLeadJob = { deliveryId };
+  await boss.send(DELIVER_CRM_LEAD_QUEUE, job, {
+    retryLimit: MAX_DELIVERY_ATTEMPTS - 1,
+    retryDelay: 30,
+    retryBackoff: true,
+  });
 }

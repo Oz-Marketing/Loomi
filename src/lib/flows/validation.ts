@@ -18,8 +18,15 @@ export type NodeType =
   | 'condition'
   | 'split'
   | 'webhook'
+  | 'push_to_crm'
   | 'exit'
   | 'sticky_note';
+
+// CRM platforms a push_to_crm node can hand a contact off to. Only API
+// providers belong here (the ADF email providers receive leads via forms,
+// not flow nodes). Mirrors the API-provider set in the CRM integration.
+export const CRM_PUSH_PROVIDERS = ['hubspot'] as const;
+export type CrmPushProvider = (typeof CRM_PUSH_PROVIDERS)[number];
 
 export type TriggerType =
   | 'list'
@@ -73,6 +80,7 @@ export const KNOWN_NODE_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
   'condition',
   'split',
   'webhook',
+  'push_to_crm',
   'exit',
   'sticky_note',
 ]);
@@ -90,6 +98,7 @@ export const EXECUTABLE_NODE_TYPES: ReadonlySet<NodeType> = new Set<NodeType>([
   'condition',
   'split',
   'webhook',
+  'push_to_crm',
   'exit',
 ]);
 
@@ -367,6 +376,18 @@ export function validateFlowGraph(graph: {
             'Open the step and fix the JSON syntax, or clear the body if no payload is needed.',
           );
         }
+      }
+    }
+    if (node.type === 'push_to_crm') {
+      // Empty provider is allowed — the worker defaults to the first
+      // (hubspot). Reject only an explicitly unsupported value.
+      const provider = String(node.config.provider || '').trim();
+      if (provider && !CRM_PUSH_PROVIDERS.includes(provider as CrmPushProvider)) {
+        push(
+          node.id,
+          `Unsupported CRM "${provider}".`,
+          `Open the step and pick a supported CRM: ${CRM_PUSH_PROVIDERS.join(', ')}.`,
+        );
       }
     }
   }

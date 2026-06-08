@@ -21,6 +21,7 @@ import {
   DocumentTextIcon,
   CheckCircleIcon,
   ArrowTopRightOnSquareIcon,
+  ArrowRightCircleIcon,
 } from '@heroicons/react/24/outline';
 import { BranchIcon } from '@/components/icons/branch';
 import { NoteIcon } from '@/components/icons/note';
@@ -55,6 +56,7 @@ const ICON_MAP: Record<BuilderNodeType, IconCmp> = {
   condition: BranchIcon,
   split: ScaleIcon,
   webhook: ArrowTopRightOnSquareIcon,
+  push_to_crm: ArrowRightCircleIcon,
   exit: StopCircleIcon,
   sticky_note: NoteIcon,
 };

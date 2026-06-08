@@ -58,6 +58,30 @@ export const INDUSTRY_TEMPLATES: Record<string, IndustryDefaults> = {
 export const SUPPORTED_INDUSTRIES = Object.keys(INDUSTRY_TEMPLATES);
 
 /**
+ * Seed list for the account "Industry" dropdowns. The EFFECTIVE list is
+ * managed at runtime via the Industries settings tab (stored in AppSetting
+ * "app-industries"); this is the fallback used before anyone customizes it
+ * and the single source of truth the four dropdowns + the manager start from.
+ *
+ * Note: "Automotive" and "Powersports" carry built-in behavior (OEM brand
+ * selectors, lifecycle audience seeding, field templates in INDUSTRY_TEMPLATES)
+ * keyed off these exact strings. Renaming/removing them in the UI only changes
+ * the dropdown options — existing accounts keep their stored category — but
+ * those features won't light up under a different label.
+ */
+export const DEFAULT_INDUSTRIES: string[] = [
+  'Automotive',
+  'Powersports',
+  'Ecommerce',
+  'Healthcare',
+  'Real Estate',
+  'Hospitality',
+  'Retail',
+  'Marketing Agency',
+  'General',
+];
+
+/**
  * Get the default custom value template for a given industry/category.
  * Returns `null` if no template exists for the category.
  */

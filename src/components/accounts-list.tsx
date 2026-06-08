@@ -19,6 +19,7 @@ import { formatAccountCityState } from '@/lib/account-resolvers';
 import { industryHasBrands, brandsForIndustry } from '@/lib/oems';
 import { useAccount, type AccountData } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
+import { useIndustries } from '@/lib/hooks/use-industries';
 
 type CreateMode = null | 'manual';
 type SortDirection = 'asc' | 'desc';
@@ -29,7 +30,6 @@ interface AccountsListProps {
   detailBasePath?: string;
 }
 
-const CATEGORY_SUGGESTIONS = ['Automotive', 'Powersports', 'Ecommerce', 'Healthcare', 'Real Estate', 'Hospitality', 'Retail', 'General'];
 const ACCOUNTS_PAGE_SIZE = 10;
 
 /** Convert a display name to camelCase slug, e.g. "Young Ford Ogden" → "youngFordOgden" */
@@ -81,6 +81,7 @@ export function AccountsList({
   const [newKey, setNewKey] = useState('');
   const [newDealer, setNewDealer] = useState('');
   const [newCategory, setNewCategory] = useState('General');
+  const categorySuggestions = useIndustries();
   const [newOems, setNewOems] = useState<string[]>([]);
   const [newRepId, setNewRepId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -335,7 +336,7 @@ export function AccountsList({
                         onChange={(e) => setNewCategory(e.target.value)}
                         className="w-full bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm"
                       >
-                        {CATEGORY_SUGGESTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                        {categorySuggestions.map(c => <option key={c} value={c}>{c}</option>)}
                       </select>
                     </div>
                   </div>

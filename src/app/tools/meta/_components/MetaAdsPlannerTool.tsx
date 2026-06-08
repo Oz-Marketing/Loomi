@@ -7042,7 +7042,6 @@ function AdSetLinkPicker({
   const updatePosition = useCallback(() => {
     if (!triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    const margin = 8;
     const estHeight = 340;
     const spaceBelow = window.innerHeight - rect.bottom;
     // Flip above only when there isn't room below AND there's more room above.

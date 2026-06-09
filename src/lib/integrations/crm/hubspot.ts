@@ -186,9 +186,33 @@ export async function testHubspotConnection(token: string): Promise<{ ok: true }
 }
 
 /**
- * Upsert a contact by email. Idempotent: HubSpot matches on the email
- * idProperty, creating the contact or updating it in place. Returns the
- * HubSpot contact id (recorded as CrmDelivery.messageId for traceability).
+ * Pull the existing contact id out of a 409 "duplicate" create response.
+ * HubSpot returns e.g. `{ message: "Contact already exists. Existing ID:
+ * 12345", category: "CONFLICT" }`. We parse the JSON message first, then fall
+ * back to scanning the raw body, so a phrasing tweak doesn't break us.
+ */
+export function parseExistingContactId(body: string): string | null {
+  let text = body;
+  try {
+    const json = JSON.parse(body) as { message?: unknown };
+    if (typeof json.message === 'string') text = json.message;
+  } catch {
+    // not JSON — scan the raw text
+  }
+  const m = text.match(/Existing ID:\s*(\d+)/i) ?? text.match(/\bID:?\s*(\d{3,})/i);
+  return m ? m[1] : null;
+}
+
+/**
+ * Create or update a contact, keyed on email. Idempotent — pushing the same
+ * contact twice just refreshes it.
+ *
+ * We deliberately DON'T use the batch/upsert endpoint with `email` as the
+ * idProperty: HubSpot's handling of email there is unreliable (documented 409s
+ * / "non-unique" failures). Instead we POST a create, and on a 409 duplicate
+ * we read the existing contact id from the error and PATCH it — the canonical,
+ * dependable v3 "create-or-update by email". Returns the HubSpot contact id
+ * (recorded as CrmDelivery.messageId for traceability).
  */
 export async function upsertHubspotContact(args: {
   token: string;
@@ -197,37 +221,55 @@ export async function upsertHubspotContact(args: {
 }): Promise<{ contactId: string }> {
   const email = args.email.trim();
   if (!email) {
-    // No email → can't upsert by email. Non-retryable: it won't grow one on
-    // a retry. (Our funnel only pushes opted-in email contacts, so this is a
+    // No email → can't match a contact. Non-retryable: it won't grow one on a
+    // retry. (Our funnel only pushes opted-in email contacts — this is a
     // guard, not an expected path.)
     throw new HubspotError('Contact has no email — cannot push to HubSpot.', {
       retryable: false,
     });
   }
 
-  const body = {
-    inputs: [{ idProperty: 'email', id: email, properties: { ...args.properties, email } }],
-  };
-  const res = await hubspotFetch(args.token, '/crm/v3/objects/contacts/batch/upsert', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+  const properties = { ...args.properties, email };
 
-  if (!res.ok) {
-    const detail = await readErrorBody(res);
-    throw new HubspotError(`HubSpot contact upsert failed (${res.status}): ${detail}`, {
-      retryable: isRetryableStatus(res.status),
-      status: res.status,
+  // 1) Try to create.
+  const createRes = await hubspotFetch(args.token, '/crm/v3/objects/contacts', {
+    method: 'POST',
+    body: JSON.stringify({ properties }),
+  });
+  if (createRes.ok) {
+    const json = (await createRes.json().catch(() => null)) as { id?: string } | null;
+    if (json?.id) return { contactId: json.id };
+    throw new HubspotError('HubSpot create returned no contact id.', { retryable: true });
+  }
+
+  // 2) Already exists → update the existing record in place.
+  if (createRes.status === 409) {
+    const errBody = await createRes.text().catch(() => '');
+    const existingId = parseExistingContactId(errBody);
+    if (!existingId) {
+      throw new HubspotError(
+        `HubSpot reported a duplicate contact but no existing id could be parsed: ${errBody.slice(0, 200)}`,
+        { retryable: false },
+      );
+    }
+    const patchRes = await hubspotFetch(args.token, `/crm/v3/objects/contacts/${existingId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ properties }),
+    });
+    if (patchRes.ok) return { contactId: existingId };
+    const detail = await readErrorBody(patchRes);
+    throw new HubspotError(`HubSpot contact update failed (${patchRes.status}): ${detail}`, {
+      retryable: isRetryableStatus(patchRes.status),
+      status: patchRes.status,
     });
   }
 
-  const json = (await res.json().catch(() => null)) as { results?: { id?: string }[] } | null;
-  const contactId = json?.results?.[0]?.id;
-  if (!contactId) {
-    // 2xx with no id is unexpected — let a retry try again.
-    throw new HubspotError('HubSpot upsert returned no contact id.', { retryable: true });
-  }
-  return { contactId };
+  // 3) Anything else is a real failure.
+  const detail = await readErrorBody(createRes);
+  throw new HubspotError(`HubSpot contact create failed (${createRes.status}): ${detail}`, {
+    retryable: isRetryableStatus(createRes.status),
+    status: createRes.status,
+  });
 }
 
 /**

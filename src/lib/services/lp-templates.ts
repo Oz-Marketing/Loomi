@@ -103,10 +103,16 @@ export async function createLpTemplateFromLandingPage(input: {
 
   const lp = await prisma.landingPage.findUnique({ where: { id: input.lpId } });
   if (!lp) throw new LpTemplateServiceError('Source landing page not found.', 404);
+  // An account template must attach to an account, so a null-account
+  // (system/library) LP can't seed one. This guard also blocks a scoped
+  // caller from snapshotting another account's LP by id (source-account
+  // scope check), and narrows accountKey to non-null for the create below.
+  const sourceAccountKey = lp.accountKey;
   if (
-    input.accountKeys &&
-    input.accountKeys.length > 0 &&
-    !input.accountKeys.includes(lp.accountKey)
+    sourceAccountKey == null ||
+    (input.accountKeys &&
+      input.accountKeys.length > 0 &&
+      !input.accountKeys.includes(sourceAccountKey))
   ) {
     throw new LpTemplateServiceError('Source landing page not found.', 404);
   }
@@ -117,7 +123,7 @@ export async function createLpTemplateFromLandingPage(input: {
 
   const row = await prisma.accountLandingPageTemplate.create({
     data: {
-      accountKey: lp.accountKey,
+      accountKey: sourceAccountKey,
       name: trimmedName,
       description:
         typeof input.description === 'string' && input.description.trim().length > 0

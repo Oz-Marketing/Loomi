@@ -194,6 +194,7 @@ export function SearchableSelect({
             ref={popoverRef}
             tabIndex={-1}
             onKeyDown={handleKey}
+            data-builder-popout-portal
             className={`fixed z-[200] rounded-lg border border-[var(--border)] bg-[var(--card-strong)] backdrop-blur-2xl backdrop-saturate-150 shadow-xl overflow-hidden focus:outline-none ${popoverClassName ?? ''}`}
             style={{
               top: coords.top,

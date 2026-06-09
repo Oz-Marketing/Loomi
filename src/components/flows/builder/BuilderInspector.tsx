@@ -29,7 +29,9 @@ import {
   type FlowApiTrigger,
 } from './types';
 import { SearchableSelect, type SearchableSelectOption } from './SearchableSelect';
+import { TemplatePreview } from '@/components/template-preview';
 import { TriggerManager } from './TriggerManager';
+import { TagField } from './TagField';
 
 function uid(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -161,7 +163,7 @@ function NodeConfigForm({
 }) {
   switch (type) {
     case 'email':
-      return <EmailForm config={config} onChange={onChange} />;
+      return <EmailForm config={config} onChange={onChange} accountKey={accountKey} />;
     case 'wait':
       return <WaitForm config={config} onChange={onChange} />;
     case 'condition':
@@ -169,7 +171,7 @@ function NodeConfigForm({
     case 'split':
       return <SplitForm config={config} onChange={onChange} />;
     case 'sms':
-      return <SmsForm config={config} onChange={onChange} />;
+      return <SmsForm config={config} onChange={onChange} accountKey={accountKey} />;
     case 'add_tag':
     case 'remove_tag':
       return <TagForm config={config} onChange={onChange} />;
@@ -185,7 +187,7 @@ function NodeConfigForm({
     case 'wait_until':
       return <WaitUntilForm config={config} onChange={onChange} />;
     case 'webhook':
-      return <WebhookForm config={config} onChange={onChange} />;
+      return <WebhookForm config={config} onChange={onChange} accountKey={accountKey} />;
     case 'trigger':
       return (
         <TriggerManager
@@ -235,14 +237,18 @@ function useFieldState(
 function EmailForm({
   config,
   onChange,
+  accountKey,
 }: {
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
+  accountKey: string | null;
 }) {
   const [subject, setSubject] = useState(String(config.subject || ''));
   const [templateId, setTemplateId] = useState(String(config.templateId || ''));
   const [html, setHtml] = useState(String(config.html || ''));
-  const [templates, setTemplates] = useState<{ id: string; title: string }[]>([]);
+  const [templates, setTemplates] = useState<
+    { id: string; name: string; category: string | null; design: string }[]
+  >([]);
 
   // Reset local state when the user picks a different node so we don't
   // leak the previous node's draft into this one.
@@ -254,13 +260,33 @@ function EmailForm({
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/templates')
-      .then((r) => (r.ok ? r.json() : { templates: [] }))
+    // Scope to the flow's account so subaccount-owned templates show up —
+    // without ?accountKey the API defaults to library scope only, which is
+    // why the picker came back empty. The route returns a plain array of
+    // { id, name, category, … } (not { templates: [...] }).
+    const url = accountKey
+      ? `/api/templates?accountKey=${encodeURIComponent(accountKey)}`
+      : '/api/templates';
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : []))
       .then((data) => {
         if (cancelled) return;
-        const rows = Array.isArray(data?.templates) ? data.templates : [];
+        const rows = Array.isArray(data) ? data : [];
         setTemplates(
-          rows.map((t: { id: string; title: string }) => ({ id: t.id, title: t.title })),
+          rows.map(
+            (t: {
+              id: string;
+              name: string;
+              category: string | null;
+              design: string;
+            }) => ({
+              id: t.id,
+              name: t.name,
+              category: t.category ?? null,
+              // `design` is the template slug — TemplatePreview fetches by it.
+              design: t.design,
+            }),
+          ),
         );
       })
       .catch(() => {
@@ -269,7 +295,7 @@ function EmailForm({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [accountKey]);
 
   function commit(next: { subject?: string; templateId?: string; html?: string }) {
     onChange({
@@ -280,49 +306,67 @@ function EmailForm({
     });
   }
 
+  // Empty value = "use inline HTML" sentinel (renders first, ungrouped);
+  // real templates follow, grouped under their category when they have one.
+  const templateOptions: SearchableSelectOption[] = [
+    { value: '', label: '— Use inline HTML below —' },
+    ...templates.map((t) => ({
+      value: t.id,
+      label: t.name,
+      group: t.category || undefined,
+    })),
+  ];
+
+  // The picker stores a template id; the preview needs its slug.
+  const selectedTemplate = templateId
+    ? templates.find((t) => t.id === templateId)
+    : undefined;
+
   return (
     <>
-      <Field label="Subject">
-        <input
-          value={subject}
-          onChange={(e) => {
-            setSubject(e.target.value);
-            commit({ subject: e.target.value });
+      <TagField
+        label="Subject"
+        value={subject}
+        onChange={(v) => {
+          setSubject(v);
+          commit({ subject: v });
+        }}
+        accountKey={accountKey}
+        placeholder="e.g. Your service appointment is coming up"
+      />
+      <Field label="Template">
+        <SearchableSelect
+          value={templateId}
+          options={templateOptions}
+          placeholder="Search templates…"
+          searchable
+          onChange={(v) => {
+            setTemplateId(v);
+            commit({ templateId: v });
           }}
-          placeholder="e.g. Your service appointment is coming up"
-          className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
         />
       </Field>
-      <Field label="Template">
-        <select
-          value={templateId}
-          onChange={(e) => {
-            setTemplateId(e.target.value);
-            commit({ templateId: e.target.value });
-          }}
-          className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
-        >
-          <option value="">— Use inline HTML below —</option>
-          {templates.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.title}
-            </option>
-          ))}
-        </select>
-      </Field>
-      {!templateId && (
-        <Field label="Inline HTML">
-          <textarea
-            value={html}
-            onChange={(e) => {
-              setHtml(e.target.value);
-              commit({ html: e.target.value });
-            }}
-            rows={6}
-            className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs font-mono"
-            placeholder="<p>Hi {{firstName}}, …</p>"
-          />
+      {selectedTemplate && (
+        <Field label="Preview">
+          <div className="rounded-md border border-[var(--border)] overflow-hidden bg-white">
+            <TemplatePreview design={selectedTemplate.design} height={220} />
+          </div>
         </Field>
+      )}
+      {!templateId && (
+        <TagField
+          label="Inline HTML"
+          value={html}
+          onChange={(v) => {
+            setHtml(v);
+            commit({ html: v });
+          }}
+          accountKey={accountKey}
+          multiline
+          code
+          rows={6}
+          placeholder="<p>Hi {{firstName}}, …</p>"
+        />
       )}
     </>
   );
@@ -908,9 +952,11 @@ function SplitForm({
 function SmsForm({
   config,
   onChange,
+  accountKey,
 }: {
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
+  accountKey: string | null;
 }) {
   const [state, setField] = useFieldState(config, ['message']);
   function commit(next: Partial<typeof state>) {
@@ -918,23 +964,22 @@ function SmsForm({
   }
   return (
     <>
-      <Field label="Message">
-        <textarea
-          value={state.message}
-          onChange={(e) => {
-            setField('message', e.target.value);
-            commit({ message: e.target.value });
-          }}
-          rows={4}
-          maxLength={1600}
-          placeholder="Hi {{firstName}}, …"
-          className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs"
-        />
-      </Field>
+      <TagField
+        label="Message"
+        value={state.message}
+        onChange={(v) => {
+          setField('message', v);
+          commit({ message: v });
+        }}
+        accountKey={accountKey}
+        multiline
+        rows={4}
+        maxLength={1600}
+        placeholder="Hi {{firstName}}, …"
+      />
       <p className="text-[10px] text-[var(--muted-foreground)] leading-relaxed">
-        Mergetags: <code>{'{{firstName}}'}</code>, <code>{'{{lastName}}'}</code>,
-        <code>{'{{fullName}}'}</code>, <code>{'{{email}}'}</code>,
-        <code>{'{{phone}}'}</code>. Twilio caps the body at 1,600 chars.
+        Use the <span className="font-medium">{'{x}'} Tags</span> button to insert
+        contact variables. Twilio caps the body at 1,600 chars.
       </p>
     </>
   );
@@ -1329,9 +1374,11 @@ function WaitUntilForm({
 function WebhookForm({
   config,
   onChange,
+  accountKey,
 }: {
   config: Record<string, unknown>;
   onChange: (config: Record<string, unknown>) => void;
+  accountKey: string | null;
 }) {
   const [state, setField] = useFieldState(config, ['url', 'method', 'body']);
   function commit(next: Partial<typeof state>) {
@@ -1366,26 +1413,24 @@ function WebhookForm({
           <option value="DELETE">DELETE</option>
         </select>
       </Field>
-      <Field label="Body (JSON)">
-        <textarea
-          value={state.body}
-          onChange={(e) => {
-            setField('body', e.target.value);
-            commit({ body: e.target.value });
-          }}
-          rows={4}
-          placeholder='{"contactId": "{{contactId}}"}'
-          className="w-full px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs font-mono"
-        />
-      </Field>
+      <TagField
+        label="Body (JSON)"
+        value={state.body}
+        onChange={(v) => {
+          setField('body', v);
+          commit({ body: v });
+        }}
+        accountKey={accountKey}
+        multiline
+        code
+        rows={4}
+        placeholder={'{"contactId": "{{contactId}}"}'}
+      />
       <p className="text-[10px] text-[var(--muted-foreground)] leading-relaxed">
-        Mergetags inside the body: <code>{'{{contactId}}'}</code>,
-        <code>{'{{firstName}}'}</code>, <code>{'{{lastName}}'}</code>,
-        <code>{'{{email}}'}</code>, <code>{'{{phone}}'}</code>,
-        <code>{'{{accountKey}}'}</code>, <code>{'{{flowId}}'}</code>,
-        <code>{'{{enrollmentId}}'}</code>. Request times out after 10s; one
-        retry is attempted on 5xx / timeout. Non-2xx after retry marks
-        the step failed but does not exit the enrollment.
+        Use the <span className="font-medium">{'{x}'} Tags</span> button to insert
+        contact + system variables. Request times out after 10s; one retry is
+        attempted on 5xx / timeout. Non-2xx after retry marks the step failed
+        but does not exit the enrollment.
       </p>
     </>
   );

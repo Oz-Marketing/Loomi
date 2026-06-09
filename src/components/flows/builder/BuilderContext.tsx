@@ -31,6 +31,12 @@ export interface BuilderContextValue {
    *  editable node types (sticky notes) that need to persist their
    *  own changes without going through the inspector. */
   onUpdateNodeConfig?: (nodeId: string, config: Record<string, unknown>) => void;
+  /** Transient canvas highlight driven by the Error Log: clicking an
+   *  issue outlines its node with a severity-colored ring (red=error,
+   *  amber=warning). Null when nothing is highlighted. Never persisted —
+   *  it's render-only state, separate from ReactFlow selection. */
+  highlightedNodeId: string | null;
+  highlightSeverity: 'error' | 'warning' | null;
 }
 
 const BuilderContext = createContext<BuilderContextValue>({
@@ -42,6 +48,8 @@ const BuilderContext = createContext<BuilderContextValue>({
   onInsertOnEdge: () => undefined,
   onAddAfterNode: () => undefined,
   onUpdateNodeConfig: undefined,
+  highlightedNodeId: null,
+  highlightSeverity: null,
 });
 
 export const BuilderContextProvider = BuilderContext.Provider;

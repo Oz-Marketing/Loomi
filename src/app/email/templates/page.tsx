@@ -7,7 +7,7 @@ import { createPortal } from 'react-dom';
 // the parent owns the page title + tabs). ManagementView portals its
 // Create Template + overflow menu into here so the affordances sit
 // in the page header rather than below the tabs.
-const TemplatesHeaderActionsContext = createContext<HTMLElement | null>(null);
+export const TemplatesHeaderActionsContext = createContext<HTMLElement | null>(null);
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   PlusIcon,
@@ -863,6 +863,76 @@ function EmbeddedHeaderActions({
 }
 
 // ═══════════════════════════════════════════════════════════════════
+// ── Email Templates Panel (reusable; used by the unified /templates) ──
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Header-less email-templates surface for the Email tab of the unified
+ * /templates page. Renders the management view (this account's own
+ * templates) by default; when `libraryOpen` is set the parent swaps in the
+ * read-only shared library (with copy-to-subaccount).
+ *
+ * The parent (unified shell) owns the sticky header — the "Browse Template
+ * Library" toggle and the embedded ManagementView's Create + overflow
+ * buttons both live up there. ManagementView portals its buttons into the
+ * shell's TemplatesHeaderActionsContext slot, so this component renders just
+ * the active view. Keyed by accountKey so a sub-account switch fully
+ * remounts the view onto the new scope.
+ */
+export function EmailTemplatesPanel({
+  campaignDraftQuery,
+  accountKey,
+  accountLabel,
+  canManage,
+  isClient,
+  libraryOpen,
+  refreshKey,
+  onCopyComplete,
+}: {
+  campaignDraftQuery: string;
+  accountKey?: string;
+  accountLabel?: string;
+  canManage: boolean;
+  isClient: boolean;
+  libraryOpen: boolean;
+  refreshKey: number;
+  onCopyComplete: () => void;
+}) {
+  if (libraryOpen) {
+    return (
+      <ReadOnlyView
+        campaignDraftQuery={campaignDraftQuery}
+        copyTargetAccountKey={accountKey}
+        copyTargetAccountLabel={accountLabel}
+        onCopyComplete={onCopyComplete}
+        embedded
+      />
+    );
+  }
+  if (canManage) {
+    return (
+      <ManagementView
+        key={`mgmt-${accountKey ?? 'admin'}-${refreshKey}`}
+        campaignDraftQuery={campaignDraftQuery}
+        accountKey={accountKey}
+        embedded
+      />
+    );
+  }
+  if (isClient) {
+    return (
+      <ReadOnlyView
+        key={`ro-${accountKey ?? 'admin'}-${refreshKey}`}
+        campaignDraftQuery={campaignDraftQuery}
+        accountKey={accountKey}
+        embedded
+      />
+    );
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // ── Management View (full management — developer, super_admin, admin) ──
 // ═══════════════════════════════════════════════════════════════════
 
@@ -934,7 +1004,10 @@ function ManagementView({
     }
   };
 
-  useEffect(() => { loadTemplates(); }, []);
+  // Refetch when the account scope changes — the unified /templates page
+  // can mount this view before the sub-account context has resolved from
+  // the URL, so the initial accountKey may be undefined and then settle.
+  useEffect(() => { loadTemplates(); }, [accountKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!menuOpen) return;

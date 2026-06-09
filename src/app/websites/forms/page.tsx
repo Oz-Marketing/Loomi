@@ -118,6 +118,20 @@ export default function FormsPage() {
   const handleRowEdit = (form: FormsTableRow) => {
     router.push(subHref(`/websites/forms/${form.id}/edit`));
   };
+
+  const handleSaveAsTemplate = async (form: FormSummary) => {
+    const res = await fetch(`/api/forms/${form.id}/save-as-template`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      toast.error(body.error || 'Could not save as template.');
+      return;
+    }
+    toast.success('Saved as template — find it under Templates → Forms.');
+  };
   const handleRowDelete = async (form: FormsTableRow) => {
     const ok = await confirm({
       title: 'Delete form?',
@@ -277,6 +291,7 @@ export default function FormsPage() {
               updatedAt: form.updatedAt,
             })
           }
+          onSaveAsTemplate={(form) => void handleSaveAsTemplate(form)}
           publishingIds={publishingIds}
         />
       ) : (

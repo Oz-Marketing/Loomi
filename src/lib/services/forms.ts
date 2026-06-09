@@ -31,6 +31,8 @@ export interface FormSummary {
   /** When true, submissions are forwarded as ADF leads to the account's
    *  configured CRM destination(s). */
   forwardToCrm: boolean;
+  /** When true, this row is a reusable template rather than a live form. */
+  isTemplate: boolean;
   createdByUserId: string;
   publishedAt: string;
   createdAt: string;
@@ -104,13 +106,14 @@ function parseJsonObject(value: Prisma.JsonValue): Record<string, unknown> {
 
 function toSummary(row: {
   id: string;
-  accountKey: string;
+  accountKey: string | null;
   name: string;
   slug: string;
   status: string;
   submissionCount: number;
   listId: string | null;
   forwardToCrm: boolean;
+  isTemplate?: boolean;
   createdByUserId: string | null;
   publishedAt: Date | null;
   createdAt: Date;
@@ -119,13 +122,17 @@ function toSummary(row: {
 }): FormSummary {
   return {
     id: row.id,
-    accountKey: row.accountKey,
+    // System/library templates have no owning account — surface '' so
+    // existing string consumers keep working; the requesting view knows
+    // the scope it asked for.
+    accountKey: row.accountKey ?? '',
     name: row.name,
     slug: row.slug,
     status: row.status === 'published' ? 'published' : 'draft',
     submissionCount: row.submissionCount,
     listId: row.listId ?? '',
     forwardToCrm: row.forwardToCrm,
+    isTemplate: row.isTemplate ?? false,
     createdByUserId: row.createdByUserId ?? '',
     schema:
       row.schema !== undefined
@@ -139,7 +146,7 @@ function toSummary(row: {
 
 function toDetail(row: {
   id: string;
-  accountKey: string;
+  accountKey: string | null;
   name: string;
   slug: string;
   status: string;
@@ -177,10 +184,23 @@ export async function listForms(options?: {
   accountKey?: string | null;
   page?: number;
   pageSize?: number;
+  /** When true, list only templates. When false/undefined, list only
+   *  live forms (templates are always excluded from the normal list). */
+  isTemplate?: boolean;
+  /** 'system' → only account-less system/library templates (accountKey
+   *  null). Otherwise scoped to accountKey/accountKeys as usual. */
+  scope?: 'system';
 }): Promise<{ forms: FormSummary[]; page: number; pageSize: number; total: number }> {
   const page = clampPage(options?.page);
   const pageSize = clampPageSize(options?.pageSize);
-  const where = whereForScope(options?.accountKeys ?? null, options?.accountKey ?? null);
+  const isTemplate = options?.isTemplate === true;
+  const where =
+    options?.scope === 'system'
+      ? { isTemplate, accountKey: null }
+      : {
+          ...whereForScope(options?.accountKeys ?? null, options?.accountKey ?? null),
+          isTemplate,
+        };
 
   const [rows, total] = await Promise.all([
     prisma.form.findMany({
@@ -220,20 +240,29 @@ export async function ensureUniqueSlug(slug: string, excludeId?: string): Promis
 }
 
 export async function createForm(input: {
-  accountKey: string;
+  // Null only for a system/library template (accountKey-less); live forms
+  // and sub-account templates always supply a real account.
+  accountKey: string | null;
   name: string;
   createdByUserId?: string | null;
   /** Pre-built FormTemplate to seed the new form. Defaults to empty. */
   schema?: FormTemplate;
+  /** When true, the new row is a reusable template, not a live form. */
+  isTemplate?: boolean;
 }): Promise<FormDetail> {
   const name = input.name.trim();
   if (!name) throw new FormServiceError('name is required');
 
-  const account = await prisma.account.findUnique({
-    where: { key: input.accountKey },
-    select: { key: true },
-  });
-  if (!account) throw new FormServiceError('Account not found', 404);
+  if (input.accountKey) {
+    const account = await prisma.account.findUnique({
+      where: { key: input.accountKey },
+      select: { key: true },
+    });
+    if (!account) throw new FormServiceError('Account not found', 404);
+  } else if (!input.isTemplate) {
+    // Only system templates may be account-less.
+    throw new FormServiceError('accountKey is required');
+  }
 
   const slug = await ensureUniqueSlug(slugify(name) || 'untitled-form');
   const schema = (input.schema ?? emptyFormTemplate()) as unknown as Prisma.InputJsonValue;
@@ -244,6 +273,7 @@ export async function createForm(input: {
       slug,
       status: 'draft',
       schema,
+      isTemplate: input.isTemplate ?? false,
       successMessage: DEFAULT_SUCCESS_MESSAGE,
       createdByUserId: input.createdByUserId ?? null,
     },
@@ -252,13 +282,86 @@ export async function createForm(input: {
   return toDetail(created);
 }
 
+/**
+ * Clone an existing form's schema into a new template row (isTemplate=true),
+ * scoped to the same account. Templates carry no submissions, list binding,
+ * or CRM forwarding — just the name + design. Returns the new template.
+ */
+export async function saveFormAsTemplate(input: {
+  formId: string;
+  accountKeys: string[] | null;
+  name?: string;
+  createdByUserId?: string | null;
+}): Promise<FormDetail> {
+  const source = await prisma.form.findUnique({ where: { id: input.formId } });
+  if (!source) throw new FormServiceError('Form not found', 404);
+  if (
+    input.accountKeys &&
+    input.accountKeys.length > 0 &&
+    (source.accountKey == null || !input.accountKeys.includes(source.accountKey))
+  ) {
+    throw new FormServiceError('Form not found', 404);
+  }
+
+  const schema = parseFormTemplate(source.schema) ?? emptyFormTemplate();
+  const name = (input.name?.trim() || `${source.name} (Template)`).slice(0, 200);
+
+  return createForm({
+    accountKey: source.accountKey,
+    name,
+    schema,
+    isTemplate: true,
+    createdByUserId: input.createdByUserId ?? null,
+  });
+}
+
+/**
+ * Copy a template (typically a system/library template) into a target
+ * sub-account as that account's own template. Used by the "Copy into this
+ * account" action in the Templates → Forms library view.
+ */
+export async function copyFormTemplateToAccount(input: {
+  sourceId: string;
+  targetAccountKey: string;
+  accountKeys: string[] | null;
+  createdByUserId?: string | null;
+}): Promise<FormDetail> {
+  const source = await prisma.form.findUnique({ where: { id: input.sourceId } });
+  if (!source || !source.isTemplate) {
+    throw new FormServiceError('Template not found', 404);
+  }
+  // Account-scoped templates require source-account access; null-account
+  // system/library templates stay copyable by anyone (the common case). A
+  // scoped caller must not be able to clone another account's template by id.
+  if (
+    source.accountKey != null &&
+    input.accountKeys &&
+    input.accountKeys.length > 0 &&
+    !input.accountKeys.includes(source.accountKey)
+  ) {
+    throw new FormServiceError('Template not found', 404);
+  }
+  const schema = parseFormTemplate(source.schema) ?? emptyFormTemplate();
+  return createForm({
+    accountKey: input.targetAccountKey,
+    name: source.name,
+    schema,
+    isTemplate: true,
+    createdByUserId: input.createdByUserId ?? null,
+  });
+}
+
 export async function getForm(
   id: string,
   accountKeys?: string[] | null,
 ): Promise<FormDetail | null> {
   const row = await prisma.form.findUnique({ where: { id } });
   if (!row) return null;
-  if (accountKeys && accountKeys.length > 0 && !accountKeys.includes(row.accountKey)) {
+  if (
+    accountKeys &&
+    accountKeys.length > 0 &&
+    (row.accountKey == null || !accountKeys.includes(row.accountKey))
+  ) {
     return null;
   }
   return toDetail(row);
@@ -266,7 +369,7 @@ export async function getForm(
 
 export async function getPublishedFormBySlug(slug: string): Promise<FormDetail | null> {
   const row = await prisma.form.findUnique({ where: { slug } });
-  if (!row || row.status !== 'published') return null;
+  if (!row || row.status !== 'published' || row.isTemplate) return null;
   return toDetail(row);
 }
 
@@ -278,7 +381,7 @@ export async function getPublishedFormBySlug(slug: string): Promise<FormDetail |
  */
 export async function getPublishedFormById(id: string): Promise<FormDetail | null> {
   const row = await prisma.form.findUnique({ where: { id } });
-  if (!row || row.status !== 'published') return null;
+  if (!row || row.status !== 'published' || row.isTemplate) return null;
   return toDetail(row);
 }
 
@@ -298,7 +401,11 @@ export async function updateForm(
 ): Promise<FormDetail> {
   const existing = await prisma.form.findUnique({ where: { id } });
   if (!existing) throw new FormServiceError('Form not found', 404);
-  if (accountKeys && accountKeys.length > 0 && !accountKeys.includes(existing.accountKey)) {
+  if (
+    accountKeys &&
+    accountKeys.length > 0 &&
+    (existing.accountKey == null || !accountKeys.includes(existing.accountKey))
+  ) {
     throw new FormServiceError('Form not found', 404);
   }
 
@@ -395,7 +502,11 @@ export async function deleteForm(id: string, accountKeys: string[] | null): Prom
     select: { id: true, accountKey: true },
   });
   if (!existing) throw new FormServiceError('Form not found', 404);
-  if (accountKeys && accountKeys.length > 0 && !accountKeys.includes(existing.accountKey)) {
+  if (
+    accountKeys &&
+    accountKeys.length > 0 &&
+    (existing.accountKey == null || !accountKeys.includes(existing.accountKey))
+  ) {
     throw new FormServiceError('Form not found', 404);
   }
   await prisma.form.delete({ where: { id } });
@@ -451,7 +562,7 @@ export async function listFormSubmissions(options: {
   if (
     options.accountKeys &&
     options.accountKeys.length > 0 &&
-    !options.accountKeys.includes(form.accountKey)
+    (form.accountKey == null || !options.accountKeys.includes(form.accountKey))
   ) {
     throw new FormServiceError('Form not found', 404);
   }

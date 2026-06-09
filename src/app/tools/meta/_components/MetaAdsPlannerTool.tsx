@@ -7028,9 +7028,12 @@ function AdSetLinkPicker({
   const [query, setQuery] = useState('');
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
-  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(
-    null,
-  );
+  const [pos, setPos] = useState<{
+    top?: number;
+    bottom?: number;
+    left: number;
+    width: number;
+  } | null>(null);
 
   // Portal the panel to <body> with fixed coords so it escapes the card's
   // overflow-hidden + backdrop-filter and any scroll container that would
@@ -7039,13 +7042,23 @@ function AdSetLinkPicker({
   const updatePosition = useCallback(() => {
     if (!triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
-    const margin = 8;
     const estHeight = 340;
-    let top = rect.bottom + 4;
-    if (top + estHeight > window.innerHeight - margin) {
-      top = Math.max(margin, rect.top - estHeight - 4);
+    const spaceBelow = window.innerHeight - rect.bottom;
+    // Flip above only when there isn't room below AND there's more room above.
+    // When flipping, anchor by the panel's *bottom* edge to the trigger's top
+    // rather than computing a top from a height estimate — a short list (a few
+    // ad sets) is far shorter than `estHeight`, so a top-anchored flip would
+    // leave it floating hundreds of px above the trigger. Bottom-anchoring
+    // keeps it glued to the trigger no matter how tall the list actually is.
+    if (spaceBelow < estHeight && rect.top > spaceBelow) {
+      setPos({
+        bottom: window.innerHeight - rect.top + 4,
+        left: rect.left,
+        width: rect.width,
+      });
+    } else {
+      setPos({ top: rect.bottom + 4, left: rect.left, width: rect.width });
     }
-    setPos({ top, left: rect.left, width: rect.width });
   }, []);
 
   useEffect(() => {
@@ -7129,7 +7142,12 @@ function AdSetLinkPicker({
             <div
               ref={popoverRef}
               className="glass-dropdown fixed z-[200]"
-              style={{ top: pos.top, left: pos.left, width: Math.max(pos.width, 260) }}
+              style={{
+                top: pos.top,
+                bottom: pos.bottom,
+                left: pos.left,
+                width: Math.max(pos.width, 260),
+              }}
             >
               <div className="flex items-center gap-1.5 border-b border-[var(--border)] px-2 py-1.5">
                 <MagnifyingGlassIcon className="w-3.5 h-3.5 flex-shrink-0 text-[var(--muted-foreground)]" />

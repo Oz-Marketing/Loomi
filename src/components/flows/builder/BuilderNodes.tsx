@@ -102,7 +102,11 @@ function NodeShell({
   const Icon = ICON_MAP[type];
   const headerTitle = titleOverride?.trim() || meta.label;
   const hasErrors = !!errors && errors.length > 0;
-  const { onCloneNode, onDeleteNode, onAddAfterNode } = useBuilderContext();
+  const { onCloneNode, onDeleteNode, onAddAfterNode, highlightedNodeId, highlightSeverity } =
+    useBuilderContext();
+  // The Error Log paints this ring when the user clicks an issue — it wins
+  // over the passive error/selected states so the clicked node is obvious.
+  const isHighlighted = highlightedNodeId === nodeId;
   const plusButtonRef = useRef<HTMLButtonElement | null>(null);
 
   // The +-button below the node lets the user extend the flow when
@@ -124,6 +128,12 @@ function NodeShell({
     [edges, nodeId],
   );
   const showAddNext = !ADD_NEXT_EXEMPT.has(type) && !hasOutgoing;
+  // A plain action step with no next is the flow's implicit end — the engine
+  // marks the contact completed on reaching any leaf (advanceEnrollment in
+  // loomi-flows.ts). Show a baked-in "End" cap there so users no longer add
+  // an Exit node by hand. Excludes the trigger (a trigger-only flow has no
+  // module to "end") and the exempt branch/annotation/exit types.
+  const showEndCap = showAddNext && type !== 'trigger';
 
   function handleAddAfter() {
     const rect = plusButtonRef.current?.getBoundingClientRect();
@@ -137,11 +147,15 @@ function NodeShell({
   return (
     <div
       className={`group relative rounded-xl border bg-[var(--card-strong)] backdrop-blur-xl backdrop-saturate-150 shadow-sm transition-shadow ${
-        hasErrors
-          ? 'border-rose-500/70 ring-2 ring-rose-500/40 shadow-md'
-          : selected
-            ? 'border-[var(--primary)] shadow-md ring-2 ring-[var(--primary)]/30'
-            : 'border-[var(--border)]'
+        isHighlighted && highlightSeverity === 'warning'
+          ? 'border-amber-500/80 ring-2 ring-amber-500/50 shadow-md'
+          : isHighlighted
+            ? 'border-rose-500/80 ring-2 ring-rose-500/50 shadow-md'
+            : hasErrors
+              ? 'border-rose-500/70 ring-2 ring-rose-500/40 shadow-md'
+              : selected
+                ? 'border-[var(--primary)] shadow-md ring-2 ring-[var(--primary)]/30'
+                : 'border-[var(--border)]'
       }`}
       style={{ width: widthOverride ?? 220 }}
     >
@@ -204,24 +218,41 @@ function NodeShell({
       )}
       {statsRow}
       {children}
-      {/* "+ Add next" affordance — sits just below the source-handle
-          edge of the card and tints up on hover. Triggers the same
-          InsertStepMenu the edge hover-+ uses. Hidden for terminal,
-          annotation, and branching node types (see ADD_NEXT_EXEMPT). */}
-      {showAddNext && (
-        <button
-          ref={plusButtonRef}
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleAddAfter();
-          }}
-          title="Add step after"
-          aria-label="Add step after"
-          className="nodrag absolute left-1/2 -translate-x-1/2 -bottom-7 w-5 h-5 rounded-full border border-[var(--border)] bg-[var(--card-strong)] text-[var(--muted-foreground)] hover:text-white hover:bg-[var(--primary)] hover:border-[var(--primary)] flex items-center justify-center shadow-sm transition-colors"
-        >
-          <PlusIcon className="w-3 h-3" />
-        </button>
+      {/* Bottom affordance for leaf nodes: the "+ add next" button and,
+          for plain action steps, a baked-in "End" cap that shows the flow
+          terminates here (contact marked completed). Both hang below the
+          card; a leaf has nothing beneath it so auto-layout leaves room.
+          Hidden for terminal/annotation/branching types (ADD_NEXT_EXEMPT). */}
+      {(showAddNext || showEndCap) && (
+        <div className="nodrag absolute left-1/2 top-full -translate-x-1/2 mt-2 flex flex-col items-center gap-1.5">
+          {showAddNext && (
+            <button
+              ref={plusButtonRef}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleAddAfter();
+              }}
+              title="Add step after"
+              aria-label="Add step after"
+              className="w-5 h-5 rounded-full border border-[var(--border)] bg-[var(--card-strong)] text-[var(--muted-foreground)] hover:text-white hover:bg-[var(--primary)] hover:border-[var(--primary)] flex items-center justify-center shadow-sm transition-colors"
+            >
+              <PlusIcon className="w-3 h-3" />
+            </button>
+          )}
+          {showEndCap && (
+            <>
+              <span className="w-px h-2 bg-[var(--border)]" aria-hidden />
+              <span
+                title="The flow ends here — the contact is marked completed."
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-[var(--border)] bg-zinc-500/15 text-zinc-300 text-[10px] font-semibold uppercase tracking-wider"
+              >
+                <StopCircleIcon className="w-3 h-3" />
+                End
+              </span>
+            </>
+          )}
+        </div>
       )}
     </div>
   );

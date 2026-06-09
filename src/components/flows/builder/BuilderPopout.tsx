@@ -63,6 +63,13 @@ export function BuilderPopout({
     const onMouseDown = (e: MouseEvent) => {
       if (!ref.current) return;
       if (ref.current.contains(e.target as Node)) return;
+      // Dropdowns opened from inside the popout (the merge-tag picker,
+      // SearchableSelect, …) render through a portal to document.body, so
+      // they sit OUTSIDE this ref's subtree. A click within one must not
+      // dismiss the popout — they opt out by tagging their portal root with
+      // `data-builder-popout-portal`.
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('[data-builder-popout-portal]')) return;
       onClose();
     };
     const onKey = (e: KeyboardEvent) => {

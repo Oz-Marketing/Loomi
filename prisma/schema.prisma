@@ -708,8 +708,11 @@ model LoomiFlowEnrollmentStep {
 
 model Form {
   id              String       @id @default(cuid())
-  accountKey      String
-  account         Account      @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  // Nullable: a system/library form template has no owning account
+  // (accountKey = null). Live forms and sub-account templates always
+  // carry an accountKey.
+  accountKey      String?
+  account         Account?     @relation(fields: [accountKey], references: [key], onDelete: Cascade)
   name            String
   // Public URL slug — served at /f/[slug]. Globally unique so iframe
   // embeds resolve without an account prefix.
@@ -729,6 +732,11 @@ model Form {
   // account's configured CRM destination(s) (Tekion / VinSolutions).
   // When false (default) leads are kept in Loomi only.
   forwardToCrm    Boolean      @default(false)
+  // When true, this row is a reusable template (authored from the Forms
+  // tab of /templates) rather than a live form. Templates are excluded
+  // from the normal forms list and from public /f/[slug] serving;
+  // "Save as template" clones a form's schema into a new isTemplate row.
+  isTemplate      Boolean      @default(false)
   submissionCount Int          @default(0)
   createdByUserId String?
   publishedAt     DateTime?
@@ -739,6 +747,7 @@ model Form {
 
   @@index([accountKey])
   @@index([accountKey, status])
+  @@index([accountKey, isTemplate])
 }
 
 model FormSubmission {
@@ -847,9 +856,16 @@ model CrmDelivery {
 
 model LandingPage {
   id              String   @id @default(cuid())
-  accountKey      String
-  account         Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  // Nullable: a system/library LP template has no owning account
+  // (accountKey = null). Live LPs and sub-account templates always
+  // carry an accountKey.
+  accountKey      String?
+  account         Account? @relation(fields: [accountKey], references: [key], onDelete: Cascade)
   name            String
+  // When true, this row is a reusable template (authored from the
+  // Landing Pages tab of /templates), edited in place by the LP editor,
+  // and excluded from public /lp/[slug] serving + the LP list.
+  isTemplate      Boolean  @default(false)
   // Public URL slug — served at /lp/[slug]. Globally unique so links
   // resolve without an account prefix (same approach as Form.slug).
   slug            String   @unique
@@ -900,6 +916,7 @@ model LandingPage {
 
   @@index([accountKey])
   @@index([accountKey, status])
+  @@index([accountKey, isTemplate])
 }
 
 // ─────────────────────────────────────────────────────

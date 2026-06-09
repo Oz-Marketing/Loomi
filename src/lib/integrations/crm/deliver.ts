@@ -70,9 +70,15 @@ export async function deliverCrmLead(deliveryId: string): Promise<void> {
     await markTerminal(deliveryId, attempt, 'Forwarding disabled before delivery');
     return;
   }
+  // Account-less system templates can't forward; guard + narrow.
+  if (!form.accountKey) {
+    await markTerminal(deliveryId, attempt, 'Form has no owning account');
+    return;
+  }
+  const accountKey = form.accountKey;
 
   const account = await prisma.account.findUnique({
-    where: { key: form.accountKey },
+    where: { key: accountKey },
     select: { dealer: true },
   });
 
@@ -81,7 +87,7 @@ export async function deliverCrmLead(deliveryId: string): Promise<void> {
     : null;
 
   const adfInput = {
-    dealerName: account?.dealer || form.accountKey,
+    dealerName: account?.dealer || accountKey,
     formName: form.name,
     submission,
     contact,
@@ -100,7 +106,7 @@ export async function deliverCrmLead(deliveryId: string): Promise<void> {
 
   try {
     const { messageId } = await sendLeadEmail({
-      accountKey: form.accountKey,
+      accountKey,
       to: destination.leadEmail,
       subject,
       xml,

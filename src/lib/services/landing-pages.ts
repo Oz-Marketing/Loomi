@@ -23,10 +23,13 @@ export class LandingPageServiceError extends Error {
 
 export interface LandingPageSummary {
   id: string;
+  /** '' for an account-less system/library template. */
   accountKey: string;
   name: string;
   slug: string;
   status: LandingPageStatus;
+  /** When true, this row is a reusable template, not a live page. */
+  isTemplate: boolean;
   createdByUserId: string;
   publishedAt: string;
   createdAt: string;
@@ -62,10 +65,11 @@ export interface LandingPageDetail extends LandingPageSummary {
 
 interface LandingPageRow {
   id: string;
-  accountKey: string;
+  accountKey: string | null;
   name: string;
   slug: string;
   status: string;
+  isTemplate: boolean;
   schema: Prisma.JsonValue;
   seoTitle: string | null;
   seoDescription: string | null;
@@ -90,10 +94,11 @@ function toSummary(row: LandingPageRow): LandingPageSummary {
   const parsed = parseLandingPageContent(row.schema) ?? emptyLandingPageTemplate();
   return {
     id: row.id,
-    accountKey: row.accountKey,
+    accountKey: row.accountKey ?? '',
     name: row.name,
     slug: row.slug,
     status: (row.status as LandingPageStatus) ?? 'draft',
+    isTemplate: row.isTemplate,
     createdByUserId: row.createdByUserId ?? '',
     publishedAt: row.publishedAt?.toISOString() ?? '',
     createdAt: row.createdAt.toISOString(),
@@ -144,7 +149,12 @@ export async function listLandingPages(
   accountKeys?: string[] | null,
 ): Promise<LandingPageSummary[]> {
   const rows = await prisma.landingPage.findMany({
-    where: accountKeys && accountKeys.length > 0 ? { accountKey: { in: accountKeys } } : undefined,
+    // Templates are excluded from the live LP list — they live in the
+    // Templates → Landing Pages tab.
+    where: {
+      isTemplate: false,
+      ...(accountKeys && accountKeys.length > 0 ? { accountKey: { in: accountKeys } } : {}),
+    },
     orderBy: { updatedAt: 'desc' },
   });
   return rows.map(toSummary);
@@ -156,7 +166,11 @@ export async function getLandingPage(
 ): Promise<LandingPageDetail | null> {
   const row = await prisma.landingPage.findUnique({ where: { id } });
   if (!row) return null;
-  if (accountKeys && accountKeys.length > 0 && !accountKeys.includes(row.accountKey)) {
+  if (
+    accountKeys &&
+    accountKeys.length > 0 &&
+    (row.accountKey == null || !accountKeys.includes(row.accountKey))
+  ) {
     return null;
   }
   return toDetail(row);
@@ -164,7 +178,7 @@ export async function getLandingPage(
 
 export async function getPublishedLandingPageBySlug(slug: string): Promise<LandingPageDetail | null> {
   const row = await prisma.landingPage.findUnique({ where: { slug } });
-  if (!row || row.status !== 'published') return null;
+  if (!row || row.status !== 'published' || row.isTemplate) return null;
   return toDetail(row);
 }
 
@@ -180,7 +194,7 @@ export async function getPublishedLandingPageByAccountAndSlug(
   slug: string,
 ): Promise<LandingPageDetail | null> {
   const row = await prisma.landingPage.findFirst({
-    where: { accountKey, slug, status: 'published' },
+    where: { accountKey, slug, status: 'published', isTemplate: false },
   });
   if (!row) return null;
   return toDetail(row);
@@ -190,22 +204,29 @@ export async function getPublishedLandingPageByAccountAndSlug(
  *  resolver — the AccountDomain row stores the LP id, not a slug. */
 export async function getPublishedLandingPageById(id: string): Promise<LandingPageDetail | null> {
   const row = await prisma.landingPage.findUnique({ where: { id } });
-  if (!row || row.status !== 'published') return null;
+  if (!row || row.status !== 'published' || row.isTemplate) return null;
   return toDetail(row);
 }
 
 // ── Create / update / delete ───────────────────────────────────────
 
 export interface CreateLandingPageInput {
-  accountKey: string;
+  // Null only for a system/library template; live pages + sub-account
+  // templates always carry an account.
+  accountKey: string | null;
   name: string;
   slug?: string;
   schema?: LandingPageContent;
   createdByUserId?: string;
+  /** When true, the new row is a reusable template, not a live page. */
+  isTemplate?: boolean;
 }
 
 export async function createLandingPage(input: CreateLandingPageInput): Promise<LandingPageDetail> {
   if (!input.name?.trim()) throw new LandingPageServiceError('Name is required.');
+  if (!input.accountKey && !input.isTemplate) {
+    throw new LandingPageServiceError('accountKey is required.');
+  }
   const baseSlug = slugify(input.slug || input.name);
   if (!isValidSlug(baseSlug)) {
     throw new LandingPageServiceError('Slug must be 2–80 lowercase letters, numbers, or hyphens.');
@@ -219,6 +240,7 @@ export async function createLandingPage(input: CreateLandingPageInput): Promise<
       name: input.name.trim(),
       slug,
       schema,
+      isTemplate: input.isTemplate ?? false,
       createdByUserId: input.createdByUserId,
     },
   });
@@ -247,7 +269,11 @@ export async function updateLandingPage(
 ): Promise<LandingPageDetail> {
   const existing = await prisma.landingPage.findUnique({ where: { id } });
   if (!existing) throw new LandingPageServiceError('Not found.', 404);
-  if (accountKeys && accountKeys.length > 0 && !accountKeys.includes(existing.accountKey)) {
+  if (
+    accountKeys &&
+    accountKeys.length > 0 &&
+    (existing.accountKey == null || !accountKeys.includes(existing.accountKey))
+  ) {
     throw new LandingPageServiceError('Not found.', 404);
   }
 
@@ -395,7 +421,11 @@ export async function deleteLandingPage(
 ): Promise<void> {
   const existing = await prisma.landingPage.findUnique({ where: { id } });
   if (!existing) throw new LandingPageServiceError('Not found.', 404);
-  if (accountKeys && accountKeys.length > 0 && !accountKeys.includes(existing.accountKey)) {
+  if (
+    accountKeys &&
+    accountKeys.length > 0 &&
+    (existing.accountKey == null || !accountKeys.includes(existing.accountKey))
+  ) {
     throw new LandingPageServiceError('Not found.', 404);
   }
   await prisma.landingPage.delete({ where: { id } });
@@ -418,7 +448,11 @@ export async function cloneLandingPage(
 ): Promise<LandingPageDetail> {
   const source = await prisma.landingPage.findUnique({ where: { id } });
   if (!source) throw new LandingPageServiceError('Not found.', 404);
-  if (accountKeys && accountKeys.length > 0 && !accountKeys.includes(source.accountKey)) {
+  if (
+    accountKeys &&
+    accountKeys.length > 0 &&
+    (source.accountKey == null || !accountKeys.includes(source.accountKey))
+  ) {
     throw new LandingPageServiceError('Not found.', 404);
   }
 
@@ -437,6 +471,7 @@ export async function cloneLandingPage(
       slug,
       schema,
       status: 'draft',
+      isTemplate: source.isTemplate,
       createdByUserId: options.createdByUserId,
     },
   });

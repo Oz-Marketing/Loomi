@@ -12,7 +12,6 @@ import { usePathname } from 'next/navigation';
 import {
   Squares2X2Icon,
   CogIcon,
-  EnvelopeIcon,
   UserGroupIcon,
   PhotoIcon,
   SunIcon,
@@ -83,35 +82,26 @@ const toolsNavItem: NavItem = {
   ],
 };
 
-// Messaging group — nests the email + SMS surfaces underneath.
-// (Flows lives at the top level since it's a separate workflow concept.)
-const messagingGroupCampaigns: NavItem = {
+// Email & SMS — the campaigns surface (the page already covers both
+// channels). A flat top-level leaf; the old "Messaging" dropdown that
+// grouped Campaigns + Templates has been split apart.
+const emailSmsNav: NavItem = {
   href: '/messaging/campaigns',
-  label: 'Campaigns',
-  icon: ListBulletIcon,
+  label: 'Email & SMS',
+  icon: ChatBubbleLeftRightIcon,
 };
-const messagingGroupTemplates: NavItem = {
-  href: '/email/templates',
+// Templates — now its own top-level destination. The unified page at
+// /templates spans every medium (email, forms, flows, landing pages).
+const templatesNav: NavItem = {
+  href: '/templates',
   label: 'Templates',
-  icon: EnvelopeIcon,
+  icon: RectangleStackIcon,
 };
 // Flows is now a leaf nav item — analytics moved to /reporting/engagement.
 const flowsNavItem: NavItem = {
   href: '/flows',
   label: 'Flows',
   icon: FlowIcon as IconComponent,
-};
-
-const messagingNav: NavItem = {
-  href: '/messaging/campaigns',
-  label: 'Messaging',
-  icon: ChatBubbleLeftRightIcon,
-  // Analytics removed — lives in /reporting/engagement now. Use the
-  // "View Analytics" affordance on each creative page to jump there.
-  children: [
-    messagingGroupCampaigns,
-    messagingGroupTemplates,
-  ],
 };
 
 // Websites group — public-facing surfaces. Forms and Landing Pages both
@@ -145,7 +135,8 @@ const contactsNav: NavItem = {
 const adminNavItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: Squares2X2Icon },
   contactsNav,
-  messagingNav,
+  emailSmsNav,
+  templatesNav,
   flowsNavItem,
   websitesNav,
   { href: '/media', label: 'Media', icon: PhotoIcon },
@@ -156,7 +147,8 @@ const adminNavItems: NavItem[] = [
 const subaccountAdminNavItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: Squares2X2Icon },
   contactsNav,
-  messagingNav,
+  emailSmsNav,
+  templatesNav,
   flowsNavItem,
   websitesNav,
   { href: '/media', label: 'Media', icon: PhotoIcon },
@@ -168,7 +160,8 @@ const subaccountAdminNavItems: NavItem[] = [
 const subaccountClientNavItems: NavItem[] = [
   { href: '/dashboard', label: 'Dashboard', icon: Squares2X2Icon },
   contactsNav,
-  messagingNav,
+  emailSmsNav,
+  templatesNav,
 ];
 
 export function Sidebar() {

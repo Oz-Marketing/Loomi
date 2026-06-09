@@ -8,6 +8,7 @@ import {
   EllipsisVerticalIcon,
   InboxStackIcon,
   PencilSquareIcon,
+  Square2StackIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import type { FormSummary } from '@/lib/services/forms';
@@ -19,8 +20,16 @@ interface FormCardProps {
   accountName?: string;
   onTogglePublish?: (form: FormSummary, next: 'published' | 'draft') => void;
   onDelete?: (form: FormSummary) => void;
+  /** Save this live form's design as a reusable template (forms only). */
+  onSaveAsTemplate?: (form: FormSummary) => void;
   /** Soft-disable the toggle while a PATCH is mid-flight. */
   isPublishUpdating?: boolean;
+  /**
+   * 'template' renders the card for the Templates gallery: the whole card
+   * links straight to the editor and the live-form meta (publish toggle,
+   * status pill, public slug, submission count) is hidden.
+   */
+  variant?: 'form' | 'template';
 }
 
 function formatRelativeDate(dateStr: string): string {
@@ -50,18 +59,23 @@ export function FormCard({
   accountName,
   onTogglePublish,
   onDelete,
+  onSaveAsTemplate,
   isPublishUpdating = false,
+  variant = 'form',
 }: FormCardProps) {
   const subHref = useSubaccountHref();
+  const isTemplate = variant === 'template';
   const published = form.status === 'published';
-  const overviewHref = subHref(`/websites/forms/${form.id}`);
+  const editHref = subHref(`/websites/forms/${form.id}/edit`);
+  // Template cards jump straight into the editor; live forms open the overview.
+  const cardHref = isTemplate ? editHref : subHref(`/websites/forms/${form.id}`);
 
   return (
     <div className="glass-card group relative rounded-xl overflow-hidden transition-all hover:border-[var(--primary)]/40 hover:shadow-lg">
       {/* Full-card click target — the menu / toggle stopPropagation so
           they don't double-trigger as a navigation event. */}
       <Link
-        href={overviewHref}
+        href={cardHref}
         className="absolute inset-0 z-0"
         aria-label={`Open ${form.name || 'Untitled form'}`}
       />
@@ -72,16 +86,18 @@ export function FormCard({
         <FormPreviewThumbnail template={form.schema} height={200} />
 
         {/* Status pill — bottom-left corner of the preview so it doesn't
-            clash with the meta strip below. */}
-        <span
-          className={`absolute bottom-2.5 left-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium capitalize backdrop-blur-sm ${
-            published
-              ? 'bg-emerald-500/90 text-white'
-              : 'bg-black/40 text-zinc-100'
-          }`}
-        >
-          {form.status}
-        </span>
+            clash with the meta strip below. Live forms only. */}
+        {!isTemplate && (
+          <span
+            className={`absolute bottom-2.5 left-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium capitalize backdrop-blur-sm ${
+              published
+                ? 'bg-emerald-500/90 text-white'
+                : 'bg-black/40 text-zinc-100'
+            }`}
+          >
+            {form.status}
+          </span>
+        )}
       </div>
 
       {/* Meta strip — non-interactive areas pass clicks through to
@@ -95,13 +111,15 @@ export function FormCard({
             >
               {form.name || 'Untitled form'}
             </h3>
-            <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)] font-mono truncate">
-              /f/{form.slug}
-            </p>
+            {!isTemplate && (
+              <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)] font-mono truncate">
+                /f/{form.slug}
+              </p>
+            )}
           </div>
 
           <div className="flex items-center gap-1 flex-shrink-0 pointer-events-auto">
-            {onTogglePublish && (
+            {!isTemplate && onTogglePublish && (
               <PublishSwitch
                 active={published}
                 disabled={isPublishUpdating}
@@ -110,22 +128,27 @@ export function FormCard({
             )}
             <CardMenu
               form={form}
-              editHref={subHref(`/websites/forms/${form.id}/edit`)}
+              editHref={editHref}
+              editLabel={isTemplate ? 'Edit template' : 'Edit form'}
+              showLiveLink={!isTemplate}
+              onSaveAsTemplate={isTemplate ? undefined : onSaveAsTemplate}
               onDelete={onDelete}
             />
           </div>
         </div>
 
         <div className="flex items-center gap-3 text-[11px] text-[var(--muted-foreground)]">
-          <span className="inline-flex items-center gap-1">
-            <InboxStackIcon className="w-3 h-3" />
-            <span className="tabular-nums">
-              {form.submissionCount.toLocaleString()}
+          {!isTemplate && (
+            <span className="inline-flex items-center gap-1">
+              <InboxStackIcon className="w-3 h-3" />
+              <span className="tabular-nums">
+                {form.submissionCount.toLocaleString()}
+              </span>
+              <span className="text-[var(--muted-foreground)]/60">
+                {form.submissionCount === 1 ? 'submission' : 'submissions'}
+              </span>
             </span>
-            <span className="text-[var(--muted-foreground)]/60">
-              {form.submissionCount === 1 ? 'submission' : 'submissions'}
-            </span>
-          </span>
+          )}
           <span className="inline-flex items-center gap-1">
             <ClockIcon className="w-3 h-3" />
             {formatRelativeDate(form.updatedAt)}
@@ -182,10 +205,16 @@ function PublishSwitch({
 function CardMenu({
   form,
   editHref,
+  editLabel = 'Edit form',
+  showLiveLink = true,
+  onSaveAsTemplate,
   onDelete,
 }: {
   form: FormSummary;
   editHref: string;
+  editLabel?: string;
+  showLiveLink?: boolean;
+  onSaveAsTemplate?: (form: FormSummary) => void;
   onDelete?: (form: FormSummary) => void;
 }) {
   const [open, setOpen] = React.useState(false);
@@ -237,9 +266,9 @@ function CardMenu({
             onClick={() => setOpen(false)}
           >
             <PencilSquareIcon className="w-3.5 h-3.5" />
-            Edit form
+            {editLabel}
           </Link>
-          {published && (
+          {showLiveLink && published && (
             <a
               href={`/f/${form.slug}`}
               target="_blank"
@@ -250,6 +279,21 @@ function CardMenu({
               <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5" />
               Open live form
             </a>
+          )}
+          {onSaveAsTemplate && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setOpen(false);
+                onSaveAsTemplate(form);
+              }}
+              className="w-full flex items-center gap-2 px-2.5 py-2 text-xs rounded-md text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+            >
+              <Square2StackIcon className="w-3.5 h-3.5" />
+              Save as template
+            </button>
           )}
           {onDelete && (
             <>

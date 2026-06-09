@@ -11,8 +11,14 @@ interface FormsListProps {
   /** Plumbed through to FormCard so the inline publish toggle can fire. */
   onTogglePublish?: (form: FormSummary, next: 'published' | 'draft') => void;
   onDelete?: (form: FormSummary) => void;
+  /** Save a live form's design as a reusable template (live-form view only). */
+  onSaveAsTemplate?: (form: FormSummary) => void;
   /** IDs whose publish toggle should render as in-flight. */
   publishingIds?: string[];
+  /** 'template' renders template cards (click → editor, no publish meta). */
+  variant?: 'form' | 'template';
+  /** Override the empty-state copy (e.g. for the Templates gallery). */
+  emptyState?: { title: string; subtitle: string };
 }
 
 export function FormsList({
@@ -21,7 +27,10 @@ export function FormsList({
   accountNames,
   onTogglePublish,
   onDelete,
+  onSaveAsTemplate,
   publishingIds,
+  variant = 'form',
+  emptyState,
 }: FormsListProps) {
   if (loading) {
     return (
@@ -42,9 +51,12 @@ export function FormsList({
         <div className="w-14 h-14 rounded-2xl bg-[var(--muted)] flex items-center justify-center mx-auto mb-4">
           <DocumentTextIcon className="w-7 h-7 text-[var(--muted-foreground)]" />
         </div>
-        <h3 className="text-lg font-semibold">No forms yet</h3>
+        <h3 className="text-lg font-semibold">
+          {emptyState?.title ?? 'No forms yet'}
+        </h3>
         <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Create your first form and start shaping the capture experience.
+          {emptyState?.subtitle ??
+            'Create your first form and start shaping the capture experience.'}
         </p>
       </div>
     );
@@ -56,9 +68,11 @@ export function FormsList({
         <FormCard
           key={form.id}
           form={form}
+          variant={variant}
           accountName={accountNames?.[form.accountKey]}
           onTogglePublish={onTogglePublish}
           onDelete={onDelete}
+          onSaveAsTemplate={onSaveAsTemplate}
           isPublishUpdating={publishingIds?.includes(form.id) ?? false}
         />
       ))}

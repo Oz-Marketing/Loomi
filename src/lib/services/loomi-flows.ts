@@ -33,8 +33,10 @@ import {
 import { nextAllowedSendTime, birthdayMatchesTarget } from '@/lib/flows/scheduling';
 import { applyMergetags, type MergetagContext } from '@/lib/flows/mergetags';
 import { assertSafeWebhookUrl } from '@/lib/flows/ssrf';
+import { enqueueCrmDeliveryJob } from '@/lib/integrations/crm/dispatch';
 import {
   ANNOTATION_NODE_TYPES,
+  CRM_PUSH_PROVIDERS,
   EXECUTABLE_NODE_TYPES,
   FlowValidationError,
   validateFlowGraph,
@@ -1901,6 +1903,12 @@ export async function processEnrollmentTick(enrollmentId: string): Promise<void>
       await advanceEnrollment(enrollmentId, next, null);
       return;
     }
+    case 'push_to_crm': {
+      await executePushToCrmNode(enrollment, node);
+      const next = pickNextNode(node, edgesByFromId, null);
+      await advanceEnrollment(enrollmentId, next, null);
+      return;
+    }
     case 'wait_until': {
       const decision = await evaluateWaitUntil(enrollment, node);
       if (decision.kind === 'wait') {
@@ -3158,6 +3166,100 @@ async function executeWebhookNode(
         method,
         status: response.status,
       }),
+    },
+  });
+}
+
+/**
+ * push_to_crm node — hand the enrolled contact off to an API CRM (HubSpot).
+ *
+ * The node doesn't call the CRM inline: it creates a CrmDelivery (source
+ * "flow") and enqueues the same pg-boss delivery job a form submission would,
+ * so the actual upsert — and its retry/backoff — runs in the worker
+ * (deliver.ts). This keeps the flow tick fast and the CRM-push logic in one
+ * place. The HubSpot upsert is idempotent by email, so a contact that passes
+ * through this node more than once just refreshes the same record.
+ */
+async function executePushToCrmNode(
+  enrollment: { id: string; contactId: string },
+  node: NodeForExecution,
+): Promise<void> {
+  // Idempotency guard (same as the email node): a 'sent' step for this node
+  // in the current cycle means we already enqueued — never double-enqueue
+  // (which, with deal creation on, could otherwise create duplicate deals).
+  const alreadyPushed = await prisma.loomiFlowEnrollmentStep.findFirst({
+    where: { enrollmentId: enrollment.id, nodeId: node.id, status: 'sent' },
+    select: { id: true },
+  });
+  if (alreadyPushed) return;
+
+  const provider = String(node.config.provider || '').trim() || CRM_PUSH_PROVIDERS[0];
+
+  const contact = await prisma.contact.findUnique({
+    where: { id: enrollment.contactId },
+    select: { id: true, accountKey: true },
+  });
+  if (!contact) {
+    await recordStepFailure(enrollment.id, node.id, 'contact missing');
+    return;
+  }
+
+  const destination = await prisma.crmDestination.findFirst({
+    where: { accountKey: contact.accountKey, provider, enabled: true },
+    select: { id: true },
+  });
+  if (!destination) {
+    // No connected CRM for this provider — skip (non-fatal) so the contact
+    // keeps moving through the flow; the step log shows why nothing pushed.
+    await prisma.loomiFlowEnrollmentStep.create({
+      data: {
+        enrollmentId: enrollment.id,
+        nodeId: node.id,
+        status: 'skipped',
+        metadata: stringifyConfig({ reason: `no enabled ${provider} CRM connected` }),
+      },
+    });
+    return;
+  }
+
+  const delivery = await prisma.crmDelivery.create({
+    data: {
+      destinationId: destination.id,
+      source: 'flow',
+      contactId: contact.id,
+    },
+    select: { id: true },
+  });
+
+  try {
+    await enqueueCrmDeliveryJob(delivery.id);
+  } catch (err) {
+    // Don't leave an orphaned `pending` row no worker will pick up.
+    await prisma.crmDelivery
+      .update({
+        where: { id: delivery.id },
+        data: {
+          status: 'failed',
+          lastError: err instanceof Error ? `enqueue failed: ${err.message}` : 'enqueue failed',
+        },
+      })
+      .catch(() => {});
+    await recordStepFailure(
+      enrollment.id,
+      node.id,
+      `failed to enqueue ${provider} push: ${err instanceof Error ? err.message : 'unknown'}`,
+    );
+    return;
+  }
+
+  await prisma.loomiFlowEnrollmentStep.create({
+    data: {
+      enrollmentId: enrollment.id,
+      nodeId: node.id,
+      // 'sent' = handed to the delivery worker (the async upsert happens
+      // there). Mirrors how the webhook node records a successful hand-off.
+      status: 'sent',
+      metadata: stringifyConfig({ provider, deliveryId: delivery.id }),
     },
   });
 }

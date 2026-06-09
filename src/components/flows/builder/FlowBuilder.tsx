@@ -90,6 +90,7 @@ const DEFAULT_NODE_CONFIG: Record<BuilderNodeType, Record<string, unknown>> = {
   },
   split: { weights: [0.5, 0.5], labels: ['a', 'b'] },
   webhook: { url: '', method: 'POST', body: '' },
+  push_to_crm: { provider: 'hubspot' },
   exit: {},
   sticky_note: { text: '', color: 'yellow' },
 };

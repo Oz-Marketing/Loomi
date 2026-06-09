@@ -66,6 +66,7 @@ export type BuilderNodeType =
   | 'wait_until'
   // Integrations
   | 'webhook'
+  | 'push_to_crm'
   // Exit
   | 'exit'
   // Annotations (canvas authoring aids; not executed)
@@ -246,6 +247,11 @@ export const NODE_META: Record<BuilderNodeType, NodeMetaEntry> = {
 
   // ── Integrations ──
   webhook: meta('integrations', 'Webhook', 'Call an external URL with mergetag-templated body.'),
+  push_to_crm: meta(
+    'integrations',
+    'Push to CRM',
+    'Send the contact to a connected CRM (HubSpot) as a qualified lead.',
+  ),
 
   // ── End ──
   exit: meta('end', 'Exit', 'End of the flow — contact is marked completed.'),

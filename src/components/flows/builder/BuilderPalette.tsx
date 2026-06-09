@@ -16,6 +16,7 @@ import {
   DocumentTextIcon,
   CheckCircleIcon,
   ArrowTopRightOnSquareIcon,
+  ArrowRightCircleIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   MagnifyingGlassIcon,
@@ -50,6 +51,7 @@ const ICON_MAP: Record<BuilderNodeType, IconCmp> = {
   condition: BranchIcon,
   split: ScaleIcon,
   webhook: ArrowTopRightOnSquareIcon,
+  push_to_crm: ArrowRightCircleIcon,
   exit: StopCircleIcon,
   sticky_note: NoteIcon,
 };

@@ -783,24 +783,33 @@ model FormSubmission {
 // ─────────────────────────────────────────────────────
 // Websites — Forms → CRM lead routing
 //
-// Forwards form leads to a dealer's CRM (Tekion / VinSolutions) as an
-// ADF/XML email — the automotive-industry standard lead format. Each
-// account configures one CrmDestination per provider (the CRM's lead
-// intake email). When a form has `forwardToCrm` enabled, submit.ts
-// enqueues one pg-boss delivery job per enabled destination; the worker
-// builds the ADF document, emails it via the account's sending identity,
-// and records the outcome on CrmDelivery.
+// Forwards leads to a customer's CRM and records the outcome on
+// CrmDelivery. Two delivery shapes, keyed off `provider`:
+//
+//   • ADF email (tekion / vinsolutions) — the automotive-industry standard
+//     lead format. The lead is emailed (via the account's sending identity)
+//     to the CRM's intake address(es) in `leadEmails`.
+//   • HubSpot API (hubspot) — the contact is upserted into HubSpot over its
+//     REST API using an encrypted Private App token; `leadEmails` is unused.
+//
+// Each account configures one CrmDestination per provider. Deliveries are
+// triggered two ways: a form submission with `Form.forwardToCrm` enabled
+// (submit.ts), or a contact reaching a `push_to_crm` node in a flow
+// (loomi-flows.ts). Either path enqueues one pg-boss job per delivery; the
+// worker (deliver.ts) does the provider-specific send.
 // ─────────────────────────────────────────────────────
 
 model CrmDestination {
   id              String   @id @default(cuid())
   accountKey      String
   account         Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
-  // CRM platform — drives the card label and any provider-specific quirks.
-  provider        String // tekion | vinsolutions
+  // CRM platform — drives the card label, the delivery method, and any
+  // provider-specific quirks.
+  provider        String // tekion | vinsolutions | hubspot
   // The CRM's ADF lead-intake email address(es) (dealer-specific, issued by
   // the CRM). Stored as a JSON array of strings; each lead is emailed to every
-  // address, so one provider can fan out to multiple intake inboxes.
+  // address, so one provider can fan out to multiple intake inboxes. Unused for
+  // API providers (hubspot) — those leave it at the default empty list.
   //
   // @map keeps the PHYSICAL column named `leadEmail` (its pre-rename name) so
   // `prisma db push` — which can't detect renames and would otherwise DROP the
@@ -808,6 +817,15 @@ model CrmDestination {
   // sees no column change. Existing single-address values stay in place and
   // parseLeadEmails() reads them as a one-element list.
   leadEmails      String   @default("[]") @map("leadEmail")
+  // ── API providers (hubspot) ──
+  // accessToken is the HubSpot Private App token, encrypted at rest with the
+  // same AES-256-GCM helper as sendgridApiKey (never returned to the client).
+  // portalId is the HubSpot account id (informational — for building record
+  // links). config holds optional per-provider settings: field mapping and an
+  // optional { pipelineId, stageId } to also create a deal on push.
+  accessToken     String?
+  portalId        String?
+  config          Json?
   enabled         Boolean  @default(true)
   createdByUserId String?
   createdAt       DateTime @default(now())
@@ -816,7 +834,8 @@ model CrmDestination {
   deliveries CrmDelivery[]
 
   // One destination per CRM per account — each provider is a single
-  // "connect" in the integrations grid (Tekion card, VinSolutions card).
+  // "connect" in the integrations grid (Tekion card, VinSolutions card,
+  // HubSpot card).
   @@unique([accountKey, provider])
   @@index([accountKey, enabled])
 }
@@ -825,19 +844,30 @@ model CrmDelivery {
   id            String         @id @default(cuid())
   destinationId String
   destination   CrmDestination @relation(fields: [destinationId], references: [id], onDelete: Cascade)
-  // FormSubmission.id this delivery is for. No relation — submissions can
-  // be pruned independently and we don't want a cascade to wipe the log.
-  submissionId  String
-  // The single intake address this delivery targets. A submission fans out to
-  // one CrmDelivery per address on the destination, so a retry only re-sends to
-  // the address that actually failed (no duplicates to the ones that
-  // succeeded). Nullable for legacy rows created before the fan-out (those
-  // fall back to emailing all of the destination's addresses).
+  // What triggered this delivery: "form" (a form submission) or "flow" (a
+  // push_to_crm node). Drives which id below identifies the lead.
+  source        String         @default("form")
+  // FormSubmission.id this delivery is for (source="form"). No relation —
+  // submissions can be pruned independently and we don't want a cascade to
+  // wipe the log. Null for flow-triggered pushes, which carry contactId
+  // instead.
+  submissionId  String?
+  // Contact.id this delivery is for (source="flow"). No relation, same
+  // reasoning as submissionId. Null for form-triggered ADF deliveries, which
+  // resolve the contact from the submission.
+  contactId     String?
+  // The single intake address this delivery targets (ADF providers only). A
+  // submission fans out to one CrmDelivery per address on the destination, so
+  // a retry only re-sends to the address that actually failed (no duplicates
+  // to the ones that succeeded). Null for API providers (hubspot) and for
+  // legacy rows created before the fan-out (those fall back to emailing all of
+  // the destination's addresses).
   recipientEmail String?
   status        String         @default("pending") // pending | sent | failed
   attempts      Int            @default(0)
-  // Provider message id from the email send (SendGrid X-Message-Id or the
-  // SMTP messageId), kept for tracing a lead through to the CRM.
+  // Provider message id: the email send id (SendGrid X-Message-Id / SMTP
+  // messageId) for ADF, or the created/updated HubSpot contact id for hubspot.
+  // Kept for tracing a lead through to the CRM.
   messageId     String?
   lastError     String?
   createdAt     DateTime       @default(now())
@@ -845,6 +875,7 @@ model CrmDelivery {
 
   @@index([destinationId, createdAt])
   @@index([submissionId])
+  @@index([contactId])
 }
 
 // ─────────────────────────────────────────────────────

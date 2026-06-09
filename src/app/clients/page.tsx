@@ -5,6 +5,7 @@ import { PlusIcon, XMarkIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { AdminOnly } from '@/components/route-guard';
 import PrimaryButton from '@/components/primary-button';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
+import { useIndustries } from '@/lib/hooks/use-industries';
 
 interface ClientData {
   dealer: string;
@@ -17,10 +18,9 @@ interface ClientData {
   };
 }
 
-const CATEGORY_SUGGESTIONS = ['Automotive', 'Healthcare', 'Real Estate', 'Hospitality', 'Retail', 'General'];
-
 export default function ClientsPage() {
   const { confirm } = useLoomiDialog();
+  const categorySuggestions = useIndustries();
   const [clients, setClients] = useState<Record<string, ClientData> | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -152,7 +152,7 @@ export default function ClientsPage() {
             <input type="text" value={newKey} onChange={(e) => setNewKey(e.target.value)} className="text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-[var(--foreground)]" placeholder="Client key (e.g. youngFord)" autoFocus />
             <input type="text" value={newDealer} onChange={(e) => setNewDealer(e.target.value)} className="text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-[var(--foreground)]" placeholder="Client name (e.g. Young Ford)" />
             <select value={newCategory} onChange={(e) => setNewCategory(e.target.value)} className="text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-[var(--foreground)]">
-              {CATEGORY_SUGGESTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+              {categorySuggestions.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
           <div className="flex items-center gap-2">
@@ -199,7 +199,7 @@ export default function ClientsPage() {
                       onChange={(e) => updateClient(key, 'category', e.target.value)}
                       className="w-full mt-0.5 bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-1.5 text-sm"
                     >
-                      {CATEGORY_SUGGESTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                      {categorySuggestions.map(c => <option key={c} value={c}>{c}</option>)}
                     </select>
                   </div>
                   <button

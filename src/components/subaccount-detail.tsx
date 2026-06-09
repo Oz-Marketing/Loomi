@@ -52,8 +52,7 @@ import {
   resolveAccountTimezone,
   resolveAccountWebsite,
 } from '@/lib/account-resolvers';
-
-const CATEGORY_SUGGESTIONS = ['Automotive', 'Powersports', 'Ecommerce', 'Healthcare', 'Real Estate', 'Hospitality', 'Retail', 'General'];
+import { useIndustries } from '@/lib/hooks/use-industries';
 
 const WEBSAFE_FONTS = [
   { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
@@ -147,6 +146,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   // ── Company fields ──
   const [dealer, setDealer] = useState('');
   const [category, setCategory] = useState('General');
+  const categorySuggestions = useIndustries();
   const [oems, setOems] = useState<string[]>([]);
   const [storefrontImage, setStorefrontImage] = useState('');
   const [bizEmail, setBizEmail] = useState('');
@@ -801,7 +801,10 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                   <div>
                     <label className={labelClass}>Industry</label>
                     <select value={category} onChange={e => setCategory(e.target.value)} className={inputClass}>
-                      {CATEGORY_SUGGESTIONS.map(c => <option key={c} value={c}>{c}</option>)}
+                      {categorySuggestions.map(c => <option key={c} value={c}>{c}</option>)}
+                      {category && !categorySuggestions.includes(category) && (
+                        <option value={category}>{category}</option>
+                      )}
                     </select>
                   </div>
                   {showBrandsSelector && (

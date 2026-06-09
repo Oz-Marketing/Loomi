@@ -5,7 +5,9 @@ import {
   getAccountScope,
   requireRole,
 } from '@/lib/api-auth';
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { encryptToken } from '@/lib/crypto/encryption';
 import {
   normalizeLeadEmails,
   parseLeadEmails,
@@ -42,7 +44,13 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
   }
 
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
-  const data: { leadEmails?: string; enabled?: boolean } = {};
+  const data: {
+    leadEmails?: string;
+    enabled?: boolean;
+    accessToken?: string;
+    portalId?: string | null;
+    config?: Prisma.InputJsonValue;
+  } = {};
 
   // provider is immutable. Each card is bound to one CRM and there's a
   // unique (accountKey, provider) constraint — allowing a provider edit
@@ -55,7 +63,25 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
     );
   }
 
-  if ('leadEmails' in body || 'leadEmail' in body) {
+  if (existing.provider === 'hubspot') {
+    // Re-key: a non-empty token replaces (re-encrypts) the stored one. An
+    // empty/whitespace token is ignored (use DELETE to disconnect) so a save
+    // that doesn't re-enter the token doesn't wipe it.
+    if (typeof body.accessToken === 'string' && body.accessToken.trim()) {
+      data.accessToken = encryptToken(body.accessToken.trim());
+    }
+    if ('portalId' in body) {
+      data.portalId =
+        typeof body.portalId === 'string' && body.portalId.trim() ? body.portalId.trim() : null;
+    }
+    if ('config' in body) {
+      if (body.config && typeof body.config === 'object' && !Array.isArray(body.config)) {
+        data.config = body.config as Prisma.InputJsonValue;
+      } else if (body.config == null) {
+        data.config = Prisma.JsonNull as unknown as Prisma.InputJsonValue;
+      }
+    }
+  } else if ('leadEmails' in body || 'leadEmail' in body) {
     const { emails, invalid } = normalizeLeadEmails(body.leadEmails ?? body.leadEmail);
     if (invalid.length > 0) {
       return NextResponse.json(
@@ -83,6 +109,9 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
       id: updated.id,
       provider: updated.provider,
       leadEmails: parseLeadEmails(updated.leadEmails),
+      connected: Boolean(updated.accessToken),
+      portalId: updated.portalId ?? null,
+      config: (updated.config as Record<string, unknown> | null) ?? null,
       enabled: updated.enabled,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,

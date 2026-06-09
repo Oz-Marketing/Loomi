@@ -23,6 +23,7 @@ import {
   DocumentTextIcon,
   CheckCircleIcon,
   ArrowTopRightOnSquareIcon,
+  ArrowRightCircleIcon,
   ExclamationTriangleIcon,
   DocumentDuplicateIcon,
   TrashIcon,
@@ -56,6 +57,7 @@ const ICON_MAP: Record<BuilderNodeType, React.ComponentType<{ className?: string
   condition: BranchIcon,
   split: ScaleIcon,
   webhook: ArrowTopRightOnSquareIcon,
+  push_to_crm: ArrowRightCircleIcon,
   exit: StopCircleIcon,
   sticky_note: NoteIcon,
 };
@@ -645,6 +647,12 @@ const WebhookNode = makeActionNode('webhook', (c) => {
   return url ? `POST ${truncate(url, 28)}` : 'Set webhook URL →';
 });
 
+const PushToCrmNode = makeActionNode('push_to_crm', (c) => {
+  const provider = String(c.provider || 'hubspot');
+  const label = provider === 'hubspot' ? 'HubSpot' : provider;
+  return `→ ${label}`;
+});
+
 const WaitUntilNode = makeActionNode('wait_until', (c) => {
   const field = String(c.field || '');
   return field ? `Until ${field}` : 'Pick a date field →';
@@ -677,6 +685,7 @@ export const NODE_TYPES = {
   condition: ConditionNode,
   split: SplitNode,
   webhook: WebhookNode,
+  push_to_crm: PushToCrmNode,
   exit: ExitNode,
   // Annotation — persisted node, no edges, never executed.
   sticky_note: StickyNoteNode,

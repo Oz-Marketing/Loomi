@@ -10,7 +10,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { FlowIcon } from '@/components/icon-map';
-import { EmailTemplatesPanel, TemplatesHeaderActionsContext } from '@/app/email/templates/page';
+import { EmailTemplatesPanel, TemplatesHeaderActionsContext } from '@/app/email/templates/email-templates-view';
 import { FormTemplatesTab } from '@/components/templates/form-templates-tab';
 import { FlowTemplatesTab } from '@/components/templates/flow-templates-tab';
 import { LandingPageTemplatesTab } from '@/components/templates/landing-page-templates-tab';

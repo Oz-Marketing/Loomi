@@ -264,9 +264,15 @@ async function deliverAdfLead(
     await markTerminal(delivery.id, attempt, 'Forwarding disabled before delivery');
     return;
   }
+  // Account-less system templates can't forward; guard + narrow.
+  if (!form.accountKey) {
+    await markTerminal(delivery.id, attempt, 'Form has no owning account');
+    return;
+  }
+  const accountKey = form.accountKey;
 
   const account = await prisma.account.findUnique({
-    where: { key: form.accountKey },
+    where: { key: accountKey },
     select: { dealer: true },
   });
 
@@ -275,7 +281,7 @@ async function deliverAdfLead(
     : null;
 
   const adfInput = {
-    dealerName: account?.dealer || form.accountKey,
+    dealerName: account?.dealer || accountKey,
     formName: form.name,
     submission,
     contact,
@@ -301,7 +307,7 @@ async function deliverAdfLead(
       : parseLeadEmails(destination.leadEmails);
 
     const { messageId } = await sendLeadEmail({
-      accountKey: form.accountKey,
+      accountKey,
       to: recipients,
       subject,
       xml,

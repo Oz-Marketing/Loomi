@@ -121,7 +121,7 @@ export function TopUtilityBar() {
   }, [pathname]);
 
   return (
-    <header className="flex justify-end mb-2" aria-label="Page utilities">
+    <header className="flex justify-end mb-6" aria-label="Page utilities">
       <div className="flex items-center gap-2">
         <UtilityIconButton
           title="Help"

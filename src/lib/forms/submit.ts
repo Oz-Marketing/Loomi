@@ -72,6 +72,14 @@ export async function submitForm(args: {
     throw new FormSubmitError('Form schema is malformed', 500);
   }
 
+  // Templates (incl. account-less system templates) never accept
+  // submissions — public serving already excludes them, but guard here
+  // too. This also narrows `accountKey` to a non-null string below.
+  if (form.isTemplate || !form.accountKey) {
+    throw new FormSubmitError('This form is not accepting submissions', 404);
+  }
+  const accountKey = form.accountKey;
+
   // CAPTCHA verification runs before schema validation so a failed
   // challenge doesn't leak which fields are required (and so we don't
   // burn a Prisma round-trip on a bot submission). When Turnstile
@@ -103,7 +111,7 @@ export async function submitForm(args: {
   // Upsert the Contact if we have an identifier. Anonymous submissions
   // (no email + no phone) still get stored, just without a contact link.
   const contactId = await upsertContactFromSubmission({
-    accountKey: form.accountKey,
+    accountKey,
     email: identifiers.email,
     phone: identifiers.phone,
     firstName: identifiers.firstName,
@@ -113,7 +121,7 @@ export async function submitForm(args: {
   // Attach to the configured list. Idempotent — composite PK on
   // ContactListMembership prevents duplicate rows for the same pair.
   if (contactId && form.listId) {
-    await attachContactToList(contactId, form.listId, form.accountKey);
+    await attachContactToList(contactId, form.listId, accountKey);
   }
 
   // Write the raw submission + bump the form's counter. The LP
@@ -152,7 +160,7 @@ export async function submitForm(args: {
       await enrollContactForFormSubmission({
         formId: form.id,
         contactId,
-        accountKey: form.accountKey,
+        accountKey,
       });
     } catch (err) {
       console.error('[forms/submit] flow-trigger enrollment failed', err);

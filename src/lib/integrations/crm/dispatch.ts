@@ -46,9 +46,12 @@ export async function enqueueFormSubmissionCrmLeads(args: {
 
   // Per-form gate: leads only leave Loomi when the form opts in.
   if (!form.forwardToCrm) return;
+  // Account-less system templates never forward (and can't enable it).
+  if (!form.accountKey) return;
+  const accountKey = form.accountKey;
 
   const destinations = await prisma.crmDestination.findMany({
-    where: { accountKey: form.accountKey, enabled: true },
+    where: { accountKey, enabled: true },
     select: { id: true, provider: true, leadEmails: true },
   });
   if (destinations.length === 0) return;

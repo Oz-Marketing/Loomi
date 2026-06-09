@@ -163,6 +163,9 @@ export function validateFlowGraph(graph: {
     arr.push(edge);
     edgesByFrom.set(edge.fromNodeId, arr);
   }
+  // Nodes that something points at — used to tell a legitimate end-of-flow
+  // leaf (reachable, no next) from a stranded node (no in AND no out).
+  const nodesWithIncoming = new Set(graph.edges.map((e) => e.toNodeId));
 
   const hasTrigger = graph.nodes.some((n) => n.type === 'trigger');
   if (!hasTrigger) {
@@ -195,11 +198,31 @@ export function validateFlowGraph(graph: {
     if (ANNOTATION_NODE_TYPES.has(node.type)) continue;
     const outgoing = edgesByFrom.get(node.id) ?? [];
     if (outgoing.length === 0) {
-      push(
-        node.id,
-        `This step has no outgoing connection.`,
-        `Connect this step to the next one, or end the flow with an Exit step.`,
-      );
+      // A trigger or a brancher (condition/split) must connect onward —
+      // a dangling one is a real mistake. A plain action step with no next
+      // is the flow's implicit END: the engine marks the contact completed
+      // on reaching any leaf (advanceEnrollment, loomi-flows.ts), and the
+      // builder shows a baked-in "End" cap there, so no Exit node needed.
+      // Still flag a step that's connected to nothing at all (no in/out).
+      if (node.type === 'trigger') {
+        push(
+          node.id,
+          'The trigger has no outgoing connection.',
+          'Connect the trigger to the first step of the flow.',
+        );
+      } else if (node.type === 'condition' || node.type === 'split') {
+        push(
+          node.id,
+          'This step has no outgoing connection.',
+          'Connect each branch to the next step.',
+        );
+      } else if (!nodesWithIncoming.has(node.id)) {
+        push(
+          node.id,
+          'This step is not connected to anything.',
+          'Connect it after another step, or remove it.',
+        );
+      }
       continue;
     }
     if (node.type === 'condition') {
@@ -403,15 +426,9 @@ export function validateFlowGraph(graph: {
     );
   }
 
-  const hasExit = graph.nodes.some((n) => n.type === 'exit');
-  if (graph.nodes.length > 0 && hasTrigger && !hasExit) {
-    push(
-      null,
-      'Flow has no Exit step — contacts will leave the flow only after completing every step.',
-      'Add an Exit step at any termination point so contacts can be marked complete sooner.',
-      'warning',
-    );
-  }
+  // (No "missing Exit step" warning: a flow now ends implicitly at any leaf
+  // step — the builder shows a baked-in "End" cap there — so an explicit
+  // Exit node is optional and its absence is not noteworthy.)
 
   // ok = no errors. Warnings don't block publish.
   const ok = !issues.some((i) => (i.severity ?? 'error') === 'error');

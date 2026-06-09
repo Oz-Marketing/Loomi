@@ -170,6 +170,14 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
   const [nodes, setNodes, onNodesChangeBase] = useNodesState<Node<BuilderNodeData>>([]);
   const [edges, setEdges, onEdgesChangeBase] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  // Transient canvas highlight driven by the Error Log: clicking an issue
+  // outlines its node (red=error, amber=warning) on top of the pan. Kept
+  // out of `nodes` so it never marks the flow dirty or burns an undo slot;
+  // surfaced to node renderers via BuilderContext.
+  const [highlight, setHighlight] = useState<{
+    nodeId: string;
+    severity: 'error' | 'warning';
+  } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -395,7 +403,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
   // Centers a node on the canvas and opens its inspector. Used by the
   // Error Log drawer when the user clicks an issue.
   const focusNode = useCallback(
-    (nodeId: string) => {
+    (nodeId: string, severity: 'error' | 'warning' = 'error') => {
       const node = nodes.find((n) => n.id === nodeId);
       if (!node) return;
       const w = node.measured?.width ?? 240;
@@ -405,9 +413,21 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
         duration: 300,
       });
       setSelectedNodeId(nodeId);
+      // Paint a severity-colored ring on the target so it's obvious which
+      // node the issue points at, not just where the canvas panned.
+      setHighlight({ nodeId, severity });
     },
     [nodes, setCenter],
   );
+
+  // Drop the highlight once it stops being meaningful: the user closed the
+  // Error Log, fixed the issue (so it left liveIssues), or deleted the node.
+  // This keeps the colored ring from lingering after the problem is gone.
+  useEffect(() => {
+    if (!highlight) return;
+    const stillFlagged = liveIssues.some((i) => i.nodeId === highlight.nodeId);
+    if (activeDrawer !== 'error_log' || !stillFlagged) setHighlight(null);
+  }, [highlight, liveIssues, activeDrawer]);
 
   // Keyboard: Cmd/Ctrl+Z = undo, Cmd/Ctrl+Shift+Z (or Cmd/Ctrl+Y) = redo.
   // Suppressed when focus is inside a form field so typing isn't hijacked.
@@ -1550,6 +1570,8 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
           onInsertOnEdge: handleInsertOnEdge,
           onAddAfterNode: handleAddAfterNode,
           onUpdateNodeConfig: handleConfigChange,
+          highlightedNodeId: highlight?.nodeId ?? null,
+          highlightSeverity: highlight?.severity ?? null,
         }}
       >
           {/* Floating title group, top-left. Back arrow + editable

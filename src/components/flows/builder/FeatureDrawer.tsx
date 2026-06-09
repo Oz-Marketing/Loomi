@@ -27,7 +27,7 @@ interface FeatureDrawerProps {
   nodeLabel?: (nodeId: string) => string;
   /** Click handler when a user taps an issue. Focuses + centers the
    *  matching node on the canvas. */
-  onFocusNode?: (nodeId: string) => void;
+  onFocusNode?: (nodeId: string, severity?: 'error' | 'warning') => void;
 }
 
 const FEATURE_COPY: Record<
@@ -131,7 +131,7 @@ function ErrorLogDrawer({
 }: {
   issues: FlowValidationIssue[];
   nodeLabel?: (nodeId: string) => string;
-  onFocusNode?: (nodeId: string) => void;
+  onFocusNode?: (nodeId: string, severity?: 'error' | 'warning') => void;
   onClose: () => void;
 }) {
   const errors = issues.filter((i) => (i.severity ?? 'error') === 'error');
@@ -208,7 +208,7 @@ function IssueSection({
   tone: 'error' | 'warning';
   issues: FlowValidationIssue[];
   nodeLabel?: (nodeId: string) => string;
-  onFocusNode?: (nodeId: string) => void;
+  onFocusNode?: (nodeId: string, severity?: 'error' | 'warning') => void;
 }) {
   const toneClasses =
     tone === 'error'
@@ -237,7 +237,7 @@ function IssueSection({
                 clickable ? 'hover:bg-[var(--muted)] cursor-pointer' : ''
               }`}
               onClick={() => {
-                if (clickable && issue.nodeId) onFocusNode(issue.nodeId);
+                if (clickable && issue.nodeId) onFocusNode(issue.nodeId, tone);
               }}
             >
               <div className="flex items-start gap-2">

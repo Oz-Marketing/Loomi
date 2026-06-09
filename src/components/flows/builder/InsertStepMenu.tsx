@@ -82,13 +82,16 @@ export function InsertStepMenu({
   const query = search.trim().toLowerCase();
 
   // Same section/category structure as the palette, minus the entry
-  // (trigger) since you can't insert another trigger mid-flow.
+  // (trigger — can't insert another mid-flow) and exit: the flow now ends
+  // implicitly at any leaf step (shown as a baked-in "End" cap), so an
+  // explicit Exit node is no longer something users add by hand.
   const sections = useMemo(() => {
     return PALETTE_SECTIONS.filter((s) => s.category !== 'entry').map(
       (section) => {
         const types = (Object.keys(NODE_META) as BuilderNodeType[])
           .filter((t) => NODE_META[t].category === section.category)
           .filter((t) => t !== 'trigger')
+          .filter((t) => t !== 'exit')
           .filter((t) => {
             if (!query) return true;
             const meta = NODE_META[t];

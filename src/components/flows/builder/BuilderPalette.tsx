@@ -77,6 +77,9 @@ export function BuilderPalette() {
         .filter((t) => NODE_META[t].category === section.category)
         // Trigger is pinned at the top; suppress it from the list view.
         .filter((t) => t !== PINNED_ENTRY_TYPE)
+        // Exit is no longer added by hand — flows end implicitly at any leaf
+        // step (shown as a baked-in "End" cap), so drop it from the palette.
+        .filter((t) => t !== 'exit')
         .filter((t) => {
           if (!query) return true;
           const meta = NODE_META[t];

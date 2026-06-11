@@ -5,6 +5,7 @@ import { normalizeOems } from '@/lib/oems';
 import * as accountService from '@/lib/services/accounts';
 import { normalizeAccountInputAliases } from '@/lib/account-field-aliases';
 import { normalizeAccountOutputPayload } from '@/lib/account-output';
+import { encryptToken } from '@/lib/crypto/encryption';
 
 /**
  * Strip the ESP-era legacy column from an outbound account payload.
@@ -14,6 +15,18 @@ import { normalizeAccountOutputPayload } from '@/lib/account-output';
 function stripLegacyEspFields(payload: Record<string, unknown>): void {
   delete payload.espProvider;
 }
+
+/**
+ * Never return the GoHighLevel Private Integration token (it's encrypted at
+ * rest); surface only whether one is configured so the UI can show state.
+ */
+function maskGhlToken(payload: Record<string, unknown>): void {
+  payload.ghlConfigured = Boolean(payload.ghlApiKey);
+  delete payload.ghlApiKey;
+}
+
+/** Per-account reporting margins — nullable Float (%); empty/non-numeric clears. */
+const NULLABLE_FLOAT_FIELDS = ['markup', 'facebookAdsMargin', 'stackadaptMargin', 'googleAdsMargin'] as const;
 
 /**
  * PATCH /api/accounts/[key] — merge-update a single account
@@ -53,7 +66,7 @@ export async function PATCH(
     const updatePayload: Record<string, string | number | null | undefined> = {};
 
     // Simple string fields
-    const stringFields = ['dealer', 'category', 'oem', 'email', 'phone', 'salesPhone', 'servicePhone', 'partsPhone', 'address', 'city', 'state', 'postalCode', 'website', 'timezone', 'senderEmail', 'senderName', 'sendingDomain', 'replyToEmail', 'metaAdAccountId'] as const;
+    const stringFields = ['dealer', 'category', 'oem', 'email', 'phone', 'salesPhone', 'servicePhone', 'partsPhone', 'address', 'city', 'state', 'postalCode', 'website', 'timezone', 'senderEmail', 'senderName', 'sendingDomain', 'replyToEmail', 'metaAdAccountId', 'stackadaptAdvertiserId', 'googleAdsCustomerId', 'ghlLocationId'] as const;
     for (const field of stringFields) {
       if (field in body) {
         const value = body[field];
@@ -68,17 +81,26 @@ export async function PATCH(
         : null;
     }
 
-    // Markup rate (nullable Float). Empty string / null / non-numeric
-    // input clears the override so the Pacer falls back to the global
-    // default. We accept either a number or a numeric string from the form.
-    if ('markup' in body) {
-      const raw = body.markup;
-      if (raw === '' || raw === null || raw === undefined) {
-        updatePayload.markup = null;
-      } else {
-        const parsed = typeof raw === 'number' ? raw : Number(raw);
-        updatePayload.markup = Number.isFinite(parsed) ? parsed : null;
+    // Nullable Float fields (Pacer markup + the reporting margins). Empty /
+    // null / non-numeric input clears the override. Number or numeric string.
+    for (const field of NULLABLE_FLOAT_FIELDS) {
+      if (field in body) {
+        const raw = body[field];
+        if (raw === '' || raw === null || raw === undefined) {
+          updatePayload[field] = null;
+        } else {
+          const parsed = typeof raw === 'number' ? raw : Number(raw);
+          updatePayload[field] = Number.isFinite(parsed) ? parsed : null;
+        }
       }
+    }
+
+    // GoHighLevel Private Integration token — encrypted at rest. A non-empty
+    // value is (re)encrypted; an explicit empty clears the connection. Only
+    // sent by the form when the operator actually enters/changes it.
+    if ('ghlApiKey' in body) {
+      const raw = typeof body.ghlApiKey === 'string' ? body.ghlApiKey.trim() : '';
+      updatePayload.ghlApiKey = raw ? encryptToken(raw) : '';
     }
 
     // JSON-serialized fields — deep merge with existing
@@ -125,6 +147,7 @@ export async function PATCH(
     const response: Record<string, unknown> = { ...saved };
     normalizeAccountOutputPayload(response);
     stripLegacyEspFields(response);
+    maskGhlToken(response);
 
     return NextResponse.json(response);
   } catch (err) {
@@ -159,6 +182,7 @@ export async function GET(
     const response: Record<string, unknown> = { ...account };
     normalizeAccountOutputPayload(response);
     stripLegacyEspFields(response);
+    maskGhlToken(response);
 
     return NextResponse.json(response);
   } catch (err) {

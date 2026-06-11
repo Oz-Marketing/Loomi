@@ -30,6 +30,7 @@ import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
 import { AccountDomainsTab } from '@/components/account-domains-tab';
 import { CrmIntegrationCards } from '@/components/crm-integration-cards';
+import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
 // Sending + Suppressions tabs now live under /messaging/settings.
 import { OemMultiSelect } from '@/components/oem-multi-select';
 import { UserAvatar } from '@/components/user-avatar';
@@ -168,6 +169,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   // Facebook ad account ("act_...") for the Meta Ads Pacer's Sync-from-
   // Facebook job. Empty string = not connected.
   const [metaAdAccountId, setMetaAdAccountId] = useState<string>('');
+  // Reporting margin (%) for the Meta Ads report.
+  const [facebookAdsMargin, setFacebookAdsMargin] = useState<string>('');
   const [allUsers, setAllUsers] = useState<{ id: string; name: string; title?: string | null; email: string; avatarUrl?: string | null; role?: string; accountKeys?: string[] }[]>([]);
 
   // ── Branding fields ──
@@ -216,6 +219,11 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
         : '',
     );
     setMetaAdAccountId(accountData.metaAdAccountId || '');
+    setFacebookAdsMargin(
+      typeof accountData.facebookAdsMargin === 'number' && Number.isFinite(accountData.facebookAdsMargin)
+        ? String(accountData.facebookAdsMargin)
+        : '',
+    );
     // Logos
     setLogoLight(accountData.logos?.light || '');
     setLogoDark(accountData.logos?.dark || '');
@@ -481,6 +489,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
         body: JSON.stringify({
           metaAdAccountId: metaAdAccountId.trim(),
           markup: markup.trim() === '' ? null : markup,
+          facebookAdsMargin: facebookAdsMargin.trim() === '' ? null : facebookAdsMargin,
         }),
       });
       if (!res.ok) {
@@ -1093,6 +1102,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
             </button>
 
             {key && <CrmIntegrationCards accountKey={key} />}
+            {key && <ReportingIntegrationCards accountKey={key} />}
           </div>
         )}
 
@@ -1182,6 +1192,27 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                           if (v === '' || /^\d*\.?\d*$/.test(v)) setMarkup(v);
                         }}
                         placeholder="0.77"
+                        className={`${inputClass} max-w-[160px]`}
+                      />
+                    </div>
+
+                    <div>
+                      <label className={labelClass} style={{ marginBottom: 0 }}>
+                        Reporting Margin (%)
+                      </label>
+                      <p className="mb-1.5 text-[11px] text-[var(--muted-foreground)]">
+                        Ad report markup: billed cost = actual ÷ (1 − margin/100).
+                        Blank bills at face value.
+                      </p>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={facebookAdsMargin}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v === '' || /^\d*\.?\d*$/.test(v)) setFacebookAdsMargin(v);
+                        }}
+                        placeholder="23"
                         className={`${inputClass} max-w-[160px]`}
                       />
                     </div>

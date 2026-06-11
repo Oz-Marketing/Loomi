@@ -61,6 +61,8 @@ export interface AccountData {
   // Facebook ad account ("act_...") for the Meta Ads Pacer's Sync-from-
   // Facebook job. Empty/undefined = not connected.
   metaAdAccountId?: string | null;
+  // Reporting margin (%) for the Meta Ads report — set on the Meta Ads card.
+  facebookAdsMargin?: number | null;
   // Loomi-native sending identity. Used by EmailCampaign sends when set;
   // otherwise the global SMTP_FROM env var is used.
   senderEmail?: string | null;

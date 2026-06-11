@@ -73,6 +73,19 @@ interface GraphErrorBody {
   error?: { message?: string; code?: number; type?: string };
 }
 
+/**
+ * Build the network-failure message for a MetaSyncError, with the agency token
+ * scrubbed. The token rides in the request URL (GET) / body (POST), and some
+ * undici fetch failures echo the full URL into `err.message` — which the
+ * reporting routes return to the client verbatim (`{ error: err.message }`).
+ * Strip `access_token` / `appsecret_proof` so a secret can never surface there.
+ */
+function graphNetworkError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : 'network error';
+  const scrubbed = raw.replace(/(access_token|appsecret_proof)=[^&\s'")]+/gi, '$1=***');
+  return `Could not reach the Facebook Graph API: ${scrubbed}`;
+}
+
 async function metaGraphFetch<T>(
   cfg: MetaConfig,
   path: string,
@@ -96,10 +109,7 @@ async function metaGraphFetch<T>(
   try {
     res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
   } catch (err) {
-    throw new MetaSyncError(
-      `Could not reach the Facebook Graph API: ${err instanceof Error ? err.message : 'network error'}`,
-      'graph_error',
-    );
+    throw new MetaSyncError(graphNetworkError(err), 'graph_error');
   }
 
   const json = (await res.json().catch(() => null)) as (T & GraphErrorBody) | null;
@@ -167,10 +177,7 @@ async function metaGraphPost(
       body: body.toString(),
     });
   } catch (err) {
-    throw new MetaSyncError(
-      `Could not reach the Facebook Graph API: ${err instanceof Error ? err.message : 'network error'}`,
-      'graph_error',
-    );
+    throw new MetaSyncError(graphNetworkError(err), 'graph_error');
   }
 
   const json = (await res.json().catch(() => null)) as GraphErrorBody | null;
@@ -410,6 +417,475 @@ export async function getAdAccountConfig(
   }
   const adAccountId = /^\d+$/.test(raw) ? `act_${raw}` : raw;
   return { cfg, adAccountId };
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Reporting fetchers (Ads report — /reporting/ads)
+//
+//  Read-only Insights pulls that mirror Oz Dealer Tools' FacebookAds
+//  library. Each returns RAW platform numbers (no margin applied — the
+//  route layer grosses these up via src/lib/reporting/margins.ts so the
+//  markup math lives in one tested place). Shapes match the PHP arrays so
+//  numeric parity with the old report is verifiable field-by-field.
+// ════════════════════════════════════════════════════════════════════
+
+/** One entry in an Insights `actions` / `cost_per_action_type` / `action_values` array. */
+interface InsightAction {
+  action_type?: string;
+  value?: string;
+}
+
+/** Raw Insights row as returned by the Graph API (all metrics are strings). */
+interface RawInsightRow {
+  date_start?: string;
+  campaign_id?: string;
+  campaign_name?: string;
+  device_platform?: string;
+  age?: string;
+  gender?: string;
+  impressions?: string;
+  clicks?: string;
+  ctr?: string;
+  cpc?: string;
+  cpm?: string;
+  spend?: string;
+  actions?: InsightAction[];
+  cost_per_action_type?: InsightAction[];
+  action_values?: InsightAction[];
+}
+
+/** "Primary" online conversion action types (Oz parity). */
+const PRIMARY_ONLINE_ACTIONS = [
+  'purchase',
+  'lead',
+  'complete_registration',
+  'submit_application',
+];
+
+export interface ConversionSummary {
+  conversions: number;
+  offline_leads: number;
+  offline_purchases: number;
+  offline_purchase_value: number;
+}
+
+/**
+ * Classify a Facebook action_type to an offline bucket, or null when it's an
+ * online/irrelevant type. Offline events carry the `offline_conversion.`
+ * prefix; within that we bucket by the lead/purchase substring. (Oz parity —
+ * see FacebookAds::classifyOfflineActionType.)
+ */
+function classifyOfflineActionType(
+  actionType: string,
+): 'offline_lead' | 'offline_purchase' | null {
+  if (!actionType.startsWith('offline_conversion.')) return null;
+  if (actionType.includes('purchase')) return 'offline_purchase';
+  if (actionType.includes('lead')) return 'offline_lead';
+  return null;
+}
+
+/**
+ * Summarize an Insights `actions` (+ `action_values`) array into a total
+ * conversions count plus offline buckets. Offline events count on top of the
+ * online total (they're real outcomes). Port of FacebookAds::summarizeConversions.
+ */
+function summarizeConversions(
+  actions: InsightAction[] = [],
+  actionValues: InsightAction[] = [],
+): ConversionSummary {
+  let conversions = 0;
+  let offlineLeads = 0;
+  let offlinePurchases = 0;
+  let offlinePurchaseValue = 0;
+
+  for (const action of actions) {
+    const type = action.action_type ?? '';
+    const value = Math.trunc(Number(action.value ?? 0)) || 0;
+
+    if (PRIMARY_ONLINE_ACTIONS.includes(type)) {
+      conversions += value;
+      continue;
+    }
+    const bucket = classifyOfflineActionType(type);
+    if (bucket === 'offline_lead') {
+      offlineLeads += value;
+      conversions += value;
+    } else if (bucket === 'offline_purchase') {
+      offlinePurchases += value;
+      conversions += value;
+    }
+  }
+
+  // Offline purchase revenue lives in the parallel action_values array.
+  for (const av of actionValues) {
+    if (classifyOfflineActionType(av.action_type ?? '') === 'offline_purchase') {
+      offlinePurchaseValue += Number(av.value ?? 0) || 0;
+    }
+  }
+
+  return {
+    conversions,
+    offline_leads: offlineLeads,
+    offline_purchases: offlinePurchases,
+    offline_purchase_value: offlinePurchaseValue,
+  };
+}
+
+/** First cost_per_action_type whose type is a primary online conversion. */
+function costPerConversion(rows: InsightAction[] = []): number {
+  for (const row of rows) {
+    if (PRIMARY_ONLINE_ACTIONS.includes(row.action_type ?? '')) {
+      return Number(row.value ?? 0) || 0;
+    }
+  }
+  return 0;
+}
+
+const intOf = (v: string | undefined) => Math.trunc(Number(v ?? 0)) || 0;
+const floatOf = (v: string | undefined) => Number(v ?? 0) || 0;
+
+/** Run an Insights query against the ad account, following paging. */
+function metaInsights(
+  cfg: MetaConfig,
+  adAccountId: string,
+  params: Record<string, string | number | undefined>,
+): Promise<RawInsightRow[]> {
+  return metaGraphFetchAll<RawInsightRow>(cfg, `${adAccountId}/insights`, params);
+}
+
+export interface MetaReportMetrics extends ConversionSummary {
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  cpc: number;
+  spend: number;
+  cpm: number;
+  cost_per_conversion: number;
+}
+
+export interface MetaCampaignRow extends ConversionSummary {
+  id: string;
+  name: string;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  cpc: number;
+  spend: number;
+  cost_per_conversion: number;
+}
+
+export interface MetaDeviceRow {
+  device: string;
+  impressions: number;
+  clicks: number;
+  ctr: number;
+  spend: number;
+}
+
+export interface MetaDailyRow extends ConversionSummary {
+  date: string;
+  label: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+}
+
+export interface MetaDemographicRow {
+  age: string;
+  gender: string;
+  impressions: number;
+  clicks: number;
+  spend: number;
+}
+
+const EMPTY_ACCOUNT_METRICS: MetaReportMetrics = {
+  impressions: 0,
+  clicks: 0,
+  ctr: 0,
+  cpc: 0,
+  spend: 0,
+  cpm: 0,
+  conversions: 0,
+  cost_per_conversion: 0,
+  offline_leads: 0,
+  offline_purchases: 0,
+  offline_purchase_value: 0,
+};
+
+/** Account-level totals over [since, until]. */
+export async function getAccountMetrics(
+  cfg: MetaConfig,
+  adAccountId: string,
+  since: string,
+  until: string,
+): Promise<MetaReportMetrics> {
+  const rows = await metaInsights(cfg, adAccountId, {
+    level: 'account',
+    fields:
+      'impressions,clicks,ctr,cpc,spend,cpm,actions,cost_per_action_type,action_values',
+    time_range: JSON.stringify({ since, until }),
+  });
+  const data = rows[0];
+  if (!data) return { ...EMPTY_ACCOUNT_METRICS };
+
+  return {
+    impressions: intOf(data.impressions),
+    clicks: intOf(data.clicks),
+    ctr: floatOf(data.ctr),
+    cpc: floatOf(data.cpc),
+    spend: floatOf(data.spend),
+    cpm: floatOf(data.cpm),
+    cost_per_conversion: costPerConversion(data.cost_per_action_type),
+    ...summarizeConversions(data.actions, data.action_values),
+  };
+}
+
+/** Per-campaign performance over [since, until]. */
+export async function getCampaignPerformance(
+  cfg: MetaConfig,
+  adAccountId: string,
+  since: string,
+  until: string,
+): Promise<MetaCampaignRow[]> {
+  const rows = await metaInsights(cfg, adAccountId, {
+    level: 'campaign',
+    fields:
+      'campaign_id,campaign_name,impressions,clicks,ctr,cpc,spend,actions,cost_per_action_type,action_values',
+    time_range: JSON.stringify({ since, until }),
+  });
+  return rows.map((data) => ({
+    id: data.campaign_id ?? '',
+    name: data.campaign_name ?? 'Unknown',
+    impressions: intOf(data.impressions),
+    clicks: intOf(data.clicks),
+    ctr: floatOf(data.ctr),
+    cpc: floatOf(data.cpc),
+    spend: floatOf(data.spend),
+    cost_per_conversion: costPerConversion(data.cost_per_action_type),
+    ...summarizeConversions(data.actions, data.action_values),
+  }));
+}
+
+/** Device-platform breakdown over [since, until]. */
+export async function getDevicePerformance(
+  cfg: MetaConfig,
+  adAccountId: string,
+  since: string,
+  until: string,
+): Promise<MetaDeviceRow[]> {
+  const rows = await metaInsights(cfg, adAccountId, {
+    level: 'account',
+    fields: 'impressions,clicks,ctr,spend',
+    breakdowns: 'device_platform',
+    time_range: JSON.stringify({ since, until }),
+  });
+  return rows.map((data) => {
+    const device = data.device_platform ?? 'Unknown';
+    return {
+      device: device.charAt(0).toUpperCase() + device.slice(1),
+      impressions: intOf(data.impressions),
+      clicks: intOf(data.clicks),
+      ctr: floatOf(data.ctr),
+      spend: floatOf(data.spend),
+    };
+  });
+}
+
+/** Daily trend over [since, until] (time_increment=1). */
+export async function getDailyPerformance(
+  cfg: MetaConfig,
+  adAccountId: string,
+  since: string,
+  until: string,
+): Promise<MetaDailyRow[]> {
+  const rows = await metaInsights(cfg, adAccountId, {
+    level: 'account',
+    fields: 'impressions,clicks,spend,actions,action_values',
+    time_range: JSON.stringify({ since, until }),
+    time_increment: 1,
+  });
+  return rows.map((data) => {
+    const date = data.date_start ?? '';
+    // "May 15" — matches the PHP date('M d', …) bucket label (zero-padded day).
+    const label = date
+      ? new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
+          month: 'short',
+          day: '2-digit',
+          timeZone: 'UTC',
+        })
+      : '';
+    return {
+      date,
+      label,
+      impressions: intOf(data.impressions),
+      clicks: intOf(data.clicks),
+      spend: floatOf(data.spend),
+      ...summarizeConversions(data.actions, data.action_values),
+    };
+  });
+}
+
+/** Age × gender breakdown over [since, until]. */
+export async function getDemographics(
+  cfg: MetaConfig,
+  adAccountId: string,
+  since: string,
+  until: string,
+): Promise<MetaDemographicRow[]> {
+  const rows = await metaInsights(cfg, adAccountId, {
+    level: 'account',
+    fields: 'impressions,clicks,spend',
+    breakdowns: 'age,gender',
+    time_range: JSON.stringify({ since, until }),
+  });
+  return rows.map((data) => ({
+    age: data.age ?? 'Unknown',
+    gender: data.gender ?? 'Unknown',
+    impressions: intOf(data.impressions),
+    clicks: intOf(data.clicks),
+    spend: floatOf(data.spend),
+  }));
+}
+
+export interface MetaCreative {
+  ad_id: string;
+  ad_name: string;
+  thumbnail_url: string;
+  full_url: string;
+}
+
+/** ?ids=… batch response shape for ad → creative thumbnail lookups. */
+interface CreativeBatchEntry {
+  error?: unknown;
+  creative?: { id?: string; thumbnail_url?: string };
+  image_url?: string;
+  effective_image_url?: string;
+}
+
+/**
+ * Ad creative thumbnails grouped by campaign id, for ads that delivered in
+ * [since, until]. Best-effort and non-fatal: any failure returns {} so the
+ * report still renders (Oz parity — getCampaignCreatives). Two extra ?ids=…
+ * passes upgrade thumbnails to full-size creative images where available.
+ */
+export async function getCampaignCreatives(
+  cfg: MetaConfig,
+  adAccountId: string,
+  since: string,
+  until: string,
+): Promise<Record<string, MetaCreative[]>> {
+  interface AdInsightRow extends RawInsightRow {
+    ad_id?: string;
+    ad_name?: string;
+  }
+  let rows: AdInsightRow[];
+  try {
+    rows = (await metaInsights(cfg, adAccountId, {
+      level: 'ad',
+      fields: 'campaign_id,ad_id,ad_name,impressions',
+      time_range: JSON.stringify({ since, until }),
+      filtering: JSON.stringify([
+        { field: 'impressions', operator: 'GREATER_THAN', value: '0' },
+      ]),
+    })) as AdInsightRow[];
+  } catch {
+    return {};
+  }
+
+  // Collect the best (highest-impression) row per ad, grouped by campaign.
+  interface AdInfo {
+    ad_id: string;
+    ad_name: string;
+    impressions: number;
+    campaign_id: string;
+  }
+  const adById = new Map<string, AdInfo>();
+  for (const r of rows) {
+    const cid = r.campaign_id ?? '';
+    const aid = r.ad_id ?? '';
+    if (!cid || !aid) continue;
+    adById.set(aid, {
+      ad_id: aid,
+      ad_name: r.ad_name ?? '',
+      impressions: intOf(r.impressions),
+      campaign_id: cid,
+    });
+  }
+  if (adById.size === 0) return {};
+
+  // Pass 1: ad → creative{ id, thumbnail_url }, batched 50 at a time.
+  const thumbs = new Map<string, { thumb: string; full: string; creativeId?: string }>();
+  const adIds = [...adById.keys()];
+  for (let i = 0; i < adIds.length; i += 50) {
+    const chunk = adIds.slice(i, i + 50);
+    let batch: Record<string, CreativeBatchEntry>;
+    try {
+      batch = await metaGraphFetch<Record<string, CreativeBatchEntry>>(cfg, '', {
+        ids: chunk.join(','),
+        fields: 'id,creative{id,thumbnail_url}',
+      });
+    } catch {
+      continue;
+    }
+    for (const [adId, adData] of Object.entries(batch)) {
+      if (!adData || adData.error) continue;
+      const thumb = adData.creative?.thumbnail_url;
+      if (adId && thumb) {
+        thumbs.set(adId, { thumb, full: thumb, creativeId: adData.creative?.id });
+      }
+    }
+  }
+
+  // Pass 2: upgrade thumbnails to full-size creative images.
+  const creativeToAd = new Map<string, string>();
+  for (const [adId, info] of thumbs) {
+    if (info.creativeId) creativeToAd.set(info.creativeId, adId);
+  }
+  const creativeIds = [...creativeToAd.keys()];
+  for (let i = 0; i < creativeIds.length; i += 50) {
+    const chunk = creativeIds.slice(i, i + 50);
+    let batch: Record<string, CreativeBatchEntry>;
+    try {
+      batch = await metaGraphFetch<Record<string, CreativeBatchEntry>>(cfg, '', {
+        ids: chunk.join(','),
+        fields: 'id,image_url,effective_image_url',
+      });
+    } catch {
+      continue;
+    }
+    for (const [crId, crData] of Object.entries(batch)) {
+      if (!crData || crData.error) continue;
+      const full = crData.effective_image_url ?? crData.image_url;
+      const adId = creativeToAd.get(crId);
+      if (full && adId && thumbs.has(adId)) {
+        thumbs.get(adId)!.full = full;
+      }
+    }
+  }
+
+  // Group into campaigns, ordered by impressions desc, dropping ads with no thumb.
+  const byCampaign = new Map<string, AdInfo[]>();
+  for (const info of adById.values()) {
+    if (!thumbs.has(info.ad_id)) continue;
+    const list = byCampaign.get(info.campaign_id) ?? [];
+    list.push(info);
+    byCampaign.set(info.campaign_id, list);
+  }
+
+  const result: Record<string, MetaCreative[]> = {};
+  for (const [cid, ads] of byCampaign) {
+    ads.sort((a, b) => b.impressions - a.impressions);
+    result[cid] = ads.map((ad) => {
+      const t = thumbs.get(ad.ad_id)!;
+      return {
+        ad_id: ad.ad_id,
+        ad_name: ad.ad_name,
+        thumbnail_url: t.thumb,
+        full_url: t.full,
+      };
+    });
+  }
+  return result;
 }
 
 export interface MetaSyncAdResult {

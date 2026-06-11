@@ -43,6 +43,12 @@ interface DashboardToolbarProps {
   onAccountChange?: (keys: string[]) => void;
   showReset?: boolean;
   triggerSize?: 'compact' | 'header';
+  /** Which edge the dropdown panels anchor to. Defaults to 'right' (top-right toolbars). */
+  align?: 'left' | 'right';
+  /** Preset keys to omit (e.g. ['all'] where a data source can't serve unbounded ranges). */
+  hidePresets?: DateRangeKey[];
+  /** Earliest selectable custom-range date (yyyy-mm-dd), e.g. an API lookback floor. */
+  minDate?: string;
 }
 
 function toInputDate(d: Date): string {
@@ -97,7 +103,11 @@ export function DashboardToolbar({
   onAccountChange,
   showReset = true,
   triggerSize = 'compact',
+  align = 'right',
+  hidePresets = [],
+  minDate,
 }: DashboardToolbarProps) {
+  const panelAlign = align === 'left' ? 'left-0' : 'right-0';
   const [openPanel, setOpenPanel] = useState<'date' | 'account' | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
 
@@ -147,7 +157,9 @@ export function DashboardToolbar({
       ? formatCustomRangeLabel(customRange.start, customRange.end)
       : getDateRangeLabel(dateRange);
 
-  const standardPresets = DATE_RANGE_PRESETS.filter(p => p.key !== 'custom');
+  const standardPresets = DATE_RANGE_PRESETS.filter(
+    p => p.key !== 'custom' && !hidePresets.includes(p.key),
+  );
 
   const singleSelectedAccount = selectedAccountObjs.length === 1 ? selectedAccountObjs[0] : null;
   const accountTriggerLabel = getFilterLabel(
@@ -202,7 +214,7 @@ export function DashboardToolbar({
 
         {openPanel === 'date' && (
           <div
-            className="absolute top-full right-0 mt-2 z-50 glass-dropdown shadow-lg animate-fade-in-up"
+            className={`absolute top-full ${panelAlign} mt-2 z-50 glass-dropdown shadow-lg animate-fade-in-up`}
             style={{ minWidth: '260px' }}
           >
             <div className="p-1.5">
@@ -235,6 +247,7 @@ export function DashboardToolbar({
                   <input
                     type="date"
                     value={startInput}
+                    min={minDate}
                     max={endInput}
                     onChange={e => setStartInput(e.target.value)}
                     className="w-full px-2 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)] transition-colors"
@@ -291,7 +304,7 @@ export function DashboardToolbar({
 
           {openPanel === 'account' && accounts && (
             <div
-              className="absolute top-full right-0 mt-2 z-50 glass-dropdown shadow-lg animate-fade-in-up"
+              className={`absolute top-full ${panelAlign} mt-2 z-50 glass-dropdown shadow-lg animate-fade-in-up`}
               style={{ minWidth: '260px' }}
             >
               <div className="p-1.5">

@@ -53,6 +53,9 @@ interface ProviderMeta {
   logo: string;
   /** Brand tint used by the text fallback when there's no hosted logo. */
   accent?: string;
+  /** Banner background behind the logo. Defaults to white; set a dark value
+   *  for white/knockout logos (e.g. Tecobi) that would vanish on white. */
+  logoBg?: string;
 }
 
 const PROVIDERS: ProviderMeta[] = [
@@ -71,6 +74,32 @@ const PROVIDERS: ProviderMeta[] = [
     logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/c4be6d0fe861482ea4b045ed02e299d7/vinsolutions_logo.png',
   },
   {
+    value: 'elead',
+    label: 'Elead (CDK)',
+    blurb: 'Forward form leads into Elead / CDK.',
+    kind: 'adf',
+    logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/e8e91129ebe04f1fab29fc48799304ce/eLead1.png',
+    accent: '#0b6efd',
+  },
+  {
+    value: 'tecobi',
+    label: 'Tecobi',
+    blurb: 'Forward form leads into Tecobi.',
+    kind: 'adf',
+    // White/knockout logo — render on a dark banner so it's visible.
+    logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/438d2f28ff354cdb9bdc65958b39a2f1/branding_tecobi_white.svg',
+    logoBg: '#111827',
+    accent: '#6d28d9',
+  },
+  {
+    value: 'psx',
+    label: 'PSX',
+    blurb: 'Forward form leads into PSX / CXMAi.',
+    kind: 'adf',
+    logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/be00bffddd3c417bb100e0602a7dddb4/PSXD_Full-Style1.png',
+    accent: '#0891b2',
+  },
+  {
     value: 'hubspot',
     label: 'HubSpot',
     blurb: 'Push qualified leads into HubSpot as contacts.',
@@ -87,19 +116,68 @@ const fetcher = async (url: string) => {
   return res.json();
 };
 
+const ADF_META = PROVIDERS.filter((p) => p.kind === 'adf');
+const API_META = PROVIDERS.filter((p) => p.kind === 'api');
+
 export function CrmIntegrationCards({ accountKey }: { accountKey: string }) {
   const listUrl = `/api/accounts/${encodeURIComponent(accountKey)}/crm`;
   const { data, mutate } = useSWR<{ destinations: Destination[] }>(listUrl, fetcher);
+  // active is either '__adf__' (the consolidated ADF card) or an API
+  // provider's value (its own card), or null when no modal is open.
   const [active, setActive] = React.useState<string | null>(null);
 
   const byProvider = new Map((data?.destinations ?? []).map((d) => [d.provider, d]));
-  const activeMeta = PROVIDERS.find((p) => p.value === active) ?? null;
+
+  // The single ADF card represents every ADF CRM (Tekion, VinSolutions,
+  // Elead, Tecobi). A dealer usually uses one, so a single card keeps the
+  // grid clean as more ADF CRMs are added.
+  const connectedAdf = ADF_META.filter((p) => byProvider.get(p.value)?.enabled);
+  // When exactly one ADF CRM is connected, the card adopts that CRM's
+  // identity (logo + name); 0 or 2+ keep the generic "CRM Lead Routing" look.
+  const soleAdf = connectedAdf.length === 1 ? connectedAdf[0] : null;
+  const activeApi = API_META.find((p) => p.value === active) ?? null;
 
   return (
     <>
-      {PROVIDERS.map((p) => {
-        const dest = byProvider.get(p.value);
-        const connected = Boolean(dest?.enabled);
+      <button
+        type="button"
+        onClick={() => setActive('__adf__')}
+        className="group overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] text-left transition-all hover:border-[var(--primary)] hover:shadow-md"
+      >
+        {soleAdf ? (
+          <div
+            className="flex h-28 w-full items-center justify-center border-b border-[var(--border)] px-8 py-6"
+            style={{ background: soleAdf.logoBg ?? '#ffffff' }}
+          >
+            <LogoBox logo={soleAdf.logo} label={soleAdf.label} accent={soleAdf.accent} />
+          </div>
+        ) : (
+          <div
+            className="flex h-28 w-full items-center justify-center border-b border-[var(--border)]"
+            style={{ background: 'linear-gradient(135deg,#0f172a,#4338ca)' }}
+          >
+            <span className="text-xl font-bold tracking-tight text-white">CRM Lead Routing</span>
+          </div>
+        )}
+        <div className="p-4">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-[var(--foreground)]">
+              {soleAdf ? soleAdf.label : 'CRM Lead Routing'}
+            </span>
+            <ConnectionPill connected={connectedAdf.length > 0} />
+          </div>
+          <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+            {soleAdf
+              ? `Forwarding form leads to ${soleAdf.label}.`
+              : connectedAdf.length > 1
+                ? `${connectedAdf.length} CRMs connected.`
+                : 'Forward form leads to the dealer’s CRM (Tekion, VinSolutions, Elead, Tecobi, PSX).'}
+          </p>
+        </div>
+      </button>
+
+      {API_META.map((p) => {
+        const connected = Boolean(byProvider.get(p.value)?.enabled);
         return (
           <button
             key={p.value}
@@ -107,7 +185,10 @@ export function CrmIntegrationCards({ accountKey }: { accountKey: string }) {
             onClick={() => setActive(p.value)}
             className="group overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] text-left transition-all hover:border-[var(--primary)] hover:shadow-md"
           >
-            <div className="flex h-28 w-full items-center justify-center border-b border-[var(--border)] bg-white px-8 py-6">
+            <div
+              className="flex h-28 w-full items-center justify-center border-b border-[var(--border)] px-8 py-6"
+              style={{ background: p.logoBg ?? '#ffffff' }}
+            >
               <LogoBox logo={p.logo} label={p.label} accent={p.accent} />
             </div>
             <div className="p-4">
@@ -121,33 +202,89 @@ export function CrmIntegrationCards({ accountKey }: { accountKey: string }) {
         );
       })}
 
-      {activeMeta &&
+      {active === '__adf__' &&
         createPortal(
-          activeMeta.kind === 'api' ? (
-            <HubspotModal
-              accountKey={accountKey}
-              label={activeMeta.label}
-              logo={activeMeta.logo}
-              accent={activeMeta.accent}
-              destination={byProvider.get(activeMeta.value) ?? null}
-              onClose={() => setActive(null)}
-              onChanged={() => void mutate()}
-            />
-          ) : (
-            <ProviderModal
-              accountKey={accountKey}
-              provider={activeMeta.value}
-              label={activeMeta.label}
-              logo={activeMeta.logo}
-              accent={activeMeta.accent}
-              destination={byProvider.get(activeMeta.value) ?? null}
-              onClose={() => setActive(null)}
-              onChanged={() => void mutate()}
-            />
-          ),
+          <AdfCardModal
+            accountKey={accountKey}
+            byProvider={byProvider}
+            onClose={() => setActive(null)}
+            onChanged={() => void mutate()}
+          />,
+          document.body,
+        )}
+
+      {activeApi &&
+        createPortal(
+          <HubspotModal
+            accountKey={accountKey}
+            label={activeApi.label}
+            logo={activeApi.logo}
+            accent={activeApi.accent}
+            logoBg={activeApi.logoBg}
+            destination={byProvider.get(activeApi.value) ?? null}
+            onClose={() => setActive(null)}
+            onChanged={() => void mutate()}
+          />,
           document.body,
         )}
     </>
+  );
+}
+
+/**
+ * Modal behind the single ADF "CRM Lead Routing" card. A provider picker
+ * selects which ADF CRM to configure; the body is the existing per-provider
+ * email form (ProviderModal), re-mounted per provider via `key` so its email
+ * state resets cleanly on switch. The picker marks already-connected CRMs.
+ */
+function AdfCardModal({
+  accountKey,
+  byProvider,
+  onClose,
+  onChanged,
+}: {
+  accountKey: string;
+  byProvider: Map<string, Destination>;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  // Default to the first connected ADF CRM, else the first in the list.
+  const firstConnected = ADF_META.find((p) => byProvider.get(p.value));
+  const [selected, setSelected] = React.useState((firstConnected ?? ADF_META[0]).value);
+  const meta = ADF_META.find((p) => p.value === selected) ?? ADF_META[0];
+
+  const picker = (
+    <label className="block">
+      <span className="text-sm font-medium">CRM</span>
+      <select
+        value={selected}
+        onChange={(e) => setSelected(e.target.value)}
+        className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]"
+      >
+        {ADF_META.map((p) => (
+          <option key={p.value} value={p.value}>
+            {p.label}
+            {byProvider.get(p.value)?.enabled ? ' — Connected' : ''}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+
+  return (
+    <ProviderModal
+      key={selected}
+      accountKey={accountKey}
+      provider={selected}
+      label={meta.label}
+      logo={meta.logo}
+      accent={meta.accent}
+      logoBg={meta.logoBg}
+      destination={byProvider.get(selected) ?? null}
+      picker={picker}
+      onClose={onClose}
+      onChanged={onChanged}
+    />
   );
 }
 
@@ -202,7 +339,9 @@ function ProviderModal({
   label,
   logo,
   accent,
+  logoBg,
   destination,
+  picker,
   onClose,
   onChanged,
 }: {
@@ -211,7 +350,11 @@ function ProviderModal({
   label: string;
   logo: string;
   accent?: string;
+  logoBg?: string;
   destination: Destination | null;
+  /** Optional provider picker rendered above the form (set by AdfCardModal
+   *  so one card can configure any ADF CRM). */
+  picker?: React.ReactNode;
   onClose: () => void;
   onChanged: () => void;
 }) {
@@ -343,7 +486,10 @@ function ProviderModal({
         className="glass-modal w-[560px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="relative flex h-28 w-full items-center justify-center border-b border-[var(--border)] bg-white px-8 py-6">
+        <div
+          className="relative flex h-28 w-full items-center justify-center border-b border-[var(--border)] px-8 py-6"
+          style={{ background: logoBg ?? '#ffffff' }}
+        >
           <LogoBox logo={logo} label={label} accent={accent} max="max-h-14" />
           <button
             type="button"
@@ -366,6 +512,8 @@ function ProviderModal({
             <span className="font-medium text-[var(--foreground)]">Forward leads to CRM</span> turned
             on are emailed there as ADF/XML. We retry with backoff if delivery fails.
           </p>
+
+          {picker ? <div className="mb-4">{picker}</div> : null}
 
           <div className="block">
             <span className="text-sm font-medium">Lead-intake emails</span>
@@ -460,6 +608,7 @@ function HubspotModal({
   label,
   logo,
   accent,
+  logoBg,
   destination,
   onClose,
   onChanged,
@@ -468,6 +617,7 @@ function HubspotModal({
   label: string;
   logo: string;
   accent?: string;
+  logoBg?: string;
   destination: Destination | null;
   onClose: () => void;
   onChanged: () => void;
@@ -629,7 +779,10 @@ function HubspotModal({
         className="glass-modal w-[560px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="relative flex h-28 w-full items-center justify-center border-b border-[var(--border)] bg-white px-8 py-6">
+        <div
+          className="relative flex h-28 w-full items-center justify-center border-b border-[var(--border)] px-8 py-6"
+          style={{ background: logoBg ?? '#ffffff' }}
+        >
           <LogoBox logo={logo} label={label} accent={accent} max="max-h-14" />
           <button
             type="button"

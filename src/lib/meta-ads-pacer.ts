@@ -195,7 +195,7 @@ export function monthState(period: string, timeZone: string): MonthState {
 }
 
 /** Resolve an account's pacing timezone (Meta zone → stored zone → default). */
-async function accountTimeZone(accountKey: string): Promise<string> {
+export async function accountTimeZone(accountKey: string): Promise<string> {
   const account = await prisma.account.findUnique({
     where: { key: accountKey },
     select: { metaTimezone: true, timezone: true },

@@ -7,7 +7,7 @@ import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import {
   BuildingStorefrontIcon,
   UsersIcon, SwatchIcon, SparklesIcon,
-  CogIcon, BellIcon, TagIcon, Squares2X2Icon, BriefcaseIcon, CalculatorIcon,
+  CogIcon, BellIcon, BellAlertIcon, TagIcon, Squares2X2Icon, BriefcaseIcon, CalculatorIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { CodeEditor } from '@/components/code-editor';
@@ -22,6 +22,7 @@ import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
 import { CustomFieldBlueprintsTab } from '@/components/settings/custom-field-blueprints-tab';
 import { IndustriesTab } from '@/components/settings/industries-tab';
 import { DefaultMarkupTab } from '@/components/settings/default-markup-tab';
+import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
 import { useIndustries } from '@/lib/hooks/use-industries';
 
 type Tab =
@@ -31,6 +32,7 @@ type Tab =
   | 'knowledge'
   | 'industries'
   | 'markup'
+  | 'alerts'
   | 'contact-fields'
   | 'contact-field-blueprints'
   | 'notifications'
@@ -63,6 +65,7 @@ export default function SettingsPage() {
   if (hasAdminAccess && isAdmin) tabs.push({ key: 'knowledge', label: 'Knowledge Base', titleLabel: 'Knowledge Base Settings', icon: SparklesIcon });
   if (isElevated && isAdmin) tabs.push({ key: 'industries', label: 'Industries', titleLabel: 'Industry Settings', icon: BriefcaseIcon });
   if (isElevated && isAdmin) tabs.push({ key: 'markup', label: 'Markup', titleLabel: 'Default Markup', icon: CalculatorIcon });
+  if (isElevated && isAdmin) tabs.push({ key: 'alerts', label: 'Alerts', titleLabel: 'Alert Rules', icon: BellAlertIcon });
   tabs.push({ key: 'notifications', label: 'Notifications', titleLabel: 'Notification Settings', icon: BellIcon });
   tabs.push({ key: 'appearance', label: 'Appearance', titleLabel: 'Appearance Settings', icon: SwatchIcon });
 
@@ -144,6 +147,7 @@ export default function SettingsPage() {
           {activeTab === 'knowledge' && hasAdminAccess && isAdmin && <KnowledgeBaseTab />}
           {activeTab === 'industries' && isElevated && isAdmin && <IndustriesTab />}
           {activeTab === 'markup' && isElevated && isAdmin && <DefaultMarkupTab />}
+          {activeTab === 'alerts' && isElevated && isAdmin && <AlertRulesTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
           {activeTab === 'appearance' && <AppearanceTab />}
         </div>

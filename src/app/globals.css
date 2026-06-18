@@ -682,6 +682,26 @@ main[data-scrolled='true'] .page-sticky-header {
     inset 0 0.5px 0 rgba(255, 255, 255, 0.6);
 }
 
+/* ── Meta Ads pacer card ── a brighter card body so the inner metric boxes
+   (Projected Spend, Days Remaining, …) read as recessed dark panels. The
+   default glass-section-card body and its boxes sit at nearly the same value,
+   which looks flat; here we lift the body and sink the boxes. Scoped to the
+   pacer — other glass-section-cards keep the default look. */
+.pacer-ad-card {
+  background: #23232b;
+}
+.pacer-ad-card .metric-box {
+  background: rgba(0, 0, 0, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+[data-theme='light'] .pacer-ad-card {
+  background: rgba(255, 255, 255, 0.9);
+}
+[data-theme='light'] .pacer-ad-card .metric-box {
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.04);
+}
+
 /* ── Glass modal ── dialogs, large overlays */
 .glass-modal {
   background: rgba(18, 18, 22, 0.86);

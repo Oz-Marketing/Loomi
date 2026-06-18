@@ -65,7 +65,16 @@ import {
 } from '@/components/ui/date-picker';
 import { DEFAULT_TIME_ZONE } from '@/lib/timezone';
 import { CARRYOVER_THRESHOLD } from '../_lib/constants';
-import { buildAdCalc, buildPacerCalc } from '../_lib/pacer-calc';
+import {
+  buildAdCalc,
+  buildPacerCalc,
+  isEligibleForLivePacing,
+  isLifetimeInProgress,
+  isCrossMonthStraddler,
+  effectiveActual,
+  effectiveTarget,
+} from '../_lib/pacer-calc';
+import { effectiveSpendTarget } from '../_lib/markup';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 const AD_STATUSES = [
@@ -263,7 +272,13 @@ const AD_COLORS = [
   '#4ade80',
 ];
 
-const MARKUP = 0.77;
+// §0.1: the client never holds a markup literal. The server resolves the
+// per-account factor (Account.markup override, else the agency default) and
+// sends it on the plan / period / overview payloads; this just normalizes a
+// possibly-missing value, guarding it to 0 so an unconfigured markup surfaces
+// as $0 rather than a plausible-but-wrong number.
+const effMarkupOf = (markup: number | null | undefined): number =>
+  typeof markup === 'number' && Number.isFinite(markup) && markup > 0 ? markup : 0;
 
 // Per-ad contribution to the Base / Added budget pools. For a regular
 // single-source ad, the full allocation + pacerActual goes to its source.
@@ -418,6 +433,10 @@ interface PacerAd {
   pacerSyncedAt: string | null;
   /** Full-run (all-time) spend across the ad set's whole flight; informational. */
   pacerRunSpend: string | null;
+  // §2a/§2b cross-month resolution (server-managed, survives sync) — mirror of
+  // _lib/types.ts PacerAd.
+  fullRunAppliedToMonth: string | null;
+  lifetimeMonthSplit: string | null;
   metaStartDate: string | null;
   metaEndDate: string | null;
   alertsMuted: boolean;
@@ -430,7 +449,7 @@ interface PacerPlan {
   baseBudgetGoal: string | null;
   addedBudgetGoal: string | null;
   // Per-account markup override (Account.markup). `null` → use the
-  // global MARKUP default. Drives the Budget Calculator's Client Budget
+  // the agency default markup. Drives the Budget Calculator's Client Budget
   // mode (gross × markup = actual spend).
   markup: number | null;
   // Resolved IANA zone for pacing math (Meta ad-account zone → valid stored
@@ -611,6 +630,8 @@ function makeAd(position: number, period: string): PacerAd {
     metaEffectiveStatus: null,
     pacerSyncedAt: null,
     pacerRunSpend: null,
+    fullRunAppliedToMonth: null,
+    lifetimeMonthSplit: null,
     metaStartDate: null,
     metaEndDate: null,
     alertsMuted: false,
@@ -1153,7 +1174,9 @@ function MetricBox({
   return (
     // No border + softer bg so it reads as a passive computed-info card,
     // not as another fillable field. Editable inputs stay bordered+filled.
-    <div className="rounded-lg bg-[var(--muted)]/40 px-3 py-2.5">
+    // `metric-box` lets the pacer card recess these into darker wells (see
+    // `.pacer-ad-card .metric-box` in globals.css); harmless elsewhere.
+    <div className="metric-box rounded-lg bg-[var(--muted)]/40 px-3 py-2.5">
       <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-1">
         {label}
       </div>
@@ -2718,10 +2741,14 @@ function PlanAdForm({
   ad,
   users,
   onUpdate,
+  markup,
 }: {
   ad: PacerAd;
   users: DirectoryUser[];
   onUpdate: (ad: PacerAd) => void;
+  // §0.1: resolved per-account factor (override, else agency default), passed
+  // down so the Gross Allocation display grosses up at the right rate.
+  markup: number | null;
 }) {
   const days = calcDays(ad.flightStart, ad.flightEnd);
   const allocation = num(ad.allocation) ?? 0;
@@ -3052,7 +3079,11 @@ function PlanAdForm({
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
               <MetricBox
                 label="Gross Allocation"
-                value={fmt(Math.round((allocation / MARKUP) * 100) / 100)}
+                value={
+                  effMarkupOf(markup) > 0
+                    ? fmt(Math.round((allocation / effMarkupOf(markup)) * 100) / 100)
+                    : '—'
+                }
                 sub="client budget"
               />
               <MetricBox
@@ -3227,6 +3258,7 @@ function PlanAdForm({
  */
 function AdEditorModal({
   initialAd,
+  markup,
   liveActivityLog,
   mode,
   users,
@@ -3238,6 +3270,8 @@ function AdEditorModal({
   onDeleteActivity,
 }: {
   initialAd: PacerAd;
+  /** §0.1 resolved per-account markup factor, threaded to PlanAdForm. */
+  markup: number | null;
   /**
    * The current activity log for this ad pulled from the parent plan. The
    * modal's draft state is for form fields only — activity entries persist
@@ -3396,7 +3430,7 @@ function AdEditorModal({
             {/* A disabled fieldset (display:contents → no layout change)
                 locks every form control at once when the month is frozen. */}
             <fieldset disabled={readOnly} className="contents">
-              <PlanAdForm ad={draft} users={users} onUpdate={setDraft} />
+              <PlanAdForm ad={draft} users={users} onUpdate={setDraft} markup={markup} />
             </fieldset>
           </div>
           {mode === 'create' ? (
@@ -3456,10 +3490,7 @@ function BudgetPanel({
     return s + (source === 'base' ? c.baseAllocation : c.addedAllocation);
   }, 0);
   // Per-account markup override when set, else the global default.
-  const effMarkup =
-    plan.markup != null && Number.isFinite(plan.markup) && plan.markup > 0
-      ? plan.markup
-      : MARKUP;
+  const effMarkup = effMarkupOf(plan.markup);
   // Carryover (Change 7) adjusts the DERIVED spend target only — the client
   // budget goal stays untouched. target = goal × markup + carryover.
   const carryover =
@@ -3591,7 +3622,7 @@ function BudgetPanel({
           $192.50 split ad with $92.50 to base appears as $92.50 on the
           Base card and $100.00 on the Added card. */}
       {goal != null && goal > 0 && (() => {
-        const budgetCap = goal * MARKUP;
+        const budgetCap = goal * effMarkup;
         const poolEntries = srcAds
           .map((a, i) => {
             const c = adContribution(a);
@@ -3686,10 +3717,7 @@ function TotalAllocationHeader({ plan }: { plan: PacerPlan }) {
   // target (target = goal × markup + carryover). The total budget is the SUM of
   // the two cards' targets — applying an over/under carryover therefore grows
   // the total allocation cap the same way it grows the source card it lands in.
-  const effMarkup =
-    plan.markup != null && Number.isFinite(plan.markup) && plan.markup > 0
-      ? plan.markup
-      : MARKUP;
+  const effMarkup = effMarkupOf(plan.markup);
   const totalGross = Math.round((totalActual / effMarkup) * 100) / 100;
   const baseGoal = num(plan.baseBudgetGoal);
   const addedGoal = num(plan.addedBudgetGoal);
@@ -4434,10 +4462,7 @@ function BudgetCalculatorModal({
   // Effective markup — per-account override (Account.markup) when set,
   // otherwise the global default. Used here to convert the gross client
   // goal into the actual-spend default, and below for Client Budget mode.
-  const effectiveMarkup =
-    plan.markup != null && Number.isFinite(plan.markup) && plan.markup > 0
-      ? plan.markup
-      : MARKUP;
+  const effectiveMarkup = effMarkupOf(plan.markup);
   const goal =
     source === 'base' ? num(plan.baseBudgetGoal) : num(plan.addedBudgetGoal);
   const defaultBudget =
@@ -5628,6 +5653,7 @@ function AdPlannerPanel({
       {editor && editorInitialAd && (
         <AdEditorModal
           initialAd={editorInitialAd}
+          markup={plan.markup}
           liveActivityLog={editorLiveActivityLog}
           mode={editor.mode}
           users={users}
@@ -7237,6 +7263,7 @@ function PacerRow({
   onMuteToggle,
   onMarkOff,
   onPushDailyBudget,
+  onResolveCrossMonth,
 }: {
   ad: PacerAd;
   index: number;
@@ -7254,6 +7281,12 @@ function PacerRow({
   onMarkOff: () => void;
   /** Push the row's current daily budget to its linked Meta ad set. */
   onPushDailyBudget: (value: string) => Promise<{ ok: boolean; text: string }>;
+  /** §2: resolve a cross-month straddler — count its full run in its own month
+   *  (apply_full_run), set a lifetime planned split, or clear. Persists server-side. */
+  onResolveCrossMonth: (
+    action: 'apply_full_run' | 'split' | 'clear',
+    splitMap?: Record<string, number>,
+  ) => void;
 }) {
   const isLifetime = ad.budgetType === 'Lifetime';
   const typeColor = isLifetime ? COLORS.lifetime : COLORS.daily;
@@ -7328,6 +7361,16 @@ function PacerRow({
   // badge in the summary row, so both UI elements agree on the bucket.
   const health = useMemo(() => classifyPacerHealth(ad, calc), [ad, calc]);
 
+  // §1: a daily ad whose flight straddles a month boundary with a materially
+  // short in-month slice — the in-month variance is a scope artifact, so the row
+  // is contextualized with the full-run verdict and it's excluded from the
+  // account pacing badge (via isEligibleForLivePacing).
+  const crossMonth = isCrossMonthStraddler(ad);
+  // §2: once resolved (full run counted in its own month), the straddler
+  // predicate returns false, so the §1 'Cross-month' block/chip vanishes and
+  // this resolved state takes over.
+  const resolvedFullRun = ad.fullRunAppliedToMonth != null;
+
   // Status indicator color — pulled from the same map AdStatusPill uses
   // so the dot matches the status the user sees on the planner page.
   const statusColor = AD_STATUS_COLORS[ad.adStatus]?.[0] ?? 'var(--muted-foreground)';
@@ -7388,6 +7431,36 @@ function PacerRow({
           />
           {ad.adStatus || 'No status'}
         </span>
+        {/* Cross-month / resolution chips live HERE (next to the name) rather
+            than out by the metrics, so the Actual / Budget / verdict columns
+            stay aligned down the list whether or not a chip is present. */}
+        {crossMonth && (
+          <span
+            className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md flex-shrink-0"
+            style={{ background: 'rgba(56,189,248,0.12)', color: '#38bdf8' }}
+            title="Cross-month — this flight runs into the next month, so the in-month variance is expected. Expand for the full-run verdict."
+          >
+            Cross-month
+          </span>
+        )}
+        {resolvedFullRun && (
+          <span
+            className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md flex-shrink-0"
+            style={{ background: 'rgba(56,189,248,0.12)', color: '#38bdf8' }}
+            title="Full run counted in this ad's own month — the over/under compares the full run to the full target."
+          >
+            Full run ✓
+          </span>
+        )}
+        {ad.lifetimeMonthSplit && (
+          <span
+            className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-md flex-shrink-0"
+            style={{ background: 'rgba(167,139,250,0.12)', color: COLORS.lifetime }}
+            title="Lifetime ad with a planned per-month split (reference only — the variance books once on completion)."
+          >
+            Split
+          </span>
+        )}
       </div>
       {/* Actual spend — labelled so the bare number isn't ambiguous. Fixed
           width + right-aligned so it forms a consistent column down the list. */}
@@ -7443,7 +7516,7 @@ function PacerRow({
   );
 
   return (
-    <div className="glass-section-card relative rounded-xl mb-2.5 overflow-hidden">
+    <div className="glass-section-card pacer-ad-card relative rounded-xl mb-2.5 overflow-hidden">
       {/* Left-edge accent stripe colored by pacing health — visible on
           both summary and expanded states. */}
       <div
@@ -7537,7 +7610,7 @@ function PacerRow({
       {/* Editable inputs row — just the two values reps actually edit.
           Today's date always uses the current date and end date uses
           the immutable flight end, so neither needs an input. */}
-      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,340px)_minmax(0,180px)] gap-4 mb-3.5">
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,300px)_minmax(0,160px)] gap-3 mb-3.5">
         <Field label="Actual Spend">
           {syncedFromMeta ? (
             // Meta owns the spend once synced — plain read-only value, not a
@@ -7546,7 +7619,7 @@ function PacerRow({
               className="flex items-center gap-2 py-2 cursor-default"
               title="Actual spend is pulled from Meta and isn't editable here. Re-run Sync from Meta to refresh."
             >
-              <span className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
+              <span className="text-xl font-bold tabular-nums text-[var(--foreground)]">
                 {fmt(num(ad.pacerActual) ?? 0)}
               </span>
               <span className="flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]">
@@ -7707,7 +7780,7 @@ function PacerRow({
             // Synced — plain read-only value with a pencil to reveal the input.
             // Not a box that looks editable until you click the pencil.
             <div className="flex items-center gap-2 py-2">
-              <span className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
+              <span className="text-xl font-bold tabular-nums text-[var(--foreground)]">
                 {ad.pacerDailyBudget != null && ad.pacerDailyBudget !== ''
                   ? fmt(num(ad.pacerDailyBudget) ?? 0)
                   : '—'}
@@ -7776,6 +7849,198 @@ function PacerRow({
           )}
         </Field>
       </div>
+
+      {crossMonth && (
+        <div
+          className="mt-3 mb-3 rounded-lg border px-3 py-2.5"
+          style={{
+            borderColor: 'rgba(56,189,248,0.35)',
+            background: 'rgba(56,189,248,0.06)',
+          }}
+        >
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <div
+                className="text-[10px] font-bold uppercase tracking-wider mb-1"
+                style={{ color: '#38bdf8' }}
+              >
+                Cross-month — variance expected
+              </div>
+              <div className="text-[11px] text-[var(--foreground)] leading-snug">
+                {(() => {
+                  // Full run can never be below the in-month slice; when Meta
+                  // run-spend isn't synced (manual / name-match ad) fall back to
+                  // the entered actual so the verdict isn't a misleading $0.
+                  const run = Math.max(
+                    num(ad.pacerRunSpend) ?? 0,
+                    num(ad.pacerActual) ?? 0,
+                  );
+                  const target = num(ad.allocation) ?? 0;
+                  const onTrack =
+                    target > 0 && Math.abs(run / target - 1) <= 0.1;
+                  const rawStart =
+                    ad.metaStartDate ?? ad.liveDate ?? ad.flightStart;
+                  const rawEnd = ad.metaEndDate ?? ad.flightEnd;
+                  return (
+                    <>
+                      In-month slice{' '}
+                      <span className="font-semibold">{fmt(calc.spent)}</span> is
+                      only part of the run · spans{' '}
+                      {rawStart ? fmtDate(rawStart) : '—'} –{' '}
+                      {rawEnd ? fmtDate(rawEnd) : '—'}.{' '}
+                      <span className="font-semibold">
+                        Full run {fmt(run)} / {fmt(target)}
+                        {target > 0 ? (onTrack ? ' ✓ on track' : ' ⚠ off') : ''}
+                      </span>
+                      {ad.recurring === 'Yes'
+                        ? ' · recurring event — likely a full-run month'
+                        : ''}
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onResolveCrossMonth('apply_full_run')}
+              disabled={readOnly}
+              title="Count this ad's full run in its own month — the over/under then compares the full run to the full target."
+              className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Count full run in {fmtPeriodLong(ad.period)}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {resolvedFullRun && (
+        <div
+          className="mt-3 mb-3 rounded-lg border px-3 py-2.5 flex items-center justify-between gap-3 flex-wrap"
+          style={{
+            borderColor: 'rgba(56,189,248,0.35)',
+            background: 'rgba(56,189,248,0.06)',
+          }}
+        >
+          <div className="text-[11px] text-[var(--foreground)] min-w-0">
+            <span className="font-semibold" style={{ color: '#38bdf8' }}>
+              Full run counted in {fmtPeriodLong(ad.fullRunAppliedToMonth ?? ad.period)}
+            </span>{' '}
+            — the over/under compares the full run{' '}
+            <span className="font-semibold">{fmt(num(ad.pacerRunSpend) ?? 0)}</span> to
+            the full target{' '}
+            <span className="font-semibold">{fmt(num(ad.allocation) ?? 0)}</span>.
+          </div>
+          <button
+            type="button"
+            onClick={() => onResolveCrossMonth('clear')}
+            disabled={readOnly}
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-50"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
+      {/* §2b — lifetime "split across months": an editable planned split,
+          display-only (the single variance still books once on completion via
+          §3). Only meaningful when the lifetime flight spans >1 calendar month. */}
+      {isLifetime &&
+        (() => {
+          const rawStart = ad.metaStartDate ?? ad.liveDate ?? ad.flightStart;
+          const rawEnd = ad.metaEndDate ?? ad.flightEnd;
+          if (!rawStart || !rawEnd) return null;
+          const months: string[] = [];
+          let y = Number(rawStart.slice(0, 4));
+          let mo = Number(rawStart.slice(5, 7));
+          const ey = Number(rawEnd.slice(0, 4));
+          const em = Number(rawEnd.slice(5, 7));
+          while ((y < ey || (y === ey && mo <= em)) && months.length < 25) {
+            months.push(`${y}-${String(mo).padStart(2, '0')}`);
+            mo += 1;
+            if (mo > 12) {
+              mo = 1;
+              y += 1;
+            }
+          }
+          if (months.length < 2) return null; // single-month lifetime — no split
+          let split: Record<string, number> | null = null;
+          try {
+            split = ad.lifetimeMonthSplit
+              ? (JSON.parse(ad.lifetimeMonthSplit) as Record<string, number>)
+              : null;
+          } catch {
+            split = null;
+          }
+          const total = num(ad.allocation) ?? 0;
+          if (!split) {
+            return (
+              <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-2.5 flex items-center justify-between gap-3 flex-wrap">
+                <div className="text-[11px] text-[var(--muted-foreground)] min-w-0">
+                  Lifetime flight spans {months.length} months. Plan an intended
+                  per-month split — reference only; the variance still books once
+                  on completion.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const per = Math.round((total / months.length) * 100) / 100;
+                    const map: Record<string, number> = {};
+                    months.forEach((mm) => {
+                      map[mm] = per;
+                    });
+                    onResolveCrossMonth('split', map);
+                  }}
+                  disabled={readOnly}
+                  className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--primary)] hover:bg-[var(--primary)]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Split evenly across {months.length} months
+                </button>
+              </div>
+            );
+          }
+          return (
+            <div
+              className="mt-3 rounded-lg border px-3 py-2.5"
+              style={{
+                borderColor: 'rgba(167,139,250,0.35)',
+                background: 'rgba(167,139,250,0.06)',
+              }}
+            >
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-1.5">
+                <div
+                  className="text-[10px] font-bold uppercase tracking-wider"
+                  style={{ color: COLORS.lifetime }}
+                >
+                  Lifetime · planned split (reference only)
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onResolveCrossMonth('clear')}
+                  disabled={readOnly}
+                  className="text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:underline disabled:opacity-50"
+                >
+                  Clear split
+                </button>
+              </div>
+              <div className="space-y-0.5">
+                {months.map((mm) => (
+                  <div
+                    key={mm}
+                    className="text-[11px] text-[var(--foreground)] flex justify-between gap-3"
+                  >
+                    <span>{fmtPeriodLong(mm)}</span>
+                    <span className="text-[var(--muted-foreground)]">
+                      {mm === ad.period
+                        ? `actual ${fmt(num(ad.pacerActual) ?? 0)} · `
+                        : ''}
+                      planned {fmt(split?.[mm] ?? 0)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
       {/* Stopped / past-due states replace the projection grid. Off or
           Completed Run freezes the math at the entered actuals; past-flight
@@ -8154,6 +8419,10 @@ function PacerCompletedSummary({
 interface AccountPacing {
   pct: number;
   status: 'on-track' | 'over' | 'under';
+  // §7: 'pacing' = live forward-looking rollup; 'final' = a settled
+  // (frozen/closed) month's final variance. Drives the badge label + how pct
+  // is read (live shows the ratio; final shows the exact delta from target).
+  mode: 'pacing' | 'final';
 }
 
 function PacerSpendTotals({
@@ -8177,14 +8446,27 @@ function PacerSpendTotals({
         : pacing.status === 'over'
           ? COLORS.error
           : COLORS.warn;
+  // §7: a live month rolls up per-ad pace (shown as a ratio %); a frozen/closed
+  // month shows the settled final variance (exact delta from target).
+  const isFinal = pacing?.mode === 'final';
+  const pacingHeader = isFinal ? 'Final variance' : 'Pacing';
+  const pacingTitle = isFinal
+    ? "Settled month: total actual spend vs the account's effective target (client budget × markup + carryover) — the final over/under, matching the Over/Under page."
+    : 'Actual spend vs time-adjusted expected spend, rolled up over eligible LIVE ads only — not-started, completed, and lifetime ads are excluded, each prorated on its own flight window. TOTAL SPEND is never the denominator.';
   const pacingLabel =
     pacing == null
       ? ''
-      : pacing.status === 'on-track'
-        ? 'On track'
-        : pacing.status === 'over'
-          ? `Over ${pacing.pct.toFixed(0)}%`
-          : `Under ${pacing.pct.toFixed(0)}%`;
+      : isFinal
+        ? pacing.status === 'on-track'
+          ? 'On target'
+          : `${pacing.pct - 100 > 0 ? '+' : ''}${(pacing.pct - 100).toFixed(1)}% ${
+              pacing.status === 'over' ? 'over' : 'under'
+            }`
+        : pacing.status === 'on-track'
+          ? 'On track'
+          : pacing.status === 'over'
+            ? `Over ${pacing.pct.toFixed(0)}%`
+            : `Under ${pacing.pct.toFixed(0)}%`;
   return (
     <div className="flex flex-wrap gap-6 items-center justify-end">
       <div className="text-right">
@@ -8206,12 +8488,12 @@ function PacerSpendTotals({
       {pacing && pacingColor && (
         <div className="text-right">
           <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-            Account pacing
+            {pacingHeader}
           </div>
           <span
             className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-2 py-1 rounded mt-0.5"
             style={{ background: `${pacingColor}22`, color: pacingColor }}
-            title="Actual spend vs time-adjusted expected spend, summed per ad (finished ads count their full target, mid-flight ads their elapsed portion)."
+            title={pacingTitle}
           >
             {pacingLabel}
           </span>
@@ -8296,31 +8578,127 @@ function BudgetPacerPanel({
     [accountKey, plan.period],
   );
 
+  // §2: resolve a cross-month straddler (count its full run in its own month),
+  // set a lifetime planned split, or clear. Optimistically updates the ad's
+  // persisted resolution fields, then writes through the dedicated endpoint
+  // (server-authoritative, so a re-sync or autosave can't clobber it).
+  const resolveCrossMonth = useCallback(
+    async (
+      adId: string,
+      action: 'apply_full_run' | 'split' | 'clear',
+      splitMap?: Record<string, number>,
+    ) => {
+      // The CTA is disabled when frozen and the endpoint rejects a frozen
+      // month (409), so no client-side readOnly guard is needed here.
+      const prior = plan.ads.find((a) => a.id === adId);
+      onChange({
+        ...plan,
+        ads: plan.ads.map((a) =>
+          a.id === adId
+            ? {
+                ...a,
+                fullRunAppliedToMonth:
+                  action === 'apply_full_run' ? plan.period : null,
+                lifetimeMonthSplit:
+                  action === 'split' ? JSON.stringify(splitMap ?? {}) : null,
+              }
+            : a,
+        ),
+      });
+      try {
+        const res = await fetch(
+          `/api/meta-ads-pacer/${accountKey}/resolve-cross-month?period=${plan.period}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              adId,
+              action,
+              ...(action === 'split' ? { splitMap } : {}),
+            }),
+          },
+        );
+        if (!res.ok) {
+          const d = await res.json().catch(() => null);
+          toast.error(d?.error || 'Failed to update cross-month resolution.');
+          if (prior) {
+            onChange({
+              ...plan,
+              ads: plan.ads.map((a) => (a.id === adId ? prior : a)),
+            });
+          }
+        }
+      } catch {
+        toast.error('Failed to update cross-month resolution — network error.');
+        if (prior) {
+          onChange({
+            ...plan,
+            ads: plan.ads.map((a) => (a.id === adId ? prior : a)),
+          });
+        }
+      }
+    },
+    [accountKey, plan, onChange],
+  );
+
   const visibleAds = useMemo(
     () => applyFilters(plan.ads, filters, currentUserId),
     [plan.ads, filters, currentUserId],
   );
   const readOnly = usePacerReadOnly();
 
-  // Account-wide pacing (Change 9): actual vs time-adjusted expected, summed
-  // PER AD (not one account-wide date fraction) so a finished ad contributes
-  // its full target and a mid-flight ad its elapsed portion. Catches drift no
-  // single per-ad badge would (several ads each slightly off the same way).
+  // Account-wide pacing (§7): roll up per-ad pace over §0.2-ELIGIBLE ads only
+  // (live, started, daily) so a completed run, a lifetime ad, or a not-yet-
+  // started ad can't drag the account into a false under. Each eligible ad is
+  // prorated against its OWN flight window (clampToMonth), never the calendar
+  // month, and TOTAL SPEND is never the denominator. A frozen/closed month
+  // isn't paced — it shows the settled final variance vs the effective target
+  // (§0.1), the same number the Over/Under page reports.
   const accountPacing = useMemo<AccountPacing | null>(() => {
     const nowMs = Date.now();
+
+    if (plan.frozen) {
+      const gross =
+        (num(plan.baseBudgetGoal) ?? 0) + (num(plan.addedBudgetGoal) ?? 0);
+      const carry =
+        (num(plan.baseCarryover) ?? 0) + (num(plan.addedCarryover) ?? 0);
+      const target = effectiveSpendTarget(gross, effMarkupOf(plan.markup), carry);
+      // §3: exclude any lifetime ad still in progress from BOTH sides — rare in
+      // a settled month, but a flight extending past month-end can linger — so
+      // this Final-variance badge matches the Over/Under + Reconciliation pages
+      // (a no-op when no lifetime ad is mid-run).
+      let ipLifeActual = 0;
+      let ipLifeAlloc = 0;
+      for (const ad of plan.ads) {
+        if (!isLifetimeInProgress(ad, nowMs, plan.timeZone)) continue;
+        ipLifeActual += effectiveActual(ad);
+        ipLifeAlloc += num(ad.allocation) ?? 0;
+      }
+      const baseTarget = target - ipLifeAlloc;
+      if (baseTarget <= 0) return null;
+      const pct = ((totals.actual - ipLifeActual) / baseTarget) * 100;
+      const delta = pct - 100;
+      // Settled: report the exact final variance, no pacing tolerance band.
+      const status =
+        Math.abs(delta) < 0.5 ? 'on-track' : delta > 0 ? 'over' : 'under';
+      return { pct, status, mode: 'final' };
+    }
+
     let expected = 0;
     let actual = 0;
     for (const ad of plan.ads) {
+      if (!isEligibleForLivePacing(ad, nowMs, plan.timeZone)) continue;
       const c = buildAdCalc(ad, nowMs, plan.timeZone);
-      if (c.target == null) continue; // skip un-budgeted ads
-      expected += c.expectedToDate;
+      if (c.target == null) continue; // un-budgeted — nothing to pace against
+      expected += c.days > 0 ? c.allocation * (c.daysElapsed / c.days) : 0;
       actual += c.actual ?? 0;
     }
     if (expected <= 0) return null;
     const pct = (actual / expected) * 100;
-    const status = pct >= 90 && pct <= 110 ? 'on-track' : pct > 110 ? 'over' : 'under';
-    return { pct, status };
-  }, [plan]);
+    const status =
+      pct >= 90 && pct <= 110 ? 'on-track' : pct > 110 ? 'over' : 'under';
+    return { pct, status, mode: 'pacing' };
+  }, [plan, totals.actual]);
 
   // Auto-expand needs-attention rows ONCE per mount so the rep lands on
   // the things that need work. Re-running on plan change would fight
@@ -8468,6 +8846,33 @@ function BudgetPacerPanel({
           />
         </div>
       </div>
+      {(() => {
+        // §1: standing reassurance that an odd-looking total is explained.
+        const crossMonthCount = visibleAds.filter((a) =>
+          isCrossMonthStraddler(a),
+        ).length;
+        if (crossMonthCount === 0) return null;
+        return (
+          <div className="mb-3 text-[11px]" style={{ color: '#38bdf8' }}>
+            {crossMonthCount} cross-month ad{crossMonthCount === 1 ? '' : 's'} —
+            variance expected (the in-month slice is part of a run that crosses
+            the month; expand a flagged row for the full-run verdict).
+          </div>
+        );
+      })()}
+      {(() => {
+        // §2a: how many straddlers have been resolved (full run counted whole).
+        const fullRunCount = visibleAds.filter(
+          (a) => a.fullRunAppliedToMonth != null,
+        ).length;
+        if (fullRunCount === 0) return null;
+        return (
+          <div className="mb-3 text-[11px]" style={{ color: '#38bdf8' }}>
+            {fullRunCount} ad{fullRunCount === 1 ? '' : 's'} with full-run applied
+            — counted whole in this month, not split across the boundary.
+          </div>
+        );
+      })()}
       <FilterStatus
         filters={filters}
         onClear={() => onFiltersChange(EMPTY_FILTERS)}
@@ -8530,6 +8935,9 @@ function BudgetPacerPanel({
             }
             onMarkOff={() => updateAd({ ...ad, adStatus: 'Off' })}
             onPushDailyBudget={(value) => pushDailyBudget(ad.id, value)}
+            onResolveCrossMonth={(action, splitMap) =>
+              resolveCrossMonth(ad.id, action, splitMap)
+            }
           />
         ))
       )}
@@ -8764,7 +9172,7 @@ function SummaryPanel({ plan }: { plan: PacerPlan }) {
                 </td>
                 <td colSpan={6} className="px-2.5 py-2.5">
                   <span className="text-[var(--foreground)] font-bold">
-                    {fmt(Math.round(combinedGoal * MARKUP * 100) / 100)}
+                    {fmt(Math.round(combinedGoal * effMarkupOf(plan.markup) * 100) / 100)}
                   </span>
                   <span className="text-[var(--muted-foreground)]"> actual / </span>
                   <span style={{ color: COLORS.daily }} className="font-bold">
@@ -8798,6 +9206,17 @@ interface ReconMonth {
   appliedOut: number;
   unapplied: number;
   appliedIn: number;
+  // §3: month has a lifetime ad still running — excluded from the over/under
+  // base (books once on completion); drives the 'lifetime · in progress' badge.
+  hasLifetimeInProgress: boolean;
+}
+interface CarryoverApplication {
+  id: string;
+  sourceMonth: string;
+  targetMonth: string;
+  bucket: 'base' | 'added';
+  amount: number;
+  appliedAt: string;
 }
 interface ReconData {
   year: number;
@@ -8808,6 +9227,8 @@ interface ReconData {
   ytdCarryover: number;
   ytdUnapplied: number;
   appliedThisMonth: { base: number; added: number; total: number };
+  // §5: individual ledger entries, newest first — powers both-ends provenance.
+  applications: CarryoverApplication[];
 }
 
 /**
@@ -9065,12 +9486,6 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                   const noData = !m.hasActual && !m.hasTarget;
                   const needsTarget = m.isBackfilled && !m.hasTarget;
                   const applied = Math.abs(m.appliedOut) >= 0.005;
-                  const reconcilable =
-                    !isLive &&
-                    m.period < data.targetPeriod &&
-                    Math.abs(m.unapplied) >= 0.005 &&
-                    m.hasActual &&
-                    m.hasTarget;
                   const ou = overUnder(m.variance);
                   return (
                     <tr
@@ -9093,6 +9508,18 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                               title="Pre-tool month — actual pulled from Meta account spend"
                             >
                               Backfilled
+                            </span>
+                          )}
+                          {m.hasLifetimeInProgress && (
+                            <span
+                              className="text-[9px] font-medium uppercase tracking-wider rounded px-1.5 py-0.5"
+                              style={{
+                                background: 'rgba(167,139,250,0.15)',
+                                color: COLORS.lifetime,
+                              }}
+                              title="A lifetime ad is still running this month — excluded from the over/under base (its single variance books once when the run completes). Its spend still shows in the Pacer's total spend."
+                            >
+                              Lifetime in progress
                             </span>
                           )}
                         </div>
@@ -9147,9 +9574,22 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                               <div
                                 className="text-[9px]"
                                 style={{ color: COLORS.lifetime }}
+                                title="Carryover applied INTO this month from a prior month's over/under (adjusts this month's target; the client budget is unchanged)."
                               >
-                                {m.appliedIn > 0 ? '+' : '−'}
-                                {fmt(Math.abs(m.appliedIn))} carryover
+                                ← {m.appliedIn > 0 ? '+' : '−'}
+                                {fmt(Math.abs(m.appliedIn))} from{' '}
+                                {(() => {
+                                  const srcs = Array.from(
+                                    new Set(
+                                      (data.applications ?? [])
+                                        .filter((a) => a.targetMonth === m.period)
+                                        .map((a) => a.sourceMonth),
+                                    ),
+                                  );
+                                  return srcs.length
+                                    ? srcs.map((s) => fmtPeriodLong(s)).join(', ')
+                                    : 'a prior month';
+                                })()}
                               </div>
                             )}
                           </>
@@ -9187,7 +9627,21 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                             >
                               <CheckIcon className="w-3 h-3" />
                               Applied {m.appliedOut >= 0 ? '+' : '−'}
-                              {fmt(Math.abs(m.appliedOut))}
+                              {fmt(Math.abs(m.appliedOut))} →{' '}
+                              {(() => {
+                                const tgts = Array.from(
+                                  new Set(
+                                    (data.applications ?? [])
+                                      .filter((a) => a.sourceMonth === m.period)
+                                      .map((a) => a.targetMonth),
+                                  ),
+                                );
+                                return tgts.length
+                                  ? tgts.map((t) => fmtPeriodLong(t)).join(', ')
+                                  : data.targetPeriod
+                                    ? fmtPeriodLong(data.targetPeriod)
+                                    : 'live month';
+                              })()}
                             </span>
                             <button
                               type="button"
@@ -9203,20 +9657,6 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                               {busy === `unapply:${m.period}` ? '…' : 'Undo'}
                             </button>
                           </div>
-                        ) : reconcilable ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              post(
-                                { type: 'apply', sourceMonth: m.period, bucket },
-                                `apply:${m.period}`,
-                              )
-                            }
-                            disabled={!data.targetPeriod || busy === `apply:${m.period}`}
-                            className="inline-flex items-center gap-1 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/10 px-2.5 py-1 text-[10px] font-semibold text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            {busy === `apply:${m.period}` ? 'Applying…' : 'Apply'}
-                          </button>
                         ) : noData ? (
                           <span className="text-[10px] text-[var(--muted-foreground)]">
                             No data
@@ -9259,18 +9699,26 @@ interface MonthAd {
   id: string;
   name: string;
   budgetSource: 'base' | 'added' | 'split';
+  budgetType: 'Daily' | 'Lifetime';
   // When budgetSource === 'split', this is the dollar portion of
   // `allocation` drawn from Base. The rest comes from Added. Spend
   // apportions proportionally for the Over/Under math.
   splitBaseAmount: string | null;
   allocation: number;
   actual: number;
+  // §3: a lifetime ad still running — excluded from the over/under base (both
+  // its actual slice AND its allocation) while in progress; books its single
+  // variance once it completes. Still counted in total month spend.
+  lifetimeInProgress: boolean;
+  // §2a: the YYYY-MM the ad's full run was counted in (resolved straddler), or
+  // null. Drives the 'full run → applied to [month]' badge on the row.
+  fullRunAppliedToMonth: string | null;
 }
 
 interface MonthPlanData {
   baseBudgetGoal: number;
   addedBudgetGoal: number;
-  // Per-account markup override; null = fall back to global MARKUP.
+  // Per-account markup override; null = fall back to the agency default markup.
   // Needed for the Over/Under math because pacerActual is in actual-spend
   // dollars while the budget goals are gross client dollars.
   markup: number | null;
@@ -9374,22 +9822,39 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                 id: string;
                 name?: string | null;
                 budgetSource?: string;
+                budgetType?: string;
+                period?: string;
                 splitBaseAmount?: string | null;
                 allocation?: string | null;
                 pacerActual?: string | null;
-              }) => ({
-                id: a.id,
-                name: a.name || 'Untitled Ad',
-                budgetSource:
-                  a.budgetSource === 'split'
-                    ? 'split'
-                    : a.budgetSource === 'added'
-                      ? 'added'
-                      : 'base',
-                splitBaseAmount: a.splitBaseAmount ?? null,
-                allocation: num(a.allocation) ?? 0,
-                actual: num(a.pacerActual) ?? 0,
-              }),
+                pacerRunSpend?: string | null;
+                fullRunAppliedToMonth?: string | null;
+                lifetimeInProgress?: boolean;
+              }) => {
+                // §2: a resolved straddler shows its FULL run + full target in
+                // its own month; effectiveActual/Target collapse to the month
+                // slice otherwise.
+                const eff = { ...a, period: a.period ?? period };
+                return {
+                  id: a.id,
+                  name: a.name || 'Untitled Ad',
+                  budgetSource:
+                    a.budgetSource === 'split'
+                      ? ('split' as const)
+                      : a.budgetSource === 'added'
+                        ? ('added' as const)
+                        : ('base' as const),
+                  budgetType:
+                    a.budgetType === 'Lifetime'
+                      ? ('Lifetime' as const)
+                      : ('Daily' as const),
+                  splitBaseAmount: a.splitBaseAmount ?? null,
+                  allocation: effectiveTarget(eff),
+                  actual: effectiveActual(eff),
+                  lifetimeInProgress: a.lifetimeInProgress === true,
+                  fullRunAppliedToMonth: a.fullRunAppliedToMonth ?? null,
+                };
+              },
             ),
           });
         } else {
@@ -9411,9 +9876,12 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                     id: 'aggregate',
                     name: 'All tracked ads (aggregate)',
                     budgetSource: 'base' as const,
+                    budgetType: 'Daily' as const,
                     splitBaseAmount: null,
                     allocation: row.clientBudget,
                     actual: row.actual,
+                    lifetimeInProgress: false,
+                    fullRunAppliedToMonth: null,
                   },
                 ]
               : [],
@@ -9434,10 +9902,7 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
   // Budget goals are stored gross; pacerActual is actual-spend. Convert
   // budget through the account's effective markup so the comparison is
   // apples-to-apples (everything in actual-spend dollars).
-  const effectiveMarkup =
-    data?.markup != null && Number.isFinite(data.markup) && data.markup > 0
-      ? data.markup
-      : MARKUP;
+  const effectiveMarkup = effMarkupOf(data?.markup);
   const budgetGross = data ? data.baseBudgetGoal + data.addedBudgetGoal : 0;
   // All-accounts mode supplies a pre-summed, per-account-correct target;
   // single-account mode derives it from this account's goals × markup.
@@ -9445,19 +9910,25 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
     data?.spendTargetOverride != null
       ? data.spendTargetOverride
       : budgetGross * effectiveMarkup;
-  const trackedTotal = data ? data.ads.reduce((s, a) => s + a.actual, 0) : 0;
-  // Variance always uses the tracked total (sum of per-ad pacer actuals) —
-  // the single spend source.
-  const effectiveActual = trackedTotal;
+  // §3: TWO independent sums. (1) Total month spend — every ad's actual,
+  // lifetime slice included — shown as the per-ad "Tracked total". (2) Over/
+  // under base — EXCLUDES lifetime ads still in progress (both their actual
+  // slice AND their allocation), so a running lifetime ad contributes $0 to the
+  // variance; its single variance books when the run completes (it re-enters
+  // the base naturally as a completed ad).
+  const allAds = data?.ads ?? [];
+  const inProgressLifetime = allAds.filter((a) => a.lifetimeInProgress);
+  const ipLifeActual = inProgressLifetime.reduce((s, a) => s + a.actual, 0);
+  const ipLifeAlloc = inProgressLifetime.reduce((s, a) => s + a.allocation, 0);
+  const trackedTotal = allAds.reduce((s, a) => s + a.actual, 0);
+  const baseActual = trackedTotal - ipLifeActual; // settle-able base actual
   const daysIn = daysInPeriod(period);
   const daysElapsed = daysElapsedInPeriod(period);
-  // "Should have spent" intentionally drops day-based proration — this view
-  // is used at end-of-month for retrospective review, so the target is just
-  // the full actual-spend budget (client goal × markup). The day count is
-  // still shown above for context only.
-  const shouldHaveSpent = budgetActual;
-  // Single variance: actual vs target.
-  const variance = effectiveActual - shouldHaveSpent;
+  // "Should have spent" drops day proration (end-of-month retrospective) and,
+  // per §3, nets out the allocation of any lifetime ad still in progress.
+  const shouldHaveSpent = budgetActual - ipLifeAlloc;
+  // Variance is measured on the settle-able base (lifetime-in-progress excluded).
+  const variance = baseActual - shouldHaveSpent;
 
   const varianceColor = (v: number) =>
     Math.abs(v) < 0.005
@@ -9550,6 +10021,24 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                               {' · '}
                               {ad.allocation > 0 ? fmt(ad.allocation) : '—'}
                             </span>
+                            {ad.lifetimeInProgress && (
+                              <span
+                                className="ml-1 font-semibold"
+                                style={{ color: COLORS.lifetime }}
+                                title="Lifetime ad still running — excluded from the over/under until its run completes (still counted in total spend)."
+                              >
+                                · lifetime · in progress
+                              </span>
+                            )}
+                            {ad.fullRunAppliedToMonth && (
+                              <span
+                                className="ml-1 font-semibold"
+                                style={{ color: '#38bdf8' }}
+                                title="Full run counted in this month — the over/under compares the full run to the full target."
+                              >
+                                · full run → {fmtPeriodLong(ad.fullRunAppliedToMonth)}
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>
@@ -9602,6 +10091,9 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                   </div>
                   <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
                     {`${fmt(budgetGross)} × ${effectiveMarkup}`}
+                    {ipLifeAlloc > 0
+                      ? ` − ${fmt(ipLifeAlloc)} lifetime in progress`
+                      : ''}
                   </div>
                 </div>
               </div>
@@ -9626,9 +10118,9 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                 </span>
               </div>
               <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
-                tracked total{' '}
+                {inProgressLifetime.length > 0 ? 'settle-able spend ' : 'tracked total '}
                 <span className="font-semibold text-[var(--foreground)]">
-                  {fmt(effectiveActual)}
+                  {fmt(baseActual)}
                 </span>
                 {' − '}
                 <span className="font-semibold text-[var(--foreground)]">
@@ -9636,6 +10128,17 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                 </span>
                 {' should have spent'}
               </div>
+              {inProgressLifetime.length > 0 && (
+                <div
+                  className="text-[10px] mt-1"
+                  style={{ color: COLORS.lifetime }}
+                  title="A lifetime ad still running is excluded from the over/under — both its spend and its target — until its run completes, when its single variance books once. Its spend is still counted in the tracked total above."
+                >
+                  Excludes {inProgressLifetime.length} lifetime ad
+                  {inProgressLifetime.length === 1 ? '' : 's'} in progress ·{' '}
+                  {fmt(ipLifeActual)} spent · settles on completion
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -9850,6 +10353,8 @@ function OverUnderYearView({ accountKey }: { accountKey: string | null }) {
 interface OverviewAccount {
   accountKey: string;
   dealer: string;
+  // §0.1: resolved per-account markup factor for the gross-up display.
+  markup: number;
   baseBudgetGoal: string | null;
   addedBudgetGoal: string | null;
   // Server-side aggregated count of account-level pacer notes — drives
@@ -10053,12 +10558,12 @@ function OverviewAccountRow({
                         style={{ color: COLORS.daily }}
                         title="Gross client-facing dollars (allocation grossed up by markup)"
                       >
-                        {num(ad.allocation) != null && MARKUP > 0
-                          ? fmt(
-                              Math.round((num(ad.allocation)! / MARKUP) * 100) /
-                                100,
-                            )
-                          : '—'}
+                        {(() => {
+                          const m = effMarkupOf(account.markup);
+                          return num(ad.allocation) != null && m > 0
+                            ? fmt(Math.round((num(ad.allocation)! / m) * 100) / 100)
+                            : '—';
+                        })()}
                       </td>
                       <td className="px-2 py-2 text-[var(--foreground)]">
                         {num(ad.allocation) != null ? fmt(num(ad.allocation)!) : '—'}
@@ -10195,7 +10700,10 @@ function OverviewView({
  * header gets a Pacer | Summary toggle that swaps the body content.
  */
 type MetaToolMode = 'planner' | 'pacer';
-type PacerInnerTab = 'pacer' | 'summary' | 'compare' | 'reconcile';
+type PacerInnerTab = 'pacer' | 'summary' | 'compare';
+// Planner page sub-tabs: the planner itself + the Reconciliation view
+// (moved here from the Pacer page).
+type PlannerInnerTab = 'planner' | 'reconcile';
 
 export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
   const { accountKey, accounts, setAccount } = useAccount();
@@ -10215,6 +10723,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
 
   const urlPeriod = searchParams.get('period');
   const urlPacerTab = searchParams.get('pacerTab');
+  const urlPlannerTab = searchParams.get('plannerTab');
 
   const [users, setUsers] = useState<DirectoryUser[]>([]);
   const [period, setPeriod] = useState<string>(
@@ -10261,9 +10770,10 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
       ? 'summary'
       : urlPacerTab === 'compare'
         ? 'compare'
-        : urlPacerTab === 'reconcile'
-          ? 'reconcile'
-          : 'pacer',
+        : 'pacer',
+  );
+  const [plannerTab, setPlannerTab] = useState<PlannerInnerTab>(
+    urlPlannerTab === 'reconcile' ? 'reconcile' : 'planner',
   );
 
   // Mirror state changes back into the URL (replace, not push, so the
@@ -10273,13 +10783,15 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
     next.set('period', period);
     if (mode === 'pacer') next.set('pacerTab', pacerTab);
     else next.delete('pacerTab');
+    if (mode === 'planner') next.set('plannerTab', plannerTab);
+    else next.delete('plannerTab');
     const qs = next.toString();
     const url = qs ? `${pathname}?${qs}` : pathname;
     router.replace(url, { scroll: false });
     // Intentionally exclude `searchParams` so external param changes don't
     // re-trigger this loop (we read from it once on mount).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period, pacerTab, mode, pathname, router]);
+  }, [period, pacerTab, plannerTab, mode, pathname, router]);
   const [filters, setFilters] = useState<PlanFilters>(EMPTY_FILTERS);
   const [filterSidebarOpen, setFilterSidebarOpen] = useState(false);
   // Lifted overview list — fetched once per period when there's no
@@ -10873,7 +11385,8 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
       const c = adContribution(ad);
       base += c.baseAllocation;
       added += c.addedAllocation;
-      actual += num(ad.pacerActual) ?? 0;
+      // §2: a resolved straddler counts its full run in its own month.
+      actual += effectiveActual(ad);
     });
     return { base, added, actual };
   }, [plan]);
@@ -10975,20 +11488,38 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
             <ScaleIcon className="w-3.5 h-3.5" />
             Over/Under Spend
           </button>
-          {activeKey && (
-            <button
-              type="button"
-              onClick={() => setPacerTab('reconcile')}
-              className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                pacerTab === 'reconcile'
-                  ? 'border-[var(--primary)] text-[var(--primary)]'
-                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              <InvestmentIcon className="w-3.5 h-3.5" />
-              Reconciliation
-            </button>
-          )}
+        </div>
+      )}
+
+      {/* Planner sub-tabs — Planner + Reconciliation, mirroring the Pacer
+          page's tab row. Only shown when an account is selected, since the
+          Reconciliation view needs an account. */}
+      {mode === 'planner' && activeKey && (
+        <div className="mb-8 flex items-center gap-1 border-b border-[var(--border)]">
+          <button
+            type="button"
+            onClick={() => setPlannerTab('planner')}
+            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              plannerTab === 'planner'
+                ? 'border-[var(--primary)] text-[var(--primary)]'
+                : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+            }`}
+          >
+            <ClipboardDocumentListIcon className="w-3.5 h-3.5" />
+            Planner
+          </button>
+          <button
+            type="button"
+            onClick={() => setPlannerTab('reconcile')}
+            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              plannerTab === 'reconcile'
+                ? 'border-[var(--primary)] text-[var(--primary)]'
+                : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+            }`}
+          >
+            <InvestmentIcon className="w-3.5 h-3.5" />
+            Reconciliation
+          </button>
         </div>
       )}
 
@@ -11164,8 +11695,8 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         }
       >
         <div className="min-w-0">
-          {/* Budget header (Total + Base/Added) — only on the Ad Planner page */}
-          {activeKey && plan && mode === 'planner' && (
+          {/* Budget header (Total + Base/Added) — only on the Planner tab */}
+          {activeKey && plan && mode === 'planner' && plannerTab === 'planner' && (
             <div className="mb-10 space-y-5">
               {/* Carryover prompt (Change 7) — fold last month's settled
                   over/under into this month's spend target, opt-in, per
@@ -11379,28 +11910,32 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
             // Pacer + Over/Under Spend tabs keep the glass-section-card
             // chrome since their content benefits from the visual frame.
             const flat =
-              mode === 'planner' ||
+              (mode === 'planner' && plannerTab === 'planner') ||
               (mode === 'pacer' && pacerTab === 'summary');
             const wrapperClass = flat
               ? ''
               : 'glass-section-card rounded-xl px-7 py-7';
             const inner =
               mode === 'planner' ? (
-                <AdPlannerPanel
-                  plan={plan}
-                  period={period}
-                  users={users}
-                  filters={filters}
-                  onFiltersChange={setFilters}
-                  currentUserId={currentUserId}
-                  periodSummaries={periodSummaries}
-                  onChange={setPlan}
-                  onCopyFrom={handleCopyFrom}
-                  onModalOpenChange={setEditorOpen}
-                  onAddActivity={onAddActivity}
-                  onEditActivity={onEditActivity}
-                  onDeleteActivity={onDeleteActivity}
-                />
+                plannerTab === 'reconcile' ? (
+                  <ReconciliationPanel accountKey={activeKey} />
+                ) : (
+                  <AdPlannerPanel
+                    plan={plan}
+                    period={period}
+                    users={users}
+                    filters={filters}
+                    onFiltersChange={setFilters}
+                    currentUserId={currentUserId}
+                    periodSummaries={periodSummaries}
+                    onChange={setPlan}
+                    onCopyFrom={handleCopyFrom}
+                    onModalOpenChange={setEditorOpen}
+                    onAddActivity={onAddActivity}
+                    onEditActivity={onEditActivity}
+                    onDeleteActivity={onDeleteActivity}
+                  />
+                )
               ) : pacerTab === 'pacer' ? (
                 <BudgetPacerPanel
                   plan={plan}
@@ -11413,8 +11948,6 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                 />
               ) : pacerTab === 'compare' ? (
                 <ComparePanel accountKey={activeKey} />
-              ) : pacerTab === 'reconcile' ? (
-                <ReconciliationPanel accountKey={activeKey} />
               ) : (
                 <SummaryPanel plan={plan} />
               );

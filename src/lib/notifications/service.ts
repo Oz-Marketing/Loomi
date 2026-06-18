@@ -9,6 +9,12 @@ import {
   type NotificationType,
 } from '@/lib/notifications/types';
 import { purgeOldAuditEntries } from '@/lib/meta-ads-audit';
+// §0.1: per-account markup (override, else agency default) — no hardcoded literal.
+import {
+  accountMarginSetting,
+  effectiveSpendTarget,
+} from '@/app/tools/meta/_lib/markup';
+import { getGlobalDefaultMarkup } from '@/lib/services/markup';
 
 export type { NotificationType };
 export type NotificationSeverity = 'info' | 'warning' | 'critical';
@@ -507,24 +513,24 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
   }
 
   // ── 5. Period over-allocated (sum allocation > goal × markup) ──
-  const MARKUP = 0.77;
+  const globalDefaultMarkup = await getGlobalDefaultMarkup();
   let plans: Array<{
     id: string;
     accountKey: string;
-    account: { dealer: string };
+    account: { dealer: string; markup: number | null };
     accountRepId: string | null;
     periodBudgets: Array<{ period: string; baseBudgetGoal: string | null; addedBudgetGoal: string | null }>;
   }>;
   try {
     plans = (await prisma.metaAdsPacerPlan.findMany({
       include: {
-        account: { select: { dealer: true, accountRepId: true } },
+        account: { select: { dealer: true, accountRepId: true, markup: true } },
         periodBudgets: true,
       },
     })).map((p) => ({
       id: p.id,
       accountKey: p.accountKey,
-      account: { dealer: p.account.dealer },
+      account: { dealer: p.account.dealer, markup: p.account.markup },
       accountRepId: p.account.accountRepId,
       periodBudgets: p.periodBudgets.map((b) => ({
         period: b.period,
@@ -537,12 +543,14 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
   }
 
   for (const plan of plans) {
+    const markup = accountMarginSetting(plan.account.markup, globalDefaultMarkup);
     for (const budget of plan.periodBudgets) {
       const baseGoal = Number(budget.baseBudgetGoal ?? '');
       const addedGoal = Number(budget.addedBudgetGoal ?? '');
-      const totalGoalActual =
-        (Number.isFinite(baseGoal) ? baseGoal : 0) * MARKUP +
-        (Number.isFinite(addedGoal) ? addedGoal : 0) * MARKUP;
+      const grossGoal =
+        (Number.isFinite(baseGoal) ? baseGoal : 0) +
+        (Number.isFinite(addedGoal) ? addedGoal : 0);
+      const totalGoalActual = effectiveSpendTarget(grossGoal, markup);
       if (totalGoalActual <= 0) continue;
 
       const periodAds = ads.filter((a) => a.plan.accountKey === plan.accountKey && a.period === budget.period);

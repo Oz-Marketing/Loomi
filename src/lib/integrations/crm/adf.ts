@@ -24,7 +24,7 @@ export interface AdfLeadInput {
   contact: Pick<Contact, 'email' | 'phone' | 'firstName' | 'lastName'> | null;
 }
 
-const PROVIDER_NAME = 'Loomi';
+const PROVIDER_NAME = 'Loomi - Oz';
 
 // Characters that are illegal in XML 1.0 even when numeric-escaped
 // (everything below 0x20 except tab/LF/CR). A pasted textarea or hostile

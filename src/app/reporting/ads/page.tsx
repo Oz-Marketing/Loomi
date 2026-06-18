@@ -1,25 +1,11 @@
-import { ReportingPageHeader } from '../_components/page-header';
+import { redirect } from 'next/navigation';
+import { LIVE_REPORTS } from './_components/reports-config';
 
 /**
- * Ads reporting — paid traffic overview.
- *
- * Stub for Phase 1. Ad planning and pacing work continues in studio's
- * `/tools/meta/*` surfaces. This page will surface read-only visuals
- * pulled from the same Meta data — spend, impressions, CTR rolled up
- * by account.
+ * Digital Ads index. Navigation happens via the sidebar's Digital Ads
+ * dropdown, so hitting /reporting/ads directly just lands you on the first
+ * live platform report.
  */
-export default function ReportingAdsPage() {
-  return (
-    <>
-      <ReportingPageHeader
-        eyebrow="Ads"
-        title="Ad reporting"
-        subtitle="Meta ad spend, impressions, and CTR — read-only visuals."
-      />
-      <div className="glass-card mt-8 p-6 text-sm text-[var(--muted-foreground)]">
-        Coming next: aggregate Meta performance pulled from the same
-        source as the studio Ad Planner / Ad Pacer tools.
-      </div>
-    </>
-  );
+export default function DigitalAdsIndex() {
+  redirect(`/ads/${LIVE_REPORTS[0]?.key ?? 'meta'}`);
 }

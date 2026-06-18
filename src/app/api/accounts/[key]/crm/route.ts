@@ -21,7 +21,7 @@ interface RouteParams {
 const MANAGEMENT_ROLES = ['developer', 'super_admin', 'admin'] as const;
 // ADF providers receive leads as email; hubspot is an API provider that
 // stores an encrypted token instead. PROVIDERS is the full accept-list.
-const ADF_PROVIDERS = ['tekion', 'vinsolutions'] as const;
+const ADF_PROVIDERS = ['tekion', 'vinsolutions', 'elead', 'tecobi', 'psx'] as const;
 const PROVIDERS = [...ADF_PROVIDERS, 'hubspot'] as const;
 const RECENT_DELIVERIES = 5;
 

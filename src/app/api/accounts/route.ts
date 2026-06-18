@@ -28,6 +28,9 @@ export async function GET() {
       const data: Record<string, unknown> = { ...rest };
       delete data.createdAt;
       delete data.updatedAt;
+      // Never ship the encrypted GoHighLevel token; expose only its presence.
+      data.ghlConfigured = Boolean(data.ghlApiKey);
+      delete data.ghlApiKey;
       normalizeAccountOutputPayload(data);
       result[key] = data;
     }

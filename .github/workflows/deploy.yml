@@ -10,18 +10,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Compile the Next.js bundle on the GitHub runner (NOT the droplet). The
+  # webpack build is the one CPU-heavy step in a deploy; running it here keeps
+  # the 1-vCPU droplet from pegging at ~100% for minutes. The compiled `.next`
+  # is shipped to the droplet, which then only does light work (install, prisma
+  # generate/push, start).
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - run: npm ci --legacy-peer-deps --no-audit --no-fund
+
+      - name: Build Next.js assets
+        # The build never connects to the DB — dynamic routes aren't
+        # prerendered — so a placeholder DATABASE_URL satisfies any Prisma
+        # client constructed at import time. The droplet runs the real
+        # prisma generate/push against the live DB in `deploy:prepare`.
+        run: npm run build:assets
+        env:
+          DATABASE_URL: postgresql://build:build@localhost:5432/build
+
+      - name: Package .next (exclude the local webpack cache)
+        run: tar -czf "next-${{ github.sha }}.tar.gz" --exclude='.next/cache' .next
+
+      - name: Ship build to droplet
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DO_HOST }}
+          username: root
+          key: ${{ secrets.DO_SSH_KEY }}
+          source: next-${{ github.sha }}.tar.gz
+          target: /var/www/loomi-studio/incoming/
+
   deploy:
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
+        env:
+          DEPLOY_SHA: ${{ github.sha }}
         with:
           host: ${{ secrets.DO_HOST }}
           username: root
           key: ${{ secrets.DO_SSH_KEY }}
           command_timeout: 15m
+          envs: DEPLOY_SHA
           script: |
             set -Eeuo pipefail
 
@@ -30,11 +73,13 @@ jobs:
             SHARED_DIR="$APP_ROOT/shared"
             SHARED_ENV="$SHARED_DIR/.env.local"
             SHARED_AVATARS_DIR="$SHARED_DIR/avatars"
+            INCOMING_DIR="$APP_ROOT/incoming"
             ACTIVE_PORT_FILE="$APP_ROOT/.active-port"
             CURRENT_LINK="$APP_ROOT/current"
             NGINX_UPSTREAM_CONF=/etc/nginx/conf.d/loomi-upstream.conf
+            DEPLOY_BRANCH=main
 
-            mkdir -p "$RELEASES_DIR" "$SHARED_DIR" "$SHARED_AVATARS_DIR"
+            mkdir -p "$RELEASES_DIR" "$SHARED_DIR" "$SHARED_AVATARS_DIR" "$INCOMING_DIR"
 
             # Ensure nginx allows uploads up to 10MB (default is 1MB)
             if [ ! -f /etc/nginx/conf.d/client-max-body-size.conf ]; then
@@ -56,8 +101,12 @@ jobs:
             echo "=== Pre-deploy: current commit ==="
             git log --oneline -1
 
-            git fetch origin main
-            NEW_SHA=$(git rev-parse origin/main)
+            # Deploy the exact commit that triggered this run (and that the
+            # `build` job compiled), not whatever origin/$DEPLOY_BRANCH resolves
+            # to now — a queued newer push must not graft its source onto this
+            # release's prebuilt .next.
+            git fetch origin "$DEPLOY_BRANCH"
+            NEW_SHA="$DEPLOY_SHA"
             SHORT_SHA=$(echo "$NEW_SHA" | cut -c1-7)
             RELEASE_ID="$(date +%Y%m%d%H%M%S)-$SHORT_SHA"
             NEW_RELEASE="$RELEASES_DIR/$RELEASE_ID"
@@ -65,7 +114,7 @@ jobs:
             # Reset any locally-modified tracked files (e.g. package-lock.json
             # dirtied by npm install) so git pull doesn't abort.
             git checkout -- .
-            git pull --ff-only origin main
+            git pull --ff-only origin "$DEPLOY_BRANCH"
 
             echo "=== Post-pull: latest commit ==="
             git log --oneline -1
@@ -108,7 +157,7 @@ jobs:
               OLD_APP=loomi-studio-green
             fi
 
-            # Ensure swap exists so npm ci / next build don't get OOM-killed
+            # Ensure swap exists so npm ci doesn't get OOM-killed on the small droplet.
             if [ ! -f /swapfile ]; then
               echo "=== Creating 2G swap ==="
               fallocate -l 2G /swapfile
@@ -130,26 +179,43 @@ jobs:
             pm2 stop "$NEXT_APP" 2>/dev/null || true
             pm2 delete "$NEXT_APP" 2>/dev/null || true
 
+            # Runtime deps + tooling (the worker runs via tsx, a devDep; prisma
+            # CLI runs db push below) — install all, no --omit=dev.
             npm ci --legacy-peer-deps --no-audit --no-fund
 
-            # Load env vars for build/runtime (Prisma needs DATABASE_URL, etc.)
+            # Load env vars for the DB steps + runtime (Prisma needs DATABASE_URL).
             set -a && source .env.local && set +a
 
-            # Bump Node heap for the build only — the TypeScript check
-            # phase OOMs at the droplet's ~1GB default once the bundle
-            # grows past a certain size. 4GB is well above what we
-            # actually use and well below what the swap can absorb.
-            # Runtime keeps its leaner 768MB limit set further below.
-            NODE_OPTIONS="--max-old-space-size=4096" npm run build
-
-            echo "=== Build complete, .next dir size ==="
+            # The webpack compile now happens in the `build` job on the runner
+            # and is shipped here as a tarball, so the droplet no longer compiles
+            # (this is what kept CPU pegged for ~7min/deploy). Extract the
+            # prebuilt .next into this release.
+            BUILD_TARBALL="$INCOMING_DIR/next-$NEW_SHA.tar.gz"
+            if [ ! -f "$BUILD_TARBALL" ]; then
+              echo "ERROR: prebuilt .next not found at $BUILD_TARBALL (the build job must run + ship first)"
+              exit 1
+            fi
+            echo "=== Extracting prebuilt .next ($(du -h "$BUILD_TARBALL" | cut -f1)) ==="
+            rm -rf "$NEW_RELEASE/.next"
+            tar -xzf "$BUILD_TARBALL" -C "$NEW_RELEASE"
+            rm -f "$BUILD_TARBALL"
+            if [ ! -d "$NEW_RELEASE/.next" ]; then
+              echo "ERROR: .next missing after extraction"
+              exit 1
+            fi
+            echo "=== .next dir size ==="
             du -sh .next
+
+            # Light DB steps only (prisma generate against the droplet's native
+            # engine, db push, slug/changelog seeds) — no compilation.
+            echo "=== Prepare DB (prisma generate + db push + seeds) ==="
+            npm run deploy:prepare
 
             # One-time data backfill: lift the old file-based stores into
             # Postgres / Spaces before this release (which no longer writes
             # them to disk) takes over. Reads from the PREVIOUS release
             # ($CURRENT_LINK is still the old one until the cutover below) and
-            # the shared avatars dir. Runs after `npm run build`, so the
+            # the shared avatars dir. Runs after `deploy:prepare`, so the
             # AppSetting table created by `prisma db push` already exists.
             # Every script is idempotent and made non-fatal here, so this block
             # is safe to leave in permanently — it no-ops once everything is

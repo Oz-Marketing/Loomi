@@ -138,6 +138,16 @@ export async function updateAccount(
     senderName: string;
     sendingDomain: string;
     replyToEmail: string;
+    // Ad-reporting per-account settings (ids + margins) + GoHighLevel PIT.
+    // Margins are nullable Float (% markup); empty clears the override.
+    metaAdAccountId: string;
+    facebookAdsMargin: number | null;
+    stackadaptAdvertiserId: string;
+    stackadaptMargin: number | null;
+    googleAdsCustomerId: string;
+    googleAdsMargin: number | null;
+    ghlApiKey: string;
+    ghlLocationId: string;
   }>,
 ) {
   return prisma.account.update({ where: { key }, data });

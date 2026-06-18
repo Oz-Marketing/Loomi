@@ -135,6 +135,31 @@ model Account {
   // pull spend. The access token itself is a single agency-wide System User
   // token in env (META_SYSTEM_USER_TOKEN), not per-account.
   metaAdAccountId           String?
+  // Reporting margin (percent, 0–100) applied to Meta media-cost fields in the
+  // Ads report: billed = actual / (1 - margin/100). Ported from Oz Dealer
+  // Tools' per-org `facebook_ads_margin`. Distinct from `markup` above (the
+  // Pacer's spend multiplier). null / 0 = bill cost at face value.
+  facebookAdsMargin         Float?
+  // StackAdapt (OTT/CTV) advertiser this sub-account reports on, plus its
+  // reporting margin (percent, same markup math as facebookAdsMargin). The
+  // StackAdapt GraphQL API key is a single agency-wide key in env
+  // (STACKADAPT_API_KEY), not per-account. Ported from Oz Dealer Tools'
+  // per-org stackadapt_advertiser_id / stackadapt_margin.
+  stackadaptAdvertiserId    String?
+  stackadaptMargin          Float?
+  // Google Ads customer this sub-account reports on (digits, dashes stripped),
+  // plus its reporting margin (percent, same markup math as the others). The
+  // Google Ads API credentials (developer token + OAuth) are agency-wide in env.
+  // Ported from Oz Dealer Tools' per-org google_ads_customer_id / google_ads_margin.
+  googleAdsCustomerId       String?
+  googleAdsMargin           Float?
+  // GoHighLevel email reporting: a per-sub-account Private Integration Token
+  // (AES-256-GCM encrypted at rest via src/lib/crypto/encryption.ts) + the GHL
+  // locationId it reports on. The /emails/schedule API returns delivery counts
+  // only — engagement (opens/clicks) requires a marketplace OAuth app, not a
+  // PIT. Ported from Oz Dealer Tools' per-org ghl_api_key / ghl_location_id.
+  ghlApiKey                 String?
+  ghlLocationId             String?
   // IANA timezone of the Meta ad account (e.g. "America/New_York"), cached
   // from the Marketing API on each sync. Meta resets the daily budget at
   // midnight in THIS zone, so the Pacer's time-left math runs against it.

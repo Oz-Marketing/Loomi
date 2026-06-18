@@ -87,6 +87,17 @@ export interface PacerAd {
   // the pacer clamps these to the pacing month. metaEndDate null = open-ended.
   metaStartDate: string | null;
   metaEndDate: string | null;
+  // §8 Google Ads (optional — present on every row the API returns, but optional
+  // here so existing Meta-only constructors don't need updating). platform tags
+  // the row ('meta' default / 'google'); the google* fields mirror the meta*
+  // ones for a Google-linked campaign line (channel type is the rollup tag).
+  platform?: 'meta' | 'google' | null;
+  googleCampaignId?: string | null;
+  googleChannelType?: string | null;
+  googleEffectiveStatus?: string | null;
+  googleStartDate?: string | null;
+  googleEndDate?: string | null;
+  googleBudgetResourceName?: string | null;
   // Per-ad alert mute (Change 9): silences pacing-family alerts for this ad.
   alertsMuted: boolean;
   designNotes: DesignNote[];

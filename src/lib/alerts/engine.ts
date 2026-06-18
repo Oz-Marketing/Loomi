@@ -78,9 +78,10 @@ export async function evaluateAlertRules(): Promise<AlertEngineResult> {
     errors: [],
   };
 
-  const rules = await prisma.alertRule.findMany({
-    where: { enabled: true, channel: 'meta' },
-  });
+  // All enabled rules across channels; each is scoped to its channel's lines in
+  // the loop below. Google rules stay disabled (and thus unloaded) until §8 is
+  // connected, but the engine is ready for them the moment they're enabled.
+  const rules = await prisma.alertRule.findMany({ where: { enabled: true } });
   if (rules.length === 0) return result;
 
   // Parse the JSON config once per rule.
@@ -114,11 +115,17 @@ export async function evaluateAlertRules(): Promise<AlertEngineResult> {
       if ('frozen' in view && view.frozen) continue;
       // view.ads carry every MetaAdsPacerAd column (fetchPeriodPlan uses include),
       // so they satisfy both PacerAd and the recipient fields at runtime.
-      const ads = view.ads as unknown as Array<PacerAd & AdRecipientFields>;
-      const accountRecipients = [...new Set(ads.flatMap((a) => adRecipients(a)))];
+      const allAds = view.ads as unknown as Array<PacerAd & AdRecipientFields>;
 
       for (const { row, spec, params, notifType } of parsed) {
-        if (!notifType) continue; // metric we can't compute on Meta
+        if (!notifType) continue; // metric we can't compute on this channel
+        // Scope each rule to its own channel's lines — a Meta rule paces over
+        // Meta ads (platform null/'meta'), a Google rule over google lines — so
+        // the two channels never bleed into each other's account number (§0.4
+        // per channel). Recipients come from the same channel's ads.
+        const channel = row.channel === 'google' ? 'google' : 'meta';
+        const ads = allAds.filter((a) => (a.platform ?? 'meta') === channel);
+        const accountRecipients = [...new Set(ads.flatMap((a) => adRecipients(a)))];
 
         if (row.metric === 'account_monthly_pace') {
           const pace = computeAccountPace(ads, nowMs, tz);

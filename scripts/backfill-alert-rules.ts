@@ -72,6 +72,45 @@ const SEEDS: Seed[] = [
     phase: 1,
     enabled: true,
   },
+  // ── Google channel (§8) — seeded DISABLED until the Google Ads API is
+  // connected. The engine is channel-ready: enabling these makes them pace over
+  // the account's Google lines. Google-METRIC rules (QS, impression share, PMax,
+  // conversions — the non-FIXED baseline types) are added once §8 supplies the
+  // metric history; these two reuse the channel-agnostic FIXED metrics.
+  {
+    key: 'google-account-monthly-pace',
+    name: 'Google account pacing off-target',
+    description:
+      'Live-month Google account pace is outside the 85–110% band of expected-to-date (Google lines only). Disabled until the Google Ads API is connected (§8).',
+    channel: 'google',
+    metric: 'account_monthly_pace',
+    resource: 'account',
+    baselineType: 'FIXED',
+    baselineParams: '{}',
+    fireCondition: JSON.stringify({ comparator: 'outside', low: 85, high: 110 }),
+    tier: 'FYI',
+    minVolumeGate: 50,
+    cooldownHours: 20,
+    phase: 1,
+    enabled: false,
+  },
+  {
+    key: 'google-campaign-budget-burn',
+    name: 'Google campaign budget burning early',
+    description:
+      'A Google campaign has spent ≥90% of its monthly allocation with more than 5 flight-days left. Disabled until the Google Ads API is connected (§8).',
+    channel: 'google',
+    metric: 'campaign_budget_burn',
+    resource: 'campaign',
+    baselineType: 'FIXED',
+    baselineParams: JSON.stringify({ minDaysLeft: 5 }),
+    fireCondition: JSON.stringify({ comparator: 'gte', value: 90 }),
+    tier: 'URGENT',
+    minVolumeGate: null,
+    cooldownHours: 20,
+    phase: 1,
+    enabled: false,
+  },
 ];
 
 async function main() {

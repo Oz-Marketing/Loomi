@@ -78,10 +78,26 @@ export interface PacerAd {
   pacerSyncedAt: string | null;
   /** Full-run (all-time) spend across the ad set's whole flight; informational. */
   pacerRunSpend: string | null;
+  // §2a/§2b: server-persisted cross-month resolution (survives Meta re-sync).
+  // fullRunAppliedToMonth = the YYYY-MM the full run is counted in (single-month
+  // straddler). lifetimeMonthSplit = JSON planned per-month split (display-only).
+  fullRunAppliedToMonth: string | null;
+  lifetimeMonthSplit: string | null;
   // Actual run schedule from Meta (account-TZ YYYY-MM-DD). Server-managed;
   // the pacer clamps these to the pacing month. metaEndDate null = open-ended.
   metaStartDate: string | null;
   metaEndDate: string | null;
+  // §8 Google Ads (optional — present on every row the API returns, but optional
+  // here so existing Meta-only constructors don't need updating). platform tags
+  // the row ('meta' default / 'google'); the google* fields mirror the meta*
+  // ones for a Google-linked campaign line (channel type is the rollup tag).
+  platform?: 'meta' | 'google' | null;
+  googleCampaignId?: string | null;
+  googleChannelType?: string | null;
+  googleEffectiveStatus?: string | null;
+  googleStartDate?: string | null;
+  googleEndDate?: string | null;
+  googleBudgetResourceName?: string | null;
   // Per-ad alert mute (Change 9): silences pacing-family alerts for this ad.
   alertsMuted: boolean;
   designNotes: DesignNote[];
@@ -94,7 +110,7 @@ export interface PacerPlan {
   baseBudgetGoal: string | null;
   addedBudgetGoal: string | null;
   // Per-account markup override (Account.markup). `null` → use the
-  // platform default (MARKUP constant in the calculator). Drives the
+  // platform default (the admin-configured agency markup). Drives the
   // gross↔actual conversion in the Budget Calculator's Client Budget mode.
   markup: number | null;
   ads: PacerAd[];

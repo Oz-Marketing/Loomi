@@ -115,7 +115,7 @@ interface SearchStreamBatch {
 }
 
 /** Run a GAQL query against a customer via searchStream; returns all rows. */
-async function gaql(cfg: GoogleAdsConfig, customerId: string, query: string): Promise<GoogleRow[]> {
+export async function gaql(cfg: GoogleAdsConfig, customerId: string, query: string): Promise<GoogleRow[]> {
   const token = await getAccessToken(cfg);
   const cid = stripDashes(customerId);
   const headers: Record<string, string> = {
@@ -173,8 +173,17 @@ interface GoogleMetrics {
   searchRankLostImpressionShare?: number;
 }
 interface GoogleRow {
-  campaign?: { id?: string; name?: string; status?: string };
-  campaignBudget?: { amountMicros?: string };
+  // §8 pacer import also reads advertisingChannelType + start/end dates and the
+  // budget's total_amount_micros + resource_name (shared-budget dedup).
+  campaign?: {
+    id?: string;
+    name?: string;
+    status?: string;
+    advertisingChannelType?: string;
+    startDate?: string;
+    endDate?: string;
+  };
+  campaignBudget?: { amountMicros?: string; totalAmountMicros?: string; resourceName?: string };
   adGroup?: { id?: string; name?: string; status?: string; type?: string };
   adGroupCriterion?: {
     keyword?: { text?: string; matchType?: string };

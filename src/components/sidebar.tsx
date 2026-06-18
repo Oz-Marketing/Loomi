@@ -35,7 +35,7 @@ import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { SidebarTooltip, SidebarPopout } from '@/components/sidebar-collapsed-ui';
 import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
 import { FlowIcon } from '@/components/icon-map';
-import { MetaLogoIcon } from '@/components/icons/meta-logo';
+import { MetaBrandIcon, GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
 import { AccountSwitcher } from '@/components/account-switcher';
 import { DevImpersonate } from '@/components/dev-impersonate';
 import { AppLogo } from '@/components/app-logo';
@@ -64,7 +64,7 @@ const toolsNavItem: NavItem = {
     {
       href: '/tools/meta',
       label: 'Meta',
-      icon: MetaLogoIcon,
+      icon: MetaBrandIcon,
       absolute: true,
       children: [
         {
@@ -74,6 +74,24 @@ const toolsNavItem: NavItem = {
         },
         {
           href: '/tools/meta/ad-pacer',
+          label: 'Ad Pacer',
+          absolute: true,
+        },
+      ],
+    },
+    {
+      href: '/tools/google',
+      label: 'Google',
+      icon: GoogleAdsBrandIcon,
+      absolute: true,
+      children: [
+        {
+          href: '/tools/google/ad-planner',
+          label: 'Ad Planner',
+          absolute: true,
+        },
+        {
+          href: '/tools/google/ad-pacer',
           label: 'Ad Pacer',
           absolute: true,
         },
@@ -511,10 +529,11 @@ function NavGroup({
         aria-expanded={open}
         className={buttonClass}
       >
-        {/* Icons only render at the top level of the nav. Nested
-            groups (Tools → Meta) drop their icon so the hierarchy stays
-            visually clean — the indent + rail communicate the nesting. */}
-        {isTop && item.icon && <item.icon className="w-5 h-5" />}
+        {/* Top-level groups show their icon at w-5. Nested groups normally drop
+            it to keep the hierarchy clean (the indent + rail show nesting), but
+            when a nested group carries a brand badge (Meta / Google) we show it,
+            smaller, so the platform is recognizable in the expanded nav too. */}
+        {item.icon && <item.icon className={isTop ? 'w-5 h-5' : 'w-4 h-4'} />}
         <span className="flex-1 text-left">{item.label}</span>
         <ChevronDownIcon
           className={`${chevronSize} transition-transform duration-200 ${open ? 'rotate-180' : ''} ${

@@ -5,6 +5,7 @@
  */
 
 import { calcDays, calcElapsed, num } from './helpers';
+import { ACTIVE_STATUSES, CROSS_MONTH_IN_MONTH_THRESHOLD } from './constants';
 import {
   fractionalDaysRemaining,
   monthBoundsIso,
@@ -57,8 +58,10 @@ export function buildPacerCalc(
   timeZone: string,
 ): PacerCalc {
   const isLifetime = ad.budgetType === 'Lifetime';
-  const budget = num(ad.allocation) ?? 0;
-  const spent = num(ad.pacerActual) ?? 0;
+  // §2: honor a resolved cross-month straddler — the assigned month uses the
+  // full run + full target; the default is the month-bounded slice (unchanged).
+  const budget = effectiveTarget(ad);
+  const spent = effectiveActual(ad);
   // Lifetime ads don't have a daily-rate column — projection collapses to
   // whatever's been spent rather than extrapolating with a phantom rate.
   const dailyBudget = isLifetime ? 0 : num(ad.pacerDailyBudget) ?? 0;
@@ -145,7 +148,23 @@ export function buildPacerCalc(
  * without any budget pro-rating. Returns the raw schedule unclamped if the
  * period is malformed (shouldn't happen for a real pacer row).
  */
-export function clampToMonth(ad: PacerAd): {
+/**
+ * The minimal ad shape the schedule/eligibility helpers read — satisfied by
+ * BOTH the client `PacerAd` and the server's Prisma ad row, so these helpers
+ * run on either side. (`budgetType`/dates are loose strings to match the DB row.)
+ */
+export type AdScheduleLike = {
+  adStatus: string;
+  budgetType: string;
+  period: string;
+  metaStartDate: string | null;
+  liveDate: string | null;
+  flightStart: string | null;
+  metaEndDate: string | null;
+  flightEnd: string | null;
+};
+
+export function clampToMonth(ad: AdScheduleLike): {
   effectiveStart: string | null;
   effectiveEnd: string | null;
 } {
@@ -160,6 +179,134 @@ export function clampToMonth(ad: PacerAd): {
     // min(rawEnd, month_end) — never pace past the month's budget window.
     effectiveEnd: rawEnd && rawEnd < bounds.end ? rawEnd : bounds.end,
   };
+}
+
+/**
+ * §0.2 — does this ad participate in LIVE account pacing? Only live, started,
+ * daily ads count toward the account pace ratio. Ineligible ads still render
+ * their own row state; they just don't move the account number. Excluded:
+ *   - non-active statuses (Scheduled / Waiting on Rep / In Draft / Off /
+ *     Completed Run …) — only the delivering statuses pace;
+ *   - lifetime ads — their single variance is booked once on completion into
+ *     the over/under (§3), never paced day-to-day;
+ *   - not-yet-started flights (effectiveStart > asOf);
+ *   - §1: unresolved cross-month straddlers (in-month slice materially below
+ *     the full-run target) — excluded via isCrossMonthStraddler.
+ * This is the shared predicate §7 / §1 / §8 all build on.
+ */
+export function isEligibleForLivePacing(
+  ad: AdScheduleLike & {
+    allocation?: string | null;
+    pacerActual?: string | null;
+    fullRunAppliedToMonth?: string | null;
+  },
+  nowMs: number,
+  timeZone: string,
+): boolean {
+  if (!ACTIVE_STATUSES.includes(ad.adStatus)) return false; // status == Live
+  if (ad.budgetType === 'Lifetime') return false; // NOT (lifetime in-progress)
+  if (isCrossMonthStraddler(ad)) return false; // §1: unresolved cross-month straddler
+  const { effectiveStart } = clampToMonth(ad);
+  if (!effectiveStart) return false;
+  return effectiveStart <= zonedTodayIso(nowMs, timeZone); // flightStart <= asOf
+}
+
+/**
+ * §3 — is this a LIFETIME ad still running (in progress)? Such an ad is
+ * EXCLUDED from a month's over/under base entirely (both its actual slice and
+ * its allocation are removed → $0 variance contribution) while it runs; it
+ * still counts toward the honest "total month spend". When it completes
+ * (status leaves ACTIVE_STATUSES, e.g. "Completed Run") it re-enters the base
+ * and its single variance (pacerActual − allocation) books once — which for a
+ * single-period ad equals fullRunActual − fullLifetimeTarget per the spec.
+ * Multi-month lifetime ads are handled later by §1/§2 (cross-month split).
+ * This is the ONE predicate every over/under-base sum + the badge consult.
+ */
+export function isLifetimeInProgress(
+  ad: AdScheduleLike,
+  nowMs: number,
+  timeZone: string,
+): boolean {
+  if (ad.budgetType !== 'Lifetime') return false;
+  if (!ACTIVE_STATUSES.includes(ad.adStatus)) return false; // completed/off books normally
+  const { effectiveStart } = clampToMonth(ad);
+  if (!effectiveStart) return false;
+  return effectiveStart <= zonedTodayIso(nowMs, timeZone); // has started
+}
+
+/**
+ * §1 — is this a cross-month STRADDLER: a (daily) ad whose flight crosses a
+ * calendar-month boundary AND whose in-month slice is materially below the
+ * full-run target, so the raw in-month variance looks alarming but is just a
+ * scope artifact. Such an ad is excluded from the account pacing badge (via
+ * isEligibleForLivePacing) and its row is contextualized with the full-run
+ * verdict. Lifetime ads are owned by §3 (over/under exclusion) + §2b (split),
+ * so they are NOT flagged here. (§2 will additionally skip ads already resolved
+ * via fullRunAppliedToMonth/split — those fields don't exist yet.)
+ */
+export function isCrossMonthStraddler(
+  ad: AdScheduleLike & {
+    allocation?: string | null;
+    pacerActual?: string | null;
+    fullRunAppliedToMonth?: string | null;
+  },
+): boolean {
+  if (ad.fullRunAppliedToMonth != null) return false; // §2: resolved — no longer a straddler
+  if (ad.budgetType === 'Lifetime') return false;
+  // Use the RAW flight, NOT clampToMonth — clamping collapses both ends into the
+  // period month, which could never expose a boundary.
+  const start = ad.metaStartDate ?? ad.liveDate ?? ad.flightStart;
+  const end = ad.metaEndDate ?? ad.flightEnd;
+  if (!start || !end) return false;
+  if (start.slice(0, 7) === end.slice(0, 7)) return false; // single calendar month
+  const inMonth = num(ad.pacerActual) ?? 0;
+  const target = num(ad.allocation) ?? 0;
+  if (target <= 0) return false;
+  // Materially below: in-month slice is short of the full-run target by more
+  // than the threshold gap (a near-complete in-month flight won't trip it).
+  return inMonth < target * CROSS_MONTH_IN_MONTH_THRESHOLD;
+}
+
+/** Loose money/period shape for the §2 effective-actual/target helpers. */
+type EffectiveMoneyLike = {
+  period: string;
+  allocation?: string | null;
+  pacerActual?: string | null;
+  pacerRunSpend?: string | null;
+  fullRunAppliedToMonth?: string | null;
+};
+
+/**
+ * §2 — the ONE actual a surface should use for a month, honoring a resolved
+ * cross-month straddler (§2a, "count full run in [month]"). Default = the
+ * month-bounded slice (pacerActual), unchanged. When fullRunAppliedToMonth is
+ * set: the ASSIGNED month uses the full run (pacerRunSpend, falling back to
+ * pacerActual); any OTHER month the flight touched contributes 0. §2b split is
+ * display-only and never changes this. Pure + string-tolerant so server Prisma
+ * rows and the client PacerAd both pass. Routing every variance/total/pacing
+ * sum through this pair keeps §0.3 (count once) and §0.4 (surfaces agree).
+ */
+export function effectiveActual(ad: EffectiveMoneyLike, asMonth?: string): number {
+  const month = asMonth ?? ad.period;
+  if (ad.fullRunAppliedToMonth != null) {
+    return ad.fullRunAppliedToMonth === month
+      ? (num(ad.pacerRunSpend) ?? num(ad.pacerActual) ?? 0)
+      : 0;
+  }
+  return num(ad.pacerActual) ?? 0;
+}
+
+/**
+ * §2 — the ONE target for a month, mirroring effectiveActual: the full
+ * allocation in the assigned month, 0 in any other month it touched, else the
+ * month-bounded allocation.
+ */
+export function effectiveTarget(ad: EffectiveMoneyLike, asMonth?: string): number {
+  const month = asMonth ?? ad.period;
+  if (ad.fullRunAppliedToMonth != null) {
+    return ad.fullRunAppliedToMonth === month ? (num(ad.allocation) ?? 0) : 0;
+  }
+  return num(ad.allocation) ?? 0;
 }
 
 export interface AdCalc {
@@ -215,7 +362,10 @@ export function buildAdCalc(
   const totalBudget = isLifetime ? allocation : dailyBudget ?? 0;
   const projected = pacer.projected;
   const impliedDaily = isLifetime && days > 0 ? allocation / days : null;
-  const actual = num(ad.pacerActual);
+  // §2: a resolved straddler counts its full run; otherwise the month-bounded
+  // actual (null preserved so a no-spend ad still reads "no data").
+  const actual =
+    ad.fullRunAppliedToMonth != null ? effectiveActual(ad) : num(ad.pacerActual);
   const target = allocation > 0 ? allocation : null;
   const recDaily =
     pacer.daysLeft > 0 && pacer.budget > 0 ? pacer.recDaily : null;
@@ -268,6 +418,85 @@ export function buildAdCalc(
     pacingPct,
     status,
   };
+}
+
+export interface AccountPaceResult {
+  pct: number; // Σ actual-to-date ÷ Σ expected-to-date × 100
+  actual: number; // Σ eligible actual-to-date
+  expected: number; // Σ eligible expected-to-date
+  eligibleCount: number;
+  status: 'on-track' | 'over' | 'under';
+}
+
+/**
+ * §7 live-month account pacing rollup over §0.2-eligible ads (live, started,
+ * daily — completed/lifetime/not-started/unresolved-straddler excluded). Each
+ * eligible ad is prorated against its OWN flight window (never the calendar
+ * month) and TOTAL SPEND is never the denominator.
+ *
+ * This is the SINGLE source of truth shared by the Pacer badge AND the §9 pace
+ * alert, so the two can never disagree (the §0.4 standing test). Returns null
+ * when nothing is eligible or there's no expected-to-date to pace against — an
+ * empty/not-yet-started account is not "under", it's simply not pacing.
+ */
+export function computeAccountPace(
+  ads: PacerAd[],
+  nowMs: number,
+  timeZone: string,
+): AccountPaceResult | null {
+  let expected = 0;
+  let actual = 0;
+  let eligibleCount = 0;
+  for (const ad of ads) {
+    if (!isEligibleForLivePacing(ad, nowMs, timeZone)) continue;
+    const c = buildAdCalc(ad, nowMs, timeZone);
+    if (c.target == null) continue; // un-budgeted — nothing to pace against
+    expected += c.days > 0 ? c.allocation * (c.daysElapsed / c.days) : 0;
+    actual += c.actual ?? 0;
+    eligibleCount += 1;
+  }
+  if (expected <= 0) return null;
+  const pct = (actual / expected) * 100;
+  const status =
+    pct >= 90 && pct <= 110 ? 'on-track' : pct > 110 ? 'over' : 'under';
+  return { pct, actual, expected, eligibleCount, status };
+}
+
+export interface BudgetBurnSample {
+  adId: string;
+  adName: string;
+  burnPct: number; // actual ÷ allocation × 100
+  allocation: number;
+  daysLeft: number; // whole flight-days remaining this month
+}
+
+/**
+ * §9 per-campaign budget-burn samples over §0.2-eligible, budgeted ads: how much
+ * of the month's allocation is already spent and how many flight-days remain.
+ * The engine fires "budget burned early" when burnPct ≥ a threshold AND daysLeft
+ * exceeds the rule's minDaysLeft — i.e. the budget is running out well before the
+ * flight does. Lifetime / cross-month / not-started ads are excluded by the same
+ * eligibility predicate as the pacing badge.
+ */
+export function computeBudgetBurnSamples(
+  ads: PacerAd[],
+  nowMs: number,
+  timeZone: string,
+): BudgetBurnSample[] {
+  const out: BudgetBurnSample[] = [];
+  for (const ad of ads) {
+    if (!isEligibleForLivePacing(ad, nowMs, timeZone)) continue;
+    const c = buildAdCalc(ad, nowMs, timeZone);
+    if (c.allocation <= 0 || c.actual == null) continue;
+    out.push({
+      adId: ad.id,
+      adName: ad.name,
+      burnPct: (c.actual / c.allocation) * 100,
+      allocation: c.allocation,
+      daysLeft: Math.max(0, c.days - c.daysElapsed),
+    });
+  }
+  return out;
 }
 
 /**

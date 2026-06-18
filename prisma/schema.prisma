@@ -1627,6 +1627,15 @@ model MetaAdsPacerAd {
   // surfaced for multi-month ads so the full date-range spend is visible; never
   // drives the month's pacing math.
   pacerRunSpend    String?
+  // §2a: the YYYY-MM the ad's FULL run was counted in (single-month straddler
+  // resolution). When set, the assigned month uses pacerRunSpend + allocation
+  // (full scope) and the ad contributes 0 to any other month. Server-managed
+  // via /resolve-cross-month; never written by autosave or the Meta sync.
+  fullRunAppliedToMonth String?
+  // §2b: JSON Record<YYYY-MM, number> — a lifetime ad's editable planned split
+  // across the months its flight touches. DISPLAY-ONLY (planned vs actual);
+  // never books a variance (§3 owns the over/under). Server-managed too.
+  lifetimeMonthSplit String?
 
   // Pacer-only date scoping: lets the user adjust "today" and "end" per ad
   // without affecting the Ad Planner flight dates.
@@ -1654,6 +1663,27 @@ model MetaAdsPacerAd {
   // metaEndDate is null for campaigns Meta reports with no stop_time.
   metaStartDate       String?
   metaEndDate         String?
+
+  // Google Ads sync (§8) — parallel to the Meta block above, reusing the same
+  // planner/pacer/reconciliation flow. `platform` tags the row's ad platform:
+  // null/"meta" = a Meta line (back-compat for every existing row), "google" =
+  // a Google campaign line. For Google lines `googleCampaignId` links to the
+  // Google Ads CAMPAIGN (the budget/pacing grain per §8 — never an ad group/ad);
+  // `googleChannelType` is the display-only rollup tag (Search/Display/Video/
+  // Shopping/PMax, PMax kept as its own group); googleEffectiveStatus/Start/End
+  // mirror the Meta equivalents. Spend syncs via metrics.cost_micros under the
+  // same server-managed rules as Meta (sync owns pacerActual, never allocation;
+  // pacerSyncedAt is shared across both platforms).
+  platform              String? // null | "meta" | "google"
+  googleCampaignId      String?
+  googleChannelType     String? // "Search" | "Display" | "Video" | "Shopping" | "PMax"
+  googleEffectiveStatus String?
+  googleStartDate       String?
+  googleEndDate         String?
+  // The campaign_budget resource name — multiple campaigns can share one budget,
+  // so the §8 "daily set" account roll-up dedupes on this (distinct budgets, not
+  // per-campaign rows) to avoid overstating the run-rate.
+  googleBudgetResourceName String?
   // Per-ad alert mute (Change 9): when true, the pacing-family scanners
   // (underspend/overpace, went-dark, flight-ending) skip this ad so a
   // known-acceptable case stops pinging. Workflow alerts are unaffected.
@@ -1781,6 +1811,39 @@ model NotificationPreference {
 
   @@unique([userId, type])
   @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────
+// Alert rules (§9) — config-driven monitoring engine
+// ─────────────────────────────────────────────────────
+
+// One row per alert definition, so thresholds tune without a redeploy. Every
+// rule is the same shape: a metric, a baseline, a fire condition, a tier. The
+// engine (src/lib/alerts) reads enabled rows and fires Notifications, reusing
+// their dedupe window for cooldown. Google-channel rules (channel='google',
+// phase 1/2) drop in as rows once the Google Ads API is connected (§8).
+model AlertRule {
+  id          String  @id @default(cuid())
+  key         String  @unique // stable slug for seeding/idempotency, e.g. "meta-account-pace"
+  name        String
+  description String?
+  channel     String  @default("meta") // meta | google
+  metric      String // e.g. account_monthly_pace | campaign_budget_burn | metrics.ctr
+  resource    String // account | campaign | keyword_view | asset_group | asset_group_asset
+  // FIXED | ROLLING_AVG_DEVIATION | PERIOD_OVER_PERIOD | CONSECUTIVE_DURATION
+  baselineType  String
+  baselineParams String @default("{}") // JSON, e.g. {"window":30,"deviationPct":25}
+  fireCondition  String @default("{}") // JSON, e.g. {"comparator":"outside","low":85,"high":110}
+  tier          String  @default("FYI") // URGENT | FYI
+  minVolumeGate Float? // skip below this data volume (e.g. min monthly spend target $)
+  cooldownHours Int     @default(20) // suppress re-fire while still true / within N hours
+  phase         Int     @default(1) // 1 = ships now | 2 = Merchant Center (deferred)
+  enabled       Boolean @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([enabled])
+  @@index([channel, enabled])
 }
 
 // ─────────────────────────────────────────────────────

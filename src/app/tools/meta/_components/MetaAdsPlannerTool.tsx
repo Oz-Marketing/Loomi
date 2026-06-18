@@ -9226,6 +9226,10 @@ interface ReconData {
   ytdVariance: number;
   ytdCarryover: number;
   ytdUnapplied: number;
+  // §4: lifetime drift incl. the in-progress live month (health gauge), and the
+  // settled months still carrying unapplied over/under (named in the UI).
+  ytdVarianceInclLive: number;
+  unappliedMonths: string[];
   appliedThisMonth: { base: number; added: number; total: number };
   // §5: individual ledger entries, newest first — powers both-ends provenance.
   applications: CarryoverApplication[];
@@ -9323,6 +9327,19 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
   const net = data?.ytdUnapplied ?? 0;
   const netReconciled = Math.abs(net) < 0.005;
   const canApply = !!data?.targetPeriod && !netReconciled;
+  // §4: the health-gauge total (lifetime drift incl. the in-progress live
+  // month, variance convention) — distinct from `net` (the settle-able queue).
+  const inclLive = data?.ytdVarianceInclLive ?? 0;
+  const inclLiveGauge = overUnder(inclLive);
+  // §4: name the settled months still carrying unapplied over/under.
+  const unappliedMonthsLabel = (data?.unappliedMonths ?? [])
+    .map((p) =>
+      new Date(Number(p.slice(0, 4)), Number(p.slice(5, 7)) - 1, 1).toLocaleDateString(
+        'en-US',
+        { month: 'short' },
+      ),
+    )
+    .join(', ');
 
   return (
     <div>
@@ -9399,8 +9416,8 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                 {netReconciled
                   ? 'No outstanding over/under across settled months.'
                   : net > 0
-                    ? `Underspent overall — apply to add ${fmt(net)} to ${data.targetPeriod ? fmtPeriodLong(data.targetPeriod) : 'the live month'}.`
-                    : `Overspent overall — apply to pull ${fmt(-net)} from ${data.targetPeriod ? fmtPeriodLong(data.targetPeriod) : 'the live month'}.`}
+                    ? `Underspent ${unappliedMonthsLabel ? `across ${unappliedMonthsLabel}` : 'across settled months'} — apply to add ${fmt(net)} to ${data.targetPeriod ? fmtPeriodLong(data.targetPeriod) : 'the live month'}.`
+                    : `Overspent ${unappliedMonthsLabel ? `across ${unappliedMonthsLabel}` : 'across settled months'} — apply to pull ${fmt(-net)} from ${data.targetPeriod ? fmtPeriodLong(data.targetPeriod) : 'the live month'}.`}
               </div>
               {data.appliedThisMonth.total !== 0 && data.targetPeriod && (
                 <div className="text-[11px] text-[var(--muted-foreground)] mt-2 flex items-center gap-2 flex-wrap">
@@ -9421,6 +9438,30 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                   </button>
                 </div>
               )}
+              {/* §4: health-gauge total — lifetime drift INCLUDING the
+                  in-progress live month. Deliberately distinct from the
+                  settle-able "net still to reconcile" above (which excludes the
+                  open month) so the two can't be confused: one is the action
+                  queue, this is the overall over/under reading. */}
+              <div className="mt-3 pt-3 border-t border-[var(--border)]">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                  Net variance · incl. live month
+                </div>
+                <div className="flex items-baseline gap-2 mt-0.5 flex-wrap">
+                  <span
+                    className="text-base font-semibold tabular-nums"
+                    style={{ color: inclLiveGauge.color }}
+                  >
+                    {inclLiveGauge.text}
+                  </span>
+                  <span className="text-[10px] text-[var(--muted-foreground)]">
+                    health gauge — total drift including{' '}
+                    {data.targetPeriod
+                      ? `${fmtPeriodLong(data.targetPeriod)} in progress`
+                      : 'the live month'}
+                  </span>
+                </div>
+              </div>
             </div>
             <div className="flex flex-col items-end gap-2">
               <div className="flex items-center rounded-lg border border-[var(--border)] bg-[var(--background)] p-1">

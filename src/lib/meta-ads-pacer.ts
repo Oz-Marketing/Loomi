@@ -824,6 +824,18 @@ export interface YearReconciliation {
   ytdVariance: number; // Σ variance over settled months before the target
   ytdCarryover: number; // Σ carryover over settled months before the target
   ytdUnapplied: number; // Σ unapplied over settled months before the target
+  /**
+   * §4 health gauge: lifetime drift INCLUDING the in-progress live month,
+   * measured against ORIGINAL (pre-carryover) targets. Distinct from
+   * ytdUnapplied (the settle-able action queue). Sign is variance convention:
+   * >0 overspent, <0 underspent. Intentionally swings with the open month.
+   */
+  ytdVarianceInclLive: number;
+  /**
+   * §4: settled months that still carry unapplied over/under (the ones summing
+   * into ytdUnapplied), so the UI can name them — "$X across Mar, Apr".
+   */
+  unappliedMonths: string[];
   appliedThisMonth: { base: number; added: number; total: number };
   /**
    * Every stored carryover application in scope (newest first) — powers the
@@ -879,6 +891,8 @@ export async function getYearReconciliation(
       ytdVariance: 0,
       ytdCarryover: 0,
       ytdUnapplied: 0,
+      ytdVarianceInclLive: 0,
+      unappliedMonths: [],
       appliedThisMonth: { base: 0, added: 0, total: 0 },
       applications: [],
     };
@@ -1025,6 +1039,24 @@ export async function getYearReconciliation(
   const ytdCarryover = settled.reduce((s, m) => s + m.carryover, 0);
   const ytdUnapplied = settled.reduce((s, m) => s + m.unapplied, 0);
 
+  // §4 health gauge: lifetime drift INCLUDING the in-progress live month,
+  // measured against ORIGINAL targets. `m.variance` is actual − (baseTarget +
+  // appliedIn); carryover applied into a month is internal reallocation, not
+  // real drift, so add `appliedIn` back to recover (baseActual − baseTarget).
+  // For settled months appliedIn is 0, so this matches their variance exactly.
+  // This number intentionally swings with the open month's in-progress under —
+  // it's the health gauge, NOT the settle-able action queue (ytdUnapplied).
+  const active = months.filter((m) => m.hasActual || m.hasTarget);
+  const ytdVarianceInclLive = active.reduce(
+    (s, m) => s + m.variance + m.appliedIn,
+    0,
+  );
+  // §4: settled months still carrying unapplied over/under — named in the UI so
+  // "net still to reconcile" is actionable ("$X across Mar, Apr").
+  const unappliedMonths = settled
+    .filter((m) => Math.abs(m.unapplied) >= 0.005)
+    .map((m) => m.period);
+
   let appliedBase = 0;
   let appliedAdded = 0;
   if (targetPeriod) {
@@ -1056,6 +1088,8 @@ export async function getYearReconciliation(
     ytdVariance,
     ytdCarryover,
     ytdUnapplied,
+    ytdVarianceInclLive,
+    unappliedMonths,
     appliedThisMonth: {
       base: appliedBase,
       added: appliedAdded,

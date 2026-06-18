@@ -778,11 +778,14 @@ export async function fetchYearSummary(
 
 export interface ReconAdVariance {
   name: string;
-  /** effectiveActual − effectiveTarget for the month ($0 for in-progress lifetime). */
+  /** What actually spent this calendar month (the slice). */
+  inMonthSpend: number;
+  /** What the over/under is billed on (full run for a billed-cross-month ad;
+   *  0 for an in-progress lifetime ad). */
+  billedActual: number;
+  /** billedActual − target — the ad's over/under contribution. */
   contribution: number;
-  klass: 'real' | 'timing-straddler' | 'timing-lifetime';
-  /** In-progress lifetime: spend done this month, held out of the over/under. */
-  heldOutSpend: number;
+  klass: 'real' | 'billed-cross-month' | 'lifetime-in-progress';
 }
 
 export interface ReconciliationMonth {
@@ -986,9 +989,10 @@ export async function getYearReconciliation(
     const list = adVarByPeriod.get(a.period) ?? [];
     list.push({
       name: a.name ?? '',
+      inMonthSpend: v.inMonthSpend,
+      billedActual: v.billedActual,
       contribution: v.contribution,
       klass: v.klass,
-      heldOutSpend: v.heldOutSpend,
     });
     adVarByPeriod.set(a.period, list);
     if (isLifetimeInProgress(a, reconNowMs, tz)) {

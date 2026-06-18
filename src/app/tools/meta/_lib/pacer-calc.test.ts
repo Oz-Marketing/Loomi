@@ -229,7 +229,7 @@ describe('isCrossMonthStraddler (§1)', () => {
     ).toBe(false);
   });
 
-  it('excludes a flagged straddler from live pacing (§0.2 un-stub)', () => {
+  it('no longer auto-excludes a cross-month daily ad from live pacing', () => {
     const straddler = mk({
       adStatus: 'Live',
       budgetType: 'Daily',
@@ -238,8 +238,11 @@ describe('isCrossMonthStraddler (§1)', () => {
       allocation: '80',
       pacerActual: '49.79',
     });
+    // The predicate still recognizes the cross-month flight, but eligibility no
+    // longer consults it (no auto-detect) — a mid-flight daily ad is paced on
+    // its own window (§7), not silently dropped.
     expect(isCrossMonthStraddler(straddler)).toBe(true);
-    expect(isEligibleForLivePacing(straddler, NOW, TZ)).toBe(false);
+    expect(isEligibleForLivePacing(straddler, NOW, TZ)).toBe(true);
   });
 });
 
@@ -289,36 +292,56 @@ describe('effectiveActual / effectiveTarget (§2)', () => {
   });
 });
 
-// Cross-month clarity — per-ad variance contribution + the real-vs-timing split
-// that powers the "this gap is just timing, not an over/under" callouts.
-describe('classifyAdVariance / decomposeMonthVariance (cross-month clarity)', () => {
-  it('a normal ad is real — contribution = actual − allocation', () => {
+// Cross-month split — inMonthSpend (what spent this calendar month) vs
+// billedActual (what the over/under counts). No auto-detection; cross-month is
+// the user's manual "Bill in one month" choice (fullRunAppliedToMonth).
+describe('classifyAdVariance / decomposeMonthVariance (cross-month split)', () => {
+  it('a normal ad is real — billed equals the in-month slice', () => {
     const v = classifyAdVariance(mk({ allocation: '100', pacerActual: '120' }), PERIOD, NOW, TZ);
     expect(v.klass).toBe('real');
+    expect(v.inMonthSpend).toBeCloseTo(120);
+    expect(v.billedActual).toBeCloseTo(120);
     expect(v.contribution).toBeCloseTo(20);
-    expect(v.heldOutSpend).toBe(0);
   });
 
-  it('an UNRESOLVED daily straddler is timing — its slice-vs-target shortfall', () => {
+  it('a daily cross-month ad is NOT auto-flagged — real, billed = slice', () => {
     const v = classifyAdVariance(
       mk({ flightStart: '2026-05-29', flightEnd: '2026-06-05', allocation: '80', pacerActual: '49.79' }),
       PERIOD,
       NOW,
       TZ,
     );
-    expect(v.klass).toBe('timing-straddler');
+    expect(v.klass).toBe('real');
+    expect(v.billedActual).toBeCloseTo(49.79);
     expect(v.contribution).toBeCloseTo(49.79 - 80);
   });
 
-  it('a straddler RESOLVED into its own month is real — full run vs full target', () => {
+  it('billed in one month → billed-cross-month: full run billed, slice spent here', () => {
     const v = classifyAdVariance(
       mk({
         period: '2026-06',
         fullRunAppliedToMonth: '2026-06',
-        flightStart: '2026-05-29',
-        flightEnd: '2026-06-05',
         allocation: '80',
-        pacerActual: '49.79',
+        pacerActual: '49.79', // in-month slice
+        pacerRunSpend: '79.91', // full run
+      }),
+      '2026-06',
+      NOW,
+      TZ,
+    );
+    expect(v.klass).toBe('billed-cross-month');
+    expect(v.inMonthSpend).toBeCloseTo(49.79);
+    expect(v.billedActual).toBeCloseTo(79.91);
+    expect(v.contribution).toBeCloseTo(79.91 - 80);
+  });
+
+  it('billed in one month but full run == slice → stays real (no cross-month gap)', () => {
+    const v = classifyAdVariance(
+      mk({
+        period: '2026-06',
+        fullRunAppliedToMonth: '2026-06',
+        allocation: '80',
+        pacerActual: '79.91',
         pacerRunSpend: '79.91',
       }),
       '2026-06',
@@ -326,29 +349,19 @@ describe('classifyAdVariance / decomposeMonthVariance (cross-month clarity)', ()
       TZ,
     );
     expect(v.klass).toBe('real');
-    expect(v.contribution).toBeCloseTo(79.91 - 80);
   });
 
-  it('a resolved straddler viewed in a DIFFERENT month contributes 0', () => {
-    const v = classifyAdVariance(
-      mk({ period: '2026-06', fullRunAppliedToMonth: '2026-06', allocation: '80', pacerActual: '49.79', pacerRunSpend: '79.91' }),
-      '2026-07',
-      NOW,
-      TZ,
-    );
-    expect(v.contribution).toBe(0);
-  });
-
-  it('an in-progress lifetime ad is timing-lifetime — $0 booked, spend held out', () => {
+  it('an in-progress lifetime ad → lifetime-in-progress: $0 billed, slice held out', () => {
     const v = classifyAdVariance(
       mk({ budgetType: 'Lifetime', adStatus: 'Live', allocation: '500', pacerActual: '180' }),
       PERIOD,
       NOW,
       TZ,
     );
-    expect(v.klass).toBe('timing-lifetime');
+    expect(v.klass).toBe('lifetime-in-progress');
+    expect(v.billedActual).toBe(0);
     expect(v.contribution).toBe(0);
-    expect(v.heldOutSpend).toBeCloseTo(180);
+    expect(v.inMonthSpend).toBeCloseTo(180);
   });
 
   it('a COMPLETED lifetime ad is real — its single variance books', () => {
@@ -362,18 +375,25 @@ describe('classifyAdVariance / decomposeMonthVariance (cross-month clarity)', ()
     expect(v.contribution).toBeCloseTo(20);
   });
 
-  it('decomposeMonthVariance splits real vs timing vs held-out lifetime', () => {
+  it('decomposeMonthVariance reconciles total-spent vs over/under basis + the gap', () => {
     const ads = [
-      mk({ allocation: '100', pacerActual: '120' }), // real +20
-      mk({ flightStart: '2026-05-29', flightEnd: '2026-06-05', allocation: '80', pacerActual: '49.79' }), // timing −30.21
-      mk({ budgetType: 'Lifetime', adStatus: 'Live', allocation: '500', pacerActual: '180' }), // held-out 180
+      mk({ allocation: '100', pacerActual: '120' }), // real: in 120 / billed 120
+      mk({
+        period: '2026-06',
+        fullRunAppliedToMonth: '2026-06',
+        allocation: '80',
+        pacerActual: '49.79',
+        pacerRunSpend: '79.91',
+      }), // billed-cross-month: in 49.79 / billed 79.91
+      mk({ budgetType: 'Lifetime', adStatus: 'Live', allocation: '500', pacerActual: '180' }), // lifetime in-progress: in 180 / billed 0
     ];
     const d = decomposeMonthVariance(ads, PERIOD, NOW, TZ);
-    expect(d.real).toBeCloseTo(20);
-    expect(d.timing).toBeCloseTo(49.79 - 80);
+    expect(d.totalInMonth).toBeCloseTo(120 + 49.79 + 180); // what spent this month
+    expect(d.overUnderActual).toBeCloseTo(120 + 79.91 + 0); // over/under basis
+    expect(d.billedElsewhere).toBeCloseTo(79.91 - 49.79); // billed cross-month
     expect(d.heldOutLifetime).toBeCloseTo(180);
-    expect(d.timingAdCount).toBe(1);
-    expect(d.heldOutAdCount).toBe(1);
+    expect(d.crossMonthCount).toBe(1);
+    expect(d.heldOutCount).toBe(1);
     expect(d.perAd).toHaveLength(3);
   });
 });

@@ -1793,6 +1793,39 @@ model NotificationPreference {
 }
 
 // ─────────────────────────────────────────────────────
+// Alert rules (§9) — config-driven monitoring engine
+// ─────────────────────────────────────────────────────
+
+// One row per alert definition, so thresholds tune without a redeploy. Every
+// rule is the same shape: a metric, a baseline, a fire condition, a tier. The
+// engine (src/lib/alerts) reads enabled rows and fires Notifications, reusing
+// their dedupe window for cooldown. Google-channel rules (channel='google',
+// phase 1/2) drop in as rows once the Google Ads API is connected (§8).
+model AlertRule {
+  id          String  @id @default(cuid())
+  key         String  @unique // stable slug for seeding/idempotency, e.g. "meta-account-pace"
+  name        String
+  description String?
+  channel     String  @default("meta") // meta | google
+  metric      String // e.g. account_monthly_pace | campaign_budget_burn | metrics.ctr
+  resource    String // account | campaign | keyword_view | asset_group | asset_group_asset
+  // FIXED | ROLLING_AVG_DEVIATION | PERIOD_OVER_PERIOD | CONSECUTIVE_DURATION
+  baselineType  String
+  baselineParams String @default("{}") // JSON, e.g. {"window":30,"deviationPct":25}
+  fireCondition  String @default("{}") // JSON, e.g. {"comparator":"outside","low":85,"high":110}
+  tier          String  @default("FYI") // URGENT | FYI
+  minVolumeGate Float? // skip below this data volume (e.g. min monthly spend target $)
+  cooldownHours Int     @default(20) // suppress re-fire while still true / within N hours
+  phase         Int     @default(1) // 1 = ships now | 2 = Merchant Center (deferred)
+  enabled       Boolean @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([enabled])
+  @@index([channel, enabled])
+}
+
+// ─────────────────────────────────────────────────────
 // App Settings (singleton key/value store)
 // ─────────────────────────────────────────────────────
 

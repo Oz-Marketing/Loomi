@@ -420,6 +420,85 @@ export function buildAdCalc(
   };
 }
 
+export interface AccountPaceResult {
+  pct: number; // Σ actual-to-date ÷ Σ expected-to-date × 100
+  actual: number; // Σ eligible actual-to-date
+  expected: number; // Σ eligible expected-to-date
+  eligibleCount: number;
+  status: 'on-track' | 'over' | 'under';
+}
+
+/**
+ * §7 live-month account pacing rollup over §0.2-eligible ads (live, started,
+ * daily — completed/lifetime/not-started/unresolved-straddler excluded). Each
+ * eligible ad is prorated against its OWN flight window (never the calendar
+ * month) and TOTAL SPEND is never the denominator.
+ *
+ * This is the SINGLE source of truth shared by the Pacer badge AND the §9 pace
+ * alert, so the two can never disagree (the §0.4 standing test). Returns null
+ * when nothing is eligible or there's no expected-to-date to pace against — an
+ * empty/not-yet-started account is not "under", it's simply not pacing.
+ */
+export function computeAccountPace(
+  ads: PacerAd[],
+  nowMs: number,
+  timeZone: string,
+): AccountPaceResult | null {
+  let expected = 0;
+  let actual = 0;
+  let eligibleCount = 0;
+  for (const ad of ads) {
+    if (!isEligibleForLivePacing(ad, nowMs, timeZone)) continue;
+    const c = buildAdCalc(ad, nowMs, timeZone);
+    if (c.target == null) continue; // un-budgeted — nothing to pace against
+    expected += c.days > 0 ? c.allocation * (c.daysElapsed / c.days) : 0;
+    actual += c.actual ?? 0;
+    eligibleCount += 1;
+  }
+  if (expected <= 0) return null;
+  const pct = (actual / expected) * 100;
+  const status =
+    pct >= 90 && pct <= 110 ? 'on-track' : pct > 110 ? 'over' : 'under';
+  return { pct, actual, expected, eligibleCount, status };
+}
+
+export interface BudgetBurnSample {
+  adId: string;
+  adName: string;
+  burnPct: number; // actual ÷ allocation × 100
+  allocation: number;
+  daysLeft: number; // whole flight-days remaining this month
+}
+
+/**
+ * §9 per-campaign budget-burn samples over §0.2-eligible, budgeted ads: how much
+ * of the month's allocation is already spent and how many flight-days remain.
+ * The engine fires "budget burned early" when burnPct ≥ a threshold AND daysLeft
+ * exceeds the rule's minDaysLeft — i.e. the budget is running out well before the
+ * flight does. Lifetime / cross-month / not-started ads are excluded by the same
+ * eligibility predicate as the pacing badge.
+ */
+export function computeBudgetBurnSamples(
+  ads: PacerAd[],
+  nowMs: number,
+  timeZone: string,
+): BudgetBurnSample[] {
+  const out: BudgetBurnSample[] = [];
+  for (const ad of ads) {
+    if (!isEligibleForLivePacing(ad, nowMs, timeZone)) continue;
+    const c = buildAdCalc(ad, nowMs, timeZone);
+    if (c.allocation <= 0 || c.actual == null) continue;
+    out.push({
+      adId: ad.id,
+      adName: ad.name,
+      burnPct: (c.actual / c.allocation) * 100,
+      allocation: c.allocation,
+      daysLeft: Math.max(0, c.days - c.daysElapsed),
+    });
+  }
+  return out;
+}
+
 /**
  * Allocation distribution for the Budget Calculator modal: spreads a total
  * across a set of ads using per-ad mode specs. "even" rows split the

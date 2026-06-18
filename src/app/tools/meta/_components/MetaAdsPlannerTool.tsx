@@ -68,7 +68,7 @@ import { CARRYOVER_THRESHOLD } from '../_lib/constants';
 import {
   buildAdCalc,
   buildPacerCalc,
-  isEligibleForLivePacing,
+  computeAccountPace,
   isLifetimeInProgress,
   isCrossMonthStraddler,
   effectiveActual,
@@ -8684,20 +8684,11 @@ function BudgetPacerPanel({
       return { pct, status, mode: 'final' };
     }
 
-    let expected = 0;
-    let actual = 0;
-    for (const ad of plan.ads) {
-      if (!isEligibleForLivePacing(ad, nowMs, plan.timeZone)) continue;
-      const c = buildAdCalc(ad, nowMs, plan.timeZone);
-      if (c.target == null) continue; // un-budgeted — nothing to pace against
-      expected += c.days > 0 ? c.allocation * (c.daysElapsed / c.days) : 0;
-      actual += c.actual ?? 0;
-    }
-    if (expected <= 0) return null;
-    const pct = (actual / expected) * 100;
-    const status =
-      pct >= 90 && pct <= 110 ? 'on-track' : pct > 110 ? 'over' : 'under';
-    return { pct, status, mode: 'pacing' };
+    // §7 live rollup — shared with the §9 pace alert so the badge and the alert
+    // can never disagree (computeAccountPace is the one implementation).
+    const pace = computeAccountPace(plan.ads, nowMs, plan.timeZone);
+    if (!pace) return null;
+    return { pct: pace.pct, status: pace.status, mode: 'pacing' };
   }, [plan, totals.actual]);
 
   // Auto-expand needs-attention rows ONCE per mount so the rep lands on

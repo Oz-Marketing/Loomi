@@ -78,6 +78,11 @@ export interface PacerAd {
   pacerSyncedAt: string | null;
   /** Full-run (all-time) spend across the ad set's whole flight; informational. */
   pacerRunSpend: string | null;
+  // §2a/§2b: server-persisted cross-month resolution (survives Meta re-sync).
+  // fullRunAppliedToMonth = the YYYY-MM the full run is counted in (single-month
+  // straddler). lifetimeMonthSplit = JSON planned per-month split (display-only).
+  fullRunAppliedToMonth: string | null;
+  lifetimeMonthSplit: string | null;
   // Actual run schedule from Meta (account-TZ YYYY-MM-DD). Server-managed;
   // the pacer clamps these to the pacing month. metaEndDate null = open-ended.
   metaStartDate: string | null;
@@ -94,7 +99,7 @@ export interface PacerPlan {
   baseBudgetGoal: string | null;
   addedBudgetGoal: string | null;
   // Per-account markup override (Account.markup). `null` → use the
-  // platform default (MARKUP constant in the calculator). Drives the
+  // platform default (the admin-configured agency markup). Drives the
   // gross↔actual conversion in the Budget Calculator's Client Budget mode.
   markup: number | null;
   ads: PacerAd[];

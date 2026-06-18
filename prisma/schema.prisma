@@ -1602,6 +1602,15 @@ model MetaAdsPacerAd {
   // surfaced for multi-month ads so the full date-range spend is visible; never
   // drives the month's pacing math.
   pacerRunSpend    String?
+  // §2a: the YYYY-MM the ad's FULL run was counted in (single-month straddler
+  // resolution). When set, the assigned month uses pacerRunSpend + allocation
+  // (full scope) and the ad contributes 0 to any other month. Server-managed
+  // via /resolve-cross-month; never written by autosave or the Meta sync.
+  fullRunAppliedToMonth String?
+  // §2b: JSON Record<YYYY-MM, number> — a lifetime ad's editable planned split
+  // across the months its flight touches. DISPLAY-ONLY (planned vs actual);
+  // never books a variance (§3 owns the over/under). Server-managed too.
+  lifetimeMonthSplit String?
 
   // Pacer-only date scoping: lets the user adjust "today" and "end" per ad
   // without affecting the Ad Planner flight dates.

@@ -2,13 +2,22 @@ import type { Session } from 'next-auth';
 import { prisma } from '@/lib/prisma';
 import { s3PublicUrl } from '@/lib/s3';
 import { resolveAccountTimeZone, zonedTodayIso } from '@/lib/timezone';
-// Gross→spend markup default (client gross × markup = spend target) + the
-// carryover threshold, shared with the planner so server and client agree.
+// Carryover threshold + active-status set, shared with the planner so server
+// and client agree.
 import {
-  MARKUP as DEFAULT_MARKUP,
   CARRYOVER_THRESHOLD,
   ACTIVE_STATUSES,
 } from '@/app/tools/meta/_lib/constants';
+// §0.1: the ONE markup resolution + spend-target formula (no hardcoded
+// literal); the agency default comes from admin settings (DB-backed).
+import {
+  accountMarginSetting,
+  effectiveSpendTarget,
+} from '@/app/tools/meta/_lib/markup';
+import { getGlobalDefaultMarkup } from '@/lib/services/markup';
+// §3: the ONE "lifetime ad still running" predicate, shared with the client so
+// the over/under base excludes the same ads everywhere.
+import { isLifetimeInProgress, effectiveActual } from '@/app/tools/meta/_lib/pacer-calc';
 import { writeAudit } from '@/lib/meta-ads-audit';
 
 function attachUrl<T extends { attachmentKey: string | null }>(entry: T): T & { attachmentUrl: string | null } {
@@ -93,7 +102,7 @@ export async function fetchPeriodPlan(planId: string, period: string) {
   // (Account.markup) and resolved pacing timezone alongside the period data.
   // The calculator needs markup to translate Client Budget inputs into actual
   // spend; the Pacer needs the timezone for its time-left math.
-  const [budget, ads, plan] = await Promise.all([
+  const [budget, ads, plan, globalDefaultMarkup] = await Promise.all([
     prisma.metaAdsPacerPeriodBudget.findUnique({
       where: { planId_period: { planId, period } },
     }),
@@ -113,21 +122,33 @@ export async function fetchPeriodPlan(planId: string, period: string) {
         },
       },
     }),
+    getGlobalDefaultMarkup(),
   ]);
+  // Resolve tz + "now" once so each ad can carry a §3 lifetime-in-progress flag
+  // computed against the account's clock (the same predicate the over/under
+  // base uses, so the client never re-derives it).
+  const tz = resolveAccountTimeZone(
+    plan?.account?.metaTimezone,
+    plan?.account?.timezone,
+  );
+  const nowMs = Date.now();
   return {
     baseBudgetGoal: budget?.baseBudgetGoal ?? null,
     addedBudgetGoal: budget?.addedBudgetGoal ?? null,
     // Opt-in carryover applied to each bucket's DERIVED spend target (Change 7).
     baseCarryover: budget?.baseCarryover ?? null,
     addedCarryover: budget?.addedCarryover ?? null,
-    markup: plan?.account?.markup ?? null,
+    // §0.1: resolved at this single boundary — Account.markup override, else
+    // the agency default — so every consumer (client + getPriorOverUnder) gets
+    // a concrete factor and never re-resolves or holds a literal.
+    markup: accountMarginSetting(plan?.account?.markup ?? null, globalDefaultMarkup),
     // Meta zone if cached, else a valid hand-entered zone, else the default.
-    timeZone: resolveAccountTimeZone(
-      plan?.account?.metaTimezone,
-      plan?.account?.timezone,
-    ),
+    timeZone: tz,
     ads: ads.map((ad) => ({
       ...ad,
+      // §3: lifetime ad still running — the Over/Under view excludes it from the
+      // settle-able base while it runs (it still shows in total spend).
+      lifetimeInProgress: isLifetimeInProgress(ad, nowMs, tz),
       activityLog: ad.activityLog.map(attachUrl),
     })),
   };
@@ -387,16 +408,20 @@ export async function getPriorOverUnder(
   const addedGoal = Number(view.addedBudgetGoal ?? 0);
   const clientBudget =
     (isNaN(baseGoal) ? 0 : baseGoal) + (isNaN(addedGoal) ? 0 : addedGoal);
-  const markup =
-    typeof view.markup === 'number' && view.markup > 0
-      ? view.markup
-      : DEFAULT_MARKUP;
-  const spendTarget = clientBudget * markup;
+  // view.markup is already the resolved factor (fetchPeriodPlan boundary, §0.1).
+  const spendTarget = effectiveSpendTarget(clientBudget, view.markup ?? 0);
+  // §2: a resolved straddler counts its full run in its own month.
   const actual = (view.ads ?? []).reduce(
-    (s: number, a: { pacerActual?: string | null }) => {
-      const n = Number(a.pacerActual ?? 0);
-      return s + (isNaN(n) ? 0 : n);
-    },
+    (
+      s: number,
+      a: {
+        period: string;
+        pacerActual?: string | null;
+        pacerRunSpend?: string | null;
+        allocation?: string | null;
+        fullRunAppliedToMonth?: string | null;
+      },
+    ) => s + effectiveActual(a),
     0,
   );
   const variance = actual - spendTarget;
@@ -572,15 +597,16 @@ export function accessibleAccountKeys(
 export async function fetchOverview(accountKeys: string[], period: string) {
   if (accountKeys.length === 0) return [];
 
-  const [accounts, plans] = await Promise.all([
+  const [accounts, plans, globalDefaultMarkup] = await Promise.all([
     prisma.account.findMany({
       where: { key: { in: accountKeys } },
-      select: { key: true, dealer: true },
+      select: { key: true, dealer: true, markup: true },
     }),
     prisma.metaAdsPacerPlan.findMany({
       where: { accountKey: { in: accountKeys } },
       select: { id: true, accountKey: true },
     }),
+    getGlobalDefaultMarkup(),
   ]);
 
   const planByKey = new Map(plans.map((p) => [p.accountKey, p.id]));
@@ -630,6 +656,8 @@ export async function fetchOverview(accountKeys: string[], period: string) {
       return {
         accountKey: acct.key,
         dealer: acct.dealer,
+        // §0.1: resolved per-account factor for the overview gross-up display.
+        markup: accountMarginSetting(acct.markup, globalDefaultMarkup),
         baseBudgetGoal: budget?.baseBudgetGoal ?? null,
         addedBudgetGoal: budget?.addedBudgetGoal ?? null,
         notesCount: noteCountByKey.get(acct.key) ?? 0,
@@ -674,19 +702,22 @@ export async function fetchYearSummary(
 
   if (accountKeys.length === 0) return periods.map(zero);
 
-  const plans = await prisma.metaAdsPacerPlan.findMany({
-    where: { accountKey: { in: accountKeys } },
-    select: { id: true, account: { select: { markup: true } } },
-  });
+  const [plans, globalDefaultMarkup] = await Promise.all([
+    prisma.metaAdsPacerPlan.findMany({
+      where: { accountKey: { in: accountKeys } },
+      select: { id: true, account: { select: { markup: true } } },
+    }),
+    getGlobalDefaultMarkup(),
+  ]);
   const planIds = plans.map((p) => p.id);
   if (planIds.length === 0) return periods.map(zero);
 
   // planId → effective markup (per-account override, else global default).
   const markupByPlan = new Map(
-    plans.map((p) => {
-      const m = p.account?.markup;
-      return [p.id, m != null && Number.isFinite(m) && m > 0 ? m : DEFAULT_MARKUP];
-    }),
+    plans.map((p) => [
+      p.id,
+      accountMarginSetting(p.account?.markup, globalDefaultMarkup),
+    ]),
   );
 
   const [budgets, ads] = await Promise.all([
@@ -711,11 +742,11 @@ export async function fetchYearSummary(
     const base = Number(b.baseBudgetGoal ?? 0);
     const added = Number(b.addedBudgetGoal ?? 0);
     const gross = (isNaN(base) ? 0 : base) + (isNaN(added) ? 0 : added);
-    const markup = markupByPlan.get(b.planId) ?? DEFAULT_MARKUP;
+    const markup = markupByPlan.get(b.planId) ?? globalDefaultMarkup;
     grossByPeriod.set(b.period, (grossByPeriod.get(b.period) ?? 0) + gross);
     targetByPeriod.set(
       b.period,
-      (targetByPeriod.get(b.period) ?? 0) + gross * markup,
+      (targetByPeriod.get(b.period) ?? 0) + effectiveSpendTarget(gross, markup),
     );
   }
 
@@ -761,6 +792,27 @@ export interface ReconciliationMonth {
   appliedOut: number; // Σ ledger amount sourced FROM this month (consumed)
   unapplied: number; // carryover − appliedOut (still reconcilable)
   appliedIn: number; // Σ ledger amount applied INTO this month
+  /**
+   * §3: this month has ≥1 LIFETIME ad still running — excluded from the
+   * over/under base (its variance books once when the run completes). Drives
+   * the 'lifetime · in progress' badge and explains why, for the live month,
+   * total spend can differ from the settle-able over/under.
+   */
+  hasLifetimeInProgress: boolean;
+}
+
+/**
+ * One stored carryover ledger application (§5), surfaced to the client so the
+ * Reconciliation table can show both-ends provenance (source → target) and a
+ * dated history rather than just aggregate sums.
+ */
+export interface CarryoverApplication {
+  id: string;
+  sourceMonth: string; // YYYY-MM the over/under came from
+  targetMonth: string; // YYYY-MM it was applied into
+  bucket: 'base' | 'added';
+  amount: number; // signed; actual-spend dollars
+  appliedAt: string; // ISO timestamp
 }
 
 export interface YearReconciliation {
@@ -773,6 +825,11 @@ export interface YearReconciliation {
   ytdCarryover: number; // Σ carryover over settled months before the target
   ytdUnapplied: number; // Σ unapplied over settled months before the target
   appliedThisMonth: { base: number; added: number; total: number };
+  /**
+   * Every stored carryover application in scope (newest first) — powers the
+   * both-ends indicators (source → target / target ← source) and dated history.
+   */
+  applications: CarryoverApplication[];
 }
 
 /**
@@ -794,16 +851,14 @@ export async function getYearReconciliation(
 ): Promise<YearReconciliation> {
   const plan = await getOrCreatePlan(accountKey);
   const tz = await accountTimeZone(accountKey);
-  const account = await prisma.account.findUnique({
-    where: { key: accountKey },
-    select: { markup: true },
-  });
-  const markup =
-    account?.markup != null &&
-    Number.isFinite(account.markup) &&
-    account.markup > 0
-      ? account.markup
-      : DEFAULT_MARKUP;
+  const [account, globalDefaultMarkup] = await Promise.all([
+    prisma.account.findUnique({
+      where: { key: accountKey },
+      select: { markup: true },
+    }),
+    getGlobalDefaultMarkup(),
+  ]);
+  const markup = accountMarginSetting(account?.markup, globalDefaultMarkup);
 
   const curPeriod = zonedTodayIso(Date.now(), tz).slice(0, 7);
   const curYear = Number(curPeriod.slice(0, 4));
@@ -825,6 +880,7 @@ export async function getYearReconciliation(
       ytdCarryover: 0,
       ytdUnapplied: 0,
       appliedThisMonth: { base: 0, added: 0, total: 0 },
+      applications: [],
     };
   }
 
@@ -840,24 +896,62 @@ export async function getYearReconciliation(
     }),
     prisma.metaAdsPacerAd.findMany({
       where: { planId: plan.id, period: { in: periods } },
-      select: { period: true, pacerActual: true },
+      select: {
+        period: true,
+        pacerActual: true,
+        pacerRunSpend: true,
+        fullRunAppliedToMonth: true,
+        allocation: true,
+        budgetType: true,
+        adStatus: true,
+        metaStartDate: true,
+        liveDate: true,
+        flightStart: true,
+        metaEndDate: true,
+        flightEnd: true,
+      },
     }),
     prisma.metaAdsPacerCarryoverApplication.findMany({
       where: {
         planId: plan.id,
         OR: [{ sourceMonth: { in: periods } }, { targetMonth: { in: periods } }],
       },
-      select: { bucket: true, sourceMonth: true, targetMonth: true, amount: true },
+      select: {
+        id: true,
+        bucket: true,
+        sourceMonth: true,
+        targetMonth: true,
+        amount: true,
+        appliedAt: true,
+      },
     }),
   ]);
 
   const budgetByPeriod = new Map(budgets.map((b) => [b.period, b]));
   const adCountByPeriod = new Map<string, number>();
-  const actualByPeriod = new Map<string, number>();
+  const actualByPeriod = new Map<string, number>(); // Σ all pacerActual (total spend)
+  // §3: per-period sums for LIFETIME ads still in progress — excluded from the
+  // settle-able over/under base (both actual slice AND allocation) so a running
+  // lifetime ad contributes $0 variance; it still counts toward total spend and
+  // books its single variance once it completes (re-enters the base naturally).
+  const ipLifeActualByPeriod = new Map<string, number>();
+  const ipLifeAllocByPeriod = new Map<string, number>();
+  const ipLifePeriods = new Set<string>();
+  const reconNowMs = Date.now();
   for (const a of adRows) {
     adCountByPeriod.set(a.period, (adCountByPeriod.get(a.period) ?? 0) + 1);
-    const n = Number(a.pacerActual ?? 0);
-    if (!isNaN(n)) actualByPeriod.set(a.period, (actualByPeriod.get(a.period) ?? 0) + n);
+    // §2: a resolved cross-month straddler contributes its FULL run in its own
+    // month (effectiveActual); otherwise its month slice. Never NaN.
+    const n = effectiveActual(a);
+    actualByPeriod.set(a.period, (actualByPeriod.get(a.period) ?? 0) + n);
+    if (isLifetimeInProgress(a, reconNowMs, tz)) {
+      ipLifePeriods.add(a.period);
+      ipLifeActualByPeriod.set(a.period, (ipLifeActualByPeriod.get(a.period) ?? 0) + n);
+      const alloc = Number(a.allocation ?? 0);
+      if (!isNaN(alloc)) {
+        ipLifeAllocByPeriod.set(a.period, (ipLifeAllocByPeriod.get(a.period) ?? 0) + alloc);
+      }
+    }
   }
   const appliedOutByPeriod = new Map<string, number>();
   const appliedInByPeriod = new Map<string, number>();
@@ -883,13 +977,21 @@ export async function getYearReconciliation(
         : 0;
     const hasActual = tracked ? actualByPeriod.has(period) : isBackfilled;
     const appliedIn = appliedInByPeriod.get(period) ?? 0;
-    const spendTarget = clientBudget * markup;
+    const spendTarget = effectiveSpendTarget(clientBudget, markup);
+    // §3: exclude any LIFETIME ad still in progress from the SETTLE-ABLE base —
+    // both its actual slice and its allocation — so it contributes $0 to the
+    // over/under while running (it books its single variance on completion).
+    // `actual`/`spendTarget` displayed stay the honest totals; only `variance`
+    // uses the base. Settled months have no in-progress lifetime ad, so for them
+    // base == total and nothing changes.
+    const hasLifetimeInProgress = ipLifePeriods.has(period);
+    const baseActual = actual - (ipLifeActualByPeriod.get(period) ?? 0);
+    const baseTarget = spendTarget - (ipLifeAllocByPeriod.get(period) ?? 0);
     // The live month's target includes carryover applied INTO it, mirroring the
     // Pacer's adjusted target (base × markup + carryover). Past months never
-    // receive carryover (appliedIn = 0), so theirs is unchanged — and their
-    // over/under stays measured against their own original target.
+    // receive carryover (appliedIn = 0), so theirs is unchanged.
     const adjustedSpendTarget = spendTarget + appliedIn;
-    const variance = actual - adjustedSpendTarget;
+    const variance = baseActual - (baseTarget + appliedIn);
     const carryover = -variance;
     const appliedOut = appliedOutByPeriod.get(period) ?? 0;
     return {
@@ -908,6 +1010,7 @@ export async function getYearReconciliation(
       appliedOut,
       unapplied: carryover - appliedOut,
       appliedIn,
+      hasLifetimeInProgress,
     };
   });
 
@@ -934,6 +1037,17 @@ export async function getYearReconciliation(
     }
   }
 
+  const applications: CarryoverApplication[] = ledger
+    .map((e) => ({
+      id: e.id,
+      sourceMonth: e.sourceMonth,
+      targetMonth: e.targetMonth,
+      bucket: (e.bucket === 'added' ? 'added' : 'base') as 'base' | 'added',
+      amount: Number(e.amount ?? 0) || 0,
+      appliedAt: e.appliedAt.toISOString(),
+    }))
+    .sort((a, b) => (a.appliedAt < b.appliedAt ? 1 : -1)); // newest first
+
   return {
     year,
     markup,
@@ -947,6 +1061,7 @@ export async function getYearReconciliation(
       added: appliedAdded,
       total: appliedBase + appliedAdded,
     },
+    applications,
   };
 }
 

@@ -5,6 +5,8 @@ import {
   isCrossMonthStraddler,
   effectiveActual,
   effectiveTarget,
+  classifyAdVariance,
+  decomposeMonthVariance,
 } from './pacer-calc';
 import type { PacerAd } from './types';
 
@@ -269,5 +271,94 @@ describe('effectiveActual / effectiveTarget (§2)', () => {
     });
     expect(effectiveActual(ad, '2026-07')).toBe(0);
     expect(effectiveTarget(ad, '2026-07')).toBe(0);
+  });
+});
+
+// Cross-month clarity — per-ad variance contribution + the real-vs-timing split
+// that powers the "this gap is just timing, not an over/under" callouts.
+describe('classifyAdVariance / decomposeMonthVariance (cross-month clarity)', () => {
+  it('a normal ad is real — contribution = actual − allocation', () => {
+    const v = classifyAdVariance(mk({ allocation: '100', pacerActual: '120' }), PERIOD, NOW, TZ);
+    expect(v.klass).toBe('real');
+    expect(v.contribution).toBeCloseTo(20);
+    expect(v.heldOutSpend).toBe(0);
+  });
+
+  it('an UNRESOLVED daily straddler is timing — its slice-vs-target shortfall', () => {
+    const v = classifyAdVariance(
+      mk({ flightStart: '2026-05-29', flightEnd: '2026-06-05', allocation: '80', pacerActual: '49.79' }),
+      PERIOD,
+      NOW,
+      TZ,
+    );
+    expect(v.klass).toBe('timing-straddler');
+    expect(v.contribution).toBeCloseTo(49.79 - 80);
+  });
+
+  it('a straddler RESOLVED into its own month is real — full run vs full target', () => {
+    const v = classifyAdVariance(
+      mk({
+        period: '2026-06',
+        fullRunAppliedToMonth: '2026-06',
+        flightStart: '2026-05-29',
+        flightEnd: '2026-06-05',
+        allocation: '80',
+        pacerActual: '49.79',
+        pacerRunSpend: '79.91',
+      }),
+      '2026-06',
+      NOW,
+      TZ,
+    );
+    expect(v.klass).toBe('real');
+    expect(v.contribution).toBeCloseTo(79.91 - 80);
+  });
+
+  it('a resolved straddler viewed in a DIFFERENT month contributes 0', () => {
+    const v = classifyAdVariance(
+      mk({ period: '2026-06', fullRunAppliedToMonth: '2026-06', allocation: '80', pacerActual: '49.79', pacerRunSpend: '79.91' }),
+      '2026-07',
+      NOW,
+      TZ,
+    );
+    expect(v.contribution).toBe(0);
+  });
+
+  it('an in-progress lifetime ad is timing-lifetime — $0 booked, spend held out', () => {
+    const v = classifyAdVariance(
+      mk({ budgetType: 'Lifetime', adStatus: 'Live', allocation: '500', pacerActual: '180' }),
+      PERIOD,
+      NOW,
+      TZ,
+    );
+    expect(v.klass).toBe('timing-lifetime');
+    expect(v.contribution).toBe(0);
+    expect(v.heldOutSpend).toBeCloseTo(180);
+  });
+
+  it('a COMPLETED lifetime ad is real — its single variance books', () => {
+    const v = classifyAdVariance(
+      mk({ budgetType: 'Lifetime', adStatus: 'Completed Run', allocation: '500', pacerActual: '520' }),
+      PERIOD,
+      NOW,
+      TZ,
+    );
+    expect(v.klass).toBe('real');
+    expect(v.contribution).toBeCloseTo(20);
+  });
+
+  it('decomposeMonthVariance splits real vs timing vs held-out lifetime', () => {
+    const ads = [
+      mk({ allocation: '100', pacerActual: '120' }), // real +20
+      mk({ flightStart: '2026-05-29', flightEnd: '2026-06-05', allocation: '80', pacerActual: '49.79' }), // timing −30.21
+      mk({ budgetType: 'Lifetime', adStatus: 'Live', allocation: '500', pacerActual: '180' }), // held-out 180
+    ];
+    const d = decomposeMonthVariance(ads, PERIOD, NOW, TZ);
+    expect(d.real).toBeCloseTo(20);
+    expect(d.timing).toBeCloseTo(49.79 - 80);
+    expect(d.heldOutLifetime).toBeCloseTo(180);
+    expect(d.timingAdCount).toBe(1);
+    expect(d.heldOutAdCount).toBe(1);
+    expect(d.perAd).toHaveLength(3);
   });
 });

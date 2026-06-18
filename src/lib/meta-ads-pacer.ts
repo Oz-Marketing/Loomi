@@ -17,7 +17,11 @@ import {
 import { getGlobalDefaultMarkup } from '@/lib/services/markup';
 // §3: the ONE "lifetime ad still running" predicate, shared with the client so
 // the over/under base excludes the same ads everywhere.
-import { isLifetimeInProgress, effectiveActual } from '@/app/tools/meta/_lib/pacer-calc';
+import {
+  isLifetimeInProgress,
+  effectiveActual,
+  classifyAdVariance,
+} from '@/app/tools/meta/_lib/pacer-calc';
 import { writeAudit } from '@/lib/meta-ads-audit';
 
 function attachUrl<T extends { attachmentKey: string | null }>(entry: T): T & { attachmentUrl: string | null } {
@@ -149,6 +153,10 @@ export async function fetchPeriodPlan(planId: string, period: string) {
       // §3: lifetime ad still running — the Over/Under view excludes it from the
       // settle-able base while it runs (it still shows in total spend).
       lifetimeInProgress: isLifetimeInProgress(ad, nowMs, tz),
+      // Cross-month clarity: this ad's over/under contribution + WHY it differs
+      // from plan (real vs cross-month timing). Computed here so the Pacer card,
+      // the Over/Under page, and reconciliation all agree (§0.4).
+      variance: classifyAdVariance(ad, period, nowMs, tz),
       activityLog: ad.activityLog.map(attachUrl),
     })),
   };
@@ -768,6 +776,15 @@ export async function fetchYearSummary(
 
 // ─── Year reconciliation (Phase 2b) ─────────────────────────────────────────
 
+export interface ReconAdVariance {
+  name: string;
+  /** effectiveActual − effectiveTarget for the month ($0 for in-progress lifetime). */
+  contribution: number;
+  klass: 'real' | 'timing-straddler' | 'timing-lifetime';
+  /** In-progress lifetime: spend done this month, held out of the over/under. */
+  heldOutSpend: number;
+}
+
 export interface ReconciliationMonth {
   period: string; // YYYY-MM
   state: MonthState;
@@ -799,6 +816,9 @@ export interface ReconciliationMonth {
    * total spend can differ from the settle-able over/under.
    */
   hasLifetimeInProgress: boolean;
+  /** CM4: per-ad over/under contributions for this month — powers the
+   *  Reconciliation row drill-down (which ads drove the variance). */
+  ads: ReconAdVariance[];
 }
 
 /**
@@ -912,6 +932,7 @@ export async function getYearReconciliation(
       where: { planId: plan.id, period: { in: periods } },
       select: {
         period: true,
+        name: true,
         pacerActual: true,
         pacerRunSpend: true,
         fullRunAppliedToMonth: true,
@@ -951,6 +972,9 @@ export async function getYearReconciliation(
   const ipLifeActualByPeriod = new Map<string, number>();
   const ipLifeAllocByPeriod = new Map<string, number>();
   const ipLifePeriods = new Set<string>();
+  // CM4: per-ad over/under contribution + timing class, grouped by month, for
+  // the Reconciliation row drill-down (same classifier the Over/Under page uses).
+  const adVarByPeriod = new Map<string, ReconAdVariance[]>();
   const reconNowMs = Date.now();
   for (const a of adRows) {
     adCountByPeriod.set(a.period, (adCountByPeriod.get(a.period) ?? 0) + 1);
@@ -958,6 +982,15 @@ export async function getYearReconciliation(
     // month (effectiveActual); otherwise its month slice. Never NaN.
     const n = effectiveActual(a);
     actualByPeriod.set(a.period, (actualByPeriod.get(a.period) ?? 0) + n);
+    const v = classifyAdVariance(a, a.period, reconNowMs, tz);
+    const list = adVarByPeriod.get(a.period) ?? [];
+    list.push({
+      name: a.name ?? '',
+      contribution: v.contribution,
+      klass: v.klass,
+      heldOutSpend: v.heldOutSpend,
+    });
+    adVarByPeriod.set(a.period, list);
     if (isLifetimeInProgress(a, reconNowMs, tz)) {
       ipLifePeriods.add(a.period);
       ipLifeActualByPeriod.set(a.period, (ipLifeActualByPeriod.get(a.period) ?? 0) + n);
@@ -1025,6 +1058,7 @@ export async function getYearReconciliation(
       unapplied: carryover - appliedOut,
       appliedIn,
       hasLifetimeInProgress,
+      ads: adVarByPeriod.get(period) ?? [],
     };
   });
 

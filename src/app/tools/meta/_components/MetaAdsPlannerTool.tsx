@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  Fragment,
   useCallback,
   useContext,
   useEffect,
@@ -7370,6 +7371,14 @@ function PacerRow({
   // predicate returns false, so the §1 'Cross-month' block/chip vanishes and
   // this resolved state takes over.
   const resolvedFullRun = ad.fullRunAppliedToMonth != null;
+  // CM2: does the raw flight cross a calendar-month boundary? The Scenario A
+  // chooser is offered whenever this is true — not only when isCrossMonthStraddler
+  // auto-flags a materially short slice — so the user can apply it deliberately.
+  // `crossMonth` just adds the "variance expected" emphasis on top.
+  const cmRawStart = ad.metaStartDate ?? ad.liveDate ?? ad.flightStart;
+  const cmRawEnd = ad.metaEndDate ?? ad.flightEnd;
+  const spansMultipleMonths =
+    !!cmRawStart && !!cmRawEnd && cmRawStart.slice(0, 7) !== cmRawEnd.slice(0, 7);
 
   // Status indicator color — pulled from the same map AdStatusPill uses
   // so the dot matches the status the user sees on the planner page.
@@ -7850,7 +7859,11 @@ function PacerRow({
         </Field>
       </div>
 
-      {crossMonth && (
+      {/* CM2 — Scenario A chooser: a daily ad whose flight crosses a month
+          boundary. Offered whenever it spans 2+ months (apply it deliberately),
+          with the "variance expected" emphasis when we auto-detect a short
+          in-month slice. Lifetime ads use Scenario B (the split block below). */}
+      {!isLifetime && spansMultipleMonths && !resolvedFullRun && (
         <div
           className="mt-3 mb-3 rounded-lg border px-3 py-2.5"
           style={{
@@ -7864,7 +7877,9 @@ function PacerRow({
                 className="text-[10px] font-bold uppercase tracking-wider mb-1"
                 style={{ color: '#38bdf8' }}
               >
-                Cross-month — variance expected
+                {crossMonth
+                  ? 'Cross-month — variance expected'
+                  : 'Cross-month · bill in one month?'}
               </div>
               <div className="text-[11px] text-[var(--foreground)] leading-snug">
                 {(() => {
@@ -7883,10 +7898,19 @@ function PacerRow({
                   const rawEnd = ad.metaEndDate ?? ad.flightEnd;
                   return (
                     <>
-                      In-month slice{' '}
-                      <span className="font-semibold">{fmt(calc.spent)}</span> is
-                      only part of the run · spans{' '}
-                      {rawStart ? fmtDate(rawStart) : '—'} –{' '}
+                      {crossMonth ? (
+                        <>
+                          In-month slice{' '}
+                          <span className="font-semibold">{fmt(calc.spent)}</span>{' '}
+                          is only part of the run ·{' '}
+                        </>
+                      ) : (
+                        <>
+                          Flight crosses a month boundary — bill the whole budget
+                          in one month? ·{' '}
+                        </>
+                      )}
+                      spans {rawStart ? fmtDate(rawStart) : '—'} –{' '}
                       {rawEnd ? fmtDate(rawEnd) : '—'}.{' '}
                       <span className="font-semibold">
                         Full run {fmt(run)} / {fmt(target)}
@@ -7904,7 +7928,7 @@ function PacerRow({
               type="button"
               onClick={() => onResolveCrossMonth('apply_full_run')}
               disabled={readOnly}
-              title="Count this ad's full run in its own month — the over/under then compares the full run to the full target."
+              title="Scenario A — count this ad's full run in its own month; the over/under then compares the full run to the full target, and the other month it touched contributes $0."
               className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/10 px-2.5 py-1 text-[11px] font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/20 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               Count full run in {fmtPeriodLong(ad.period)}
@@ -7976,9 +8000,12 @@ function PacerRow({
             return (
               <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-2.5 flex items-center justify-between gap-3 flex-wrap">
                 <div className="text-[11px] text-[var(--muted-foreground)] min-w-0">
-                  Lifetime flight spans {months.length} months. Plan an intended
-                  per-month split — reference only; the variance still books once
-                  on completion.
+                  <span className="font-semibold" style={{ color: COLORS.lifetime }}>
+                    Cross-month · lifetime (Scenario B).
+                  </span>{' '}
+                  Spans {months.length} months — its full variance books when the
+                  run completes; monthly spend until then is just timing, not an
+                  over/under. Optionally plan a per-month split (reference only).
                 </div>
                 <button
                   type="button"
@@ -9200,6 +9227,13 @@ interface ReconMonth {
   // §3: month has a lifetime ad still running — excluded from the over/under
   // base (books once on completion); drives the 'lifetime · in progress' badge.
   hasLifetimeInProgress: boolean;
+  // CM4: per-ad over/under contributions for this month — the row drill-down.
+  ads?: {
+    name: string;
+    contribution: number;
+    klass: 'real' | 'timing-straddler' | 'timing-lifetime';
+    heldOutSpend: number;
+  }[];
 }
 interface CarryoverApplication {
   id: string;
@@ -9243,6 +9277,8 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
   const [bucket, setBucket] = useState<'base' | 'added'>('base');
   const [backfilling, setBackfilling] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // CM4: which month rows are expanded to their per-ad variance breakdown.
+  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
 
   const load = useCallback(() => {
     setData(null);
@@ -9519,15 +9555,35 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                   const needsTarget = m.isBackfilled && !m.hasTarget;
                   const applied = Math.abs(m.appliedOut) >= 0.005;
                   const ou = overUnder(m.variance);
+                  const hasAdDetail = (m.ads?.length ?? 0) > 0;
+                  const expanded = expandedMonths.has(m.period);
                   return (
+                    <Fragment key={m.period}>
                     <tr
-                      key={m.period}
                       className={`border-b border-[var(--border)] last:border-0 ${
                         isLive ? 'bg-[var(--primary)]/5' : ''
                       }`}
                     >
                       <td className="px-3 py-2.5">
                         <div className="font-semibold text-[var(--foreground)] flex items-center gap-2">
+                          {hasAdDetail && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedMonths((s) => {
+                                  const next = new Set(s);
+                                  if (next.has(m.period)) next.delete(m.period);
+                                  else next.add(m.period);
+                                  return next;
+                                })
+                              }
+                              aria-label={expanded ? 'Hide ad breakdown' : 'Show ad breakdown'}
+                              className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                              style={{ transform: expanded ? 'rotate(90deg)' : 'none' }}
+                            >
+                              <ChevronRightIcon className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           {fmtPeriodLong(m.period)}
                           {isLive && (
                             <span className="text-[9px] font-medium uppercase tracking-wider rounded px-1.5 py-0.5 bg-[var(--primary)]/15 text-[var(--primary)]">
@@ -9700,6 +9756,66 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                         )}
                       </td>
                     </tr>
+                    {expanded && hasAdDetail && (
+                      <tr className={isLive ? 'bg-[var(--primary)]/5' : ''}>
+                        <td colSpan={5} className="px-3 pb-3 pt-0">
+                          <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)]/20 overflow-hidden">
+                            <div className="px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-[var(--muted-foreground)] border-b border-[var(--border)]">
+                              Variance by ad
+                            </div>
+                            <div className="divide-y divide-[var(--border)]/60">
+                              {(m.ads ?? []).map((av, i) => {
+                                const amtColor =
+                                  av.klass === 'timing-lifetime'
+                                    ? COLORS.lifetime
+                                    : av.klass === 'timing-straddler'
+                                      ? '#38bdf8'
+                                      : overUnder(av.contribution).color;
+                                return (
+                                  <div
+                                    key={`${m.period}-${i}`}
+                                    className="flex items-center justify-between gap-3 px-3 py-1.5"
+                                  >
+                                    <div className="min-w-0 flex items-center gap-2">
+                                      <span className="text-[11px] text-[var(--foreground)] truncate">
+                                        {av.name || 'Untitled ad'}
+                                      </span>
+                                      {av.klass === 'timing-straddler' && (
+                                        <span
+                                          className="text-[9px] font-semibold flex-shrink-0"
+                                          style={{ color: '#38bdf8' }}
+                                          title="Cross-month timing — the rest of this run spends in the other month, not a real over/under."
+                                        >
+                                          cross-month timing
+                                        </span>
+                                      )}
+                                      {av.klass === 'timing-lifetime' && (
+                                        <span
+                                          className="text-[9px] font-semibold flex-shrink-0"
+                                          style={{ color: COLORS.lifetime }}
+                                          title="Lifetime ad still running — its spend is held out of the over/under until the run completes."
+                                        >
+                                          lifetime · books on completion
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span
+                                      className="text-[11px] font-semibold tabular-nums flex-shrink-0"
+                                      style={{ color: amtColor }}
+                                    >
+                                      {av.klass === 'timing-lifetime'
+                                        ? `${fmt(av.heldOutSpend)} held`
+                                        : `${av.contribution >= 0 ? '+' : '−'}${fmt(Math.abs(av.contribution))}`}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -9745,6 +9861,13 @@ interface MonthAd {
   // §2a: the YYYY-MM the ad's full run was counted in (resolved straddler), or
   // null. Drives the 'full run → applied to [month]' badge on the row.
   fullRunAppliedToMonth: string | null;
+  // Cross-month clarity: this ad's over/under contribution + WHY it differs from
+  // plan. Computed server-side (classifyAdVariance) so every surface agrees.
+  variance?: {
+    contribution: number;
+    klass: 'real' | 'timing-straddler' | 'timing-lifetime';
+    heldOutSpend: number;
+  };
 }
 
 interface MonthPlanData {
@@ -9945,6 +10068,20 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
   // Variance is measured on the settle-able base (lifetime-in-progress excluded).
   const variance = baseActual - shouldHaveSpent;
 
+  // Cross-month clarity: how much of the variance is just TIMING — unresolved
+  // straddlers whose slice-shortfall catches up in the other month — vs a real
+  // over/under. real = headline − timing so the two reconcile to the number
+  // shown. (Held-out in-progress lifetime spend is already out of `variance`;
+  // it's surfaced in its own note below.)
+  const timingStraddler = allAds.reduce(
+    (s, a) => s + (a.variance?.klass === 'timing-straddler' ? a.variance.contribution : 0),
+    0,
+  );
+  const timingStraddlerCount = allAds.filter(
+    (a) => a.variance?.klass === 'timing-straddler',
+  ).length;
+  const realOverUnder = variance - timingStraddler;
+
   const varianceColor = (v: number) =>
     Math.abs(v) < 0.005
       ? COLORS.success
@@ -10054,11 +10191,45 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                                 · full run → {fmtPeriodLong(ad.fullRunAppliedToMonth)}
                               </span>
                             )}
+                            {ad.variance?.klass === 'timing-straddler' && (
+                              <span
+                                className="ml-1 font-semibold"
+                                style={{ color: '#38bdf8' }}
+                                title="Only part of this ad's run landed in this month, so its slice-vs-target shortfall is cross-month timing — not a real under. Use 'Count full run in [month]' on the pacer card to bill it whole in one month."
+                              >
+                                · cross-month timing
+                              </span>
+                            )}
                           </div>
                         )}
                       </div>
-                      <div className="text-sm font-semibold text-[var(--foreground)] tabular-nums whitespace-nowrap">
-                        {fmt(ad.actual)}
+                      <div className="text-right whitespace-nowrap">
+                        <div className="text-sm font-semibold text-[var(--foreground)] tabular-nums">
+                          {fmt(ad.actual)}
+                        </div>
+                        {ad.id !== 'aggregate' &&
+                          ad.variance &&
+                          ad.variance.klass !== 'timing-lifetime' &&
+                          Math.abs(ad.variance.contribution) >= 0.005 && (
+                            <div
+                              className="text-[9px] font-semibold tabular-nums leading-tight"
+                              style={{
+                                color:
+                                  ad.variance.klass === 'timing-straddler'
+                                    ? '#38bdf8'
+                                    : varianceColor(ad.variance.contribution),
+                              }}
+                              title={
+                                ad.variance.klass === 'timing-straddler'
+                                  ? 'Cross-month timing — the rest of this run spends in the other month, not a real over/under.'
+                                  : "This ad's over/under vs its allocation."
+                              }
+                            >
+                              {ad.variance.contribution >= 0 ? '+' : '−'}
+                              {fmt(Math.abs(ad.variance.contribution))}
+                              {ad.variance.klass === 'timing-straddler' ? ' timing' : ''}
+                            </div>
+                          )}
                       </div>
                     </div>
                   ))}
@@ -10143,6 +10314,25 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                 </span>
                 {' should have spent'}
               </div>
+              {Math.abs(timingStraddler) >= 0.005 && (
+                <div
+                  className="text-[10px] mt-1"
+                  style={{ color: '#38bdf8' }}
+                  title="Part of this month's variance is just cross-month timing — unresolved straddler ads whose remaining run spends in the other month. The real over/under sets that timing aside."
+                >
+                  Includes {timingStraddlerCount} cross-month ad
+                  {timingStraddlerCount === 1 ? '' : 's'} ·{' '}
+                  {timingStraddler >= 0 ? '+' : '−'}
+                  {fmt(Math.abs(timingStraddler))} timing — real over/under{' '}
+                  <span
+                    className="font-semibold"
+                    style={{ color: varianceColor(realOverUnder) }}
+                  >
+                    {realOverUnder >= 0 ? '+' : '−'}
+                    {fmt(Math.abs(realOverUnder))}
+                  </span>
+                </div>
+              )}
               {inProgressLifetime.length > 0 && (
                 <div
                   className="text-[10px] mt-1"

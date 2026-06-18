@@ -309,6 +309,109 @@ export function effectiveTarget(ad: EffectiveMoneyLike, asMonth?: string): numbe
   return num(ad.allocation) ?? 0;
 }
 
+/** Why an ad's spend differs from its plan this month (cross-month clarity). */
+export type VarianceClass = 'real' | 'timing-straddler' | 'timing-lifetime';
+
+export type VarianceAdLike = AdScheduleLike & {
+  allocation?: string | null;
+  pacerActual?: string | null;
+  pacerRunSpend?: string | null;
+  fullRunAppliedToMonth?: string | null;
+};
+
+export interface AdVariance {
+  /** effectiveActual − effectiveTarget for the month. 0 for an in-progress
+   *  lifetime ad — its variance books once on completion (§3). */
+  contribution: number;
+  klass: VarianceClass;
+  /** In-progress lifetime ad only: the spend it HAS done this month, held out
+   *  of the over/under until completion (informational). 0 otherwise. */
+  heldOutSpend: number;
+}
+
+/**
+ * Classify ONE ad's contribution to a month's over/under and WHY it may differ
+ * from plan, so a surface can separate cross-month TIMING from a real miss:
+ *   - timing-lifetime: a lifetime ad still running — contributes $0 now (§3);
+ *     its month spend is held out until the run completes.
+ *   - timing-straddler: an UNRESOLVED daily straddler — only part of its run
+ *     landed this month, so its slice-vs-target shortfall is a scope artifact,
+ *     not a miss. ("Count full run in [month]" reclassifies it as 'real'.)
+ *   - real: a normal ad, or a straddler resolved into its own month — a genuine
+ *     over/under.
+ */
+export function classifyAdVariance(
+  ad: VarianceAdLike,
+  asMonth: string,
+  nowMs: number,
+  timeZone: string,
+): AdVariance {
+  if (isLifetimeInProgress(ad, nowMs, timeZone)) {
+    return {
+      contribution: 0,
+      klass: 'timing-lifetime',
+      heldOutSpend: num(ad.pacerActual) ?? 0,
+    };
+  }
+  const contribution = effectiveActual(ad, asMonth) - effectiveTarget(ad, asMonth);
+  if (ad.fullRunAppliedToMonth == null && isCrossMonthStraddler(ad)) {
+    return { contribution, klass: 'timing-straddler', heldOutSpend: 0 };
+  }
+  return { contribution, klass: 'real', heldOutSpend: 0 };
+}
+
+export interface MonthVarianceBreakdown {
+  /** Σ contribution over 'real' ads (normal + resolved straddlers). */
+  real: number;
+  /** Σ contribution over unresolved straddlers — the cross-month timing portion
+   *  (negative = an under that catches up in the other month). */
+  timing: number;
+  /** Σ held-out spend from in-progress lifetime ads — real dollars spent this
+   *  month not yet in the over/under (book on completion). */
+  heldOutLifetime: number;
+  timingAdCount: number;
+  heldOutAdCount: number;
+  /** Per-ad results in input order — the caller maps back to its ad list. */
+  perAd: AdVariance[];
+}
+
+/**
+ * Split a month's over/under across its ads into REAL vs cross-month TIMING,
+ * plus the held-out in-progress-lifetime spend. `real + timing` equals the sum
+ * of every non-lifetime contribution (≈ the settle-able over/under when the
+ * account is fully allocated); `heldOutLifetime` is surfaced separately because
+ * §3 already removes it from both sides of the over/under. A surface should
+ * present its existing headline variance, then `timing` as the slice of it that
+ * is just timing (real = headline − timing), keeping numbers reconciled.
+ */
+export function decomposeMonthVariance(
+  ads: VarianceAdLike[],
+  asMonth: string,
+  nowMs: number,
+  timeZone: string,
+): MonthVarianceBreakdown {
+  let real = 0;
+  let timing = 0;
+  let heldOutLifetime = 0;
+  let timingAdCount = 0;
+  let heldOutAdCount = 0;
+  const perAd: AdVariance[] = [];
+  for (const ad of ads) {
+    const v = classifyAdVariance(ad, asMonth, nowMs, timeZone);
+    perAd.push(v);
+    if (v.klass === 'timing-lifetime') {
+      heldOutLifetime += v.heldOutSpend;
+      heldOutAdCount += 1;
+    } else if (v.klass === 'timing-straddler') {
+      timing += v.contribution;
+      timingAdCount += 1;
+    } else {
+      real += v.contribution;
+    }
+  }
+  return { real, timing, heldOutLifetime, timingAdCount, heldOutAdCount, perAd };
+}
+
 export interface AdCalc {
   ad: PacerAd;
   isLifetime: boolean;

@@ -26,6 +26,7 @@ import {
   ClockIcon,
   CalendarIcon,
   InformationCircleIcon,
+  LinkSlashIcon,
   UserCircleIcon,
   PaintBrushIcon,
   CheckBadgeIcon,
@@ -240,7 +241,9 @@ function classifyPacerHealth(
   if (pct > 105) {
     return {
       state: 'overpacing',
-      color: '#f59e0b',
+      // Red: projected to overspend (shares red with the already-over-budget
+      // state — both are "spending too much", distinguished by their label).
+      color: '#ef4444',
       label: 'Overpacing',
       short: 'Overpacing',
     };
@@ -248,7 +251,8 @@ function classifyPacerHealth(
   if (pct < 95) {
     return {
       state: 'underpacing',
-      color: '#38bdf8',
+      // Amber: caution that the budget is on pace to be underspent.
+      color: '#f59e0b',
       label: 'Underpacing',
       short: 'Under',
     };
@@ -843,7 +847,7 @@ function Tooltip({
       {children}
       <span
         role="tooltip"
-        className={`pointer-events-none absolute left-1/2 -translate-x-1/2 ${pos} z-[200] max-w-[220px] whitespace-normal text-center rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-[10px] font-medium leading-snug text-[var(--foreground)] opacity-0 shadow-lg transition-opacity duration-100 group-hover/tip:opacity-100`}
+        className={`pointer-events-none absolute left-1/2 -translate-x-1/2 ${pos} z-[200] w-max max-w-[340px] whitespace-normal text-center rounded-md border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5 text-[10px] font-medium leading-snug text-[var(--foreground)] opacity-0 shadow-lg transition-opacity duration-100 group-hover/tip:opacity-100`}
       >
         {label}
       </span>
@@ -7143,7 +7147,7 @@ function AdSetLinkPicker({
       {value ? (
         // Linked: show the ad-set NAME (never the raw id) + a quick Unlink.
         // Clicking the name reopens the list to change the link.
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0">
           <button
             ref={triggerRef}
             type="button"
@@ -7157,10 +7161,10 @@ function AdSetLinkPicker({
               setOpen((v) => !v);
             }}
             title="Linked to a Meta ad set — click to change"
-            className="inline-flex min-w-0 items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-[11px] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)] disabled:opacity-60"
+            className="inline-flex min-w-0 items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] px-2.5 py-1 text-xs text-[var(--foreground)] hover:border-[var(--primary)] focus:outline-none focus:border-[var(--primary)] disabled:opacity-60"
           >
-            <MetaBrandIcon className="w-3 h-3 flex-shrink-0" />
-            <span className="truncate">
+            <MetaBrandIcon className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="truncate font-medium">
               {loading && !options ? 'Loading…' : selected ? label(selected) : 'Linked'}
             </span>
             <ChevronDownIcon className="w-3 h-3 flex-shrink-0 text-[var(--muted-foreground)]" />
@@ -7169,9 +7173,11 @@ function AdSetLinkPicker({
             type="button"
             disabled={disabled}
             onClick={() => onChange(null)}
-            className="flex-shrink-0 text-[11px] text-[var(--muted-foreground)] hover:text-[#ef4444] disabled:opacity-50"
+            title="Unlink ad set"
+            aria-label="Unlink ad set"
+            className="flex-shrink-0 inline-flex items-center justify-center rounded-md p-2 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[#ef4444] disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Unlink
+            <LinkSlashIcon className="w-4 h-4" />
           </button>
         </div>
       ) : (
@@ -7456,6 +7462,40 @@ function PacerRow({
   // classified so an existing Bill/Split stays visible.
   const [showCrossMonth, setShowCrossMonth] = useState(cmSelValue !== '');
 
+  // Meta connection controls, extracted so the synced card's connection header
+  // and the unsynced field row can each place them without duplicating markup.
+  const linkPicker = (
+    <AdSetLinkPicker
+      value={ad.metaObjectId}
+      options={adSets}
+      loading={adSetsLoading}
+      error={adSetsError}
+      onOpen={onLoadAdSets}
+      onChange={onLinkChange}
+      disabled={readOnly}
+    />
+  );
+  // Tooltip shows just the Meta run window for now (the sync recency is shown
+  // inline next to it). No run dates → no info icon.
+  const metaSyncInfo =
+    ad.metaObjectId && (ad.metaStartDate || ad.metaEndDate)
+      ? (() => {
+          const parts: string[] = [
+            `Meta run: ${ad.metaStartDate ? fmtDate(ad.metaStartDate) : '—'} → ${ad.metaEndDate ? fmtDate(ad.metaEndDate) : 'ongoing'}`,
+          ];
+          if (effectiveEnd && (!ad.metaEndDate || ad.metaEndDate > effectiveEnd)) {
+            parts.push(`Paced to ${fmtDate(effectiveEnd)} (month end)`);
+          }
+          return (
+            <Tooltip label={parts.join(' · ')} placement="top">
+              <span className="inline-flex flex-shrink-0 items-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+                <InformationCircleIcon className="w-4 h-4" />
+              </span>
+            </Tooltip>
+          );
+        })()
+      : null;
+
   // Status indicator color — pulled from the same map AdStatusPill uses
   // so the dot matches the status the user sees on the planner page.
   const statusColor = AD_STATUS_COLORS[ad.adStatus]?.[0] ?? 'var(--muted-foreground)';
@@ -7681,23 +7721,29 @@ function PacerRow({
       {/* Editable inputs row — just the two values reps actually edit.
           Today's date always uses the current date and end date uses
           the immutable flight end, so neither needs an input. */}
-      <div className="mb-3.5 flex items-start gap-4 flex-wrap">
+      <div className="mb-3.5 flex items-start justify-between gap-4 flex-wrap">
         {/* Actual + Daily + Link. When the ad is connected to a Meta ad set,
             these are contained in a card with a "from Meta" badge (Meta owns the
             spend); otherwise they sit plainly. */}
         <div
           className={`${
             syncedFromMeta
-              ? 'relative w-fit rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-4 pt-3 pb-7'
+              ? 'w-full md:w-[calc(50%_-_4px)] rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 py-3'
               : 'w-fit'
           }`}
         >
-          <div className="grid grid-cols-1 md:grid-cols-[minmax(0,150px)_minmax(0,150px)_minmax(0,max-content)] gap-4">
+          <div
+            className={
+              syncedFromMeta
+                ? 'grid grid-cols-2 gap-2 [&>*]:px-3 [&_label]:mb-1'
+                : 'grid grid-cols-1 md:grid-cols-[minmax(0,150px)_minmax(0,150px)_minmax(0,max-content)] gap-4'
+            }
+          >
         <Field label="Actual Spend">
           {syncedFromMeta ? (
             // Meta owns the spend once synced — plain read-only value. The card's
             // "from Meta" badge labels the source, so no per-field tag here.
-            <div className="flex items-center py-2">
+            <div className="flex items-center">
               <span className="text-xl font-bold tabular-nums text-[var(--foreground)]">
                 {fmt(num(ad.pacerActual) ?? 0)}
               </span>
@@ -7728,7 +7774,7 @@ function PacerRow({
           ) : !dailyEditing ? (
             // Synced — plain read-only value with a pencil to reveal the input.
             // Not a box that looks editable until you click the pencil.
-            <div className="flex items-center gap-2 py-2">
+            <div className="flex items-center gap-2">
               <span className="text-xl font-bold tabular-nums text-[var(--foreground)]">
                 {ad.pacerDailyBudget != null && ad.pacerDailyBudget !== ''
                   ? fmt(num(ad.pacerDailyBudget) ?? 0)
@@ -7797,59 +7843,35 @@ function PacerRow({
             </div>
           )}
         </Field>
-        {/* No visible label — an aria-hidden spacer at the label's height keeps
-            the Link button top-aligned with the Actual / Daily input boxes. */}
-        <div>
-          <span className={labelClass} aria-hidden="true">&nbsp;</span>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <AdSetLinkPicker
-              value={ad.metaObjectId}
-              options={adSets}
-              loading={adSetsLoading}
-              error={adSetsError}
-              onOpen={onLoadAdSets}
-              onChange={onLinkChange}
-              disabled={readOnly}
-            />
-            {/* sync time + Meta run dates collapse into a custom hover tooltip
-                (not the browser default), no help cursor. */}
-            {ad.metaObjectId &&
-              (() => {
-                const parts: string[] = [
-                  ad.pacerSyncedAt
-                    ? `Synced from Meta · ${fmtSyncedAgo(ad.pacerSyncedAt)}`
-                    : 'Linked — run "Sync from Meta" to pull spend',
-                ];
-                if (ad.metaStartDate || ad.metaEndDate) {
-                  parts.push(
-                    `Meta run: ${ad.metaStartDate ? fmtDate(ad.metaStartDate) : '—'} → ${ad.metaEndDate ? fmtDate(ad.metaEndDate) : 'ongoing'}`,
-                  );
-                  if (
-                    effectiveEnd &&
-                    (!ad.metaEndDate || ad.metaEndDate > effectiveEnd)
-                  ) {
-                    parts.push(`Paced to ${fmtDate(effectiveEnd)} (month end)`);
-                  }
-                }
-                return (
-                  <Tooltip label={parts.join(' · ')} placement="top">
-                    <span className="inline-flex flex-shrink-0 items-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
-                      <InformationCircleIcon className="w-4 h-4" />
-                    </span>
-                  </Tooltip>
-                );
-              })()}
+        {!syncedFromMeta && (
+          // Unsynced/manual: the link control is the third field. Once linked +
+          // synced, the connection header above replaces this.
+          <div>
+            <span className={labelClass} aria-hidden="true">&nbsp;</span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {linkPicker}
+              {metaSyncInfo}
+            </div>
           </div>
-          {adSetsError && (
-            <div className="mt-1 text-[10px] text-[#ef4444]">{adSetsError}</div>
-          )}
-        </div>
+        )}
           </div>
           {syncedFromMeta && (
-            <span className="pointer-events-none absolute bottom-2 right-3 inline-flex items-center gap-1 text-[10px] font-medium text-[var(--muted-foreground)]">
-              <MetaBrandIcon className="w-3 h-3" />
-              from Meta
-            </span>
+            // Connection footer — ad-set link + sync status below the spend
+            // metrics, instead of crammed in as a third field.
+            <div className="mt-3 flex items-center justify-between gap-4 border-t border-[var(--border)] px-3 pt-2.5">
+              {linkPicker}
+              <div className="flex flex-shrink-0 items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
+                {ad.pacerSyncedAt && (
+                  <span className="whitespace-nowrap">
+                    Synced {fmtSyncedAgo(ad.pacerSyncedAt)}
+                  </span>
+                )}
+                {metaSyncInfo}
+              </div>
+            </div>
+          )}
+          {adSetsError && (
+            <div className="mt-2 text-[10px] text-[#ef4444]">{adSetsError}</div>
           )}
         </div>
         {/* Cross-month accounting — dropdown + its detail banner stacked into one

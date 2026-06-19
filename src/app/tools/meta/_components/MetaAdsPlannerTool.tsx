@@ -9935,7 +9935,13 @@ function daysElapsedInPeriod(period: string): number {
   return today.getDate();
 }
 
-function ComparePanel({ accountKey }: { accountKey: string | null }) {
+function ComparePanel({
+  accountKey,
+  period,
+}: {
+  accountKey: string | null;
+  period: string;
+}) {
   // §6: the Over/Under page is a within-month, per-ad diagnostic only. Everything
   // cross-month/annual (running balance, adjusted targets, apply/undo, audit
   // trail) lives on the Reconciliation page, which owns it — so the old "Year"
@@ -9948,13 +9954,20 @@ function ComparePanel({ accountKey }: { accountKey: string | null }) {
           {accountKey ? 'Over/Under Spend' : 'Over/Under Spend — all accounts'}
         </h2>
       </div>
-      <OverUnderMonthView accountKey={accountKey} />
+      <OverUnderMonthView accountKey={accountKey} period={period} />
     </div>
   );
 }
 
-function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
-  const [period, setPeriod] = useState<string>(() => currentPeriod());
+function OverUnderMonthView({
+  accountKey,
+  period,
+}: {
+  accountKey: string | null;
+  // Driven by the page's sticky-header month selector — no separate in-page
+  // selector (single source of truth for the active month).
+  period: string;
+}) {
   const [data, setData] = useState<MonthPlanData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -10132,35 +10145,12 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-        <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--card)] p-1">
-          <button
-            type="button"
-            onClick={() => setPeriod((p) => shiftPeriod(p, -1))}
-            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-            aria-label="Previous month"
-          >
-            <ChevronLeftIcon className="w-4 h-4" />
-          </button>
-          <span className="text-xs font-bold px-3 min-w-[8rem] text-center">
-            {fmtPeriodLong(period)}
-          </span>
-          <button
-            type="button"
-            onClick={() => setPeriod((p) => shiftPeriod(p, 1))}
-            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-            aria-label="Next month"
-          >
-            <ChevronRightIcon className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setPeriod(currentPeriod())}
-            className="ml-1 px-2 py-1 text-[10px] font-medium rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-          >
-            Today
-          </button>
-        </div>
+      {/* Month is controlled by the page's sticky-header selector — this is a
+          read-only label for context, not a second selector. */}
+      <div className="flex items-baseline justify-between gap-3 mb-4 flex-wrap">
+        <span className="text-sm font-bold text-[var(--foreground)]">
+          {fmtPeriodLong(period)}
+        </span>
         <div className="text-[10px] text-[var(--muted-foreground)]">
           {daysElapsed} of {daysIn} day{daysIn === 1 ? '' : 's'} elapsed
         </div>
@@ -11901,7 +11891,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           {!activeKey ? (
             mode === 'pacer' && pacerTab === 'compare' ? (
               <div className="glass-section-card rounded-xl px-7 py-7">
-                <ComparePanel accountKey={null} />
+                <ComparePanel accountKey={null} period={period} />
               </div>
             ) : (
               <OverviewView
@@ -11977,7 +11967,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                   accountKey={activeKey}
                 />
               ) : pacerTab === 'compare' ? (
-                <ComparePanel accountKey={activeKey} />
+                <ComparePanel accountKey={activeKey} period={period} />
               ) : (
                 <SummaryPanel plan={plan} />
               );

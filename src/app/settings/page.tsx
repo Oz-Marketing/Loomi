@@ -93,24 +93,6 @@ export default function SettingsPage() {
 
   return (
     <div className="animate-fade-in-up pt-4">
-      <div className="mb-6 px-1 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
-            <TitleIcon className="w-6 h-6" />
-            {titleText}
-          </h1>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Manage your preferences and configuration
-          </p>
-        </div>
-        {/* Portal target for tab-specific action buttons (e.g. "Add User"
-            on the Users tab). Each tab calls `createPortal` into this
-            div, so swapping tabs swaps the actions. */}
-        <div id="settings-title-actions" className="flex items-center gap-2" />
-      </div>
-
-      <div className="border-b border-[var(--border)] mb-6" />
-
       {/* Sidebar nav + content */}
       <div className="flex gap-6">
         {/* Vertical nav — sticky */}
@@ -134,11 +116,26 @@ export default function SettingsPage() {
           ))}
         </nav>
 
-        {/* Tab content — no per-tab title bar; the active tab is
-            indicated by the highlighted item in the sidebar nav, and
-            tab-specific actions render into `#settings-title-actions`
-            up in the main Settings header. */}
+        {/* Tab content — the title section sits directly above the active
+            tab's content (the active tab is also highlighted in the nav).
+            Tab-specific actions (e.g. "Add User") portal into
+            #settings-title-actions. */}
         <div className="flex-1 min-w-0">
+          <div className="mb-6 px-1 flex items-start justify-between gap-4">
+            <div>
+              <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
+                <TitleIcon className="w-6 h-6" />
+                {titleText}
+              </h1>
+              <p className="text-sm text-[var(--muted-foreground)] mt-1">
+                Manage your preferences and configuration
+              </p>
+            </div>
+            <div id="settings-title-actions" className="flex items-center gap-2" />
+          </div>
+
+          <div className="border-b border-[var(--border)] mb-6" />
+
           {activeTab === 'subaccounts' && <AccountsList listPath="/settings/subaccounts" detailBasePath="/settings/subaccounts" />}
           {activeTab === 'subaccount' && <AccountSettingsTab />}
           {activeTab === 'contact-fields' && hasAdminAccess && isAccount && <CustomFieldsTab />}

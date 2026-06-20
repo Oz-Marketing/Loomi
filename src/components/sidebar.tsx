@@ -21,8 +21,6 @@ import {
   ArrowTopRightOnSquareIcon,
   ChartBarSquareIcon,
   ChevronDownIcon,
-  ChevronDoubleLeftIcon,
-  ChevronDoubleRightIcon,
   ChatBubbleLeftRightIcon,
   ListBulletIcon,
   FunnelIcon,
@@ -41,6 +39,7 @@ import { FlowIcon } from '@/components/icon-map';
 import { MetaBrandIcon, GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
 import { AccountSwitcher } from '@/components/account-switcher';
 import { AppLogo } from '@/components/app-logo';
+import { SidebarFrame } from '@/components/sidebar-frame';
 import { accountKeyToSlug, isSubaccountRoute, stripSubaccountPrefix } from '@/lib/account-slugs';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
@@ -216,7 +215,7 @@ export function Sidebar() {
   const pathname = usePathname();
   const { userRole, isAdmin, isAccount, accountKey, accounts } = useAccount();
   const { theme, toggleTheme } = useTheme();
-  const { collapsed, toggle: toggleCollapsed } = useSidebarCollapse();
+  const { collapsed } = useSidebarCollapse();
 
   // Cross-host link to the reporting surface. Resolves after hydration
   // so we have access to `window.location.host`; account + theme are
@@ -296,42 +295,82 @@ export function Sidebar() {
     normalizedPath.startsWith('/settings') && !integrationsActive;
 
   return (
-    <aside
-      data-collapsed={collapsed}
-      className={`fixed left-3 top-3 bottom-3 rounded-2xl text-[var(--sidebar-foreground)] flex flex-col z-50 overflow-visible transition-[width] duration-200 ease-out ${
-        collapsed ? 'w-14' : 'w-60'
-      }`}
-    >
-      {/* Logo + Collapse Toggle, with the account switcher underneath. */}
-      <div className={`${collapsed ? 'p-2 pb-3' : 'px-2 pt-4 pb-3'}`}>
-        <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between'}`}>
-          {!collapsed && <AppLogo className="h-8 w-auto max-w-[150px] object-contain" />}
-          <SidebarTooltip label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
-            <button
-              type="button"
-              onClick={toggleCollapsed}
-              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--sidebar-muted-foreground)] hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)] transition"
-            >
-              {collapsed ? (
-                <ChevronDoubleRightIcon className="w-4 h-4" />
-              ) : (
-                <ChevronDoubleLeftIcon className="w-4 h-4" />
-              )}
-            </button>
-          </SidebarTooltip>
-        </div>
-        {/* Account switcher sits under the logo (admins/non-clients). Opens
-            downward — no openUp/settings (Settings is in the footer). */}
-        {!isClientRole && (
-          <div className={collapsed ? 'mt-2 flex justify-center' : 'mt-3'}>
-            {collapsed ? <AccountSwitcher compact /> : <AccountSwitcher />}
+    <SidebarFrame
+      brand={<AppLogo className="h-8 w-auto max-w-[150px] object-contain" />}
+      account={
+        // Account switcher sits under the logo (admins/non-clients). Opens
+        // downward — clients don't get a switcher (Settings is in the footer).
+        !isClientRole ? (
+          collapsed ? <AccountSwitcher compact /> : <AccountSwitcher />
+        ) : null
+      }
+      bottom={
+        <>
+          {/* Integrations — quick jump to the active sub-account's integration
+              settings, pinned at the bottom above the footer. */}
+          <div className={`${collapsed ? 'px-2' : 'px-3'} pb-1`}>
+            {(() => {
+              const intLink = (
+                <Link
+                  href={integrationsHref}
+                  className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
+                    integrationsActive
+                      ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
+                      : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
+                  }`}
+                >
+                  <PuzzlePieceIcon className="w-5 h-5" />
+                  {!collapsed && 'Integrations'}
+                </Link>
+              );
+              return collapsed ? <SidebarTooltip label="Integrations">{intLink}</SidebarTooltip> : intLink;
+            })()}
           </div>
-        )}
-      </div>
 
-      {/* Navigation */}
-      <nav className={`flex-1 space-y-px overflow-y-auto ${collapsed ? 'px-1.5 py-2' : 'px-2 py-2'}`}>
+          {/* Settings / Theme Toggle */}
+          <div className={`${collapsed ? 'p-2' : 'px-2 py-2'}`}>
+            {(() => {
+              const themeLabel = theme === 'dark' ? 'Light Mode' : 'Dark Mode';
+              const themeBtn = (
+                <button
+                  type="button"
+                  onClick={toggleTheme}
+                  className={`w-full flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]`}
+                >
+                  {theme === 'dark' ? <SunIcon className="w-5 h-5" /> : <MoonIcon className="w-5 h-5" />}
+                  {!collapsed && themeLabel}
+                </button>
+              );
+              if (isClientRole) {
+                return collapsed ? (
+                  <SidebarTooltip label={themeLabel}>{themeBtn}</SidebarTooltip>
+                ) : themeBtn;
+              }
+              // Settings lives here now (the account switcher moved up under the
+              // logo).
+              const settingsLink = (
+                <Link
+                  href={settingsHref}
+                  className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
+                    settingsActive
+                      ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
+                      : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
+                  }`}
+                >
+                  <Cog6ToothIcon className="w-5 h-5" />
+                  {!collapsed && 'Settings'}
+                </Link>
+              );
+              return collapsed ? (
+                <SidebarTooltip label="Settings">{settingsLink}</SidebarTooltip>
+              ) : (
+                settingsLink
+              );
+            })()}
+          </div>
+        </>
+      }
+    >
         {resolvedNavItems.map((entry, i) => {
           if ('divider' in entry) {
             if (collapsed) {
@@ -413,72 +452,7 @@ export function Sidebar() {
             </SidebarTooltip>
           ) : leaf;
         })}
-
-      </nav>
-
-      {/* Integrations — quick jump to the active sub-account's integration settings,
-          pinned at the bottom above the dev impersonation control. */}
-      <div className={`${collapsed ? 'px-2' : 'px-3'} pb-1`}>
-        {(() => {
-          const intLink = (
-            <Link
-              href={integrationsHref}
-              className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
-                integrationsActive
-                  ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
-                  : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
-              }`}
-            >
-              <PuzzlePieceIcon className="w-5 h-5" />
-              {!collapsed && 'Integrations'}
-            </Link>
-          );
-          return collapsed ? <SidebarTooltip label="Integrations">{intLink}</SidebarTooltip> : intLink;
-        })()}
-      </div>
-
-      {/* Settings / Theme Toggle */}
-      <div className={`${collapsed ? 'p-2' : 'px-2 py-2'}`}>
-        {(() => {
-          const themeLabel = theme === 'dark' ? 'Light Mode' : 'Dark Mode';
-          const themeBtn = (
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className={`w-full flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]`}
-            >
-              {theme === 'dark' ? <SunIcon className="w-5 h-5" /> : <MoonIcon className="w-5 h-5" />}
-              {!collapsed && themeLabel}
-            </button>
-          );
-          if (isClientRole) {
-            return collapsed ? (
-              <SidebarTooltip label={themeLabel}>{themeBtn}</SidebarTooltip>
-            ) : themeBtn;
-          }
-          // Settings lives here now (the account switcher moved up under the
-          // logo).
-          const settingsLink = (
-            <Link
-              href={settingsHref}
-              className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
-                settingsActive
-                  ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
-                  : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
-              }`}
-            >
-              <Cog6ToothIcon className="w-5 h-5" />
-              {!collapsed && 'Settings'}
-            </Link>
-          );
-          return collapsed ? (
-            <SidebarTooltip label="Settings">{settingsLink}</SidebarTooltip>
-          ) : (
-            settingsLink
-          );
-        })()}
-      </div>
-    </aside>
+    </SidebarFrame>
   );
 }
 

@@ -31,19 +31,8 @@
   --ring: #6366f1;
   --radius: 0.5rem;
 
-  /* Gradient background — dark mode */
-  --gradient-bg:
-    radial-gradient(ellipse 60% 50% at 8% 30%, rgba(99, 60, 180, 0.2) 0%, transparent 70%),
-    radial-gradient(ellipse 40% 40% at 15% 70%, rgba(56, 100, 220, 0.14) 0%, transparent 60%),
-    linear-gradient(
-      145deg,
-      #09090b 0%,
-      #0c0c14 25%,
-      #0f0a18 45%,
-      #0a0d1a 65%,
-      #0d0b12 85%,
-      #09090b 100%
-    );
+  /* Background — dark mode: solid, no gradient art. */
+  --gradient-bg: var(--background);
 
   /* Liquid glass sidebar — dark */
   --sidebar-bg: rgba(12, 12, 20, 0.7);

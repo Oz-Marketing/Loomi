@@ -12,7 +12,7 @@ import { useParams } from 'next/navigation';
 import { ChartBarIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
-import { ReportingPageHeader } from '../../_components/page-header';
+import { PageHeader } from '@/components/page-header';
 import { EmptyState, RangeControls } from '../_components/shared';
 import { findReport, LIVE_REPORTS } from '../_components/reports-config';
 import { REPORT_COMPONENTS } from '../_components/report-components';
@@ -32,7 +32,7 @@ export default function DigitalAdsReportPage() {
   if (!def || def.status !== 'live' || !Report) {
     return (
       <>
-        <ReportingPageHeader eyebrow="Digital Ads" title="Report not found" subtitle="" />
+        <PageHeader icon={ChartBarIcon} title="Report not found" />
         <EmptyState
           icon={ExclamationTriangleIcon}
           title="That report isn't available"
@@ -47,8 +47,8 @@ export default function DigitalAdsReportPage() {
 
   return (
     <>
-      <ReportingPageHeader
-        eyebrow="Digital Ads"
+      <PageHeader
+        icon={ChartBarIcon}
         title={def.label}
         subtitle={`${def.blurb} — ${accountKey ? dealer : 'select an account'}.`}
       />

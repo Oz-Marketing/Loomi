@@ -1,9 +1,10 @@
-import { ReportingPageHeader } from '../_components/page-header';
+import { UserCircleIcon } from '@heroicons/react/24/outline';
+import { PageHeader } from '@/components/page-header';
 
 export default function ReportingProfilePage() {
   return (
-    <ReportingPageHeader
-      eyebrow="Profile"
+    <PageHeader
+      icon={UserCircleIcon}
       title="Your profile"
       subtitle="Account details, password, and notification preferences land here."
     />

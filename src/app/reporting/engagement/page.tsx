@@ -4,12 +4,13 @@ import { useAccount } from '@/contexts/account-context';
 import { EngagementSection } from '@/components/campaigns/engagement-section';
 import { FlowsAnalyticsBody } from '@/components/flows/flows-analytics-body';
 import { DEFAULT_DATE_RANGE } from '@/lib/date-ranges';
-import { ReportingPageHeader } from '../_components/page-header';
+import { PaperAirplaneIcon } from '@heroicons/react/24/outline';
+import { PageHeader } from '@/components/page-header';
 
 /**
  * Engagement reporting — stacks messaging + flows analytics on one page.
  *
- *   ┌─ ReportingPageHeader ─┐
+ *   ┌─ PageHeader ───────────┐
  *   │ "Engagement reporting" │
  *   └────────────────────────┘
  *   ┌─ Messaging ─┐
@@ -30,8 +31,8 @@ export default function ReportingEngagementPage() {
 
   return (
     <>
-      <ReportingPageHeader
-        eyebrow="Engagement"
+      <PageHeader
+        icon={PaperAirplaneIcon}
         title="Engagement reporting"
         subtitle={`Campaign performance, email engagement, and flow throughput — ${dealerName}.`}
       />

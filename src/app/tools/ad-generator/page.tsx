@@ -15,12 +15,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { ArrowDownTrayIcon, SparklesIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { AD_TEMPLATES } from '@/lib/ad-generator/templates';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
-import type { AdData, FieldSpec } from '@/lib/ad-generator/types';
+import type { AdData, AdTemplate, FieldSpec } from '@/lib/ad-generator/types';
+import type { AdCopyVariation } from '@/lib/ad-generator/copy-types';
 
 const PREVIEW_W = 460;
 const PREVIEW_H = 560;
@@ -226,6 +227,13 @@ export default function AdGeneratorPage() {
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
         {/* Form */}
         <div className="space-y-6">
+          <AiCopyPanel
+            template={template}
+            renderData={renderData}
+            dealerName={accountData?.dealer}
+            onApply={(fields) => setData((d) => ({ ...d, ...fields }))}
+          />
+
           {/* Branding — from the active account */}
           <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
             <div className="mb-4 flex items-center justify-between">
@@ -371,6 +379,196 @@ export default function AdGeneratorPage() {
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+const TONES = [
+  { value: '', label: 'On-brand (default)' },
+  { value: 'bold', label: 'Bold' },
+  { value: 'friendly', label: 'Friendly' },
+  { value: 'urgent', label: 'Urgent' },
+  { value: 'luxury', label: 'Luxury' },
+];
+
+/**
+ * "Write with AI" — generates marketing copy for the template's `copy` fields
+ * plus Meta/Google captions. Renders nothing if the template declares no copy
+ * fields, so it lights up automatically for any (incl. future data-driven)
+ * template that marks fields as copy.
+ */
+function AiCopyPanel({
+  template,
+  renderData,
+  dealerName,
+  onApply,
+}: {
+  template: AdTemplate;
+  renderData: AdData;
+  dealerName?: string;
+  onApply: (fields: Record<string, string>) => void;
+}) {
+  const copyFields = useMemo(() => template.fields.filter((f) => f.copy), [template]);
+  const [brief, setBrief] = useState('');
+  const [tone, setTone] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [variations, setVariations] = useState<AdCopyVariation[] | null>(null);
+
+  async function generate() {
+    setBusy(true);
+    try {
+      const res = await fetch('/api/ad-generator/copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ templateId: template.id, data: renderData, dealerName, tone, brief }),
+      });
+      if (!res.ok) {
+        const msg = (await res.json().catch(() => null))?.error || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+      const json = (await res.json()) as { variations: AdCopyVariation[] };
+      setVariations(json.variations);
+      if (!json.variations.length) toast.error('No copy came back — try again.');
+    } catch (err) {
+      toast.error(`Couldn't write copy: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (copyFields.length === 0) return null;
+
+  return (
+    <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
+      <div className="mb-2 flex items-center gap-2">
+        <SparklesIcon className="h-4 w-4 text-[var(--primary)]" />
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Write with AI</h2>
+      </div>
+      <p className="mb-3 text-xs text-[var(--muted-foreground)]">
+        Writes the marketing copy + Meta/Google captions from your offer details. Prices, terms, and the disclaimer stay exactly as you set them.
+      </p>
+      <textarea
+        value={brief}
+        onChange={(e) => setBrief(e.target.value)}
+        rows={2}
+        placeholder="Optional brief — e.g. “year-end clearance, emphasize the low payment”"
+        className="mb-2 w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]"
+      />
+      <div className="flex items-center gap-2">
+        <select
+          value={tone}
+          onChange={(e) => setTone(e.target.value)}
+          className="rounded-lg border border-[var(--border)] bg-[var(--input)] px-2.5 py-2 text-sm text-[var(--foreground)]"
+        >
+          {TONES.map((t) => (
+            <option key={t.value} value={t.value}>{t.label}</option>
+          ))}
+        </select>
+        <button
+          onClick={generate}
+          disabled={busy}
+          className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          <SparklesIcon className="h-4 w-4" />
+          {busy ? 'Writing…' : variations ? 'Regenerate' : 'Write with AI'}
+        </button>
+      </div>
+
+      {variations && variations.length > 0 && (
+        <div className="mt-4 space-y-3">
+          {variations.map((v, i) => (
+            <AiVariationCard
+              key={i}
+              index={i}
+              variation={v}
+              copyFields={copyFields}
+              onApply={() => {
+                onApply(v.fields);
+                toast.success(`Applied option ${i + 1}`);
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AiVariationCard({
+  index,
+  variation,
+  copyFields,
+  onApply,
+}: {
+  index: number;
+  variation: AdCopyVariation;
+  copyFields: FieldSpec[];
+  onApply: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-3">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Option {index + 1}</span>
+        <button
+          onClick={onApply}
+          className="rounded-md bg-[var(--primary)]/10 px-2 py-1 text-[11px] font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/20"
+        >
+          Apply to ad
+        </button>
+      </div>
+      <div className="space-y-1">
+        {copyFields.map((f) => (
+          <div key={f.key} className="flex gap-2 text-xs">
+            <span className="w-20 flex-shrink-0 text-[var(--muted-foreground)]">{f.label}</span>
+            <span className="font-medium text-[var(--foreground)]">{variation.fields[f.key] || '—'}</span>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 grid grid-cols-1 gap-3 border-t border-[var(--border)] pt-2 sm:grid-cols-2">
+        <CaptionBlock
+          label="Meta"
+          lines={[
+            ['Primary', variation.meta.primaryText],
+            ['Headline', variation.meta.headline],
+            ['Desc', variation.meta.description],
+          ]}
+        />
+        <CaptionBlock
+          label="Google"
+          lines={[
+            ...variation.google.headlines.map((h, i) => [`H${i + 1}`, h] as [string, string]),
+            ...variation.google.descriptions.map((d, i) => [`D${i + 1}`, d] as [string, string]),
+          ]}
+        />
+      </div>
+    </div>
+  );
+}
+
+function CaptionBlock({ label, lines }: { label: string; lines: [string, string][] }) {
+  const visible = lines.filter(([, v]) => v);
+  if (!visible.length) return null;
+  return (
+    <div>
+      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{label}</div>
+      <div className="space-y-0.5">
+        {visible.map(([k, v], i) => (
+          <button
+            key={i}
+            type="button"
+            title="Click to copy"
+            onClick={() => {
+              navigator.clipboard?.writeText(v);
+              toast.success('Copied');
+            }}
+            className="group flex w-full items-start gap-1.5 rounded px-1 py-0.5 text-left text-[11px] text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/50"
+          >
+            <span className="w-10 flex-shrink-0 text-[var(--muted-foreground)]">{k}</span>
+            <span className="flex-1 break-words">{v}</span>
+            <ClipboardDocumentIcon className="h-3 w-3 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
+          </button>
+        ))}
       </div>
     </div>
   );

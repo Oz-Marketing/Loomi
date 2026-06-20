@@ -31,6 +31,18 @@ export interface FieldSpec {
   help?: string;
   /** For `select` fields. */
   options?: { value: string; label: string }[];
+  /** Max characters — a fit hint for on-canvas text and the constraint the AI
+   *  copywriter must respect. Carries over to data-driven templates. */
+  maxLength?: number;
+  /**
+   * This field holds marketing COPY the AI may write — as opposed to DATA
+   * (price, terms, VIN) or LEGAL (the disclaimer), which the AI must never
+   * touch. "Write with AI" fills exactly the fields a template marks `copy`.
+   * When templates move from code to a `TemplateDoc` authored in the visual
+   * builder, each text binding carries this same flag, so the copy service
+   * and UI keep working unchanged.
+   */
+  copy?: boolean;
 }
 
 export type AdData = Record<string, string>;

@@ -34,6 +34,7 @@ function render(data: AdData, size: AdSize): string {
   const terms = esc(data.terms) || '36 months · $2,999 due at signing';
   const expiration = esc(data.expiration) || 'Offer ends soon';
   const disclaimer = esc(data.disclaimer);
+  const tagline = esc(data.tagline);
 
   // Branding font (from the account's uploaded custom fonts). fontFaceCss is raw
   // CSS built upstream (page = url src for preview; render route = base64 src).
@@ -51,6 +52,10 @@ function render(data: AdData, size: AdSize): string {
       <div style="font-size:${u * 2.6}px;font-weight:800;line-height:.95;color:#0f172a;letter-spacing:-${u * 0.04}px;">${price}</div>
       <div style="font-size:${u * 0.66}px;font-weight:500;color:#475569;">${terms}</div>
     </div>`;
+
+  const taglineBlock = tagline
+    ? `<div style="font-size:${u * 0.95}px;font-weight:800;line-height:1.04;color:#0f172a;letter-spacing:-${u * 0.03}px;">${tagline}</div>`
+    : '';
 
   const expirationPill = `
     <span style="display:inline-block;align-self:flex-start;background:${brand};color:#fff;font-size:${u * 0.52}px;font-weight:700;padding:${u * 0.28}px ${u * 0.6}px;border-radius:${u * 2}px;letter-spacing:${u * 0.02}px;">${expiration}</span>`;
@@ -70,7 +75,10 @@ function render(data: AdData, size: AdSize): string {
       ? `
       <div style="display:flex;height:100%;gap:${u}px;">
         <div style="flex:0 0 46%;display:flex;flex-direction:column;justify-content:space-between;">
-          ${header}
+          <div style="display:flex;flex-direction:column;gap:${u * 0.55}px;">
+            ${header}
+            ${taglineBlock}
+          </div>
           ${offerBlock}
           ${expirationPill}
         </div>
@@ -79,6 +87,7 @@ function render(data: AdData, size: AdSize): string {
       : `
       <div style="display:flex;flex-direction:column;height:100%;gap:${u * 0.6}px;">
         ${header}
+        ${taglineBlock}
         <div style="flex:1;display:flex;align-items:center;justify-content:center;min-height:0;">${vehicle}</div>
         ${offerBlock}
         ${expirationPill}
@@ -123,7 +132,8 @@ export const vehicleOffer: AdTemplate = {
   fields: [
     { key: 'vehicleName', label: 'Vehicle', type: 'text', group: 'Vehicle', placeholder: '2024 Toyota Camry SE' },
     { key: 'vehicleImageUrl', label: 'Vehicle image URL', type: 'image', group: 'Vehicle', placeholder: 'https://…/camry.png', help: 'Transparent PNG (e.g. from EVOX) looks best.' },
-    { key: 'offerLabel', label: 'Offer label', type: 'text', group: 'Offer', placeholder: 'LEASE FOR' },
+    { key: 'tagline', label: 'Tagline', type: 'text', group: 'Copy', placeholder: 'Drive home today', help: 'Short on-image hook — the AI can write this.', copy: true, maxLength: 28 },
+    { key: 'offerLabel', label: 'Offer label', type: 'text', group: 'Offer', placeholder: 'LEASE FOR', copy: true, maxLength: 18 },
     { key: 'price', label: 'Price', type: 'text', group: 'Offer', placeholder: '$299/mo' },
     { key: 'terms', label: 'Terms', type: 'text', group: 'Offer', placeholder: '36 months · $2,999 due at signing' },
     { key: 'expiration', label: 'Expiration', type: 'text', group: 'Offer', placeholder: 'Offer ends March 31' },
@@ -135,6 +145,7 @@ export const vehicleOffer: AdTemplate = {
     logoUrl: '',
     vehicleName: '2024 Toyota Camry SE',
     vehicleImageUrl: '',
+    tagline: 'Drive Home Today',
     offerLabel: 'LEASE FOR',
     price: '$299/mo',
     terms: '36 months · $2,999 due at signing',

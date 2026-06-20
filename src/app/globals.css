@@ -544,7 +544,14 @@ body {
     inset 0 0.5px 0 rgba(255, 255, 255, 0.04);
   transition: border-color 0.2s ease, box-shadow 0.3s ease, transform 0.2s ease;
 }
-.glass-card:hover {
+/* The hover lift + primary border is a CLICKABLE affordance, so only apply
+   it to glass-cards that actually navigate or act: links (<Link> renders an
+   <a>), <button>s, or a div explicitly opted in with `.glass-card-interactive`.
+   Plain `.glass-card` containers (stat tiles, panels) stay static so they
+   don't signal a click that goes nowhere. */
+a.glass-card:hover,
+button.glass-card:hover,
+.glass-card-interactive:hover {
   border-color: var(--primary);
   transform: translateY(-2px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15),
@@ -565,7 +572,9 @@ body {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.6);
 }
-[data-theme='light'] .glass-card:hover {
+[data-theme='light'] a.glass-card:hover,
+[data-theme='light'] button.glass-card:hover,
+[data-theme='light'] .glass-card-interactive:hover {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08),
     0 0 0 1px rgba(37, 99, 235, 0.08),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.6);

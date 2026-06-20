@@ -310,7 +310,7 @@ export function Sidebar() {
       }`}
     >
       {/* Logo + Account Switcher + Collapse Toggle */}
-      <div className={`${collapsed ? 'p-2 pb-3' : 'p-5 pb-4'}`}>
+      <div className={`${collapsed ? 'p-2 pb-3' : 'px-2 pt-4 pb-3'}`}>
         <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between mb-3'}`}>
           {!collapsed && <AppLogo className="h-8 w-auto max-w-[150px] object-contain" />}
           <SidebarTooltip label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
@@ -341,7 +341,7 @@ export function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className={`flex-1 space-y-0.5 overflow-y-auto ${collapsed ? 'p-2' : 'p-3'}`}>
+      <nav className={`flex-1 space-y-px overflow-y-auto ${collapsed ? 'p-2' : 'px-2 py-2'}`}>
         {resolvedNavItems.map((entry, i) => {
           if ('divider' in entry) {
             if (collapsed) {
@@ -365,7 +365,7 @@ export function Sidebar() {
               <a
                 key={`cross-${i}`}
                 href={reportingHref}
-                className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-xl text-sm font-medium transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]`}
+                className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]`}
               >
                 <CrossIcon className="w-5 h-5" />
                 {!collapsed && (
@@ -407,7 +407,7 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
-              className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
+              className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
                 isActive
                   ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
                   : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
@@ -433,7 +433,7 @@ export function Sidebar() {
           const intLink = (
             <Link
               href={integrationsHref}
-              className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
+              className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
                 integrationsActive
                   ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
                   : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
@@ -448,14 +448,14 @@ export function Sidebar() {
       </div>
 
       {/* Settings / Theme Toggle */}
-      <div className={`${collapsed ? 'p-2' : 'p-3'}`}>
+      <div className={`${collapsed ? 'p-2' : 'px-2 py-2'}`}>
         {(() => {
           const themeLabel = theme === 'dark' ? 'Light Mode' : 'Dark Mode';
           const themeBtn = (
             <button
               type="button"
               onClick={toggleTheme}
-              className={`w-full flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-xl text-sm font-medium transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]`}
+              className={`w-full flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]`}
             >
               {theme === 'dark' ? <SunIcon className="w-5 h-5" /> : <MoonIcon className="w-5 h-5" />}
               {!collapsed && themeLabel}
@@ -464,7 +464,7 @@ export function Sidebar() {
           const settingsLink = (
             <Link
               href={settingsHref}
-              className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
+              className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
                 settingsActive
                   ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
                   : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
@@ -573,7 +573,7 @@ function NavGroup({
                       role="menuitem"
                       className={`block px-3 py-1.5 text-[13px] rounded-md transition-colors ${
                         grandActive
-                          ? 'text-[var(--primary)] font-semibold bg-[var(--sidebar-muted)]'
+                          ? 'text-[var(--primary)] font-medium bg-[var(--sidebar-muted)]'
                           : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]/60'
                       }`}
                     >
@@ -594,7 +594,7 @@ function NavGroup({
               role="menuitem"
               className={`flex items-center gap-2.5 px-2 py-1.5 text-sm rounded-md transition-colors ${
                 childActive
-                  ? 'text-[var(--primary)] font-semibold bg-[var(--sidebar-muted)]'
+                  ? 'text-[var(--primary)] font-medium bg-[var(--sidebar-muted)]'
                   : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]/60'
               }`}
             >
@@ -610,7 +610,7 @@ function NavGroup({
   // Top-level groups keep the bold pill treatment. Nested groups go lighter so
   // we don't stack multiple dark pills inside each other (Tools → Meta → leaf).
   const buttonClass = isTop
-    ? `w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
+    ? `w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
         sectionActive
           ? 'text-[var(--sidebar-foreground)] bg-[var(--sidebar-muted)]'
           : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
@@ -647,7 +647,7 @@ function NavGroup({
       <div className="collapsible-wrapper" data-open={open ? 'true' : 'false'}>
         <div className="collapsible-inner">
           {/* Vertical rail to visually anchor children to their parent group. */}
-          <div className="relative pt-1 pl-3 pb-0.5 space-y-0.5">
+          <div className="relative pt-1 pl-3 pb-0.5 space-y-px">
             <div
               aria-hidden="true"
               className="pointer-events-none absolute top-1 bottom-0.5 left-[14px] w-px bg-[var(--sidebar-border-soft)]"

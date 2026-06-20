@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { Sidebar } from '@/components/sidebar';
-import { TopUtilityBar } from '@/components/top-utility-bar';
+// import { TopUtilityBar } from '@/components/top-utility-bar'; // temporarily hidden (Klaviyo-style shell trial)
 import { AppLogo } from '@/components/app-logo';
 import { stripSubaccountPrefix } from '@/lib/account-slugs';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
@@ -238,8 +238,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
             Only the standard app shell is constrained — the builder/editor
             branches above stay full-bleed by design. */}
         <div className="mx-auto w-full max-w-[1600px]">
-          <TopUtilityBar />
-          {children}
+          {/* Klaviyo-style trial: top utility bar hidden; page content in a rounded card. */}
+          <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] backdrop-blur-xl shadow-sm p-6 md:p-8 min-h-[calc(100vh-4rem)]">
+            {children}
+          </div>
         </div>
       </main>
     </>

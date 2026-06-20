@@ -279,7 +279,7 @@ export function Sidebar() {
   return (
     <aside
       data-collapsed={collapsed}
-      className={`glass-panel fixed left-3 top-3 bottom-3 rounded-2xl text-[var(--sidebar-foreground)] flex flex-col z-50 overflow-visible transition-[width] duration-200 ease-out ${
+      className={`fixed left-3 top-3 bottom-3 rounded-2xl text-[var(--sidebar-foreground)] flex flex-col z-50 overflow-visible transition-[width] duration-200 ease-out ${
         collapsed ? 'w-[4.5rem]' : 'w-60'
       }`}
     >

@@ -426,12 +426,12 @@ body {
    room — bake it into the scroll card here. Header pages bake it into the
    header instead (above) so the pinned bar can reach the card's top edge. */
 [data-scrolled]:not(:has(.page-sticky-header)) {
-  padding-top: 0.625rem;
+  padding-top: 1.5rem;
 }
 
 @media (min-width: 768px) {
   [data-scrolled]:not(:has(.page-sticky-header)) {
-    padding-top: 0.75rem;
+    padding-top: 2rem;
   }
 }
 

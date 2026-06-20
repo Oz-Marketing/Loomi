@@ -12,7 +12,9 @@ on:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # Bumped 5 → 10: the scan now runs a Meta pre-sync (refresh every linked
+    # account's live month) before evaluating, so the endpoint takes longer.
+    timeout-minutes: 10
     steps:
       - name: Trigger pacer alerts scan
         env:
@@ -29,7 +31,7 @@ jobs:
           status=$(curl --silent --show-error --location \
             --output /tmp/scan-response.json \
             --write-out "%{http_code}" \
-            --max-time 240 \
+            --max-time 540 \
             -X POST \
             -H "x-internal-job-secret: ${INTERNAL_JOB_SECRET}" \
             -H "Content-Type: application/json" \

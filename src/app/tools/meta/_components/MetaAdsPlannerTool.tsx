@@ -54,6 +54,10 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { toast } from '@/lib/toast';
 import { AccountAvatar } from '@/components/account-avatar';
 import { UserAvatar } from '@/components/user-avatar';
+// Shared searchable people picker (search + avatars). Aliased — this file has
+// its own department-filtered native-select `UserPicker` used by the planner
+// form; the import modal wants the searchable one.
+import { UserPicker as PeopleSearchPicker } from '@/components/user-picker';
 import { MetaBrandIcon } from '@/components/icons/platform-logos';
 import { BellIcon, BellOffIcon } from '@/components/icons/bell';
 import { InvestmentIcon } from '@/components/icons/investment';
@@ -11075,29 +11079,33 @@ function ImportFromMetaModal({
         {/* Footer: bulk assignment + import */}
         <div className="border-t border-[var(--border)] p-5 pt-4">
           <div className="grid grid-cols-3 gap-3 mb-4">
-            {(
-              [
-                ['Owner', ownerId, setOwnerId],
-                ['Designer', designerId, setDesignerId],
-                ['Account Rep', repId, setRepId],
-              ] as const
-            ).map(([label, value, setter]) => (
-              <div key={label}>
-                <label className={labelClass}>{label}</label>
-                <select
-                  value={value}
-                  onChange={(e) => setter(e.target.value)}
-                  className={inputClass}
-                >
-                  <option value="">— Unassigned —</option>
-                  {users.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            ))}
+            <div>
+              <label className={labelClass}>Owner</label>
+              <PeopleSearchPicker
+                value={ownerId || null}
+                onChange={(v) => setOwnerId(v ?? '')}
+                users={users}
+                placeholder="— Unassigned —"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Designer</label>
+              <PeopleSearchPicker
+                value={designerId || null}
+                onChange={(v) => setDesignerId(v ?? '')}
+                users={users}
+                placeholder="— Unassigned —"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Account Rep</label>
+              <PeopleSearchPicker
+                value={repId || null}
+                onChange={(v) => setRepId(v ?? '')}
+                users={users}
+                placeholder="— Unassigned —"
+              />
+            </div>
           </div>
           <div className="flex items-center justify-end gap-2">
             <button

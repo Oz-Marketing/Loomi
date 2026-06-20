@@ -385,7 +385,7 @@ body {
      chrome appears instantly with no animation. */
   margin-left: -1.5rem;
   margin-right: -1.5rem;
-  padding: 1.5rem 1.5rem 0.75rem;
+  padding: 1rem 1.5rem 0.75rem;
   border: 1px solid transparent;
 }
 
@@ -393,7 +393,7 @@ body {
   .page-sticky-header {
     margin-left: -2rem;
     margin-right: -2rem;
-    padding: 2rem 2rem 0.75rem;
+    padding: 1.25rem 2rem 0.75rem;
   }
 }
 
@@ -426,12 +426,12 @@ body {
    room — bake it into the scroll card here. Header pages bake it into the
    header instead (above) so the pinned bar can reach the card's top edge. */
 [data-scrolled]:not(:has(.page-sticky-header)) {
-  padding-top: 1.5rem;
+  padding-top: 1rem;
 }
 
 @media (min-width: 768px) {
   [data-scrolled]:not(:has(.page-sticky-header)) {
-    padding-top: 2rem;
+    padding-top: 1.25rem;
   }
 }
 

@@ -12,6 +12,7 @@ import {
   HomeIcon,
   MegaphoneIcon,
   PaperAirplaneIcon,
+  StarIcon,
   UsersIcon,
 } from '@heroicons/react/24/outline';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
@@ -48,6 +49,7 @@ const NAV: NavItem[] = [
   { key: 'contacts', label: 'Contacts', icon: UsersIcon, href: '/contacts' },
   { key: 'engagement', label: 'Engagement', icon: PaperAirplaneIcon, href: '/engagement' },
   { key: 'websites', label: 'Websites', icon: GlobeAltIcon, href: '/websites' },
+  { key: 'reputation', label: 'Reputation', icon: StarIcon, href: '/reputation' },
   {
     key: 'digital-ads',
     label: 'Digital Ads',

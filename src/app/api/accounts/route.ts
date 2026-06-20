@@ -35,7 +35,8 @@ export async function GET() {
       result[key] = data;
     }
     return NextResponse.json(result);
-  } catch {
+  } catch (err) {
+    console.error('[api/accounts] GET failed:', err);
     return NextResponse.json({ error: 'Could not read accounts' }, { status: 500 });
   }
 }

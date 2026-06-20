@@ -181,8 +181,14 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     if (status !== 'authenticated') return;
 
     fetch('/api/accounts')
-      .then(r => r.json())
-      .then((data: Record<string, AccountData>) => {
+      .then(async (r) => {
+        // Guard against error responses (e.g. a 500 returns `{ error }`) — without
+        // this the error body gets treated as an account map, surfacing a phantom
+        // "error" sub-account in the switcher.
+        if (!r.ok) throw new Error(`/api/accounts ${r.status}`);
+        return (await r.json()) as Record<string, AccountData>;
+      })
+      .then((data) => {
         setAccounts(filterAccountsForCurrentUser(data));
         setAccountsLoaded(true);
       })
@@ -201,7 +207,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
   const refreshAccounts = useCallback(async () => {
     try {
-      const data: Record<string, AccountData> = await fetch('/api/accounts').then(r => r.json());
+      const r = await fetch('/api/accounts');
+      if (!r.ok) return;
+      const data: Record<string, AccountData> = await r.json();
       setAccounts(filterAccountsForCurrentUser(data));
     } catch {}
   }, [filterAccountsForCurrentUser]);

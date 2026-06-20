@@ -196,6 +196,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     file: null,
   });
   const [fontUploading, setFontUploading] = useState(false);
+  const fontFileRef = useRef<HTMLInputElement>(null);
+  const [fontDragging, setFontDragging] = useState(false);
 
   // ── Custom Values ──
   type CustomValueDef = { name: string; value: string };
@@ -1081,10 +1083,11 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
             </section>
 
             <section className={sectionCardClass}>
-              <h3 className={sectionHeadingClass}>Websafe Fonts</h3>
+              <h3 className={sectionHeadingClass}>Fonts</h3>
               <p className="text-[11px] text-[var(--muted-foreground)] mb-4 -mt-2">
-                Choose fallback-safe font stacks for headings and body copy.
+                Websafe stacks for everyday copy, plus uploaded OEM/brand fonts for the Ad Generator.
               </p>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className={labelClass}>Heading Font</label>
@@ -1111,80 +1114,107 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                   Body preview in selected websafe stack.
                 </p>
               </div>
-            </section>
 
-            <section className={sectionCardClass}>
-              <h3 className={sectionHeadingClass}>Custom Fonts</h3>
-              <p className="text-[11px] text-[var(--muted-foreground)] mb-4 -mt-2">
-                Upload OEM/brand font files (woff2, woff, ttf, otf). These become selectable in the Ad Generator.
-              </p>
+              <div className="mt-6 pt-5 border-t border-[var(--border)]">
+                <p className="text-sm font-semibold text-[var(--foreground)]">Custom fonts</p>
+                <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5 mb-4">
+                  Upload OEM/brand font files (woff2, woff, ttf, otf). These become selectable in the Ad Generator.
+                </p>
 
-              {customFonts.length > 0 && (
-                <div className="mb-4 space-y-2">
-                  {customFonts.map((f) => (
-                    <div key={f.url} className="flex items-center justify-between rounded-lg border border-[var(--border)] px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-[var(--foreground)]">{f.family}</p>
-                        <p className="text-[11px] text-[var(--muted-foreground)]">{f.weight || '400'} · {f.style || 'normal'}</p>
+                {customFonts.length > 0 && (
+                  <div className="mb-4 space-y-2">
+                    {customFonts.map((f) => (
+                      <div key={f.url} className="flex items-center justify-between rounded-lg border border-[var(--border)] px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-[var(--foreground)]">{f.family}</p>
+                          <p className="text-[11px] text-[var(--muted-foreground)]">{f.weight || '400'} · {f.style || 'normal'}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleFontDelete(f.url)}
+                          className="text-[11px] font-medium text-rose-400 hover:underline"
+                        >
+                          Remove
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => handleFontDelete(f.url)}
-                        className="text-[11px] font-medium text-rose-400 hover:underline"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )}
 
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="sm:col-span-2">
-                  <label className={labelClass}>Font file</label>
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setFontDragging(true);
+                  }}
+                  onDragLeave={() => setFontDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setFontDragging(false);
+                    const f = e.dataTransfer.files?.[0];
+                    if (f) setFontUpload((s) => ({ ...s, file: f }));
+                  }}
+                  onClick={() => fontFileRef.current?.click()}
+                  className={`relative flex h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed transition-all ${
+                    fontDragging
+                      ? 'border-[var(--primary)] bg-[var(--primary)]/5'
+                      : 'border-[var(--border)] bg-[var(--muted)]/50 hover:border-[var(--muted-foreground)]'
+                  }`}
+                >
+                  <CloudArrowUpIcon className="h-6 w-6 text-[var(--muted-foreground)]" />
+                  <span className="text-[11px] text-[var(--muted-foreground)]">
+                    {fontUpload.file ? fontUpload.file.name : 'Drop font file or click to upload'}
+                  </span>
                   <input
+                    ref={fontFileRef}
                     type="file"
                     accept=".woff2,.woff,.ttf,.otf"
-                    onChange={(e) => setFontUpload((s) => ({ ...s, file: e.target.files?.[0] ?? null }))}
-                    className={inputClass}
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) setFontUpload((s) => ({ ...s, file: f }));
+                      e.target.value = '';
+                    }}
                   />
                 </div>
-                <div>
-                  <label className={labelClass}>Family name</label>
-                  <input
-                    type="text"
-                    value={fontUpload.family}
-                    placeholder="e.g. Toyota Type"
-                    onChange={(e) => setFontUpload((s) => ({ ...s, family: e.target.value }))}
-                    className={inputClass}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
+
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
-                    <label className={labelClass}>Weight</label>
-                    <select value={fontUpload.weight} onChange={(e) => setFontUpload((s) => ({ ...s, weight: e.target.value }))} className={inputClass}>
-                      {['300', '400', '500', '600', '700', '800', '900'].map((w) => (
-                        <option key={w} value={w}>{w}</option>
-                      ))}
-                    </select>
+                    <label className={labelClass}>Family name</label>
+                    <input
+                      type="text"
+                      value={fontUpload.family}
+                      placeholder="e.g. Toyota Type"
+                      onChange={(e) => setFontUpload((s) => ({ ...s, family: e.target.value }))}
+                      className={inputClass}
+                    />
                   </div>
-                  <div>
-                    <label className={labelClass}>Style</label>
-                    <select value={fontUpload.style} onChange={(e) => setFontUpload((s) => ({ ...s, style: e.target.value }))} className={inputClass}>
-                      <option value="normal">Normal</option>
-                      <option value="italic">Italic</option>
-                    </select>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={labelClass}>Weight</label>
+                      <select value={fontUpload.weight} onChange={(e) => setFontUpload((s) => ({ ...s, weight: e.target.value }))} className={inputClass}>
+                        {['300', '400', '500', '600', '700', '800', '900'].map((w) => (
+                          <option key={w} value={w}>{w}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={labelClass}>Style</label>
+                      <select value={fontUpload.style} onChange={(e) => setFontUpload((s) => ({ ...s, style: e.target.value }))} className={inputClass}>
+                        <option value="normal">Normal</option>
+                        <option value="italic">Italic</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={handleFontUpload}
+                  disabled={fontUploading}
+                  className="mt-3 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  {fontUploading ? 'Uploading…' : 'Upload font'}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={handleFontUpload}
-                disabled={fontUploading}
-                className="mt-3 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-              >
-                {fontUploading ? 'Uploading…' : 'Upload font'}
-              </button>
             </section>
           </div>
         )}

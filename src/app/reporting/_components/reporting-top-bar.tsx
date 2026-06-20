@@ -168,7 +168,7 @@ export function ReportingTopBar({
   return (
     <>
       <header
-        className="mb-6 flex items-center justify-end gap-2"
+        className="flex items-center justify-end gap-4 px-6"
         aria-label="Reporting utilities"
       >
         <UtilityIconButton

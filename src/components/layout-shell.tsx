@@ -1,13 +1,12 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { Sidebar } from '@/components/sidebar';
 import { TopUtilityBar } from '@/components/top-utility-bar';
 import { AppLogo } from '@/components/app-logo';
 import { stripSubaccountPrefix } from '@/lib/account-slugs';
-import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
+import { SurfaceShell } from '@/components/surface-shell';
 
 const BUILDER_STEPS = [
   { key: 'recipients', label: 'Recipients' },
@@ -94,9 +93,6 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const normalizedPath = stripSubaccountPrefix(pathname);
-  const mainRef = useRef<HTMLDivElement>(null);
-  const [isMainScrolled, setIsMainScrolled] = useState(false);
-  const { collapsed: sidebarCollapsed } = useSidebarCollapse();
   const isFullScreen =
     normalizedPath.startsWith('/preview')
     || normalizedPath.startsWith('/login')
@@ -130,31 +126,6 @@ function AppShell({ children }: { children: React.ReactNode }) {
     /^\/websites\/forms\/[^/]+\/edit$/.test(builderProbe) ||
     /^\/websites\/landing-pages\/[^/]+\/edit$/.test(builderProbe) ||
     builderProbe === '/websites/landing-pages/demo';
-
-  useEffect(() => {
-    if (isFullScreen || isTemplateEditor || isCampaignBuilder || isFlowBuilder || isWebsiteBuilder) {
-      setIsMainScrolled(false);
-      return;
-    }
-
-    const main = mainRef.current;
-    if (!main) return;
-
-    const handleScroll = () => {
-      setIsMainScrolled(main.scrollTop > 0);
-    };
-
-    handleScroll();
-    main.addEventListener('scroll', handleScroll, { passive: true });
-    return () => main.removeEventListener('scroll', handleScroll);
-  }, [
-    pathname,
-    isFullScreen,
-    isTemplateEditor,
-    isCampaignBuilder,
-    isFlowBuilder,
-    isWebsiteBuilder,
-  ]);
 
   if (isFullScreen) {
     return <div className="flex-1">{children}</div>;
@@ -224,30 +195,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <>
-      <Sidebar />
-      {/* Fixed-height column: the utility bar + card never scroll; only the
-          card's inner content does. Outer padding tightened; small gap to the
-          sidebar. */}
-      <main
-        className={`flex-1 min-w-0 h-screen flex flex-col overflow-hidden p-3 transition-[padding-left] duration-200 ease-out ${
-          sidebarCollapsed ? 'pl-[4.5rem]' : 'pl-[16.5rem]'
-        }`}
-      >
-        {/* Fill the width so the card hugs the nav (no centered gap on wide
-            monitors); fill the height as a column. */}
-        <div className="flex w-full flex-1 flex-col min-h-0 gap-3">
-          <TopUtilityBar />
-          <div
-            ref={mainRef}
-            data-scrolled={isMainScrolled ? 'true' : 'false'}
-            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain rounded-2xl border border-[var(--border)] bg-[var(--card)] backdrop-blur-xl shadow-sm px-6 md:px-8 pb-6 md:pb-8"
-          >
-            {children}
-          </div>
-        </div>
-      </main>
-    </>
+    <SurfaceShell sidebar={<Sidebar />} topBar={<TopUtilityBar />}>
+      {children}
+    </SurfaceShell>
   );
 }
 

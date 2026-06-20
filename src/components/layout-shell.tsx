@@ -231,7 +231,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
           sidebar. */}
       <main
         className={`flex-1 min-w-0 h-screen flex flex-col overflow-hidden p-3 transition-[padding-left] duration-200 ease-out ${
-          sidebarCollapsed ? 'pl-[6rem]' : 'pl-[16.5rem]'
+          sidebarCollapsed ? 'pl-[4.5rem]' : 'pl-[16.5rem]'
         }`}
       >
         {/* Cap content width on wide monitors; fill the height as a column. */}

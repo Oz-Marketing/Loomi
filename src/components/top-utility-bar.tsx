@@ -139,17 +139,7 @@ export function TopUtilityBar() {
   }, []);
 
   return (
-    <header className="flex items-center justify-between gap-4" aria-label="Page utilities">
-      <button
-        type="button"
-        onClick={() => setSearchOpen(true)}
-        className="flex items-center gap-2 w-full max-w-md rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-sm text-[var(--muted-foreground)] hover:border-[var(--primary)] transition-colors"
-      >
-        <MagnifyingGlassIcon className="w-4 h-4 flex-shrink-0" />
-        <span className="flex-1 text-left">Search&hellip;</span>
-        <kbd className="hidden sm:inline text-[10px] rounded border border-[var(--border)] px-1.5 py-0.5">&#8984;K</kbd>
-      </button>
-
+    <header className="flex items-center justify-end gap-4" aria-label="Page utilities">
       {searchOpen && (
         <div
           className="fixed inset-0 z-[100] flex items-start justify-center bg-black/40 backdrop-blur-sm px-4 pt-[15vh]"
@@ -183,6 +173,16 @@ export function TopUtilityBar() {
       )}
 
       <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setSearchOpen(true)}
+          className="flex items-center gap-2 w-56 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-sm text-[var(--muted-foreground)] hover:border-[var(--primary)] transition-colors"
+        >
+          <MagnifyingGlassIcon className="w-4 h-4 flex-shrink-0" />
+          <span className="flex-1 text-left">Search&hellip;</span>
+          <kbd className="hidden sm:inline text-[10px] rounded border border-[var(--border)] px-1.5 py-0.5">&#8984;K</kbd>
+        </button>
+
         <UtilityIconButton
           title="Help"
           onClick={() => {

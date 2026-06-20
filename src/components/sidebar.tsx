@@ -13,6 +13,7 @@ import {
   Squares2X2Icon,
   UserGroupIcon,
   PhotoIcon,
+  SparklesIcon,
   SunIcon,
   MoonIcon,
   MegaphoneIcon,
@@ -134,9 +135,11 @@ const templatesNav: NavItem = {
 const adGeneratorNav: NavItem = {
   href: '/tools/ad-generator',
   label: 'Ad Generator',
-  icon: PhotoIcon,
+  icon: SparklesIcon,
   absolute: true,
 };
+// Media library — re-added below Ad Generator.
+const mediaNav: NavItem = { href: '/media', label: 'Media', icon: PhotoIcon };
 // Flows is now a leaf nav item — analytics moved to /reporting/engagement.
 const flowsNavItem: NavItem = {
   href: '/flows',
@@ -187,6 +190,7 @@ const adminNavItems: NavEntry[] = [
   websitesNav,
   flowsNavItem,
   adGeneratorNav,
+  mediaNav,
   { divider: true, label: 'Tools' },
   toolsNavItem,
 ];
@@ -300,7 +304,7 @@ export function Sidebar() {
     <aside
       data-collapsed={collapsed}
       className={`fixed left-3 top-3 bottom-3 rounded-2xl text-[var(--sidebar-foreground)] flex flex-col z-50 overflow-visible transition-[width] duration-200 ease-out ${
-        collapsed ? 'w-[4.5rem]' : 'w-60'
+        collapsed ? 'w-14' : 'w-60'
       }`}
     >
       {/* Logo + Account Switcher + Collapse Toggle */}
@@ -325,7 +329,7 @@ export function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className={`flex-1 space-y-px overflow-y-auto ${collapsed ? 'p-2' : 'px-2 py-2'}`}>
+      <nav className={`flex-1 space-y-px overflow-y-auto ${collapsed ? 'px-1.5 py-2' : 'px-2 py-2'}`}>
         {resolvedNavItems.map((entry, i) => {
           if ('divider' in entry) {
             if (collapsed) {

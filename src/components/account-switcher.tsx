@@ -186,7 +186,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [recentAccountKeys, setRecentAccountKeys] = useState<string[]>([]);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number }>({ top: 0, left: 0 });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -209,7 +209,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
           left: rect.right + 12,
         });
       } else if (openUp) {
-        setPos({ top: rect.top - 6, left: rect.left });
+        setPos({ bottom: window.innerHeight - rect.top + 6, left: rect.left });
       } else {
         setPos({
           top: rect.bottom + 6,
@@ -449,8 +449,8 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
       {open && typeof document !== 'undefined' && createPortal(
         <div
           ref={dropdownRef}
-          className={`fixed z-[200] w-72 rounded-xl glass-dropdown overflow-hidden ${openUp ? '' : 'animate-fade-in-up'}`}
-          style={{ top: pos.top, left: pos.left, transform: openUp ? 'translateY(-100%)' : undefined }}
+          className="fixed z-[200] w-72 rounded-xl glass-dropdown overflow-hidden animate-fade-in-up"
+          style={{ top: pos.top, bottom: pos.bottom, left: pos.left }}
         >
           {/* Search */}
           <div className="p-1.5 border-b border-[var(--border)]">

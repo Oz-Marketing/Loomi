@@ -54,6 +54,10 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { toast } from '@/lib/toast';
 import { AccountAvatar } from '@/components/account-avatar';
 import { UserAvatar } from '@/components/user-avatar';
+// Shared searchable people picker (search + avatars). Aliased — this file has
+// its own department-filtered native-select `UserPicker` used by the planner
+// form; the import modal wants the searchable one.
+import { UserPicker as PeopleSearchPicker } from '@/components/user-picker';
 import { MetaBrandIcon } from '@/components/icons/platform-logos';
 import { BellIcon, BellOffIcon } from '@/components/icons/bell';
 import { InvestmentIcon } from '@/components/icons/investment';
@@ -10745,6 +10749,395 @@ function OverviewView({
   );
 }
 
+// ─── Import from Meta (onboarding) ──────────────────────────────────────────
+/** Mirror of the server `DiscoveredAdSet` (lib/integrations/meta-ads.ts). */
+interface DiscoveredAdSet {
+  id: string;
+  name: string;
+  campaignName: string | null;
+  effectiveStatus: string | null;
+  active: boolean;
+  budgetType: 'Daily' | 'Lifetime';
+  dailyBudget: number | null;
+  lifetimeBudget: number | null;
+  startDate: string | null;
+  endDate: string | null;
+  periodSpend: number;
+  runSpend: number | null;
+  alreadyLinked: boolean;
+  suggestedStatus: string;
+}
+
+/**
+ * Bulk-import existing Meta ad sets as pacer rows — the onboarding fast path
+ * for a fresh subaccount that already has ads running. Lists every ad set in
+ * the account (active-only by default, with a toggle), lets the user check the
+ * ones to adopt, optionally stamp owner/designer/rep across the batch, and
+ * creates them already linked + synced. Already-imported ad sets show disabled
+ * so nothing is double-created.
+ */
+function ImportFromMetaModal({
+  accountKey,
+  period,
+  periodLabel,
+  users,
+  onClose,
+  onImported,
+}: {
+  accountKey: string;
+  period: string;
+  periodLabel: string;
+  users: DirectoryUser[];
+  onClose: () => void;
+  onImported: (data: unknown) => void;
+}) {
+  const [adSets, setAdSets] = useState<DiscoveredAdSet[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
+  const [showInactive, setShowInactive] = useState(false);
+  const [ownerId, setOwnerId] = useState('');
+  const [designerId, setDesignerId] = useState('');
+  const [repId, setRepId] = useState('');
+  const [importing, setImporting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetch(`/api/meta-ads-pacer/${accountKey}/discover?period=${period}`)
+      .then(async (r) => {
+        const data = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(data?.error || 'Failed to load ad sets');
+        return data;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setAdSets(Array.isArray(data?.adSets) ? data.adSets : []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Failed to load ad sets');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey, period]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !importing) onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, importing]);
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return (adSets ?? []).filter((s) => {
+      if (!showInactive && !s.active && !s.alreadyLinked) return false;
+      if (!q) return true;
+      return (
+        s.name.toLowerCase().includes(q) ||
+        (s.campaignName ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [adSets, search, showInactive]);
+
+  const selectable = useMemo(
+    () => visible.filter((s) => !s.alreadyLinked),
+    [visible],
+  );
+  const allSelected =
+    selectable.length > 0 && selectable.every((s) => selected.has(s.id));
+  const hiddenInactive = useMemo(
+    () =>
+      showInactive
+        ? 0
+        : (adSets ?? []).filter((s) => !s.active && !s.alreadyLinked).length,
+    [adSets, showInactive],
+  );
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAll = () =>
+    setSelected((prev) => {
+      if (selectable.length > 0 && selectable.every((s) => prev.has(s.id))) {
+        const next = new Set(prev);
+        selectable.forEach((s) => next.delete(s.id));
+        return next;
+      }
+      const next = new Set(prev);
+      selectable.forEach((s) => next.add(s.id));
+      return next;
+    });
+
+  const doImport = async () => {
+    if (importing || selected.size === 0) return;
+    setImporting(true);
+    try {
+      const res = await fetch(
+        `/api/meta-ads-pacer/${accountKey}/import?period=${period}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            adSetIds: Array.from(selected),
+            assignments: {
+              ownerUserId: ownerId || null,
+              designerUserId: designerId || null,
+              accountRepUserId: repId || null,
+            },
+          }),
+        },
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(data?.error || 'Import failed.');
+        return;
+      }
+      const n = data?.import?.imported ?? 0;
+      const skipped = data?.import?.skipped ?? 0;
+      onImported(data);
+      toast.success(
+        `Imported ${n} ad${n === 1 ? '' : 's'} from Meta.${
+          skipped ? ` ${skipped} skipped.` : ''
+        }`,
+      );
+      onClose();
+    } catch {
+      toast.error('Import failed.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[120] flex items-start justify-center p-4 sm:pt-16 bg-black/50 backdrop-blur-sm"
+      onClick={() => !importing && onClose()}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="glass-modal w-full max-w-2xl rounded-xl flex flex-col max-h-[85vh]"
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between p-5 pb-4 border-b border-[var(--border)]">
+          <div>
+            <h3 className="text-base font-bold text-[var(--foreground)] flex items-center gap-2">
+              <MetaBrandIcon className="w-4 h-4" />
+              Import ad sets from Meta
+            </h3>
+            <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
+              Pick which of this account&apos;s ad sets to bring into{' '}
+              {periodLabel}. They&apos;re created already linked and synced.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => !importing && onClose()}
+            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
+            aria-label="Close"
+          >
+            <XMarkIcon className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Controls */}
+        <div className="flex items-center gap-3 px-5 py-3 border-b border-[var(--border)]">
+          <div className="relative flex-1">
+            <MagnifyingGlassIcon className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search ad sets or campaigns…"
+              className="w-full pl-8 pr-3 py-1.5 text-sm rounded-lg border border-[var(--border)] bg-[var(--input)] focus:outline-none focus:border-[var(--primary)] text-[var(--foreground)]"
+            />
+          </div>
+          <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)] whitespace-nowrap cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => setShowInactive(e.target.checked)}
+              className="accent-[var(--primary)]"
+            />
+            Show paused/archived
+          </label>
+        </div>
+
+        {/* List */}
+        <div className="flex-1 overflow-y-auto px-2 py-2 min-h-[160px]">
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 py-12 text-sm text-[var(--muted-foreground)]">
+              <ArrowPathIcon className="w-4 h-4 animate-spin" />
+              Loading ad sets…
+            </div>
+          ) : error ? (
+            <div className="py-12 text-center text-sm text-[#ef4444]">{error}</div>
+          ) : visible.length === 0 ? (
+            <div className="py-12 text-center text-sm text-[var(--muted-foreground)]">
+              {(adSets ?? []).length === 0
+                ? 'No ad sets found in this Meta ad account.'
+                : 'No ad sets match your filters.'}
+              {hiddenInactive > 0 && (
+                <div className="mt-1 text-xs">
+                  {hiddenInactive} paused/archived hidden — toggle above to show.
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between px-3 py-1.5">
+                <button
+                  type="button"
+                  onClick={toggleAll}
+                  disabled={selectable.length === 0}
+                  className="text-xs font-semibold text-[var(--primary)] hover:underline disabled:opacity-40 disabled:no-underline"
+                >
+                  {allSelected ? 'Clear all' : 'Select all'}
+                </button>
+                <span className="text-xs text-[var(--muted-foreground)]">
+                  {selected.size} selected
+                  {hiddenInactive > 0 && ` · ${hiddenInactive} hidden`}
+                </span>
+              </div>
+              {visible.map((s) => {
+                const checked = selected.has(s.id);
+                const budgetLabel =
+                  s.budgetType === 'Lifetime'
+                    ? s.lifetimeBudget != null
+                      ? `${fmt(s.lifetimeBudget)} lifetime`
+                      : '— lifetime'
+                    : s.dailyBudget != null
+                      ? `${fmt(s.dailyBudget)}/day`
+                      : 'No set budget';
+                const flight = s.startDate
+                  ? `${fmtDate(s.startDate)} – ${s.endDate ? fmtDate(s.endDate) : 'ongoing'}`
+                  : 'Open-ended';
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    disabled={s.alreadyLinked}
+                    onClick={() => toggle(s.id)}
+                    className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
+                      s.alreadyLinked
+                        ? 'opacity-50 cursor-not-allowed'
+                        : checked
+                          ? 'bg-[var(--primary)]/10'
+                          : 'hover:bg-[var(--muted)]'
+                    }`}
+                  >
+                    <span
+                      className={`mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border ${
+                        checked && !s.alreadyLinked
+                          ? 'bg-[var(--primary)] border-[var(--primary)]'
+                          : 'border-[var(--border)]'
+                      }`}
+                    >
+                      {checked && !s.alreadyLinked && (
+                        <CheckIcon className="w-3 h-3 text-white" />
+                      )}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-[var(--foreground)] truncate">
+                          {s.name}
+                        </span>
+                        {s.alreadyLinked ? (
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[var(--muted)] text-[var(--muted-foreground)] whitespace-nowrap">
+                            Imported
+                          </span>
+                        ) : (
+                          <AdStatusPill status={s.suggestedStatus} />
+                        )}
+                      </div>
+                      <div className="mt-0.5 text-xs text-[var(--muted-foreground)] truncate">
+                        {s.campaignName ? `${s.campaignName} · ` : ''}
+                        {budgetLabel} · {flight}
+                        {s.periodSpend > 0 && ` · ${fmt(s.periodSpend)} spent`}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </>
+          )}
+        </div>
+
+        {/* Footer: bulk assignment + import */}
+        <div className="border-t border-[var(--border)] p-5 pt-4">
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div>
+              <label className={labelClass}>Owner</label>
+              <PeopleSearchPicker
+                value={ownerId || null}
+                onChange={(v) => setOwnerId(v ?? '')}
+                users={users}
+                placeholder="— Unassigned —"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Designer</label>
+              <PeopleSearchPicker
+                value={designerId || null}
+                onChange={(v) => setDesignerId(v ?? '')}
+                users={users}
+                placeholder="— Unassigned —"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Account Rep</label>
+              <PeopleSearchPicker
+                value={repId || null}
+                onChange={(v) => setRepId(v ?? '')}
+                users={users}
+                placeholder="— Unassigned —"
+              />
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => !importing && onClose()}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={doImport}
+              disabled={importing || selected.size === 0}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg bg-[var(--primary)] text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {importing ? (
+                <ArrowPathIcon className="w-4 h-4 animate-spin" />
+              ) : (
+                <PlusIcon className="w-4 h-4" />
+              )}
+              {importing
+                ? 'Importing…'
+                : `Import ${selected.size || ''} ad set${selected.size === 1 ? '' : 's'}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // ─── Main tool component ───────────────────────────────────────────────────
 /**
  * Shared shell rendered by both the Ad Planner and Ad Pacer pages. The
@@ -10797,6 +11190,8 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
   // their open-state + drawers are lifted here and work on every pacer sub-tab.
   const [budgetLogOpen, setBudgetLogOpen] = useState(false);
   const [changeLogOpen, setChangeLogOpen] = useState(false);
+  // "Import from Meta" onboarding modal (pacer only).
+  const [importOpen, setImportOpen] = useState(false);
   const adsSnapshot = useMemo<AdSnapshot[]>(
     () =>
       plan
@@ -11069,17 +11464,21 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
   // plan straight into state. Linked rows (or rows whose name matches a
   // campaign) get their pacerActual overwritten by Facebook's number; the
   // existing autosave effect persists the result.
-  const handleSyncMeta = async () => {
+  const handleSyncMeta = async (opts?: { auto?: boolean }) => {
     if (!activeKey || syncingMeta) return;
+    // Auto = the silent background refresh on load (stale-while-revalidate):
+    // no toasts, and the route skips the audit entry. The button spinner is
+    // the only surfaced signal.
+    const auto = opts?.auto === true;
     setSyncingMeta(true);
     try {
       const res = await fetch(
-        `/api/meta-ads-pacer/${activeKey}/sync-meta?period=${period}`,
+        `/api/meta-ads-pacer/${activeKey}/sync-meta?period=${period}${auto ? '&auto=1' : ''}`,
         { method: 'POST' },
       );
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        toast.error(data?.error || 'Meta sync failed.');
+        if (!auto) toast.error(data?.error || 'Meta sync failed.');
         return;
       }
       setPlan({
@@ -11104,6 +11503,8 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         ads: Array.isArray(data.ads) ? data.ads : [],
         siblingsByName: data.siblingsByName,
       });
+      // Background refresh: the rows just updated silently — no toasts.
+      if (auto) return;
       const sync = data.sync as
         | { matched: number; total: number; results: { matched: boolean; name: string }[] }
         | undefined;
@@ -11126,10 +11527,73 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         );
       }
     } catch {
-      toast.error('Meta sync failed.');
+      if (!auto) toast.error('Meta sync failed.');
     } finally {
       setSyncingMeta(false);
     }
+  };
+
+  // ── Auto-refresh from Meta on load (stale-while-revalidate) ──
+  // The pacer renders from cached DB rows immediately; once loaded, if the
+  // linked ads' spend is stale we fire ONE silent background sync. Latest sync
+  // fn + plan live in refs so the effect fires once per account/period load
+  // without re-running on every plan edit or chasing the fn's identity.
+  const autoSyncFnRef = useRef<(opts?: { auto?: boolean }) => void>(() => {});
+  autoSyncFnRef.current = handleSyncMeta;
+  const planRef = useRef<PacerPlan | null>(null);
+  planRef.current = plan;
+  // Per account+period cooldown so a sync that keeps failing can't re-fire on
+  // every render — it retries at most once per stale window.
+  const autoSyncAttemptRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    if (mode !== 'pacer' || !activeKey || !loaded) return;
+    const p = planRef.current;
+    if (!p || p.frozen) return;
+    // Only ad sets actually linked to Meta can be refreshed.
+    const linked = p.ads.filter((a) => a.metaObjectId);
+    if (linked.length === 0) return;
+    const STALE_MS = 15 * 60 * 1000;
+    const now = Date.now();
+    const anyNeverSynced = linked.some((a) => !a.pacerSyncedAt);
+    const freshest = linked.reduce((max, a) => {
+      const t = a.pacerSyncedAt ? Date.parse(a.pacerSyncedAt) : NaN;
+      return Number.isFinite(t) && t > max ? t : max;
+    }, 0);
+    if (!anyNeverSynced && now - freshest <= STALE_MS) return; // still fresh
+    const key = `${activeKey}:${period}`;
+    const last = autoSyncAttemptRef.current.get(key) ?? 0;
+    if (now - last < STALE_MS) return; // attempted recently — don't loop
+    autoSyncAttemptRef.current.set(key, now);
+    autoSyncFnRef.current({ auto: true });
+  }, [activeKey, period, loaded, mode]);
+
+  // ── Apply the refreshed plan returned by the "Import from Meta" modal ──
+  // The import route returns the same period view as a sync, so the rows drop
+  // straight into state (the modal owns its own toast + close).
+  const handleImported = (raw: unknown) => {
+    const data = (raw ?? {}) as Record<string, unknown>;
+    setPlan({
+      accountKey: (data.accountKey as string) ?? activeKey ?? '',
+      period: (data.period as string) ?? period,
+      baseBudgetGoal: (data.baseBudgetGoal as string | null) ?? null,
+      addedBudgetGoal: (data.addedBudgetGoal as string | null) ?? null,
+      markup:
+        typeof data.markup === 'number' && Number.isFinite(data.markup)
+          ? (data.markup as number)
+          : null,
+      timeZone:
+        typeof data.timeZone === 'string' && data.timeZone
+          ? (data.timeZone as string)
+          : DEFAULT_TIME_ZONE,
+      frozen: data.frozen === true,
+      frozenAt: (data.frozenAt as string | null) ?? null,
+      reopened: data.reopened === true,
+      baseCarryover: (data.baseCarryover as string | null) ?? null,
+      addedCarryover: (data.addedCarryover as string | null) ?? null,
+      priorOverUnder: (data.priorOverUnder as PriorOverUnder | null) ?? null,
+      ads: Array.isArray(data.ads) ? (data.ads as PacerAd[]) : [],
+      siblingsByName: data.siblingsByName as PacerPlan['siblingsByName'],
+    });
   };
 
   // ── Reopen a frozen (closed) month for correction (admin escape hatch) ──
@@ -11643,17 +12107,35 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
               </Tooltip>
             </>
           )}
+          {/* Import from Meta: bulk-adopt existing ad sets as pacer rows — the
+              onboarding fast path. Pacer only, and not on frozen months. */}
+          {activeKey && mode === 'pacer' && (
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              disabled={!!plan?.frozen}
+              title={
+                plan?.frozen
+                  ? 'This month is frozen — reopen it to import'
+                  : 'Bring existing Meta ad sets into this month as pacer rows'
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <PlusIcon className="w-3.5 h-3.5" />
+              Import from Meta
+            </button>
+          )}
           {/* Sync from Meta sits to the right of the icons. Pacer only — the
               planner is for planning, so it doesn't pull actual spend. */}
           {activeKey && mode === 'pacer' && (
             <button
               type="button"
-              onClick={handleSyncMeta}
+              onClick={() => handleSyncMeta()}
               disabled={syncingMeta || !!plan?.frozen}
               title={
                 plan?.frozen
                   ? 'This month is frozen — reopen it to re-sync'
-                  : "Pull actual spend from Meta for this period's linked campaigns"
+                  : "Refresh actual spend from Meta now (also auto-refreshes when you open the pacer if it's been a while)"
               }
               className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
             >
@@ -12067,6 +12549,16 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           accountLabel={activeAccount?.dealer ?? activeKey}
           period={period}
           onClose={() => setChangeLogOpen(false)}
+        />
+      )}
+      {importOpen && activeKey && mode === 'pacer' && (
+        <ImportFromMetaModal
+          accountKey={activeKey}
+          period={period}
+          periodLabel={fmtPeriodLong(period)}
+          users={users}
+          onClose={() => setImportOpen(false)}
+          onImported={handleImported}
         />
       )}
     </div>

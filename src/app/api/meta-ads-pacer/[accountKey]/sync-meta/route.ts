@@ -54,12 +54,17 @@ export async function POST(
     );
   }
 
+  // Automatic background refresh (stale-while-revalidate on pacer load) passes
+  // ?auto=1. Same sync, but we skip the audit entry so the change log only
+  // records deliberate manual syncs — not one line per page view.
+  const auto = req.nextUrl.searchParams.get('auto') === '1';
+
   try {
     const sync = await syncPeriodFromMeta(accountKey, period, todayIso());
     const userId = session.user?.id ?? null;
     // One grouped audit entry per sync (per the team decision) — captures that
     // spend refreshed without flooding the log with per-ad spend deltas.
-    if (sync.matched > 0) {
+    if (!auto && sync.matched > 0) {
       await writeAudit([
         {
           accountKey,

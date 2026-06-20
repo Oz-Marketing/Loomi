@@ -1490,7 +1490,7 @@ function ManagementRoleDashboard({
 
             <div>
               <h2 className="text-2xl font-bold">{dashboardTitle}</h2>
-              <p className="mt-0.5 text-sm font-medium text-[var(--foreground)]">Welcome, {welcomeName}!</p>
+              <p className="dashboard-welcome mt-0.5 text-sm font-medium text-[var(--foreground)]">Welcome, {welcomeName}!</p>
               {usingMockData ? (
                 <p className="mt-1 inline-flex items-center rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-300">
                   Dummy Data Mode
@@ -2093,7 +2093,7 @@ function ClientRoleDashboard({
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-2xl font-bold">Dashboard</h2>
-            <p className="mt-0.5 text-sm font-medium text-[var(--foreground)]">Welcome, {userName?.trim() || 'there'}!</p>
+            <p className="dashboard-welcome mt-0.5 text-sm font-medium text-[var(--foreground)]">Welcome, {userName?.trim() || 'there'}!</p>
             {usingMockData ? (
               <p className="mt-1 inline-flex items-center rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-300">
                 Dummy Data Mode

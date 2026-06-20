@@ -373,19 +373,18 @@ body {
   z-index: 30;
   /* Full-bleed at ALL times: negative margins cancel the content card's
      padding so the bar can span edge-to-edge, and matching horizontal padding
-     keeps the title aligned with the rest of the page. The top padding gives
-     breathing room from the card's top edge (the card carries no top padding,
-     so the header pins flush when stuck).
+     keeps the title aligned with the rest of the page.
 
-     Box dimensions stay CONSTANT whether stuck or not — only the background,
-     border color, and shadow change on scroll (paint-only, below). This is
-     deliberate: resizing the header on scroll shifts the content beneath it,
-     which nudges scrollTop and re-toggles the stuck state, causing a visible
-     jitter. A fixed size avoids that, and there's no transition, so the
-     chrome appears instantly with no animation. */
+     TOP padding is generous at rest so the title clears the card's rounded
+     top edge, then compacts once the header docks on scroll (the stuck rule
+     below) so the pinned bar reads tight. Only the top padding changes —
+     horizontal + bottom stay constant. The content card is a fixed-height
+     scroll area and any page rendering a sticky header has enough content
+     that compacting can't make it un-scrollable, so the height change can't
+     bounce the stuck state. */
   margin-left: -1.5rem;
   margin-right: -1.5rem;
-  padding: 0.625rem 1.5rem 0.75rem;
+  padding: 1.5rem 1.5rem 0.75rem;
   border: 1px solid transparent;
 }
 
@@ -393,7 +392,7 @@ body {
   .page-sticky-header {
     margin-left: -2rem;
     margin-right: -2rem;
-    padding: 0.75rem 2rem 0.75rem;
+    padding: 2rem 2rem 0.75rem;
   }
 }
 
@@ -406,10 +405,11 @@ body {
 /* `.pad-on-scroll` is a legacy alias kept so existing call sites don't need
    sweeping — it intentionally adds nothing now. */
 
-/* Stuck (page scrolled): paint only — opaque background so scrolled content
-   can't show through, a bottom divider, and a shadow. No size or position
-   change, so the header never resizes or jitters. */
+/* Stuck (page scrolled): go opaque so scrolled content can't show through,
+   add a bottom divider + shadow, and compact the top padding so the docked
+   bar reads tight (it's generous at rest, above). */
 [data-scrolled='true'] .page-sticky-header {
+  padding-top: 0.625rem;
   /* Opaque so scrolled content can't show through; tuned to read as the
      content card it pins to. */
   background: #120f18;
@@ -417,9 +417,22 @@ body {
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
 }
 
+@media (min-width: 768px) {
+  [data-scrolled='true'] .page-sticky-header {
+    padding-top: 0.75rem;
+  }
+}
+
 [data-theme='light'] [data-scrolled='true'] .page-sticky-header {
   background: rgb(255, 255, 255);
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+}
+
+/* The dashboard greeting collapses once the header docks — it's a one-time
+   welcome, not a persistent label, so it shows only at rest (top). Scoped to
+   `.dashboard-welcome` so this is dashboards-only. */
+[data-scrolled='true'] .dashboard-welcome {
+  display: none;
 }
 
 /* Pages that don't render a sticky page header still need top breathing

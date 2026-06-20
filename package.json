@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3000",
-    "build": "prisma generate && prisma db push --accept-data-loss && npx tsx scripts/backfill-slugs.ts && npx tsx scripts/seed-changelog-entries.ts && npx tsx scripts/backfill-default-markup.ts && npx tsx scripts/backfill-alert-rules.ts && next build --webpack",
+    "build": "prisma generate && prisma db push && npx tsx scripts/backfill-slugs.ts && npx tsx scripts/seed-changelog-entries.ts && npx tsx scripts/backfill-default-markup.ts && npx tsx scripts/backfill-alert-rules.ts && next build --webpack",
     "build:assets": "prisma generate && next build --webpack",
-    "deploy:prepare": "prisma generate && prisma db push --accept-data-loss && npx tsx scripts/backfill-slugs.ts && npx tsx scripts/seed-changelog-entries.ts && npx tsx scripts/backfill-default-markup.ts && npx tsx scripts/backfill-alert-rules.ts",
+    "deploy:prepare": "prisma generate && prisma db push && npx tsx scripts/backfill-slugs.ts && npx tsx scripts/seed-changelog-entries.ts && npx tsx scripts/backfill-default-markup.ts && npx tsx scripts/backfill-alert-rules.ts",
     "start": "next start -p 3000",
     "worker:start": "node --import tsx src/worker/index.ts",
     "db:generate": "npx prisma generate",

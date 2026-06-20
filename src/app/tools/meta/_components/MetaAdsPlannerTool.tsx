@@ -6807,6 +6807,15 @@ function ChangeLogDrawer({
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Group ids that contain a `sync` entry. Imports/syncs write a sync line
+  // (plus, for imports, per-ad `created` lines under the same group), so any
+  // entry in one of these groups originated from Meta and gets a Meta badge.
+  const metaGroupIds = new Set(
+    (entries ?? [])
+      .filter((e) => e.action === 'sync' && e.groupId)
+      .map((e) => e.groupId),
+  );
+
   if (typeof document === 'undefined') return null;
 
   return createPortal(
@@ -6849,19 +6858,32 @@ function ChangeLogDrawer({
                 const color = AUDIT_ACTION_COLORS[e.action] ?? 'var(--muted-foreground)';
                 const ActionIcon = AUDIT_ACTION_ICONS[e.action] ?? ClockIcon;
                 const isSystem = e.authorName === 'System';
+                const isFromMeta =
+                  e.action === 'sync' || (!!e.groupId && metaGroupIds.has(e.groupId));
                 return (
                   <div
                     key={e.id}
                     className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2"
                   >
                     <div className="flex items-center justify-between gap-2 mb-1">
-                      <span
-                        className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
-                        style={{ background: `${color}22`, color }}
-                      >
-                        <ActionIcon className="w-3 h-3" />
-                        {e.action.replace(/_/g, ' ')}
-                      </span>
+                      <div className="flex items-center gap-1 min-w-0">
+                        <span
+                          className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                          style={{ background: `${color}22`, color }}
+                        >
+                          <ActionIcon className="w-3 h-3" />
+                          {e.action.replace(/_/g, ' ')}
+                        </span>
+                        {isFromMeta && (
+                          <span
+                            title="From Meta"
+                            className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-[#0866FF]/15 text-[#0866FF]"
+                          >
+                            <MetaBrandIcon className="w-3 h-3" />
+                            Meta
+                          </span>
+                        )}
+                      </div>
                       <span className="text-[10px] text-[var(--muted-foreground)] whitespace-nowrap">
                         {fmtSyncedAgo(e.createdAt)}
                       </span>

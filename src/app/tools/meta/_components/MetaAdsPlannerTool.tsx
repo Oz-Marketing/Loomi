@@ -11464,17 +11464,21 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
   // plan straight into state. Linked rows (or rows whose name matches a
   // campaign) get their pacerActual overwritten by Facebook's number; the
   // existing autosave effect persists the result.
-  const handleSyncMeta = async () => {
+  const handleSyncMeta = async (opts?: { auto?: boolean }) => {
     if (!activeKey || syncingMeta) return;
+    // Auto = the silent background refresh on load (stale-while-revalidate):
+    // no toasts, and the route skips the audit entry. The button spinner is
+    // the only surfaced signal.
+    const auto = opts?.auto === true;
     setSyncingMeta(true);
     try {
       const res = await fetch(
-        `/api/meta-ads-pacer/${activeKey}/sync-meta?period=${period}`,
+        `/api/meta-ads-pacer/${activeKey}/sync-meta?period=${period}${auto ? '&auto=1' : ''}`,
         { method: 'POST' },
       );
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        toast.error(data?.error || 'Meta sync failed.');
+        if (!auto) toast.error(data?.error || 'Meta sync failed.');
         return;
       }
       setPlan({
@@ -11499,6 +11503,8 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         ads: Array.isArray(data.ads) ? data.ads : [],
         siblingsByName: data.siblingsByName,
       });
+      // Background refresh: the rows just updated silently — no toasts.
+      if (auto) return;
       const sync = data.sync as
         | { matched: number; total: number; results: { matched: boolean; name: string }[] }
         | undefined;
@@ -11521,11 +11527,45 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         );
       }
     } catch {
-      toast.error('Meta sync failed.');
+      if (!auto) toast.error('Meta sync failed.');
     } finally {
       setSyncingMeta(false);
     }
   };
+
+  // ── Auto-refresh from Meta on load (stale-while-revalidate) ──
+  // The pacer renders from cached DB rows immediately; once loaded, if the
+  // linked ads' spend is stale we fire ONE silent background sync. Latest sync
+  // fn + plan live in refs so the effect fires once per account/period load
+  // without re-running on every plan edit or chasing the fn's identity.
+  const autoSyncFnRef = useRef<(opts?: { auto?: boolean }) => void>(() => {});
+  autoSyncFnRef.current = handleSyncMeta;
+  const planRef = useRef<PacerPlan | null>(null);
+  planRef.current = plan;
+  // Per account+period cooldown so a sync that keeps failing can't re-fire on
+  // every render — it retries at most once per stale window.
+  const autoSyncAttemptRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    if (mode !== 'pacer' || !activeKey || !loaded) return;
+    const p = planRef.current;
+    if (!p || p.frozen) return;
+    // Only ad sets actually linked to Meta can be refreshed.
+    const linked = p.ads.filter((a) => a.metaObjectId);
+    if (linked.length === 0) return;
+    const STALE_MS = 15 * 60 * 1000;
+    const now = Date.now();
+    const anyNeverSynced = linked.some((a) => !a.pacerSyncedAt);
+    const freshest = linked.reduce((max, a) => {
+      const t = a.pacerSyncedAt ? Date.parse(a.pacerSyncedAt) : NaN;
+      return Number.isFinite(t) && t > max ? t : max;
+    }, 0);
+    if (!anyNeverSynced && now - freshest <= STALE_MS) return; // still fresh
+    const key = `${activeKey}:${period}`;
+    const last = autoSyncAttemptRef.current.get(key) ?? 0;
+    if (now - last < STALE_MS) return; // attempted recently — don't loop
+    autoSyncAttemptRef.current.set(key, now);
+    autoSyncFnRef.current({ auto: true });
+  }, [activeKey, period, loaded, mode]);
 
   // ── Apply the refreshed plan returned by the "Import from Meta" modal ──
   // The import route returns the same period view as a sync, so the rows drop
@@ -12090,12 +12130,12 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           {activeKey && mode === 'pacer' && (
             <button
               type="button"
-              onClick={handleSyncMeta}
+              onClick={() => handleSyncMeta()}
               disabled={syncingMeta || !!plan?.frozen}
               title={
                 plan?.frozen
                   ? 'This month is frozen — reopen it to re-sync'
-                  : "Pull actual spend from Meta for this period's linked campaigns"
+                  : "Refresh actual spend from Meta now (also auto-refreshes when you open the pacer if it's been a while)"
               }
               className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
             >

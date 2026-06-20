@@ -207,6 +207,18 @@ const subaccountClientNavItems: NavEntry[] = [
   emailSmsNav,
 ];
 
+/** True if the current path matches any of a group's (or grandchild's) leaves. */
+function groupContainsPath(item: NavItem, prefix: string, normalizedPath: string): boolean {
+  return (item.children ?? []).some((child) => {
+    const childPath = child.absolute ? child.href : child.href.replace(prefix, '');
+    if (normalizedPath === childPath || normalizedPath.startsWith(`${childPath}/`)) return true;
+    return (child.children ?? []).some((grand) => {
+      const grandPath = grand.absolute ? grand.href : grand.href.replace(prefix, '');
+      return normalizedPath === grandPath || normalizedPath.startsWith(`${grandPath}/`);
+    });
+  });
+}
+
 export function Sidebar() {
   const pathname = usePathname();
   const { userRole, isAdmin, isAccount, accountKey, accounts } = useAccount();
@@ -218,6 +230,8 @@ export function Sidebar() {
   // appended as query params so reporting lands on the same account
   // with the same theme (cookie sharing doesn't work in dev).
   const [reportingHref, setReportingHref] = useState<string | null>(null);
+  // Single-open accordion: at most one top-level group expanded at a time.
+  const [openGroupKey, setOpenGroupKey] = useState<string | null>(null);
   const accountForCrossLink = useAccount().account;
   useEffect(() => {
     let url = getOtherSurfaceUrl('/');
@@ -260,6 +274,19 @@ export function Sidebar() {
 
   const normalizedPath = inSubaccountRoute ? stripSubaccountPrefix(pathname) : pathname;
 
+  // Auto-open the top-level group that contains the current route.
+  let activeGroupKey: string | null = null;
+  for (const entry of resolvedNavItems) {
+    if ('divider' in entry || 'crosslink' in entry) continue;
+    if (entry.children?.length && groupContainsPath(entry, prefix, normalizedPath)) {
+      activeGroupKey = entry.label;
+      break;
+    }
+  }
+  useEffect(() => {
+    if (activeGroupKey) setOpenGroupKey(activeGroupKey);
+  }, [activeGroupKey]);
+
   const settingsHref = isClientRole
     ? (slug ? `/subaccount/${slug}/settings` : '/settings/subaccount')
     : isAccount && slug
@@ -284,7 +311,7 @@ export function Sidebar() {
       }`}
     >
       {/* Logo + Account Switcher + Collapse Toggle */}
-      <div className={`border-b border-[var(--sidebar-border)] ${collapsed ? 'p-2 pb-3' : 'p-5 pb-4'}`}>
+      <div className={`${collapsed ? 'p-2 pb-3' : 'p-5 pb-4'}`}>
         <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between mb-3'}`}>
           {!collapsed && <AppLogo className="h-8 w-auto max-w-[150px] object-contain" />}
           <SidebarTooltip label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
@@ -367,6 +394,8 @@ export function Sidebar() {
                 prefix={prefix}
                 normalizedPath={normalizedPath}
                 depth={0}
+                controlledOpen={openGroupKey === item.label}
+                onToggle={() => setOpenGroupKey((p) => (p === item.label ? null : item.label))}
               />
             );
           }
@@ -423,7 +452,7 @@ export function Sidebar() {
       {!collapsed && <DevImpersonate />}
 
       {/* Settings / Theme Toggle */}
-      <div className={`border-t border-[var(--sidebar-border)] ${collapsed ? 'p-2' : 'p-3'}`}>
+      <div className={`${collapsed ? 'p-2' : 'p-3'}`}>
         {(() => {
           const themeLabel = theme === 'dark' ? 'Light Mode' : 'Dark Mode';
           const themeBtn = (
@@ -468,11 +497,15 @@ function NavGroup({
   prefix,
   normalizedPath,
   depth,
+  controlledOpen,
+  onToggle,
 }: {
   item: NavItem;
   prefix: string;
   normalizedPath: string;
   depth: number;
+  controlledOpen?: boolean;
+  onToggle?: () => void;
 }) {
   const { collapsed } = useSidebarCollapse();
 
@@ -507,8 +540,11 @@ function NavGroup({
     wasActiveRef.current = sectionActive;
   }, [sectionActive]);
 
-  const open = userOpen ?? sectionActive;
-  const handleToggle = () => setUserOpen(!open);
+  // Controlled (single-open accordion) when the parent passes onToggle — that's
+  // the top-level groups; nested groups stay self-managed.
+  const controlled = onToggle !== undefined;
+  const open = controlled ? !!controlledOpen : userOpen ?? sectionActive;
+  const handleToggle = controlled ? onToggle : () => setUserOpen(!open);
 
   const isTop = depth === 0;
 

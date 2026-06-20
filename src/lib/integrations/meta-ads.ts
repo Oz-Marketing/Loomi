@@ -14,7 +14,7 @@
  * (Account.metaAdAccountId, e.g. "act_123"). We never write to Facebook here.
  */
 
-import { createHmac } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import {
@@ -974,11 +974,16 @@ export async function syncPeriodFromMeta(
   const syncedAt = new Date();
 
   for (const ad of ads) {
-    const adSet =
-      (ad.metaObjectId ? byId.get(ad.metaObjectId) : undefined) ??
-      (ad.name?.trim()
+    // ID-first: a linked row resolves by its stored ad-set id ONLY — it never
+    // falls back to a name match, so a deleted/renamed ad set leaves it
+    // unmatched rather than silently re-binding to a different same-named ad
+    // set. The case-insensitive name match is reserved for never-linked rows
+    // (first sync of a hand-created ad).
+    const adSet = ad.metaObjectId
+      ? byId.get(ad.metaObjectId)
+      : ad.name?.trim()
         ? byName.get(ad.name.trim().toLowerCase())
-        : undefined);
+        : undefined;
 
     if (!adSet) {
       results.push({
@@ -1046,4 +1051,307 @@ export async function syncPeriodFromMeta(
     matched: results.filter((r) => r.matched).length,
     results,
   };
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Bulk import (onboarding) — discover an account's existing ad sets and
+//  adopt the chosen ones as pacer rows, born already linked + synced. The
+//  inverse of the manual "create row, then hunt for its match" flow.
+//  Still read-only against Meta: we only ever write local pacer rows here.
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * Map a Meta ad-set effective status onto the pacer's planner status vocabulary
+ * (src/app/tools/meta/_lib/constants.ts → AD_STATUSES), so an imported ad lands
+ * in the board column that matches its real delivery state in Meta.
+ */
+export function metaStatusToAdStatus(
+  effectiveStatus: string | null | undefined,
+): string {
+  switch ((effectiveStatus ?? '').toUpperCase()) {
+    case 'ACTIVE':
+      return 'Live';
+    case 'PAUSED':
+    case 'ADSET_PAUSED':
+    case 'CAMPAIGN_PAUSED':
+      return 'Off';
+    case 'PENDING_REVIEW':
+    case 'IN_PROCESS':
+    case 'PENDING_BILLING_INFO':
+    case 'PREAPPROVED':
+      return 'Scheduled';
+    case 'DISAPPROVED':
+    case 'WITH_ISSUES':
+      return 'Stuck';
+    case 'ARCHIVED':
+      return 'Completed Run';
+    case 'DELETED':
+      return 'Off';
+    default:
+      return 'Working on it';
+  }
+}
+
+/** Daily/lifetime cents (string) → positive dollars, or null. */
+function metaBudgetDollars(cents: string | null | undefined): number | null {
+  if (cents == null) return null;
+  const n = Number(cents) / 100;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+export interface DiscoveredAdSet {
+  id: string;
+  name: string;
+  campaignName: string | null;
+  effectiveStatus: string | null;
+  /** True when Meta reports the ad set actively delivering (status ACTIVE). */
+  active: boolean;
+  budgetType: 'Daily' | 'Lifetime';
+  /** Daily budget in dollars (ABO daily ad sets); null otherwise. */
+  dailyBudget: number | null;
+  /** Lifetime budget in dollars (lifetime ad sets); null otherwise. */
+  lifetimeBudget: number | null;
+  /** Account-TZ calendar dates of the ad set's flight (null = open-ended). */
+  startDate: string | null;
+  endDate: string | null;
+  /** Spend in the requested period ($). */
+  periodSpend: number;
+  /** All-time spend across the whole flight ($); informational. */
+  runSpend: number | null;
+  /** Already linked to a pacer row in THIS period — excluded from import. */
+  alreadyLinked: boolean;
+  /** The planner status this ad set would map to on import. */
+  suggestedStatus: string;
+}
+
+export interface DiscoverResult {
+  ok: true;
+  adAccountId: string;
+  since: string;
+  until: string;
+  adSets: DiscoveredAdSet[];
+}
+
+/**
+ * List every ad set in the account's Facebook ad account, enriched with the
+ * budget / flight / spend the import modal previews, and flagged for the ones
+ * already linked to a pacer row in `period` (so re-running never double-offers
+ * them). Read-only.
+ */
+export async function discoverAdSets(
+  accountKey: string,
+  period: string,
+  todayIso: string,
+): Promise<DiscoverResult> {
+  const { cfg, adAccountId } = await getAdAccountConfig(accountKey);
+  const { since, until, future } = periodWindow(period, todayIso);
+
+  const [adSets, spendMap, runSpendMap] = await Promise.all([
+    fetchAdSets(cfg, adAccountId),
+    future
+      ? Promise.resolve(new Map<string, number>())
+      : fetchAdSetSpend(cfg, adAccountId, since, until),
+    future
+      ? Promise.resolve(new Map<string, number>())
+      : fetchAdSetRunSpend(cfg, adAccountId).catch(() => new Map<string, number>()),
+  ]);
+
+  // Account timezone for bucketing Meta's start_time / end_time into calendar
+  // dates. Best-effort — fall back to the default zone.
+  let accountTz = DEFAULT_TIME_ZONE;
+  try {
+    const tz = await fetchAdAccountTimezone(cfg, adAccountId);
+    if (tz) accountTz = tz;
+  } catch {
+    // Ignore — dates fall back to the default zone.
+  }
+
+  // Ad sets already linked to a row in THIS period — scoped to the period so a
+  // multi-month ad set can legitimately back a row in more than one month.
+  const plan = await prisma.metaAdsPacerPlan.findUnique({
+    where: { accountKey },
+    select: { id: true },
+  });
+  const linkedRows = plan
+    ? await prisma.metaAdsPacerAd.findMany({
+        where: { planId: plan.id, period, metaObjectId: { not: null } },
+        select: { metaObjectId: true },
+      })
+    : [];
+  const linkedIds = new Set(
+    linkedRows.map((r) => r.metaObjectId).filter((id): id is string => !!id),
+  );
+
+  const out: DiscoveredAdSet[] = adSets.map((s) => {
+    const eff = s.effective_status ?? s.status ?? null;
+    const dailyBudget = metaBudgetDollars(s.daily_budget);
+    const lifetimeBudget = metaBudgetDollars(s.lifetime_budget);
+    return {
+      id: s.id,
+      name: s.name,
+      campaignName: s.campaign?.name ?? null,
+      effectiveStatus: eff,
+      active: (eff ?? '').toUpperCase() === 'ACTIVE',
+      budgetType: lifetimeBudget != null && dailyBudget == null ? 'Lifetime' : 'Daily',
+      dailyBudget,
+      lifetimeBudget,
+      startDate: metaScheduleDate(s.start_time, accountTz),
+      endDate: metaScheduleDate(s.end_time, accountTz),
+      periodSpend: spendMap.get(s.id) ?? 0,
+      runSpend: runSpendMap.get(s.id) ?? null,
+      alreadyLinked: linkedIds.has(s.id),
+      suggestedStatus: metaStatusToAdStatus(eff),
+    };
+  });
+
+  return { ok: true, adAccountId, since, until, adSets: out };
+}
+
+export interface ImportedAdSummary {
+  adId: string;
+  adSetId: string;
+  name: string;
+  status: string;
+}
+
+export interface ImportAdSetsResult {
+  ok: true;
+  imported: ImportedAdSummary[];
+  /** Ids requested but skipped (not found, or already linked in this period). */
+  skipped: string[];
+}
+
+export interface ImportAssignments {
+  ownerUserId?: string | null;
+  designerUserId?: string | null;
+  accountRepUserId?: string | null;
+}
+
+/**
+ * Adopt the chosen Meta ad sets as new pacer rows in `period`, born already
+ * linked (metaObjectId) and synced (actual spend, status, budget, flight
+ * dates). `planId` is resolved by the caller (route) via getOrCreatePlan, so
+ * this stays free of the pacer-lib dependency. The caller writes the audit
+ * entry from the returned summaries.
+ */
+export async function importAdSets(
+  accountKey: string,
+  planId: string,
+  period: string,
+  todayIso: string,
+  adSetIds: string[],
+  assignments: ImportAssignments = {},
+): Promise<ImportAdSetsResult> {
+  const requested = Array.from(new Set(adSetIds.filter(Boolean)));
+  if (requested.length === 0) return { ok: true, imported: [], skipped: [] };
+
+  const { cfg, adAccountId } = await getAdAccountConfig(accountKey);
+  const { since, until, future } = periodWindow(period, todayIso);
+
+  const [adSets, spendMap, runSpendMap] = await Promise.all([
+    fetchAdSets(cfg, adAccountId),
+    future
+      ? Promise.resolve(new Map<string, number>())
+      : fetchAdSetSpend(cfg, adAccountId, since, until),
+    future
+      ? Promise.resolve(new Map<string, number>())
+      : fetchAdSetRunSpend(cfg, adAccountId).catch(() => new Map<string, number>()),
+  ]);
+
+  // Cache the ad account timezone (same as a sync) and bucket flight dates.
+  let accountTz = DEFAULT_TIME_ZONE;
+  try {
+    const tz = await fetchAdAccountTimezone(cfg, adAccountId);
+    if (tz) {
+      accountTz = tz;
+      await prisma.account
+        .update({ where: { key: accountKey }, data: { metaTimezone: tz } })
+        .catch(() => undefined);
+    }
+  } catch {
+    // Ignore — pacing falls back to the stored timezone / default.
+  }
+
+  const byId = new Map(adSets.map((s) => [s.id, s]));
+
+  // Already-linked ids in this period are skipped (idempotency) — re-importing
+  // the same ad set never creates a duplicate row.
+  const linkedRows = await prisma.metaAdsPacerAd.findMany({
+    where: { planId, period, metaObjectId: { not: null } },
+    select: { metaObjectId: true },
+  });
+  const linkedIds = new Set(
+    linkedRows.map((r) => r.metaObjectId).filter((id): id is string => !!id),
+  );
+
+  // Append after the period's existing rows.
+  const maxPos = await prisma.metaAdsPacerAd.aggregate({
+    where: { planId, period },
+    _max: { position: true },
+  });
+  let position = (maxPos._max.position ?? -1) + 1;
+
+  const syncedAt = new Date();
+  const creates: Prisma.MetaAdsPacerAdCreateManyInput[] = [];
+  const imported: ImportedAdSummary[] = [];
+  const skipped: string[] = [];
+
+  for (const id of requested) {
+    const adSet = byId.get(id);
+    if (!adSet || linkedIds.has(id)) {
+      skipped.push(id);
+      continue;
+    }
+    const dailyBudget = metaBudgetDollars(adSet.daily_budget);
+    const lifetimeBudget = metaBudgetDollars(adSet.lifetime_budget);
+    const budgetType: 'Daily' | 'Lifetime' =
+      lifetimeBudget != null && dailyBudget == null ? 'Lifetime' : 'Daily';
+    const status = metaStatusToAdStatus(adSet.effective_status ?? adSet.status);
+    const spend = spendMap.get(adSet.id) ?? 0;
+    const runSpend = runSpendMap.get(adSet.id);
+    const startDate = metaScheduleDate(adSet.start_time, accountTz);
+    const endDate = metaScheduleDate(adSet.end_time, accountTz);
+    // Seed the planned target (allocation) from Meta's current budget as a
+    // sensible starting point the team can adjust — daily ads get the daily
+    // rate, lifetime ads the lifetime pool. Sync never touches allocation
+    // again, so this is a one-time seed only.
+    const allocation = budgetType === 'Lifetime' ? lifetimeBudget : dailyBudget;
+
+    const adId = randomUUID();
+    creates.push({
+      id: adId,
+      planId,
+      position: position++,
+      name: adSet.name,
+      period,
+      ownerUserId: assignments.ownerUserId ?? null,
+      designerUserId: assignments.designerUserId ?? null,
+      accountRepUserId: assignments.accountRepUserId ?? null,
+      budgetType,
+      adStatus: status,
+      allocation: allocation != null ? allocation.toFixed(2) : null,
+      flightStart: startDate,
+      flightEnd: endDate,
+      // Meta-managed mirror — born linked + synced.
+      metaObjectType: 'adset',
+      metaObjectId: adSet.id,
+      metaEffectiveStatus: adSet.effective_status ?? adSet.status ?? null,
+      pacerActual: spend.toFixed(2),
+      pacerRunSpend: runSpend != null ? runSpend.toFixed(2) : null,
+      pacerSyncedAt: syncedAt,
+      pacerDailyBudget:
+        budgetType !== 'Lifetime' && dailyBudget != null
+          ? dailyBudget.toFixed(2)
+          : null,
+      metaStartDate: startDate,
+      metaEndDate: endDate,
+    });
+    imported.push({ adId, adSetId: adSet.id, name: adSet.name, status });
+  }
+
+  if (creates.length > 0) {
+    await prisma.metaAdsPacerAd.createMany({ data: creates });
+  }
+
+  return { ok: true, imported, skipped };
 }

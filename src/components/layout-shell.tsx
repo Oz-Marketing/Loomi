@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { Sidebar } from '@/components/sidebar';
-// import { TopUtilityBar } from '@/components/top-utility-bar'; // temporarily hidden (Klaviyo-style shell trial)
+import { TopUtilityBar } from '@/components/top-utility-bar';
 import { AppLogo } from '@/components/app-logo';
 import { stripSubaccountPrefix } from '@/lib/account-slugs';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
@@ -94,7 +94,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const normalizedPath = stripSubaccountPrefix(pathname);
-  const mainRef = useRef<HTMLElement>(null);
+  const mainRef = useRef<HTMLDivElement>(null);
   const [isMainScrolled, setIsMainScrolled] = useState(false);
   const { collapsed: sidebarCollapsed } = useSidebarCollapse();
   const isFullScreen =
@@ -226,20 +226,22 @@ function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <>
       <Sidebar />
+      {/* Fixed-height column: the utility bar + card never scroll; only the
+          card's inner content does. Outer padding tightened; small gap to the
+          sidebar. */}
       <main
-        ref={mainRef}
-        data-scrolled={isMainScrolled ? 'true' : 'false'}
-        className={`flex-1 min-w-0 h-screen overflow-y-auto overflow-x-hidden overscroll-contain p-8 transition-[padding-left] duration-200 ease-out ${
-          sidebarCollapsed ? 'pl-[7.5rem]' : 'pl-[18.5rem]'
+        className={`flex-1 min-w-0 h-screen flex flex-col overflow-hidden p-3 transition-[padding-left] duration-200 ease-out ${
+          sidebarCollapsed ? 'pl-[6rem]' : 'pl-[16.5rem]'
         }`}
       >
-        {/* Cap content width so pages don't stretch edge-to-edge on wide
-            monitors. Centered in the space to the right of the sidebar.
-            Only the standard app shell is constrained — the builder/editor
-            branches above stay full-bleed by design. */}
-        <div className="mx-auto w-full max-w-[1600px]">
-          {/* Klaviyo-style trial: top utility bar hidden; page content in a rounded card. */}
-          <div className="rounded-2xl border border-[var(--border)] bg-[var(--card)] backdrop-blur-xl shadow-sm p-6 md:p-8 min-h-[calc(100vh-4rem)]">
+        {/* Cap content width on wide monitors; fill the height as a column. */}
+        <div className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col min-h-0 gap-3">
+          <TopUtilityBar />
+          <div
+            ref={mainRef}
+            data-scrolled={isMainScrolled ? 'true' : 'false'}
+            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain rounded-2xl border border-[var(--border)] bg-[var(--card)] backdrop-blur-xl shadow-sm p-6 md:p-8"
+          >
             {children}
           </div>
         </div>

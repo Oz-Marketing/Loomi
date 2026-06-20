@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { FontSelect } from '@/components/font-select';
 import { createPortal } from 'react-dom';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
@@ -1091,34 +1092,18 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className={labelClass}>Heading Font</label>
-                  <select value={brandHeadingFont} onChange={(e) => setBrandHeadingFont(e.target.value)} className={inputClass}>
-                    {WEBSAFE_FONTS.map((font) => (
-                      <option key={font.value} value={font.value}>{font.label}</option>
-                    ))}
-                  </select>
+                  <FontSelect value={brandHeadingFont} onChange={setBrandHeadingFont} options={WEBSAFE_FONTS} />
                 </div>
                 <div>
                   <label className={labelClass}>Body Font</label>
-                  <select value={brandBodyFont} onChange={(e) => setBrandBodyFont(e.target.value)} className={inputClass}>
-                    {WEBSAFE_FONTS.map((font) => (
-                      <option key={font.value} value={font.value}>{font.label}</option>
-                    ))}
-                  </select>
+                  <FontSelect value={brandBodyFont} onChange={setBrandBodyFont} options={WEBSAFE_FONTS} />
                 </div>
-              </div>
-              <div className="mt-3 p-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/40">
-                <p className="text-sm text-[var(--foreground)]" style={{ fontFamily: brandHeadingFont }}>
-                  Heading preview
-                </p>
-                <p className="text-xs text-[var(--muted-foreground)] mt-1" style={{ fontFamily: brandBodyFont }}>
-                  Body preview in selected websafe stack.
-                </p>
               </div>
 
               <div className="mt-6 pt-5 border-t border-[var(--border)]">
                 <p className="text-sm font-semibold text-[var(--foreground)]">Custom fonts</p>
                 <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5 mb-4">
-                  Upload OEM/brand font files (woff2, woff, ttf, otf). These become selectable in the Ad Generator.
+                  Upload brand font files (woff2, woff, ttf, otf) to use across your creative.
                 </p>
 
                 {customFonts.length > 0 && (
@@ -1191,18 +1176,21 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className={labelClass}>Weight</label>
-                      <select value={fontUpload.weight} onChange={(e) => setFontUpload((s) => ({ ...s, weight: e.target.value }))} className={inputClass}>
-                        {['300', '400', '500', '600', '700', '800', '900'].map((w) => (
-                          <option key={w} value={w}>{w}</option>
-                        ))}
-                      </select>
+                      <FontSelect
+                        previewFont={false}
+                        value={fontUpload.weight}
+                        onChange={(v) => setFontUpload((s) => ({ ...s, weight: v }))}
+                        options={['300', '400', '500', '600', '700', '800', '900'].map((w) => ({ value: w, label: w }))}
+                      />
                     </div>
                     <div>
                       <label className={labelClass}>Style</label>
-                      <select value={fontUpload.style} onChange={(e) => setFontUpload((s) => ({ ...s, style: e.target.value }))} className={inputClass}>
-                        <option value="normal">Normal</option>
-                        <option value="italic">Italic</option>
-                      </select>
+                      <FontSelect
+                        previewFont={false}
+                        value={fontUpload.style}
+                        onChange={(v) => setFontUpload((s) => ({ ...s, style: v }))}
+                        options={[{ value: 'normal', label: 'Normal' }, { value: 'italic', label: 'Italic' }]}
+                      />
                     </div>
                   </div>
                 </div>

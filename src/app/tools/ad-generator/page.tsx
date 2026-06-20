@@ -298,7 +298,7 @@ export default function AdGeneratorPage() {
                     </div>
                   ) : (
                     <p className="text-xs text-[var(--muted-foreground)]">
-                      No custom fonts yet. Upload OEM/brand fonts in the account&rsquo;s Branding settings.
+                      No custom fonts yet. Add fonts in the account&rsquo;s Branding settings.
                     </p>
                   )}
                 </div>

@@ -234,8 +234,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
           sidebarCollapsed ? 'pl-[4.5rem]' : 'pl-[16.5rem]'
         }`}
       >
-        {/* Cap content width on wide monitors; fill the height as a column. */}
-        <div className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col min-h-0 gap-3">
+        {/* Fill the width so the card hugs the nav (no centered gap on wide
+            monitors); fill the height as a column. */}
+        <div className="flex w-full flex-1 flex-col min-h-0 gap-3">
           <TopUtilityBar />
           <div
             ref={mainRef}

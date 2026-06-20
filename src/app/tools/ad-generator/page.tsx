@@ -19,6 +19,7 @@ import { ArrowDownTrayIcon, SparklesIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { AD_TEMPLATES } from '@/lib/ad-generator/templates';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
+import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import type { AdData, FieldSpec } from '@/lib/ad-generator/types';
 
 const PREVIEW_W = 460;
@@ -35,6 +36,21 @@ const COLOR_KEYS = [
   { key: 'secondary', label: 'Secondary' },
   { key: 'accent', label: 'Accent' },
 ] as const;
+// Websafe families Chromium/browsers reliably have (single names; the template
+// appends a system fallback). Custom uploaded fonts are added per account.
+const WEBSAFE_FONTS = [
+  'Arial',
+  'Helvetica',
+  'Verdana',
+  'Tahoma',
+  'Trebuchet MS',
+  'Georgia',
+  'Times New Roman',
+  'Palatino',
+  'Garamond',
+  'Courier New',
+  'Lucida Console',
+];
 
 export default function AdGeneratorPage() {
   const { accountKey, accountData } = useAccount();
@@ -66,18 +82,29 @@ export default function AdGeneratorPage() {
 
   const customFonts = useMemo(() => accountData?.customFonts ?? [], [accountData?.customFonts]);
   const fontFamilies = useMemo(() => [...new Set(customFonts.map((f) => f.family))], [customFonts]);
+  // Font picker = system default + the account's uploaded fonts + websafe stacks.
+  const fontOptions = useMemo<FontSelectOption[]>(
+    () => [
+      { value: '', label: 'System default' },
+      ...fontFamilies.map((fam) => ({ value: fam, label: fam })),
+      ...WEBSAFE_FONTS.map((fam) => ({ value: fam, label: fam })),
+    ],
+    [fontFamilies],
+  );
+  // Page-level @font-face so the dropdown can preview the custom families.
+  const pageFontFaceCss = useMemo(() => buildFontFaceCssFromUrls(customFonts), [customFonts]);
 
   const [logoKey, setLogoKey] = useState<string>('light');
   const [colorKey, setColorKey] = useState<string>('primary');
   const [customColor, setCustomColor] = useState('');
-  const [fontKey, setFontKey] = useState<string>('default');
+  const [fontKey, setFontKey] = useState<string>('');
 
   // Reset branding selections when the account changes.
   useEffect(() => {
     setLogoKey(logoVariants[0]?.key ?? 'light');
     setColorKey('primary');
     setCustomColor('');
-    setFontKey('default');
+    setFontKey('');
   }, [accountKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const logoUrl = logoVariants.find((v) => v.key === logoKey)?.url ?? logoVariants[0]?.url ?? '';
@@ -86,10 +113,13 @@ export default function AdGeneratorPage() {
       ? customColor || undefined
       : colorSwatches.find((c) => c.key === colorKey)?.value ?? colorSwatches[0]?.value ?? undefined;
 
-  const selectedFontFamily = fontKey !== 'default' && fontFamilies.includes(fontKey) ? fontKey : '';
+  const selectedFontFamily = fontKey;
   const previewFontFaceCss = useMemo(
-    () => (selectedFontFamily ? buildFontFaceCssFromUrls(customFonts.filter((f) => f.family === selectedFontFamily)) : ''),
-    [customFonts, selectedFontFamily],
+    () =>
+      fontKey && customFonts.some((f) => f.family === fontKey)
+        ? buildFontFaceCssFromUrls(customFonts.filter((f) => f.family === fontKey))
+        : '',
+    [customFonts, fontKey],
   );
 
   const brandingData: AdData = useMemo(
@@ -162,6 +192,7 @@ export default function AdGeneratorPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
+      {pageFontFaceCss && <style dangerouslySetInnerHTML={{ __html: pageFontFaceCss }} />}
       <div className="mb-6 flex items-center gap-3">
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
           <SparklesIcon className="h-5 w-5" />
@@ -269,38 +300,7 @@ export default function AdGeneratorPage() {
 
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">Font</label>
-                  {fontFamilies.length ? (
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        onClick={() => setFontKey('default')}
-                        className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                          fontKey === 'default'
-                            ? 'border-[var(--primary)] text-[var(--primary)]'
-                            : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
-                        }`}
-                      >
-                        Default
-                      </button>
-                      {fontFamilies.map((fam) => (
-                        <button
-                          key={fam}
-                          onClick={() => setFontKey(fam)}
-                          style={{ fontFamily: `"${fam}"` }}
-                          className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${
-                            fam === fontKey
-                              ? 'border-[var(--primary)] text-[var(--primary)]'
-                              : 'border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)]'
-                          }`}
-                        >
-                          {fam}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-[var(--muted-foreground)]">
-                      No custom fonts yet. Add fonts in the account&rsquo;s Branding settings.
-                    </p>
-                  )}
+                  <FontSelect value={fontKey} onChange={setFontKey} options={fontOptions} />
                 </div>
               </div>
             )}

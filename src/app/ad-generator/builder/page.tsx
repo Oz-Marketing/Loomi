@@ -511,6 +511,29 @@ export default function AdBuilderPage() {
     [],
   );
 
+  // Add a full-bleed background image: a cover image element pinned to the whole
+  // canvas at the back, bound to a new per-ad image field. It's a normal layer —
+  // reorder / lock / group it like anything else; per-size focal point frames it.
+  const addBackground = useCallback(() => {
+    const id = `image-${rid()}`;
+    const key = `bgImage_${rid()}`;
+    setDoc((prev) => {
+      const layouts = { ...prev.layouts };
+      for (const s of prev.sizes) {
+        const cur = prev.layouts[s.id] ?? {};
+        const minZ = Object.values(cur).reduce((m, b) => Math.min(m, b.z ?? 0), 0);
+        layouts[s.id] = { ...cur, [id]: { x: 0, y: 0, w: 1, h: 1, z: minZ - 1, objectX: 0.5, objectY: 0.5 } };
+      }
+      return {
+        ...prev,
+        fields: [...prev.fields, { key, label: 'Background image', type: 'image', group: 'Background' }],
+        elements: [...prev.elements, { id, type: 'image', name: 'Background', binding: { kind: 'field', key }, fit: 'cover' }],
+        layouts,
+      };
+    });
+    setSelectedIds([id]);
+  }, []);
+
   // Patch the selected element's style.
   const updEl = (patch: Partial<DocElement>) => {
     if (selected) setElement(selected.id, patch);
@@ -1528,6 +1551,15 @@ export default function AdBuilderPage() {
                 );
               })}
             </div>
+            <button
+              onClick={addBackground}
+              className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+              title="Full-bleed background image — a normal layer at the back"
+            >
+              <PlusIcon className="h-3 w-3" />
+              <PhotoIcon className="h-3.5 w-3.5" />
+              Background image
+            </button>
           </section>
 
           {/* Layers — the stack of placed elements (top of the list = front).
@@ -2557,7 +2589,38 @@ function SelectionToolbar({
           <BarBtn title="Fill (cover)" active={el.fit === 'cover'} onClick={() => onEl({ fit: 'cover' })}>
             <ArrowsPointingOutIcon className="h-4 w-4" />
           </BarBtn>
+          {el.type === 'image' && el.fit === 'cover' && (
+            <>
+              <BarSep />
+              <span className="px-1 text-[10px] font-medium text-[var(--muted-foreground)]" title="Which part of a cover image stays in frame — set per size">
+                Focus
+              </span>
+              <FocalGrid x={box.objectX ?? 0.5} y={box.objectY ?? 0.5} onChange={(fx, fy) => onBox({ objectX: fx, objectY: fy })} />
+            </>
+          )}
         </>
+      )}
+    </div>
+  );
+}
+
+/** 3×3 focal-point picker — sets a cover image's object-position per size. */
+function FocalGrid({ x, y, onChange }: { x: number; y: number; onChange: (x: number, y: number) => void }) {
+  const cells = [0, 0.5, 1];
+  return (
+    <div className="grid grid-cols-3 gap-0.5 rounded-md border border-[var(--border)] p-0.5">
+      {cells.map((fy) =>
+        cells.map((fx) => {
+          const active = Math.abs(x - fx) < 0.01 && Math.abs(y - fy) < 0.01;
+          return (
+            <button
+              key={`${fx}-${fy}`}
+              onClick={() => onChange(fx, fy)}
+              title={`Focus ${fy === 0 ? 'top' : fy === 1 ? 'bottom' : 'middle'} ${fx === 0 ? 'left' : fx === 1 ? 'right' : 'center'}`}
+              className={`h-2.5 w-2.5 rounded-sm transition-colors ${active ? 'bg-[var(--primary)]' : 'bg-[var(--muted-foreground)]/30 hover:bg-[var(--muted-foreground)]/60'}`}
+            />
+          );
+        }),
       )}
     </div>
   );

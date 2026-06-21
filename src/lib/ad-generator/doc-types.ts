@@ -78,6 +78,11 @@ export interface DocLayoutBox {
   fontSize?: number;
   z?: number;
   hidden?: boolean;
+  /** Focal point (0..1) for a `fit:cover` image — which part stays in frame per
+   *  size. Maps to CSS object-position; defaults to center. Lets one background
+   *  image be framed differently for square vs. story, etc. */
+  objectX?: number;
+  objectY?: number;
 }
 
 /** Darkening scrim drawn over the background image so text stays legible. */

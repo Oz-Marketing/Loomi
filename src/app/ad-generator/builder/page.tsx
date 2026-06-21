@@ -405,7 +405,8 @@ export default function AdBuilderPage() {
   const [renamingLayer, setRenamingLayer] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [dragLayer, setDragLayer] = useState<string | null>(null);
-  const [dropLayer, setDropLayer] = useState<string | null>(null);
+  // Live order during a Layers drag (top→front), so rows shift as you hover.
+  const [dragOrder, setDragOrder] = useState<string[] | null>(null);
 
   // Single-selection shorthand — the per-element toolbar, handles, and action
   // tab only show when exactly one element is selected.
@@ -1353,46 +1354,57 @@ export default function AdBuilderPage() {
               <span className="text-[11px] text-[var(--muted-foreground)]">{placed.length}</span>
             </div>
             <div className="space-y-1">
-              {[...placed].reverse().map(({ el, box }) => {
-                const Icon = TYPE_ICON[el.type];
-                const isSel = selectedIds.includes(el.id);
-                const locked = !!el.locked;
-                const renaming = renamingLayer === el.id;
-                const isDropTarget = dropLayer === el.id && dragLayer !== el.id;
-                const commitRename = () => {
-                  renameElement(el.id, renameDraft);
-                  setRenamingLayer(null);
-                };
-                return (
-                  <div
-                    key={el.id}
-                    draggable={!renaming}
-                    onDragStart={() => setDragLayer(el.id)}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      if (dropLayer !== el.id) setDropLayer(el.id);
-                    }}
-                    onDragEnd={() => {
-                      setDragLayer(null);
-                      setDropLayer(null);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      const from = dragLayer;
-                      setDragLayer(null);
-                      setDropLayer(null);
-                      if (!from || from === el.id) return;
-                      // Current visual order (top→front), with `from` moved to before `el`.
-                      const order = [...placed].reverse().map((p) => p.el.id);
-                      const next = order.filter((id) => id !== from);
-                      const at = next.indexOf(el.id);
-                      next.splice(at, 0, from);
-                      reorderLayers(next);
-                    }}
-                    className={`flex items-center gap-1 rounded-lg pr-1 transition-colors ${
-                      isSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'
-                    } ${box.hidden ? 'opacity-50' : ''} ${isDropTarget ? 'ring-1 ring-[var(--primary)]' : ''} ${dragLayer === el.id ? 'opacity-40' : ''}`}
-                  >
+              {(() => {
+                const base = [...placed].reverse(); // top of list = front
+                const byId = new Map(base.map((p) => [p.el.id, p] as const));
+                const order = (dragLayer && dragOrder ? dragOrder : base.map((p) => p.el.id)).filter((id) => byId.has(id));
+                return order.map((id) => {
+                  const { el, box } = byId.get(id)!;
+                  const Icon = TYPE_ICON[el.type];
+                  const isSel = selectedIds.includes(el.id);
+                  const locked = !!el.locked;
+                  const renaming = renamingLayer === el.id;
+                  const commitRename = () => {
+                    renameElement(el.id, renameDraft);
+                    setRenamingLayer(null);
+                  };
+                  return (
+                    <div
+                      key={el.id}
+                      draggable={!renaming}
+                      onDragStart={() => {
+                        setDragLayer(el.id);
+                        setDragOrder(base.map((p) => p.el.id));
+                      }}
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        // Live-shift: move the dragged row to where we're hovering.
+                        setDragOrder((cur) => {
+                          const from = dragLayer;
+                          const list = cur ?? base.map((p) => p.el.id);
+                          if (!from || from === el.id) return list;
+                          const fromIdx = list.indexOf(from);
+                          const overIdx = list.indexOf(el.id);
+                          if (fromIdx < 0 || overIdx < 0 || fromIdx === overIdx) return list;
+                          const without = list.filter((x) => x !== from);
+                          let at = without.indexOf(el.id);
+                          if (fromIdx < overIdx) at += 1; // dragging down → land after
+                          without.splice(at, 0, from);
+                          return without;
+                        });
+                      }}
+                      onDragEnd={() => {
+                        setDragOrder((cur) => {
+                          if (cur) reorderLayers(cur);
+                          return null;
+                        });
+                        setDragLayer(null);
+                      }}
+                      onDrop={(e) => e.preventDefault()}
+                      className={`flex items-center gap-1 rounded-lg pr-1 transition-[opacity] ${
+                        isSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'
+                      } ${box.hidden ? 'opacity-50' : ''} ${dragLayer === el.id ? 'opacity-40' : ''}`}
+                    >
                     <span className="cursor-grab pl-1 text-[var(--muted-foreground)]/50" title="Drag to reorder">
                       <Bars2Icon className="h-3.5 w-3.5" />
                     </span>
@@ -1437,8 +1449,9 @@ export default function AdBuilderPage() {
                       {box.hidden ? <EyeSlashIcon className="h-3.5 w-3.5" /> : <EyeIcon className="h-3.5 w-3.5" />}
                     </button>
                   </div>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           </section>
 

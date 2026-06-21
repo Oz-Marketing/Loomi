@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import {
   PlusIcon,
-  Squares2X2Icon,
+  SparklesIcon,
   EllipsisVerticalIcon,
   EyeIcon,
   PencilSquareIcon,
@@ -19,6 +19,8 @@ import {
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { UserAvatar } from '@/components/user-avatar';
+import PrimaryButton from '@/components/primary-button';
+import { TemplatesHeaderActionsContext } from '@/app/email/templates/email-templates-view';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -52,6 +54,7 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
   const router = useRouter();
   const { accountData } = useAccount();
   const { confirm } = useLoomiDialog();
+  const headerSlot = useContext(TemplatesHeaderActionsContext);
 
   const { data, isLoading, error, mutate } = useSWR<{ templates?: DocTemplate[] }>(
     '/api/ad-generator/templates-doc?all=1',
@@ -80,6 +83,7 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
   }, [menuFor]);
 
   const edit = (id: string) => router.push(`/ad-generator/builder?template=${encodeURIComponent(id)}${acct}`);
+  const newTemplate = () => router.push(`/ad-generator/builder${newAcct}`);
 
   const clone = async (t: DocTemplate) => {
     if (!t.doc) return;
@@ -160,6 +164,35 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
 
   return (
     <>
+      {/* Primary CTA in the page header (portaled), matching the Email tab. */}
+      {headerSlot &&
+        createPortal(
+          <PrimaryButton onClick={newTemplate}>
+            <PlusIcon className="w-4 h-4" />
+            New template
+          </PrimaryButton>,
+          headerSlot,
+        )}
+
+      {templates.length === 0 ? (
+        <div className="glass-card rounded-2xl p-12 text-center flex flex-col items-center">
+          <div className="w-16 h-16 rounded-2xl bg-[var(--muted)] flex items-center justify-center mb-4">
+            <SparklesIcon className="w-8 h-8 text-[var(--muted-foreground)]" />
+          </div>
+          <h2 className="text-lg font-semibold mb-1">No ad templates yet</h2>
+          <p className="text-sm text-[var(--muted-foreground)] max-w-md mb-6">
+            Design a reusable layout in the Template Builder — your team starts each ad from one of these.
+          </p>
+          <button
+            type="button"
+            onClick={newTemplate}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+          >
+            <PlusIcon className="w-4 h-4" />
+            New template
+          </button>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {templates.map((t) => {
           const template = t.doc ? adTemplateFromDoc(t.id, t.doc) : undefined;
@@ -233,22 +266,8 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
             </div>
           );
         })}
-
-        {/* New template — opens the builder (starts from the default layout) */}
-        <button
-          type="button"
-          onClick={() => router.push(`/ad-generator/builder${newAcct}`)}
-          className="group flex min-h-[220px] flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-[var(--border)] p-6 text-center transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)]/40"
-        >
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--muted)] text-[var(--muted-foreground)] transition-colors group-hover:text-[var(--primary)]">
-            {templates.length === 0 ? <Squares2X2Icon className="h-6 w-6" /> : <PlusIcon className="h-6 w-6" />}
-          </div>
-          <div>
-            <div className="text-sm font-semibold text-[var(--foreground)]">New template</div>
-            <div className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">Design a reusable layout in the Template Builder.</div>
-          </div>
-        </button>
       </div>
+      )}
 
       {/* View preview */}
       {preview && typeof document !== 'undefined' && createPortal(

@@ -72,6 +72,29 @@ export interface DocLayoutBox {
   hidden?: boolean;
 }
 
+/** Darkening scrim drawn over the background image so text stays legible. */
+export interface DocBgOverlay {
+  /** Tint color (hex). Default black. */
+  color?: string;
+  /** Strength, 0..1. */
+  opacity?: number;
+  /** Even tint, or a gradient that fades from the named edge to transparent. */
+  direction?: 'full' | 'top' | 'bottom';
+}
+
+/**
+ * Per-size framing of the background image. The image always covers the canvas
+ * (`object-fit: cover`); these just choose WHAT stays in frame for a given
+ * aspect ratio, so one image works across Square / Landscape / Story.
+ */
+export interface DocBgFraming {
+  /** Focal point as fractions 0..1 (maps to object-position). Default 0.5/0.5. */
+  x?: number;
+  y?: number;
+  /** Zoom on top of cover (1 = cover, >1 zooms in toward the focal point). */
+  zoom?: number;
+}
+
 /** Canvas background. */
 export interface DocBackground {
   /** Solid fill (hex). Ignored when `gradient` is set. */
@@ -80,6 +103,12 @@ export interface DocBackground {
   gradient?: [string, string];
   /** Thin brand-colored bar across the top (the current Vehicle Offer look). */
   accentBar?: boolean;
+  /** Full-bleed background image, bound to a field (per-ad) / brand asset /
+   *  static URL. Drawn cover behind everything; framed per size via
+   *  `TemplateDoc.bgFraming`. Pair with `overlay` for text legibility. */
+  image?: Binding;
+  /** Scrim over the image. */
+  overlay?: DocBgOverlay;
 }
 
 export interface TemplateDoc {
@@ -99,5 +128,8 @@ export interface TemplateDoc {
   elements: DocElement[];
   /** sizeId → (elementId → placement). */
   layouts: Record<string, Record<string, DocLayoutBox>>;
+  /** sizeId → background-image framing (focal point + zoom). Optional; a missing
+   *  entry means centered cover. */
+  bgFraming?: Record<string, DocBgFraming>;
   defaults: AdData;
 }

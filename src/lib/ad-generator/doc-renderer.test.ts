@@ -33,6 +33,21 @@ describe('renderDoc', () => {
     expect(renderDoc(doc, { price: '$299/mo' }, SIZE)).toContain('$299/mo');
   });
 
+  it('applies a per-size focal point (object-position) to a cover image element', () => {
+    const bgDoc: TemplateDoc = {
+      id: 'bg',
+      name: 'Bg',
+      sizes: [SIZE],
+      fields: [],
+      elements: [{ id: 'bg', type: 'image', binding: { kind: 'field', key: 'img' }, fit: 'cover' }],
+      layouts: { square: { bg: { x: 0, y: 0, w: 1, h: 1, objectX: 0.25, objectY: 0.75 } } },
+      defaults: {},
+    };
+    const html = renderDoc(bgDoc, { img: 'https://x/bg.jpg' }, SIZE);
+    expect(html).toContain('object-fit:cover');
+    expect(html).toContain('object-position:25% 75%');
+  });
+
   it('positions elements from fractional boxes (× size)', () => {
     const html = renderDoc(doc, { price: '$299/mo' }, SIZE);
     expect(html).toContain('left:100px;top:500px;');

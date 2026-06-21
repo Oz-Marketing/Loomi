@@ -104,7 +104,14 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
       return `<div${idAttr} style="${dim}${pos}display:flex;align-items:center;justify-content:center;border:2px dashed #cbd5e1;border-radius:${minEdge * 0.06}px;color:#cbd5e1;font-size:${minEdge * 0.14}px;font-family:${brandStack};">${el.type === 'logo' ? 'Logo' : 'Image'}</div>`;
     }
     const fit = el.fit ?? 'contain';
-    const objectPos = el.type === 'logo' ? 'left center' : 'center';
+    // A cover image can carry a per-size focal point (object-position) so one
+    // background frames correctly across aspect ratios; else sensible defaults.
+    const objectPos =
+      fit === 'cover' && (box.objectX != null || box.objectY != null)
+        ? `${clamp01(box.objectX ?? 0.5) * 100}% ${clamp01(box.objectY ?? 0.5) * 100}%`
+        : el.type === 'logo'
+          ? 'left center'
+          : 'center';
     return `<div${idAttr} style="${dim}${pos}overflow:hidden;"><img src="${url}" alt="" style="width:100%;height:100%;object-fit:${fit};object-position:${objectPos};" /></div>`;
   }
 

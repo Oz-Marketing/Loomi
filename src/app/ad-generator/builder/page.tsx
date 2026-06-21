@@ -271,8 +271,25 @@ export default function AdBuilderPage() {
   const [dragBox, setDragBox] = useState<DocLayoutBox | null>(null);
   const [fieldsOpen, setFieldsOpen] = useState(false);
   const [addSizeOpen, setAddSizeOpen] = useState(false);
+  const [customName, setCustomName] = useState('');
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
+  // The shared size library (drives the Add-size picker; falls back to presets).
+  const [libSizes, setLibSizes] = useState<{ id: string; name: string; width: number; height: number }[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/ad-generator/sizes')
+      .then((r) => (r.ok ? r.json() : { sizes: [] }))
+      .then((d: { sizes?: { id: string; name: string; width: number; height: number }[] }) => {
+        if (!cancelled) setLibSizes(d.sizes ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setLibSizes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ── persistence ──
   const [templateId, setTemplateId] = useState<string | null>(null);
@@ -499,6 +516,34 @@ export default function AdBuilderPage() {
     }));
     setSizeId(id);
     setAddSizeOpen(false);
+  }
+
+  // Create a NEW size in the shared library (anyone can), then add it here.
+  async function createLibrarySize() {
+    const w = Number(customW);
+    const h = Number(customH);
+    const name = customName.trim();
+    if (!name || !(w > 0) || !(h > 0)) {
+      toast.error('Name, width, and height are required');
+      return;
+    }
+    try {
+      const res = await fetch('/api/ad-generator/sizes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, width: Math.round(w), height: Math.round(h) }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      if (json.size) setLibSizes((prev) => [json.size, ...prev]);
+      addSize(name, Math.round(w), Math.round(h));
+      setCustomName('');
+      setCustomW('');
+      setCustomH('');
+      toast.success('Size created');
+    } catch (err) {
+      toast.error(`Couldn't create size: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
   }
 
   function removeSize(targetId: string) {
@@ -945,13 +990,21 @@ export default function AdBuilderPage() {
           <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
             <div className="mb-2 flex items-center justify-between">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Sizes</h2>
-              <button
-                onClick={() => setAddSizeOpen((v) => !v)}
-                className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
-              >
-                <PlusIcon className="h-3 w-3" />
-                Add
-              </button>
+              <div className="flex items-center gap-1.5">
+                <Link
+                  href="/ad-generator/sizes"
+                  className="text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--primary)]"
+                >
+                  Library
+                </Link>
+                <button
+                  onClick={() => setAddSizeOpen((v) => !v)}
+                  className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+                >
+                  <PlusIcon className="h-3 w-3" />
+                  Add
+                </button>
+              </div>
             </div>
 
             <div className="space-y-1">
@@ -985,10 +1038,14 @@ export default function AdBuilderPage() {
 
             {addSizeOpen && (
               <div className="mt-2 space-y-2 rounded-lg border border-dashed border-[var(--border)] p-2">
+                {/* From the shared library (falls back to built-in presets when empty) */}
                 <div className="grid grid-cols-2 gap-1.5">
-                  {SIZE_PRESETS.map((p) => (
+                  {(libSizes.length > 0
+                    ? libSizes.map((s) => ({ key: s.id, label: s.name, width: s.width, height: s.height }))
+                    : SIZE_PRESETS.map((p) => ({ key: p.label, label: p.label, width: p.width, height: p.height }))
+                  ).map((p) => (
                     <button
-                      key={p.label}
+                      key={p.key}
                       onClick={() => addSize(p.label, p.width, p.height)}
                       className="rounded-md border border-[var(--border)] px-2 py-1 text-center text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
                     >
@@ -999,36 +1056,40 @@ export default function AdBuilderPage() {
                     </button>
                   ))}
                 </div>
-                <div className="flex items-center gap-1.5">
+
+                {/* Create a brand-new size — saved to the library + added here */}
+                <div className="space-y-1.5 border-t border-[var(--border)] pt-2">
                   <input
-                    type="number"
-                    value={customW}
-                    onChange={(e) => setCustomW(e.target.value)}
-                    placeholder="W"
+                    value={customName}
+                    onChange={(e) => setCustomName(e.target.value)}
+                    placeholder="New size name (e.g. Wide Banner)"
                     className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
                   />
-                  <span className="text-[var(--muted-foreground)]">×</span>
-                  <input
-                    type="number"
-                    value={customH}
-                    onChange={(e) => setCustomH(e.target.value)}
-                    placeholder="H"
-                    className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                  />
-                  <button
-                    onClick={() => {
-                      const w = Number(customW);
-                      const h = Number(customH);
-                      if (w > 0 && h > 0) {
-                        addSize('Custom', Math.round(w), Math.round(h));
-                        setCustomW('');
-                        setCustomH('');
-                      }
-                    }}
-                    className="flex-shrink-0 rounded-md bg-[var(--primary)] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90"
-                  >
-                    Add
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="number"
+                      value={customW}
+                      onChange={(e) => setCustomW(e.target.value)}
+                      placeholder="W"
+                      className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                    />
+                    <span className="text-[var(--muted-foreground)]">×</span>
+                    <input
+                      type="number"
+                      value={customH}
+                      onChange={(e) => setCustomH(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && createLibrarySize()}
+                      placeholder="H"
+                      className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                    />
+                    <button
+                      onClick={createLibrarySize}
+                      title="Save to the size library and add it here"
+                      className="flex-shrink-0 rounded-md bg-[var(--primary)] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                    >
+                      Create
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

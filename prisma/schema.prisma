@@ -2024,3 +2024,25 @@ model AdTemplateDoc {
 
   @@index([status, isActive])
 }
+
+// ─────────────────────────────────────────────────────
+// Ad Generator — ad size library
+// ─────────────────────────────────────────────────────
+//
+// A shared (global) library of named ad sizes — Square 1080, Story 1080×1920,
+// etc. The template builder's size picker draws from this; anyone can add a new
+// size (name + W×H). Each row records who created it (name / email / avatar
+// snapshot) + when, so the library shows provenance. Additive; reaches an
+// environment via db push on deploy, queried resiliently.
+model AdSizePreset {
+  id             String   @id @default(cuid())
+  name           String
+  width          Int
+  height         Int
+  createdById    String?
+  createdByName  String?
+  createdByEmail String?
+  createdByImage String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}

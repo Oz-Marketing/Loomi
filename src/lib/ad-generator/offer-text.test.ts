@@ -63,4 +63,12 @@ describe('assembleOffer', () => {
     expect(assembleOffer({ offerType: 'custom', price: '$299/mo' })).toBeNull();
     expect(assembleOffer({})).toBeNull(); // defaults to custom
   });
+
+  it('assembles a second offer from a prefixed field set (dual offers)', () => {
+    const data = { offerType: 'lease', monthlyPayment: '299', o2_offerType: 'apr', o2_aprRate: '0', o2_aprTerm: '60' };
+    expect(assembleOffer(data)?.main).toBe('$299/mo'); // default prefix → offer 1
+    const offer2 = assembleOffer(data, 'o2_');
+    expect(offer2?.main).toBe('0% APR');
+    expect(offer2?.terms).toContain('60 months');
+  });
 });

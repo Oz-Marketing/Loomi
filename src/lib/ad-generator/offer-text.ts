@@ -62,19 +62,24 @@ const DEFAULT_LABEL: Record<Exclude<OfferType, 'custom' | 'discount'>, string> =
  * Assemble the offer block from `data`. `offerLabel` (if set) overrides the
  * per-type default label. Returns null for `custom`, where the free-text
  * `price`/`terms` fields are used directly by the template.
+ *
+ * `prefix` reads a parallel set of fields (e.g. `'o2_'` → `o2_offerType`,
+ * `o2_monthlyPayment`, …) so a dual-offer template can assemble a second offer
+ * from the same engine. Default `''` is the original single-offer behavior.
  */
-export function assembleOffer(data: AdData): OfferBlock | null {
-  const type = (data.offerType as OfferType) || 'custom';
+export function assembleOffer(data: AdData, prefix = ''): OfferBlock | null {
+  const g = (key: string): string | undefined => data[prefix + key];
+  const type = (g('offerType') as OfferType) || 'custom';
   if (type === 'custom') return null;
 
-  const override = (data.offerLabel || '').trim();
-  const msrp = money(data.msrp);
+  const override = (g('offerLabel') || '').trim();
+  const msrp = money(g('msrp'));
 
   switch (type) {
     case 'lease': {
-      const pay = money(data.monthlyPayment);
-      const term = num(data.leaseTerm);
-      const due = money(data.dueAtSigning);
+      const pay = money(g('monthlyPayment'));
+      const term = num(g('leaseTerm'));
+      const due = money(g('dueAtSigning'));
       return {
         label: override || DEFAULT_LABEL.lease,
         main: pay ? `${pay}/mo` : PLACEHOLDER,
@@ -85,31 +90,31 @@ export function assembleOffer(data: AdData): OfferBlock | null {
       };
     }
     case 'apr': {
-      const rate = num(data.aprRate);
-      const term = num(data.aprTerm);
+      const rate = num(g('aprRate'));
+      const term = num(g('aprTerm'));
       return {
         label: override || DEFAULT_LABEL.apr,
         main: rate != null ? `${rate}% APR` : PLACEHOLDER,
         terms: joinTerms([
           term != null ? `for ${term} months` : null,
-          data.financialInstitution ? `through ${data.financialInstitution}` : null,
+          g('financialInstitution') ? `through ${g('financialInstitution')}` : null,
         ]),
       };
     }
     case 'discount': {
-      const amt = money(data.discountAmount);
-      const cashBack = data.discountLabelStyle === 'cash_back';
+      const amt = money(g('discountAmount'));
+      const cashBack = g('discountLabelStyle') === 'cash_back';
       return {
         label: override || (cashBack ? 'CASH BACK' : 'SAVE'),
         main: amt ?? PLACEHOLDER,
         terms: joinTerms([
           msrp ? (cashBack ? `MSRP ${msrp}` : `Off MSRP ${msrp}`) : null,
-          data.discountSource || null,
+          g('discountSource') || null,
         ]),
       };
     }
     case 'sales_price': {
-      const sale = money(data.salePrice);
+      const sale = money(g('salePrice'));
       return {
         label: override || DEFAULT_LABEL.sales_price,
         main: sale ?? PLACEHOLDER,

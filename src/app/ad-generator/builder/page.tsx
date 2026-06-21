@@ -287,7 +287,14 @@ export default function AdBuilderPage() {
 
   const { doc, setDoc, undo, redo, canUndo, canRedo, reset: resetHistory } = useDocHistory(() => structuredClone(vehicleOfferDoc));
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Marquee (drag-to-select) rectangle in canvas fractions, while dragging the backdrop.
+  const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+  // Live boxes for a group (multi-select) drag, keyed by element id.
+  const [groupLive, setGroupLive] = useState<Record<string, DocLayoutBox> | null>(null);
+  const selectOne = useCallback((id: string) => setSelectedIds([id]), []);
+  const clearSelection = useCallback(() => setSelectedIds([]), []);
+  const toggleSelect = useCallback((id: string) => setSelectedIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id])), []);
   const [showOutlines, setShowOutlines] = useState(true);
   const [showSafe, setShowSafe] = useState(true);
   const [dragBox, setDragBox] = useState<DocLayoutBox | null>(null);
@@ -376,6 +383,9 @@ export default function AdBuilderPage() {
     [doc.elements, layout],
   );
 
+  // Single-selection shorthand — the per-element toolbar, handles, and action
+  // tab only show when exactly one element is selected.
+  const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const selected = selectedId ? doc.elements.find((e) => e.id === selectedId) ?? null : null;
   const selectedBox = selectedId ? layout[selectedId] : undefined;
 
@@ -406,7 +416,7 @@ export default function AdBuilderPage() {
       }
       return { ...prev, elements: prev.elements.filter((e) => e.id !== id), layouts };
     });
-    setSelectedId((cur) => (cur === id ? null : cur));
+    setSelectedIds((ids) => ids.filter((x) => x !== id));
   }, []);
 
   const duplicateElement = useCallback((id: string) => {
@@ -430,7 +440,7 @@ export default function AdBuilderPage() {
       }
       return { ...prev, elements, layouts };
     });
-    setSelectedId(newId);
+    setSelectedIds([newId]);
   }, [doc.elements]);
 
   const addElement = useCallback(
@@ -451,7 +461,7 @@ export default function AdBuilderPage() {
         for (const s of prev.sizes) layouts[s.id] = { ...layouts[s.id], [id]: { ...box } };
         return { ...prev, elements: [...prev.elements, makeDefaultElement(id, type)], layouts };
       });
-      setSelectedId(id);
+      setSelectedIds([id]);
     },
     [],
   );
@@ -652,7 +662,7 @@ export default function AdBuilderPage() {
     setTemplateName(t.name);
     setStatus(st);
     setSizeId(loaded.sizes[0]?.id ?? '');
-    setSelectedId(null);
+    clearSelection();
     setLoadOpen(false);
     savedRef.current = serializeDoc(loaded, t.name, st);
     setSaveStatus('saved');
@@ -687,72 +697,124 @@ export default function AdBuilderPage() {
     setTemplateName('Untitled template');
     setStatus('draft');
     setSizeId('square');
-    setSelectedId(null);
+    clearSelection();
     savedRef.current = '';
     setSaveStatus('idle');
   }
 
-  // ── pointer drag/resize ──
-  const dragRef = useRef<{
-    handle: Handle;
-    sx: number;
-    sy: number;
-    start: DocLayoutBox;
-    fw: number;
-    fh: number;
-    nw: number;
-    nh: number;
-    sizeId: string;
-    elId: string;
-    live: DocLayoutBox;
-    targetsX: number[];
-    targetsY: number[];
-  } | null>(null);
+  // ── pointer interactions: single drag · group drag · marquee select ──
+  type DragState =
+    | { kind: 'single'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; elId: string; start: DocLayoutBox; live: DocLayoutBox; targetsX: number[]; targetsY: number[] }
+    | { kind: 'group'; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; items: { elId: string; start: DocLayoutBox }[]; bounds: { left: number; cx: number; right: number; top: number; cy: number; bottom: number }; minDx: number; maxDx: number; minDy: number; maxDy: number; targetsX: number[]; targetsY: number[]; live: Record<string, DocLayoutBox> }
+    | { kind: 'marquee'; left: number; top: number; fw: number; fh: number; startXF: number; startYF: number; rect: { x: number; y: number; w: number; h: number } };
+  const dragRef = useRef<DragState | null>(null);
 
   const onMoveRef = useRef<(e: PointerEvent) => void>(() => {});
   const onUpRef = useRef<(e: PointerEvent) => void>(() => {});
   const moveListener = useCallback((e: PointerEvent) => onMoveRef.current(e), []);
   const upListener = useCallback((e: PointerEvent) => onUpRef.current(e), []);
 
+  // Edges/centers to snap to: every other visible element + canvas + safe area.
+  function snapTargets(exclude: Set<string>) {
+    const tx = [0, 0.5, 1];
+    const ty = [0, 0.5, 1];
+    if (doc.safeArea) {
+      tx.push(doc.safeArea.x, 1 - doc.safeArea.x);
+      ty.push(doc.safeArea.y, 1 - doc.safeArea.y);
+    }
+    for (const p of placed) {
+      if (exclude.has(p.el.id) || p.box.hidden) continue;
+      tx.push(p.box.x, p.box.x + p.box.w / 2, p.box.x + p.box.w);
+      ty.push(p.box.y, p.box.y + p.box.h / 2, p.box.y + p.box.h);
+    }
+    return { tx, ty };
+  }
+
+  // Nudge the live node inside the iframe so content moves with the outline.
+  function moveNode(elId: string, b: DocLayoutBox, nw: number, nh: number) {
+    const node = iframeRef.current?.contentDocument?.querySelector(`[data-el-id="${elId}"]`) as HTMLElement | null;
+    if (node) {
+      node.style.left = `${b.x * nw}px`;
+      node.style.top = `${b.y * nh}px`;
+      node.style.width = `${b.w * nw}px`;
+      node.style.height = `${b.h * nh}px`;
+    }
+  }
+
   onMoveRef.current = (e: PointerEvent) => {
     const d = dragRef.current;
     if (!d) return;
+    if (d.kind === 'marquee') {
+      const cx = (e.clientX - d.left) / d.fw;
+      const cy = (e.clientY - d.top) / d.fh;
+      const x = clamp(Math.min(d.startXF, cx), 0, 1);
+      const y = clamp(Math.min(d.startYF, cy), 0, 1);
+      d.rect = { x, y, w: clamp(Math.abs(cx - d.startXF), 0, 1 - x), h: clamp(Math.abs(cy - d.startYF), 0, 1 - y) };
+      setMarquee(d.rect);
+      return;
+    }
     const dxF = (e.clientX - d.sx) / d.fw;
     const dyF = (e.clientY - d.sy) / d.fh;
-    const box = computeBox(d.handle, d.start, dxF, dyF);
-
-    // Alignment snapping on MOVE: snap the dragged element's edges/center to
-    // the other elements' (and the canvas') edges/centers, and draw a guide.
-    let gx: number | null = null;
-    let gy: number | null = null;
-    if (d.handle === 'move') {
-      const sx = bestSnap([box.x, box.x + box.w / 2, box.x + box.w], d.targetsX, SNAP_PX / d.fw);
-      const sy = bestSnap([box.y, box.y + box.h / 2, box.y + box.h], d.targetsY, SNAP_PX / d.fh);
-      box.x = clamp(box.x + sx.off, 0, 1 - box.w);
-      box.y = clamp(box.y + sy.off, 0, 1 - box.h);
-      gx = sx.guide;
-      gy = sy.guide;
-    }
-    d.live = box;
-    setDragBox(box);
-    setGuides({ x: gx, y: gy });
-
-    // Move the real content live (not just the outline) by nudging the node
-    // inside the iframe — avoids a full re-render per frame.
-    const node = iframeRef.current?.contentDocument?.querySelector(`[data-el-id="${d.elId}"]`) as HTMLElement | null;
-    if (node) {
-      node.style.left = `${box.x * d.nw}px`;
-      node.style.top = `${box.y * d.nh}px`;
-      node.style.width = `${box.w * d.nw}px`;
-      node.style.height = `${box.h * d.nh}px`;
+    if (d.kind === 'single') {
+      const box = computeBox(d.handle, d.start, dxF, dyF);
+      let gx: number | null = null;
+      let gy: number | null = null;
+      if (d.handle === 'move') {
+        const sx = bestSnap([box.x, box.x + box.w / 2, box.x + box.w], d.targetsX, SNAP_PX / d.fw);
+        const sy = bestSnap([box.y, box.y + box.h / 2, box.y + box.h], d.targetsY, SNAP_PX / d.fh);
+        box.x = clamp(box.x + sx.off, 0, 1 - box.w);
+        box.y = clamp(box.y + sy.off, 0, 1 - box.h);
+        gx = sx.guide;
+        gy = sy.guide;
+      }
+      d.live = box;
+      setDragBox(box);
+      setGuides({ x: gx, y: gy });
+      moveNode(d.elId, box, d.nw, d.nh);
+    } else {
+      // group — translate all by a clamped delta, snapping the group's bounds.
+      let ddx = clamp(dxF, d.minDx, d.maxDx);
+      let ddy = clamp(dyF, d.minDy, d.maxDy);
+      const sx = bestSnap([d.bounds.left + ddx, d.bounds.cx + ddx, d.bounds.right + ddx], d.targetsX, SNAP_PX / d.fw);
+      const sy = bestSnap([d.bounds.top + ddy, d.bounds.cy + ddy, d.bounds.bottom + ddy], d.targetsY, SNAP_PX / d.fh);
+      ddx = clamp(ddx + sx.off, d.minDx, d.maxDx);
+      ddy = clamp(ddy + sy.off, d.minDy, d.maxDy);
+      const live: Record<string, DocLayoutBox> = {};
+      for (const it of d.items) {
+        const nb = { ...it.start, x: it.start.x + ddx, y: it.start.y + ddy };
+        live[it.elId] = nb;
+        moveNode(it.elId, nb, d.nw, d.nh);
+      }
+      d.live = live;
+      setGroupLive(live);
+      setGuides({ x: sx.guide, y: sy.guide });
     }
   };
+
   onUpRef.current = () => {
     const d = dragRef.current;
-    if (d) setBox(d.sizeId, d.elId, d.live);
+    if (d?.kind === 'single') {
+      setBox(d.sizeId, d.elId, d.live);
+    } else if (d?.kind === 'group') {
+      setDoc((prev) => {
+        const lay = { ...(prev.layouts[d.sizeId] ?? {}) };
+        for (const id of Object.keys(d.live)) lay[id] = d.live[id];
+        return { ...prev, layouts: { ...prev.layouts, [d.sizeId]: lay } };
+      });
+    } else if (d?.kind === 'marquee') {
+      const r = d.rect;
+      if (r.w > 0.01 || r.h > 0.01) {
+        const hit = placed
+          .filter((p) => !p.box.hidden && p.box.x < r.x + r.w && p.box.x + p.box.w > r.x && p.box.y < r.y + r.h && p.box.y + p.box.h > r.y)
+          .map((p) => p.el.id);
+        setSelectedIds(hit);
+      }
+    }
     dragRef.current = null;
     setDragBox(null);
+    setGroupLive(null);
     setGuides({ x: null, y: null });
+    setMarquee(null);
     window.removeEventListener('pointermove', moveListener);
     window.removeEventListener('pointerup', upListener);
   };
@@ -765,73 +827,176 @@ export default function AdBuilderPage() {
     [moveListener, upListener],
   );
 
-  function startDrag(e: React.PointerEvent, elId: string, handle: Handle) {
+  function listen() {
+    window.addEventListener('pointermove', moveListener);
+    window.addEventListener('pointerup', upListener);
+  }
+
+  function startSingleDrag(e: React.PointerEvent, elId: string, handle: Handle) {
     e.preventDefault();
     e.stopPropagation();
     const box = (doc.layouts[size.id] ?? {})[elId];
     if (!box) return;
-    setSelectedId(elId);
-    // Snap targets: the other (visible) elements' edges + centers, plus the
-    // canvas edges + center. Static for the duration of the drag.
-    const targetsX = [0, 0.5, 1];
-    const targetsY = [0, 0.5, 1];
-    // Snap to the safe-area margins when one is set.
-    if (doc.safeArea) {
-      targetsX.push(doc.safeArea.x, 1 - doc.safeArea.x);
-      targetsY.push(doc.safeArea.y, 1 - doc.safeArea.y);
-    }
-    for (const p of placed) {
-      if (p.el.id === elId || p.box.hidden) continue;
-      targetsX.push(p.box.x, p.box.x + p.box.w / 2, p.box.x + p.box.w);
-      targetsY.push(p.box.y, p.box.y + p.box.h / 2, p.box.y + p.box.h);
-    }
+    const { tx, ty } = snapTargets(new Set([elId]));
+    dragRef.current = { kind: 'single', handle, sx: e.clientX, sy: e.clientY, fw: frameW, fh: frameH, nw: size.width, nh: size.height, sizeId: size.id, elId, start: { ...box }, live: { ...box }, targetsX: tx, targetsY: ty };
+    setDragBox({ ...box });
+    listen();
+  }
+
+  function startGroupDrag(e: React.PointerEvent) {
+    const lay = doc.layouts[size.id] ?? {};
+    const items = selectedIds
+      .map((id) => ({ elId: id, start: lay[id] }))
+      .filter((it): it is { elId: string; start: DocLayoutBox } => Boolean(it.start) && !it.start!.hidden);
+    if (items.length < 2) return;
+    const left = Math.min(...items.map((it) => it.start.x));
+    const right = Math.max(...items.map((it) => it.start.x + it.start.w));
+    const top = Math.min(...items.map((it) => it.start.y));
+    const bottom = Math.max(...items.map((it) => it.start.y + it.start.h));
+    const { tx, ty } = snapTargets(new Set(items.map((it) => it.elId)));
     dragRef.current = {
-      handle,
+      kind: 'group',
       sx: e.clientX,
       sy: e.clientY,
-      start: { ...box },
       fw: frameW,
       fh: frameH,
       nw: size.width,
       nh: size.height,
       sizeId: size.id,
-      elId,
-      live: { ...box },
-      targetsX,
-      targetsY,
+      items,
+      bounds: { left, right, top, bottom, cx: (left + right) / 2, cy: (top + bottom) / 2 },
+      minDx: -left,
+      maxDx: 1 - right,
+      minDy: -top,
+      maxDy: 1 - bottom,
+      targetsX: tx,
+      targetsY: ty,
+      live: {},
     };
-    setDragBox({ ...box });
-    window.addEventListener('pointermove', moveListener);
-    window.addEventListener('pointerup', upListener);
+    listen();
   }
 
-  // ── keyboard: nudge with arrows, delete with Delete/Backspace ──
+  function startMarquee(e: React.PointerEvent) {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const startXF = (e.clientX - rect.left) / frameW;
+    const startYF = (e.clientY - rect.top) / frameH;
+    clearSelection();
+    dragRef.current = { kind: 'marquee', left: rect.left, top: rect.top, fw: frameW, fh: frameH, startXF, startYF, rect: { x: startXF, y: startYF, w: 0, h: 0 } };
+    setMarquee({ x: startXF, y: startYF, w: 0, h: 0 });
+    listen();
+  }
+
+  // Element pointerdown: Shift toggles selection; otherwise select (or keep a
+  // multi-selection) and start a single / group drag.
+  function onBoxPointerDown(e: React.PointerEvent, elId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.shiftKey) {
+      toggleSelect(elId);
+      return;
+    }
+    if (selectedIds.length > 1 && selectedIds.includes(elId)) {
+      startGroupDrag(e);
+      return;
+    }
+    selectOne(elId);
+    startSingleDrag(e, elId, 'move');
+  }
+
+  // ── align / distribute the multi-selection ──
+  function applyBoxes(patch: Record<string, DocLayoutBox>) {
+    setDoc((prev) => {
+      const lay = { ...(prev.layouts[size.id] ?? {}) };
+      for (const id of Object.keys(patch)) lay[id] = patch[id];
+      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+    });
+  }
+
+  function alignSelected(edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') {
+    const boxes = selectedIds.map((id) => ({ id, box: layout[id] })).filter((b): b is { id: string; box: DocLayoutBox } => Boolean(b.box));
+    if (boxes.length < 2) return;
+    const left = Math.min(...boxes.map((b) => b.box.x));
+    const right = Math.max(...boxes.map((b) => b.box.x + b.box.w));
+    const top = Math.min(...boxes.map((b) => b.box.y));
+    const bottom = Math.max(...boxes.map((b) => b.box.y + b.box.h));
+    const cx = (left + right) / 2;
+    const cy = (top + bottom) / 2;
+    const patch: Record<string, DocLayoutBox> = {};
+    for (const { id, box } of boxes) {
+      let { x, y } = box;
+      if (edge === 'left') x = left;
+      else if (edge === 'right') x = right - box.w;
+      else if (edge === 'hcenter') x = cx - box.w / 2;
+      else if (edge === 'top') y = top;
+      else if (edge === 'bottom') y = bottom - box.h;
+      else if (edge === 'vmiddle') y = cy - box.h / 2;
+      patch[id] = { ...box, x: clamp(x, 0, 1 - box.w), y: clamp(y, 0, 1 - box.h) };
+    }
+    applyBoxes(patch);
+  }
+
+  function distributeSelected(axis: 'h' | 'v') {
+    const boxes = selectedIds.map((id) => ({ id, box: layout[id] })).filter((b): b is { id: string; box: DocLayoutBox } => Boolean(b.box));
+    if (boxes.length < 3) return; // equal gaps need 3+
+    const patch: Record<string, DocLayoutBox> = {};
+    if (axis === 'h') {
+      boxes.sort((a, b) => a.box.x - b.box.x);
+      const start = boxes[0].box.x;
+      const end = boxes[boxes.length - 1].box.x + boxes[boxes.length - 1].box.w;
+      const totalW = boxes.reduce((s, b) => s + b.box.w, 0);
+      const gap = (end - start - totalW) / (boxes.length - 1);
+      let cur = start;
+      for (const { id, box } of boxes) {
+        patch[id] = { ...box, x: cur };
+        cur += box.w + gap;
+      }
+    } else {
+      boxes.sort((a, b) => a.box.y - b.box.y);
+      const start = boxes[0].box.y;
+      const end = boxes[boxes.length - 1].box.y + boxes[boxes.length - 1].box.h;
+      const totalH = boxes.reduce((s, b) => s + b.box.h, 0);
+      const gap = (end - start - totalH) / (boxes.length - 1);
+      let cur = start;
+      for (const { id, box } of boxes) {
+        patch[id] = { ...box, y: cur };
+        cur += box.h + gap;
+      }
+    }
+    applyBoxes(patch);
+  }
+
+  // ── keyboard: nudge / delete ALL selected elements ──
   useEffect(() => {
-    if (!selectedId) return;
+    if (selectedIds.length === 0) return;
     function onKey(e: KeyboardEvent) {
       const tag = (document.activeElement?.tagName ?? '').toLowerCase();
       if (tag === 'input' || tag === 'textarea') return;
-      const box = (doc.layouts[size.id] ?? {})[selectedId!];
-      if (!box) return;
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        deleteElement(selectedId!);
+        selectedIds.forEach((id) => deleteElement(id));
         return;
       }
+      let dx = 0;
+      let dy = 0;
       const step = e.shiftKey ? 0.02 : 0.005;
-      let nx = box.x;
-      let ny = box.y;
-      if (e.key === 'ArrowLeft') nx -= step;
-      else if (e.key === 'ArrowRight') nx += step;
-      else if (e.key === 'ArrowUp') ny -= step;
-      else if (e.key === 'ArrowDown') ny += step;
+      if (e.key === 'ArrowLeft') dx = -step;
+      else if (e.key === 'ArrowRight') dx = step;
+      else if (e.key === 'ArrowUp') dy = -step;
+      else if (e.key === 'ArrowDown') dy = step;
       else return;
       e.preventDefault();
-      setBox(size.id, selectedId!, { ...box, x: clamp(nx, 0, 1 - box.w), y: clamp(ny, 0, 1 - box.h) });
+      setDoc((prev) => {
+        const lay = { ...(prev.layouts[size.id] ?? {}) };
+        for (const id of selectedIds) {
+          const b = lay[id];
+          if (b) lay[id] = { ...b, x: clamp(b.x + dx, 0, 1 - b.w), y: clamp(b.y + dy, 0, 1 - b.h) };
+        }
+        return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+      });
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedId, doc, size.id, deleteElement, setBox]);
+  }, [selectedIds, size.id, deleteElement, setDoc]);
 
   // ⌘Z / ⌘⇧Z undo-redo — global, but defer to the browser inside text fields.
   useEffect(() => {
@@ -1027,7 +1192,7 @@ export default function AdBuilderPage() {
             <div className="space-y-1">
               {[...placed].reverse().map(({ el, box }) => {
                 const Icon = TYPE_ICON[el.type];
-                const isSel = el.id === selectedId;
+                const isSel = selectedIds.includes(el.id);
                 return (
                   <div
                     key={el.id}
@@ -1036,7 +1201,7 @@ export default function AdBuilderPage() {
                     } ${box.hidden ? 'opacity-50' : ''}`}
                   >
                     <button
-                      onClick={() => setSelectedId(isSel ? null : el.id)}
+                      onClick={(e) => (e.shiftKey ? toggleSelect(el.id) : selectOne(el.id))}
                       className={`flex flex-1 items-center gap-2 rounded-lg px-2.5 py-2 text-left ${isSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
                     >
                       <Icon className="h-4 w-4 flex-shrink-0 opacity-70" />
@@ -1276,11 +1441,11 @@ export default function AdBuilderPage() {
                   />
                 </div>
 
-                {/* Interaction overlay — click backdrop to deselect. */}
+                {/* Interaction overlay — drag empty backdrop to marquee-select. */}
                 <div
                   className="absolute inset-0"
                   onPointerDown={(e) => {
-                    if (e.target === e.currentTarget) setSelectedId(null);
+                    if (e.target === e.currentTarget) startMarquee(e);
                   }}
                 >
                   {/* Safe-area margin boundary (a builder-only guide) */}
@@ -1302,10 +1467,19 @@ export default function AdBuilderPage() {
                   {dragBox && guides.y != null && (
                     <span className="pointer-events-none absolute left-0 right-0 z-30 h-px bg-[#ec4899]" style={{ top: guides.y * frameH }} />
                   )}
+                  {/* Marquee select rectangle */}
+                  {marquee && (
+                    <span
+                      className="pointer-events-none absolute z-30 rounded-[2px] border border-[var(--primary)] bg-[var(--primary)]/10"
+                      style={{ left: marquee.x * frameW, top: marquee.y * frameH, width: marquee.w * frameW, height: marquee.h * frameH }}
+                    />
+                  )}
                   {placed.map(({ el, box }) => {
-                    const isSel = el.id === selectedId;
-                    const isDragging = isSel && dragBox != null && dragRef.current?.elId === el.id;
-                    const b = isDragging && dragBox ? dragBox : box;
+                    const isSel = selectedIds.includes(el.id);
+                    const isSingleSel = el.id === selectedId;
+                    const singleDragging = dragBox != null && dragRef.current?.kind === 'single' && dragRef.current.elId === el.id;
+                    const live = groupLive?.[el.id];
+                    const b = singleDragging && dragBox ? dragBox : live ?? box;
                     const boxStyle: CSSProperties = {
                       left: b.x * frameW,
                       top: b.y * frameH,
@@ -1318,7 +1492,7 @@ export default function AdBuilderPage() {
                     return (
                       <div
                         key={el.id}
-                        onPointerDown={(e) => startDrag(e, el.id, 'move')}
+                        onPointerDown={(e) => onBoxPointerDown(e, el.id)}
                         title={box.hidden ? `${elName(el)} (hidden here)` : elName(el)}
                         className="group absolute"
                         style={boxStyle}
@@ -1334,7 +1508,7 @@ export default function AdBuilderPage() {
                                   : 'group-hover:ring-1 group-hover:ring-[var(--primary)]/50'
                           }`}
                         />
-                        {isSel && (
+                        {isSingleSel && (
                           <>
                             <span className="pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded bg-[var(--primary)] px-1.5 py-0.5 text-[10px] font-medium text-white">
                               {elName(el)}
@@ -1363,7 +1537,7 @@ export default function AdBuilderPage() {
                             {RESIZE_HANDLES.map((rh) => (
                               <span
                                 key={rh.h}
-                                onPointerDown={(e) => startDrag(e, el.id, rh.h)}
+                                onPointerDown={(e) => startSingleDrag(e, el.id, rh.h)}
                                 className="absolute h-2.5 w-2.5 rounded-[2px] border border-[var(--primary)] bg-[var(--card)]"
                                 style={{
                                   left: `${rh.x * 100}%`,
@@ -1392,10 +1566,18 @@ export default function AdBuilderPage() {
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch })}
                 />
               )}
+              {selectedIds.length > 1 && (
+                <MultiSelectToolbar
+                  count={selectedIds.length}
+                  onAlign={alignSelected}
+                  onDistribute={distributeSelected}
+                  canDistribute={selectedIds.length >= 3}
+                />
+              )}
             </div>
 
           <div className="flex-shrink-0 border-t border-[var(--border)] px-4 py-1.5 text-center text-[11px] text-[var(--muted-foreground)]">
-            {size.label} · drag to move · arrows nudge · Delete removes
+            {size.label} · drag to move · shift-click or drag a box to multi-select · arrows nudge · Delete removes
           </div>
         </div>
       </div>
@@ -1787,6 +1969,80 @@ function SelectionToolbar({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Floating toolbar shown when 2+ elements are selected — align the selection to
+ * a shared edge/center, and (3+) distribute with equal gaps. Mirrors the
+ * single-element SelectionToolbar's chrome.
+ */
+function MultiSelectToolbar({
+  count,
+  onAlign,
+  onDistribute,
+  canDistribute,
+}: {
+  count: number;
+  onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
+  onDistribute: (axis: 'h' | 'v') => void;
+  canDistribute: boolean;
+}) {
+  return (
+    <div className="absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-lg backdrop-blur-2xl backdrop-saturate-150">
+      <span className="px-1.5 text-xs font-medium text-[var(--muted-foreground)]">{count} selected</span>
+      <BarSep />
+      <BarBtn title="Align left" onClick={() => onAlign('left')}>
+        <AlignIcon edge="left" />
+      </BarBtn>
+      <BarBtn title="Align horizontal centers" onClick={() => onAlign('hcenter')}>
+        <AlignIcon edge="hcenter" />
+      </BarBtn>
+      <BarBtn title="Align right" onClick={() => onAlign('right')}>
+        <AlignIcon edge="right" />
+      </BarBtn>
+      <BarSep />
+      <BarBtn title="Align top" onClick={() => onAlign('top')}>
+        <AlignIcon edge="top" />
+      </BarBtn>
+      <BarBtn title="Align vertical centers" onClick={() => onAlign('vmiddle')}>
+        <AlignIcon edge="vmiddle" />
+      </BarBtn>
+      <BarBtn title="Align bottom" onClick={() => onAlign('bottom')}>
+        <AlignIcon edge="bottom" />
+      </BarBtn>
+      {canDistribute && (
+        <>
+          <BarSep />
+          <BarBtn title="Distribute horizontally (equal gaps)" onClick={() => onDistribute('h')}>
+            <AlignIcon edge="dist-h" />
+          </BarBtn>
+          <BarBtn title="Distribute vertically (equal gaps)" onClick={() => onDistribute('v')}>
+            <AlignIcon edge="dist-v" />
+          </BarBtn>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Tiny pictographic icons for the align / distribute actions. */
+function AlignIcon({ edge }: { edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom' | 'dist-h' | 'dist-v' }) {
+  const s = 'h-4 w-4';
+  const bar = 'currentColor';
+  const rect = (x: number, y: number, w: number, h: number) => <rect x={x} y={y} width={w} height={h} rx="0.6" fill={bar} opacity="0.7" />;
+  const guide = (x1: number, y1: number, x2: number, y2: number) => <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={bar} strokeWidth="1.1" strokeLinecap="round" />;
+  return (
+    <svg viewBox="0 0 16 16" className={s} aria-hidden="true">
+      {edge === 'left' && (<>{guide(2.5, 2, 2.5, 14)}{rect(4, 4, 8, 2.4)}{rect(4, 9.2, 5, 2.4)}</>)}
+      {edge === 'right' && (<>{guide(13.5, 2, 13.5, 14)}{rect(4, 4, 8, 2.4)}{rect(7, 9.2, 5, 2.4)}</>)}
+      {edge === 'hcenter' && (<>{guide(8, 2, 8, 14)}{rect(3.5, 4, 9, 2.4)}{rect(5, 9.2, 6, 2.4)}</>)}
+      {edge === 'top' && (<>{guide(2, 2.5, 14, 2.5)}{rect(4, 4, 2.4, 8)}{rect(9.2, 4, 2.4, 5)}</>)}
+      {edge === 'bottom' && (<>{guide(2, 13.5, 14, 13.5)}{rect(4, 4, 2.4, 8)}{rect(9.2, 7, 2.4, 5)}</>)}
+      {edge === 'vmiddle' && (<>{guide(2, 8, 14, 8)}{rect(4, 3.5, 2.4, 9)}{rect(9.2, 5, 2.4, 6)}</>)}
+      {edge === 'dist-h' && (<>{rect(1.5, 4, 2.4, 8)}{rect(6.8, 4, 2.4, 8)}{rect(12.1, 4, 2.4, 8)}</>)}
+      {edge === 'dist-v' && (<>{rect(4, 1.5, 8, 2.4)}{rect(4, 6.8, 8, 2.4)}{rect(4, 12.1, 8, 2.4)}</>)}
+    </svg>
   );
 }
 

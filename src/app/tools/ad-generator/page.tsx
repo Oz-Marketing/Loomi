@@ -19,6 +19,8 @@ import { toast } from 'sonner';
 import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon, Squares2X2Icon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { AD_TEMPLATES } from '@/lib/ad-generator/templates';
+import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
+import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { isFieldVisible, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
@@ -59,8 +61,30 @@ const WEBSAFE_FONTS = [
 export default function AdGeneratorPage() {
   const { accountKey, accountData } = useAccount();
 
+  // Published builder templates (DB) joined with the code-defined ones.
+  const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/ad-generator/templates-doc')
+      .then((r) => (r.ok ? r.json() : { templates: [] }))
+      .then((d: { templates?: { id: string; doc: TemplateDoc | null }[] }) => {
+        if (cancelled) return;
+        const built = (d.templates ?? [])
+          .filter((t) => t.doc)
+          .map((t) => adTemplateFromDoc(t.id, t.doc as TemplateDoc));
+        setDbTemplates(built);
+      })
+      .catch(() => {
+        if (!cancelled) setDbTemplates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const templates = useMemo(() => [...AD_TEMPLATES, ...dbTemplates], [dbTemplates]);
+
   const [templateId, setTemplateId] = useState(AD_TEMPLATES[0].id);
-  const template = useMemo(() => AD_TEMPLATES.find((t) => t.id === templateId)!, [templateId]);
+  const template = useMemo(() => templates.find((t) => t.id === templateId) ?? templates[0], [templates, templateId]);
 
   const [data, setData] = useState<AdData>(() => ({ ...AD_TEMPLATES[0].defaults }));
   const [sizeId, setSizeId] = useState(AD_TEMPLATES[0].sizes[0].id);
@@ -179,7 +203,8 @@ export default function AdGeneratorPage() {
   }, [template, data]);
 
   function switchTemplate(id: string) {
-    const t = AD_TEMPLATES.find((x) => x.id === id)!;
+    const t = templates.find((x) => x.id === id);
+    if (!t) return;
     setTemplateId(id);
     setData({ ...t.defaults });
     setSizeId(t.sizes[0].id);
@@ -246,9 +271,9 @@ export default function AdGeneratorPage() {
         </Link>
       </div>
 
-      {AD_TEMPLATES.length > 1 && (
+      {templates.length > 1 && (
         <div className="mb-6 flex flex-wrap gap-2">
-          {AD_TEMPLATES.map((t) => (
+          {templates.map((t) => (
             <button
               key={t.id}
               onClick={() => switchTemplate(t.id)}

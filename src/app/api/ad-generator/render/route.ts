@@ -13,7 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import { downloadFromS3, s3KeyFromPublicUrl } from '@/lib/s3';
-import { getTemplate } from '@/lib/ad-generator/templates';
+import { resolveTemplate } from '@/lib/ad-generator/resolve-template';
 import { renderAd } from '@/lib/ad-generator/render';
 import { fontFaceRule, parseCustomFonts, type FontFace } from '@/lib/ad-generator/fonts';
 
@@ -57,7 +57,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const template = getTemplate(body.templateId ?? '');
+  const template = await resolveTemplate(body.templateId ?? '');
   if (!template) return NextResponse.json({ error: 'Unknown template' }, { status: 400 });
   const size = template.sizes.find((s) => s.id === body.sizeId);
   if (!size) return NextResponse.json({ error: 'Unknown size' }, { status: 400 });

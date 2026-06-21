@@ -36,11 +36,21 @@ function resolveColor(c: string | undefined, brand: string, fallback: string): s
   return c === 'brand' ? brand : c;
 }
 
+/** A human-ish label for an empty binding, shown as a placeholder in preview mode. */
+function bindingLabel(b: Binding | undefined): string {
+  if (!b) return 'Text';
+  if (b.kind === 'static') return b.value || 'Text';
+  return b.key; // field key or brand key
+}
+
 interface RenderCtx {
   width: number;
   height: number;
   brand: string;
   brandStack: string;
+  /** Builder canvas: show empty text bindings as muted placeholders so every
+   *  element stays visible + selectable. Off for export. */
+  preview: boolean;
 }
 
 function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: RenderCtx): string {
@@ -68,12 +78,17 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   }
 
   // text
-  const value = esc(resolveBinding(el.binding, data));
-  if (!value) return '';
+  let value = esc(resolveBinding(el.binding, data));
+  let placeholder = false;
+  if (!value) {
+    if (!ctx.preview) return '';
+    value = esc(bindingLabel(el.binding));
+    placeholder = true;
+  }
   const family = el.fontFamily ? `"${esc(el.fontFamily)}", ${brandStack}` : brandStack;
-  const color = resolveColor(el.color, brand, '#0f172a');
+  const color = placeholder ? '#cbd5e1' : resolveColor(el.color, brand, '#0f172a');
   const items = el.align === 'center' ? 'center' : el.align === 'right' ? 'flex-end' : 'flex-start';
-  const bg = el.bg ? `background:${esc(resolveColor(el.bg, brand, brand))};` : '';
+  const bg = !placeholder && el.bg ? `background:${esc(resolveColor(el.bg, brand, brand))};` : '';
   const padding = el.padding ? `padding:${el.padding}px;` : '';
   const radius = el.radius ? `border-radius:${el.radius}px;` : '';
   const styles =
@@ -91,14 +106,14 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
 }
 
 /** Render a TemplateDoc + data at a given size into a full HTML document. */
-export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize): string {
+export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: { preview?: boolean }): string {
   const { width, height } = size;
   const brand = (data.brandColor && esc(data.brandColor)) || '#4f46e5';
 
   const fontFamily = cssSafeFamily(data.fontFamily ?? '');
   const fontFaceCss = data.fontFaceCss ?? '';
   const brandStack = `${fontFamily ? `"${fontFamily}", ` : ''}-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif`;
-  const ctx: RenderCtx = { width, height, brand, brandStack };
+  const ctx: RenderCtx = { width, height, brand, brandStack, preview: opts?.preview ?? false };
 
   const layout = doc.layouts[size.id] ?? {};
   const body = doc.elements

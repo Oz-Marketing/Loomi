@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon, Squares2X2Icon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { AD_TEMPLATES } from '@/lib/ad-generator/templates';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
@@ -225,16 +225,25 @@ export default function AdGeneratorPage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
       {pageFontFaceCss && <style dangerouslySetInnerHTML={{ __html: pageFontFaceCss }} />}
-      <div className="mb-6 flex items-center gap-3">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
-          <SparklesIcon className="h-5 w-5" />
+      <div className="mb-6 flex items-start justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
+            <SparklesIcon className="h-5 w-5" />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-[var(--foreground)]">Ad Generator</h1>
+            <p className="text-sm text-[var(--muted-foreground)]">
+              Generate on-brand ad creative from a template — preview live, export every size.
+            </p>
+          </div>
         </div>
-        <div>
-          <h1 className="text-xl font-bold text-[var(--foreground)]">Ad Generator</h1>
-          <p className="text-sm text-[var(--muted-foreground)]">
-            Generate on-brand ad creative from a template — preview live, export every size.
-          </p>
-        </div>
+        <Link
+          href="/tools/ad-generator/builder"
+          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+        >
+          <Squares2X2Icon className="h-3.5 w-3.5" />
+          Template Builder
+        </Link>
       </div>
 
       {AD_TEMPLATES.length > 1 && (

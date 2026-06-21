@@ -61,4 +61,10 @@ describe('renderDoc', () => {
     expect(html).not.toContain('<script>x');
     expect(html).toContain('&lt;script&gt;');
   });
+
+  it('shows empty text bindings as placeholders only in preview mode', () => {
+    // `price` has no value here: omitted on export, shown as its field key in the builder.
+    expect(renderDoc(doc, {}, SIZE)).not.toContain('>price<');
+    expect(renderDoc(doc, {}, SIZE, { preview: true })).toContain('price');
+  });
 });

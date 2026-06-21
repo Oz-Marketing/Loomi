@@ -16,7 +16,7 @@ import { vehicleOffer } from './vehicle-offer';
  * `_offer*` computed fields the doc binds to — keeping `renderDoc` generic
  * (it only knows about fields, not offer math).
  */
-const doc: TemplateDoc = {
+export const vehicleOfferDoc: TemplateDoc = {
   id: 'vehicle-offer-doc',
   name: 'Vehicle Offer (Builder)',
   description: 'Data-driven Vehicle Offer authored as a TemplateDoc (the builder renderer).',
@@ -73,7 +73,7 @@ const doc: TemplateDoc = {
 };
 
 /** Assemble the offer block into the `_offer*` fields the doc binds to. */
-function enrich(data: AdData): AdData {
+export function enrichVehicleOffer(data: AdData): AdData {
   const offer = assembleOffer(data);
   return {
     ...data,
@@ -83,12 +83,16 @@ function enrich(data: AdData): AdData {
   };
 }
 
+/** Fully-populated example data (defaults + assembled offer block) — what the
+ *  builder canvas renders so every element shows realistic content. */
+export const vehicleOfferPreviewData: AdData = enrichVehicleOffer(vehicleOfferDoc.defaults);
+
 export const vehicleOfferDocTemplate: AdTemplate = {
-  id: doc.id,
-  name: doc.name,
-  description: doc.description ?? '',
-  sizes: doc.sizes,
-  fields: doc.fields,
-  defaults: doc.defaults,
-  render: (data, size) => renderDoc(doc, enrich(data), size),
+  id: vehicleOfferDoc.id,
+  name: vehicleOfferDoc.name,
+  description: vehicleOfferDoc.description ?? '',
+  sizes: vehicleOfferDoc.sizes,
+  fields: vehicleOfferDoc.fields,
+  defaults: vehicleOfferDoc.defaults,
+  render: (data, size) => renderDoc(vehicleOfferDoc, enrichVehicleOffer(data), size),
 };

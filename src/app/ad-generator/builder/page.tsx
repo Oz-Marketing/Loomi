@@ -53,9 +53,10 @@ import { renderDoc } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
+import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, DocBackground, DocBgFraming } from '@/lib/ad-generator/doc-types';
-import type { FieldSpec, FieldType } from '@/lib/ad-generator/types';
+import type { FieldSpec, FieldType, AdData } from '@/lib/ad-generator/types';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
 const MIN_FRAC = 0.03; // smallest element edge as a fraction of the canvas
@@ -324,6 +325,10 @@ export default function AdBuilderPage() {
 
   // ── persistence ──
   const [templateId, setTemplateId] = useState<string | null>(null);
+  // Ad mode: when set, the builder is editing ONE ad's own design copy (the
+  // AdCreative.doc) rather than a shared template — Save writes back to the ad.
+  const [adId, setAdId] = useState<string | null>(null);
+  const [adData, setAdData] = useState<AdData | null>(null);
   const [templateName, setTemplateName] = useState(vehicleOfferDoc.name);
   const [status, setStatus] = useState<'draft' | 'published'>('draft');
   const [saving, setSaving] = useState(false);
@@ -354,15 +359,17 @@ export default function AdBuilderPage() {
   );
 
   const previewData = useMemo(
-    () => ({
-      ...vehicleOfferPreviewData,
-      ...doc.defaults, // designer-set default / preview values for fields
-      ...(fontFaceCss ? { fontFaceCss } : {}),
-      ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
-      ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
-      ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
-    }),
-    [accountData, fontFaceCss, doc.defaults],
+    () =>
+      enrichOfferFields({
+        ...vehicleOfferPreviewData,
+        ...doc.defaults, // designer-set default / preview values for fields
+        ...(adData ?? {}), // ad mode: the ad's real content
+        ...(fontFaceCss ? { fontFaceCss } : {}),
+        ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
+        ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
+        ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
+      }),
+    [accountData, fontFaceCss, doc.defaults, adData],
   );
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
@@ -688,6 +695,28 @@ export default function AdBuilderPage() {
 
   // ── save / load ──
   async function save(asNew = false) {
+    // Ad mode — persist the design to THIS ad (not a template).
+    if (adId) {
+      const name = templateName.trim() || 'Untitled ad';
+      setSaving(true);
+      try {
+        const res = await fetch(`/api/ad-generator/creatives/${adId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, doc: { ...doc, name } }),
+        });
+        if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+        savedRef.current = serializeDoc(doc, name, status);
+        setSaveStatus('saved');
+        toast.success('Saved to this ad');
+      } catch (err) {
+        setSaveStatus('error');
+        toast.error(`Couldn't save: ${err instanceof Error ? err.message : 'unknown error'}`);
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     const name = templateName.trim();
     if (!name) {
       toast.error('Name the template first');
@@ -787,11 +816,42 @@ export default function AdBuilderPage() {
   // the query client-side so no Suspense boundary is needed.
   useEffect(() => {
     if (deepLinkedRef.current) return;
-    const tid = new URLSearchParams(window.location.search).get('template');
-    if (!tid) return;
+    const params = new URLSearchParams(window.location.search);
+    const adParam = params.get('ad');
+    const tid = params.get('template');
+    if (!adParam && !tid) return;
     deepLinkedRef.current = true;
     (async () => {
       try {
+        if (adParam) {
+          // Ad mode — edit THIS ad's own design copy, saving back to the ad.
+          const res = await fetch(`/api/ad-generator/creatives/${adParam}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const json = (await res.json()) as { creative?: { id: string; name: string; templateId: string; data: AdData; doc: TemplateDoc | null } };
+          const c = json.creative;
+          if (!c) throw new Error('not found');
+          let d = c.doc;
+          if (!d) {
+            // No snapshot yet (e.g. a code-template ad) — resolve the source doc.
+            if (c.templateId === vehicleOfferDoc.id) d = structuredClone(vehicleOfferDoc);
+            else {
+              const tr = await fetch(`/api/ad-generator/templates-doc/${c.templateId}`);
+              if (tr.ok) d = (((await tr.json()) as { template?: { doc: TemplateDoc | null } }).template?.doc) ?? null;
+            }
+          }
+          if (!d || !Array.isArray(d.sizes) || !d.sizes.length) {
+            toast.error("This ad's template can't be edited in the builder");
+            return;
+          }
+          resetHistory(d);
+          setAdId(c.id);
+          setAdData(c.data ?? {});
+          setTemplateName(c.name);
+          setSizeId(d.sizes[0].id);
+          savedRef.current = serializeDoc(d, c.name, 'draft');
+          setSaveStatus('saved');
+          return;
+        }
         const res = await fetch(`/api/ad-generator/templates-doc/${tid}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = (await res.json()) as { template?: { id: string; name: string; description: string | null; status: string; doc: TemplateDoc | null } };
@@ -799,7 +859,7 @@ export default function AdBuilderPage() {
         if (t?.doc) loadTemplate({ id: t.id, name: t.name, description: t.description, status: t.status, updatedAt: '', doc: t.doc });
         else toast.error('That template could not be opened');
       } catch {
-        toast.error('Could not open that template');
+        toast.error('Could not open that');
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1175,19 +1235,23 @@ export default function AdBuilderPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [undo, redo]);
 
-  // Autosave — debounced PATCH once the template exists (has an id). New/unsaved
-  // templates require an explicit Save first (there's no row to PATCH yet).
+  // Autosave — debounced PATCH once there's a target (a saved template, or the
+  // ad in ad mode). New/unsaved templates require an explicit Save first.
   useEffect(() => {
-    if (!templateId) return;
+    if (!templateId && !adId) return;
     const snapshot = serializeDoc(doc, templateName, status);
     if (snapshot === savedRef.current) return; // nothing changed since last persist
     const handle = window.setTimeout(async () => {
       setSaveStatus('saving');
       try {
-        const res = await fetch(`/api/ad-generator/templates-doc/${templateId}`, {
+        const url = adId ? `/api/ad-generator/creatives/${adId}` : `/api/ad-generator/templates-doc/${templateId}`;
+        const body = adId
+          ? { name: templateName.trim() || 'Untitled ad', doc: { ...doc, name: templateName.trim() } }
+          : { name: templateName.trim(), status, doc: { ...doc, name: templateName.trim() } };
+        const res = await fetch(url, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: templateName.trim(), status, doc: { ...doc, name: templateName.trim() } }),
+          body: JSON.stringify(body),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         savedRef.current = snapshot;
@@ -1197,7 +1261,7 @@ export default function AdBuilderPage() {
       }
     }, 1200);
     return () => window.clearTimeout(handle);
-  }, [doc, templateName, status, templateId]);
+  }, [doc, templateName, status, templateId, adId]);
 
   const adders: { type: DocElementType; label: string }[] = [
     { type: 'text', label: 'Text' },
@@ -1224,13 +1288,18 @@ export default function AdBuilderPage() {
         {/* left — back + status */}
         <div className="flex min-w-0 items-center gap-2">
           <Link
-            href="/ad-generator"
+            href={adId ? `/ad-generator/${adId}` : '/ad-generator'}
             className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-            title="Back to the Generator"
+            title={adId ? 'Back to the ad' : 'Back to the Generator'}
           >
             <ArrowLeftIcon className="h-4 w-4" />
-            Generator
+            {adId ? 'Back to ad' : 'Generator'}
           </Link>
+          {adId ? (
+            <span className="inline-flex items-center rounded-full border border-[var(--primary)]/30 bg-[var(--primary)]/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--primary)]">
+              Editing ad
+            </span>
+          ) : (
           <span
             className={`inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${
               status === 'published'
@@ -1240,7 +1309,8 @@ export default function AdBuilderPage() {
           >
             {status}
           </span>
-          {templateId ? (
+          )}
+          {templateId || adId ? (
             <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${saveInfo.cls}`}>
               <saveInfo.Icon className={`h-3.5 w-3.5 ${saveInfo.spin ? 'animate-spin' : ''}`} />
               <span className="hidden sm:inline">{saveInfo.label}</span>
@@ -1255,8 +1325,8 @@ export default function AdBuilderPage() {
           <input
             value={templateName}
             onChange={(e) => setTemplateName(e.target.value)}
-            placeholder="Untitled template"
-            title="Template name"
+            placeholder={adId ? 'Untitled ad' : 'Untitled template'}
+            title={adId ? 'Ad name' : 'Template name'}
             className="w-[min(28rem,60vw)] rounded-lg border border-transparent bg-transparent px-3 py-1 text-center text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
           />
         </div>
@@ -1283,33 +1353,38 @@ export default function AdBuilderPage() {
               <ArrowUturnRightIcon className="h-4 w-4" />
             </button>
           </div>
-          <button onClick={openLoad} className="rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
-            Open
-          </button>
-          <button onClick={newBlank} className="rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
-            New
-          </button>
-          <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
-            {(['draft', 'published'] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => setStatus(s)}
-                className={`rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
-                  status === s ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-              >
-                {s}
+          {/* Template-management controls — hidden when editing a single ad. */}
+          {!adId && (
+            <>
+              <button onClick={openLoad} className="rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
+                Open
               </button>
-            ))}
-          </div>
-          {templateId && (
-            <button
-              onClick={() => save(true)}
-              disabled={saving}
-              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:opacity-50"
-            >
-              Save as new
-            </button>
+              <button onClick={newBlank} className="rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
+                New
+              </button>
+              <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
+                {(['draft', 'published'] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setStatus(s)}
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
+                      status === s ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+              {templateId && (
+                <button
+                  onClick={() => save(true)}
+                  disabled={saving}
+                  className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:opacity-50"
+                >
+                  Save as new
+                </button>
+              )}
+            </>
           )}
           <button
             onClick={() => save(false)}

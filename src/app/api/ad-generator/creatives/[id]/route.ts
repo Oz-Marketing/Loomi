@@ -47,7 +47,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { id } = await params;
-  let body: { name?: string; data?: Record<string, string>; status?: string; thumbnailUrl?: string };
+  let body: { name?: string; data?: Record<string, string>; status?: string; thumbnailUrl?: string; doc?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -58,6 +58,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.data && typeof body.data === 'object') data.data = JSON.stringify(body.data);
   if (typeof body.status === 'string') data.status = body.status === 'ready' ? 'ready' : 'draft';
   if (typeof body.thumbnailUrl === 'string') data.thumbnailUrl = body.thumbnailUrl;
+  // The ad's own design copy (edited in the builder's ad mode).
+  if (body.doc && typeof body.doc === 'object' && Array.isArray((body.doc as { sizes?: unknown }).sizes)) {
+    data.doc = JSON.stringify(body.doc);
+  }
 
   try {
     const row = await prisma.adCreative.update({ where: { id }, data });

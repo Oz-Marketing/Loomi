@@ -364,11 +364,12 @@ export default function AdGeneratorPage() {
             ))}
           </div>
           <Link
-            href="/ad-generator/builder"
+            href={`/ad-generator/builder?ad=${encodeURIComponent(creativeId)}${accountKey ? `&account=${encodeURIComponent(accountKey)}` : ''}`}
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+            title="Open this ad's layout in the builder"
           >
             <Squares2X2Icon className="h-3.5 w-3.5" />
-            Templates
+            Edit design
           </Link>
         </div>
       </div>

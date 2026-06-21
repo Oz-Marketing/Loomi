@@ -386,6 +386,21 @@ export default function AdBuilderPage() {
   );
 
   const lockedIds = useMemo(() => new Set(doc.elements.filter((e) => e.locked).map((e) => e.id)), [doc.elements]);
+  // Bounding box of the current multi-selection (live during group move/resize),
+  // for the group resize handles.
+  const groupBox = useMemo(() => {
+    if (selectedIds.length < 2) return null;
+    const boxes = selectedIds
+      .map((id) => groupLive?.[id] ?? layout[id])
+      .filter((b): b is DocLayoutBox => Boolean(b) && !b!.hidden);
+    if (boxes.length < 2) return null;
+    return {
+      left: Math.min(...boxes.map((b) => b.x)),
+      top: Math.min(...boxes.map((b) => b.y)),
+      right: Math.max(...boxes.map((b) => b.x + b.w)),
+      bottom: Math.max(...boxes.map((b) => b.y + b.h)),
+    };
+  }, [selectedIds, groupLive, layout]);
   // Layers panel: inline rename + drag-reorder transient state.
   const [renamingLayer, setRenamingLayer] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
@@ -793,6 +808,7 @@ export default function AdBuilderPage() {
   type DragState =
     | { kind: 'single'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; elId: string; start: DocLayoutBox; live: DocLayoutBox; targetsX: number[]; targetsY: number[]; scaleFont: boolean }
     | { kind: 'group'; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; items: { elId: string; start: DocLayoutBox }[]; bounds: { left: number; cx: number; right: number; top: number; cy: number; bottom: number }; minDx: number; maxDx: number; minDy: number; maxDy: number; targetsX: number[]; targetsY: number[]; live: Record<string, DocLayoutBox> }
+    | { kind: 'groupresize'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; bounds: { left: number; top: number; right: number; bottom: number }; items: { elId: string; start: DocLayoutBox; isText: boolean }[]; live: Record<string, DocLayoutBox> }
     | { kind: 'marquee'; left: number; top: number; fw: number; fh: number; startXF: number; startYF: number; rect: { x: number; y: number; w: number; h: number } };
   const dragRef = useRef<DragState | null>(null);
 
@@ -862,7 +878,7 @@ export default function AdBuilderPage() {
       setDragBox(box);
       setGuides({ x: gx, y: gy });
       moveNode(d.elId, box, d.nw, d.nh);
-    } else {
+    } else if (d.kind === 'group') {
       // group — translate all by a clamped delta, snapping the group's bounds.
       let ddx = clamp(dxF, d.minDx, d.maxDx);
       let ddy = clamp(dyF, d.minDy, d.maxDy);
@@ -879,6 +895,28 @@ export default function AdBuilderPage() {
       d.live = live;
       setGroupLive(live);
       setGuides({ x: sx.guide, y: sy.guide });
+    } else if (d.kind === 'groupresize') {
+      // group resize — scale every box (and text font) about the opposite edge.
+      const w0 = d.bounds.right - d.bounds.left;
+      const h0 = d.bounds.bottom - d.bounds.top;
+      const rect = computeBox(d.handle, { x: d.bounds.left, y: d.bounds.top, w: w0, h: h0 }, dxF, dyF);
+      const scaleX = w0 > 0 ? rect.w / w0 : 1;
+      const scaleY = h0 > 0 ? rect.h / h0 : 1;
+      const live: Record<string, DocLayoutBox> = {};
+      for (const it of d.items) {
+        const nb: DocLayoutBox = {
+          ...it.start,
+          x: clamp(rect.x + (it.start.x - d.bounds.left) * scaleX, 0, 1),
+          y: clamp(rect.y + (it.start.y - d.bounds.top) * scaleY, 0, 1),
+          w: Math.max(MIN_FRAC, it.start.w * scaleX),
+          h: Math.max(MIN_FRAC, it.start.h * scaleY),
+        };
+        if (it.isText && it.start.fontSize) nb.fontSize = Math.max(4, Math.round(it.start.fontSize * scaleY));
+        live[it.elId] = nb;
+        moveNode(it.elId, nb, d.nw, d.nh);
+      }
+      d.live = live;
+      setGroupLive(live);
     }
   };
 
@@ -886,7 +924,7 @@ export default function AdBuilderPage() {
     const d = dragRef.current;
     if (d?.kind === 'single') {
       setBox(d.sizeId, d.elId, d.live);
-    } else if (d?.kind === 'group') {
+    } else if (d?.kind === 'group' || d?.kind === 'groupresize') {
       setDoc((prev) => {
         const lay = { ...(prev.layouts[d.sizeId] ?? {}) };
         for (const id of Object.keys(d.live)) lay[id] = d.live[id];
@@ -963,6 +1001,37 @@ export default function AdBuilderPage() {
       maxDy: 1 - bottom,
       targetsX: tx,
       targetsY: ty,
+      live: {},
+    };
+    listen();
+  }
+
+  // Resize the whole multi-selection from a bounding-box handle: scale every
+  // box (and text font size) proportionally about the opposite edge/corner.
+  function startGroupResize(e: React.PointerEvent, handle: Handle) {
+    e.preventDefault();
+    e.stopPropagation();
+    const lay = doc.layouts[size.id] ?? {};
+    const items = selectedIds
+      .map((id) => ({ elId: id, start: lay[id], isText: doc.elements.find((el) => el.id === id)?.type === 'text' }))
+      .filter((it): it is { elId: string; start: DocLayoutBox; isText: boolean } => Boolean(it.start) && !it.start!.hidden);
+    if (items.length < 2) return;
+    const left = Math.min(...items.map((it) => it.start.x));
+    const top = Math.min(...items.map((it) => it.start.y));
+    const right = Math.max(...items.map((it) => it.start.x + it.start.w));
+    const bottom = Math.max(...items.map((it) => it.start.y + it.start.h));
+    dragRef.current = {
+      kind: 'groupresize',
+      handle,
+      sx: e.clientX,
+      sy: e.clientY,
+      fw: frameW,
+      fh: frameH,
+      nw: size.width,
+      nh: size.height,
+      sizeId: size.id,
+      bounds: { left, top, right, bottom },
+      items,
       live: {},
     };
     listen();
@@ -1739,6 +1808,35 @@ export default function AdBuilderPage() {
                       </div>
                     );
                   })}
+
+                  {/* Group bounding box + resize handles (scale the whole selection) */}
+                  {groupBox && (
+                    <div
+                      className="pointer-events-none absolute z-20"
+                      style={{
+                        left: groupBox.left * frameW,
+                        top: groupBox.top * frameH,
+                        width: (groupBox.right - groupBox.left) * frameW,
+                        height: (groupBox.bottom - groupBox.top) * frameH,
+                      }}
+                    >
+                      <span className="absolute inset-0 rounded-[2px] ring-1 ring-dashed ring-[var(--primary)]/60" />
+                      {RESIZE_HANDLES.map((rh) => (
+                        <span
+                          key={rh.h}
+                          onPointerDown={(e) => startGroupResize(e, rh.h)}
+                          className="pointer-events-auto absolute h-2.5 w-2.5 rounded-[2px] border border-[var(--primary)] bg-[var(--card)]"
+                          style={{
+                            left: `${rh.x * 100}%`,
+                            top: `${rh.y * 100}%`,
+                            transform: 'translate(-50%, -50%)',
+                            cursor: rh.cursor,
+                            touchAction: 'none',
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1763,7 +1861,7 @@ export default function AdBuilderPage() {
             </div>
 
           <div className="flex-shrink-0 border-t border-[var(--border)] px-4 py-1.5 text-center text-[11px] text-[var(--muted-foreground)]">
-            {size.label} · drag to move · shift-click or drag a box to multi-select · arrows nudge · Delete removes
+            {size.label} · drag to move · shift-click or drag a box to multi-select · drag the box handles to resize the group · arrows nudge · Delete removes
           </div>
         </div>
       </div>

@@ -325,11 +325,12 @@ export default function AdGeneratorPage() {
                 {fields.map((f) => (
                   <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} />
                 ))}
+                {fields.some((f) => f.key === 'disclaimer') && (
+                  <DisclaimerActions renderData={renderData} onApply={(text) => set('disclaimer', text)} />
+                )}
               </div>
             </section>
           ))}
-
-          <DisclaimerHelper renderData={renderData} onApply={(text) => set('disclaimer', text)} />
         </div>
 
         {/* Preview + export */}
@@ -589,12 +590,13 @@ type DisclaimerTemplateOption = {
 };
 
 /**
- * "Generate disclaimer" — composes rule-based legal text from the structured
- * offer (token substitution + dealer-fee boilerplate + VIN/Stock#). Lists any
- * DB templates for the current offer type (make-specific first, then global),
- * falling back to the code-defined default when none exist. Never AI-written.
+ * Compact "generate disclaimer" controls — rendered INSIDE the Legal group,
+ * under the disclaimer field. Composes rule-based legal text from the
+ * structured offer (token substitution + dealer-fee boilerplate + VIN/Stock#),
+ * using a chosen DB template for the offer type (make-specific first, then
+ * global) or the code-defined default. Never AI-written.
  */
-function DisclaimerHelper({
+function DisclaimerActions({
   renderData,
   onApply,
 }: {
@@ -628,33 +630,29 @@ function DisclaimerHelper({
   }
 
   return (
-    <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
-      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Disclaimer</h2>
-      <p className="mb-3 text-xs text-[var(--muted-foreground)]">
-        Builds compliant legal text from the offer — numbers, dealer-fee boilerplate, and VIN/Stock# filled in automatically. Edit freely after.
-      </p>
-      <div className="flex items-center gap-2">
-        <select
-          value={selectedId}
-          onChange={(e) => setSelectedId(e.target.value)}
-          className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--input)] px-2.5 py-2 text-sm text-[var(--foreground)]"
-        >
-          <option value="">Default ({offerType})</option>
-          {templates.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.name}{t.make ? ` — ${t.make}` : ' — global'}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={generate}
-          className="flex-shrink-0 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
-        >
-          Generate
-        </button>
-      </div>
-    </section>
+    <div className="flex items-center gap-2 pt-1">
+      <select
+        value={selectedId}
+        onChange={(e) => setSelectedId(e.target.value)}
+        title="Disclaimer template"
+        className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--input)] px-2.5 py-1.5 text-xs text-[var(--foreground)]"
+      >
+        <option value="">Default ({offerType})</option>
+        {templates.map((t) => (
+          <option key={t.id} value={t.id}>
+            {t.name}{t.make ? ` — ${t.make}` : ' — global'}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={generate}
+        title="Fill from the offer: numbers + dealer-fee boilerplate + VIN/Stock#"
+        className="flex-shrink-0 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+      >
+        Generate
+      </button>
+    </div>
   );
 }
 

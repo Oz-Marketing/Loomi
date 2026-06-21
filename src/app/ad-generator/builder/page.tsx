@@ -44,6 +44,9 @@ import {
   CheckIcon,
   CloudIcon,
   ExclamationTriangleIcon,
+  LockClosedIcon,
+  LockOpenIcon,
+  Bars2Icon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { renderDoc } from '@/lib/ad-generator/doc-renderer';
@@ -221,8 +224,10 @@ function rid(): string {
   return u.replace(/-/g, '').slice(0, 8);
 }
 
-/** Friendly display name for an element (its binding, falling back to id). */
+/** Friendly display name for an element: its custom name, else its binding,
+ *  falling back to id. */
 function elName(el: DocElement): string {
+  if (el.name && el.name.trim()) return el.name;
   const b = el.binding;
   if (!b) return el.id;
   if (b.kind === 'static') return b.value || el.id;
@@ -380,6 +385,13 @@ export default function AdBuilderPage() {
     [doc.elements, layout],
   );
 
+  const lockedIds = useMemo(() => new Set(doc.elements.filter((e) => e.locked).map((e) => e.id)), [doc.elements]);
+  // Layers panel: inline rename + drag-reorder transient state.
+  const [renamingLayer, setRenamingLayer] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [dragLayer, setDragLayer] = useState<string | null>(null);
+  const [dropLayer, setDropLayer] = useState<string | null>(null);
+
   // Single-selection shorthand — the per-element toolbar, handles, and action
   // tab only show when exactly one element is selected.
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
@@ -532,6 +544,32 @@ export default function AdBuilderPage() {
     const box = layout[id];
     if (!box) return;
     setBox(size.id, id, { ...box, hidden: !box.hidden });
+  }
+
+  // Lock/unlock an element (builder-only; deselects it when locking).
+  function toggleLock(id: string) {
+    setElement(id, { locked: !doc.elements.find((e) => e.id === id)?.locked });
+    setSelectedIds((ids) => ids.filter((x) => x !== id));
+  }
+
+  // Rename an element's layer label (double-click in the Layers panel).
+  function renameElement(id: string, name: string) {
+    setElement(id, { name: name.trim() || undefined });
+  }
+
+  // Drag-reorder in the Layers panel → reassign z within the CURRENT size so the
+  // dropped order sticks (z is per-size). `orderTopFirst` is front→back (as the
+  // Layers list shows it); the renderer paints low z first, so invert.
+  function reorderLayers(orderTopFirst: string[]) {
+    setDoc((prev) => {
+      const lay = { ...(prev.layouts[size.id] ?? {}) };
+      const n = orderTopFirst.length;
+      orderTopFirst.forEach((id, i) => {
+        const b = lay[id];
+        if (b) lay[id] = { ...b, z: n - i }; // top of list = highest z (front)
+      });
+      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+    });
   }
 
   // New sizes start from the current size's layout so they're not empty.
@@ -753,7 +791,7 @@ export default function AdBuilderPage() {
 
   // ── pointer interactions: single drag · group drag · marquee select ──
   type DragState =
-    | { kind: 'single'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; elId: string; start: DocLayoutBox; live: DocLayoutBox; targetsX: number[]; targetsY: number[] }
+    | { kind: 'single'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; elId: string; start: DocLayoutBox; live: DocLayoutBox; targetsX: number[]; targetsY: number[]; scaleFont: boolean }
     | { kind: 'group'; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; items: { elId: string; start: DocLayoutBox }[]; bounds: { left: number; cx: number; right: number; top: number; cy: number; bottom: number }; minDx: number; maxDx: number; minDy: number; maxDy: number; targetsX: number[]; targetsY: number[]; live: Record<string, DocLayoutBox> }
     | { kind: 'marquee'; left: number; top: number; fw: number; fh: number; startXF: number; startYF: number; rect: { x: number; y: number; w: number; h: number } };
   const dragRef = useRef<DragState | null>(null);
@@ -787,6 +825,7 @@ export default function AdBuilderPage() {
       node.style.top = `${b.y * nh}px`;
       node.style.width = `${b.w * nw}px`;
       node.style.height = `${b.h * nh}px`;
+      if (b.fontSize != null) node.style.fontSize = `${b.fontSize}px`;
     }
   }
 
@@ -815,6 +854,9 @@ export default function AdBuilderPage() {
         box.y = clamp(box.y + sy.off, 0, 1 - box.h);
         gx = sx.guide;
         gy = sy.guide;
+      } else if (d.scaleFont && d.start.fontSize && d.start.h > 0) {
+        // Resizing text scales the font with the box height (not just reflow).
+        box.fontSize = Math.max(4, Math.round(d.start.fontSize * (box.h / d.start.h)));
       }
       d.live = box;
       setDragBox(box);
@@ -854,7 +896,7 @@ export default function AdBuilderPage() {
       const r = d.rect;
       if (r.w > 0.01 || r.h > 0.01) {
         const hit = placed
-          .filter((p) => !p.box.hidden && p.box.x < r.x + r.w && p.box.x + p.box.w > r.x && p.box.y < r.y + r.h && p.box.y + p.box.h > r.y)
+          .filter((p) => !p.box.hidden && !p.el.locked && p.box.x < r.x + r.w && p.box.x + p.box.w > r.x && p.box.y < r.y + r.h && p.box.y + p.box.h > r.y)
           .map((p) => p.el.id);
         setSelectedIds(hit);
       }
@@ -887,7 +929,8 @@ export default function AdBuilderPage() {
     const box = (doc.layouts[size.id] ?? {})[elId];
     if (!box) return;
     const { tx, ty } = snapTargets(new Set([elId]));
-    dragRef.current = { kind: 'single', handle, sx: e.clientX, sy: e.clientY, fw: frameW, fh: frameH, nw: size.width, nh: size.height, sizeId: size.id, elId, start: { ...box }, live: { ...box }, targetsX: tx, targetsY: ty };
+    const scaleFont = doc.elements.find((el) => el.id === elId)?.type === 'text';
+    dragRef.current = { kind: 'single', handle, sx: e.clientX, sy: e.clientY, fw: frameW, fh: frameH, nw: size.width, nh: size.height, sizeId: size.id, elId, start: { ...box }, live: { ...box }, targetsX: tx, targetsY: ty, scaleFont };
     setDragBox({ ...box });
     listen();
   }
@@ -940,6 +983,7 @@ export default function AdBuilderPage() {
   function onBoxPointerDown(e: React.PointerEvent, elId: string) {
     e.preventDefault();
     e.stopPropagation();
+    if (lockedIds.has(elId)) return; // locked → not selectable/draggable on canvas
     if (e.shiftKey) {
       toggleSelect(elId);
       return;
@@ -1232,7 +1276,8 @@ export default function AdBuilderPage() {
             </div>
           </section>
 
-          {/* Layers — the stack of placed elements (top of the list = front) */}
+          {/* Layers — the stack of placed elements (top of the list = front).
+              Double-click to rename · lock icon to lock · drag to reorder (z). */}
           <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Layers</h2>
@@ -1242,20 +1287,78 @@ export default function AdBuilderPage() {
               {[...placed].reverse().map(({ el, box }) => {
                 const Icon = TYPE_ICON[el.type];
                 const isSel = selectedIds.includes(el.id);
+                const locked = !!el.locked;
+                const renaming = renamingLayer === el.id;
+                const isDropTarget = dropLayer === el.id && dragLayer !== el.id;
+                const commitRename = () => {
+                  renameElement(el.id, renameDraft);
+                  setRenamingLayer(null);
+                };
                 return (
                   <div
                     key={el.id}
+                    draggable={!renaming}
+                    onDragStart={() => setDragLayer(el.id)}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      if (dropLayer !== el.id) setDropLayer(el.id);
+                    }}
+                    onDragEnd={() => {
+                      setDragLayer(null);
+                      setDropLayer(null);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const from = dragLayer;
+                      setDragLayer(null);
+                      setDropLayer(null);
+                      if (!from || from === el.id) return;
+                      // Current visual order (top→front), with `from` moved to before `el`.
+                      const order = [...placed].reverse().map((p) => p.el.id);
+                      const next = order.filter((id) => id !== from);
+                      const at = next.indexOf(el.id);
+                      next.splice(at, 0, from);
+                      reorderLayers(next);
+                    }}
                     className={`flex items-center gap-1 rounded-lg pr-1 transition-colors ${
                       isSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'
-                    } ${box.hidden ? 'opacity-50' : ''}`}
+                    } ${box.hidden ? 'opacity-50' : ''} ${isDropTarget ? 'ring-1 ring-[var(--primary)]' : ''} ${dragLayer === el.id ? 'opacity-40' : ''}`}
                   >
+                    <span className="cursor-grab pl-1 text-[var(--muted-foreground)]/50" title="Drag to reorder">
+                      <Bars2Icon className="h-3.5 w-3.5" />
+                    </span>
+                    {renaming ? (
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') commitRename();
+                          if (e.key === 'Escape') setRenamingLayer(null);
+                        }}
+                        className="flex-1 rounded-md border border-[var(--primary)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none"
+                      />
+                    ) : (
+                      <button
+                        onClick={(e) => (e.shiftKey ? toggleSelect(el.id) : selectOne(el.id))}
+                        onDoubleClick={() => {
+                          setRenameDraft(elName(el));
+                          setRenamingLayer(el.id);
+                        }}
+                        className={`flex flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left ${isSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
+                        title="Double-click to rename"
+                      >
+                        <Icon className="h-4 w-4 flex-shrink-0 opacity-70" />
+                        <span className="flex-1 truncate text-xs font-medium">{elName(el)}</span>
+                      </button>
+                    )}
                     <button
-                      onClick={(e) => (e.shiftKey ? toggleSelect(el.id) : selectOne(el.id))}
-                      className={`flex flex-1 items-center gap-2 rounded-lg px-2.5 py-2 text-left ${isSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
+                      onClick={() => toggleLock(el.id)}
+                      title={locked ? 'Unlock' : 'Lock (not editable)'}
+                      className={`rounded p-1 transition-colors hover:text-[var(--foreground)] ${locked ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]'}`}
                     >
-                      <Icon className="h-4 w-4 flex-shrink-0 opacity-70" />
-                      <span className="flex-1 truncate text-xs font-medium">{elName(el)}</span>
-                      <span className="text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">{el.type}</span>
+                      {locked ? <LockClosedIcon className="h-3.5 w-3.5" /> : <LockOpenIcon className="h-3.5 w-3.5" />}
                     </button>
                     <button
                       onClick={() => toggleHidden(el.id)}
@@ -1569,7 +1672,7 @@ export default function AdBuilderPage() {
                       width: b.w * frameW,
                       height: b.h * frameH,
                       zIndex: (b.z ?? 0) + 1,
-                      cursor: box.hidden ? 'pointer' : 'move',
+                      cursor: el.locked ? 'default' : box.hidden ? 'pointer' : 'move',
                       touchAction: 'none',
                     };
                     return (

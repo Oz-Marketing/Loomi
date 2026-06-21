@@ -28,6 +28,11 @@ export type DocElementType = 'text' | 'image' | 'logo' | 'shape';
 export interface DocElement {
   id: string;
   type: DocElementType;
+  /** Designer-set layer name (overrides the binding-derived label). */
+  name?: string;
+  /** Builder-only: a locked element can't be selected, moved, or edited on the
+   *  canvas until unlocked. Never affects export. */
+  locked?: boolean;
   /** What the element displays. Omitted for plain shapes. */
   binding?: Binding;
   // ── text ──

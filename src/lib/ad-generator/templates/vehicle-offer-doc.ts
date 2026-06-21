@@ -1,7 +1,7 @@
 import type { AdTemplate, AdData } from '../types';
 import type { TemplateDoc } from '../doc-types';
 import { renderDoc } from '../doc-renderer';
-import { assembleOffer } from '../offer-text';
+import { enrichOfferFields } from '../offer-text';
 import { vehicleOffer } from './vehicle-offer';
 
 /**
@@ -72,15 +72,11 @@ export const vehicleOfferDoc: TemplateDoc = {
   },
 };
 
-/** Assemble the offer block into the `_offer*` fields the doc binds to. */
+/** Assemble the offer block into the `_offer*` fields the doc binds to.
+ *  Delegates to the shared, generic enricher (kept as a named export for the
+ *  builder preview + code template). */
 export function enrichVehicleOffer(data: AdData): AdData {
-  const offer = assembleOffer(data);
-  return {
-    ...data,
-    _offerLabel: offer ? offer.label : data.offerLabel || 'LEASE FOR',
-    _offerMain: offer ? offer.main : data.price || '$299/mo',
-    _offerTerms: offer ? offer.terms : data.terms || '',
-  };
+  return enrichOfferFields(data);
 }
 
 /** Fully-populated example data (defaults + assembled offer block) — what the

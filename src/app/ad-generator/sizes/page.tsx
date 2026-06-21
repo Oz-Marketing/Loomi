@@ -23,6 +23,7 @@ import {
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { UserAvatar } from '@/components/user-avatar';
+import { catalogByCategory, aspectLabel } from '@/lib/ad-generator/ad-size-catalog';
 
 type AdSize = {
   id: string;
@@ -227,18 +228,49 @@ export default function AdSizesPage() {
         </button>
       </div>
 
-      {/* List */}
+      {/* Standard catalog — built-in platform sizes, always available */}
+      <div className="mb-8">
+        <div className="mb-3 flex items-baseline gap-2">
+          <h2 className="text-sm font-semibold text-[var(--foreground)]">Standard sizes</h2>
+          <span className="text-xs text-[var(--muted-foreground)]">Built-in platform presets — always available in the builder.</span>
+        </div>
+        <div className="space-y-4">
+          {catalogByCategory().map((grp) => (
+            <div key={grp.category}>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{grp.label}</div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {grp.sizes.map((s) => {
+                  const ratio = s.width / s.height;
+                  const boxW = ratio >= 1 ? 44 : 44 * ratio;
+                  const boxH = ratio >= 1 ? 44 / ratio : 44;
+                  return (
+                    <div key={s.name} className="glass-card flex items-center gap-3 rounded-2xl border border-[var(--border)] p-4">
+                      <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--muted)]/40">
+                        <div className="rounded-[2px] bg-[var(--primary)]/30 ring-1 ring-[var(--primary)]/50" style={{ width: boxW, height: boxH }} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-semibold text-[var(--foreground)]">{s.name}</div>
+                        <div className="text-xs text-[var(--muted-foreground)]">
+                          {s.width}×{s.height} · {aspectLabel(s.width, s.height)}
+                        </div>
+                        <div className="mt-1 text-[11px] text-[var(--muted-foreground)]">{s.platform}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Custom sizes — team-added presets from the DB */}
+      <h2 className="mb-3 text-sm font-semibold text-[var(--foreground)]">Custom sizes</h2>
       {sizes === null ? (
         <div className="text-sm text-[var(--muted-foreground)]">Loading…</div>
       ) : count === 0 ? (
-        <div className="glass-card rounded-2xl p-12 text-center flex flex-col items-center">
-          <div className="w-16 h-16 rounded-2xl bg-[var(--muted)] flex items-center justify-center mb-4">
-            <RectangleGroupIcon className="w-8 h-8 text-[var(--muted-foreground)]" />
-          </div>
-          <h2 className="text-lg font-semibold mb-1">No sizes yet</h2>
-          <p className="text-sm text-[var(--muted-foreground)] max-w-md">
-            Add the ones your team designs against — Square, Story, Landscape — and they&rsquo;ll appear in the builder&rsquo;s size picker.
-          </p>
+        <div className="glass-card rounded-2xl px-4 py-10 text-center text-sm text-[var(--muted-foreground)]">
+          No custom sizes yet. The standard sizes above cover the common platforms — add one here for anything bespoke.
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

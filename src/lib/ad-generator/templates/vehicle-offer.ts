@@ -162,7 +162,7 @@ export const vehicleOffer: AdTemplate = {
     { key: 'expiration', label: 'Expiration', type: 'text', group: 'Offer', placeholder: 'Offer ends March 31' },
     { key: 'vin', label: 'VIN', type: 'text', group: 'Legal', placeholder: '1HGCM82633A004352', help: 'Optional — appended to the disclaimer.' },
     { key: 'stockNumber', label: 'Stock #', type: 'text', group: 'Legal', placeholder: 'H4421A', help: 'Optional — appended to the disclaimer.' },
-    { key: 'disclaimer', label: 'Disclaimer', type: 'textarea', group: 'Legal', placeholder: 'Plus tax, title, license…', help: 'Required legal text — generate from a template or write your own.' },
+    { key: 'disclaimer', label: 'Disclaimer', type: 'textarea', group: 'Legal', placeholder: 'Plus tax, title, license…', help: 'Auto-fills from the template + offer; edit to override.' },
   ],
   defaults: {
     dealerName: 'Oz Toyota',

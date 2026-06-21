@@ -13,7 +13,7 @@
  * channel), AI copy, and EVOX vehicle imagery.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
@@ -322,11 +322,18 @@ export default function AdGeneratorPage() {
             <section key={group} className="glass-card rounded-2xl border border-[var(--border)] p-5">
               <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{group}</h2>
               <div className="space-y-4">
-                {fields.map((f) => (
-                  <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} />
-                ))}
-                {fields.some((f) => f.key === 'disclaimer') && (
-                  <DisclaimerActions renderData={renderData} onApply={(text) => set('disclaimer', text)} />
+                {fields.map((f) =>
+                  f.key === 'disclaimer' ? (
+                    <DisclaimerField
+                      key={f.key}
+                      field={f}
+                      renderData={renderData}
+                      value={data.disclaimer ?? ''}
+                      onChange={(v) => set('disclaimer', v)}
+                    />
+                  ) : (
+                    <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} />
+                  ),
                 )}
               </div>
             </section>
@@ -463,15 +470,13 @@ function AiCopyPanel({
         className="mb-2 w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]"
       />
       <div className="flex items-center gap-2">
-        <select
+        <FontSelect
           value={tone}
-          onChange={(e) => setTone(e.target.value)}
-          className="rounded-lg border border-[var(--border)] bg-[var(--input)] px-2.5 py-2 text-sm text-[var(--foreground)]"
-        >
-          {TONES.map((t) => (
-            <option key={t.value} value={t.value}>{t.label}</option>
-          ))}
-        </select>
+          onChange={setTone}
+          options={TONES}
+          previewFont={false}
+          className="w-44 flex-shrink-0"
+        />
         <button
           onClick={generate}
           disabled={busy}
@@ -590,31 +595,35 @@ type DisclaimerTemplateOption = {
 };
 
 /**
- * Compact "generate disclaimer" controls — rendered INSIDE the Legal group,
- * under the disclaimer field. Composes rule-based legal text from the
- * structured offer (token substitution + dealer-fee boilerplate + VIN/Stock#),
- * using a chosen DB template for the offer type (make-specific first, then
- * global) or the code-defined default. Never AI-written.
+ * The disclaimer area (rendered in place of the generic `disclaimer` field):
+ * a template selector + the disclaimer textarea. The legal text AUTO-FILLS
+ * from the selected template + the structured offer (token substitution +
+ * dealer-fee boilerplate + VIN/Stock#) and re-composes whenever the offer /
+ * VIN / Stock# / template changes — no button. Manually editing the text
+ * opts out of auto-fill (until a template is re-selected). Never AI-written.
  */
-function DisclaimerActions({
+function DisclaimerField({
+  field,
   renderData,
-  onApply,
+  value,
+  onChange,
 }: {
+  field: FieldSpec;
   renderData: AdData;
-  onApply: (text: string) => void;
+  value: string;
+  onChange: (v: string) => void;
 }) {
   const offerType = renderData.offerType || 'custom';
   const [templates, setTemplates] = useState<DisclaimerTemplateOption[]>([]);
   const [selectedId, setSelectedId] = useState('');
+  const editedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/ad-generator/disclaimer-templates?offerType=${encodeURIComponent(offerType)}`)
       .then((r) => (r.ok ? r.json() : { templates: [] }))
       .then((d: { templates?: DisclaimerTemplateOption[] }) => {
-        if (cancelled) return;
-        setTemplates(d.templates ?? []);
-        setSelectedId('');
+        if (!cancelled) setTemplates(d.templates ?? []);
       })
       .catch(() => {
         if (!cancelled) setTemplates([]);
@@ -624,34 +633,57 @@ function DisclaimerActions({
     };
   }, [offerType]);
 
-  function generate() {
-    const tmpl = templates.find((t) => t.id === selectedId);
-    onApply(composeDisclaimer(renderData, tmpl?.body));
-  }
+  const tmpl = templates.find((t) => t.id === selectedId);
+  const composed = composeDisclaimer(renderData, tmpl?.body);
+
+  // Auto-fill the disclaimer whenever the composed result changes (offer / VIN
+  // / Stock# / template edits) — unless the user has typed their own text.
+  useEffect(() => {
+    if (!editedRef.current && composed !== value) onChange(composed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [composed]);
+
+  const templateOptions: FontSelectOption[] = [
+    { value: '', label: `Default (${offerType})` },
+    ...templates.map((t) => ({
+      value: t.id,
+      label: `${t.name}${t.make ? ` — ${t.make}` : ' — global'}`,
+    })),
+  ];
 
   return (
-    <div className="flex items-center gap-2 pt-1">
-      <select
-        value={selectedId}
-        onChange={(e) => setSelectedId(e.target.value)}
-        title="Disclaimer template"
-        className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--input)] px-2.5 py-1.5 text-xs text-[var(--foreground)]"
-      >
-        <option value="">Default ({offerType})</option>
-        {templates.map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.name}{t.make ? ` — ${t.make}` : ' — global'}
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        onClick={generate}
-        title="Fill from the offer: numbers + dealer-fee boilerplate + VIN/Stock#"
-        className="flex-shrink-0 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-      >
-        Generate
-      </button>
+    <div className="space-y-3">
+      <div>
+        <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
+          Disclaimer template
+          <span className="ml-1 font-normal text-[var(--muted-foreground)]">— auto-fills the text below from the offer</span>
+        </label>
+        <FontSelect
+          value={selectedId}
+          onChange={(v) => {
+            editedRef.current = false; // re-selecting a template re-binds auto-fill
+            setSelectedId(v);
+          }}
+          options={templateOptions}
+          previewFont={false}
+        />
+      </div>
+      <div>
+        <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
+          {field.label}
+          {field.help && <span className="ml-1 font-normal text-[var(--muted-foreground)]">— {field.help}</span>}
+        </label>
+        <textarea
+          rows={3}
+          value={value}
+          placeholder={field.placeholder}
+          onChange={(e) => {
+            editedRef.current = true; // manual edit opts out of auto-fill
+            onChange(e.target.value);
+          }}
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+        />
+      </div>
     </div>
   );
 }
@@ -678,13 +710,7 @@ function Field({ field, value, onChange }: { field: FieldSpec; value: string; on
     return (
       <div>
         {label}
-        <select value={value} onChange={(e) => onChange(e.target.value)} className={inputClass}>
-          {(field.options ?? []).map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+        <FontSelect value={value} onChange={onChange} options={field.options ?? []} previewFont={false} />
       </div>
     );
   }

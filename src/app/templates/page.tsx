@@ -36,9 +36,9 @@ const MANAGER_TABS: TabDef[] = [
   { id: 'landing-pages', label: 'Landing Pages', subtitle: 'Saved landing page templates.', icon: RectangleStackIcon },
 ];
 
-// The Ad Generator is still gated to developers behind its feature flag, so the
-// Ads tab only joins the manager set there (mirrors the nav gating).
-const ADS_TAB: TabDef = { id: 'ads', label: 'Ads', subtitle: 'Reusable ad layouts. Start a new ad from one, or build your own.', icon: SparklesIcon };
+// The Ad Generator is still feature-flagged, so the Ads tab only joins the
+// manager set when the flag is on (any admin+ can then edit ad templates).
+const ADS_TAB: TabDef = { id: 'ads', label: 'Ads', subtitle: 'Shared ad templates. Edit a layout here; create the account’s ad in the Ad Generator.', icon: SparklesIcon };
 
 // Clients only ever had access to email templates — keep the unified
 // page scoped to that surface for them.
@@ -61,7 +61,7 @@ function TemplatesPageInner() {
   const isClient = userRole === 'client';
   const canManage =
     userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
-  const showAdsTab = canManage && AD_GENERATOR_ENABLED && userRole === 'developer';
+  const showAdsTab = canManage && AD_GENERATOR_ENABLED;
   const tabs = canManage
     ? showAdsTab
       ? [...MANAGER_TABS, ADS_TAB]

@@ -329,6 +329,9 @@ export default function AdBuilderPage() {
   // Serialized snapshot of what's persisted — autosave fires only when the live
   // doc/name/status diverge from this.
   const savedRef = useRef('');
+  // Guards the one-time `?template=<id>` deep-load (edit a template from the
+  // Templates → Ads tab).
+  const deepLinkedRef = useRef(false);
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
 
@@ -724,6 +727,29 @@ export default function AdBuilderPage() {
     savedRef.current = '';
     setSaveStatus('idle');
   }
+
+  // Deep-link: `/ad-generator/builder?template=<id>` opens an existing template
+  // for editing (the Templates → Ads tab links here). Runs once on mount; reads
+  // the query client-side so no Suspense boundary is needed.
+  useEffect(() => {
+    if (deepLinkedRef.current) return;
+    const tid = new URLSearchParams(window.location.search).get('template');
+    if (!tid) return;
+    deepLinkedRef.current = true;
+    (async () => {
+      try {
+        const res = await fetch(`/api/ad-generator/templates-doc/${tid}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = (await res.json()) as { template?: { id: string; name: string; description: string | null; status: string; doc: TemplateDoc | null } };
+        const t = json.template;
+        if (t?.doc) loadTemplate({ id: t.id, name: t.name, description: t.description, status: t.status, updatedAt: '', doc: t.doc });
+        else toast.error('That template could not be opened');
+      } catch {
+        toast.error('Could not open that template');
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── pointer interactions: single drag · group drag · marquee select ──
   type DragState =

@@ -32,11 +32,47 @@ import {
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { renderDoc } from '@/lib/ad-generator/doc-renderer';
+import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
+import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox } from '@/lib/ad-generator/doc-types';
 
 const CANVAS_MAX = 560; // px the canvas fits within (longest edge)
 const MIN_FRAC = 0.03; // smallest element edge as a fraction of the canvas
+
+// Websafe families browsers/Chromium reliably have; account custom fonts are
+// added on top, and '' = the account's brand font stack.
+const WEBSAFE_FONTS = [
+  'Arial',
+  'Helvetica',
+  'Verdana',
+  'Tahoma',
+  'Trebuchet MS',
+  'Georgia',
+  'Times New Roman',
+  'Palatino',
+  'Garamond',
+  'Courier New',
+  'Lucida Console',
+];
+const WEIGHT_OPTIONS: FontSelectOption[] = [
+  { value: '300', label: 'Light' },
+  { value: '400', label: 'Regular' },
+  { value: '500', label: 'Medium' },
+  { value: '600', label: 'Semibold' },
+  { value: '700', label: 'Bold' },
+  { value: '800', label: 'Extrabold' },
+  { value: '900', label: 'Black' },
+];
+const ALIGN_OPTIONS: FontSelectOption[] = [
+  { value: 'left', label: 'Left' },
+  { value: 'center', label: 'Center' },
+  { value: 'right', label: 'Right' },
+];
+const FIT_OPTIONS: FontSelectOption[] = [
+  { value: 'contain', label: 'Contain (fit)' },
+  { value: 'cover', label: 'Cover (fill)' },
+];
 
 type Handle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
@@ -139,14 +175,28 @@ export default function AdBuilderPage() {
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
 
+  // Account custom fonts: drive both the dropdown and the @font-face the canvas
+  // needs so a chosen family actually renders.
+  const customFonts = useMemo(() => accountData?.customFonts ?? [], [accountData?.customFonts]);
+  const fontFaceCss = useMemo(() => buildFontFaceCssFromUrls(customFonts), [customFonts]);
+  const fontOptions = useMemo<FontSelectOption[]>(
+    () => [
+      { value: '', label: 'Brand default' },
+      ...[...new Set(customFonts.map((f) => f.family))].map((fam) => ({ value: fam, label: fam })),
+      ...WEBSAFE_FONTS.map((fam) => ({ value: fam, label: fam })),
+    ],
+    [customFonts],
+  );
+
   const previewData = useMemo(
     () => ({
       ...vehicleOfferPreviewData,
+      ...(fontFaceCss ? { fontFaceCss } : {}),
       ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
       ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
       ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
     }),
-    [accountData],
+    [accountData, fontFaceCss],
   );
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
@@ -245,6 +295,23 @@ export default function AdBuilderPage() {
     [],
   );
 
+  // Patch the selected element's style.
+  const updEl = (patch: Partial<DocElement>) => {
+    if (selected) setElement(selected.id, patch);
+  };
+
+  // Z-order within the current size (z lives per-size on the box).
+  function bringForward() {
+    if (!selected || !selectedBox) return;
+    const maxZ = Object.values(layout).reduce((m, b) => Math.max(m, b.z ?? 0), 0);
+    setBox(size.id, selected.id, { ...selectedBox, z: maxZ + 1 });
+  }
+  function sendBack() {
+    if (!selected || !selectedBox) return;
+    const minZ = Object.values(layout).reduce((m, b) => Math.min(m, b.z ?? 0), 0);
+    setBox(size.id, selected.id, { ...selectedBox, z: minZ - 1 });
+  }
+
   // ── pointer drag/resize ──
   const dragRef = useRef<{
     handle: Handle;
@@ -338,6 +405,7 @@ export default function AdBuilderPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
+      {fontFaceCss && <style dangerouslySetInnerHTML={{ __html: fontFaceCss }} />}
       {/* Header */}
       <div className="mb-6 flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -432,35 +500,84 @@ export default function AdBuilderPage() {
                 </div>
               </div>
 
-              <div className="space-y-2 text-xs">
-                <Row label="Type" value={selected.type} />
+              <div className="space-y-3 text-xs">
+                <div className="flex gap-1.5">
+                  <LayerBtn onClick={bringForward}>Bring forward</LayerBtn>
+                  <LayerBtn onClick={sendBack}>Send back</LayerBtn>
+                </div>
+
                 <Row label="Binding" value={bindingDescription(selected)} />
 
-                {/* Edit static text content inline (full binding editing is Phase 5). */}
+                {/* Edit static text content inline (binding to fields is Phase 5). */}
                 {selected.type === 'text' && selected.binding?.kind === 'static' && (
                   <div>
                     <label className="mb-1 block text-[var(--muted-foreground)]">Text</label>
                     <input
                       value={selected.binding.value}
-                      onChange={(e) => setElement(selected.id, { binding: { kind: 'static', value: e.target.value } })}
+                      onChange={(e) => updEl({ binding: { kind: 'static', value: e.target.value } })}
                       className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
                     />
                   </div>
                 )}
 
-                <div className="grid grid-cols-2 gap-2 pt-1">
+                {/* Geometry */}
+                <div className="grid grid-cols-2 gap-2">
                   <NumberField label="X %" value={Math.round(selectedBox.x * 100)} onChange={(v) => setBox(size.id, selected.id, { ...selectedBox, x: clamp(v / 100, 0, 1 - selectedBox.w) })} />
                   <NumberField label="Y %" value={Math.round(selectedBox.y * 100)} onChange={(v) => setBox(size.id, selected.id, { ...selectedBox, y: clamp(v / 100, 0, 1 - selectedBox.h) })} />
                   <NumberField label="W %" value={Math.round(selectedBox.w * 100)} onChange={(v) => setBox(size.id, selected.id, { ...selectedBox, w: clamp(v / 100, MIN_FRAC, 1 - selectedBox.x) })} />
                   <NumberField label="H %" value={Math.round(selectedBox.h * 100)} onChange={(v) => setBox(size.id, selected.id, { ...selectedBox, h: clamp(v / 100, MIN_FRAC, 1 - selectedBox.y) })} />
                 </div>
 
+                {/* Text style */}
                 {selected.type === 'text' && (
-                  <NumberField
-                    label="Font size (px)"
-                    value={selectedBox.fontSize ?? 16}
-                    onChange={(v) => setBox(size.id, selected.id, { ...selectedBox, fontSize: clamp(Math.round(v), 4, 400) })}
-                  />
+                  <div className="space-y-2 border-t border-[var(--border)] pt-3">
+                    <NumberField
+                      label="Font size (px)"
+                      value={selectedBox.fontSize ?? 16}
+                      onChange={(v) => setBox(size.id, selected.id, { ...selectedBox, fontSize: clamp(Math.round(v), 4, 400) })}
+                    />
+                    <SelectRow label="Font">
+                      <FontSelect value={selected.fontFamily ?? ''} onChange={(v) => updEl({ fontFamily: v || undefined })} options={fontOptions} />
+                    </SelectRow>
+                    <div className="grid grid-cols-2 gap-2">
+                      <SelectRow label="Weight">
+                        <FontSelect value={String(selected.fontWeight ?? 400)} onChange={(v) => updEl({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} />
+                      </SelectRow>
+                      <SelectRow label="Align">
+                        <FontSelect value={selected.align ?? 'left'} onChange={(v) => updEl({ align: v as 'left' | 'center' | 'right' })} options={ALIGN_OPTIONS} previewFont={false} />
+                      </SelectRow>
+                    </div>
+                    <ColorControl label="Color" value={selected.color} onChange={(v) => updEl({ color: v })} allowNone />
+                    <div className="grid grid-cols-2 gap-2">
+                      <NumberField label="Letter spacing" value={selected.letterSpacing ?? 0} onChange={(v) => updEl({ letterSpacing: v ? Math.round(v) : undefined })} />
+                      <NumberField label="Line height" step={0.05} value={selected.lineHeight ?? 1.1} onChange={(v) => updEl({ lineHeight: v || undefined })} />
+                    </div>
+                    <ToggleRow label="Uppercase" on={!!selected.uppercase} onClick={() => updEl({ uppercase: !selected.uppercase })} />
+                    <ColorControl label="Pill background" value={selected.bg} onChange={(v) => updEl({ bg: v })} allowNone />
+                    {selected.bg && (
+                      <div className="grid grid-cols-2 gap-2">
+                        <NumberField label="Padding" value={selected.padding ?? 0} onChange={(v) => updEl({ padding: v ? Math.round(v) : undefined })} />
+                        <NumberField label="Radius" value={selected.radius ?? 0} onChange={(v) => updEl({ radius: v ? Math.round(v) : undefined })} />
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Shape style */}
+                {selected.type === 'shape' && (
+                  <div className="space-y-2 border-t border-[var(--border)] pt-3">
+                    <ColorControl label="Fill" value={selected.fill} onChange={(v) => updEl({ fill: v })} />
+                    <NumberField label="Corner radius" value={selected.radius ?? 0} onChange={(v) => updEl({ radius: v ? Math.round(v) : undefined })} />
+                  </div>
+                )}
+
+                {/* Image / logo style */}
+                {(selected.type === 'image' || selected.type === 'logo') && (
+                  <div className="space-y-2 border-t border-[var(--border)] pt-3">
+                    <SelectRow label="Fit">
+                      <FontSelect value={selected.fit ?? 'contain'} onChange={(v) => updEl({ fit: v as 'contain' | 'cover' })} options={FIT_OPTIONS} previewFont={false} />
+                    </SelectRow>
+                  </div>
                 )}
               </div>
             </section>
@@ -597,13 +714,14 @@ function Row({ label, value }: { label: string; value: string }) {
   );
 }
 
-function NumberField({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
+function NumberField({ label, value, onChange, step }: { label: string; value: number; onChange: (v: number) => void; step?: number }) {
   return (
     <label className="block">
       <span className="mb-1 block text-[var(--muted-foreground)]">{label}</span>
       <input
         type="number"
         value={value}
+        step={step}
         onChange={(e) => {
           const n = Number(e.target.value);
           if (!Number.isNaN(n)) onChange(n);
@@ -611,5 +729,97 @@ function NumberField({ label, value, onChange }: { label: string; value: number;
         className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
       />
     </label>
+  );
+}
+
+function LayerBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex-1 rounded-md border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+    >
+      {children}
+    </button>
+  );
+}
+
+function SelectRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="mb-1 block text-[var(--muted-foreground)]">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function ToggleRow({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex w-full items-center justify-between rounded-md border px-2 py-1.5 text-xs transition-colors ${
+        on ? 'border-[var(--primary)] text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+      }`}
+    >
+      <span>{label}</span>
+      <span className={`h-3.5 w-3.5 rounded-sm border ${on ? 'border-[var(--primary)] bg-[var(--primary)]' : 'border-[var(--border)]'}`} />
+    </button>
+  );
+}
+
+function ModeBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
+        active ? 'border-[var(--primary)] text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * Color picker that maps to the doc's color model: `'brand'` (the account
+ * color), a custom hex, or — when `allowNone` — unset (renderer default).
+ */
+function ColorControl({
+  label,
+  value,
+  onChange,
+  allowNone,
+}: {
+  label: string;
+  value?: string;
+  onChange: (v: string | undefined) => void;
+  allowNone?: boolean;
+}) {
+  const mode = value === undefined ? 'none' : value === 'brand' ? 'brand' : 'custom';
+  const hex = value && value !== 'brand' ? value : '#4f46e5';
+  return (
+    <div>
+      <label className="mb-1 block text-[var(--muted-foreground)]">{label}</label>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {allowNone && (
+          <ModeBtn active={mode === 'none'} onClick={() => onChange(undefined)}>
+            None
+          </ModeBtn>
+        )}
+        <ModeBtn active={mode === 'brand'} onClick={() => onChange('brand')}>
+          Brand
+        </ModeBtn>
+        <ModeBtn active={mode === 'custom'} onClick={() => onChange(hex)}>
+          Custom
+        </ModeBtn>
+        {mode === 'custom' && (
+          <input
+            type="color"
+            value={hex}
+            onChange={(e) => onChange(e.target.value)}
+            className="h-7 w-9 cursor-pointer rounded border border-[var(--border)] bg-transparent"
+          />
+        )}
+      </div>
+    </div>
   );
 }

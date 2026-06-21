@@ -25,6 +25,7 @@ import {
   BuildingStorefrontIcon,
   RectangleGroupIcon,
   ArrowLeftIcon,
+  EyeIcon,
   EyeSlashIcon,
   PlusIcon,
   TrashIcon,
@@ -88,6 +89,12 @@ const BRAND_OPTIONS: FontSelectOption[] = [
   { value: 'dealerName', label: 'Dealer name' },
   { value: 'logoUrl', label: 'Logo' },
   { value: 'brandColor', label: 'Brand color' },
+];
+const SIZE_PRESETS: { label: string; width: number; height: number }[] = [
+  { label: 'Square', width: 1080, height: 1080 },
+  { label: 'Landscape', width: 1200, height: 628 },
+  { label: 'Portrait', width: 1080, height: 1350 },
+  { label: 'Story', width: 1080, height: 1920 },
 ];
 
 type Handle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
@@ -181,6 +188,9 @@ export default function AdBuilderPage() {
   const [showOutlines, setShowOutlines] = useState(true);
   const [dragBox, setDragBox] = useState<DocLayoutBox | null>(null);
   const [fieldsOpen, setFieldsOpen] = useState(false);
+  const [addSizeOpen, setAddSizeOpen] = useState(false);
+  const [customW, setCustomW] = useState('');
+  const [customH, setCustomH] = useState('');
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
 
@@ -368,6 +378,49 @@ export default function AdBuilderPage() {
     });
   };
 
+  // ── per-size operations ──
+  // Show/hide an element in the CURRENT size only (the box stays, just isn't rendered).
+  function toggleHidden(id: string) {
+    const box = layout[id];
+    if (!box) return;
+    setBox(size.id, id, { ...box, hidden: !box.hidden });
+  }
+
+  // New sizes start from the current size's layout so they're not empty.
+  function addSize(label: string, width: number, height: number) {
+    const base = `${width}x${height}`;
+    let id = base;
+    let n = 2;
+    while (doc.sizes.some((s) => s.id === id)) id = `${base}-${n++}`;
+    const src = doc.layouts[sizeId] ?? {};
+    setDoc((prev) => ({
+      ...prev,
+      sizes: [...prev.sizes, { id, label: `${label} ${width}×${height}`, width, height }],
+      layouts: { ...prev.layouts, [id]: structuredClone(src) },
+    }));
+    setSizeId(id);
+    setAddSizeOpen(false);
+  }
+
+  function removeSize(targetId: string) {
+    if (doc.sizes.length <= 1) return;
+    setDoc((prev) => {
+      const layouts = { ...prev.layouts };
+      delete layouts[targetId];
+      return { ...prev, sizes: prev.sizes.filter((s) => s.id !== targetId), layouts };
+    });
+    if (sizeId === targetId) setSizeId(doc.sizes.find((s) => s.id !== targetId)!.id);
+  }
+
+  // Copy another size's full layout into the current size (fractions are
+  // size-independent; font sizes carry over as a starting point to tune).
+  function copyLayoutFrom(srcId: string) {
+    setDoc((prev) => ({
+      ...prev,
+      layouts: { ...prev.layouts, [sizeId]: structuredClone(prev.layouts[srcId] ?? {}) },
+    }));
+  }
+
   // ── pointer drag/resize ──
   const dragRef = useRef<{
     handle: Handle;
@@ -516,18 +569,28 @@ export default function AdBuilderPage() {
                 const Icon = TYPE_ICON[el.type];
                 const isSel = el.id === selectedId;
                 return (
-                  <button
+                  <div
                     key={el.id}
-                    onClick={() => setSelectedId(isSel ? null : el.id)}
-                    className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
-                      isSel ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--foreground)] hover:bg-[var(--muted)]/60'
-                    }`}
+                    className={`flex items-center gap-1 rounded-lg pr-1 transition-colors ${
+                      isSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'
+                    } ${box.hidden ? 'opacity-50' : ''}`}
                   >
-                    <Icon className="h-4 w-4 flex-shrink-0 opacity-70" />
-                    <span className="flex-1 truncate text-xs font-medium">{elName(el)}</span>
-                    {box.hidden && <EyeSlashIcon className="h-3.5 w-3.5 flex-shrink-0 opacity-50" />}
-                    <span className="text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">{el.type}</span>
-                  </button>
+                    <button
+                      onClick={() => setSelectedId(isSel ? null : el.id)}
+                      className={`flex flex-1 items-center gap-2 rounded-lg px-2.5 py-2 text-left ${isSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
+                    >
+                      <Icon className="h-4 w-4 flex-shrink-0 opacity-70" />
+                      <span className="flex-1 truncate text-xs font-medium">{elName(el)}</span>
+                      <span className="text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">{el.type}</span>
+                    </button>
+                    <button
+                      onClick={() => toggleHidden(el.id)}
+                      title={box.hidden ? 'Show in this size' : 'Hide in this size'}
+                      className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+                    >
+                      {box.hidden ? <EyeSlashIcon className="h-3.5 w-3.5" /> : <EyeIcon className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 );
               })}
             </div>
@@ -549,6 +612,120 @@ export default function AdBuilderPage() {
                 Manage
               </button>
             </div>
+          </section>
+
+          {/* Sizes — each has its own independent layout */}
+          <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
+            <div className="mb-2 flex items-center justify-between">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Sizes</h2>
+              <button
+                onClick={() => setAddSizeOpen((v) => !v)}
+                className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+              >
+                <PlusIcon className="h-3 w-3" />
+                Add
+              </button>
+            </div>
+
+            <div className="space-y-1">
+              {doc.sizes.map((s) => {
+                const count = Object.keys(doc.layouts[s.id] ?? {}).length;
+                const active = s.id === sizeId;
+                return (
+                  <div
+                    key={s.id}
+                    className={`flex items-center gap-1 rounded-lg pr-1 transition-colors ${active ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'}`}
+                  >
+                    <button onClick={() => setSizeId(s.id)} className="flex flex-1 items-center justify-between gap-2 px-2.5 py-2 text-left">
+                      <span className={`truncate text-xs font-medium ${active ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>{s.label}</span>
+                      <span className="flex-shrink-0 text-[10px] text-[var(--muted-foreground)]">
+                        {s.width}×{s.height} · {count}
+                      </span>
+                    </button>
+                    {doc.sizes.length > 1 && (
+                      <button
+                        onClick={() => removeSize(s.id)}
+                        title="Remove size"
+                        className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500"
+                      >
+                        <TrashIcon className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {addSizeOpen && (
+              <div className="mt-2 space-y-2 rounded-lg border border-dashed border-[var(--border)] p-2">
+                <div className="grid grid-cols-2 gap-1.5">
+                  {SIZE_PRESETS.map((p) => (
+                    <button
+                      key={p.label}
+                      onClick={() => addSize(p.label, p.width, p.height)}
+                      className="rounded-md border border-[var(--border)] px-2 py-1 text-center text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                    >
+                      {p.label}
+                      <span className="block text-[9px] text-[var(--muted-foreground)]">
+                        {p.width}×{p.height}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    value={customW}
+                    onChange={(e) => setCustomW(e.target.value)}
+                    placeholder="W"
+                    className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                  />
+                  <span className="text-[var(--muted-foreground)]">×</span>
+                  <input
+                    type="number"
+                    value={customH}
+                    onChange={(e) => setCustomH(e.target.value)}
+                    placeholder="H"
+                    className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                  />
+                  <button
+                    onClick={() => {
+                      const w = Number(customW);
+                      const h = Number(customH);
+                      if (w > 0 && h > 0) {
+                        addSize('Custom', Math.round(w), Math.round(h));
+                        setCustomW('');
+                        setCustomH('');
+                      }
+                    }}
+                    className="flex-shrink-0 rounded-md bg-[var(--primary)] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                  >
+                    Add
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {doc.sizes.length > 1 && (
+              <div className="mt-3 border-t border-[var(--border)] pt-3">
+                <label className="mb-1.5 block text-[11px] text-[var(--muted-foreground)]">
+                  Copy layout into {size.label.split(' ')[0]} from
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {doc.sizes
+                    .filter((s) => s.id !== sizeId)
+                    .map((s) => (
+                      <button
+                        key={s.id}
+                        onClick={() => copyLayoutFrom(s.id)}
+                        className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                      >
+                        {s.label.split(' ')[0]}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
           </section>
 
           {/* Selected element controls */}
@@ -579,6 +756,12 @@ export default function AdBuilderPage() {
                   <LayerBtn onClick={bringForward}>Bring forward</LayerBtn>
                   <LayerBtn onClick={sendBack}>Send back</LayerBtn>
                 </div>
+
+                <ToggleRow
+                  label={`Visible on ${size.label.split(' ')[0]}`}
+                  on={!selectedBox.hidden}
+                  onClick={() => toggleHidden(selected.id)}
+                />
 
                 {selected.type === 'shape' ? (
                   <p className="text-[11px] text-[var(--muted-foreground)]">Shapes are decorative — no data binding.</p>

@@ -7,17 +7,20 @@ import {
   EnvelopeIcon,
   DocumentTextIcon,
   RectangleStackIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { FlowIcon } from '@/components/icon-map';
+import { AD_GENERATOR_ENABLED } from '@/lib/feature-flags';
 import { EmailTemplatesPanel, TemplatesHeaderActionsContext } from '@/app/email/templates/email-templates-view';
 import { FormTemplatesTab } from '@/components/templates/form-templates-tab';
 import { FlowTemplatesTab } from '@/components/templates/flow-templates-tab';
 import { LandingPageTemplatesTab } from '@/components/templates/landing-page-templates-tab';
+import { AdTemplatesTab } from '@/components/templates/ad-templates-tab';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
-type TabId = 'email' | 'forms' | 'flows' | 'landing-pages';
+type TabId = 'email' | 'forms' | 'flows' | 'landing-pages' | 'ads';
 
 interface TabDef {
   id: TabId;
@@ -32,6 +35,10 @@ const MANAGER_TABS: TabDef[] = [
   { id: 'flows', label: 'Flows', subtitle: 'Reusable flow templates you can adopt into an account.', icon: FlowIcon as IconComponent },
   { id: 'landing-pages', label: 'Landing Pages', subtitle: 'Saved landing page templates.', icon: RectangleStackIcon },
 ];
+
+// The Ad Generator is still gated to developers behind its feature flag, so the
+// Ads tab only joins the manager set there (mirrors the nav gating).
+const ADS_TAB: TabDef = { id: 'ads', label: 'Ads', subtitle: 'Reusable ad layouts. Start a new ad from one, or build your own.', icon: SparklesIcon };
 
 // Clients only ever had access to email templates — keep the unified
 // page scoped to that surface for them.
@@ -54,7 +61,12 @@ function TemplatesPageInner() {
   const isClient = userRole === 'client';
   const canManage =
     userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
-  const tabs = canManage ? MANAGER_TABS : CLIENT_TABS;
+  const showAdsTab = canManage && AD_GENERATOR_ENABLED && userRole === 'developer';
+  const tabs = canManage
+    ? showAdsTab
+      ? [...MANAGER_TABS, ADS_TAB]
+      : MANAGER_TABS
+    : CLIENT_TABS;
 
   const requestedTab = searchParams.get('tab') as TabId | null;
   const initialTab: TabId =
@@ -162,6 +174,7 @@ function TemplatesPageInner() {
         {tab === 'landing-pages' && (
           <LandingPageTemplatesTab accountKey={scopedAccountKey} />
         )}
+        {tab === 'ads' && <AdTemplatesTab accountKey={scopedAccountKey} />}
       </div>
     </TemplatesHeaderActionsContext.Provider>
   );

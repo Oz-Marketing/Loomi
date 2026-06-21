@@ -18,6 +18,7 @@ import { SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, XMarkIcon } from '@h
 import { useAccount } from '@/contexts/account-context';
 import { ListToolbar } from '@/components/list-toolbar';
 import type { StatusFilterValue } from '@/components/status-filter';
+import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { AD_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -81,14 +82,7 @@ export default function AdGeneratorListPage() {
   }, [accountKey]);
 
   // Account branding for the mini previews (same as the editor merges in).
-  const branding: AdData = useMemo(
-    () => ({
-      ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
-      ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
-      ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
-    }),
-    [accountData],
-  );
+  const branding: AdData = useMemo(() => brandingFromAccount(accountData), [accountData]);
 
   // Visible list — filtered by status + search (ads only have a card view).
   const visible = useMemo(() => {
@@ -241,7 +235,7 @@ export default function AdGeneratorListPage() {
                 onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && router.push(`/ad-generator/${c.id}`)}
                 className="glass-card group cursor-pointer overflow-hidden rounded-2xl border border-[var(--border)] text-left transition-colors hover:border-[var(--primary)]"
               >
-                <CreativeThumb template={template} data={c.data} branding={branding} />
+                <AdPreviewThumb template={template} data={c.data} branding={branding} />
                 <div className="flex items-start justify-between gap-2 p-3">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-[var(--foreground)]">{c.name}</div>
@@ -294,7 +288,7 @@ export default function AdGeneratorListPage() {
                   onClick={() => createAd(t.id)}
                   className="flex flex-col overflow-hidden rounded-xl border border-[var(--border)] text-left transition-colors hover:border-[var(--primary)] disabled:opacity-60"
                 >
-                  <CreativeThumb template={t} data={{}} branding={branding} height={120} />
+                  <AdPreviewThumb template={t} data={{}} branding={branding} height={120} />
                   <div className="p-2.5">
                     <div className="truncate text-xs font-semibold text-[var(--foreground)]">{t.name}</div>
                     {t.description && <div className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">{t.description}</div>}
@@ -305,28 +299,6 @@ export default function AdGeneratorListPage() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-/** A scaled, non-interactive mini-preview rendered with the template function. */
-function CreativeThumb({ template, data, branding, height = 180 }: { template?: AdTemplate; data: AdData; branding: AdData; height?: number }) {
-  if (!template) {
-    return <div className="flex items-center justify-center bg-[var(--muted)]/40 text-xs text-[var(--muted-foreground)]" style={{ height }}>Preview unavailable</div>;
-  }
-  const size = template.sizes[0];
-  const html = template.render({ ...template.defaults, ...data, ...branding }, size);
-  const boxW = 360;
-  const scale = Math.min(boxW / size.width, height / size.height);
-  return (
-    <div className="flex items-center justify-center overflow-hidden bg-[var(--muted)]/40" style={{ height }}>
-      <div className="overflow-hidden rounded shadow-sm ring-1 ring-black/5" style={{ width: size.width * scale, height: size.height * scale }}>
-        <iframe
-          title="Ad preview"
-          srcDoc={html}
-          style={{ width: size.width, height: size.height, border: 0, transform: `scale(${scale})`, transformOrigin: 'top left', pointerEvents: 'none' }}
-        />
-      </div>
     </div>
   );
 }

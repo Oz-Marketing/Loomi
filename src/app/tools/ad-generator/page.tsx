@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon, Squares2X2Icon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon, Squares2X2Icon, TruckIcon, XMarkIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { AD_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
@@ -27,6 +27,7 @@ import { isFieldVisible, type AdData, type AdTemplate, type FieldSpec } from '@/
 import type { AdCopyVariation } from '@/lib/ad-generator/copy-types';
 import { composeDisclaimer } from '@/lib/ad-generator/disclaimer';
 import { missingRequired, type OemOfferRule } from '@/lib/ad-generator/compliance';
+import type { EvoxVehicle, EvoxColor } from '@/lib/integrations/evox';
 
 const PREVIEW_W = 460;
 const PREVIEW_H = 560;
@@ -470,6 +471,17 @@ export default function AdGeneratorPage() {
   );
 }
 
+// EVOX vehicle picker — years EVOX covers (newest first) + the major makes.
+// If EVOX's make spelling differs for any brand, fix it here (1-line change).
+const EVOX_CURRENT_YEAR = new Date().getFullYear();
+const EVOX_YEARS = Array.from({ length: EVOX_CURRENT_YEAR + 1 - 2007 + 1 }, (_, i) => EVOX_CURRENT_YEAR + 1 - i);
+const EVOX_MAKES = [
+  'Acura', 'Alfa Romeo', 'Audi', 'BMW', 'Buick', 'Cadillac', 'Chevrolet', 'Chrysler', 'Dodge', 'Fiat',
+  'Ford', 'Genesis', 'GMC', 'Honda', 'Hyundai', 'Infiniti', 'Jaguar', 'Jeep', 'Kia', 'Land Rover',
+  'Lexus', 'Lincoln', 'Maserati', 'Mazda', 'Mercedes-Benz', 'MINI', 'Mitsubishi', 'Nissan', 'Polestar',
+  'Porsche', 'Ram', 'Rivian', 'Subaru', 'Tesla', 'Toyota', 'Volkswagen', 'Volvo',
+];
+
 const TONES = [
   { value: '', label: 'On-brand (default)' },
   { value: 'bold', label: 'Bold' },
@@ -791,6 +803,9 @@ function Field({ field, value, onChange }: { field: FieldSpec; value: string; on
       </div>
     );
   }
+  if (field.type === 'image') {
+    return <ImageField field={field} value={value} onChange={onChange} />;
+  }
   return (
     <div>
       {label}
@@ -801,6 +816,213 @@ function Field({ field, value, onChange }: { field: FieldSpec; value: string; on
         onChange={(e) => onChange(e.target.value)}
         className={inputClass}
       />
+    </div>
+  );
+}
+
+/**
+ * Image field with a URL input + a "Pick a vehicle" button that opens the EVOX
+ * picker. Picking a vehicle/color re-hosts the transparent PNG on our S3 and
+ * drops the stable URL into the field.
+ */
+function ImageField({ field, value, onChange }: { field: FieldSpec; value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
+        {field.label}
+        {field.help && <span className="ml-1 font-normal text-[var(--muted-foreground)]">— {field.help}</span>}
+      </label>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={value}
+          placeholder={field.placeholder || 'Image URL'}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+        />
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+        >
+          <TruckIcon className="h-4 w-4" />
+          Vehicle
+        </button>
+      </div>
+      {value && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={value} alt="" className="mt-2 h-20 rounded-md border border-[var(--border)] bg-[var(--muted)]/40 object-contain p-1" />
+      )}
+      {open && <EvoxPickerModal onClose={() => setOpen(false)} onPick={(url) => { onChange(url); setOpen(false); }} />}
+    </div>
+  );
+}
+
+/** EVOX vehicle picker: search Year/Make/Model → pick a trim + color → image. */
+function EvoxPickerModal({ onClose, onPick }: { onClose: () => void; onPick: (url: string) => void }) {
+  const { accountKey } = useAccount();
+  const [year, setYear] = useState(String(EVOX_CURRENT_YEAR));
+  const [make, setMake] = useState('');
+  const [model, setModel] = useState('');
+  const [trim, setTrim] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [vehicles, setVehicles] = useState<EvoxVehicle[] | null>(null);
+  const [notConfigured, setNotConfigured] = useState(false);
+  const [picking, setPicking] = useState<string | null>(null);
+
+  const yearOptions: FontSelectOption[] = EVOX_YEARS.map((y) => ({ value: String(y), label: String(y) }));
+  const makeOptions: FontSelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
+
+  async function search() {
+    if (!make || !model.trim()) {
+      toast.error('Pick a make and enter a model');
+      return;
+    }
+    setBusy(true);
+    setVehicles(null);
+    setNotConfigured(false);
+    try {
+      const res = await fetch('/api/ad-generator/evox/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ year: Number(year), make, model: model.trim(), trim: trim.trim() }),
+      });
+      const json = await res.json();
+      if (json.configured === false) {
+        setNotConfigured(true);
+        setVehicles([]);
+        return;
+      }
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      setVehicles(json.vehicles ?? []);
+    } catch (err) {
+      toast.error(`EVOX search failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+      setVehicles([]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function pick(v: EvoxVehicle, color: EvoxColor) {
+    const id = `${v.vifnum}-${color.code}`;
+    setPicking(id);
+    try {
+      const res = await fetch('/api/ad-generator/evox/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          vifnum: v.vifnum,
+          colorCode: color.code,
+          accountKey,
+          hint: `${v.year}-${v.make}-${v.model}-${color.simple || color.name || color.code}`,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      onPick(json.url);
+      toast.success('Vehicle image added');
+    } catch (err) {
+      toast.error(`Couldn't add image: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setPicking(null);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-12" onClick={onClose}>
+      <div className="w-full max-w-2xl rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-start justify-between">
+          <div>
+            <h2 className="flex items-center gap-2 text-sm font-bold text-[var(--foreground)]">
+              <TruckIcon className="h-4 w-4 text-[var(--primary)]" />
+              Find a vehicle
+            </h2>
+            <p className="text-xs text-[var(--muted-foreground)]">EVOX transparent-PNG photography. Pick a trim + color to drop it into the ad.</p>
+          </div>
+          <button onClick={onClose} className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <FontSelect value={year} onChange={setYear} options={yearOptions} previewFont={false} />
+          <FontSelect value={make} onChange={setMake} options={makeOptions} previewFont={false} />
+          <input
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && search()}
+            placeholder="Model (e.g. F-150)"
+            className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+          />
+          <input
+            value={trim}
+            onChange={(e) => setTrim(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && search()}
+            placeholder="Trim (optional)"
+            className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+          />
+        </div>
+        <button
+          onClick={search}
+          disabled={busy}
+          className="mt-2 flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          <MagnifyingGlassIcon className="h-4 w-4" />
+          {busy ? 'Searching…' : 'Search'}
+        </button>
+
+        <div className="mt-4 max-h-[50vh] space-y-4 overflow-y-auto">
+          {notConfigured && (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-3 text-xs text-amber-600 dark:text-amber-400">
+              EVOX isn’t configured in this environment. Set <span className="font-mono">EVOX_API_KEY</span> to enable the vehicle picker.
+            </div>
+          )}
+          {vehicles && vehicles.length === 0 && !notConfigured && (
+            <p className="py-6 text-center text-xs text-[var(--muted-foreground)]">
+              No matches — double-check the make/model spelling (EVOX is exact).
+            </p>
+          )}
+          {vehicles?.map((v) => (
+            <div key={v.vifnum}>
+              <div className="mb-2 text-xs font-semibold text-[var(--foreground)]">
+                {v.year} {v.make} {v.model} <span className="font-normal text-[var(--muted-foreground)]">· {v.trim}</span>
+              </div>
+              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                {v.colors.map((c) => {
+                  const id = `${v.vifnum}-${c.code}`;
+                  const isPicking = picking === id;
+                  return (
+                    <button
+                      key={c.code}
+                      onClick={() => pick(v, c)}
+                      disabled={picking !== null}
+                      title={c.name || c.code}
+                      className="group relative overflow-hidden rounded-lg border border-[var(--border)] p-1.5 text-left transition-colors hover:border-[var(--primary)] disabled:opacity-60"
+                    >
+                      <div className="flex h-16 items-center justify-center rounded bg-[var(--muted)]/40">
+                        {c.thumbUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={c.thumbUrl} alt={c.name} className="max-h-full max-w-full object-contain" />
+                        ) : (
+                          <span className="h-6 w-6 rounded-full border border-[var(--border)]" style={{ background: c.rgb ? `#${c.rgb.replace('#', '')}` : '#cbd5e1' }} />
+                        )}
+                      </div>
+                      <div className="mt-1 flex items-center gap-1.5">
+                        <span className="h-3 w-3 flex-shrink-0 rounded-full border border-[var(--border)]" style={{ background: c.rgb ? `#${c.rgb.replace('#', '')}` : 'transparent' }} />
+                        <span className="truncate text-[10px] text-[var(--muted-foreground)]">{c.simple || c.name || c.code}</span>
+                      </div>
+                      {isPicking && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-[var(--card)]/70 text-[10px] font-medium text-[var(--primary)]">Adding…</div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 /**
  * Ad Generator disclaimer template — PATCH / DELETE one template (admin only).
  * Companion to the collection route. Gated by the feature flag + management
- * roles. Used by the templates manager at /tools/ad-generator/templates.
+ * roles. Used by the templates manager at /ad-generator/templates.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';

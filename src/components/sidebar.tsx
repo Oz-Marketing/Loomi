@@ -131,7 +131,7 @@ const templatesNav: NavItem = {
 // Ad Generator — templated, on-brand ad creative for the active account.
 // Global tool (reads the active account via context), so absolute like /tools/*.
 const adGeneratorNav: NavItem = {
-  href: '/tools/ad-generator',
+  href: '/ad-generator',
   label: 'Ad Generator',
   icon: SparklesIcon,
   absolute: true,

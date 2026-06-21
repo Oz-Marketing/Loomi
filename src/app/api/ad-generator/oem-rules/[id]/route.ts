@@ -1,7 +1,7 @@
 /**
  * Ad Generator OEM compliance rule — PATCH / DELETE one rule (admin only).
  * Companion to the collection route. Used by the rules manager at
- * /tools/ad-generator/oem-rules. Flag-gated + management roles.
+ * /ad-generator/oem-rules. Flag-gated + management roles.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';

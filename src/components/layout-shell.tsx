@@ -130,7 +130,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // Ad Template Builder — the same focused full-viewport editor treatment as
   // the website builders. Only the builder gets it; the generator + admin
   // pages keep the standard app shell.
-  const isAdBuilder = /^\/tools\/ad-generator\/builder$/.test(builderProbe);
+  const isAdBuilder = /^\/ad-generator\/builder$/.test(builderProbe);
 
   if (isFullScreen) {
     return <div className="flex-1">{children}</div>;

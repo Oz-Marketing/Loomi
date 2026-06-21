@@ -133,7 +133,7 @@ export default function OemRulesPage() {
     <div className="mx-auto max-w-4xl px-6 py-8">
       <div className="mb-3 flex items-center gap-3">
         <Link
-          href="/tools/ad-generator"
+          href="/ad-generator"
           className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
           aria-label="Back to Ad Generator"
         >
@@ -149,7 +149,7 @@ export default function OemRulesPage() {
 
       <div className="mb-6 flex items-center justify-between gap-3">
         <div className="flex gap-1 text-xs">
-          <Link href="/tools/ad-generator/templates" className="rounded-md px-2.5 py-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+          <Link href="/ad-generator/templates" className="rounded-md px-2.5 py-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
             Disclaimer Templates
           </Link>
           <span className="rounded-md bg-[var(--primary)]/10 px-2.5 py-1 font-medium text-[var(--primary)]">OEM Rules</span>

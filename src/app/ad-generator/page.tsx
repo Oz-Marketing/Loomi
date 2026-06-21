@@ -264,7 +264,7 @@ export default function AdGeneratorPage() {
           </div>
         </div>
         <Link
-          href="/tools/ad-generator/builder"
+          href="/ad-generator/builder"
           className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
         >
           <Squares2X2Icon className="h-3.5 w-3.5" />
@@ -743,7 +743,7 @@ function DisclaimerField({
             Disclaimer template
             <span className="ml-1 font-normal text-[var(--muted-foreground)]">— auto-fills the text below</span>
           </label>
-          <Link href="/tools/ad-generator/templates" className="flex-shrink-0 text-[11px] font-medium text-[var(--primary)] hover:underline">
+          <Link href="/ad-generator/templates" className="flex-shrink-0 text-[11px] font-medium text-[var(--primary)] hover:underline">
             Manage
           </Link>
         </div>

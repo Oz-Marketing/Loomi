@@ -25,7 +25,6 @@ import {
   Bars3Icon,
   Bars3BottomRightIcon,
   BuildingStorefrontIcon,
-  RectangleGroupIcon,
   ArrowLeftIcon,
   EyeIcon,
   EyeSlashIcon,
@@ -46,7 +45,6 @@ import {
   ExclamationTriangleIcon,
   LockClosedIcon,
   LockOpenIcon,
-  Bars2Icon,
   ChevronDownIcon,
   ChevronRightIcon,
   RectangleStackIcon,
@@ -59,6 +57,7 @@ import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
 import { buildLayerEntries, flattenLayerEntries } from '@/lib/ad-generator/layer-tree';
+import { TextElementIcon, ShapeElementIcon, DashboardLayoutIcon, LayersIcon } from '@/components/ad-generator/builder-icons';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, DocBackground, DocBgFraming } from '@/lib/ad-generator/doc-types';
@@ -182,11 +181,11 @@ const RESIZE_HANDLES: { h: Handle; x: number; y: number; cursor: string }[] = [
   { h: 'w', x: 0, y: 0.5, cursor: 'ew-resize' },
 ];
 
-const TYPE_ICON: Record<DocElementType, typeof PhotoIcon> = {
-  text: Bars3BottomLeftIcon,
+const TYPE_ICON: Record<DocElementType, React.ComponentType<{ className?: string }>> = {
+  text: TextElementIcon,
   image: PhotoIcon,
   logo: BuildingStorefrontIcon,
-  shape: RectangleGroupIcon,
+  shape: ShapeElementIcon,
 };
 
 type SavedTemplate = {
@@ -1534,7 +1533,10 @@ export default function AdBuilderPage() {
         <aside className="flex w-[320px] flex-shrink-0 flex-col gap-4 overflow-y-auto pb-1 pr-1">
           {/* Elements — add to the canvas */}
           <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
-            <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Elements</h2>
+            <h2 className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              <DashboardLayoutIcon className="h-3.5 w-3.5" />
+              Elements
+            </h2>
             <div className="grid grid-cols-2 gap-1.5">
               {adders.map((a) => {
                 const Icon = TYPE_ICON[a.type];
@@ -1566,7 +1568,10 @@ export default function AdBuilderPage() {
               Double-click to rename · lock icon to lock · drag to reorder (z). */}
           <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Layers</h2>
+              <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                <LayersIcon className="h-3.5 w-3.5" />
+                Layers
+              </h2>
               <span className="text-[11px] text-[var(--muted-foreground)]">{placed.length}</span>
             </div>
             <div className="space-y-1">
@@ -1632,9 +1637,6 @@ export default function AdBuilderPage() {
                         isSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'
                       } ${box.hidden ? 'opacity-50' : ''} ${dragLayer === el.id ? 'opacity-40' : ''}`}
                     >
-                      <span className="cursor-grab pl-1 text-[var(--muted-foreground)]/50" title="Drag to reorder">
-                        <Bars2Icon className="h-3.5 w-3.5" />
-                      </span>
                       {renaming ? (
                         <input
                           autoFocus
@@ -2084,6 +2086,13 @@ export default function AdBuilderPage() {
                       <div
                         key={el.id}
                         onPointerDown={(e) => onBoxPointerDown(e, el.id)}
+                        onDoubleClick={(e) => {
+                          // Drill into a group: double-click selects just this member.
+                          if (el.groupId && !lockedIds.has(el.id)) {
+                            e.stopPropagation();
+                            selectOne(el.id);
+                          }
+                        }}
                         title={box.hidden ? `${elName(el)} (hidden here)` : elName(el)}
                         className="group absolute"
                         style={boxStyle}

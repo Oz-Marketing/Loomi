@@ -112,7 +112,7 @@ export default function DisclaimerTemplatesPage() {
 
   return (
     <div className="mx-auto max-w-4xl px-6 py-8">
-      <div className="mb-6 flex items-start justify-between gap-3">
+      <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <Link
             href="/tools/ad-generator"
@@ -136,6 +136,13 @@ export default function DisclaimerTemplatesPage() {
             <PlusIcon className="h-4 w-4" /> New template
           </button>
         )}
+      </div>
+
+      <div className="mb-6 flex gap-1 text-xs">
+        <span className="rounded-md bg-[var(--primary)]/10 px-2.5 py-1 font-medium text-[var(--primary)]">Disclaimer Templates</span>
+        <Link href="/tools/ad-generator/oem-rules" className="rounded-md px-2.5 py-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+          OEM Rules
+        </Link>
       </div>
 
       {draft && (

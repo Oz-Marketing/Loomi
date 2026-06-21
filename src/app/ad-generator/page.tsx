@@ -21,7 +21,8 @@ import { ListToolbar } from '@/components/list-toolbar';
 import type { StatusFilterValue } from '@/components/status-filter';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { AD_TEMPLATES } from '@/lib/ad-generator/templates';
-import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
+import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
+import { templateInIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import type { AdTemplate, AdData } from '@/lib/ad-generator/types';
 
@@ -78,6 +79,11 @@ export default function AdGeneratorListPage() {
     };
   }, []);
   const templates = useMemo(() => [...AD_TEMPLATES, ...dbTemplates], [dbTemplates]);
+  // Templates offered for THIS account's industry (non-automotive sees none for now).
+  const pickerTemplates = useMemo(
+    () => templates.filter((t) => templateInIndustry(t, accountData?.category)),
+    [templates, accountData?.category],
+  );
 
   useEffect(() => {
     if (!accountKey) {
@@ -133,6 +139,30 @@ export default function AdGeneratorListPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       router.push(`/ad-generator/${json.creative.id}`);
+    } catch (err) {
+      toast.error(`Couldn't create: ${err instanceof Error ? err.message : 'unknown error'}`);
+      setCreating(false);
+    }
+  }
+
+  // From scratch: a blank ad (empty doc), opened straight in the builder's ad
+  // mode so the designer starts on an empty canvas with no layers.
+  async function createBlank() {
+    if (!accountKey) {
+      toast.error('Select an account first');
+      return;
+    }
+    setCreating(true);
+    try {
+      const doc = blankTemplateDoc(`blank-${Date.now()}`);
+      const res = await fetch('/api/ad-generator/creatives', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountKey, name: 'Untitled ad', templateId: 'blank', data: {}, doc }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      router.push(`/ad-generator/builder?ad=${encodeURIComponent(json.creative.id)}${accountKey ? `&account=${encodeURIComponent(accountKey)}` : ''}`);
     } catch (err) {
       toast.error(`Couldn't create: ${err instanceof Error ? err.message : 'unknown error'}`);
       setCreating(false);
@@ -219,16 +249,17 @@ export default function AdGeneratorListPage() {
                   </button>
                   <button
                     type="button"
+                    disabled={creating || !accountKey}
                     onClick={() => {
                       setNewOpen(false);
-                      router.push(`/ad-generator/builder${accountKey ? `?account=${encodeURIComponent(accountKey)}` : ''}`);
+                      void createBlank();
                     }}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50"
                   >
                     <Squares2X2Icon className="w-4 h-4 flex-shrink-0" />
                     <span>
                       From scratch
-                      <span className="block text-[11px] text-[var(--muted-foreground)]">Design a new layout in the builder.</span>
+                      <span className="block text-[11px] text-[var(--muted-foreground)]">Start blank and design it in the builder.</span>
                     </span>
                   </button>
                 </div>
@@ -354,22 +385,40 @@ export default function AdGeneratorListPage() {
                 <XMarkIcon className="h-5 w-5" />
               </button>
             </div>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              {templates.map((t) => (
+            {pickerTemplates.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-[var(--border)] p-8 text-center">
+                <p className="text-sm text-[var(--muted-foreground)]">No templates for this account&rsquo;s industry yet.</p>
                 <button
-                  key={t.id}
+                  type="button"
                   disabled={creating}
-                  onClick={() => createAd(t.id)}
-                  className="flex flex-col overflow-hidden rounded-xl border border-[var(--border)] text-left transition-colors hover:border-[var(--primary)] disabled:opacity-60"
+                  onClick={() => {
+                    setPickerOpen(false);
+                    void createBlank();
+                  }}
+                  className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                 >
-                  <AdPreviewThumb template={t} data={{}} branding={branding} height={120} />
-                  <div className="p-2.5">
-                    <div className="truncate text-xs font-semibold text-[var(--foreground)]">{t.name}</div>
-                    {t.description && <div className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">{t.description}</div>}
-                  </div>
+                  <Squares2X2Icon className="h-4 w-4" />
+                  Start from scratch
                 </button>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {pickerTemplates.map((t) => (
+                  <button
+                    key={t.id}
+                    disabled={creating}
+                    onClick={() => createAd(t.id)}
+                    className="flex flex-col overflow-hidden rounded-xl border border-[var(--border)] text-left transition-colors hover:border-[var(--primary)] disabled:opacity-60"
+                  >
+                    <AdPreviewThumb template={t} data={{}} branding={branding} height={120} />
+                    <div className="p-2.5">
+                      <div className="truncate text-xs font-semibold text-[var(--foreground)]">{t.name}</div>
+                      {t.description && <div className="mt-0.5 truncate text-[10px] text-[var(--muted-foreground)]">{t.description}</div>}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>,
         document.body,

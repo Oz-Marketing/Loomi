@@ -22,6 +22,7 @@ import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTria
 import { useAccount } from '@/contexts/account-context';
 import { AD_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
+import { isVehicleIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
@@ -216,12 +217,12 @@ export default function AdGeneratorPage() {
   // EVOX vehicle picker) appear only for an Automotive account on a vehicle-
   // offer template. Everything else (AI copy, branding, the template's own
   // fields) is generic, so events, grand openings, etc. get a clean form.
-  const isAutomotive = (accountData?.category ?? '').trim().toLowerCase() === 'automotive';
+  const isVehicleAccount = isVehicleIndustry(accountData?.category);
   const isVehicleOffer = useMemo(
     () => template.fields.some((f) => f.key === 'offerType' || f.key === 'vehicleImageUrl'),
     [template],
   );
-  const showAutomotiveTools = isAutomotive && isVehicleOffer;
+  const showAutomotiveTools = isVehicleAccount && isVehicleOffer;
 
   // OEM compliance: pull the active account's make-keyed required-field rule
   // (resilient — null when none/unmigrated → baseline applies), then compute

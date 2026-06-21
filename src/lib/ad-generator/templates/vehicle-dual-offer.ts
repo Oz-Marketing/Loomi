@@ -125,6 +125,8 @@ export const vehicleDualOffer: AdTemplate = {
   id: 'vehicle-dual-offer',
   name: 'Dual Offer',
   description: 'Two offers in one ad — two vehicles side-by-side, each with its own image, offer, and terms.',
+  industries: ['Automotive', 'Powersports'],
+  adType: 'Vehicle Offer',
   sizes: [
     { id: 'square', label: 'Square 1:1 (1080×1080)', width: 1080, height: 1080 },
     { id: 'landscape', label: 'Landscape (1200×628)', width: 1200, height: 628 },

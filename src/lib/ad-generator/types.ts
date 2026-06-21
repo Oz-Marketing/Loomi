@@ -64,6 +64,11 @@ export interface AdTemplate {
   id: string;
   name: string;
   description: string;
+  /** Industries this template is offered to (account `category` values).
+   *  Empty/undefined → derived from content. Drives picker visibility. */
+  industries?: string[];
+  /** Optional ad-type label for grouping (e.g. 'Vehicle Offer', 'Event'). */
+  adType?: string;
   /** Output sizes this template supports (square, landscape, story, …). */
   sizes: AdSize[];
   /** Field definitions that drive the generated form. */

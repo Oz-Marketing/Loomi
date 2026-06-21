@@ -23,6 +23,7 @@ import PrimaryButton from '@/components/primary-button';
 import { TemplatesHeaderActionsContext } from '@/app/email/templates/email-templates-view';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
+import { templateInIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
 type DocTemplate = {
@@ -60,7 +61,15 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
     '/api/ad-generator/templates-doc?all=1',
     fetcher,
   );
-  const templates = useMemo(() => (data?.templates ?? []).filter((t) => t.doc), [data]);
+  // Scope to the active account's industry — in a subaccount you only see its
+  // industry's templates; in Admin (no account) you manage the whole library.
+  const templates = useMemo(
+    () =>
+      (data?.templates ?? [])
+        .filter((t) => t.doc)
+        .filter((t) => templateInIndustry({ industries: t.doc!.industries, fields: t.doc!.fields }, accountData?.category)),
+    [data, accountData?.category],
+  );
   const branding = useMemo(() => brandingFromAccount(accountData), [accountData]);
 
   const acct = accountKey ? `&account=${encodeURIComponent(accountKey)}` : '';

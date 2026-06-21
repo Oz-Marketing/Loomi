@@ -120,6 +120,13 @@ export interface TemplateDoc {
   id: string;
   name: string;
   description?: string;
+  /** Industries this template is offered to (account `category` values, e.g.
+   *  'Automotive', 'Powersports'). Empty/undefined → derived from content
+   *  (vehicle templates default to Automotive + Powersports). Drives which
+   *  accounts see it in the picker. */
+  industries?: string[];
+  /** Optional ad-type label for grouping (e.g. 'Vehicle Offer', 'Event'). */
+  adType?: string;
   sizes: AdSize[];
   /** Form fields the user fills — reuses FieldSpec (copy / maxLength /
    *  visibleWhen all carry straight over from the code-template work). */

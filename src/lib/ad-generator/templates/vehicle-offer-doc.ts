@@ -20,6 +20,8 @@ export const vehicleOfferDoc: TemplateDoc = {
   id: 'vehicle-offer-doc',
   name: 'Vehicle Offer (Builder)',
   description: 'Data-driven Vehicle Offer authored as a TemplateDoc (the builder renderer).',
+  industries: ['Automotive', 'Powersports'],
+  adType: 'Vehicle Offer',
   sizes: vehicleOffer.sizes,
   fields: vehicleOffer.fields,
   defaults: vehicleOffer.defaults,

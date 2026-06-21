@@ -55,6 +55,7 @@ import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
+import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, DocBackground, DocBgFraming } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType, AdData } from '@/lib/ad-generator/types';
 
@@ -692,6 +693,19 @@ export default function AdBuilderPage() {
       background: { ...prev.background, image: { kind: 'field', key } },
     }));
   }, [setDoc]);
+
+  // ── industries (which accounts this template is offered to) ──
+  const allIndustries = useIndustries();
+  const toggleIndustry = useCallback(
+    (name: string) => {
+      setDoc((prev) => {
+        const cur = prev.industries ?? [];
+        const next = cur.includes(name) ? cur.filter((i) => i !== name) : [...cur, name];
+        return { ...prev, industries: next };
+      });
+    },
+    [setDoc],
+  );
 
   // ── save / load ──
   async function save(asNew = false) {
@@ -1547,6 +1561,35 @@ export default function AdBuilderPage() {
               </button>
             </div>
           </section>
+
+          {/* Industries — which accounts this template is offered to. Ad mode
+              edits one ad, not a template, so this only shows in template mode. */}
+          {!adId && (
+            <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
+              <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Industries</h2>
+              <p className="mb-3 text-[11px] text-[var(--muted-foreground)]">
+                Which accounts can use this template. None selected → only vehicle-offer accounts (Automotive, Powersports).
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {allIndustries.map((name) => {
+                  const on = (doc.industries ?? []).includes(name);
+                  return (
+                    <button
+                      key={name}
+                      onClick={() => toggleIndustry(name)}
+                      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                        on
+                          ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+                          : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
+                      }`}
+                    >
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
           {/* Sizes — each has its own independent layout */}
           <section className="glass-card rounded-2xl border border-[var(--border)] p-4">

@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
   const session = await getAuthSession();
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  let body: { accountKey?: string; name?: string; templateId?: string; data?: Record<string, string>; status?: string };
+  let body: { accountKey?: string; name?: string; templateId?: string; data?: Record<string, string>; status?: string; doc?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -88,16 +88,19 @@ export async function POST(req: NextRequest) {
   }
   const u = session.user as { id?: string; name?: string | null };
 
-  // Snapshot the source template's design into the ad so it's an independent
-  // copy — later edits to the master template won't change this ad. Only DB
-  // (AdTemplateDoc) templates are editable, so only those need freezing; code
-  // templates are stable, so they stay referenced (doc = null).
+  // The ad's own design copy: an explicit doc (e.g. "from scratch" sends a blank
+  // one), else a snapshot of the source DB template so later master edits don't
+  // change this ad. Code templates are stable, so they stay referenced (null).
   let docSnapshot: string | null = null;
-  try {
-    const tpl = await prisma.adTemplateDoc.findUnique({ where: { id: templateId }, select: { doc: true } });
-    if (tpl?.doc) docSnapshot = tpl.doc;
-  } catch {
-    docSnapshot = null;
+  if (body.doc && typeof body.doc === 'object' && Array.isArray((body.doc as { sizes?: unknown }).sizes)) {
+    docSnapshot = JSON.stringify(body.doc);
+  } else {
+    try {
+      const tpl = await prisma.adTemplateDoc.findUnique({ where: { id: templateId }, select: { doc: true } });
+      if (tpl?.doc) docSnapshot = tpl.doc;
+    } catch {
+      docSnapshot = null;
+    }
   }
 
   try {

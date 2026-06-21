@@ -2,10 +2,12 @@
 
 /**
  * Ad Generator — the home surface: a gallery of the active account's created
- * ads (like the forms / landing-page index pages). Click one to open the editor
- * (/ad-generator/[id]); "New ad" picks a template and creates one. Live mini
- * previews render through the same template function the editor + export use.
- * Behind AD_GENERATOR_ENABLED (the route layout 404s when off).
+ * ads (like the Landing Pages / Templates index pages, and styled to match
+ * them: sticky page header, shared ListToolbar, glass-card empty states).
+ * Click an ad to open the editor (/ad-generator/[id]); "New ad" picks a
+ * template and creates one. Live mini previews render through the same
+ * template function the editor + export use. Behind AD_GENERATOR_ENABLED (the
+ * route layout 404s when off).
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -14,6 +16,8 @@ import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, XMarkIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { ListToolbar } from '@/components/list-toolbar';
+import type { StatusFilterValue } from '@/components/status-filter';
 import { AD_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -36,6 +40,8 @@ export default function AdGeneratorListPage() {
   const [creatives, setCreatives] = useState<Creative[] | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all');
 
   useEffect(() => {
     let cancelled = false;
@@ -84,6 +90,21 @@ export default function AdGeneratorListPage() {
     [accountData],
   );
 
+  // Visible list — filtered by status + search (ads only have a card view).
+  const visible = useMemo(() => {
+    let list = creatives ?? [];
+    if (statusFilter === 'published') list = list.filter((c) => c.status === 'ready');
+    else if (statusFilter === 'draft') list = list.filter((c) => c.status !== 'ready');
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      list = list.filter((c) => {
+        const t = templates.find((x) => x.id === c.templateId);
+        return c.name.toLowerCase().includes(q) || (t?.name ?? c.templateId).toLowerCase().includes(q);
+      });
+    }
+    return list;
+  }, [creatives, statusFilter, search, templates]);
+
   async function createAd(templateId: string) {
     if (!accountKey) {
       toast.error('Select an account first');
@@ -118,52 +139,98 @@ export default function AdGeneratorListPage() {
   }
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
-            <SparklesIcon className="h-5 w-5" />
+    <div>
+      <div className="page-sticky-header mb-6">
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-3">
+            <SparklesIcon className="w-7 h-7 text-[var(--primary)]" />
+            <div>
+              <h2 className="text-2xl font-bold">Ad Generator</h2>
+              <p className="text-[var(--muted-foreground)] mt-1">
+                Your account&rsquo;s ads. Open one to edit, or start a new one from a template.
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-bold text-[var(--foreground)]">Ad Generator</h1>
-            <p className="text-sm text-[var(--muted-foreground)]">Your account&rsquo;s ads. Open one to edit, or start a new one from a template.</p>
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <Link
+              href="/ad-generator/builder"
+              className="hidden sm:flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+            >
+              <Squares2X2Icon className="w-4 h-4" />
+              Template Builder
+            </Link>
+            <button
+              type="button"
+              onClick={() => setPickerOpen(true)}
+              disabled={!accountKey}
+              className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <PlusIcon className="w-4 h-4" />
+              New ad
+            </button>
           </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/ad-generator/builder"
-            className="hidden items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] sm:flex"
-          >
-            <Squares2X2Icon className="h-3.5 w-3.5" />
-            Template Builder
-          </Link>
-          <button
-            onClick={() => setPickerOpen(true)}
-            className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
-          >
-            <PlusIcon className="h-4 w-4" />
-            New ad
-          </button>
         </div>
       </div>
 
+      {creatives && creatives.length > 0 && (
+        <div className="mb-4">
+          <ListToolbar
+            leading={
+              <span className="text-sm text-[var(--muted-foreground)]">
+                {visible.length} {visible.length === 1 ? 'ad' : 'ads'}
+              </span>
+            }
+            search={search}
+            onSearchChange={setSearch}
+            searchPlaceholder="Search ads…"
+            status={statusFilter}
+            onStatusChange={setStatusFilter}
+            statusOptions={[
+              { value: 'all', label: 'All' },
+              { value: 'draft', label: 'Draft' },
+              { value: 'published', label: 'Ready' },
+            ]}
+          />
+        </div>
+      )}
+
       {!accountKey ? (
-        <p className="rounded-2xl border border-dashed border-[var(--border)] px-4 py-16 text-center text-sm text-[var(--muted-foreground)]">
-          Select an account in the top bar to see its ads.
-        </p>
+        <div className="glass-card rounded-2xl p-12 text-center flex flex-col items-center">
+          <div className="w-16 h-16 rounded-2xl bg-[var(--muted)] flex items-center justify-center mb-4">
+            <SparklesIcon className="w-8 h-8 text-[var(--muted-foreground)]" />
+          </div>
+          <h2 className="text-lg font-semibold mb-1">Select an account</h2>
+          <p className="text-sm text-[var(--muted-foreground)] max-w-md">
+            Choose an account in the top bar to see and create its ads.
+          </p>
+        </div>
       ) : creatives === null ? (
-        <p className="py-16 text-center text-sm text-[var(--muted-foreground)]">Loading…</p>
+        <div className="text-sm text-[var(--muted-foreground)]">Loading…</div>
       ) : creatives.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-[var(--border)] px-4 py-16 text-center">
-          <p className="text-sm text-[var(--muted-foreground)]">No ads yet.</p>
-          <button onClick={() => setPickerOpen(true)} className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90">
-            <PlusIcon className="h-4 w-4" />
+        <div className="glass-card rounded-2xl p-12 text-center flex flex-col items-center">
+          <div className="w-16 h-16 rounded-2xl bg-[var(--muted)] flex items-center justify-center mb-4">
+            <SparklesIcon className="w-8 h-8 text-[var(--muted-foreground)]" />
+          </div>
+          <h2 className="text-lg font-semibold mb-1">No ads yet</h2>
+          <p className="text-sm text-[var(--muted-foreground)] max-w-md mb-6">
+            Start from a template — pick a layout, drop in the offer + vehicle, and export sized for every channel.
+          </p>
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+          >
+            <PlusIcon className="w-4 h-4" />
             Create your first ad
           </button>
         </div>
+      ) : visible.length === 0 ? (
+        <div className="glass-card rounded-2xl p-10 text-center text-sm text-[var(--muted-foreground)]">
+          No ads match the current filters.
+        </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {creatives.map((c) => {
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+          {visible.map((c) => {
             const template = templates.find((t) => t.id === c.templateId);
             return (
               <div

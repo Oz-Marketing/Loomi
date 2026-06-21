@@ -2001,3 +2001,26 @@ model AdOemOfferRule {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
+
+// ─────────────────────────────────────────────────────
+// Ad Generator — data-driven templates (visual builder)
+// ─────────────────────────────────────────────────────
+//
+// A TemplateDoc authored in the visual Template Builder, stored as JSON. The
+// generator renders PUBLISHED docs with the same `renderDoc` used on the
+// builder canvas, so what a designer builds is exactly what users fill +
+// export. Additive; reaches an environment via `db push` on deploy, and is
+// queried resiliently (falls back to code-defined templates when unmigrated).
+model AdTemplateDoc {
+  id          String   @id @default(cuid())
+  name        String
+  description String?  @db.Text
+  doc         String   @db.Text // JSON-serialized TemplateDoc (fields + elements + per-size layouts)
+  status      String   @default("draft") // draft | published
+  isActive    Boolean  @default(true)
+  createdBy   String? // user id / email who last saved it
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([status, isActive])
+}

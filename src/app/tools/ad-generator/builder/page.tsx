@@ -18,6 +18,7 @@
 
 import { useMemo, useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
 import Link from 'next/link';
+import { toast } from 'sonner';
 import {
   Squares2X2Icon,
   PhotoIcon,
@@ -117,6 +118,15 @@ const TYPE_ICON: Record<DocElementType, typeof PhotoIcon> = {
   shape: RectangleGroupIcon,
 };
 
+type SavedTemplate = {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  updatedAt: string;
+  doc: TemplateDoc | null;
+};
+
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 function rid(): string {
@@ -191,6 +201,15 @@ export default function AdBuilderPage() {
   const [addSizeOpen, setAddSizeOpen] = useState(false);
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
+
+  // ── persistence ──
+  const [templateId, setTemplateId] = useState<string | null>(null);
+  const [templateName, setTemplateName] = useState(vehicleOfferDoc.name);
+  const [status, setStatus] = useState<'draft' | 'published'>('draft');
+  const [saving, setSaving] = useState(false);
+  const [loadOpen, setLoadOpen] = useState(false);
+  const [savedList, setSavedList] = useState<SavedTemplate[]>([]);
+  const [loadingList, setLoadingList] = useState(false);
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
 
@@ -421,6 +440,94 @@ export default function AdBuilderPage() {
     }));
   }
 
+  // ── save / load ──
+  async function save(asNew = false) {
+    const name = templateName.trim();
+    if (!name) {
+      toast.error('Name the template first');
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = { name, doc: { ...doc, name }, status };
+      const useId = templateId && !asNew;
+      const res = await fetch(useId ? `/api/ad-generator/templates-doc/${templateId}` : '/api/ad-generator/templates-doc', {
+        method: useId ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      const json = (await res.json()) as { template?: { id: string } };
+      if (json.template?.id) setTemplateId(json.template.id);
+      toast.success(status === 'published' ? 'Saved & published' : 'Saved as draft');
+    } catch (err) {
+      toast.error(`Couldn't save: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openLoad() {
+    setLoadOpen(true);
+    setLoadingList(true);
+    try {
+      const res = await fetch('/api/ad-generator/templates-doc?all=1');
+      const json = res.ok ? ((await res.json()) as { templates?: SavedTemplate[] }) : { templates: [] };
+      setSavedList(json.templates ?? []);
+    } catch {
+      setSavedList([]);
+    } finally {
+      setLoadingList(false);
+    }
+  }
+
+  function loadTemplate(t: SavedTemplate) {
+    if (!t.doc) {
+      toast.error('That template could not be read');
+      return;
+    }
+    const loaded = structuredClone(t.doc);
+    setDoc(loaded);
+    setTemplateId(t.id);
+    setTemplateName(t.name);
+    setStatus(t.status === 'published' ? 'published' : 'draft');
+    setSizeId(loaded.sizes[0]?.id ?? '');
+    setSelectedId(null);
+    setLoadOpen(false);
+    toast.success(`Loaded "${t.name}"`);
+  }
+
+  async function deleteSaved(id: string) {
+    try {
+      const res = await fetch(`/api/ad-generator/templates-doc/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setSavedList((list) => list.filter((t) => t.id !== id));
+      if (templateId === id) setTemplateId(null);
+      toast.success('Deleted');
+    } catch (err) {
+      toast.error(`Couldn't delete: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  }
+
+  function newBlank() {
+    const id = `tmpl-${rid()}`;
+    setDoc({
+      id,
+      name: 'Untitled template',
+      sizes: [{ id: 'square', label: 'Square 1080×1080', width: 1080, height: 1080 }],
+      fields: [],
+      background: { color: '#ffffff' },
+      elements: [],
+      layouts: { square: {} },
+      defaults: {},
+    });
+    setTemplateId(null);
+    setTemplateName('Untitled template');
+    setStatus('draft');
+    setSizeId('square');
+    setSelectedId(null);
+  }
+
   // ── pointer drag/resize ──
   const dragRef = useRef<{
     handle: Handle;
@@ -535,6 +642,57 @@ export default function AdBuilderPage() {
           <ArrowLeftIcon className="h-3.5 w-3.5" />
           Generator
         </Link>
+      </div>
+
+      {/* Save / load toolbar */}
+      <div className="glass-card mb-6 flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--border)] p-3">
+        <input
+          value={templateName}
+          onChange={(e) => setTemplateName(e.target.value)}
+          placeholder="Template name"
+          className="min-w-[180px] flex-1 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm font-medium text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+        />
+        <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
+          {(['draft', 'published'] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setStatus(s)}
+              className={`rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
+                status === s ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+        <button
+          onClick={openLoad}
+          className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+        >
+          Open
+        </button>
+        <button
+          onClick={newBlank}
+          className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+        >
+          New
+        </button>
+        {templateId && (
+          <button
+            onClick={() => save(true)}
+            disabled={saving}
+            className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:opacity-50"
+          >
+            Save as new
+          </button>
+        )}
+        <button
+          onClick={() => save(false)}
+          disabled={saving}
+          className="rounded-lg bg-[var(--primary)] px-4 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : templateId ? 'Save' : 'Save template'}
+        </button>
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
@@ -963,6 +1121,17 @@ export default function AdBuilderPage() {
           onSetDefault={setDefaultAt}
         />
       )}
+
+      {loadOpen && (
+        <LoadModal
+          loading={loadingList}
+          templates={savedList}
+          currentId={templateId}
+          onClose={() => setLoadOpen(false)}
+          onLoad={loadTemplate}
+          onDelete={deleteSaved}
+        />
+      )}
     </div>
   );
 }
@@ -1337,6 +1506,80 @@ function FieldManagerModal({
           <PlusIcon className="h-3.5 w-3.5" />
           Add field
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** The Template Library — open or delete a saved TemplateDoc. */
+function LoadModal({
+  loading,
+  templates,
+  currentId,
+  onClose,
+  onLoad,
+  onDelete,
+}: {
+  loading: boolean;
+  templates: SavedTemplate[];
+  currentId: string | null;
+  onClose: () => void;
+  onLoad: (t: SavedTemplate) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-16" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-start justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-[var(--foreground)]">Template Library</h2>
+            <p className="text-xs text-[var(--muted-foreground)]">Open a saved template to keep editing. Published ones appear in the Ad Generator.</p>
+          </div>
+          <button onClick={onClose} className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+
+        {loading ? (
+          <p className="py-8 text-center text-xs text-[var(--muted-foreground)]">Loading…</p>
+        ) : templates.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-8 text-center text-xs text-[var(--muted-foreground)]">
+            No saved templates yet. Save one to start your library.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {templates.map((t) => (
+              <div
+                key={t.id}
+                className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${t.id === currentId ? 'border-[var(--primary)]' : 'border-[var(--border)]'}`}
+              >
+                <button onClick={() => onLoad(t)} className="flex flex-1 items-center gap-2 text-left" disabled={!t.doc}>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-xs font-medium text-[var(--foreground)]">{t.name}</span>
+                      <span
+                        className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+                          t.status === 'published' ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
+                        }`}
+                      >
+                        {t.status}
+                      </span>
+                      {!t.doc && <span className="text-[10px] text-red-500">unreadable</span>}
+                    </div>
+                    {t.description && <p className="mt-0.5 truncate text-[11px] text-[var(--muted-foreground)]">{t.description}</p>}
+                  </div>
+                </button>
+                <button
+                  onClick={() => onDelete(t.id)}
+                  title="Delete"
+                  className="flex-shrink-0 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500"
+                >
+                  <TrashIcon className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

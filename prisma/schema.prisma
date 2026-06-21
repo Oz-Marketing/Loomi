@@ -2046,3 +2046,29 @@ model AdSizePreset {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 }
+
+// ─────────────────────────────────────────────────────
+// Ad Generator — saved ad creatives
+// ─────────────────────────────────────────────────────
+//
+// A created ad: a chosen template (code id OR AdTemplateDoc id) + the filled-in
+// field values. Account-scoped — the /ad-generator list shows the active
+// account's ads; clicking one opens the generator to edit it. `campaignId` is
+// reserved for the future Campaign-channel tie-in (not wired yet). Additive,
+// queried resiliently.
+model AdCreative {
+  id            String   @id @default(cuid())
+  accountKey    String
+  name          String
+  templateId    String // code template id or AdTemplateDoc id
+  data          String   @db.Text // JSON of the filled AdData
+  status        String   @default("draft") // draft | ready
+  thumbnailUrl  String?  @db.Text
+  campaignId    String? // reserved — future Campaign channel link
+  createdById   String?
+  createdByName String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([accountKey, updatedAt])
+}

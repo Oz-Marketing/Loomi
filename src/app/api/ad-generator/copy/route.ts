@@ -11,7 +11,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession } from '@/lib/api-auth';
 import { AD_GENERATOR_ENABLED } from '@/lib/feature-flags';
-import { getTemplate } from '@/lib/ad-generator/templates';
+import { resolveTemplate } from '@/lib/ad-generator/resolve-template';
 import { generateAdCopy } from '@/lib/ai/ad-copy';
 import type { AdCopyField } from '@/lib/ad-generator/copy-types';
 
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const template = getTemplate(body.templateId ?? '');
+  const template = await resolveTemplate(body.templateId ?? '');
   if (!template) return NextResponse.json({ error: 'Unknown template' }, { status: 400 });
 
   const copyFields: AdCopyField[] = template.fields

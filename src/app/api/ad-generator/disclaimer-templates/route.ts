@@ -11,7 +11,7 @@
  * generator simply falls back to the code-defined default templates.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession } from '@/lib/api-auth';
+import { getAuthSession, requireRole } from '@/lib/api-auth';
 import { AD_GENERATOR_ENABLED } from '@/lib/feature-flags';
 import { prisma } from '@/lib/prisma';
 
@@ -22,6 +22,22 @@ export async function GET(req: NextRequest) {
   if (!AD_GENERATOR_ENABLED) {
     return NextResponse.json({ error: 'Not found' }, { status: 404 });
   }
+
+  // Admin: full list for the templates manager (`?all=1`).
+  if (req.nextUrl.searchParams.get('all') === '1') {
+    const { error } = await requireRole('developer', 'super_admin', 'admin');
+    if (error) return error;
+    try {
+      const rows = await prisma.adDisclaimerTemplate.findMany({
+        orderBy: [{ offerType: 'asc' }, { make: 'asc' }, { name: 'asc' }],
+      });
+      return NextResponse.json({ templates: rows });
+    } catch (err) {
+      console.warn('[api/ad-generator/disclaimer-templates] all → []:', err);
+      return NextResponse.json({ templates: [] });
+    }
+  }
+
   const session = await getAuthSession();
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
@@ -62,5 +78,47 @@ export async function GET(req: NextRequest) {
     // to the code-defined defaults rather than failing the generator.
     console.warn('[api/ad-generator/disclaimer-templates] falling back to []:', err);
     return NextResponse.json({ templates: [] });
+  }
+}
+
+export async function POST(req: NextRequest) {
+  if (!AD_GENERATOR_ENABLED) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  if (error) return error;
+
+  let body: {
+    make?: string | null;
+    offerType?: string;
+    name?: string;
+    body?: string;
+    isDefault?: boolean;
+    isActive?: boolean;
+  };
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  }
+  if (!body.offerType || !body.name?.trim() || !body.body?.trim()) {
+    return NextResponse.json({ error: 'offerType, name, and body are required' }, { status: 400 });
+  }
+  try {
+    const row = await prisma.adDisclaimerTemplate.create({
+      data: {
+        make: body.make?.trim() || null,
+        offerType: body.offerType,
+        name: body.name.trim(),
+        body: body.body,
+        isDefault: !!body.isDefault,
+        isActive: body.isActive !== false,
+      },
+    });
+    return NextResponse.json({ template: row });
+  } catch (err) {
+    console.error('[api/ad-generator/disclaimer-templates] create failed:', err);
+    return NextResponse.json(
+      { error: 'Could not create — has the table been migrated in this environment?' },
+      { status: 500 },
+    );
   }
 }

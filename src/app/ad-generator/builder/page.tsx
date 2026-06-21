@@ -50,7 +50,7 @@ import { renderDoc } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
-import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, Binding } from '@/lib/ad-generator/doc-types';
+import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType } from '@/lib/ad-generator/types';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -149,15 +149,6 @@ const WEIGHT_OPTIONS: FontSelectOption[] = [
   { value: '800', label: 'Extrabold' },
   { value: '900', label: 'Black' },
 ];
-const ALIGN_OPTIONS: FontSelectOption[] = [
-  { value: 'left', label: 'Left' },
-  { value: 'center', label: 'Center' },
-  { value: 'right', label: 'Right' },
-];
-const FIT_OPTIONS: FontSelectOption[] = [
-  { value: 'contain', label: 'Contain (fit)' },
-  { value: 'cover', label: 'Cover (fill)' },
-];
 const FIELD_TYPE_OPTIONS: FontSelectOption[] = [
   { value: 'text', label: 'Text' },
   { value: 'textarea', label: 'Text area' },
@@ -166,11 +157,6 @@ const FIELD_TYPE_OPTIONS: FontSelectOption[] = [
   { value: 'select', label: 'Select' },
   { value: 'color', label: 'Color' },
   { value: 'image', label: 'Image URL' },
-];
-const BRAND_OPTIONS: FontSelectOption[] = [
-  { value: 'dealerName', label: 'Dealer name' },
-  { value: 'logoUrl', label: 'Logo' },
-  { value: 'brandColor', label: 'Brand color' },
 ];
 const SIZE_PRESETS: { label: string; width: number; height: number }[] = [
   { label: 'Square', width: 1080, height: 1080 },
@@ -777,7 +763,7 @@ export default function AdBuilderPage() {
         {/* left — back + status */}
         <div className="flex min-w-0 items-center gap-2">
           <Link
-            href="/tools/ad-generator"
+            href="/ad-generator"
             className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
             title="Back to the Generator"
           >
@@ -1069,109 +1055,6 @@ export default function AdBuilderPage() {
             )}
           </section>
 
-          {/* Selected element controls */}
-          {selected && selectedBox && (
-            <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Selected</h2>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={() => duplicateElement(selected.id)}
-                    title="Duplicate"
-                    className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-                  >
-                    <DocumentDuplicateIcon className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => deleteElement(selected.id)}
-                    title="Delete"
-                    className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500"
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-3 text-xs">
-                <div className="flex gap-1.5">
-                  <LayerBtn onClick={bringForward}>Bring forward</LayerBtn>
-                  <LayerBtn onClick={sendBack}>Send back</LayerBtn>
-                </div>
-
-                <ToggleRow
-                  label={`Visible on ${size.label.split(' ')[0]}`}
-                  on={!selectedBox.hidden}
-                  onClick={() => toggleHidden(selected.id)}
-                />
-
-                {selected.type === 'shape' ? (
-                  <p className="text-[11px] text-[var(--muted-foreground)]">Shapes are decorative — no data binding.</p>
-                ) : (
-                  <BindingEditor el={selected} fields={doc.fields} onChange={(b) => updEl({ binding: b })} />
-                )}
-
-                {/* Geometry */}
-                <div className="grid grid-cols-2 gap-2">
-                  <NumberField label="X %" value={Math.round(selectedBox.x * 100)} onChange={(v) => setBox(size.id, selected.id, { ...selectedBox, x: clamp(v / 100, 0, 1 - selectedBox.w) })} />
-                  <NumberField label="Y %" value={Math.round(selectedBox.y * 100)} onChange={(v) => setBox(size.id, selected.id, { ...selectedBox, y: clamp(v / 100, 0, 1 - selectedBox.h) })} />
-                  <NumberField label="W %" value={Math.round(selectedBox.w * 100)} onChange={(v) => setBox(size.id, selected.id, { ...selectedBox, w: clamp(v / 100, MIN_FRAC, 1 - selectedBox.x) })} />
-                  <NumberField label="H %" value={Math.round(selectedBox.h * 100)} onChange={(v) => setBox(size.id, selected.id, { ...selectedBox, h: clamp(v / 100, MIN_FRAC, 1 - selectedBox.y) })} />
-                </div>
-
-                {/* Text style */}
-                {selected.type === 'text' && (
-                  <div className="space-y-2 border-t border-[var(--border)] pt-3">
-                    <NumberField
-                      label="Font size (px)"
-                      value={selectedBox.fontSize ?? 16}
-                      onChange={(v) => setBox(size.id, selected.id, { ...selectedBox, fontSize: clamp(Math.round(v), 4, 400) })}
-                    />
-                    <SelectRow label="Font">
-                      <FontSelect value={selected.fontFamily ?? ''} onChange={(v) => updEl({ fontFamily: v || undefined })} options={fontOptions} />
-                    </SelectRow>
-                    <div className="grid grid-cols-2 gap-2">
-                      <SelectRow label="Weight">
-                        <FontSelect value={String(selected.fontWeight ?? 400)} onChange={(v) => updEl({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} />
-                      </SelectRow>
-                      <SelectRow label="Align">
-                        <FontSelect value={selected.align ?? 'left'} onChange={(v) => updEl({ align: v as 'left' | 'center' | 'right' })} options={ALIGN_OPTIONS} previewFont={false} />
-                      </SelectRow>
-                    </div>
-                    <ColorControl label="Color" value={selected.color} onChange={(v) => updEl({ color: v })} allowNone />
-                    <div className="grid grid-cols-2 gap-2">
-                      <NumberField label="Letter spacing" value={selected.letterSpacing ?? 0} onChange={(v) => updEl({ letterSpacing: v ? Math.round(v) : undefined })} />
-                      <NumberField label="Line height" step={0.05} value={selected.lineHeight ?? 1.1} onChange={(v) => updEl({ lineHeight: v || undefined })} />
-                    </div>
-                    <ToggleRow label="Uppercase" on={!!selected.uppercase} onClick={() => updEl({ uppercase: !selected.uppercase })} />
-                    <ColorControl label="Pill background" value={selected.bg} onChange={(v) => updEl({ bg: v })} allowNone />
-                    {selected.bg && (
-                      <div className="grid grid-cols-2 gap-2">
-                        <NumberField label="Padding" value={selected.padding ?? 0} onChange={(v) => updEl({ padding: v ? Math.round(v) : undefined })} />
-                        <NumberField label="Radius" value={selected.radius ?? 0} onChange={(v) => updEl({ radius: v ? Math.round(v) : undefined })} />
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Shape style */}
-                {selected.type === 'shape' && (
-                  <div className="space-y-2 border-t border-[var(--border)] pt-3">
-                    <ColorControl label="Fill" value={selected.fill} onChange={(v) => updEl({ fill: v })} />
-                    <NumberField label="Corner radius" value={selected.radius ?? 0} onChange={(v) => updEl({ radius: v ? Math.round(v) : undefined })} />
-                  </div>
-                )}
-
-                {/* Image / logo style */}
-                {(selected.type === 'image' || selected.type === 'logo') && (
-                  <div className="space-y-2 border-t border-[var(--border)] pt-3">
-                    <SelectRow label="Fit">
-                      <FontSelect value={selected.fit ?? 'contain'} onChange={(v) => updEl({ fit: v as 'contain' | 'cover' })} options={FIT_OPTIONS} previewFont={false} />
-                    </SelectRow>
-                  </div>
-                )}
-              </div>
-            </section>
-          )}
         </aside>
 
         {/* Canvas */}
@@ -1314,6 +1197,7 @@ export default function AdBuilderPage() {
                   el={selected}
                   box={selectedBox}
                   fontOptions={fontOptions}
+                  fields={doc.fields}
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch })}
                 />
@@ -1353,35 +1237,6 @@ export default function AdBuilderPage() {
   );
 }
 
-function NumberField({ label, value, onChange, step }: { label: string; value: number; onChange: (v: number) => void; step?: number }) {
-  return (
-    <label className="block">
-      <span className="mb-1 block text-[var(--muted-foreground)]">{label}</span>
-      <input
-        type="number"
-        value={value}
-        step={step}
-        onChange={(e) => {
-          const n = Number(e.target.value);
-          if (!Number.isNaN(n)) onChange(n);
-        }}
-        className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-      />
-    </label>
-  );
-}
-
-function LayerBtn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className="flex-1 rounded-md border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
-    >
-      {children}
-    </button>
-  );
-}
-
 function SelectRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
@@ -1405,129 +1260,6 @@ function ToggleRow({ label, on, onClick }: { label: string; on: boolean; onClick
   );
 }
 
-function ModeBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
-        active ? 'border-[var(--primary)] text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-/**
- * Choose where an element's value comes from: a form Field, a Brand value, or
- * a Static literal. Field/brand keys resolve at render time; static is baked in.
- */
-function BindingEditor({ el, fields, onChange }: { el: DocElement; fields: FieldSpec[]; onChange: (b: Binding) => void }) {
-  const kind = el.binding?.kind ?? 'static';
-  const boundKey = el.binding?.kind === 'field' ? el.binding.key : null;
-
-  const fieldOptions: FontSelectOption[] = (() => {
-    const opts = fields.map((f) => ({ value: f.key, label: f.label || f.key }));
-    // A computed/orphan binding (e.g. an assembled offer field) still shows.
-    if (boundKey && !fields.some((f) => f.key === boundKey)) {
-      opts.unshift({ value: boundKey, label: boundKey });
-    }
-    return opts.length ? opts : [{ value: '', label: 'No fields yet' }];
-  })();
-
-  function switchKind(k: Binding['kind']) {
-    if (k === kind) return;
-    if (k === 'field') onChange({ kind: 'field', key: fields[0]?.key ?? '' });
-    else if (k === 'brand') onChange({ kind: 'brand', key: el.type === 'text' ? 'dealerName' : 'logoUrl' });
-    else onChange({ kind: 'static', value: el.binding?.kind === 'static' ? el.binding.value : '' });
-  }
-
-  return (
-    <div className="space-y-2">
-      <label className="block text-[var(--muted-foreground)]">Content</label>
-      <div className="flex gap-1.5">
-        <ModeBtn active={kind === 'field'} onClick={() => switchKind('field')}>
-          Field
-        </ModeBtn>
-        <ModeBtn active={kind === 'brand'} onClick={() => switchKind('brand')}>
-          Brand
-        </ModeBtn>
-        <ModeBtn active={kind === 'static'} onClick={() => switchKind('static')}>
-          Static
-        </ModeBtn>
-      </div>
-      {kind === 'field' && (
-        <FontSelect
-          value={el.binding?.kind === 'field' ? el.binding.key : ''}
-          onChange={(v) => onChange({ kind: 'field', key: v })}
-          options={fieldOptions}
-          previewFont={false}
-        />
-      )}
-      {kind === 'brand' && (
-        <FontSelect
-          value={el.binding?.kind === 'brand' ? el.binding.key : 'dealerName'}
-          onChange={(v) => onChange({ kind: 'brand', key: v as 'dealerName' | 'logoUrl' | 'brandColor' })}
-          options={BRAND_OPTIONS}
-          previewFont={false}
-        />
-      )}
-      {kind === 'static' && (
-        <input
-          value={el.binding?.kind === 'static' ? el.binding.value : ''}
-          onChange={(e) => onChange({ kind: 'static', value: e.target.value })}
-          placeholder={el.type === 'text' ? 'Static text' : 'Image URL'}
-          className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-        />
-      )}
-    </div>
-  );
-}
-
-/**
- * Color picker that maps to the doc's color model: `'brand'` (the account
- * color), a custom hex, or — when `allowNone` — unset (renderer default).
- */
-function ColorControl({
-  label,
-  value,
-  onChange,
-  allowNone,
-}: {
-  label: string;
-  value?: string;
-  onChange: (v: string | undefined) => void;
-  allowNone?: boolean;
-}) {
-  const mode = value === undefined ? 'none' : value === 'brand' ? 'brand' : 'custom';
-  const hex = value && value !== 'brand' ? value : '#4f46e5';
-  return (
-    <div>
-      <label className="mb-1 block text-[var(--muted-foreground)]">{label}</label>
-      <div className="flex flex-wrap items-center gap-1.5">
-        {allowNone && (
-          <ModeBtn active={mode === 'none'} onClick={() => onChange(undefined)}>
-            None
-          </ModeBtn>
-        )}
-        <ModeBtn active={mode === 'brand'} onClick={() => onChange('brand')}>
-          Brand
-        </ModeBtn>
-        <ModeBtn active={mode === 'custom'} onClick={() => onChange(hex)}>
-          Custom
-        </ModeBtn>
-        {mode === 'custom' && (
-          <input
-            type="color"
-            value={hex}
-            onChange={(e) => onChange(e.target.value)}
-            className="h-7 w-9 cursor-pointer rounded border border-[var(--border)] bg-transparent"
-          />
-        )}
-      </div>
-    </div>
-  );
-}
 
 function LabeledInput({
   label,
@@ -1737,24 +1469,63 @@ function SelectionToolbar({
   el,
   box,
   fontOptions,
+  fields,
   onEl,
   onBox,
 }: {
   el: DocElement;
   box: DocLayoutBox;
   fontOptions: FontSelectOption[];
+  fields: FieldSpec[];
   onEl: (patch: Partial<DocElement>) => void;
   onBox: (patch: Partial<DocLayoutBox>) => void;
 }) {
   const fontSize = box.fontSize ?? 16;
+
+  // ── binding (content source) as a single compact dropdown ──
+  const bindingVal = !el.binding ? 'static' : el.binding.kind === 'static' ? 'static' : `${el.binding.kind}:${el.binding.key}`;
+  const bindingOpts: FontSelectOption[] = [
+    { value: 'static', label: 'Static' },
+    { value: 'brand:dealerName', label: 'Brand · Dealer name' },
+    { value: 'brand:logoUrl', label: 'Brand · Logo' },
+    { value: 'brand:brandColor', label: 'Brand · Color' },
+    ...fields.map((f) => ({ value: `field:${f.key}`, label: `Field · ${f.label || f.key}` })),
+  ];
+  const boundFieldKey = el.binding?.kind === 'field' ? el.binding.key : null;
+  if (boundFieldKey && !fields.some((f) => f.key === boundFieldKey)) {
+    bindingOpts.push({ value: `field:${boundFieldKey}`, label: `Field · ${boundFieldKey}` });
+  }
+  const applyBinding = (v: string) => {
+    if (v === 'static') onEl({ binding: { kind: 'static', value: el.binding?.kind === 'static' ? el.binding.value : '' } });
+    else if (v.startsWith('brand:')) onEl({ binding: { kind: 'brand', key: v.slice(6) as 'dealerName' | 'logoUrl' | 'brandColor' } });
+    else if (v.startsWith('field:')) onEl({ binding: { kind: 'field', key: v.slice(6) } });
+  };
+
   return (
     <div className="absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-lg backdrop-blur-2xl backdrop-saturate-150">
-      {el.type === 'text' && (
+      {/* Content source — every element except shapes binds to data */}
+      {el.type !== 'shape' && (
         <>
           <div className="w-40">
+            <FontSelect value={bindingVal} onChange={applyBinding} options={bindingOpts} previewFont={false} openUp />
+          </div>
+          {el.binding?.kind === 'static' && (
+            <input
+              value={el.binding.value}
+              onChange={(e) => onEl({ binding: { kind: 'static', value: e.target.value } })}
+              placeholder={el.type === 'text' ? 'Text' : 'Image URL'}
+              className="w-36 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+            />
+          )}
+          <BarSep />
+        </>
+      )}
+
+      {el.type === 'text' && (
+        <>
+          <div className="w-36">
             <FontSelect value={el.fontFamily ?? ''} onChange={(v) => onEl({ fontFamily: v || undefined })} options={fontOptions} openUp />
           </div>
-          <BarSep />
           <div className="flex items-center gap-0.5">
             <BarBtn title="Smaller" onClick={() => onBox({ fontSize: Math.max(4, fontSize - 2) })}>
               <MinusIcon className="h-4 w-4" />
@@ -1772,8 +1543,7 @@ function SelectionToolbar({
               <PlusIcon className="h-4 w-4" />
             </BarBtn>
           </div>
-          <BarSep />
-          <div className="w-28">
+          <div className="w-24">
             <FontSelect value={String(el.fontWeight ?? 400)} onChange={(v) => onEl({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} openUp />
           </div>
           <BarSep />
@@ -1791,11 +1561,31 @@ function SelectionToolbar({
           <BarBtn title="Uppercase" active={!!el.uppercase} onClick={() => onEl({ uppercase: !el.uppercase })}>
             <span className="text-[11px] font-bold leading-none">Aa</span>
           </BarBtn>
+          <MiniNum title="Letter spacing (px)" value={el.letterSpacing ?? 0} onChange={(v) => onEl({ letterSpacing: v ? Math.round(v) : undefined })} />
+          <MiniNum title="Line height" step={0.05} value={el.lineHeight ?? 1.1} onChange={(v) => onEl({ lineHeight: v || undefined })} />
+          <BarSep />
+          {el.bg ? (
+            <>
+              <ColorSwatchInput title="Pill background" value={el.bg !== 'brand' ? el.bg : '#4f46e5'} onChange={(v) => onEl({ bg: v })} />
+              <BarBtn title="Remove pill background" onClick={() => onEl({ bg: undefined })}>
+                <XMarkIcon className="h-4 w-4" />
+              </BarBtn>
+            </>
+          ) : (
+            <BarBtn title="Add pill background" onClick={() => onEl({ bg: 'brand', radius: el.radius ?? 999, padding: el.padding ?? 14 })}>
+              <span className="text-[10px] font-semibold leading-none">Pill</span>
+            </BarBtn>
+          )}
         </>
       )}
+
       {el.type === 'shape' && (
-        <ColorSwatchInput title="Fill" value={el.fill && el.fill !== 'brand' ? el.fill : '#4f46e5'} onChange={(v) => onEl({ fill: v })} />
+        <>
+          <ColorSwatchInput title="Fill" value={el.fill && el.fill !== 'brand' ? el.fill : '#4f46e5'} onChange={(v) => onEl({ fill: v })} />
+          <MiniNum title="Corner radius (px)" value={el.radius ?? 0} onChange={(v) => onEl({ radius: v ? Math.round(v) : undefined })} />
+        </>
       )}
+
       {(el.type === 'image' || el.type === 'logo') && (
         <>
           <BarBtn title="Fit (contain)" active={(el.fit ?? 'contain') === 'contain'} onClick={() => onEl({ fit: 'contain' })}>
@@ -1807,6 +1597,24 @@ function SelectionToolbar({
         </>
       )}
     </div>
+  );
+}
+
+/** Compact number input for the selection toolbar (title is the tooltip). */
+function MiniNum({ title, value, onChange, step }: { title: string; value: number; onChange: (v: number) => void; step?: number }) {
+  return (
+    <input
+      type="number"
+      title={title}
+      aria-label={title}
+      value={value}
+      step={step}
+      onChange={(e) => {
+        const n = Number(e.target.value);
+        if (!Number.isNaN(n)) onChange(n);
+      }}
+      className="w-12 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1.5 text-center text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+    />
   );
 }
 

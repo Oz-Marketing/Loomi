@@ -9,7 +9,7 @@
  */
 
 /**
- * The Ad Generator (`/tools/ad-generator`). Not ready for production users yet,
+ * The Ad Generator (`/ad-generator`). Not ready for production users yet,
  * so it's hidden from the nav and its route 404s unless
  * `NEXT_PUBLIC_ENABLE_AD_GENERATOR=true` is set for the environment.
  */

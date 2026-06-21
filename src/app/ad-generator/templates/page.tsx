@@ -5,7 +5,7 @@
  * Reusable legal text with {slug} tokens, scoped per (make, offer type). The
  * generator auto-fills the disclaimer from these (make-specific first, then
  * global); when none exist it uses the code-defined defaults. Flag-gated by
- * the /tools/ad-generator layout; admin-only here.
+ * the /ad-generator layout; admin-only here.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -115,7 +115,7 @@ export default function DisclaimerTemplatesPage() {
       <div className="mb-3 flex items-start justify-between gap-3">
         <div className="flex items-center gap-3">
           <Link
-            href="/tools/ad-generator"
+            href="/ad-generator"
             className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
             aria-label="Back to Ad Generator"
           >
@@ -140,7 +140,7 @@ export default function DisclaimerTemplatesPage() {
 
       <div className="mb-6 flex gap-1 text-xs">
         <span className="rounded-md bg-[var(--primary)]/10 px-2.5 py-1 font-medium text-[var(--primary)]">Disclaimer Templates</span>
-        <Link href="/tools/ad-generator/oem-rules" className="rounded-md px-2.5 py-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+        <Link href="/ad-generator/oem-rules" className="rounded-md px-2.5 py-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
           OEM Rules
         </Link>
       </div>

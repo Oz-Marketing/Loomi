@@ -1,6 +1,7 @@
 import type { AdTemplate } from './types';
 import type { TemplateDoc } from './doc-types';
 import { renderDoc } from './doc-renderer';
+import { enrichOfferFields } from './offer-text';
 
 /**
  * Adapt a data-driven TemplateDoc into the AdTemplate shape the generator
@@ -16,6 +17,8 @@ export function adTemplateFromDoc(id: string, doc: TemplateDoc): AdTemplate {
     sizes: doc.sizes,
     fields: doc.fields,
     defaults: doc.defaults,
-    render: (data, size) => renderDoc(doc, data, size),
+    // Enrich offer fields (_offerMain, …) so the offer block renders for every
+    // doc — not only the hand-wired code template.
+    render: (data, size) => renderDoc(doc, enrichOfferFields(data), size),
   };
 }

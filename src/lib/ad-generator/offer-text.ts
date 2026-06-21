@@ -67,6 +67,26 @@ const DEFAULT_LABEL: Record<Exclude<OfferType, 'custom' | 'discount'>, string> =
  * `o2_monthlyPayment`, …) so a dual-offer template can assemble a second offer
  * from the same engine. Default `''` is the original single-offer behavior.
  */
+/**
+ * Compute the `_offer*` (and `_o2_offer*`) display fields the doc templates bind
+ * to, from the structured offer fields. Generic — runs for ANY TemplateDoc via
+ * the renderer adapter — so the offer block shows everywhere a doc is rendered
+ * (builder canvas, generator, gallery thumbs, snapshot copies, export), not just
+ * the one hand-wired code template. A no-op for data without offer fields.
+ */
+export function enrichOfferFields(data: AdData): AdData {
+  const out: AdData = { ...data };
+  for (const prefix of ['', 'o2_'] as const) {
+    // Only synthesize a block if this prefix's offer is actually in play.
+    if (!(`${prefix}offerType` in data) && prefix !== '') continue;
+    const offer = assembleOffer(data, prefix);
+    out[`_${prefix}offerLabel`] = offer ? offer.label : data[`${prefix}offerLabel`] || 'LEASE FOR';
+    out[`_${prefix}offerMain`] = offer ? offer.main : data[`${prefix}price`] || '$299/mo';
+    out[`_${prefix}offerTerms`] = offer ? offer.terms : data[`${prefix}terms`] || '';
+  }
+  return out;
+}
+
 export function assembleOffer(data: AdData, prefix = ''): OfferBlock | null {
   const g = (key: string): string | undefined => data[prefix + key];
   const type = (g('offerType') as OfferType) || 'custom';

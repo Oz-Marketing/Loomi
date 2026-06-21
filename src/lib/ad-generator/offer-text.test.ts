@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assembleOffer } from './offer-text';
+import { assembleOffer, enrichOfferFields } from './offer-text';
 
 describe('assembleOffer', () => {
   it('assembles a lease offer with formatted money + term', () => {
@@ -62,6 +62,25 @@ describe('assembleOffer', () => {
   it('returns null for custom (free-text price/terms are used instead)', () => {
     expect(assembleOffer({ offerType: 'custom', price: '$299/mo' })).toBeNull();
     expect(assembleOffer({})).toBeNull(); // defaults to custom
+  });
+
+  it('enriches the _offer* display fields the doc templates bind to', () => {
+    const e = enrichOfferFields({ offerType: 'lease', monthlyPayment: '299', leaseTerm: '36' });
+    expect(e._offerLabel).toBe('LEASE FOR');
+    expect(e._offerMain).toBe('$299/mo');
+    expect(e._offerTerms).toContain('36-month lease');
+  });
+
+  it('enriches a custom offer from its free-text fields', () => {
+    const e = enrichOfferFields({ offerType: 'custom', price: '$0 down', terms: '0% for 72 mo' });
+    expect(e._offerMain).toBe('$0 down');
+    expect(e._offerTerms).toBe('0% for 72 mo');
+  });
+
+  it('enriches the second offer (o2_) when present', () => {
+    const e = enrichOfferFields({ offerType: 'lease', monthlyPayment: '299', o2_offerType: 'apr', o2_aprRate: '0', o2_aprTerm: '60' });
+    expect(e._offerMain).toBe('$299/mo');
+    expect(e._o2_offerMain).toBe('0% APR');
   });
 
   it('assembles a second offer from a prefixed field set (dual offers)', () => {

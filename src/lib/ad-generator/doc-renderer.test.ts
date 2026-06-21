@@ -67,4 +67,17 @@ describe('renderDoc', () => {
     expect(renderDoc(doc, {}, SIZE)).not.toContain('>price<');
     expect(renderDoc(doc, {}, SIZE, { preview: true })).toContain('price');
   });
+
+  it('keeps hidden elements (dimmed) in preview but drops them on export', () => {
+    expect(renderDoc(doc, {}, SIZE)).not.toContain('SHOULD-NOT-APPEAR'); // export omits hidden
+    const prev = renderDoc(doc, {}, SIZE, { preview: true });
+    expect(prev).toContain('SHOULD-NOT-APPEAR'); // preview keeps it…
+    expect(prev).toContain('opacity:0.35'); // …dimmed
+  });
+
+  it('tags each element with data-el-id (for live drag in the builder)', () => {
+    const html = renderDoc(doc, { price: '$1' }, SIZE);
+    expect(html).toContain('data-el-id="price"');
+    expect(html).toContain('data-el-id="bar"');
+  });
 });

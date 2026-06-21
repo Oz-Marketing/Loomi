@@ -196,6 +196,27 @@ type SavedTemplate = {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+const SNAP_PX = 6; // alignment snap distance, in on-screen pixels
+
+/** Nearest snap of any of `edges` to any of `targets` within `threshold`. */
+function bestSnap(edges: number[], targets: number[], threshold: number): { off: number; guide: number | null } {
+  let best = threshold;
+  let off = 0;
+  let guide: number | null = null;
+  for (const e of edges) {
+    for (const t of targets) {
+      const diff = t - e;
+      const ad = Math.abs(diff);
+      if (ad < best) {
+        best = ad;
+        off = diff;
+        guide = t;
+      }
+    }
+  }
+  return { off, guide };
+}
+
 /** What actually gets persisted — the dirty check + autosave compare against this. */
 function serializeDoc(doc: TemplateDoc, name: string, status: string): string {
   return JSON.stringify({ status, doc: { ...doc, name: name.trim() } });
@@ -269,6 +290,9 @@ export default function AdBuilderPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showOutlines, setShowOutlines] = useState(true);
   const [dragBox, setDragBox] = useState<DocLayoutBox | null>(null);
+  // Figma-style alignment guides shown while dragging (fractions, or null).
+  const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
+  const iframeRef = useRef<HTMLIFrameElement>(null);
   const [fieldsOpen, setFieldsOpen] = useState(false);
   const [addSizeOpen, setAddSizeOpen] = useState(false);
   const [customName, setCustomName] = useState('');
@@ -669,9 +693,13 @@ export default function AdBuilderPage() {
     start: DocLayoutBox;
     fw: number;
     fh: number;
+    nw: number;
+    nh: number;
     sizeId: string;
     elId: string;
     live: DocLayoutBox;
+    targetsX: number[];
+    targetsY: number[];
   } | null>(null);
 
   const onMoveRef = useRef<(e: PointerEvent) => void>(() => {});
@@ -685,14 +713,39 @@ export default function AdBuilderPage() {
     const dxF = (e.clientX - d.sx) / d.fw;
     const dyF = (e.clientY - d.sy) / d.fh;
     const box = computeBox(d.handle, d.start, dxF, dyF);
+
+    // Alignment snapping on MOVE: snap the dragged element's edges/center to
+    // the other elements' (and the canvas') edges/centers, and draw a guide.
+    let gx: number | null = null;
+    let gy: number | null = null;
+    if (d.handle === 'move') {
+      const sx = bestSnap([box.x, box.x + box.w / 2, box.x + box.w], d.targetsX, SNAP_PX / d.fw);
+      const sy = bestSnap([box.y, box.y + box.h / 2, box.y + box.h], d.targetsY, SNAP_PX / d.fh);
+      box.x = clamp(box.x + sx.off, 0, 1 - box.w);
+      box.y = clamp(box.y + sy.off, 0, 1 - box.h);
+      gx = sx.guide;
+      gy = sy.guide;
+    }
     d.live = box;
     setDragBox(box);
+    setGuides({ x: gx, y: gy });
+
+    // Move the real content live (not just the outline) by nudging the node
+    // inside the iframe — avoids a full re-render per frame.
+    const node = iframeRef.current?.contentDocument?.querySelector(`[data-el-id="${d.elId}"]`) as HTMLElement | null;
+    if (node) {
+      node.style.left = `${box.x * d.nw}px`;
+      node.style.top = `${box.y * d.nh}px`;
+      node.style.width = `${box.w * d.nw}px`;
+      node.style.height = `${box.h * d.nh}px`;
+    }
   };
   onUpRef.current = () => {
     const d = dragRef.current;
     if (d) setBox(d.sizeId, d.elId, d.live);
     dragRef.current = null;
     setDragBox(null);
+    setGuides({ x: null, y: null });
     window.removeEventListener('pointermove', moveListener);
     window.removeEventListener('pointerup', upListener);
   };
@@ -711,7 +764,30 @@ export default function AdBuilderPage() {
     const box = (doc.layouts[size.id] ?? {})[elId];
     if (!box) return;
     setSelectedId(elId);
-    dragRef.current = { handle, sx: e.clientX, sy: e.clientY, start: { ...box }, fw: frameW, fh: frameH, sizeId: size.id, elId, live: { ...box } };
+    // Snap targets: the other (visible) elements' edges + centers, plus the
+    // canvas edges + center. Static for the duration of the drag.
+    const targetsX = [0, 0.5, 1];
+    const targetsY = [0, 0.5, 1];
+    for (const p of placed) {
+      if (p.el.id === elId || p.box.hidden) continue;
+      targetsX.push(p.box.x, p.box.x + p.box.w / 2, p.box.x + p.box.w);
+      targetsY.push(p.box.y, p.box.y + p.box.h / 2, p.box.y + p.box.h);
+    }
+    dragRef.current = {
+      handle,
+      sx: e.clientX,
+      sy: e.clientY,
+      start: { ...box },
+      fw: frameW,
+      fh: frameH,
+      nw: size.width,
+      nh: size.height,
+      sizeId: size.id,
+      elId,
+      live: { ...box },
+      targetsX,
+      targetsY,
+    };
     setDragBox({ ...box });
     window.addEventListener('pointermove', moveListener);
     window.addEventListener('pointerup', upListener);
@@ -1154,6 +1230,7 @@ export default function AdBuilderPage() {
                 {/* The export renderer, scaled to fit. */}
                 <div className="absolute inset-0 overflow-hidden rounded-md">
                   <iframe
+                    ref={iframeRef}
                     title="Template canvas"
                     srcDoc={html}
                     style={{
@@ -1174,8 +1251,14 @@ export default function AdBuilderPage() {
                     if (e.target === e.currentTarget) setSelectedId(null);
                   }}
                 >
+                  {/* Alignment guides (Figma-style) while dragging */}
+                  {dragBox && guides.x != null && (
+                    <span className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-[#ec4899]" style={{ left: guides.x * frameW }} />
+                  )}
+                  {dragBox && guides.y != null && (
+                    <span className="pointer-events-none absolute left-0 right-0 z-30 h-px bg-[#ec4899]" style={{ top: guides.y * frameH }} />
+                  )}
                   {placed.map(({ el, box }) => {
-                    if (box.hidden) return null;
                     const isSel = el.id === selectedId;
                     const isDragging = isSel && dragBox != null && dragRef.current?.elId === el.id;
                     const b = isDragging && dragBox ? dragBox : box;
@@ -1185,14 +1268,14 @@ export default function AdBuilderPage() {
                       width: b.w * frameW,
                       height: b.h * frameH,
                       zIndex: (b.z ?? 0) + 1,
-                      cursor: 'move',
+                      cursor: box.hidden ? 'pointer' : 'move',
                       touchAction: 'none',
                     };
                     return (
                       <div
                         key={el.id}
                         onPointerDown={(e) => startDrag(e, el.id, 'move')}
-                        title={elName(el)}
+                        title={box.hidden ? `${elName(el)} (hidden here)` : elName(el)}
                         className="group absolute"
                         style={boxStyle}
                       >
@@ -1200,9 +1283,11 @@ export default function AdBuilderPage() {
                           className={`pointer-events-none absolute inset-0 rounded-[2px] transition-colors ${
                             isSel
                               ? 'ring-2 ring-[var(--primary)] bg-[var(--primary)]/10'
-                              : showOutlines
-                                ? 'ring-1 ring-dashed ring-[var(--primary)]/30 group-hover:ring-[var(--primary)]/70'
-                                : 'group-hover:ring-1 group-hover:ring-[var(--primary)]/50'
+                              : box.hidden
+                                ? 'ring-1 ring-dashed ring-[var(--muted-foreground)]/30 group-hover:ring-[var(--muted-foreground)]/60'
+                                : showOutlines
+                                  ? 'ring-1 ring-dashed ring-[var(--primary)]/30 group-hover:ring-[var(--primary)]/70'
+                                  : 'group-hover:ring-1 group-hover:ring-[var(--primary)]/50'
                           }`}
                         />
                         {isSel && (

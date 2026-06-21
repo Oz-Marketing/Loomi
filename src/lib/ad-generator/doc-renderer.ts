@@ -55,6 +55,11 @@ interface RenderCtx {
 
 function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: RenderCtx): string {
   const { width, height, brand, brandStack } = ctx;
+  // data-el-id lets the builder find + move this node live during a drag.
+  const idAttr = ` data-el-id="${esc(el.id)}"`;
+  // In the builder, a hidden element is dimmed/blurred (still visible so it can
+  // be re-shown) rather than removed; on export it's omitted entirely.
+  const dim = ctx.preview && box.hidden ? 'opacity:0.35;filter:blur(1.5px);' : '';
   const pos =
     `position:absolute;` +
     `left:${box.x * width}px;top:${box.y * height}px;` +
@@ -62,7 +67,7 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
 
   if (el.type === 'shape') {
     const fill = resolveColor(el.fill, brand, brand);
-    return `<div style="${pos}background:${esc(fill)};border-radius:${el.radius ?? 0}px;"></div>`;
+    return `<div${idAttr} style="${dim}${pos}background:${esc(fill)};border-radius:${el.radius ?? 0}px;"></div>`;
   }
 
   if (el.type === 'image' || el.type === 'logo') {
@@ -70,11 +75,11 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     const minEdge = Math.min(box.w * width, box.h * height);
     if (!url) {
       // Empty slot placeholder so the builder canvas shows where it goes.
-      return `<div style="${pos}display:flex;align-items:center;justify-content:center;border:2px dashed #cbd5e1;border-radius:${minEdge * 0.06}px;color:#cbd5e1;font-size:${minEdge * 0.14}px;font-family:${brandStack};">${el.type === 'logo' ? 'Logo' : 'Image'}</div>`;
+      return `<div${idAttr} style="${dim}${pos}display:flex;align-items:center;justify-content:center;border:2px dashed #cbd5e1;border-radius:${minEdge * 0.06}px;color:#cbd5e1;font-size:${minEdge * 0.14}px;font-family:${brandStack};">${el.type === 'logo' ? 'Logo' : 'Image'}</div>`;
     }
     const fit = el.fit ?? 'contain';
     const objectPos = el.type === 'logo' ? 'left center' : 'center';
-    return `<div style="${pos}overflow:hidden;"><img src="${url}" alt="" style="width:100%;height:100%;object-fit:${fit};object-position:${objectPos};" /></div>`;
+    return `<div${idAttr} style="${dim}${pos}overflow:hidden;"><img src="${url}" alt="" style="width:100%;height:100%;object-fit:${fit};object-position:${objectPos};" /></div>`;
   }
 
   // text
@@ -102,7 +107,7 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     padding +
     radius +
     'overflow:hidden;';
-  return `<div style="${styles}">${value}</div>`;
+  return `<div${idAttr} style="${dim}${styles}">${value}</div>`;
 }
 
 /** Render a TemplateDoc + data at a given size into a full HTML document. */
@@ -118,7 +123,8 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
   const layout = doc.layouts[size.id] ?? {};
   const body = doc.elements
     .map((el) => ({ el, box: layout[el.id] }))
-    .filter((x): x is { el: DocElement; box: DocLayoutBox } => Boolean(x.box) && !x.box!.hidden)
+    // Keep hidden elements in PREVIEW (dimmed); drop them on export.
+    .filter((x): x is { el: DocElement; box: DocLayoutBox } => Boolean(x.box) && (ctx.preview || !x.box!.hidden))
     .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0))
     .map(({ el, box }) => renderElement(el, box, data, ctx))
     .join('\n');

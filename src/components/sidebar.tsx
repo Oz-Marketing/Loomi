@@ -438,9 +438,11 @@ export function Sidebar() {
               />
             );
           }
-          // Top-level "Soon" teaser — a disabled row that doesn't navigate
-          // (the route may still be reachable by direct URL where enabled).
-          if (item.comingSoon) {
+          // Top-level "Soon" teaser — a disabled row that doesn't navigate.
+          // Exception: the Ad Generator is clickable for developers (still in
+          // active build); everyone else sees the Soon chip.
+          const devClickable = item.href === '/ad-generator' && userRole === 'developer';
+          if (item.comingSoon && !devClickable) {
             const soon = (
               <div
                 key={item.href}
@@ -472,10 +474,14 @@ export function Sidebar() {
             itemPage === '/dashboard'
               ? normalizedPath === '/dashboard' || normalizedPath === '/'
               : normalizedPath.startsWith(itemPage);
+          // Absolute global tools (e.g. Ad Generator) preserve the active
+          // account across the jump out of /subaccount/* via ?account=.
+          const leafHref =
+            item.absolute && accountKey ? `${item.href}?account=${encodeURIComponent(accountKey)}` : item.href;
           const leaf = (
             <Link
               key={item.href}
-              href={item.href}
+              href={leafHref}
               className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
                 isActive
                   ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'

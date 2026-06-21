@@ -20,7 +20,6 @@ import { useMemo, useState, useRef, useEffect, useCallback, type CSSProperties }
 import Link from 'next/link';
 import { toast } from 'sonner';
 import {
-  Squares2X2Icon,
   PhotoIcon,
   Bars3BottomLeftIcon,
   BuildingStorefrontIcon,
@@ -41,8 +40,25 @@ import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/tem
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, Binding } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType } from '@/lib/ad-generator/types';
 
-const CANVAS_MAX = 560; // px the canvas fits within (longest edge)
+const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
 const MIN_FRAC = 0.03; // smallest element edge as a fraction of the canvas
+
+/** Track an element's content-box size via ResizeObserver (for fit-to-pane). */
+function useElementSize<T extends HTMLElement>() {
+  const ref = useRef<T | null>(null);
+  const [size, setSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r) setSize({ width: r.width, height: r.height });
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, size] as const;
+}
 
 // Websafe families browsers/Chromium reliably have; account custom fonts are
 // added on top, and '' = the account's brand font stack.
@@ -240,7 +256,11 @@ export default function AdBuilderPage() {
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
 
-  const scale = Math.min(CANVAS_MAX / size.width, CANVAS_MAX / size.height);
+  // The ad scales to fill the canvas pane (measured), with a little padding.
+  const [canvasRef, canvasSize] = useElementSize<HTMLDivElement>();
+  const availW = canvasSize.width - CANVAS_PAD;
+  const availH = canvasSize.height - CANVAS_PAD;
+  const scale = availW > 0 && availH > 0 ? Math.min(availW / size.width, availH / size.height) : Math.min(560 / size.width, 560 / size.height);
   const frameW = size.width * scale;
   const frameH = size.height * scale;
 
@@ -620,84 +640,88 @@ export default function AdBuilderPage() {
   ];
 
   return (
-    <div className="mx-auto max-w-6xl px-6 py-8">
+    <div className="flex h-full flex-col">
       {fontFaceCss && <style dangerouslySetInnerHTML={{ __html: fontFaceCss }} />}
-      {/* Header */}
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
-            <Squares2X2Icon className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-[var(--foreground)]">Template Builder</h1>
-            <p className="text-sm text-[var(--muted-foreground)]">
-              Drag to move, drag a handle to resize, arrow keys to nudge — the canvas is the exact renderer that exports.
-            </p>
-          </div>
-        </div>
-        <Link
-          href="/tools/ad-generator"
-          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
-        >
-          <ArrowLeftIcon className="h-3.5 w-3.5" />
-          Generator
-        </Link>
-      </div>
 
-      {/* Save / load toolbar */}
-      <div className="glass-card mb-6 flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--border)] p-3">
-        <input
-          value={templateName}
-          onChange={(e) => setTemplateName(e.target.value)}
-          placeholder="Template name"
-          className="min-w-[180px] flex-1 rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm font-medium text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-        />
-        <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
-          {(['draft', 'published'] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => setStatus(s)}
-              className={`rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
-                status === s ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-        <button
-          onClick={openLoad}
-          className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
-        >
-          Open
-        </button>
-        <button
-          onClick={newBlank}
-          className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
-        >
-          New
-        </button>
-        {templateId && (
-          <button
-            onClick={() => save(true)}
-            disabled={saving}
-            className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:opacity-50"
+      {/* Editor header bar */}
+      <header className="grid flex-shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 pb-3">
+        {/* left — back + status */}
+        <div className="flex min-w-0 items-center gap-2">
+          <Link
+            href="/tools/ad-generator"
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+            title="Back to the Generator"
           >
-            Save as new
-          </button>
-        )}
-        <button
-          onClick={() => save(false)}
-          disabled={saving}
-          className="rounded-lg bg-[var(--primary)] px-4 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-        >
-          {saving ? 'Saving…' : templateId ? 'Save' : 'Save template'}
-        </button>
-      </div>
+            <ArrowLeftIcon className="h-4 w-4" />
+            Generator
+          </Link>
+          <span
+            className={`inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${
+              status === 'published'
+                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                : 'border-zinc-500/30 bg-zinc-500/10 text-[var(--muted-foreground)]'
+            }`}
+          >
+            {status}
+          </span>
+          {!templateId && <span className="hidden text-[11px] text-[var(--muted-foreground)] sm:inline">Unsaved</span>}
+        </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
-        {/* Left: elements + selection */}
-        <div className="space-y-4">
+        {/* center — name */}
+        <div className="min-w-0 justify-self-center">
+          <input
+            value={templateName}
+            onChange={(e) => setTemplateName(e.target.value)}
+            placeholder="Untitled template"
+            title="Template name"
+            className="w-[min(28rem,60vw)] rounded-lg border border-transparent bg-transparent px-3 py-1 text-center text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
+          />
+        </div>
+
+        {/* right — actions */}
+        <div className="flex min-w-0 items-center justify-end gap-2">
+          <button onClick={openLoad} className="rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
+            Open
+          </button>
+          <button onClick={newBlank} className="rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
+            New
+          </button>
+          <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
+            {(['draft', 'published'] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setStatus(s)}
+                className={`rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
+                  status === s ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+          {templateId && (
+            <button
+              onClick={() => save(true)}
+              disabled={saving}
+              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:opacity-50"
+            >
+              Save as new
+            </button>
+          )}
+          <button
+            onClick={() => save(false)}
+            disabled={saving}
+            className="rounded-lg bg-[var(--primary)] px-5 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+        </div>
+      </header>
+
+      {/* Body — tools sidebar + canvas */}
+      <div className="flex min-h-0 flex-1 gap-4">
+        {/* Left sidebar — tools */}
+        <aside className="flex w-[320px] flex-shrink-0 flex-col gap-4 overflow-y-auto pb-1 pr-1">
           <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Elements</h2>
@@ -989,25 +1013,28 @@ export default function AdBuilderPage() {
               </div>
             </section>
           )}
-        </div>
+        </aside>
 
-        {/* Right: canvas */}
-        <div>
-          <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap gap-1.5">
-                {doc.sizes.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => setSizeId(s.id)}
-                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                      s.id === sizeId ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)]'
-                    }`}
-                  >
-                    {s.label.split(' ')[0]}
-                  </button>
-                ))}
-              </div>
+        {/* Canvas */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)]">
+          <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-2.5">
+            <div className="flex flex-wrap gap-1.5">
+              {doc.sizes.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => setSizeId(s.id)}
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    s.id === sizeId ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)]'
+                  }`}
+                >
+                  {s.label.split(' ')[0]}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-[11px] tabular-nums text-[var(--muted-foreground)]">
+                {size.width}×{size.height}
+              </span>
               <button
                 onClick={() => setShowOutlines((v) => !v)}
                 className={`rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors ${
@@ -1017,8 +1044,9 @@ export default function AdBuilderPage() {
                 Outlines
               </button>
             </div>
+          </div>
 
-            <div className="flex justify-center rounded-xl bg-[var(--muted)]/40 p-6" style={{ userSelect: 'none' }}>
+          <div ref={canvasRef} className="relative flex flex-1 items-center justify-center overflow-auto bg-[var(--muted)]/30 p-6" style={{ userSelect: 'none' }}>
               <div className="relative shadow-lg ring-1 ring-black/5" style={{ width: frameW, height: frameH }}>
                 {/* The export renderer, scaled to fit. */}
                 <div className="absolute inset-0 overflow-hidden rounded-md">
@@ -1102,10 +1130,9 @@ export default function AdBuilderPage() {
               </div>
             </div>
 
-            <p className="mt-3 text-center text-[11px] text-[var(--muted-foreground)]">
-              {size.label} · {size.width}×{size.height}px · drag to move · arrows nudge · Delete removes
-            </p>
-          </section>
+          <div className="flex-shrink-0 border-t border-[var(--border)] px-4 py-1.5 text-center text-[11px] text-[var(--muted-foreground)]">
+            {size.label} · drag to move · arrows nudge · Delete removes
+          </div>
         </div>
       </div>
 

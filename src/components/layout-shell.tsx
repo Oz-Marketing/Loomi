@@ -127,6 +127,11 @@ function AppShell({ children }: { children: React.ReactNode }) {
     /^\/websites\/landing-pages\/[^/]+\/edit$/.test(builderProbe) ||
     builderProbe === '/websites/landing-pages/demo';
 
+  // Ad Template Builder — the same focused full-viewport editor treatment as
+  // the website builders. Only the builder gets it; the generator + admin
+  // pages keep the standard app shell.
+  const isAdBuilder = /^\/tools\/ad-generator\/builder$/.test(builderProbe);
+
   if (isFullScreen) {
     return <div className="flex-1">{children}</div>;
   }
@@ -136,9 +141,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
     return <div className="flex-1 min-w-0">{children}</div>;
   }
 
-  if (isWebsiteBuilder) {
+  if (isWebsiteBuilder || isAdBuilder) {
     // Mirror the email template editor wrapper (p-4 + main) so the
-    // Forms / Landing Pages builders inherit the same breathing room
+    // Forms / Landing Pages / Ad builders inherit the same breathing room
     // and the inner `h-[calc(100vh-2rem)]` math lines up correctly.
     return <main className="flex-1 p-4">{children}</main>;
   }

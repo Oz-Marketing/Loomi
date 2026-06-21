@@ -50,6 +50,7 @@ import { renderDoc } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
+import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, DocBackground, DocBgFraming } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType } from '@/lib/ad-generator/types';
 
@@ -158,13 +159,6 @@ const FIELD_TYPE_OPTIONS: FontSelectOption[] = [
   { value: 'color', label: 'Color' },
   { value: 'image', label: 'Image URL' },
 ];
-const SIZE_PRESETS: { label: string; width: number; height: number }[] = [
-  { label: 'Square', width: 1080, height: 1080 },
-  { label: 'Landscape', width: 1200, height: 628 },
-  { label: 'Portrait', width: 1080, height: 1350 },
-  { label: 'Story', width: 1080, height: 1920 },
-];
-
 type Handle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 const RESIZE_HANDLES: { h: Handle; x: number; y: number; cursor: string }[] = [
@@ -1320,24 +1314,47 @@ export default function AdBuilderPage() {
 
             {addSizeOpen && (
               <div className="mt-2 space-y-2 rounded-lg border border-dashed border-[var(--border)] p-2">
-                {/* From the shared library (falls back to built-in presets when empty) */}
-                <div className="grid grid-cols-2 gap-1.5">
-                  {(libSizes.length > 0
-                    ? libSizes.map((s) => ({ key: s.id, label: s.name, width: s.width, height: s.height }))
-                    : SIZE_PRESETS.map((p) => ({ key: p.label, label: p.label, width: p.width, height: p.height }))
-                  ).map((p) => (
-                    <button
-                      key={p.key}
-                      onClick={() => addSize(p.label, p.width, p.height)}
-                      className="rounded-md border border-[var(--border)] px-2 py-1 text-center text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                    >
-                      {p.label}
-                      <span className="block text-[9px] text-[var(--muted-foreground)]">
-                        {p.width}×{p.height}
-                      </span>
-                    </button>
-                  ))}
-                </div>
+                {/* Standard catalog, grouped by category */}
+                {catalogByCategory().map((grp) => (
+                  <div key={grp.category}>
+                    <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{grp.label}</div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {grp.sizes.map((p) => (
+                        <button
+                          key={p.name}
+                          onClick={() => addSize(p.name, p.width, p.height)}
+                          className="rounded-md border border-[var(--border)] px-2 py-1 text-center text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                        >
+                          {p.name}
+                          <span className="block text-[9px] text-[var(--muted-foreground)]">
+                            {p.width}×{p.height}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                {/* Custom sizes from the shared library (added on top of the catalog) */}
+                {libSizes.length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Custom</div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {libSizes.map((s) => (
+                        <button
+                          key={s.id}
+                          onClick={() => addSize(s.name, s.width, s.height)}
+                          className="rounded-md border border-[var(--border)] px-2 py-1 text-center text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                        >
+                          {s.name}
+                          <span className="block text-[9px] text-[var(--muted-foreground)]">
+                            {s.width}×{s.height}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Create a brand-new size — saved to the library + added here */}
                 <div className="space-y-1.5 border-t border-[var(--border)] pt-2">

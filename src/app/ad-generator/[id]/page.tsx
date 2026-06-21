@@ -377,6 +377,7 @@ export default function AdGeneratorPage() {
 
           <OemIncentivesPanel
             defaultMake={oemMake}
+            dual={template.fields.some((f) => f.key.startsWith('o2_'))}
             onApply={(patch) => setData((d) => ({ ...d, ...patch }))}
           />
 
@@ -577,7 +578,7 @@ const TONES = [
  * entry below still works; this is just a faster, accurate source. Renders a
  * "not configured" hint when MARKETCHECK_API_KEY is unset.
  */
-function OemIncentivesPanel({ defaultMake, onApply }: { defaultMake?: string; onApply: (patch: Record<string, string>) => void }) {
+function OemIncentivesPanel({ defaultMake, dual, onApply }: { defaultMake?: string; dual?: boolean; onApply: (patch: Record<string, string>) => void }) {
   const [year, setYear] = useState(String(EVOX_CURRENT_YEAR));
   const [make, setMake] = useState(defaultMake || '');
   const [model, setModel] = useState('');
@@ -585,6 +586,8 @@ function OemIncentivesPanel({ defaultMake, onApply }: { defaultMake?: string; on
   const [busy, setBusy] = useState(false);
   const [incentives, setIncentives] = useState<MarketCheckIncentive[] | null>(null);
   const [notConfigured, setNotConfigured] = useState(false);
+  // For dual-offer templates, which offer "Apply" fills ('' = Offer 1, 'o2_' = Offer 2).
+  const [target, setTarget] = useState<'' | 'o2_'>('');
 
   const yearOptions: FontSelectOption[] = EVOX_YEARS.filter((y) => y >= 2020).map((y) => ({ value: String(y), label: String(y) }));
   const makeOptions: FontSelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
@@ -620,27 +623,28 @@ function OemIncentivesPanel({ defaultMake, onApply }: { defaultMake?: string; on
   }
 
   function apply(inc: MarketCheckIncentive) {
+    const p = dual ? target : ''; // field prefix for the chosen offer slot
     const patch: Record<string, string> = {};
     if (inc.type === 'lease') {
-      patch.offerType = 'lease';
-      if (inc.payment) patch.monthlyPayment = String(Math.round(inc.payment));
-      if (inc.term) patch.leaseTerm = String(inc.term);
-      if (inc.downPayment) patch.dueAtSigning = String(Math.round(inc.downPayment));
+      patch[`${p}offerType`] = 'lease';
+      if (inc.payment) patch[`${p}monthlyPayment`] = String(Math.round(inc.payment));
+      if (inc.term) patch[`${p}leaseTerm`] = String(inc.term);
+      if (inc.downPayment) patch[`${p}dueAtSigning`] = String(Math.round(inc.downPayment));
     } else if (inc.type === 'apr') {
-      patch.offerType = 'apr';
-      patch.aprRate = String(inc.rate);
-      if (inc.term) patch.aprTerm = String(inc.term);
+      patch[`${p}offerType`] = 'apr';
+      patch[`${p}aprRate`] = String(inc.rate);
+      if (inc.term) patch[`${p}aprTerm`] = String(inc.term);
     } else if (inc.type === 'cash') {
-      patch.offerType = 'discount';
-      if (inc.amount) patch.discountAmount = String(Math.round(inc.amount));
+      patch[`${p}offerType`] = 'discount';
+      if (inc.amount) patch[`${p}discountAmount`] = String(Math.round(inc.amount));
     }
-    if (inc.msrp) patch.msrp = String(Math.round(inc.msrp));
+    if (inc.msrp) patch[`${p}msrp`] = String(Math.round(inc.msrp));
     if (inc.endDate) {
       const d = new Date(inc.endDate);
-      if (!Number.isNaN(d.getTime())) patch.expiration = d.toISOString().slice(0, 10);
+      if (!Number.isNaN(d.getTime())) patch.expiration = d.toISOString().slice(0, 10); // shared
     }
     onApply(patch);
-    toast.success('Offer filled from the incentive');
+    toast.success(dual ? `Filled ${target === 'o2_' ? 'Offer 2' : 'Offer 1'} from the incentive` : 'Offer filled from the incentive');
   }
 
   const typeBadge: Record<string, string> = {
@@ -681,6 +685,25 @@ function OemIncentivesPanel({ defaultMake, onApply }: { defaultMake?: string; on
       >
         {busy ? 'Searching…' : 'Find incentives'}
       </button>
+
+      {dual && (
+        <div className="mt-2 flex items-center gap-2">
+          <span className="text-[11px] text-[var(--muted-foreground)]">Apply to:</span>
+          <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
+            {([['', 'Offer 1'], ['o2_', 'Offer 2']] as const).map(([val, label]) => (
+              <button
+                key={val}
+                onClick={() => setTarget(val)}
+                className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  target === val ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {notConfigured && (
         <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">

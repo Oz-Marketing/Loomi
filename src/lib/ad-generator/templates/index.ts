@@ -1,5 +1,6 @@
 import type { AdTemplate } from '../types';
 import { vehicleOffer } from './vehicle-offer';
+import { vehicleDualOffer } from './vehicle-dual-offer';
 import { vehicleOfferDocTemplate } from './vehicle-offer-doc';
 
 /**
@@ -12,7 +13,7 @@ import { vehicleOfferDocTemplate } from './vehicle-offer-doc';
  * TemplateDoc (the builder renderer) — registered so it can be rendered next to
  * the code template for a parity check.
  */
-export const AD_TEMPLATES: AdTemplate[] = [vehicleOffer, vehicleOfferDocTemplate];
+export const AD_TEMPLATES: AdTemplate[] = [vehicleOffer, vehicleDualOffer, vehicleOfferDocTemplate];
 
 export function getTemplate(id: string): AdTemplate | undefined {
   return AD_TEMPLATES.find((t) => t.id === id);

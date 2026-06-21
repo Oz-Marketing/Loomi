@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useSession } from 'next-auth/react';
 import {
   EyeIcon,
@@ -36,6 +37,11 @@ export function DevImpersonate() {
   const [switching, setSwitching] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Fixed coords for the portal-rendered panel (so it escapes the profile
+  // menu's `overflow-hidden` instead of being clipped inside it).
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   const originalUserId = session?.user?.originalUserId;
   const isImpersonating = !!originalUserId;
@@ -67,7 +73,9 @@ export function DevImpersonate() {
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      // The panel lives in a portal (outside dropdownRef), so check it too.
+      if (!dropdownRef.current?.contains(target) && !panelRef.current?.contains(target)) {
         setOpen(false);
       }
     };
@@ -208,7 +216,16 @@ export function DevImpersonate() {
         <div ref={dropdownRef} className="relative">
           {/* Trigger button */}
           <button
-            onClick={() => setOpen((prev) => !prev)}
+            ref={triggerRef}
+            onClick={() => {
+              if (open) {
+                setOpen(false);
+                return;
+              }
+              const r = triggerRef.current?.getBoundingClientRect();
+              if (r) setPos({ top: r.bottom + 6, left: Math.max(8, r.right - 352) });
+              setOpen(true);
+            }}
             disabled={switching}
             className="w-full flex items-center gap-2.5 px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors text-left disabled:opacity-50"
           >
@@ -217,11 +234,14 @@ export function DevImpersonate() {
             <ChevronUpDownIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)] flex-shrink-0" />
           </button>
 
-          {/* Dropdown panel */}
-          {open && (
+          {/* Dropdown panel — portaled to body so it isn't clipped by the
+              profile menu's overflow; fixed-positioned under the trigger. */}
+          {open && pos &&
+            createPortal(
             <div
-              className="absolute right-0 top-full mt-2 z-[60] w-[22rem] glass-dropdown rounded-xl overflow-hidden animate-fade-in-up shadow-lg"
-              style={{ maxWidth: 'calc(100vw - 1.5rem)' }}
+              ref={panelRef}
+              className="fixed z-[80] w-[22rem] glass-dropdown rounded-xl overflow-hidden animate-fade-in-up shadow-lg"
+              style={{ top: pos.top, left: pos.left, maxWidth: 'calc(100vw - 1rem)' }}
             >
               {/* Search */}
               <div className="p-1.5 border-b border-[var(--border)]">
@@ -280,8 +300,9 @@ export function DevImpersonate() {
                   </p>
                 )}
               </div>
-            </div>
-          )}
+            </div>,
+              document.body,
+            )}
         </div>
       )}
     </div>

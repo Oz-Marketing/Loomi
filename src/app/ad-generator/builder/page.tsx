@@ -50,7 +50,7 @@ import { renderDoc } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
-import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox } from '@/lib/ad-generator/doc-types';
+import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, DocBackground, DocBgFraming } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType } from '@/lib/ad-generator/types';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -605,6 +605,35 @@ export default function AdBuilderPage() {
     const f = clamp(pct, 0, 40) / 100;
     setDoc((prev) => ({ ...prev, safeArea: f > 0 ? { x: f, y: f } : undefined }));
   }
+
+  // ── canvas background ──
+  const setBackground = useCallback(
+    (patch: Partial<DocBackground>) => {
+      setDoc((prev) => ({ ...prev, background: { ...prev.background, ...patch } }));
+    },
+    [setDoc],
+  );
+  // Per-size framing of the background image (focal point + zoom), keyed by the
+  // current size so one image can be composed differently per aspect ratio.
+  const setBgFraming = useCallback(
+    (patch: Partial<DocBgFraming>) => {
+      setDoc((prev) => ({
+        ...prev,
+        bgFraming: { ...prev.bgFraming, [sizeId]: { ...prev.bgFraming?.[sizeId], ...patch } },
+      }));
+    },
+    [setDoc, sizeId],
+  );
+  // Bind the background to a NEW image field (per-ad) and return its key, so the
+  // generator form surfaces it for whoever fills the ad.
+  const addBackgroundField = useCallback(() => {
+    const key = `bgImage_${rid()}`;
+    setDoc((prev) => ({
+      ...prev,
+      fields: [...prev.fields, { key, label: 'Background image', type: 'image', group: 'Background' }],
+      background: { ...prev.background, image: { kind: 'field', key } },
+    }));
+  }, [setDoc]);
 
   // ── save / load ──
   async function save(asNew = false) {
@@ -1369,6 +1398,17 @@ export default function AdBuilderPage() {
             )}
           </section>
 
+          {/* Background — canvas fill + a full-bleed image framed per size */}
+          <BackgroundPanel
+            background={doc.background}
+            fields={doc.fields}
+            sizeLabel={size.label.split(' ')[0]}
+            framing={doc.bgFraming?.[sizeId]}
+            onBackground={setBackground}
+            onFraming={setBgFraming}
+            onAddBackgroundField={addBackgroundField}
+          />
+
         </aside>
 
         {/* Canvas */}
@@ -1969,6 +2009,200 @@ function SelectionToolbar({
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Background panel — canvas fill + a full-bleed background image. The image
+ * always covers the canvas; a per-size focal point (+ zoom) chooses what stays
+ * in frame so ONE image works across every aspect ratio. A scrim keeps text
+ * legible over photos.
+ */
+function BackgroundPanel({
+  background,
+  fields,
+  sizeLabel,
+  framing,
+  onBackground,
+  onFraming,
+  onAddBackgroundField,
+}: {
+  background: DocBackground | undefined;
+  fields: FieldSpec[];
+  sizeLabel: string;
+  framing: DocBgFraming | undefined;
+  onBackground: (patch: Partial<DocBackground>) => void;
+  onFraming: (patch: Partial<DocBgFraming>) => void;
+  onAddBackgroundField: () => void;
+}) {
+  const img = background?.image;
+  const imageFields = fields.filter((f) => f.type === 'image');
+  const sourceVal = !img ? 'none' : img.kind === 'static' ? 'static' : img.kind === 'field' ? `field:${img.key}` : 'none';
+
+  const onSource = (v: string) => {
+    if (v === 'none') onBackground({ image: undefined });
+    else if (v === 'static') onBackground({ image: { kind: 'static', value: img?.kind === 'static' ? img.value : '' } });
+    else if (v === '__addfield__') onAddBackgroundField();
+    else if (v.startsWith('field:')) onBackground({ image: { kind: 'field', key: v.slice(6) } });
+  };
+
+  const ov = background?.overlay;
+  const fx = framing?.x ?? 0.5;
+  const fy = framing?.y ?? 0.5;
+  const zoom = framing?.zoom ?? 1;
+  const inputCls =
+    'w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]';
+
+  return (
+    <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
+      <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Background</h2>
+
+      {/* Base fill */}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] text-[var(--muted-foreground)]">Fill</span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => onBackground({ accentBar: !background?.accentBar })}
+            className={`rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
+              background?.accentBar
+                ? 'border-[var(--primary)] text-[var(--primary)]'
+                : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+            }`}
+            title="Thin brand-colored bar across the top"
+          >
+            Accent bar
+          </button>
+          <ColorSwatchInput title="Background color" value={background?.color || '#ffffff'} onChange={(v) => onBackground({ color: v, gradient: undefined })} />
+        </div>
+      </div>
+
+      {/* Image source */}
+      <div className="mt-3 border-t border-[var(--border)] pt-3">
+        <label className="mb-1.5 block text-[11px] text-[var(--muted-foreground)]">Image</label>
+        <select value={sourceVal} onChange={(e) => onSource(e.target.value)} className={inputCls}>
+          <option value="none">No image</option>
+          <option value="static">Custom URL (static)</option>
+          {imageFields.map((f) => (
+            <option key={f.key} value={`field:${f.key}`}>
+              Field · {f.label || f.key}
+            </option>
+          ))}
+          <option value="__addfield__">+ New background field…</option>
+        </select>
+
+        {img?.kind === 'static' && (
+          <input
+            value={img.value}
+            onChange={(e) => onBackground({ image: { kind: 'static', value: e.target.value } })}
+            placeholder="https://…/background.jpg"
+            className={`${inputCls} mt-1.5`}
+          />
+        )}
+        {img?.kind === 'field' && (
+          <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">
+            Filled per ad in the generator form — field &ldquo;{fields.find((f) => f.key === img.key)?.label || img.key}&rdquo;.
+          </p>
+        )}
+      </div>
+
+      {/* Overlay + per-size framing — only relevant once an image is set */}
+      {img && (
+        <>
+          {/* Scrim */}
+          <div className="mt-3 border-t border-[var(--border)] pt-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-[var(--muted-foreground)]">Darken (scrim)</span>
+              <button
+                type="button"
+                onClick={() => onBackground({ overlay: ov ? undefined : { color: '#000000', opacity: 0.4, direction: 'full' } })}
+                className={`rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
+                  ov ? 'border-[var(--primary)] text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+                }`}
+              >
+                {ov ? 'On' : 'Off'}
+              </button>
+            </div>
+            {ov && (
+              <div className="mt-2 space-y-2">
+                <div className="flex items-center gap-2">
+                  <ColorSwatchInput title="Scrim color" value={ov.color || '#000000'} onChange={(v) => onBackground({ overlay: { ...ov, color: v } })} />
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={ov.opacity ?? 0.4}
+                    onChange={(e) => onBackground({ overlay: { ...ov, opacity: Number(e.target.value) } })}
+                    className="flex-1 accent-[var(--primary)]"
+                    title="Scrim strength"
+                  />
+                  <span className="w-8 text-right text-[11px] tabular-nums text-[var(--muted-foreground)]">{Math.round((ov.opacity ?? 0.4) * 100)}%</span>
+                </div>
+                <div className="flex gap-1.5">
+                  {(['full', 'top', 'bottom'] as const).map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => onBackground({ overlay: { ...ov, direction: d } })}
+                      className={`flex-1 rounded-md border px-2 py-1 text-[11px] font-medium capitalize transition-colors ${
+                        (ov.direction ?? 'full') === d
+                          ? 'border-[var(--primary)] text-[var(--primary)]'
+                          : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+                      }`}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Per-size focal point + zoom */}
+          <div className="mt-3 border-t border-[var(--border)] pt-3">
+            <label className="mb-1.5 block text-[11px] text-[var(--muted-foreground)]">
+              Focal point · {sizeLabel} <span className="opacity-70">(keeps the right part in frame)</span>
+            </label>
+            <div className="flex items-start gap-3">
+              <div className="grid grid-cols-3 gap-1">
+                {[0, 0.5, 1].map((y) =>
+                  [0, 0.5, 1].map((x) => {
+                    const active = Math.abs(fx - x) < 0.01 && Math.abs(fy - y) < 0.01;
+                    return (
+                      <button
+                        key={`${x}-${y}`}
+                        type="button"
+                        onClick={() => onFraming({ x, y })}
+                        title={`Focus ${y === 0 ? 'top' : y === 1 ? 'bottom' : 'middle'} ${x === 0 ? 'left' : x === 1 ? 'right' : 'center'}`}
+                        className={`h-5 w-5 rounded-[3px] border transition-colors ${
+                          active ? 'border-[var(--primary)] bg-[var(--primary)]' : 'border-[var(--border)] bg-[var(--muted)]/40 hover:border-[var(--primary)]'
+                        }`}
+                      />
+                    );
+                  }),
+                )}
+              </div>
+              <div className="flex-1">
+                <div className="flex items-center justify-between text-[11px] text-[var(--muted-foreground)]">
+                  <span>Zoom</span>
+                  <span className="tabular-nums">{zoom.toFixed(2)}×</span>
+                </div>
+                <input
+                  type="range"
+                  min={1}
+                  max={2}
+                  step={0.05}
+                  value={zoom}
+                  onChange={(e) => onFraming({ zoom: Number(e.target.value) })}
+                  className="mt-1 w-full accent-[var(--primary)]"
+                />
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
   );
 }
 

@@ -1,5 +1,5 @@
 import type { AdData, AdSize } from './types';
-import type { TemplateDoc, DocElement, DocLayoutBox, Binding } from './doc-types';
+import type { TemplateDoc, DocElement, DocLayoutBox, Binding, DocBgOverlay } from './doc-types';
 import { cssSafeFamily } from './fonts';
 
 /**
@@ -34,6 +34,32 @@ function resolveBinding(b: Binding | undefined, data: AdData): string {
 function resolveColor(c: string | undefined, brand: string, fallback: string): string {
   if (!c) return fallback;
   return c === 'brand' ? brand : c;
+}
+
+function clamp01(n: number): number {
+  return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0;
+}
+
+/** `#rgb` / `#rrggbb` → `rgba(r,g,b,a)`. Falls back to black on a bad hex. */
+function hexToRgba(hex: string, alpha: number): string {
+  let h = (hex || '').trim().replace(/^#/, '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const ok = /^[0-9a-fA-F]{6}$/.test(h);
+  const r = ok ? parseInt(h.slice(0, 2), 16) : 0;
+  const g = ok ? parseInt(h.slice(2, 4), 16) : 0;
+  const b = ok ? parseInt(h.slice(4, 6), 16) : 0;
+  return `rgba(${r},${g},${b},${clamp01(alpha)})`;
+}
+
+/** CSS for the legibility scrim drawn over the background image. */
+function overlayCss(o: DocBgOverlay): string {
+  const color = o.color ?? '#000000';
+  const op = clamp01(o.opacity ?? 0.4);
+  const solid = hexToRgba(color, op);
+  const clear = hexToRgba(color, 0);
+  if (o.direction === 'top') return `linear-gradient(to bottom, ${solid} 0%, ${clear} 60%)`;
+  if (o.direction === 'bottom') return `linear-gradient(to top, ${solid} 0%, ${clear} 60%)`;
+  return solid; // 'full' / default — even tint
 }
 
 /** A human-ish label for an empty binding, shown as a placeholder in preview mode. */
@@ -135,6 +161,23 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
     : bg?.color
       ? esc(bg.color)
       : '#ffffff';
+
+  // Full-bleed background image (cover) + per-size focal point. The image
+  // always fills the canvas; framing chooses WHAT stays in frame so one image
+  // works across every aspect ratio. `zoom` scales in toward the focal point.
+  const bgImageUrl = esc(resolveBinding(bg?.image, data));
+  let bgImage = '';
+  let scrim = '';
+  if (bgImageUrl) {
+    const fr = doc.bgFraming?.[size.id] ?? {};
+    const fx = clamp01(fr.x ?? 0.5) * 100;
+    const fy = clamp01(fr.y ?? 0.5) * 100;
+    const zoom = Math.max(1, Number.isFinite(fr.zoom as number) ? (fr.zoom as number) : 1);
+    const scale = zoom !== 1 ? `transform:scale(${zoom});transform-origin:${fx}% ${fy}%;` : '';
+    bgImage = `<img src="${bgImageUrl}" alt="" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:${fx}% ${fy}%;${scale}" />`;
+    if (bg?.overlay) scrim = `<div style="position:absolute;inset:0;background:${overlayCss(bg.overlay)};"></div>`;
+  }
+
   const accentBar = bg?.accentBar
     ? `<div style="position:absolute;top:0;left:0;right:0;height:${Math.max(4, Math.min(width, height) / 80)}px;background:${brand};"></div>`
     : '';
@@ -148,6 +191,6 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
   html,body { width:${width}px; height:${height}px; }
   .ad { width:${width}px; height:${height}px; position:relative; overflow:hidden; background:${bgCss}; }
 </style></head>
-<body><div class="ad">${accentBar}${body}</div></body>
+<body><div class="ad">${bgImage}${scrim}${accentBar}${body}</div></body>
 </html>`;
 }

@@ -81,3 +81,60 @@ describe('renderDoc', () => {
     expect(html).toContain('data-el-id="bar"');
   });
 });
+
+describe('renderDoc background image', () => {
+  const LANDSCAPE: AdSize = { id: 'landscape', label: 'Landscape', width: 1200, height: 628 };
+  const bgDoc: TemplateDoc = {
+    id: 'bg',
+    name: 'BG',
+    sizes: [SIZE, LANDSCAPE],
+    fields: [],
+    background: {
+      color: '#ffffff',
+      image: { kind: 'field', key: 'bgUrl' },
+      overlay: { color: '#000000', opacity: 0.5, direction: 'bottom' },
+    },
+    bgFraming: {
+      square: { x: 0.5, y: 0.5 },
+      landscape: { x: 0.5, y: 0.2, zoom: 1.4 },
+    },
+    elements: [{ id: 't', type: 'text', binding: { kind: 'static', value: 'Hi' } }],
+    layouts: {
+      square: { t: { x: 0.1, y: 0.1, w: 0.5, h: 0.1, fontSize: 40 } },
+      landscape: { t: { x: 0.1, y: 0.1, w: 0.5, h: 0.1, fontSize: 40 } },
+    },
+    defaults: {},
+  };
+
+  it('renders a cover background <img> when the bound image is present', () => {
+    const html = renderDoc(bgDoc, { bgUrl: 'https://x/bg.jpg' }, SIZE);
+    expect(html).toContain('<img src="https://x/bg.jpg"');
+    expect(html).toContain('object-fit:cover');
+  });
+
+  it('renders no background image (just the base fill) when the binding is empty', () => {
+    const html = renderDoc(bgDoc, {}, SIZE);
+    expect(html).not.toContain('object-fit:cover');
+  });
+
+  it('applies the per-size focal point and zoom', () => {
+    const sq = renderDoc(bgDoc, { bgUrl: 'https://x/bg.jpg' }, SIZE);
+    expect(sq).toContain('object-position:50% 50%');
+    expect(sq).not.toContain('transform:scale'); // zoom defaults to 1 → no transform
+
+    const ls = renderDoc(bgDoc, { bgUrl: 'https://x/bg.jpg' }, LANDSCAPE);
+    expect(ls).toContain('object-position:50% 20%');
+    expect(ls).toContain('transform:scale(1.4)');
+  });
+
+  it('draws the legibility scrim as an rgba gradient over the image', () => {
+    const html = renderDoc(bgDoc, { bgUrl: 'https://x/bg.jpg' }, SIZE);
+    expect(html).toContain('linear-gradient(to top, rgba(0,0,0,0.5)');
+  });
+
+  it('escapes the resolved image URL', () => {
+    const html = renderDoc(bgDoc, { bgUrl: 'https://x/"onerror="alert(1)' }, SIZE);
+    expect(html).not.toContain('"onerror="alert(1)');
+    expect(html).toContain('&quot;onerror=');
+  });
+});

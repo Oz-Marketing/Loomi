@@ -38,6 +38,12 @@ import {
   ChevronDoubleDownIcon,
   ArrowsPointingInIcon,
   ArrowsPointingOutIcon,
+  ArrowUturnLeftIcon,
+  ArrowUturnRightIcon,
+  ArrowPathIcon,
+  CheckIcon,
+  CloudIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { renderDoc } from '@/lib/ad-generator/doc-renderer';
@@ -65,6 +71,58 @@ function useElementSize<T extends HTMLElement>() {
     return () => ro.disconnect();
   }, []);
   return [ref, size] as const;
+}
+
+const HISTORY_LIMIT = 60;
+const COALESCE_MS = 450; // merge rapid edits (typing, nudging) into one undo step
+
+type Hist = { past: TemplateDoc[]; present: TemplateDoc; future: TemplateDoc[] };
+
+/**
+ * Undo/redo history over the doc. `setDoc` is a drop-in for useState's setter
+ * (value or updater); rapid successive edits within COALESCE_MS collapse into a
+ * single undo step. `reset` replaces the doc and clears history (load / new).
+ */
+function useDocHistory(init: () => TemplateDoc) {
+  const [hist, setHist] = useState<Hist>(() => ({ past: [], present: init(), future: [] }));
+  const lastTs = useRef(0);
+
+  const setDoc = useCallback((updater: TemplateDoc | ((d: TemplateDoc) => TemplateDoc)) => {
+    setHist((h) => {
+      const next = typeof updater === 'function' ? (updater as (d: TemplateDoc) => TemplateDoc)(h.present) : updater;
+      if (next === h.present) return h;
+      const now = Date.now();
+      const coalesce = h.past.length > 0 && now - lastTs.current < COALESCE_MS;
+      lastTs.current = now;
+      const past = coalesce ? h.past : [...h.past, h.present].slice(-HISTORY_LIMIT);
+      return { past, present: next, future: [] };
+    });
+  }, []);
+
+  const undo = useCallback(() => {
+    lastTs.current = 0;
+    setHist((h) => {
+      if (!h.past.length) return h;
+      const prev = h.past[h.past.length - 1];
+      return { past: h.past.slice(0, -1), present: prev, future: [h.present, ...h.future].slice(0, HISTORY_LIMIT) };
+    });
+  }, []);
+
+  const redo = useCallback(() => {
+    lastTs.current = 0;
+    setHist((h) => {
+      if (!h.future.length) return h;
+      const nxt = h.future[0];
+      return { past: [...h.past, h.present].slice(-HISTORY_LIMIT), present: nxt, future: h.future.slice(1) };
+    });
+  }, []);
+
+  const reset = useCallback((doc: TemplateDoc) => {
+    lastTs.current = 0;
+    setHist({ past: [], present: doc, future: [] });
+  }, []);
+
+  return { doc: hist.present, setDoc, undo, redo, canUndo: hist.past.length > 0, canRedo: hist.future.length > 0, reset };
 }
 
 // Websafe families browsers/Chromium reliably have; account custom fonts are
@@ -152,6 +210,11 @@ type SavedTemplate = {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+/** What actually gets persisted — the dirty check + autosave compare against this. */
+function serializeDoc(doc: TemplateDoc, name: string, status: string): string {
+  return JSON.stringify({ status, doc: { ...doc, name: name.trim() } });
+}
+
 function rid(): string {
   const u = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2);
   return u.replace(/-/g, '').slice(0, 8);
@@ -215,7 +278,7 @@ function makeDefaultElement(id: string, type: DocElementType): DocElement {
 export default function AdBuilderPage() {
   const { accountData } = useAccount();
 
-  const [doc, setDoc] = useState<TemplateDoc>(() => structuredClone(vehicleOfferDoc));
+  const { doc, setDoc, undo, redo, canUndo, canRedo, reset: resetHistory } = useDocHistory(() => structuredClone(vehicleOfferDoc));
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showOutlines, setShowOutlines] = useState(true);
@@ -233,6 +296,10 @@ export default function AdBuilderPage() {
   const [loadOpen, setLoadOpen] = useState(false);
   const [savedList, setSavedList] = useState<SavedTemplate[]>([]);
   const [loadingList, setLoadingList] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  // Serialized snapshot of what's persisted — autosave fires only when the live
+  // doc/name/status diverge from this.
+  const savedRef = useRef('');
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
 
@@ -486,8 +553,11 @@ export default function AdBuilderPage() {
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
       const json = (await res.json()) as { template?: { id: string } };
       if (json.template?.id) setTemplateId(json.template.id);
+      savedRef.current = serializeDoc(doc, name, status);
+      setSaveStatus('saved');
       toast.success(status === 'published' ? 'Saved & published' : 'Saved as draft');
     } catch (err) {
+      setSaveStatus('error');
       toast.error(`Couldn't save: ${err instanceof Error ? err.message : 'unknown error'}`);
     } finally {
       setSaving(false);
@@ -514,13 +584,16 @@ export default function AdBuilderPage() {
       return;
     }
     const loaded = structuredClone(t.doc);
-    setDoc(loaded);
+    const st = t.status === 'published' ? 'published' : 'draft';
+    resetHistory(loaded);
     setTemplateId(t.id);
     setTemplateName(t.name);
-    setStatus(t.status === 'published' ? 'published' : 'draft');
+    setStatus(st);
     setSizeId(loaded.sizes[0]?.id ?? '');
     setSelectedId(null);
     setLoadOpen(false);
+    savedRef.current = serializeDoc(loaded, t.name, st);
+    setSaveStatus('saved');
     toast.success(`Loaded "${t.name}"`);
   }
 
@@ -538,7 +611,7 @@ export default function AdBuilderPage() {
 
   function newBlank() {
     const id = `tmpl-${rid()}`;
-    setDoc({
+    resetHistory({
       id,
       name: 'Untitled template',
       sizes: [{ id: 'square', label: 'Square 1080×1080', width: 1080, height: 1080 }],
@@ -553,6 +626,8 @@ export default function AdBuilderPage() {
     setStatus('draft');
     setSizeId('square');
     setSelectedId(null);
+    savedRef.current = '';
+    setSaveStatus('idle');
   }
 
   // ── pointer drag/resize ──
@@ -639,12 +714,59 @@ export default function AdBuilderPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedId, doc, size.id, deleteElement, setBox]);
 
+  // ⌘Z / ⌘⇧Z undo-redo — global, but defer to the browser inside text fields.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target;
+      if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return;
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
+
+  // Autosave — debounced PATCH once the template exists (has an id). New/unsaved
+  // templates require an explicit Save first (there's no row to PATCH yet).
+  useEffect(() => {
+    if (!templateId) return;
+    const snapshot = serializeDoc(doc, templateName, status);
+    if (snapshot === savedRef.current) return; // nothing changed since last persist
+    const handle = window.setTimeout(async () => {
+      setSaveStatus('saving');
+      try {
+        const res = await fetch(`/api/ad-generator/templates-doc/${templateId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: templateName.trim(), status, doc: { ...doc, name: templateName.trim() } }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        savedRef.current = snapshot;
+        setSaveStatus('saved');
+      } catch {
+        setSaveStatus('error');
+      }
+    }, 1200);
+    return () => window.clearTimeout(handle);
+  }, [doc, templateName, status, templateId]);
+
   const adders: { type: DocElementType; label: string }[] = [
     { type: 'text', label: 'Text' },
     { type: 'image', label: 'Image' },
     { type: 'logo', label: 'Logo' },
     { type: 'shape', label: 'Shape' },
   ];
+
+  const saveInfo =
+    saveStatus === 'saving'
+      ? { label: 'Saving…', cls: 'text-amber-500', Icon: ArrowPathIcon, spin: true }
+      : saveStatus === 'error'
+        ? { label: 'Save failed', cls: 'text-red-500', Icon: ExclamationTriangleIcon, spin: false }
+        : saveStatus === 'saved'
+          ? { label: 'Saved', cls: 'text-emerald-500', Icon: CheckIcon, spin: false }
+          : { label: 'Autosave on', cls: 'text-[var(--muted-foreground)]', Icon: CloudIcon, spin: false };
 
   return (
     <div className="flex h-full flex-col">
@@ -671,7 +793,14 @@ export default function AdBuilderPage() {
           >
             {status}
           </span>
-          {!templateId && <span className="hidden text-[11px] text-[var(--muted-foreground)] sm:inline">Unsaved</span>}
+          {templateId ? (
+            <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${saveInfo.cls}`}>
+              <saveInfo.Icon className={`h-3.5 w-3.5 ${saveInfo.spin ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{saveInfo.label}</span>
+            </span>
+          ) : (
+            <span className="hidden text-[11px] text-[var(--muted-foreground)] sm:inline">Unsaved</span>
+          )}
         </div>
 
         {/* center — name */}
@@ -687,6 +816,26 @@ export default function AdBuilderPage() {
 
         {/* right — actions */}
         <div className="flex min-w-0 items-center justify-end gap-2">
+          <div className="flex items-center gap-0.5">
+            <button
+              onClick={undo}
+              disabled={!canUndo}
+              title="Undo (⌘Z)"
+              aria-label="Undo"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <ArrowUturnLeftIcon className="h-4 w-4" />
+            </button>
+            <button
+              onClick={redo}
+              disabled={!canRedo}
+              title="Redo (⌘⇧Z)"
+              aria-label="Redo"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:opacity-30 disabled:hover:bg-transparent"
+            >
+              <ArrowUturnRightIcon className="h-4 w-4" />
+            </button>
+          </div>
           <button onClick={openLoad} className="rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
             Open
           </button>

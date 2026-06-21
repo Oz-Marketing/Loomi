@@ -1949,3 +1949,31 @@ model AppSetting {
   value     String
   updatedAt DateTime @updatedAt
 }
+
+// ─────────────────────────────────────────────────────
+// Ad Generator — disclaimer templates
+// ─────────────────────────────────────────────────────
+//
+// Reusable legal/disclaimer text for the Ad Generator. The body holds
+// {slug} tokens (e.g. "{apr_rate}% APR for {apr_term} months…") that are
+// substituted from the offer's STRUCTURED fields at compose time — so the
+// legal text stays rule-based and deterministic (never AI-written).
+//
+// Port of Oz Dealer Tools' DisclaimerTemplateModel: keyed by (make,
+// offerType). `make` null = a global fallback used when no make-specific
+// template exists; `isDefault` marks the auto-selected template for its
+// (make, offerType) pair. Global (no accountKey) for v1 — OEM disclaimers
+// are brand-wide; a per-account override can come later.
+model AdDisclaimerTemplate {
+  id        String   @id @default(cuid())
+  make      String? // vehicle make (e.g. "Toyota"); null = global fallback
+  offerType String // lease | apr | discount | sales_price | custom
+  name      String
+  body      String   @db.Text // template text with {slug} tokens
+  isDefault Boolean  @default(false)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([offerType, make, isActive])
+}

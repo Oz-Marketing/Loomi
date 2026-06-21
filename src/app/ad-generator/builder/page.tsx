@@ -47,6 +47,10 @@ import {
   LockClosedIcon,
   LockOpenIcon,
   Bars2Icon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  RectangleStackIcon,
+  Squares2X2Icon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { renderDoc } from '@/lib/ad-generator/doc-renderer';
@@ -54,6 +58,7 @@ import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
+import { buildLayerEntries, flattenLayerEntries } from '@/lib/ad-generator/layer-tree';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, DocBackground, DocBgFraming } from '@/lib/ad-generator/doc-types';
@@ -394,6 +399,13 @@ export default function AdBuilderPage() {
   );
 
   const lockedIds = useMemo(() => new Set(doc.elements.filter((e) => e.locked).map((e) => e.id)), [doc.elements]);
+  // The multi-selection is "a group" when every selected element shares one
+  // groupId — drives the Group ↔ Ungroup toggle in the selection toolbar.
+  const selectionIsGroup = useMemo(() => {
+    if (selectedIds.length < 2) return false;
+    const gids = new Set(selectedIds.map((id) => doc.elements.find((e) => e.id === id)?.groupId));
+    return gids.size === 1 && !gids.has(undefined);
+  }, [selectedIds, doc.elements]);
   // Bounding box of the current multi-selection (live during group move/resize),
   // for the group resize handles.
   const groupBox = useMemo(() => {
@@ -593,6 +605,70 @@ export default function AdBuilderPage() {
         if (b) lay[id] = { ...b, z: n - i }; // top of list = highest z (front)
       });
       return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+    });
+  }
+
+  // ── element groups (⌘G) ──
+  const membersOf = useCallback((gid: string) => doc.elements.filter((e) => e.groupId === gid).map((e) => e.id), [doc.elements]);
+
+  // Group the current selection (2+ elements) into a new named group.
+  function groupSelected() {
+    const ids = selectedIds;
+    if (ids.length < 2) return;
+    const gid = `grp-${rid()}`;
+    setDoc((prev) => {
+      const used = (prev.groups ?? []).length;
+      return {
+        ...prev,
+        elements: prev.elements.map((e) => (ids.includes(e.id) ? { ...e, groupId: gid } : e)),
+        groups: [...(prev.groups ?? []), { id: gid, name: `Group ${used + 1}` }],
+      };
+    });
+  }
+
+  // Ungroup every group represented in the selection.
+  function ungroupSelected() {
+    const gids = new Set(
+      selectedIds.map((id) => doc.elements.find((e) => e.id === id)?.groupId).filter((g): g is string => Boolean(g)),
+    );
+    if (gids.size === 0) return;
+    setDoc((prev) => ({
+      ...prev,
+      elements: prev.elements.map((e) => (e.groupId && gids.has(e.groupId) ? { ...e, groupId: undefined } : e)),
+      groups: (prev.groups ?? []).filter((g) => !gids.has(g.id)),
+    }));
+  }
+
+  function ungroupGroup(gid: string) {
+    setDoc((prev) => ({
+      ...prev,
+      elements: prev.elements.map((e) => (e.groupId === gid ? { ...e, groupId: undefined } : e)),
+      groups: (prev.groups ?? []).filter((g) => g.id !== gid),
+    }));
+  }
+  const selectGroup = useCallback((gid: string) => setSelectedIds(membersOf(gid)), [membersOf]);
+  function toggleGroupCollapsed(gid: string) {
+    setDoc((prev) => ({ ...prev, groups: (prev.groups ?? []).map((g) => (g.id === gid ? { ...g, collapsed: !g.collapsed } : g)) }));
+  }
+  function renameGroup(gid: string, name: string) {
+    const n = name.trim();
+    setDoc((prev) => ({ ...prev, groups: (prev.groups ?? []).map((g) => (g.id === gid ? { ...g, name: n || g.name } : g)) }));
+  }
+  // Lock / hide every member of a group together (locked is per-element; hidden
+  // is per-size on the box).
+  function toggleGroupLock(gid: string) {
+    const ids = membersOf(gid);
+    const anyUnlocked = ids.some((id) => !doc.elements.find((e) => e.id === id)?.locked);
+    setDoc((prev) => ({ ...prev, elements: prev.elements.map((e) => (ids.includes(e.id) ? { ...e, locked: anyUnlocked } : e)) }));
+  }
+  function toggleGroupHidden(gid: string) {
+    const ids = membersOf(gid);
+    const lay = doc.layouts[size.id] ?? {};
+    const anyVisible = ids.some((id) => lay[id] && !lay[id].hidden);
+    setDoc((prev) => {
+      const cur = { ...(prev.layouts[size.id] ?? {}) };
+      for (const id of ids) if (cur[id]) cur[id] = { ...cur[id], hidden: anyVisible };
+      return { ...prev, layouts: { ...prev.layouts, [size.id]: cur } };
     });
   }
 
@@ -1048,9 +1124,9 @@ export default function AdBuilderPage() {
     listen();
   }
 
-  function startGroupDrag(e: React.PointerEvent) {
+  function startGroupDrag(e: React.PointerEvent, ids: string[] = selectedIds) {
     const lay = doc.layouts[size.id] ?? {};
-    const items = selectedIds
+    const items = ids
       .map((id) => ({ elId: id, start: lay[id] }))
       .filter((it): it is { elId: string; start: DocLayoutBox } => Boolean(it.start) && !it.start!.hidden);
     if (items.length < 2) return;
@@ -1131,6 +1207,16 @@ export default function AdBuilderPage() {
     if (e.shiftKey) {
       toggleSelect(elId);
       return;
+    }
+    // A grouped element selects (and drags) its whole group as a unit.
+    const gid = doc.elements.find((el) => el.id === elId)?.groupId;
+    if (gid) {
+      const members = membersOf(gid).filter((id) => !lockedIds.has(id));
+      if (members.length > 1) {
+        setSelectedIds(members);
+        startGroupDrag(e, members);
+        return;
+      }
     }
     if (selectedIds.length > 1 && selectedIds.includes(elId)) {
       startGroupDrag(e);
@@ -1235,19 +1321,28 @@ export default function AdBuilderPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedIds, size.id, deleteElement, setDoc]);
 
-  // ⌘Z / ⌘⇧Z undo-redo — global, but defer to the browser inside text fields.
+  // ⌘Z / ⌘⇧Z undo-redo + ⌘G / ⌘⇧G group/ungroup — global, but defer to the
+  // browser inside text fields.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const t = e.target;
       if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
-      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== 'z') return;
-      e.preventDefault();
-      if (e.shiftKey) redo();
-      else undo();
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+      } else if (key === 'g') {
+        e.preventDefault();
+        if (e.shiftKey) ungroupSelected();
+        else groupSelected();
+      }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [undo, redo, selectedIds, doc.elements]);
 
   // Autosave — debounced PATCH once there's a target (a saved template, or the
   // ad in ad mode). New/unsaved templates require an explicit Save first.
@@ -1446,9 +1541,49 @@ export default function AdBuilderPage() {
               {(() => {
                 const base = [...placed].reverse(); // top of list = front
                 const byId = new Map(base.map((p) => [p.el.id, p] as const));
-                const order = (dragLayer && dragOrder ? dragOrder : base.map((p) => p.el.id)).filter((id) => byId.has(id));
-                return order.map((id) => {
-                  const { el, box } = byId.get(id)!;
+                const groupOf = (id: string) => byId.get(id)?.el.groupId ?? null;
+                const flat = (dragLayer && dragOrder ? dragOrder : base.map((p) => p.el.id)).filter((id) => byId.has(id));
+                const entries = buildLayerEntries(flat.map((id) => ({ id, groupId: groupOf(id) })));
+                const lay = doc.layouts[size.id] ?? {};
+
+                // Drag handlers shared by every element row (live-shift on `flat`;
+                // commit re-clusters so a group's members stay contiguous).
+                const rowDrag = (id: string, renaming: boolean) => ({
+                  draggable: !renaming,
+                  onDragStart: () => {
+                    setDragLayer(id);
+                    setDragOrder(flat);
+                  },
+                  onDragOver: (e: React.DragEvent) => {
+                    e.preventDefault();
+                    setDragOrder((cur) => {
+                      const from = dragLayer;
+                      const list = cur ?? flat;
+                      if (!from || from === id) return list;
+                      const fromIdx = list.indexOf(from);
+                      const overIdx = list.indexOf(id);
+                      if (fromIdx < 0 || overIdx < 0 || fromIdx === overIdx) return list;
+                      const without = list.filter((x) => x !== from);
+                      let at = without.indexOf(id);
+                      if (fromIdx < overIdx) at += 1; // dragging down → land after
+                      without.splice(at, 0, from);
+                      return without;
+                    });
+                  },
+                  onDragEnd: () => {
+                    setDragOrder((cur) => {
+                      if (cur) reorderLayers(flattenLayerEntries(buildLayerEntries(cur.map((x) => ({ id: x, groupId: groupOf(x) })))));
+                      return null;
+                    });
+                    setDragLayer(null);
+                  },
+                  onDrop: (e: React.DragEvent) => e.preventDefault(),
+                });
+
+                const renderRow = (id: string, indent: boolean) => {
+                  const entry = byId.get(id);
+                  if (!entry) return null;
+                  const { el, box } = entry;
                   const Icon = TYPE_ICON[el.type];
                   const isSel = selectedIds.includes(el.id);
                   const locked = !!el.locked;
@@ -1460,84 +1595,122 @@ export default function AdBuilderPage() {
                   return (
                     <div
                       key={el.id}
-                      draggable={!renaming}
-                      onDragStart={() => {
-                        setDragLayer(el.id);
-                        setDragOrder(base.map((p) => p.el.id));
-                      }}
-                      onDragOver={(e) => {
-                        e.preventDefault();
-                        // Live-shift: move the dragged row to where we're hovering.
-                        setDragOrder((cur) => {
-                          const from = dragLayer;
-                          const list = cur ?? base.map((p) => p.el.id);
-                          if (!from || from === el.id) return list;
-                          const fromIdx = list.indexOf(from);
-                          const overIdx = list.indexOf(el.id);
-                          if (fromIdx < 0 || overIdx < 0 || fromIdx === overIdx) return list;
-                          const without = list.filter((x) => x !== from);
-                          let at = without.indexOf(el.id);
-                          if (fromIdx < overIdx) at += 1; // dragging down → land after
-                          without.splice(at, 0, from);
-                          return without;
-                        });
-                      }}
-                      onDragEnd={() => {
-                        setDragOrder((cur) => {
-                          if (cur) reorderLayers(cur);
-                          return null;
-                        });
-                        setDragLayer(null);
-                      }}
-                      onDrop={(e) => e.preventDefault()}
-                      className={`flex items-center gap-1 rounded-lg pr-1 transition-[opacity] ${
+                      {...rowDrag(el.id, renaming)}
+                      className={`flex items-center gap-1 rounded-lg pr-1 transition-[opacity] ${indent ? 'ml-3' : ''} ${
                         isSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'
                       } ${box.hidden ? 'opacity-50' : ''} ${dragLayer === el.id ? 'opacity-40' : ''}`}
                     >
-                    <span className="cursor-grab pl-1 text-[var(--muted-foreground)]/50" title="Drag to reorder">
-                      <Bars2Icon className="h-3.5 w-3.5" />
-                    </span>
-                    {renaming ? (
-                      <input
-                        autoFocus
-                        value={renameDraft}
-                        onChange={(e) => setRenameDraft(e.target.value)}
-                        onBlur={commitRename}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') commitRename();
-                          if (e.key === 'Escape') setRenamingLayer(null);
-                        }}
-                        className="flex-1 rounded-md border border-[var(--primary)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none"
-                      />
-                    ) : (
+                      <span className="cursor-grab pl-1 text-[var(--muted-foreground)]/50" title="Drag to reorder">
+                        <Bars2Icon className="h-3.5 w-3.5" />
+                      </span>
+                      {renaming ? (
+                        <input
+                          autoFocus
+                          value={renameDraft}
+                          onChange={(e) => setRenameDraft(e.target.value)}
+                          onBlur={commitRename}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') commitRename();
+                            if (e.key === 'Escape') setRenamingLayer(null);
+                          }}
+                          className="flex-1 rounded-md border border-[var(--primary)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none"
+                        />
+                      ) : (
+                        <button
+                          onClick={(e) => (e.shiftKey ? toggleSelect(el.id) : selectOne(el.id))}
+                          onDoubleClick={() => {
+                            setRenameDraft(elName(el));
+                            setRenamingLayer(el.id);
+                          }}
+                          className={`flex flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left ${isSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
+                          title="Double-click to rename"
+                        >
+                          <Icon className="h-4 w-4 flex-shrink-0 opacity-70" />
+                          <span className="flex-1 truncate text-xs font-medium">{elName(el)}</span>
+                        </button>
+                      )}
                       <button
-                        onClick={(e) => (e.shiftKey ? toggleSelect(el.id) : selectOne(el.id))}
-                        onDoubleClick={() => {
-                          setRenameDraft(elName(el));
-                          setRenamingLayer(el.id);
-                        }}
-                        className={`flex flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left ${isSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
-                        title="Double-click to rename"
+                        onClick={() => toggleLock(el.id)}
+                        title={locked ? 'Unlock' : 'Lock (not editable)'}
+                        className={`rounded p-1 transition-colors hover:text-[var(--foreground)] ${locked ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]'}`}
                       >
-                        <Icon className="h-4 w-4 flex-shrink-0 opacity-70" />
-                        <span className="flex-1 truncate text-xs font-medium">{elName(el)}</span>
+                        {locked ? <LockClosedIcon className="h-3.5 w-3.5" /> : <LockOpenIcon className="h-3.5 w-3.5" />}
                       </button>
-                    )}
-                    <button
-                      onClick={() => toggleLock(el.id)}
-                      title={locked ? 'Unlock' : 'Lock (not editable)'}
-                      className={`rounded p-1 transition-colors hover:text-[var(--foreground)] ${locked ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]'}`}
-                    >
-                      {locked ? <LockClosedIcon className="h-3.5 w-3.5" /> : <LockOpenIcon className="h-3.5 w-3.5" />}
-                    </button>
-                    <button
-                      onClick={() => toggleHidden(el.id)}
-                      title={box.hidden ? 'Show in this size' : 'Hide in this size'}
-                      className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
-                    >
-                      {box.hidden ? <EyeSlashIcon className="h-3.5 w-3.5" /> : <EyeIcon className="h-3.5 w-3.5" />}
-                    </button>
-                  </div>
+                      <button
+                        onClick={() => toggleHidden(el.id)}
+                        title={box.hidden ? 'Show in this size' : 'Hide in this size'}
+                        className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+                      >
+                        {box.hidden ? <EyeSlashIcon className="h-3.5 w-3.5" /> : <EyeIcon className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                  );
+                };
+
+                return entries.map((entry) => {
+                  if (entry.kind === 'element') return renderRow(entry.id, false);
+                  // ── group header + nested members ──
+                  const gid = entry.groupId;
+                  const meta = (doc.groups ?? []).find((g) => g.id === gid);
+                  const gname = meta?.name ?? 'Group';
+                  const collapsed = !!meta?.collapsed;
+                  const renamingG = renamingLayer === gid;
+                  const allSel = entry.memberIds.length > 0 && entry.memberIds.every((id) => selectedIds.includes(id));
+                  const allLocked = entry.memberIds.every((id) => byId.get(id)?.el.locked);
+                  const allHidden = entry.memberIds.every((id) => lay[id]?.hidden);
+                  const commitGRename = () => {
+                    renameGroup(gid, renameDraft);
+                    setRenamingLayer(null);
+                  };
+                  return (
+                    <div key={gid} className="rounded-lg">
+                      <div className={`flex items-center gap-1 rounded-lg pr-1 ${allSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'}`}>
+                        <button onClick={() => toggleGroupCollapsed(gid)} title={collapsed ? 'Expand' : 'Collapse'} className="rounded p-0.5 pl-1 text-[var(--muted-foreground)]/70 hover:text-[var(--foreground)]">
+                          {collapsed ? <ChevronRightIcon className="h-3.5 w-3.5" /> : <ChevronDownIcon className="h-3.5 w-3.5" />}
+                        </button>
+                        {renamingG ? (
+                          <input
+                            autoFocus
+                            value={renameDraft}
+                            onChange={(e) => setRenameDraft(e.target.value)}
+                            onBlur={commitGRename}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') commitGRename();
+                              if (e.key === 'Escape') setRenamingLayer(null);
+                            }}
+                            className="flex-1 rounded-md border border-[var(--primary)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none"
+                          />
+                        ) : (
+                          <button
+                            onClick={() => selectGroup(gid)}
+                            onDoubleClick={() => {
+                              setRenameDraft(gname);
+                              setRenamingLayer(gid);
+                            }}
+                            className={`flex flex-1 items-center gap-2 rounded-lg px-1 py-2 text-left ${allSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
+                            title="Click to select group · double-click to rename"
+                          >
+                            <RectangleStackIcon className="h-4 w-4 flex-shrink-0 opacity-70" />
+                            <span className="flex-1 truncate text-xs font-semibold">{gname}</span>
+                            <span className="text-[10px] text-[var(--muted-foreground)]">{entry.memberIds.length}</span>
+                          </button>
+                        )}
+                        <button onClick={() => ungroupGroup(gid)} title="Ungroup" className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]">
+                          <Squares2X2Icon className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          onClick={() => toggleGroupLock(gid)}
+                          title={allLocked ? 'Unlock group' : 'Lock group'}
+                          className={`rounded p-1 transition-colors hover:text-[var(--foreground)] ${allLocked ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]'}`}
+                        >
+                          {allLocked ? <LockClosedIcon className="h-3.5 w-3.5" /> : <LockOpenIcon className="h-3.5 w-3.5" />}
+                        </button>
+                        <button onClick={() => toggleGroupHidden(gid)} title={allHidden ? 'Show group' : 'Hide group'} className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]">
+                          {allHidden ? <EyeSlashIcon className="h-3.5 w-3.5" /> : <EyeIcon className="h-3.5 w-3.5" />}
+                        </button>
+                      </div>
+                      {!collapsed && <div className="mt-1 space-y-1 border-l border-[var(--border)] pl-1">{entry.memberIds.map((id) => renderRow(id, true))}</div>}
+                    </div>
                   );
                 });
               })()}
@@ -1987,6 +2160,9 @@ export default function AdBuilderPage() {
                   onAlign={alignSelected}
                   onDistribute={distributeSelected}
                   canDistribute={selectedIds.length >= 3}
+                  grouped={selectionIsGroup}
+                  onGroup={groupSelected}
+                  onUngroup={ungroupSelected}
                 />
               )}
             </div>
@@ -2591,15 +2767,25 @@ function MultiSelectToolbar({
   onAlign,
   onDistribute,
   canDistribute,
+  grouped,
+  onGroup,
+  onUngroup,
 }: {
   count: number;
   onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
   onDistribute: (axis: 'h' | 'v') => void;
   canDistribute: boolean;
+  grouped: boolean;
+  onGroup: () => void;
+  onUngroup: () => void;
 }) {
   return (
     <div className="absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-lg backdrop-blur-2xl backdrop-saturate-150">
       <span className="px-1.5 text-xs font-medium text-[var(--muted-foreground)]">{count} selected</span>
+      <BarSep />
+      <BarBtn title={grouped ? 'Ungroup (⌘⇧G)' : 'Group (⌘G)'} active={grouped} onClick={grouped ? onUngroup : onGroup}>
+        <RectangleStackIcon className="h-4 w-4" />
+      </BarBtn>
       <BarSep />
       <BarBtn title="Align left" onClick={() => onAlign('left')}>
         <AlignIcon edge="left" />

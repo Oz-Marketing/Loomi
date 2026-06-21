@@ -20,7 +20,7 @@ import { useAccount } from '@/contexts/account-context';
 import { AD_TEMPLATES } from '@/lib/ad-generator/templates';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
-import type { AdData, AdTemplate, FieldSpec } from '@/lib/ad-generator/types';
+import { isFieldVisible, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
 import type { AdCopyVariation } from '@/lib/ad-generator/copy-types';
 
 const PREVIEW_W = 460;
@@ -140,12 +140,15 @@ export default function AdGeneratorPage() {
   const groups = useMemo(() => {
     const m = new Map<string, FieldSpec[]>();
     for (const f of template.fields) {
+      // Skip fields hidden by the current data (e.g. APR fields when the
+      // offer type is Lease). Recomputes as the user changes the offer type.
+      if (!isFieldVisible(f, data)) continue;
       const g = f.group || 'General';
       if (!m.has(g)) m.set(g, []);
       m.get(g)!.push(f);
     }
     return [...m.entries()];
-  }, [template]);
+  }, [template, data]);
 
   function switchTemplate(id: string) {
     const t = AD_TEMPLATES.find((x) => x.id === id)!;

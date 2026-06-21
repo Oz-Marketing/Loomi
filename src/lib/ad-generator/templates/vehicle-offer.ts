@@ -1,5 +1,6 @@
 import type { AdTemplate, AdData, AdSize } from '../types';
 import { cssSafeFamily } from '../fonts';
+import { assembleOffer, OFFER_TYPES } from '../offer-text';
 
 /** Escape user data before it goes into HTML (preview + render are real HTML). */
 function esc(v: string | undefined): string {
@@ -29,9 +30,13 @@ function render(data: AdData, size: AdSize): string {
   const vehicleName = esc(data.vehicleName) || '2024 Model';
   const vehicleImageUrl = esc(data.vehicleImageUrl);
   const logoUrl = esc(data.logoUrl);
-  const offerLabel = esc(data.offerLabel) || 'LEASE FOR';
-  const price = esc(data.price) || '$299/mo';
-  const terms = esc(data.terms) || '36 months · $2,999 due at signing';
+  // Typed offers (lease/apr/discount/sales_price) assemble their block
+  // deterministically from structured fields; `custom` falls back to the
+  // free-text price/terms fields.
+  const offer = assembleOffer(data);
+  const offerLabel = esc(offer ? offer.label : data.offerLabel || 'LEASE FOR');
+  const price = esc(offer ? offer.main : data.price || '$299/mo');
+  const terms = esc(offer ? offer.terms : data.terms || '36 months · $2,999 due at signing');
   const expiration = esc(data.expiration) || 'Offer ends soon';
   const disclaimer = esc(data.disclaimer);
   const tagline = esc(data.tagline);
@@ -133,9 +138,27 @@ export const vehicleOffer: AdTemplate = {
     { key: 'vehicleName', label: 'Vehicle', type: 'text', group: 'Vehicle', placeholder: '2024 Toyota Camry SE' },
     { key: 'vehicleImageUrl', label: 'Vehicle image URL', type: 'image', group: 'Vehicle', placeholder: 'https://…/camry.png', help: 'Transparent PNG (e.g. from EVOX) looks best.' },
     { key: 'tagline', label: 'Tagline', type: 'text', group: 'Copy', placeholder: 'Drive home today', help: 'Short on-image hook — the AI can write this.', copy: true, maxLength: 28 },
-    { key: 'offerLabel', label: 'Offer label', type: 'text', group: 'Offer', placeholder: 'LEASE FOR', copy: true, maxLength: 18 },
-    { key: 'price', label: 'Price', type: 'text', group: 'Offer', placeholder: '$299/mo' },
-    { key: 'terms', label: 'Terms', type: 'text', group: 'Offer', placeholder: '36 months · $2,999 due at signing' },
+    { key: 'offerType', label: 'Offer type', type: 'select', group: 'Offer', options: OFFER_TYPES, help: 'Drives the offer block + which fields show below.' },
+    { key: 'offerLabel', label: 'Offer label', type: 'text', group: 'Offer', placeholder: 'auto (e.g. LEASE FOR)', help: 'Optional — overrides the default label. AI can write this.', copy: true, maxLength: 18 },
+    // Lease
+    { key: 'monthlyPayment', label: 'Monthly payment ($)', type: 'text', group: 'Offer', placeholder: '299', visibleWhen: { field: 'offerType', in: ['lease'] } },
+    { key: 'leaseTerm', label: 'Lease term (months)', type: 'text', group: 'Offer', placeholder: '36', visibleWhen: { field: 'offerType', in: ['lease'] } },
+    { key: 'dueAtSigning', label: 'Due at signing ($)', type: 'text', group: 'Offer', placeholder: '2999', visibleWhen: { field: 'offerType', in: ['lease'] } },
+    // APR
+    { key: 'aprRate', label: 'APR rate (%)', type: 'text', group: 'Offer', placeholder: '1.9', visibleWhen: { field: 'offerType', in: ['apr'] } },
+    { key: 'aprTerm', label: 'APR term (months)', type: 'text', group: 'Offer', placeholder: '60', visibleWhen: { field: 'offerType', in: ['apr'] } },
+    { key: 'financialInstitution', label: 'Financial institution', type: 'text', group: 'Offer', placeholder: 'Toyota Financial', visibleWhen: { field: 'offerType', in: ['apr'] } },
+    // Discount
+    { key: 'discountAmount', label: 'Discount amount ($)', type: 'text', group: 'Offer', placeholder: '3000', visibleWhen: { field: 'offerType', in: ['discount'] } },
+    { key: 'discountLabelStyle', label: 'Discount style', type: 'select', group: 'Offer', options: [{ value: 'off_msrp', label: 'Off MSRP' }, { value: 'cash_back', label: 'Cash Back' }], visibleWhen: { field: 'offerType', in: ['discount'] } },
+    { key: 'discountSource', label: 'Discount source', type: 'text', group: 'Offer', placeholder: 'Dealer discount', visibleWhen: { field: 'offerType', in: ['discount'] } },
+    // Sales price
+    { key: 'salePrice', label: 'Sale price ($)', type: 'text', group: 'Offer', placeholder: '28995', visibleWhen: { field: 'offerType', in: ['sales_price'] } },
+    // Shared across the typed offers
+    { key: 'msrp', label: 'MSRP ($)', type: 'text', group: 'Offer', placeholder: '34000', visibleWhen: { field: 'offerType', in: ['lease', 'apr', 'discount', 'sales_price'] } },
+    // Custom (free text)
+    { key: 'price', label: 'Price', type: 'text', group: 'Offer', placeholder: '$299/mo', visibleWhen: { field: 'offerType', in: ['custom'] } },
+    { key: 'terms', label: 'Terms', type: 'text', group: 'Offer', placeholder: '36 months · $2,999 due at signing', visibleWhen: { field: 'offerType', in: ['custom'] } },
     { key: 'expiration', label: 'Expiration', type: 'text', group: 'Offer', placeholder: 'Offer ends March 31' },
     { key: 'disclaimer', label: 'Disclaimer', type: 'textarea', group: 'Legal', placeholder: 'Plus tax, title, license…', help: 'Required legal text. Will sit in the ad footer.' },
   ],
@@ -146,7 +169,19 @@ export const vehicleOffer: AdTemplate = {
     vehicleName: '2024 Toyota Camry SE',
     vehicleImageUrl: '',
     tagline: 'Drive Home Today',
-    offerLabel: 'LEASE FOR',
+    offerType: 'lease',
+    offerLabel: '',
+    monthlyPayment: '299',
+    leaseTerm: '36',
+    dueAtSigning: '2999',
+    aprRate: '1.9',
+    aprTerm: '60',
+    financialInstitution: 'Toyota Financial',
+    discountAmount: '3000',
+    discountLabelStyle: 'off_msrp',
+    discountSource: 'Dealer discount',
+    salePrice: '28995',
+    msrp: '34000',
     price: '$299/mo',
     terms: '36 months · $2,999 due at signing',
     expiration: 'Offer ends March 31',

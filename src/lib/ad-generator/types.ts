@@ -43,9 +43,22 @@ export interface FieldSpec {
    * and UI keep working unchanged.
    */
   copy?: boolean;
+  /**
+   * Show this field only when another field's value is one of `in` — e.g. the
+   * APR-rate field is visible only when `offerType` is `apr`. Lets one template
+   * carry per-offer-type fields without separate templates. Carries over to
+   * data-driven templates (a binding can hold the same condition).
+   */
+  visibleWhen?: { field: string; in: string[] };
 }
 
 export type AdData = Record<string, string>;
+
+/** True if `field` should be shown given the current form `data`. */
+export function isFieldVisible(field: FieldSpec, data: AdData): boolean {
+  if (!field.visibleWhen) return true;
+  return field.visibleWhen.in.includes(data[field.visibleWhen.field] ?? '');
+}
 
 export interface AdTemplate {
   id: string;

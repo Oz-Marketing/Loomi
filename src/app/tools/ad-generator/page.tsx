@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { toast } from 'sonner';
 import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
@@ -691,10 +692,15 @@ function DisclaimerField({
   return (
     <div className="space-y-3">
       <div>
-        <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
-          Disclaimer template
-          <span className="ml-1 font-normal text-[var(--muted-foreground)]">— auto-fills the text below from the offer</span>
-        </label>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <label className="block text-xs font-medium text-[var(--foreground)]">
+            Disclaimer template
+            <span className="ml-1 font-normal text-[var(--muted-foreground)]">— auto-fills the text below</span>
+          </label>
+          <Link href="/tools/ad-generator/templates" className="flex-shrink-0 text-[11px] font-medium text-[var(--primary)] hover:underline">
+            Manage
+          </Link>
+        </div>
         <FontSelect
           value={selectedId}
           onChange={(v) => {

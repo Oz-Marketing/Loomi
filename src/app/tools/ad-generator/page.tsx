@@ -22,6 +22,7 @@ import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { isFieldVisible, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
 import type { AdCopyVariation } from '@/lib/ad-generator/copy-types';
+import { composeDisclaimer } from '@/lib/ad-generator/disclaimer';
 
 const PREVIEW_W = 460;
 const PREVIEW_H = 560;
@@ -327,6 +328,8 @@ export default function AdGeneratorPage() {
               </div>
             </section>
           ))}
+
+          <DisclaimerHelper renderData={renderData} onApply={(text) => set('disclaimer', text)} />
         </div>
 
         {/* Preview + export */}
@@ -574,6 +577,84 @@ function CaptionBlock({ label, lines }: { label: string; lines: [string, string]
         ))}
       </div>
     </div>
+  );
+}
+
+type DisclaimerTemplateOption = {
+  id: string;
+  name: string;
+  make: string | null;
+  body: string;
+  isDefault: boolean;
+};
+
+/**
+ * "Generate disclaimer" — composes rule-based legal text from the structured
+ * offer (token substitution + dealer-fee boilerplate + VIN/Stock#). Lists any
+ * DB templates for the current offer type (make-specific first, then global),
+ * falling back to the code-defined default when none exist. Never AI-written.
+ */
+function DisclaimerHelper({
+  renderData,
+  onApply,
+}: {
+  renderData: AdData;
+  onApply: (text: string) => void;
+}) {
+  const offerType = renderData.offerType || 'custom';
+  const [templates, setTemplates] = useState<DisclaimerTemplateOption[]>([]);
+  const [selectedId, setSelectedId] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/ad-generator/disclaimer-templates?offerType=${encodeURIComponent(offerType)}`)
+      .then((r) => (r.ok ? r.json() : { templates: [] }))
+      .then((d: { templates?: DisclaimerTemplateOption[] }) => {
+        if (cancelled) return;
+        setTemplates(d.templates ?? []);
+        setSelectedId('');
+      })
+      .catch(() => {
+        if (!cancelled) setTemplates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [offerType]);
+
+  function generate() {
+    const tmpl = templates.find((t) => t.id === selectedId);
+    onApply(composeDisclaimer(renderData, tmpl?.body));
+  }
+
+  return (
+    <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
+      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Disclaimer</h2>
+      <p className="mb-3 text-xs text-[var(--muted-foreground)]">
+        Builds compliant legal text from the offer — numbers, dealer-fee boilerplate, and VIN/Stock# filled in automatically. Edit freely after.
+      </p>
+      <div className="flex items-center gap-2">
+        <select
+          value={selectedId}
+          onChange={(e) => setSelectedId(e.target.value)}
+          className="min-w-0 flex-1 rounded-lg border border-[var(--border)] bg-[var(--input)] px-2.5 py-2 text-sm text-[var(--foreground)]"
+        >
+          <option value="">Default ({offerType})</option>
+          {templates.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}{t.make ? ` — ${t.make}` : ' — global'}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={generate}
+          className="flex-shrink-0 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90"
+        >
+          Generate
+        </button>
+      </div>
+    </section>
   );
 }
 

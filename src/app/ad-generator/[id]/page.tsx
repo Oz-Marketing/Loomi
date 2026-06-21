@@ -14,6 +14,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -1002,8 +1003,11 @@ function EvoxPickerModal({ onClose, onPick }: { onClose: () => void; onPick: (ur
     }
   }
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-12" onClick={onClose}>
+  // Portal to body so the overlay covers the viewport — a backdrop-blur
+  // ancestor (the form cards) otherwise becomes the containing block for
+  // `fixed` and traps the modal inside the card.
+  return createPortal(
+    <div className="fixed inset-0 z-[80] flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-12" onClick={onClose}>
       <div className="w-full max-w-2xl rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-5 shadow-xl backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-4 flex items-start justify-between">
           <div>
@@ -1096,6 +1100,7 @@ function EvoxPickerModal({ onClose, onPick }: { onClose: () => void; onPick: (ur
           ))}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

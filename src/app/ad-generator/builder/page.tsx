@@ -289,6 +289,7 @@ export default function AdBuilderPage() {
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showOutlines, setShowOutlines] = useState(true);
+  const [showSafe, setShowSafe] = useState(true);
   const [dragBox, setDragBox] = useState<DocLayoutBox | null>(null);
   // Figma-style alignment guides shown while dragging (fractions, or null).
   const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
@@ -589,6 +590,12 @@ export default function AdBuilderPage() {
     }));
   }
 
+  // Safe-area padding (uniform %, builder-only guide). 0 clears it.
+  function setSafeArea(pct: number) {
+    const f = clamp(pct, 0, 40) / 100;
+    setDoc((prev) => ({ ...prev, safeArea: f > 0 ? { x: f, y: f } : undefined }));
+  }
+
   // ── save / load ──
   async function save(asNew = false) {
     const name = templateName.trim();
@@ -768,6 +775,11 @@ export default function AdBuilderPage() {
     // canvas edges + center. Static for the duration of the drag.
     const targetsX = [0, 0.5, 1];
     const targetsY = [0, 0.5, 1];
+    // Snap to the safe-area margins when one is set.
+    if (doc.safeArea) {
+      targetsX.push(doc.safeArea.x, 1 - doc.safeArea.x);
+      targetsY.push(doc.safeArea.y, 1 - doc.safeArea.y);
+    }
     for (const p of placed) {
       if (p.el.id === elId || p.box.hidden) continue;
       targetsX.push(p.box.x, p.box.x + p.box.w / 2, p.box.x + p.box.w);
@@ -1222,6 +1234,26 @@ export default function AdBuilderPage() {
               >
                 Outlines
               </button>
+              {/* Safe-area margins: toggle visibility + set the padding % */}
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => setShowSafe((v) => !v)}
+                  title="Show/hide safe-area margins"
+                  className={`rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    showSafe && doc.safeArea ? 'border-[#14b8a6] text-[#14b8a6]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+                  }`}
+                >
+                  Margins
+                </button>
+                <input
+                  type="number"
+                  value={Math.round((doc.safeArea?.x ?? 0) * 100)}
+                  onChange={(e) => setSafeArea(Number(e.target.value))}
+                  title="Safe-area padding (%)"
+                  className="w-11 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                />
+                <span className="text-[10px] text-[var(--muted-foreground)]">%</span>
+              </div>
             </div>
           </div>
 
@@ -1251,6 +1283,18 @@ export default function AdBuilderPage() {
                     if (e.target === e.currentTarget) setSelectedId(null);
                   }}
                 >
+                  {/* Safe-area margin boundary (a builder-only guide) */}
+                  {showSafe && doc.safeArea && (
+                    <div
+                      className="pointer-events-none absolute z-10 rounded-[2px] border border-dashed border-[#14b8a6]/70"
+                      style={{
+                        left: doc.safeArea.x * frameW,
+                        top: doc.safeArea.y * frameH,
+                        width: (1 - 2 * doc.safeArea.x) * frameW,
+                        height: (1 - 2 * doc.safeArea.y) * frameH,
+                      }}
+                    />
+                  )}
                   {/* Alignment guides (Figma-style) while dragging */}
                   {dragBox && guides.x != null && (
                     <span className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-[#ec4899]" style={{ left: guides.x * frameW }} />

@@ -16,7 +16,7 @@
  * Behind AD_GENERATOR_ENABLED (404 in prod).
  */
 
-import { useMemo, useState, useRef, useEffect, useCallback, type CSSProperties } from 'react';
+import { useMemo, useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import {
@@ -455,6 +455,36 @@ export default function AdBuilderPage() {
   const [dragLayer, setDragLayer] = useState<string | null>(null);
   // Live order during a Layers drag (top→front), so rows shift as you hover.
   const [dragOrder, setDragOrder] = useState<string[] | null>(null);
+  // FLIP: slide Layers rows to their new spots as they shift during a drag.
+  const layersRef = useRef<HTMLDivElement>(null);
+  const layerTopsRef = useRef<Map<string, number>>(new Map());
+  useLayoutEffect(() => {
+    const container = layersRef.current;
+    if (!container) return;
+    if (!dragLayer) {
+      layerTopsRef.current.clear();
+      return;
+    }
+    const base = container.getBoundingClientRect().top;
+    const prev = layerTopsRef.current;
+    const next = new Map<string, number>();
+    container.querySelectorAll<HTMLElement>('[data-layer-row]').forEach((row) => {
+      const id = row.getAttribute('data-layer-row');
+      if (!id) return;
+      const top = row.getBoundingClientRect().top - base;
+      next.set(id, top);
+      const old = prev.get(id);
+      if (old != null && Math.abs(old - top) > 0.5) {
+        row.style.transition = 'none';
+        row.style.transform = `translateY(${old - top}px)`;
+        requestAnimationFrame(() => {
+          row.style.transition = 'transform 160ms ease';
+          row.style.transform = '';
+        });
+      }
+    });
+    layerTopsRef.current = next;
+  });
 
   // Single-selection shorthand — the per-element toolbar, handles, and action
   // tab only show when exactly one element is selected.
@@ -1636,7 +1666,7 @@ export default function AdBuilderPage() {
               </h2>
               <span className="text-[11px] text-[var(--muted-foreground)]">{placed.length}</span>
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1" ref={layersRef}>
               {(() => {
                 const base = [...placed].reverse(); // top of list = front
                 const byId = new Map(base.map((p) => [p.el.id, p] as const));
@@ -1650,6 +1680,17 @@ export default function AdBuilderPage() {
                 // The element ids a dragged row moves: a group moves ALL its leaves
                 // as one block; an element moves just itself.
                 const movingIds = (rowId: string) => (isGroupId(rowId) ? membersOf(rowId) : [rowId]);
+                // Rows being dragged render blank (a gap at the landing spot) rather
+                // than a dimmed placeholder. A dragged group blanks its whole block.
+                const draggedLeaves = dragLayer ? new Set(movingIds(dragLayer)) : null;
+                const rowIsDragged = (rowId: string, isGroupRow: boolean) => {
+                  if (!draggedLeaves) return false;
+                  if (isGroupRow) {
+                    const m = membersOf(rowId);
+                    return m.length > 0 && m.every((x) => draggedLeaves.has(x));
+                  }
+                  return draggedLeaves.has(rowId);
+                };
 
                 // Drag handlers shared by element rows AND group headers (live-shift
                 // on `flat`; commit re-clusters so a group's members stay contiguous).
@@ -1707,10 +1748,11 @@ export default function AdBuilderPage() {
                   return (
                     <div
                       key={el.id}
+                      data-layer-row={el.id}
                       {...rowDrag(el.id, renaming)}
-                      className={`flex items-center gap-1 rounded-lg pr-1 transition-[opacity] ${
+                      className={`flex items-center gap-1 rounded-lg pr-1 ${
                         isSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'
-                      } ${box.hidden ? 'opacity-50' : ''} ${dragLayer === el.id ? 'opacity-40' : ''}`}
+                      } ${box.hidden ? 'opacity-50' : ''} ${rowIsDragged(el.id, false) ? 'opacity-0' : ''}`}
                     >
                       {renaming ? (
                         <input
@@ -1773,8 +1815,9 @@ export default function AdBuilderPage() {
                   return (
                     <div key={gid} className="rounded-lg">
                       <div
+                        data-layer-row={gid}
                         {...dragHandlers(gid, true, renamingG)}
-                        className={`flex items-center gap-1 rounded-lg pr-1 transition-[opacity] ${allSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'} ${dragLayer === gid ? 'opacity-40' : ''}`}
+                        className={`flex items-center gap-1 rounded-lg pr-1 ${allSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'} ${rowIsDragged(gid, true) ? 'opacity-0' : ''}`}
                       >
                         <button onClick={() => toggleGroupCollapsed(gid)} title={collapsed ? 'Expand' : 'Collapse'} className="rounded p-0.5 pl-1 text-[var(--muted-foreground)]/70 hover:text-[var(--foreground)]">
                           {collapsed ? <ChevronRightIcon className="h-3.5 w-3.5" /> : <ChevronDownIcon className="h-3.5 w-3.5" />}

@@ -399,6 +399,7 @@ export default function AdBuilderPage() {
 
   // The ad scales to fill the canvas pane (measured), with a little padding.
   const [canvasRef, canvasSize] = useElementSize<HTMLDivElement>();
+  const frameRef = useRef<HTMLDivElement>(null); // the artboard frame (for panel alignment)
   const availW = canvasSize.width - CANVAS_PAD;
   const availH = canvasSize.height - CANVAS_PAD;
   const scale = availW > 0 && availH > 0 ? Math.min(availW / size.width, availH / size.height) : Math.min(560 / size.width, 560 / size.height);
@@ -583,6 +584,20 @@ export default function AdBuilderPage() {
       alive = false;
     };
   }, [bgImageId, doc.elements, resolveBindingUrl]);
+
+  // Top of the artboard (viewport y) — the selection panel pins to it so it lines
+  // up with the top of the ad, with natural spacing below the header.
+  const [canvasTop, setCanvasTop] = useState(96);
+  useEffect(() => {
+    const measure = () => {
+      const t = (frameRef.current ?? canvasRef.current)?.getBoundingClientRect().top;
+      if (t != null) setCanvasTop(Math.max(8, Math.round(t)));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+    // re-measure when the panel opens or the artboard moves/scales
+  }, [selectedId, canvasRef, canvasSize.width, canvasSize.height, size.id]);
 
   // ── doc mutations (all functional so they don't capture stale state) ──
   const setBox = useCallback((sid: string, elId: string, box: DocLayoutBox) => {
@@ -2396,7 +2411,7 @@ export default function AdBuilderPage() {
               if (e.target === e.currentTarget) clearSelection();
             }}
           >
-              <div className="relative shadow-lg ring-1 ring-black/5" style={{ width: frameW, height: frameH }}>
+              <div ref={frameRef} className="relative shadow-lg ring-1 ring-black/5" style={{ width: frameW, height: frameH }}>
                 {/* The export renderer, scaled to fit. */}
                 <div className="absolute inset-0 overflow-hidden rounded-md">
                   <iframe
@@ -2617,13 +2632,16 @@ export default function AdBuilderPage() {
               </div>
 
               {selected && selectedBox && !selectedBox.hidden && (
-                <SelectionToolbar
+                <SelectionPanel
                   el={selected}
                   box={selectedBox}
                   fontOptions={fontOptions}
                   fields={doc.fields}
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch })}
+                  onClose={clearSelection}
+                  shifted={fieldsOpen}
+                  topPx={canvasTop}
                 />
               )}
             </div>
@@ -2968,17 +2986,21 @@ function FieldsSidebar({
 }
 
 /**
- * Floating contextual toolbar over the canvas (mirrors the flows action bar) —
- * quick, in-context styling for the selected element, font controls first. The
- * full set (binding, geometry, pill, spacing) stays in the left sidebar.
+ * Floating properties panel for the selected element — sits to the right of the
+ * canvas with everything for that element: content binding, font/text styling,
+ * image fit, shape fill. Structural actions (reorder, duplicate, delete) live in
+ * the right-click menu.
  */
-function SelectionToolbar({
+function SelectionPanel({
   el,
   box,
   fontOptions,
   fields,
   onEl,
   onBox,
+  onClose,
+  shifted,
+  topPx,
 }: {
   el: DocElement;
   box: DocLayoutBox;
@@ -2986,8 +3008,12 @@ function SelectionToolbar({
   fields: FieldSpec[];
   onEl: (patch: Partial<DocElement>) => void;
   onBox: (patch: Partial<DocLayoutBox>) => void;
+  onClose: () => void;
+  shifted: boolean;
+  topPx: number;
 }) {
   const fontSize = box.fontSize ?? 16;
+  const typeLabel = el.type === 'text' ? 'Text' : el.type === 'image' ? 'Image' : el.type === 'logo' ? 'Logo' : 'Shape';
 
   // ── binding (content source) as a single compact dropdown ──
   const bindingVal = !el.binding ? 'static' : el.binding.kind === 'static' ? 'static' : `${el.binding.kind}:${el.binding.key}`;
@@ -3009,108 +3035,159 @@ function SelectionToolbar({
   };
 
   return (
-    <div className="absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-lg backdrop-blur-2xl backdrop-saturate-150">
-      {/* Content source — every element except shapes binds to data */}
-      {el.type !== 'shape' && (
-        <>
-          <div className="w-40">
-            <FontSelect value={bindingVal} onChange={applyBinding} options={bindingOpts} previewFont={false} openUp />
-          </div>
-          {el.binding?.kind === 'static' && (
-            <input
-              value={el.binding.value}
-              onChange={(e) => onEl({ binding: { kind: 'static', value: e.target.value } })}
-              placeholder={el.type === 'text' ? 'Text' : 'Image URL'}
-              className="w-36 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-            />
-          )}
-          <BarSep />
-        </>
-      )}
+    <div
+      style={{ top: topPx, maxHeight: `calc(100vh - ${topPx + 16}px)` }}
+      className={`fixed z-40 flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[372px]' : 'right-6'}`}
+    >
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-semibold text-[var(--foreground)]">{el.name || typeLabel}</span>
+          <span className="shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">{typeLabel}</span>
+        </div>
+        <button type="button" onClick={onClose} title="Deselect" aria-label="Deselect" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+          <XMarkIcon className="h-4 w-4" />
+        </button>
+      </div>
 
-      {el.type === 'text' && (
-        <>
-          <div className="w-36">
-            <FontSelect value={el.fontFamily ?? ''} onChange={(v) => onEl({ fontFamily: v || undefined })} options={fontOptions} openUp />
-          </div>
-          <div className="flex items-center gap-0.5">
-            <BarBtn title="Smaller" onClick={() => onBox({ fontSize: Math.max(4, fontSize - 2) })}>
-              <MinusIcon className="h-4 w-4" />
-            </BarBtn>
-            <input
-              type="number"
-              value={fontSize}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                if (!Number.isNaN(n)) onBox({ fontSize: clamp(Math.round(n), 4, 400) });
-              }}
-              className="w-12 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-center text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-            />
-            <BarBtn title="Larger" onClick={() => onBox({ fontSize: Math.min(400, fontSize + 2) })}>
-              <PlusIcon className="h-4 w-4" />
-            </BarBtn>
-          </div>
-          <div className="w-24">
-            <FontSelect value={String(el.fontWeight ?? 400)} onChange={(v) => onEl({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} openUp />
-          </div>
-          <BarSep />
-          <BarBtn title="Align left" active={(el.align ?? 'left') === 'left'} onClick={() => onEl({ align: 'left' })}>
-            <Bars3BottomLeftIcon className="h-4 w-4" />
-          </BarBtn>
-          <BarBtn title="Align center" active={el.align === 'center'} onClick={() => onEl({ align: 'center' })}>
-            <Bars3Icon className="h-4 w-4" />
-          </BarBtn>
-          <BarBtn title="Align right" active={el.align === 'right'} onClick={() => onEl({ align: 'right' })}>
-            <Bars3BottomRightIcon className="h-4 w-4" />
-          </BarBtn>
-          <BarSep />
-          <ColorSwatchInput title="Text color" value={el.color && el.color !== 'brand' ? el.color : '#4f46e5'} onChange={(v) => onEl({ color: v })} />
-          <BarBtn title="Uppercase" active={!!el.uppercase} onClick={() => onEl({ uppercase: !el.uppercase })}>
-            <span className="text-[11px] font-bold leading-none">Aa</span>
-          </BarBtn>
-          <MiniNum title="Letter spacing (px)" value={el.letterSpacing ?? 0} onChange={(v) => onEl({ letterSpacing: v ? Math.round(v) : undefined })} />
-          <MiniNum title="Line height" step={0.05} value={el.lineHeight ?? 1.1} onChange={(v) => onEl({ lineHeight: v || undefined })} />
-          <BarSep />
-          {el.bg ? (
-            <>
-              <ColorSwatchInput title="Pill background" value={el.bg !== 'brand' ? el.bg : '#4f46e5'} onChange={(v) => onEl({ bg: v })} />
-              <BarBtn title="Remove pill background" onClick={() => onEl({ bg: undefined })}>
-                <XMarkIcon className="h-4 w-4" />
+      <div className="space-y-4 p-3">
+        {/* Content source — every element except shapes binds to data */}
+        {el.type !== 'shape' && (
+          <PanelSection title="Content">
+            <FontSelect value={bindingVal} onChange={applyBinding} options={bindingOpts} previewFont={false} />
+            {el.binding?.kind === 'static' && (
+              <input
+                value={el.binding.value}
+                onChange={(e) => onEl({ binding: { kind: 'static', value: e.target.value } })}
+                placeholder={el.type === 'text' ? 'Text' : 'Image URL'}
+                className="mt-2 w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+              />
+            )}
+          </PanelSection>
+        )}
+
+        {el.type === 'text' && (
+          <>
+            <PanelSection title="Font">
+              <FontSelect value={el.fontFamily ?? ''} onChange={(v) => onEl({ fontFamily: v || undefined })} options={fontOptions} />
+              <div className="mt-2 flex items-center gap-2">
+                <div className="flex flex-1 items-center gap-1">
+                  <BarBtn title="Smaller" onClick={() => onBox({ fontSize: Math.max(4, fontSize - 2) })}>
+                    <MinusIcon className="h-4 w-4" />
+                  </BarBtn>
+                  <input
+                    type="number"
+                    aria-label="Font size"
+                    value={fontSize}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (!Number.isNaN(n)) onBox({ fontSize: clamp(Math.round(n), 4, 400) });
+                    }}
+                    className="w-full min-w-0 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1.5 text-center text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                  />
+                  <BarBtn title="Larger" onClick={() => onBox({ fontSize: Math.min(400, fontSize + 2) })}>
+                    <PlusIcon className="h-4 w-4" />
+                  </BarBtn>
+                </div>
+                <div className="w-28 shrink-0">
+                  <FontSelect value={String(el.fontWeight ?? 400)} onChange={(v) => onEl({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} />
+                </div>
+              </div>
+            </PanelSection>
+
+            <PanelSection title="Alignment">
+              <div className="flex items-center gap-1">
+                <BarBtn title="Align left" active={(el.align ?? 'left') === 'left'} onClick={() => onEl({ align: 'left' })}>
+                  <Bars3BottomLeftIcon className="h-4 w-4" />
+                </BarBtn>
+                <BarBtn title="Align center" active={el.align === 'center'} onClick={() => onEl({ align: 'center' })}>
+                  <Bars3Icon className="h-4 w-4" />
+                </BarBtn>
+                <BarBtn title="Align right" active={el.align === 'right'} onClick={() => onEl({ align: 'right' })}>
+                  <Bars3BottomRightIcon className="h-4 w-4" />
+                </BarBtn>
+                <span className="mx-1 h-6 w-px bg-[var(--border)]" />
+                <BarBtn title="Uppercase" active={!!el.uppercase} onClick={() => onEl({ uppercase: !el.uppercase })}>
+                  <span className="text-[11px] font-bold leading-none">Aa</span>
+                </BarBtn>
+              </div>
+            </PanelSection>
+
+            <PanelSection title="Color & spacing">
+              <div className="flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                  Color
+                  <ColorSwatchInput title="Text color" value={el.color && el.color !== 'brand' ? el.color : '#4f46e5'} onChange={(v) => onEl({ color: v })} />
+                </label>
+                <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                  Letter
+                  <MiniNum title="Letter spacing (px)" value={el.letterSpacing ?? 0} onChange={(v) => onEl({ letterSpacing: v ? Math.round(v) : undefined })} />
+                </label>
+                <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                  Line
+                  <MiniNum title="Line height" step={0.05} value={el.lineHeight ?? 1.1} onChange={(v) => onEl({ lineHeight: v || undefined })} />
+                </label>
+              </div>
+            </PanelSection>
+
+            <PanelSection title="Pill background">
+              {el.bg ? (
+                <div className="flex items-center gap-2">
+                  <ColorSwatchInput title="Pill background" value={el.bg !== 'brand' ? el.bg : '#4f46e5'} onChange={(v) => onEl({ bg: v })} />
+                  <span className="text-xs text-[var(--muted-foreground)]">On</span>
+                  <BarBtn title="Remove pill background" onClick={() => onEl({ bg: undefined })}>
+                    <XMarkIcon className="h-4 w-4" />
+                  </BarBtn>
+                </div>
+              ) : (
+                <BarBtn title="Add pill background" onClick={() => onEl({ bg: 'brand', radius: el.radius ?? 999, padding: el.padding ?? 14 })}>
+                  <span className="text-[10px] font-semibold leading-none">Pill</span>
+                </BarBtn>
+              )}
+            </PanelSection>
+          </>
+        )}
+
+        {el.type === 'shape' && (
+          <PanelSection title="Shape">
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                Fill
+                <ColorSwatchInput title="Fill" value={el.fill && el.fill !== 'brand' ? el.fill : '#4f46e5'} onChange={(v) => onEl({ fill: v })} />
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                Radius
+                <MiniNum title="Corner radius (px)" value={el.radius ?? 0} onChange={(v) => onEl({ radius: v ? Math.round(v) : undefined })} />
+              </label>
+            </div>
+          </PanelSection>
+        )}
+
+        {(el.type === 'image' || el.type === 'logo') && (
+          <PanelSection title="Image">
+            <div className="flex items-center gap-1">
+              <BarBtn title="Fit (contain)" active={(el.fit ?? 'contain') === 'contain'} onClick={() => onEl({ fit: 'contain' })}>
+                <ArrowsPointingInIcon className="h-4 w-4" />
               </BarBtn>
-            </>
-          ) : (
-            <BarBtn title="Add pill background" onClick={() => onEl({ bg: 'brand', radius: el.radius ?? 999, padding: el.padding ?? 14 })}>
-              <span className="text-[10px] font-semibold leading-none">Pill</span>
-            </BarBtn>
-          )}
-        </>
-      )}
+              <BarBtn title="Fill (cover)" active={el.fit === 'cover'} onClick={() => onEl({ fit: 'cover' })}>
+                <ArrowsPointingOutIcon className="h-4 w-4" />
+              </BarBtn>
+            </div>
+            {el.type === 'image' && el.fit === 'cover' && (
+              <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Drag the image on the canvas to reposition it — the off-canvas bleed shows while you drag (saved per size).</p>
+            )}
+          </PanelSection>
+        )}
+      </div>
+    </div>
+  );
+}
 
-      {el.type === 'shape' && (
-        <>
-          <ColorSwatchInput title="Fill" value={el.fill && el.fill !== 'brand' ? el.fill : '#4f46e5'} onChange={(v) => onEl({ fill: v })} />
-          <MiniNum title="Corner radius (px)" value={el.radius ?? 0} onChange={(v) => onEl({ radius: v ? Math.round(v) : undefined })} />
-        </>
-      )}
-
-      {(el.type === 'image' || el.type === 'logo') && (
-        <>
-          <BarBtn title="Fit (contain)" active={(el.fit ?? 'contain') === 'contain'} onClick={() => onEl({ fit: 'contain' })}>
-            <ArrowsPointingInIcon className="h-4 w-4" />
-          </BarBtn>
-          <BarBtn title="Fill (cover)" active={el.fit === 'cover'} onClick={() => onEl({ fit: 'cover' })}>
-            <ArrowsPointingOutIcon className="h-4 w-4" />
-          </BarBtn>
-          {el.type === 'image' && el.fit === 'cover' && (
-            <>
-              <BarSep />
-              <span className="px-1 text-[10px] font-medium text-[var(--muted-foreground)]" title="Drag the image on the canvas to reposition it — its off-canvas bleed shows while you drag (per size)">
-                Drag on canvas to reposition
-              </span>
-            </>
-          )}
-        </>
-      )}
+/** A labeled group of controls in the selection panel. */
+function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">{title}</div>
+      {children}
     </div>
   );
 }
@@ -3183,10 +3260,6 @@ function BarBtn({
       {children}
     </button>
   );
-}
-
-function BarSep() {
-  return <span className="mx-0.5 h-6 w-px bg-[var(--border)]" />;
 }
 
 function ColorSwatchInput({ title, value, onChange }: { title: string; value: string; onChange: (v: string) => void }) {

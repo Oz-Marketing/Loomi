@@ -17,6 +17,7 @@
  */
 
 import { useMemo, useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import {
@@ -455,6 +456,8 @@ export default function AdBuilderPage() {
   const [dragLayer, setDragLayer] = useState<string | null>(null);
   // Live order during a Layers drag (top→front), so rows shift as you hover.
   const [dragOrder, setDragOrder] = useState<string[] | null>(null);
+  // Right-click context menu (canvas + layers), positioned at the cursor.
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // FLIP: gently slide Layers rows to their new spots when the drop order
   // actually changes during a drag. Transforms are cleared before measuring, so
   // an in-flight animation never pollutes the next measurement (no jitter).
@@ -783,6 +786,70 @@ export default function AdBuilderPage() {
     gids.forEach((g) => ungroupGroup(g));
   }
   const selectGroup = useCallback((gid: string) => setSelectedIds(membersOf(gid)), [membersOf]);
+
+  // Delete every selected element in one step, dropping any group left empty.
+  function deleteSelected() {
+    const ids = new Set(selectedIds);
+    if (!ids.size) return;
+    setDoc((prev) => {
+      const elements = prev.elements.filter((e) => !ids.has(e.id));
+      const layouts: typeof prev.layouts = {};
+      for (const sid of Object.keys(prev.layouts)) {
+        layouts[sid] = Object.fromEntries(Object.entries(prev.layouts[sid]).filter(([k]) => !ids.has(k)));
+      }
+      const parentOf = new Map((prev.groups ?? []).map((g) => [g.id, g.parentId ?? null]));
+      const stillUsed = (gid: string) =>
+        elements.some((e) => {
+          let g = e.groupId ?? null;
+          const seen = new Set<string>();
+          while (g && !seen.has(g)) {
+            if (g === gid) return true;
+            seen.add(g);
+            g = parentOf.get(g) ?? null;
+          }
+          return false;
+        });
+      const groups = (prev.groups ?? []).filter((g) => stillUsed(g.id));
+      return { ...prev, elements, layouts, groups };
+    });
+    clearSelection();
+    setCtxMenu(null);
+  }
+
+  // Right-click → context menu. Selects the target first (a grouped element →
+  // its outermost group), unless it's already part of the current selection.
+  function openCanvasMenu(e: React.MouseEvent, elId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (lockedIds.has(elId)) return;
+    if (!selectedIds.includes(elId)) {
+      const chain = ancestorChain(elId);
+      const outer = chain[chain.length - 1];
+      if (outer) setSelectedIds(membersOf(outer));
+      else selectOne(elId);
+    }
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  }
+  function openLayerMenu(e: React.MouseEvent, opts: { elId?: string; gid?: string }) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (opts.gid) setSelectedIds(membersOf(opts.gid));
+    else if (opts.elId && !selectedIds.includes(opts.elId)) selectOne(opts.elId);
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  }
+  // Close the context menu on outside click / Escape.
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onDown = () => setCtxMenu(null);
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setCtxMenu(null);
+    window.addEventListener('pointerdown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [ctxMenu]);
+
   function toggleGroupCollapsed(gid: string) {
     setDoc((prev) => ({ ...prev, groups: (prev.groups ?? []).map((g) => (g.id === gid ? { ...g, collapsed: !g.collapsed } : g)) }));
   }
@@ -1767,6 +1834,7 @@ export default function AdBuilderPage() {
                       key={el.id}
                       data-layer-row={el.id}
                       {...rowDrag(el.id, renaming)}
+                      onContextMenu={(e) => openLayerMenu(e, { elId: el.id })}
                       className={`flex items-center gap-1 rounded-lg pr-1 ${
                         isSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'
                       } ${box.hidden ? 'opacity-50' : ''} ${rowIsDragged(el.id, false) ? 'opacity-0' : ''}`}
@@ -1834,6 +1902,7 @@ export default function AdBuilderPage() {
                       <div
                         data-layer-row={gid}
                         {...dragHandlers(gid, true, renamingG)}
+                        onContextMenu={(e) => openLayerMenu(e, { gid })}
                         className={`flex items-center gap-1 rounded-lg pr-1 ${allSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'} ${rowIsDragged(gid, true) ? 'opacity-0' : ''}`}
                       >
                         <button onClick={() => toggleGroupCollapsed(gid)} title={collapsed ? 'Expand' : 'Collapse'} className="rounded p-0.5 pl-1 text-[var(--muted-foreground)]/70 hover:text-[var(--foreground)]">
@@ -2204,6 +2273,7 @@ export default function AdBuilderPage() {
                       <div
                         key={el.id}
                         onPointerDown={(e) => onBoxPointerDown(e, el.id)}
+                        onContextMenu={(e) => openCanvasMenu(e, el.id)}
                         onDoubleClick={(e) => {
                           // Drill into a group: double-click selects just this member.
                           if (el.groupId && !lockedIds.has(el.id)) {
@@ -2313,21 +2383,10 @@ export default function AdBuilderPage() {
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch })}
                 />
               )}
-              {selectedIds.length > 1 && (
-                <MultiSelectToolbar
-                  count={selectedIds.length}
-                  onAlign={alignSelected}
-                  onDistribute={distributeSelected}
-                  canDistribute={selectedIds.length >= 3}
-                  grouped={selectionIsGroup}
-                  onGroup={groupSelected}
-                  onUngroup={ungroupSelected}
-                />
-              )}
             </div>
 
           <div className="flex-shrink-0 border-t border-[var(--border)] px-4 py-1.5 text-center text-[11px] text-[var(--muted-foreground)]">
-            {size.label} · drag to move · shift-click or drag a box to multi-select · drag the box handles to resize the group · arrows nudge · Delete removes
+            {size.label} · drag to move · shift-click to multi-select · right-click for actions · arrows nudge · Delete removes
           </div>
         </div>
       </div>
@@ -2355,6 +2414,89 @@ export default function AdBuilderPage() {
           onDelete={deleteSaved}
         />
       )}
+
+      {/* Right-click context menu (canvas + layers) */}
+      {ctxMenu && typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className="fixed z-[200] min-w-[12rem] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card-strong)] py-1 text-sm shadow-2xl backdrop-blur-2xl"
+            style={{ left: Math.min(ctxMenu.x, (typeof window !== 'undefined' ? window.innerWidth : 9999) - 230), top: ctxMenu.y }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onContextMenu={(e) => e.preventDefault()}
+          >
+            {(() => {
+              const run = (fn: () => void) => () => {
+                fn();
+                setCtxMenu(null);
+              };
+              const multi = selectedIds.length > 1;
+              const single = selected;
+              const Item = ({ onClick, danger, kbd, children }: { onClick: () => void; danger?: boolean; kbd?: string; children: React.ReactNode }) => (
+                <button
+                  onClick={run(onClick)}
+                  className={`flex w-full items-center justify-between gap-6 px-3 py-1.5 text-left transition-colors hover:bg-[var(--muted)] ${danger ? 'text-red-500' : 'text-[var(--foreground)]'}`}
+                >
+                  <span>{children}</span>
+                  {kbd && <span className="text-[10px] text-[var(--muted-foreground)]">{kbd}</span>}
+                </button>
+              );
+              const Sep = () => <div className="my-1 h-px bg-[var(--border)]" />;
+              return (
+                <>
+                  {multi && (
+                    <>
+                      <Item onClick={selectionIsGroup ? ungroupSelected : groupSelected} kbd={selectionIsGroup ? '⌘⇧G' : '⌘G'}>
+                        {selectionIsGroup ? 'Ungroup' : 'Group'}
+                      </Item>
+                      <Sep />
+                      <div className="flex items-center gap-0.5 px-2 py-1">
+                        {(['left', 'hcenter', 'right', 'top', 'vmiddle', 'bottom'] as const).map((edge) => (
+                          <button key={edge} onClick={run(() => alignSelected(edge))} title={`Align ${edge}`} className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]">
+                            <AlignIcon edge={edge} />
+                          </button>
+                        ))}
+                        {selectedIds.length >= 3 && (
+                          <>
+                            <span className="mx-0.5 h-5 w-px bg-[var(--border)]" />
+                            <button onClick={run(() => distributeSelected('h'))} title="Distribute horizontally" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]">
+                              <AlignIcon edge="dist-h" />
+                            </button>
+                            <button onClick={run(() => distributeSelected('v'))} title="Distribute vertically" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] hover:bg-[var(--muted)]">
+                              <AlignIcon edge="dist-v" />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                      <Sep />
+                    </>
+                  )}
+                  {single && (
+                    <>
+                      <Item onClick={bringForward}>Bring forward</Item>
+                      <Item onClick={sendBack}>Send back</Item>
+                      <Item onClick={() => duplicateElement(single.id)}>Duplicate</Item>
+                      <Item onClick={() => toggleLock(single.id)}>{single.locked ? 'Unlock' : 'Lock'}</Item>
+                      <Item onClick={() => toggleHidden(single.id)}>{selectedBox?.hidden ? 'Show in this size' : 'Hide in this size'}</Item>
+                      <Item
+                        onClick={() => {
+                          setRenameDraft(elName(single));
+                          setRenamingLayer(single.id);
+                        }}
+                      >
+                        Rename
+                      </Item>
+                      <Sep />
+                    </>
+                  )}
+                  <Item onClick={deleteSelected} danger kbd="⌫">
+                    Delete{multi ? ` (${selectedIds.length})` : ''}
+                  </Item>
+                </>
+              );
+            })()}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
@@ -2786,70 +2928,6 @@ function BackgroundPanel({
       </div>
       <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">For a photo background, add a <span className="font-medium text-[var(--foreground)]">Background image</span> layer from Elements.</p>
     </section>
-  );
-}
-
-/**
- * Floating toolbar shown when 2+ elements are selected — align the selection to
- * a shared edge/center, and (3+) distribute with equal gaps. Mirrors the
- * single-element SelectionToolbar's chrome.
- */
-function MultiSelectToolbar({
-  count,
-  onAlign,
-  onDistribute,
-  canDistribute,
-  grouped,
-  onGroup,
-  onUngroup,
-}: {
-  count: number;
-  onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
-  onDistribute: (axis: 'h' | 'v') => void;
-  canDistribute: boolean;
-  grouped: boolean;
-  onGroup: () => void;
-  onUngroup: () => void;
-}) {
-  return (
-    <div className="absolute bottom-4 left-1/2 z-20 flex max-w-[calc(100%-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-1.5 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-lg backdrop-blur-2xl backdrop-saturate-150">
-      <span className="px-1.5 text-xs font-medium text-[var(--muted-foreground)]">{count} selected</span>
-      <BarSep />
-      <BarBtn title={grouped ? 'Ungroup (⌘⇧G)' : 'Group (⌘G)'} active={grouped} onClick={grouped ? onUngroup : onGroup}>
-        <RectangleStackIcon className="h-4 w-4" />
-      </BarBtn>
-      <BarSep />
-      <BarBtn title="Align left" onClick={() => onAlign('left')}>
-        <AlignIcon edge="left" />
-      </BarBtn>
-      <BarBtn title="Align horizontal centers" onClick={() => onAlign('hcenter')}>
-        <AlignIcon edge="hcenter" />
-      </BarBtn>
-      <BarBtn title="Align right" onClick={() => onAlign('right')}>
-        <AlignIcon edge="right" />
-      </BarBtn>
-      <BarSep />
-      <BarBtn title="Align top" onClick={() => onAlign('top')}>
-        <AlignIcon edge="top" />
-      </BarBtn>
-      <BarBtn title="Align vertical centers" onClick={() => onAlign('vmiddle')}>
-        <AlignIcon edge="vmiddle" />
-      </BarBtn>
-      <BarBtn title="Align bottom" onClick={() => onAlign('bottom')}>
-        <AlignIcon edge="bottom" />
-      </BarBtn>
-      {canDistribute && (
-        <>
-          <BarSep />
-          <BarBtn title="Distribute horizontally (equal gaps)" onClick={() => onDistribute('h')}>
-            <AlignIcon edge="dist-h" />
-          </BarBtn>
-          <BarBtn title="Distribute vertically (equal gaps)" onClick={() => onDistribute('v')}>
-            <AlignIcon edge="dist-v" />
-          </BarBtn>
-        </>
-      )}
-    </div>
   );
 }
 

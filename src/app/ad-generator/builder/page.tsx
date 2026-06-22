@@ -59,10 +59,10 @@ import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type LayerNode } from '@/lib/ad-generator/layer-tree';
-import { TextElementIcon, ShapeElementIcon, DashboardLayoutIcon, LayersIcon } from '@/components/ad-generator/builder-icons';
+import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon } from '@/components/ad-generator/builder-icons';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
-import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, DocBackground } from '@/lib/ad-generator/doc-types';
+import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType, AdData } from '@/lib/ad-generator/types';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -589,25 +589,29 @@ export default function AdBuilderPage() {
     [],
   );
 
-  // Add a full-bleed background image: a cover image element pinned to the whole
-  // canvas at the back, bound to a new per-ad image field. It's a normal layer —
-  // reorder / lock / group it like anything else; per-size focal point frames it.
-  const addBackground = useCallback(() => {
-    const id = `image-${rid()}`;
-    const key = `bgImage_${rid()}`;
+  // Add a Button: a text element styled as a brand-colored pill (white,
+  // centered). Just a styled text element — no separate element type.
+  const addButton = useCallback(() => {
+    const id = `text-${rid()}`;
     setDoc((prev) => {
+      const curLayout = prev.layouts[prev.sizes[0].id] ?? {};
+      const maxZ = Object.values(curLayout).reduce((m, b) => Math.max(m, b.z ?? 0), 0);
+      const box: DocLayoutBox = { x: 0.35, y: 0.8, w: 0.3, h: 0.08, z: maxZ + 1, fontSize: 28 };
       const layouts = { ...prev.layouts };
-      for (const s of prev.sizes) {
-        const cur = prev.layouts[s.id] ?? {};
-        const minZ = Object.values(cur).reduce((m, b) => Math.min(m, b.z ?? 0), 0);
-        layouts[s.id] = { ...cur, [id]: { x: 0, y: 0, w: 1, h: 1, z: minZ - 1, objectX: 0.5, objectY: 0.5 } };
-      }
-      return {
-        ...prev,
-        fields: [...prev.fields, { key, label: 'Background image', type: 'image', group: 'Background' }],
-        elements: [...prev.elements, { id, type: 'image', name: 'Background', binding: { kind: 'field', key }, fit: 'cover' }],
-        layouts,
+      for (const s of prev.sizes) layouts[s.id] = { ...layouts[s.id], [id]: { ...box } };
+      const el: DocElement = {
+        id,
+        type: 'text',
+        name: 'Button',
+        binding: { kind: 'static', value: 'Shop Now' },
+        fontWeight: 700,
+        color: '#ffffff',
+        align: 'center',
+        bg: 'brand',
+        radius: 999,
+        padding: 14,
       };
+      return { ...prev, elements: [...prev.elements, el], layouts };
     });
     setSelectedIds([id]);
   }, []);
@@ -943,14 +947,6 @@ export default function AdBuilderPage() {
     const f = clamp(pct, 0, 40) / 100;
     setDoc((prev) => ({ ...prev, safeArea: f > 0 ? { x: f, y: f } : undefined }));
   }
-
-  // ── canvas background (base fill only; image backgrounds are layers) ──
-  const setBackground = useCallback(
-    (patch: Partial<DocBackground>) => {
-      setDoc((prev) => ({ ...prev, background: { ...prev.background, ...patch } }));
-    },
-    [setDoc],
-  );
 
   // ── industries (which accounts this template is offered to) ──
   const allIndustries = useIndustries();
@@ -1556,11 +1552,13 @@ export default function AdBuilderPage() {
     return () => window.clearTimeout(handle);
   }, [doc, templateName, status, templateId, adId]);
 
-  const adders: { type: DocElementType; label: string }[] = [
-    { type: 'text', label: 'Text' },
-    { type: 'image', label: 'Image' },
-    { type: 'logo', label: 'Logo' },
-    { type: 'shape', label: 'Shape' },
+  // Element adders. A "Button" is a styled text element (no separate type); a
+  // background is just an Image set to Fill — so no Logo / Background adders.
+  const adders: { label: string; Icon: React.ComponentType<{ className?: string }>; onAdd: () => void }[] = [
+    { label: 'Text', Icon: TextElementIcon, onAdd: () => addElement('text') },
+    { label: 'Image', Icon: PhotoIcon, onAdd: () => addElement('image') },
+    { label: 'Button', Icon: ButtonElementIcon, onAdd: addButton },
+    { label: 'Shape', Icon: ShapeElementIcon, onAdd: () => addElement('shape') },
   ];
 
   const saveInfo =
@@ -1714,30 +1712,19 @@ export default function AdBuilderPage() {
               Elements
             </h2>
             <div className="grid grid-cols-2 gap-1.5">
-              {adders.map((a) => {
-                const Icon = TYPE_ICON[a.type];
-                return (
-                  <button
-                    key={a.type}
-                    onClick={() => addElement(a.type)}
-                    className="flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                  >
-                    <PlusIcon className="h-3 w-3" />
-                    <Icon className="h-3.5 w-3.5" />
-                    {a.label}
-                  </button>
-                );
-              })}
+              {adders.map((a) => (
+                <button
+                  key={a.label}
+                  onClick={a.onAdd}
+                  className="flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                >
+                  <PlusIcon className="h-3 w-3" />
+                  <a.Icon className="h-3.5 w-3.5" />
+                  {a.label}
+                </button>
+              ))}
             </div>
-            <button
-              onClick={addBackground}
-              className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-              title="Full-bleed background image — a normal layer at the back"
-            >
-              <PlusIcon className="h-3 w-3" />
-              <PhotoIcon className="h-3.5 w-3.5" />
-              Background image
-            </button>
+            <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">For a photo background, add an Image and set its fill to Cover.</p>
           </section>
 
           {/* Layers — the stack of placed elements (top of the list = front).
@@ -2145,9 +2132,6 @@ export default function AdBuilderPage() {
               </div>
             )}
           </section>
-
-          {/* Background — canvas base fill (image backgrounds are layers) */}
-          <BackgroundPanel background={doc.background} onBackground={setBackground} />
 
         </aside>
 
@@ -2892,42 +2876,6 @@ function FocalGrid({ x, y, onChange }: { x: number; y: number; onChange: (x: num
         }),
       )}
     </div>
-  );
-}
-
-/** Background panel — canvas base fill (solid + brand accent bar). A background
- * IMAGE is a full-bleed image layer now ("Background image" in Elements), not a
- * doc-level setting, so it isn't managed here. */
-function BackgroundPanel({
-  background,
-  onBackground,
-}: {
-  background: DocBackground | undefined;
-  onBackground: (patch: Partial<DocBackground>) => void;
-}) {
-  return (
-    <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
-      <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Background</h2>
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-[var(--muted-foreground)]">Fill</span>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => onBackground({ accentBar: !background?.accentBar })}
-            className={`rounded-md border px-2 py-1 text-[11px] font-medium transition-colors ${
-              background?.accentBar
-                ? 'border-[var(--primary)] text-[var(--primary)]'
-                : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
-            }`}
-            title="Thin brand-colored bar across the top"
-          >
-            Accent bar
-          </button>
-          <ColorSwatchInput title="Background color" value={background?.color || '#ffffff'} onChange={(v) => onBackground({ color: v, gradient: undefined })} />
-        </div>
-      </div>
-      <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">For a photo background, add a <span className="font-medium text-[var(--foreground)]">Background image</span> layer from Elements.</p>
-    </section>
   );
 }
 

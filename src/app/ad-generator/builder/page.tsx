@@ -201,6 +201,25 @@ type SavedTemplate = {
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+type MarginUnit = 'percent' | 'px' | 'em' | 'rem';
+const MARGIN_UNITS: { value: MarginUnit; label: string }[] = [
+  { value: 'percent', label: '%' },
+  { value: 'px', label: 'px' },
+  { value: 'em', label: 'em' },
+  { value: 'rem', label: 'rem' },
+];
+/** Convert a safe-area margin (value + unit) to per-size edge fractions. px/em/
+ *  rem are absolute, so they resolve against this size's dimensions. */
+function safeAreaFractions(sa: { value: number; unit: MarginUnit } | undefined, w: number, h: number): { x: number; y: number } | null {
+  if (!sa || !(sa.value > 0)) return null;
+  if (sa.unit === 'percent') {
+    const f = clamp(sa.value / 100, 0, 0.49);
+    return { x: f, y: f };
+  }
+  const px = sa.unit === 'em' || sa.unit === 'rem' ? sa.value * 16 : sa.value;
+  return { x: clamp(px / w, 0, 0.49), y: clamp(px / h, 0, 0.49) };
+}
+
 const SNAP_PX = 6; // alignment snap distance, in on-screen pixels
 
 /** Nearest snap of any of `edges` to any of `targets` within `threshold`. */
@@ -303,7 +322,7 @@ export default function AdBuilderPage() {
   const clearSelection = useCallback(() => setSelectedIds([]), []);
   const toggleSelect = useCallback((id: string) => setSelectedIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id])), []);
   const [showOutlines, setShowOutlines] = useState(true);
-  const [showSafe, setShowSafe] = useState(true);
+  const [showSafe, setShowSafe] = useState(false);
   const [dragBox, setDragBox] = useState<DocLayoutBox | null>(null);
   // Figma-style alignment guides shown while dragging (fractions, or null).
   const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
@@ -942,10 +961,20 @@ export default function AdBuilderPage() {
     }));
   }
 
-  // Safe-area padding (uniform %, builder-only guide). 0 clears it.
-  function setSafeArea(pct: number) {
-    const f = clamp(pct, 0, 40) / 100;
-    setDoc((prev) => ({ ...prev, safeArea: f > 0 ? { x: f, y: f } : undefined }));
+  // Safe-area margin (value + unit, builder-only guide).
+  function setMargin(patch: Partial<{ value: number; unit: MarginUnit }>) {
+    setDoc((prev) => {
+      const cur = prev.safeArea ?? { value: 5, unit: 'percent' as MarginUnit };
+      return { ...prev, safeArea: { ...cur, ...patch } };
+    });
+  }
+  // The Margins toggle (on shows the guide + controls; seeds a default if unset).
+  function toggleMargins() {
+    setShowSafe((v) => {
+      const next = !v;
+      if (next && !doc.safeArea) setMargin({ value: 5, unit: 'percent' });
+      return next;
+    });
   }
 
   // ── industries (which accounts this template is offered to) ──
@@ -1150,9 +1179,10 @@ export default function AdBuilderPage() {
   function snapTargets(exclude: Set<string>) {
     const tx = [0, 0.5, 1];
     const ty = [0, 0.5, 1];
-    if (doc.safeArea) {
-      tx.push(doc.safeArea.x, 1 - doc.safeArea.x);
-      ty.push(doc.safeArea.y, 1 - doc.safeArea.y);
+    const sa = showSafe ? safeAreaFractions(doc.safeArea, size.width, size.height) : null;
+    if (sa) {
+      tx.push(sa.x, 1 - sa.x);
+      ty.push(sa.y, 1 - sa.y);
     }
     for (const p of placed) {
       if (exclude.has(p.el.id) || p.box.hidden) continue;
@@ -2163,25 +2193,40 @@ export default function AdBuilderPage() {
               >
                 Outlines
               </button>
-              {/* Safe-area margins: toggle visibility + set the padding % */}
+              {/* Safe-area margins: toggle on/off; value + unit only when on */}
               <div className="flex items-center gap-1">
                 <button
-                  onClick={() => setShowSafe((v) => !v)}
-                  title="Show/hide safe-area margins"
+                  onClick={toggleMargins}
+                  title="Safe-area margins"
                   className={`rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    showSafe && doc.safeArea ? 'border-[#14b8a6] text-[#14b8a6]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+                    showSafe ? 'border-[#14b8a6] text-[#14b8a6]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
                   }`}
                 >
                   Margins
                 </button>
-                <input
-                  type="number"
-                  value={Math.round((doc.safeArea?.x ?? 0) * 100)}
-                  onChange={(e) => setSafeArea(Number(e.target.value))}
-                  title="Safe-area padding (%)"
-                  className="w-11 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                />
-                <span className="text-[10px] text-[var(--muted-foreground)]">%</span>
+                {showSafe && (
+                  <>
+                    <input
+                      type="number"
+                      value={doc.safeArea?.value ?? 5}
+                      onChange={(e) => setMargin({ value: Math.max(0, Number(e.target.value)) })}
+                      title="Margin size"
+                      className="w-11 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                    />
+                    <select
+                      value={doc.safeArea?.unit ?? 'percent'}
+                      onChange={(e) => setMargin({ unit: e.target.value as MarginUnit })}
+                      title="Unit"
+                      className="rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                    >
+                      {MARGIN_UNITS.map((u) => (
+                        <option key={u.value} value={u.value}>
+                          {u.label}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -2213,17 +2258,15 @@ export default function AdBuilderPage() {
                   }}
                 >
                   {/* Safe-area margin boundary (a builder-only guide) */}
-                  {showSafe && doc.safeArea && (
-                    <div
-                      className="pointer-events-none absolute z-10 rounded-[2px] border border-dashed border-[#14b8a6]/70"
-                      style={{
-                        left: doc.safeArea.x * frameW,
-                        top: doc.safeArea.y * frameH,
-                        width: (1 - 2 * doc.safeArea.x) * frameW,
-                        height: (1 - 2 * doc.safeArea.y) * frameH,
-                      }}
-                    />
-                  )}
+                  {(() => {
+                    const sa = showSafe ? safeAreaFractions(doc.safeArea, size.width, size.height) : null;
+                    return sa ? (
+                      <div
+                        className="pointer-events-none absolute z-10 rounded-[2px] border border-dashed border-[#14b8a6]/70"
+                        style={{ left: sa.x * frameW, top: sa.y * frameH, width: (1 - 2 * sa.x) * frameW, height: (1 - 2 * sa.y) * frameH }}
+                      />
+                    ) : null;
+                  })()}
                   {/* Alignment guides (Figma-style) while dragging */}
                   {dragBox && guides.x != null && (
                     <span className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-[#ec4899]" style={{ left: guides.x * frameW }} />

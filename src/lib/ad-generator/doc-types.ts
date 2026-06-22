@@ -112,10 +112,10 @@ export interface TemplateDoc {
    *  visibleWhen all carry straight over from the code-template work). */
   fields: FieldSpec[];
   background?: DocBackground;
-  /** Optional safe-area padding (fractions inset from each edge) the designer
-   *  sets to mark consistent margins. A builder-only guide — never rendered on
-   *  export — that the alignment snapping treats as an edge to snap to. */
-  safeArea?: { x: number; y: number };
+  /** Optional safe-area margin the designer sets to mark consistent padding. A
+   *  builder-only guide (never exported) the alignment snapping treats as an
+   *  edge. Stored as a value + unit; converted to per-size fractions at use. */
+  safeArea?: { value: number; unit: 'percent' | 'px' | 'em' | 'rem' };
   /** Shared element definitions. */
   elements: DocElement[];
   /** Element groups (⌘G in the builder) — id + display name, referenced by

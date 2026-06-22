@@ -36,6 +36,7 @@ import {
   XMarkIcon,
   ArrowsPointingInIcon,
   ArrowsPointingOutIcon,
+  ArrowUpTrayIcon,
   ArrowUturnLeftIcon,
   ArrowUturnRightIcon,
   ArrowPathIcon,
@@ -50,6 +51,7 @@ import {
   Squares2X2Icon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { MediaPickerModal } from '@/components/media-picker-modal';
 import { renderDoc } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
@@ -306,7 +308,7 @@ function makeDefaultElement(id: string, type: DocElementType): DocElement {
 }
 
 export default function AdBuilderPage() {
-  const { accountData } = useAccount();
+  const { accountData, accountKey } = useAccount();
 
   const { doc, setDoc, undo, redo, canUndo, canRedo, reset: resetHistory } = useDocHistory(() => structuredClone(vehicleOfferDoc));
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
@@ -534,6 +536,41 @@ export default function AdBuilderPage() {
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const selected = selectedId ? doc.elements.find((e) => e.id === selectedId) ?? null : null;
   const selectedBox = selectedId ? layout[selectedId] : undefined;
+
+  // What the selection panel's "Content" section shows for the selected element.
+  // It surfaces the element's value directly (text to type, image to pick) instead
+  // of exposing the raw data binding — derived/brand-driven content is read-only.
+  const selectionContent = useMemo((): {
+    mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly';
+    value: string;
+    note?: string;
+  } | null => {
+    if (!selected) return null;
+    const b = selected.binding;
+    const isImage = selected.type === 'image' || selected.type === 'logo';
+    if (selected.type === 'shape' || !b) return { mode: 'none', value: '' };
+    const value = b.kind === 'static' ? b.value : String(previewData[b.key] ?? '');
+    if (b.kind === 'brand') return { mode: isImage ? 'image-readonly' : 'text-readonly', value, note: 'Comes from the account brand.' };
+    if (b.kind === 'field' && b.key.startsWith('_')) return { mode: 'text-readonly', value, note: 'Pulled from your offer fields — edit those in the Fields panel.' };
+    return { mode: isImage ? 'image-edit' : 'text-edit', value };
+  }, [selected, previewData]);
+
+  // Write the selected element's content back to its source: static → the literal,
+  // field → that field's default (the form data the generator prefills).
+  const setSelectedContent = useCallback(
+    (v: string) => {
+      if (!selected) return;
+      const b = selected.binding;
+      const id = selected.id;
+      if (b?.kind === 'static') {
+        setDoc((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === id ? { ...e, binding: { kind: 'static', value: v } } : e)) }));
+      } else if (b?.kind === 'field') {
+        const key = b.key;
+        setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: v } }));
+      }
+    },
+    [selected, setDoc],
+  );
 
   // A full-bleed element (covering ~the whole canvas — a background photo or its
   // scrim) behaves like the empty backdrop on click: it clears the selection
@@ -2636,7 +2673,9 @@ export default function AdBuilderPage() {
                   el={selected}
                   box={selectedBox}
                   fontOptions={fontOptions}
-                  fields={doc.fields}
+                  content={selectionContent}
+                  onContentChange={setSelectedContent}
+                  accountKey={accountKey ?? undefined}
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch })}
                   onClose={clearSelection}
@@ -2987,15 +3026,19 @@ function FieldsSidebar({
 
 /**
  * Floating properties panel for the selected element — sits to the right of the
- * canvas with everything for that element: content binding, font/text styling,
- * image fit, shape fill. Structural actions (reorder, duplicate, delete) live in
- * the right-click menu.
+ * canvas. The top "Content" section edits the element's value directly (type
+ * text, pick/upload an image) and writes straight to the form data; derived and
+ * brand-driven content is shown read-only. Below it: font/text styling, image
+ * fit, shape fill. Structural actions (reorder, duplicate, delete) live in the
+ * right-click menu.
  */
 function SelectionPanel({
   el,
   box,
   fontOptions,
-  fields,
+  content,
+  onContentChange,
+  accountKey,
   onEl,
   onBox,
   onClose,
@@ -3005,7 +3048,9 @@ function SelectionPanel({
   el: DocElement;
   box: DocLayoutBox;
   fontOptions: FontSelectOption[];
-  fields: FieldSpec[];
+  content: { mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly'; value: string; note?: string } | null;
+  onContentChange: (value: string) => void;
+  accountKey?: string;
   onEl: (patch: Partial<DocElement>) => void;
   onBox: (patch: Partial<DocLayoutBox>) => void;
   onClose: () => void;
@@ -3014,25 +3059,7 @@ function SelectionPanel({
 }) {
   const fontSize = box.fontSize ?? 16;
   const typeLabel = el.type === 'text' ? 'Text' : el.type === 'image' ? 'Image' : el.type === 'logo' ? 'Logo' : 'Shape';
-
-  // ── binding (content source) as a single compact dropdown ──
-  const bindingVal = !el.binding ? 'static' : el.binding.kind === 'static' ? 'static' : `${el.binding.kind}:${el.binding.key}`;
-  const bindingOpts: FontSelectOption[] = [
-    { value: 'static', label: 'Static' },
-    { value: 'brand:dealerName', label: 'Brand · Dealer name' },
-    { value: 'brand:logoUrl', label: 'Brand · Logo' },
-    { value: 'brand:brandColor', label: 'Brand · Color' },
-    ...fields.map((f) => ({ value: `field:${f.key}`, label: `Field · ${f.label || f.key}` })),
-  ];
-  const boundFieldKey = el.binding?.kind === 'field' ? el.binding.key : null;
-  if (boundFieldKey && !fields.some((f) => f.key === boundFieldKey)) {
-    bindingOpts.push({ value: `field:${boundFieldKey}`, label: `Field · ${boundFieldKey}` });
-  }
-  const applyBinding = (v: string) => {
-    if (v === 'static') onEl({ binding: { kind: 'static', value: el.binding?.kind === 'static' ? el.binding.value : '' } });
-    else if (v.startsWith('brand:')) onEl({ binding: { kind: 'brand', key: v.slice(6) as 'dealerName' | 'logoUrl' | 'brandColor' } });
-    else if (v.startsWith('field:')) onEl({ binding: { kind: 'field', key: v.slice(6) } });
-  };
+  const [picking, setPicking] = useState(false);
 
   return (
     <div
@@ -3050,17 +3077,47 @@ function SelectionPanel({
       </div>
 
       <div className="space-y-4 p-3">
-        {/* Content source — every element except shapes binds to data */}
-        {el.type !== 'shape' && (
+        {/* Content — edit the element's value directly; writes to the form data */}
+        {content && content.mode !== 'none' && (
           <PanelSection title="Content">
-            <FontSelect value={bindingVal} onChange={applyBinding} options={bindingOpts} previewFont={false} />
-            {el.binding?.kind === 'static' && (
-              <input
-                value={el.binding.value}
-                onChange={(e) => onEl({ binding: { kind: 'static', value: e.target.value } })}
-                placeholder={el.type === 'text' ? 'Text' : 'Image URL'}
-                className="mt-2 w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+            {content.mode === 'text-edit' && (
+              <textarea
+                value={content.value}
+                onChange={(e) => onContentChange(e.target.value)}
+                rows={2}
+                placeholder="Text"
+                className="w-full resize-y rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
               />
+            )}
+            {content.mode === 'text-readonly' && (
+              <>
+                <div className="truncate rounded-md border border-[var(--border)] bg-[var(--muted)]/40 px-2 py-1.5 text-xs text-[var(--foreground)]">{content.value || '—'}</div>
+                {content.note && <p className="mt-1.5 text-[11px] leading-snug text-[var(--muted-foreground)]">{content.note}</p>}
+              </>
+            )}
+            {(content.mode === 'image-edit' || content.mode === 'image-readonly') && (
+              <div className="flex items-center gap-3">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--border)] bg-[var(--muted)]/40">
+                  {content.value ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={content.value} alt="" className="h-full w-full object-contain" />
+                  ) : (
+                    <PhotoIcon className="h-5 w-5 text-[var(--muted-foreground)]" />
+                  )}
+                </div>
+                {content.mode === 'image-edit' ? (
+                  <button
+                    type="button"
+                    onClick={() => setPicking(true)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                  >
+                    <ArrowUpTrayIcon className="h-4 w-4" />
+                    Choose / upload
+                  </button>
+                ) : (
+                  <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">{content.note}</p>
+                )}
+              </div>
             )}
           </PanelSection>
         )}
@@ -3178,6 +3235,17 @@ function SelectionPanel({
           </PanelSection>
         )}
       </div>
+
+      {picking && (
+        <MediaPickerModal
+          accountKey={accountKey}
+          onSelect={(url) => {
+            onContentChange(url);
+            setPicking(false);
+          }}
+          onClose={() => setPicking(false)}
+        />
+      )}
     </div>
   );
 }

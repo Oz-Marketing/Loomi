@@ -30,7 +30,6 @@ import {
   EyeIcon,
   EyeSlashIcon,
   PlusIcon,
-  PlusCircleIcon,
   MinusIcon,
   TrashIcon,
   XMarkIcon,
@@ -59,7 +58,7 @@ import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type LayerNode } from '@/lib/ad-generator/layer-tree';
-import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon } from '@/components/ad-generator/builder-icons';
+import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon } from '@/components/ad-generator/builder-icons';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox } from '@/lib/ad-generator/doc-types';
@@ -330,7 +329,9 @@ export default function AdBuilderPage() {
   const [fieldsOpen, setFieldsOpen] = useState(false);
   // Left rail: which panel (Elements / Layers / Industries / Sizes) is open as a
   // flyout. null = collapsed to just the icons.
-  const [leftPanel, setLeftPanel] = useState<'elements' | 'layers' | 'industries' | 'sizes' | null>(null);
+  const [leftPanel, setLeftPanel] = useState<'layers' | 'industries' | 'sizes' | null>(null);
+  // The on-canvas "add element" popover (top-left of the artboard).
+  const [addOpen, setAddOpen] = useState(false);
   const [addSizeOpen, setAddSizeOpen] = useState(false);
   const [customName, setCustomName] = useState('');
   const [customW, setCustomW] = useState('');
@@ -1020,6 +1021,19 @@ export default function AdBuilderPage() {
       window.removeEventListener('keydown', onKey);
     };
   }, [ctxMenu]);
+
+  // Close the on-canvas add popover on outside click / Escape.
+  useEffect(() => {
+    if (!addOpen) return;
+    const onDown = () => setAddOpen(false);
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setAddOpen(false);
+    window.addEventListener('pointerdown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [addOpen]);
 
   function toggleGroupCollapsed(gid: string) {
     setDoc((prev) => ({ ...prev, groups: (prev.groups ?? []).map((g) => (g.id === gid ? { ...g, collapsed: !g.collapsed } : g)) }));
@@ -1815,90 +1829,30 @@ export default function AdBuilderPage() {
     <div className="flex h-full flex-col">
       {fontFaceCss && <style dangerouslySetInnerHTML={{ __html: fontFaceCss }} />}
 
-      {/* Editor header bar */}
-      <header className="grid flex-shrink-0 grid-cols-[1fr_auto_1fr] items-center gap-3 pb-3">
-        {/* left — back + status */}
-        <div className="flex min-w-0 items-center gap-2">
+      {/* Editor header bar — the left column matches the icon rail's width so the
+          title + actions line up with the canvas column beside it. */}
+      <header className="flex flex-shrink-0 items-center gap-4 pb-3">
+        <div className="flex w-12 flex-shrink-0 justify-center">
           <Link
             href={adId ? `/ad-generator/${adId}` : '/ad-generator'}
-            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
             title={adId ? 'Back to the ad' : 'Back to the Generator'}
+            aria-label={adId ? 'Back to the ad' : 'Back to the Generator'}
           >
-            <ArrowLeftIcon className="h-4 w-4" />
-            {adId ? 'Back to ad' : 'Generator'}
+            <ArrowLeftIcon className="h-5 w-5" />
           </Link>
-          {adId ? (
-            <span className="inline-flex items-center rounded-full border border-[var(--primary)]/30 bg-[var(--primary)]/10 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[var(--primary)]">
-              Editing ad
-            </span>
-          ) : (
-          <span
-            className={`inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${
-              status === 'published'
-                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
-                : 'border-zinc-500/30 bg-zinc-500/10 text-[var(--muted-foreground)]'
-            }`}
-          >
-            {status}
-          </span>
-          )}
-          {templateId || adId ? (
-            <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${saveInfo.cls}`}>
-              <saveInfo.Icon className={`h-3.5 w-3.5 ${saveInfo.spin ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{saveInfo.label}</span>
-            </span>
-          ) : (
-            <span className="hidden text-[11px] text-[var(--muted-foreground)] sm:inline">Unsaved</span>
-          )}
         </div>
 
-        {/* center — name */}
-        <div className="min-w-0 justify-self-center">
+        {/* main row — spans the canvas: title on the left, actions on the right */}
+        <div className="flex flex-1 items-center gap-2 pl-1">
           <input
             value={templateName}
             onChange={(e) => setTemplateName(e.target.value)}
             placeholder={adId ? 'Untitled ad' : 'Untitled template'}
             title={adId ? 'Ad name' : 'Template name'}
-            className="w-[min(28rem,60vw)] rounded-lg border border-transparent bg-transparent px-3 py-1 text-center text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
+            className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-left text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
           />
-        </div>
 
-        {/* right — actions */}
-        <div className="flex min-w-0 items-center justify-end gap-2">
-          <div className="flex items-center gap-0.5">
-            <button
-              onClick={undo}
-              disabled={!canUndo}
-              title="Undo (⌘Z)"
-              aria-label="Undo"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:opacity-30 disabled:hover:bg-transparent"
-            >
-              <ArrowUturnLeftIcon className="h-4 w-4" />
-            </button>
-            <button
-              onClick={redo}
-              disabled={!canRedo}
-              title="Redo (⌘⇧Z)"
-              aria-label="Redo"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:opacity-30 disabled:hover:bg-transparent"
-            >
-              <ArrowUturnRightIcon className="h-4 w-4" />
-            </button>
-          </div>
-          {/* Fields — the form that drives the ad; a toggleable floating panel. */}
-          <button
-            onClick={() => setFieldsOpen((v) => !v)}
-            title="Template fields — the form users fill"
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors ${
-              fieldsOpen
-                ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
-                : 'border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)]'
-            }`}
-          >
-            <TextElementIcon className="h-4 w-4" />
-            Fields
-            <span className="rounded bg-[var(--muted)] px-1.5 text-[11px] text-[var(--muted-foreground)]">{doc.fields.length}</span>
-          </button>
           {/* Template-management controls — hidden when editing a single ad. */}
           {!adId && (
             <>
@@ -1932,6 +1886,16 @@ export default function AdBuilderPage() {
               )}
             </>
           )}
+
+          {/* Autosave status — sits right next to Save */}
+          {templateId || adId ? (
+            <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${saveInfo.cls}`}>
+              <saveInfo.Icon className={`h-3.5 w-3.5 ${saveInfo.spin ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">{saveInfo.label}</span>
+            </span>
+          ) : (
+            <span className="hidden text-[11px] text-[var(--muted-foreground)] sm:inline">Unsaved</span>
+          )}
           <button
             onClick={() => save(false)}
             disabled={saving}
@@ -1948,7 +1912,9 @@ export default function AdBuilderPage() {
         <aside className="relative flex flex-shrink-0">
           {/* Icon rail — click an icon to open that panel as a flyout to the right */}
           <div className="flex w-12 flex-col items-center gap-1.5 pt-1">
-            <RailButton label="Elements" Icon={PlusCircleIcon} active={leftPanel === 'elements'} onClick={() => setLeftPanel((p) => (p === 'elements' ? null : 'elements'))} />
+            {/* Elements adding now lives on the canvas (top-left +); keep a spacer
+                so Layers / Sizes stay where they were. */}
+            <div className="h-11 w-11" aria-hidden="true" />
             <RailButton label="Layers" Icon={LayersIcon} active={leftPanel === 'layers'} onClick={() => setLeftPanel((p) => (p === 'layers' ? null : 'layers'))} />
             {!adId && <RailButton label="Industries" Icon={BuildingStorefrontIcon} active={leftPanel === 'industries'} onClick={() => setLeftPanel((p) => (p === 'industries' ? null : 'industries'))} />}
             <RailButton label="Sizes" Icon={DashboardLayoutIcon} active={leftPanel === 'sizes'} onClick={() => setLeftPanel((p) => (p === 'sizes' ? null : 'sizes'))} />
@@ -1956,30 +1922,6 @@ export default function AdBuilderPage() {
 
           {leftPanel && (
             <div className="absolute inset-y-0 left-full z-30 ml-2 flex w-[320px] flex-col gap-4 overflow-y-auto pb-1 pr-1">
-          {/* Elements — add to the canvas */}
-          {leftPanel === 'elements' && (
-          <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
-            <h2 className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-              <PlusCircleIcon className="h-3.5 w-3.5" />
-              Elements
-            </h2>
-            <div className="grid grid-cols-2 gap-1.5">
-              {adders.map((a) => (
-                <button
-                  key={a.label}
-                  onClick={a.onAdd}
-                  className="flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                >
-                  <PlusIcon className="h-3 w-3" />
-                  <a.Icon className="h-3.5 w-3.5" />
-                  {a.label}
-                </button>
-              ))}
-            </div>
-            <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">For a photo background, add an Image and set its fill to Cover.</p>
-          </section>
-          )}
-
           {/* Layers — the stack of placed elements (top of the list = front).
               Double-click to rename · lock icon to lock · drag to reorder (z). */}
           {leftPanel === 'layers' && (
@@ -2396,73 +2338,37 @@ export default function AdBuilderPage() {
 
         {/* Canvas */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)]">
-          <div className="flex flex-shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-2.5">
-            <div className="flex flex-wrap gap-1.5">
-              {doc.sizes.map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => setSizeId(s.id)}
-                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    s.id === sizeId ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)]'
-                  }`}
-                >
-                  {s.label.split(' ')[0]}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-[11px] tabular-nums text-[var(--muted-foreground)]">
-                {size.width}×{size.height}
-              </span>
+          <div className="relative flex flex-shrink-0 items-center justify-end border-b border-[var(--border)] px-3 py-2">
+            {/* Current size name, centered */}
+            <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 truncate text-xs font-semibold text-[var(--foreground)]">
+              {size.label}
+            </span>
+            {/* Undo / Redo */}
+            <div className="flex items-center gap-0.5">
               <button
-                onClick={() => setShowOutlines((v) => !v)}
-                className={`rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                  showOutlines ? 'border-[var(--primary)] text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
-                }`}
+                onClick={undo}
+                disabled={!canUndo}
+                title="Undo (⌘Z)"
+                aria-label="Undo"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:opacity-30 disabled:hover:bg-transparent"
               >
-                Outlines
+                <ArrowUturnLeftIcon className="h-4 w-4" />
               </button>
-              {/* Safe-area margins: toggle on/off; value + unit only when on */}
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={toggleMargins}
-                  title="Safe-area margins"
-                  className={`rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    showSafe ? 'border-[#14b8a6] text-[#14b8a6]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
-                  }`}
-                >
-                  Margins
-                </button>
-                {showSafe && (
-                  <>
-                    <input
-                      type="number"
-                      value={doc.safeArea?.value ?? 5}
-                      onChange={(e) => setMargin({ value: Math.max(0, Number(e.target.value)) })}
-                      title="Margin size"
-                      className="w-11 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                    />
-                    <select
-                      value={doc.safeArea?.unit ?? 'percent'}
-                      onChange={(e) => setMargin({ unit: e.target.value as MarginUnit })}
-                      title="Unit"
-                      className="rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                    >
-                      {MARGIN_UNITS.map((u) => (
-                        <option key={u.value} value={u.value}>
-                          {u.label}
-                        </option>
-                      ))}
-                    </select>
-                  </>
-                )}
-              </div>
+              <button
+                onClick={redo}
+                disabled={!canRedo}
+                title="Redo (⌘⇧Z)"
+                aria-label="Redo"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:opacity-30 disabled:hover:bg-transparent"
+              >
+                <ArrowUturnRightIcon className="h-4 w-4" />
+              </button>
             </div>
           </div>
 
           <div
             ref={canvasRef}
-            className="relative flex flex-1 items-center justify-center overflow-auto bg-[var(--muted)]/30 p-6"
+            className="relative flex flex-1 flex-col items-center justify-center gap-4 overflow-auto bg-[var(--muted)]/30 p-6"
             style={{ userSelect: 'none' }}
             onPointerDown={(e) => {
               // Clicking the empty area around the artboard clears the selection.
@@ -2689,6 +2595,104 @@ export default function AdBuilderPage() {
                 </div>
               </div>
 
+              {/* In-canvas controls — anchored to the canvas container's corners */}
+              <div className="pointer-events-none absolute inset-x-3 top-3 z-50 flex items-start justify-between">
+                {/* Add element (top-left) */}
+                <div className="pointer-events-auto relative" onPointerDown={(e) => e.stopPropagation()}>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setAddOpen((v) => !v);
+                    }}
+                    title="Add element"
+                    aria-label="Add element"
+                    className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--primary)] text-white shadow-md transition-opacity hover:opacity-90"
+                  >
+                    <PlusIcon className="h-5 w-5" />
+                  </button>
+                  {addOpen && (
+                    <div className="absolute left-0 top-11 w-40 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-xl backdrop-blur-2xl">
+                      {adders.map((a) => (
+                        <button
+                          key={a.label}
+                          onClick={() => {
+                            a.onAdd();
+                            setAddOpen(false);
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                        >
+                          <a.Icon className="h-4 w-4 text-[var(--muted-foreground)]" />
+                          {a.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* View toggles (top-right): outlines + margins */}
+                <div className="pointer-events-auto flex flex-col items-end gap-1.5" onPointerDown={(e) => e.stopPropagation()}>
+                  <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1 shadow-md backdrop-blur-2xl">
+                    <button
+                      onClick={() => setShowOutlines((v) => !v)}
+                      title="Toggle element outlines"
+                      aria-label="Toggle element outlines"
+                      aria-pressed={showOutlines}
+                      className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showOutlines ? 'bg-[var(--primary)]/15 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
+                    >
+                      <OutlinesIcon className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={toggleMargins}
+                      title="Safe-area margins"
+                      aria-label="Safe-area margins"
+                      aria-pressed={showSafe}
+                      className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showSafe ? 'bg-[#14b8a6]/15 text-[#14b8a6]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
+                    >
+                      <MarginsIcon className="h-4 w-4" />
+                    </button>
+                  </div>
+                  {showSafe && (
+                    <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-md backdrop-blur-2xl">
+                      <input
+                        type="number"
+                        value={doc.safeArea?.value ?? 5}
+                        onChange={(e) => setMargin({ value: Math.max(0, Number(e.target.value)) })}
+                        title="Margin size"
+                        className="w-12 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                      />
+                      <select
+                        value={doc.safeArea?.unit ?? 'percent'}
+                        onChange={(e) => setMargin({ unit: e.target.value as MarginUnit })}
+                        title="Unit"
+                        className="rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                      >
+                        {MARGIN_UNITS.map((u) => (
+                          <option key={u.value} value={u.value}>
+                            {u.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Size navigation — switch between this ad's sizes, under the ad */}
+              <div className="flex flex-shrink-0 items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card)] p-1 shadow-sm">
+                {doc.sizes.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setSizeId(s.id)}
+                    title={s.label}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                      s.id === sizeId ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    {s.label.split(' ')[0]}
+                  </button>
+                ))}
+              </div>
+
               {selected && selectedBox && !selectedBox.hidden && (
                 <SelectionPanel
                   el={selected}
@@ -2705,10 +2709,6 @@ export default function AdBuilderPage() {
                 />
               )}
             </div>
-
-          <div className="flex-shrink-0 border-t border-[var(--border)] px-4 py-1.5 text-center text-[11px] text-[var(--muted-foreground)]">
-            {size.label} · drag to move · shift-click to multi-select · right-click for actions · arrows nudge · Delete removes
-          </div>
         </div>
       </div>
 

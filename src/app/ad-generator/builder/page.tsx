@@ -45,6 +45,7 @@ import {
   LockClosedIcon,
   LockOpenIcon,
   ChevronDownIcon,
+  ChevronLeftIcon,
   ChevronRightIcon,
   RectangleStackIcon,
   Squares2X2Icon,
@@ -1829,30 +1830,32 @@ export default function AdBuilderPage() {
     <div className="flex h-full flex-col">
       {fontFaceCss && <style dangerouslySetInnerHTML={{ __html: fontFaceCss }} />}
 
-      {/* Editor header bar — the left column matches the icon rail's width so the
-          title + actions line up with the canvas column beside it. */}
+      {/* Editor header bar — an empty rail-width slot keeps the row below aligned
+          with the canvas column; the title centers over the canvas. */}
       <header className="flex flex-shrink-0 items-center gap-4 pb-3">
-        <div className="flex w-12 flex-shrink-0 justify-center">
+        <div className="w-12 flex-shrink-0" aria-hidden="true" />
+
+        {/* main row — spans the canvas: back at the left edge, title centered, actions right */}
+        <div className="relative flex flex-1 items-center gap-2">
           <Link
             href={adId ? `/ad-generator/${adId}` : '/ad-generator'}
-            className="inline-flex h-9 w-9 items-center justify-center rounded-lg text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+            className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
             title={adId ? 'Back to the ad' : 'Back to the Generator'}
             aria-label={adId ? 'Back to the ad' : 'Back to the Generator'}
           >
             <ArrowLeftIcon className="h-5 w-5" />
           </Link>
-        </div>
 
-        {/* main row — spans the canvas: title on the left, actions on the right */}
-        <div className="flex flex-1 items-center gap-2 pl-1">
           <input
             value={templateName}
             onChange={(e) => setTemplateName(e.target.value)}
             placeholder={adId ? 'Untitled ad' : 'Untitled template'}
             title={adId ? 'Ad name' : 'Template name'}
-            className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-left text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
+            className="absolute left-1/2 top-1/2 w-[min(20rem,42%)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-transparent bg-transparent px-2 py-1 text-center text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
           />
 
+          {/* Right actions */}
+          <div className="ml-auto flex items-center gap-2">
           {/* Template-management controls — hidden when editing a single ad. */}
           {!adId && (
             <>
@@ -1903,6 +1906,7 @@ export default function AdBuilderPage() {
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
+          </div>
         </div>
       </header>
 
@@ -2482,7 +2486,7 @@ export default function AdBuilderPage() {
                         style={boxStyle}
                       >
                         <span
-                          className={`pointer-events-none absolute inset-0 rounded-[2px] transition-colors ${
+                          className={`pointer-events-none absolute inset-0 rounded-[2px] ring-inset transition-colors ${
                             isSel
                               ? 'ring-2 ring-[var(--primary)] bg-[var(--primary)]/10'
                               : box.hidden
@@ -2631,24 +2635,24 @@ export default function AdBuilderPage() {
 
                 {/* View toggles (top-right): outlines + margins */}
                 <div className="pointer-events-auto flex flex-col items-end gap-1.5" onPointerDown={(e) => e.stopPropagation()}>
-                  <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1 shadow-md backdrop-blur-2xl">
+                  <div className="flex items-center gap-1.5 [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.35))]">
                     <button
                       onClick={() => setShowOutlines((v) => !v)}
                       title="Toggle element outlines"
                       aria-label="Toggle element outlines"
                       aria-pressed={showOutlines}
-                      className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showOutlines ? 'bg-[var(--primary)]/15 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
+                      className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showOutlines ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
                     >
-                      <OutlinesIcon className="h-4 w-4" />
+                      <OutlinesIcon className="h-5 w-5" />
                     </button>
                     <button
                       onClick={toggleMargins}
                       title="Safe-area margins"
                       aria-label="Safe-area margins"
                       aria-pressed={showSafe}
-                      className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showSafe ? 'bg-[#14b8a6]/15 text-[#14b8a6]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
+                      className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showSafe ? 'text-[#14b8a6]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
                     >
-                      <MarginsIcon className="h-4 w-4" />
+                      <MarginsIcon className="h-5 w-5" />
                     </button>
                   </div>
                   {showSafe && (
@@ -2677,21 +2681,37 @@ export default function AdBuilderPage() {
                 </div>
               </div>
 
-              {/* Size navigation — switch between this ad's sizes, under the ad */}
-              <div className="flex flex-shrink-0 items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card)] p-1 shadow-sm">
-                {doc.sizes.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => setSizeId(s.id)}
-                    title={s.label}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                      s.id === sizeId ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
-                    }`}
-                  >
-                    {s.label.split(' ')[0]}
-                  </button>
-                ))}
-              </div>
+              {/* Size navigation — arrow-paginated, scales to any number of sizes */}
+              {doc.sizes.length > 0 &&
+                (() => {
+                  const idx = Math.max(0, doc.sizes.findIndex((s) => s.id === sizeId));
+                  const go = (delta: number) => setSizeId(doc.sizes[(idx + delta + doc.sizes.length) % doc.sizes.length].id);
+                  return (
+                    <div className="flex flex-shrink-0 items-center gap-2">
+                      <button
+                        onClick={() => go(-1)}
+                        disabled={doc.sizes.length < 2}
+                        title="Previous size"
+                        aria-label="Previous size"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-30 disabled:hover:bg-transparent"
+                      >
+                        <ChevronLeftIcon className="h-4 w-4" />
+                      </button>
+                      <span className="min-w-[6.5rem] text-center text-xs font-medium text-[var(--foreground)]">
+                        {doc.sizes[idx]?.label.split(' ')[0]} <span className="tabular-nums text-[var(--muted-foreground)]">{idx + 1}/{doc.sizes.length}</span>
+                      </span>
+                      <button
+                        onClick={() => go(1)}
+                        disabled={doc.sizes.length < 2}
+                        title="Next size"
+                        aria-label="Next size"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-30 disabled:hover:bg-transparent"
+                      >
+                        <ChevronRightIcon className="h-4 w-4" />
+                      </button>
+                    </div>
+                  );
+                })()}
 
               {selected && selectedBox && !selectedBox.hidden && (
                 <SelectionPanel

@@ -52,6 +52,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
+import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { renderDoc } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
@@ -327,6 +328,9 @@ export default function AdBuilderPage() {
   const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [fieldsOpen, setFieldsOpen] = useState(false);
+  // Left rail: which panel (Elements / Layers / Industries / Sizes) is open as a
+  // flyout. null = collapsed to just the icons.
+  const [leftPanel, setLeftPanel] = useState<'elements' | 'layers' | 'industries' | 'sizes' | null>(null);
   const [addSizeOpen, setAddSizeOpen] = useState(false);
   const [customName, setCustomName] = useState('');
   const [customW, setCustomW] = useState('');
@@ -1941,8 +1945,19 @@ export default function AdBuilderPage() {
       {/* Body — tools sidebar + canvas */}
       <div className="flex min-h-0 flex-1 gap-4">
         {/* Left sidebar — tools */}
-        <aside className="flex w-[320px] flex-shrink-0 flex-col gap-4 overflow-y-auto pb-1 pr-1">
+        <aside className="relative flex flex-shrink-0">
+          {/* Icon rail — click an icon to open that panel as a flyout to the right */}
+          <div className="flex w-12 flex-col items-center gap-1.5 pt-1">
+            <RailButton label="Elements" Icon={PlusCircleIcon} active={leftPanel === 'elements'} onClick={() => setLeftPanel((p) => (p === 'elements' ? null : 'elements'))} />
+            <RailButton label="Layers" Icon={LayersIcon} active={leftPanel === 'layers'} onClick={() => setLeftPanel((p) => (p === 'layers' ? null : 'layers'))} />
+            {!adId && <RailButton label="Industries" Icon={BuildingStorefrontIcon} active={leftPanel === 'industries'} onClick={() => setLeftPanel((p) => (p === 'industries' ? null : 'industries'))} />}
+            <RailButton label="Sizes" Icon={DashboardLayoutIcon} active={leftPanel === 'sizes'} onClick={() => setLeftPanel((p) => (p === 'sizes' ? null : 'sizes'))} />
+          </div>
+
+          {leftPanel && (
+            <div className="absolute inset-y-0 left-full z-30 ml-2 flex w-[320px] flex-col gap-4 overflow-y-auto pb-1 pr-1">
           {/* Elements — add to the canvas */}
+          {leftPanel === 'elements' && (
           <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
             <h2 className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
               <PlusCircleIcon className="h-3.5 w-3.5" />
@@ -1963,9 +1978,11 @@ export default function AdBuilderPage() {
             </div>
             <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">For a photo background, add an Image and set its fill to Cover.</p>
           </section>
+          )}
 
           {/* Layers — the stack of placed elements (top of the list = front).
               Double-click to rename · lock icon to lock · drag to reorder (z). */}
+          {leftPanel === 'layers' && (
           <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
@@ -2185,10 +2202,11 @@ export default function AdBuilderPage() {
               })()}
             </div>
           </section>
+          )}
 
           {/* Industries — which accounts this template is offered to. Ad mode
               edits one ad, not a template, so this only shows in template mode. */}
-          {!adId && (
+          {leftPanel === 'industries' && !adId && (
             <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
               <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Industries</h2>
               <p className="mb-3 text-[11px] text-[var(--muted-foreground)]">
@@ -2216,6 +2234,7 @@ export default function AdBuilderPage() {
           )}
 
           {/* Sizes — each has its own independent layout */}
+          {leftPanel === 'sizes' && (
           <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
             <div className="mb-2 flex items-center justify-between">
               <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
@@ -2370,7 +2389,9 @@ export default function AdBuilderPage() {
               </div>
             )}
           </section>
-
+          )}
+            </div>
+          )}
         </aside>
 
         {/* Canvas */}
@@ -3068,7 +3089,14 @@ function SelectionPanel({
     >
       <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-semibold text-[var(--foreground)]">{el.name || typeLabel}</span>
+          <input
+            value={el.name ?? ''}
+            onChange={(e) => onEl({ name: e.target.value || undefined })}
+            placeholder={typeLabel}
+            aria-label="Layer name"
+            title="Rename this layer"
+            className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-sm font-semibold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
+          />
           <span className="shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">{typeLabel}</span>
         </div>
         <button type="button" onClick={onClose} title="Deselect" aria-label="Deselect" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
@@ -3257,6 +3285,25 @@ function PanelSection({ title, children }: { title: string; children: React.Reac
       <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">{title}</div>
       {children}
     </div>
+  );
+}
+
+/** An icon button in the left rail — opens its panel as a flyout. */
+function RailButton({ label, Icon, active, onClick }: { label: string; Icon: React.ComponentType<{ className?: string }>; active: boolean; onClick: () => void }) {
+  return (
+    <SidebarTooltip label={label}>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-label={label}
+        aria-pressed={active}
+        className={`flex h-11 w-11 items-center justify-center rounded-xl transition-colors ${
+          active ? 'bg-[var(--primary)]/15 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+        }`}
+      >
+        <Icon className="h-5 w-5" />
+      </button>
+    </SidebarTooltip>
   );
 }
 

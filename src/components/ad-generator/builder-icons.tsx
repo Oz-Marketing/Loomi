@@ -42,6 +42,28 @@ export function ButtonElementIcon({ className }: IconProps) {
   );
 }
 
+/** Dotted rounded rectangle — the "show element outlines" toggle. */
+export function OutlinesIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 50 50" className={className} fill="none" stroke="currentColor" strokeWidth={4} strokeLinecap="round" strokeDasharray="1 7" aria-hidden="true">
+      <rect x="6" y="6" width="38" height="38" rx="10" ry="10" />
+    </svg>
+  );
+}
+
+/** Framed grid — the safe-area "margins" toggle. */
+export function MarginsIcon({ className }: IconProps) {
+  return (
+    <svg viewBox="0 0 50 50" className={className} fill="none" stroke="currentColor" strokeWidth={4} strokeLinejoin="round" aria-hidden="true">
+      <rect x="6" y="6" width="38" height="38" rx="7" />
+      <line x1="14" y1="6" x2="14" y2="44" />
+      <line x1="36" y1="6" x2="36" y2="44" />
+      <line x1="6" y1="14" x2="44" y2="14" />
+      <line x1="6" y1="36" x2="44" y2="36" />
+    </svg>
+  );
+}
+
 /** Stacked layers — the Layers section. */
 export function LayersIcon({ className }: IconProps) {
   return (

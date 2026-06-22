@@ -29,6 +29,7 @@ import {
   EyeIcon,
   EyeSlashIcon,
   PlusIcon,
+  PlusCircleIcon,
   MinusIcon,
   TrashIcon,
   DocumentDuplicateIcon,
@@ -1531,7 +1532,7 @@ export default function AdBuilderPage() {
           {/* Elements — add to the canvas */}
           <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
             <h2 className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-              <DashboardLayoutIcon className="h-3.5 w-3.5" />
+              <PlusCircleIcon className="h-3.5 w-3.5" />
               Elements
             </h2>
             <div className="grid grid-cols-2 gap-1.5">
@@ -1780,7 +1781,10 @@ export default function AdBuilderPage() {
           {/* Sizes — each has its own independent layout */}
           <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Sizes</h2>
+              <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                <DashboardLayoutIcon className="h-3.5 w-3.5" />
+                Sizes
+              </h2>
               <div className="flex items-center gap-1.5">
                 <Link
                   href="/ad-generator/sizes"

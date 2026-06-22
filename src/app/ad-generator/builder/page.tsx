@@ -455,35 +455,52 @@ export default function AdBuilderPage() {
   const [dragLayer, setDragLayer] = useState<string | null>(null);
   // Live order during a Layers drag (top→front), so rows shift as you hover.
   const [dragOrder, setDragOrder] = useState<string[] | null>(null);
-  // FLIP: slide Layers rows to their new spots as they shift during a drag.
+  // FLIP: gently slide Layers rows to their new spots when the drop order
+  // actually changes during a drag. Transforms are cleared before measuring, so
+  // an in-flight animation never pollutes the next measurement (no jitter).
   const layersRef = useRef<HTMLDivElement>(null);
   const layerTopsRef = useRef<Map<string, number>>(new Map());
+  const lastDragOrderRef = useRef<string[] | null>(null);
   useLayoutEffect(() => {
     const container = layersRef.current;
-    if (!container) return;
-    if (!dragLayer) {
+    if (!container || !dragLayer) {
       layerTopsRef.current.clear();
+      lastDragOrderRef.current = null;
       return;
+    }
+    if (dragOrder === lastDragOrderRef.current) return; // only on a real reorder
+    lastDragOrderRef.current = dragOrder;
+
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('[data-layer-row]'));
+    // Snap to true layout positions first (drop any in-flight transform).
+    for (const row of rows) {
+      row.style.transition = 'none';
+      row.style.transform = '';
     }
     const base = container.getBoundingClientRect().top;
     const prev = layerTopsRef.current;
     const next = new Map<string, number>();
-    container.querySelectorAll<HTMLElement>('[data-layer-row]').forEach((row) => {
+    const moved: { row: HTMLElement; dy: number }[] = [];
+    for (const row of rows) {
       const id = row.getAttribute('data-layer-row');
-      if (!id) return;
+      if (!id) continue;
       const top = row.getBoundingClientRect().top - base;
       next.set(id, top);
       const old = prev.get(id);
       if (old != null && Math.abs(old - top) > 0.5) {
-        row.style.transition = 'none';
-        row.style.transform = `translateY(${old - top}px)`;
-        requestAnimationFrame(() => {
-          row.style.transition = 'transform 160ms ease';
-          row.style.transform = '';
-        });
+        row.style.transform = `translateY(${old - top}px)`; // invert
+        moved.push({ row, dy: old - top });
       }
-    });
+    }
     layerTopsRef.current = next;
+    if (moved.length) {
+      requestAnimationFrame(() => {
+        for (const { row } of moved) {
+          row.style.transition = 'transform 130ms cubic-bezier(0.22,1,0.36,1)';
+          row.style.transform = '';
+        }
+      });
+    }
   });
 
   // Single-selection shorthand — the per-element toolbar, handles, and action

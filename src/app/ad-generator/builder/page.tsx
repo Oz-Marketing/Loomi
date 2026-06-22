@@ -1646,12 +1646,17 @@ export default function AdBuilderPage() {
                 const nodes = buildLayerTree(flat.map((id) => ({ id, groupId: groupOf(id) })), docGroups);
                 const lay = doc.layouts[size.id] ?? {};
 
-                // Drag handlers shared by every element row (live-shift on `flat`;
-                // commit re-clusters so a group's members stay contiguous).
-                const rowDrag = (id: string, renaming: boolean) => ({
+                const isGroupId = (id: string) => docGroups.some((g) => g.id === id);
+                // The element ids a dragged row moves: a group moves ALL its leaves
+                // as one block; an element moves just itself.
+                const movingIds = (rowId: string) => (isGroupId(rowId) ? membersOf(rowId) : [rowId]);
+
+                // Drag handlers shared by element rows AND group headers (live-shift
+                // on `flat`; commit re-clusters so a group's members stay contiguous).
+                const dragHandlers = (rowId: string, isGroupRow: boolean, renaming: boolean) => ({
                   draggable: !renaming,
                   onDragStart: () => {
-                    setDragLayer(id);
+                    setDragLayer(rowId);
                     setDragOrder(flat);
                   },
                   onDragOver: (e: React.DragEvent) => {
@@ -1659,14 +1664,20 @@ export default function AdBuilderPage() {
                     setDragOrder((cur) => {
                       const from = dragLayer;
                       const list = cur ?? flat;
-                      if (!from || from === id) return list;
-                      const fromIdx = list.indexOf(from);
-                      const overIdx = list.indexOf(id);
-                      if (fromIdx < 0 || overIdx < 0 || fromIdx === overIdx) return list;
-                      const without = list.filter((x) => x !== from);
-                      let at = without.indexOf(id);
-                      if (fromIdx < overIdx) at += 1; // dragging down → land after
-                      without.splice(at, 0, from);
+                      if (!from || from === rowId) return list;
+                      const movingSet = new Set(movingIds(from));
+                      // Over-target element id: a group row targets its frontmost leaf.
+                      const overEl = isGroupRow
+                        ? membersOf(rowId).reduce<string | null>((best, mId) => (best === null || list.indexOf(mId) < list.indexOf(best) ? mId : best), null)
+                        : rowId;
+                      if (!overEl || movingSet.has(overEl)) return list;
+                      const block = list.filter((x) => movingSet.has(x)); // preserve internal order
+                      if (!block.length) return list;
+                      const without = list.filter((x) => !movingSet.has(x));
+                      let at = without.indexOf(overEl);
+                      if (at < 0) return list;
+                      if (list.indexOf(block[0]) < list.indexOf(overEl)) at += 1; // moving down → after
+                      without.splice(at, 0, ...block);
                       return without;
                     });
                   },
@@ -1679,6 +1690,7 @@ export default function AdBuilderPage() {
                   },
                   onDrop: (e: React.DragEvent) => e.preventDefault(),
                 });
+                const rowDrag = (id: string, renaming: boolean) => dragHandlers(id, false, renaming);
 
                 const renderRow = (id: string) => {
                   const entry = byId.get(id);
@@ -1760,7 +1772,10 @@ export default function AdBuilderPage() {
                   };
                   return (
                     <div key={gid} className="rounded-lg">
-                      <div className={`flex items-center gap-1 rounded-lg pr-1 ${allSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'}`}>
+                      <div
+                        {...dragHandlers(gid, true, renamingG)}
+                        className={`flex items-center gap-1 rounded-lg pr-1 transition-[opacity] ${allSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'} ${dragLayer === gid ? 'opacity-40' : ''}`}
+                      >
                         <button onClick={() => toggleGroupCollapsed(gid)} title={collapsed ? 'Expand' : 'Collapse'} className="rounded p-0.5 pl-1 text-[var(--muted-foreground)]/70 hover:text-[var(--foreground)]">
                           {collapsed ? <ChevronRightIcon className="h-3.5 w-3.5" /> : <ChevronDownIcon className="h-3.5 w-3.5" />}
                         </button>

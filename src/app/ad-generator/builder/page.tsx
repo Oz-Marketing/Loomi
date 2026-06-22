@@ -57,7 +57,7 @@ import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
-import { buildLayerEntries, flattenLayerEntries, normalizeGroupZ } from '@/lib/ad-generator/layer-tree';
+import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type LayerNode } from '@/lib/ad-generator/layer-tree';
 import { TextElementIcon, ShapeElementIcon, DashboardLayoutIcon, LayersIcon } from '@/components/ad-generator/builder-icons';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
@@ -399,13 +399,41 @@ export default function AdBuilderPage() {
   );
 
   const lockedIds = useMemo(() => new Set(doc.elements.filter((e) => e.locked).map((e) => e.id)), [doc.elements]);
-  // The multi-selection is "a group" when every selected element shares one
-  // groupId — drives the Group ↔ Ungroup toggle in the selection toolbar.
+
+  // ── group hierarchy helpers (groups nest via parentId) ──
+  const groupParent = useMemo(() => new Map((doc.groups ?? []).map((g) => [g.id, g.parentId ?? null])), [doc.groups]);
+  const elementGroup = useMemo(() => new Map(doc.elements.map((e) => [e.id, e.groupId ?? null])), [doc.elements]);
+  /** An element's ancestor group chain, innermost → outermost. */
+  const ancestorChain = useCallback(
+    (elId: string): string[] => {
+      const chain: string[] = [];
+      const seen = new Set<string>();
+      let g = elementGroup.get(elId) ?? null;
+      while (g && !seen.has(g)) {
+        seen.add(g);
+        chain.push(g);
+        g = groupParent.get(g) ?? null;
+      }
+      return chain;
+    },
+    [elementGroup, groupParent],
+  );
+  /** Every leaf element under a group, at any depth. */
+  const membersOf = useCallback(
+    (gid: string) => doc.elements.filter((e) => ancestorChain(e.id).includes(gid)).map((e) => e.id),
+    [doc.elements, ancestorChain],
+  );
+
+  // The multi-selection "is a group" when it's exactly one group's full leaf set
+  // — drives the Group ↔ Ungroup toggle in the selection toolbar.
   const selectionIsGroup = useMemo(() => {
     if (selectedIds.length < 2) return false;
-    const gids = new Set(selectedIds.map((id) => doc.elements.find((e) => e.id === id)?.groupId));
-    return gids.size === 1 && !gids.has(undefined);
-  }, [selectedIds, doc.elements]);
+    const sel = new Set(selectedIds);
+    return (doc.groups ?? []).some((g) => {
+      const m = membersOf(g.id);
+      return m.length === sel.size && m.every((x) => sel.has(x));
+    });
+  }, [selectedIds, doc.groups, membersOf]);
   // Bounding box of the current multi-selection (live during group move/resize),
   // for the group resize handles.
   const groupBox = useMemo(() => {
@@ -631,47 +659,81 @@ export default function AdBuilderPage() {
     });
   }
 
-  // ── element groups (⌘G) ──
-  const membersOf = useCallback((gid: string) => doc.elements.filter((e) => e.groupId === gid).map((e) => e.id), [doc.elements]);
-
-  // Group the current selection (2+ elements) into a new named group.
+  // ── element groups (⌘G) — groups can nest within groups ──
+  // Group the selection: wrap the distinct "units" (whole sub-groups or loose
+  // elements) it touches, under their deepest common ancestor. So selecting two
+  // groups nests both in a new parent; selecting elements inside a group makes a
+  // sub-group there.
   function groupSelected() {
-    const ids = selectedIds;
-    if (ids.length < 2) return;
+    const S = selectedIds;
+    if (S.length < 2) return;
+    const chains = S.map((id) => ancestorChain(id));
+    // Deepest common ancestor group of the whole selection (null = root).
+    let parent: string | null = null;
+    for (const g of chains[0] ?? []) {
+      if (chains.every((c) => c.includes(g))) {
+        parent = g;
+        break;
+      }
+    }
+    // The unit each element belongs to at the common-parent level: the sub-group
+    // just below `parent`, or the element itself if it's a direct child.
+    const units = new Map<string, { kind: 'group' | 'element'; id: string }>();
+    for (const id of S) {
+      const chain = ancestorChain(id);
+      const pIdx = parent ? chain.indexOf(parent) : chain.length;
+      const u = pIdx > 0 ? { kind: 'group' as const, id: chain[pIdx - 1] } : { kind: 'element' as const, id };
+      units.set(`${u.kind}:${u.id}`, u);
+    }
+    const unitList = [...units.values()];
+    if (unitList.length < 2) return;
+    // Redundant if we'd just re-wrap ALL of an existing group's children.
+    if (parent) {
+      const childCount =
+        (doc.groups ?? []).filter((g) => (g.parentId ?? null) === parent).length +
+        doc.elements.filter((e) => (e.groupId ?? null) === parent).length;
+      if (unitList.length >= childCount) return;
+    }
     const gid = `grp-${rid()}`;
+    const groupUnitIds = new Set(unitList.filter((u) => u.kind === 'group').map((u) => u.id));
+    const elUnitIds = new Set(unitList.filter((u) => u.kind === 'element').map((u) => u.id));
     setDoc((prev) => {
       const used = (prev.groups ?? []).length;
-      const elements = prev.elements.map((e) => (ids.includes(e.id) ? { ...e, groupId: gid } : e));
+      const elements = prev.elements.map((e) => (elUnitIds.has(e.id) ? { ...e, groupId: gid } : e));
+      const groups = [
+        ...(prev.groups ?? []).map((g) => (groupUnitIds.has(g.id) ? { ...g, parentId: gid } : g)),
+        { id: gid, name: `Group ${used + 1}`, parentId: parent ?? undefined },
+      ];
+      return { ...prev, elements, groups, layouts: normalizeGroupZ(elements, groups, prev.sizes, prev.layouts) };
+    });
+  }
+
+  // Dissolve a group: promote its child elements + sub-groups up to its parent.
+  function ungroupGroup(gid: string) {
+    setDoc((prev) => {
+      const parent = (prev.groups ?? []).find((g) => g.id === gid)?.parentId;
       return {
         ...prev,
-        elements,
-        groups: [...(prev.groups ?? []), { id: gid, name: `Group ${used + 1}` }],
-        // Normalize z everywhere so the group is contiguous in the canvas stack,
-        // matching how it nests in the Layers tree.
-        layouts: normalizeGroupZ(elements, prev.sizes, prev.layouts),
+        elements: prev.elements.map((e) => (e.groupId === gid ? { ...e, groupId: parent } : e)),
+        groups: (prev.groups ?? []).filter((g) => g.id !== gid).map((g) => (g.parentId === gid ? { ...g, parentId: parent } : g)),
       };
     });
   }
 
-  // Ungroup every group represented in the selection.
+  // Ungroup what the selection represents: the exact group if it matches one,
+  // else each distinct innermost group of the selected elements.
   function ungroupSelected() {
-    const gids = new Set(
-      selectedIds.map((id) => doc.elements.find((e) => e.id === id)?.groupId).filter((g): g is string => Boolean(g)),
-    );
-    if (gids.size === 0) return;
-    setDoc((prev) => ({
-      ...prev,
-      elements: prev.elements.map((e) => (e.groupId && gids.has(e.groupId) ? { ...e, groupId: undefined } : e)),
-      groups: (prev.groups ?? []).filter((g) => !gids.has(g.id)),
-    }));
-  }
-
-  function ungroupGroup(gid: string) {
-    setDoc((prev) => ({
-      ...prev,
-      elements: prev.elements.map((e) => (e.groupId === gid ? { ...e, groupId: undefined } : e)),
-      groups: (prev.groups ?? []).filter((g) => g.id !== gid),
-    }));
+    const sel = new Set(selectedIds);
+    const match = (doc.groups ?? []).find((g) => {
+      const m = membersOf(g.id);
+      return m.length === sel.size && m.every((x) => sel.has(x));
+    });
+    if (match) {
+      ungroupGroup(match.id);
+      return;
+    }
+    const gids = new Set(selectedIds.map((id) => elementGroup.get(id)).filter((g): g is string => Boolean(g)));
+    gids.forEach((g) => ungroupGroup(g));
   }
   const selectGroup = useCallback((gid: string) => setSelectedIds(membersOf(gid)), [membersOf]);
   function toggleGroupCollapsed(gid: string) {
@@ -1214,10 +1276,12 @@ export default function AdBuilderPage() {
       toggleSelect(elId);
       return;
     }
-    // A grouped element selects (and drags) its whole group as a unit.
-    const gid = doc.elements.find((el) => el.id === elId)?.groupId;
-    if (gid) {
-      const members = membersOf(gid).filter((id) => !lockedIds.has(id));
+    // A grouped element selects (and drags) its OUTERMOST group as a unit
+    // (double-click drills into the element). Nested groups → top-level group.
+    const chain = ancestorChain(elId);
+    const outer = chain[chain.length - 1];
+    if (outer) {
+      const members = membersOf(outer).filter((id) => !lockedIds.has(id));
       if (members.length > 1) {
         setSelectedIds(members);
         startGroupDrag(e, members);
@@ -1348,7 +1412,7 @@ export default function AdBuilderPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [undo, redo, selectedIds, doc.elements]);
+  }, [undo, redo, selectedIds, doc.elements, doc.groups]);
 
   // Autosave — debounced PATCH once there's a target (a saved template, or the
   // ad in ad mode). New/unsaved templates require an explicit Save first.
@@ -1577,8 +1641,9 @@ export default function AdBuilderPage() {
                 const base = [...placed].reverse(); // top of list = front
                 const byId = new Map(base.map((p) => [p.el.id, p] as const));
                 const groupOf = (id: string) => byId.get(id)?.el.groupId ?? null;
+                const docGroups = doc.groups ?? [];
                 const flat = (dragLayer && dragOrder ? dragOrder : base.map((p) => p.el.id)).filter((id) => byId.has(id));
-                const entries = buildLayerEntries(flat.map((id) => ({ id, groupId: groupOf(id) })));
+                const nodes = buildLayerTree(flat.map((id) => ({ id, groupId: groupOf(id) })), docGroups);
                 const lay = doc.layouts[size.id] ?? {};
 
                 // Drag handlers shared by every element row (live-shift on `flat`;
@@ -1607,7 +1672,7 @@ export default function AdBuilderPage() {
                   },
                   onDragEnd: () => {
                     setDragOrder((cur) => {
-                      if (cur) reorderLayers(flattenLayerEntries(buildLayerEntries(cur.map((x) => ({ id: x, groupId: groupOf(x) })))));
+                      if (cur) reorderLayers(flattenLayerTree(buildLayerTree(cur.map((x) => ({ id: x, groupId: groupOf(x) })), docGroups)));
                       return null;
                     });
                     setDragLayer(null);
@@ -1615,7 +1680,7 @@ export default function AdBuilderPage() {
                   onDrop: (e: React.DragEvent) => e.preventDefault(),
                 });
 
-                const renderRow = (id: string, indent: boolean) => {
+                const renderRow = (id: string) => {
                   const entry = byId.get(id);
                   if (!entry) return null;
                   const { el, box } = entry;
@@ -1631,7 +1696,7 @@ export default function AdBuilderPage() {
                     <div
                       key={el.id}
                       {...rowDrag(el.id, renaming)}
-                      className={`flex items-center gap-1 rounded-lg pr-1 transition-[opacity] ${indent ? 'ml-3' : ''} ${
+                      className={`flex items-center gap-1 rounded-lg pr-1 transition-[opacity] ${
                         isSel ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'
                       } ${box.hidden ? 'opacity-50' : ''} ${dragLayer === el.id ? 'opacity-40' : ''}`}
                     >
@@ -1679,17 +1744,16 @@ export default function AdBuilderPage() {
                   );
                 };
 
-                return entries.map((entry) => {
-                  if (entry.kind === 'element') return renderRow(entry.id, false);
-                  // ── group header + nested members ──
-                  const gid = entry.groupId;
-                  const meta = (doc.groups ?? []).find((g) => g.id === gid);
+                const renderGroup = (node: Extract<LayerNode, { kind: 'group' }>): React.ReactNode => {
+                  const gid = node.groupId;
+                  const meta = docGroups.find((g) => g.id === gid);
                   const gname = meta?.name ?? 'Group';
                   const collapsed = !!meta?.collapsed;
                   const renamingG = renamingLayer === gid;
-                  const allSel = entry.memberIds.length > 0 && entry.memberIds.every((id) => selectedIds.includes(id));
-                  const allLocked = entry.memberIds.every((id) => byId.get(id)?.el.locked);
-                  const allHidden = entry.memberIds.every((id) => lay[id]?.hidden);
+                  const leaves = membersOf(gid);
+                  const allSel = leaves.length > 0 && leaves.every((id) => selectedIds.includes(id));
+                  const allLocked = leaves.length > 0 && leaves.every((id) => byId.get(id)?.el.locked);
+                  const allHidden = leaves.length > 0 && leaves.every((id) => lay[id]?.hidden);
                   const commitGRename = () => {
                     renameGroup(gid, renameDraft);
                     setRenamingLayer(null);
@@ -1724,7 +1788,7 @@ export default function AdBuilderPage() {
                           >
                             <RectangleStackIcon className="h-4 w-4 flex-shrink-0 opacity-70" />
                             <span className="flex-1 truncate text-xs font-semibold">{gname}</span>
-                            <span className="text-[10px] text-[var(--muted-foreground)]">{entry.memberIds.length}</span>
+                            <span className="text-[10px] text-[var(--muted-foreground)]">{leaves.length}</span>
                           </button>
                         )}
                         <button onClick={() => ungroupGroup(gid)} title="Ungroup" className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]">
@@ -1741,10 +1805,14 @@ export default function AdBuilderPage() {
                           {allHidden ? <EyeSlashIcon className="h-3.5 w-3.5" /> : <EyeIcon className="h-3.5 w-3.5" />}
                         </button>
                       </div>
-                      {!collapsed && <div className="mt-1 space-y-1 border-l border-[var(--border)] pl-1">{entry.memberIds.map((id) => renderRow(id, true))}</div>}
+                      {!collapsed && <div className="mt-1 space-y-1 border-l border-[var(--border)] pl-1">{node.children.map((c) => renderNode(c))}</div>}
                     </div>
                   );
-                });
+                };
+
+                const renderNode = (node: LayerNode): React.ReactNode => (node.kind === 'element' ? renderRow(node.id) : renderGroup(node));
+
+                return nodes.map((n) => renderNode(n));
               })()}
             </div>
           </section>

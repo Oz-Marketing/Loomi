@@ -119,8 +119,9 @@ export interface TemplateDoc {
   /** Shared element definitions. */
   elements: DocElement[];
   /** Element groups (⌘G in the builder) — id + display name, referenced by
-   *  `DocElement.groupId`. Builder-only convenience; doesn't affect render. */
-  groups?: { id: string; name: string; collapsed?: boolean }[];
+   *  `DocElement.groupId`. Groups nest via `parentId` (a group inside a group).
+   *  Builder-only convenience; doesn't affect render. */
+  groups?: { id: string; name: string; parentId?: string; collapsed?: boolean }[];
   /** sizeId → (elementId → placement). */
   layouts: Record<string, Record<string, DocLayoutBox>>;
   defaults: AdData;

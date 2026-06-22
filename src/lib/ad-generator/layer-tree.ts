@@ -1,58 +1,99 @@
 /**
- * Layers-panel tree helpers (pure). Elements carry an optional `groupId`; the
- * Layers panel shows groups as a parent with its members nested underneath.
+ * Layers-panel tree helpers (pure). Elements carry an optional `groupId` (their
+ * innermost group); groups nest via `parentId`. The Layers panel shows this as a
+ * recursive tree — a group can contain elements AND sub-groups.
  *
- * A group appears at the position of its FRONTMOST member (the list is ordered
- * front→back, i.e. highest z first), and its members are listed in that same
- * order beneath it. Re-building entries from any flat order keeps a group's
- * members contiguous — so dragging one member moves the whole group, and an
- * ungrouped element can never wedge between a group's members.
+ * Ordering is front→back (highest z first). An element sits at its z; a group
+ * sits at the position of its frontmost descendant element, with its children
+ * laid out beneath it. Re-deriving the tree from any flat order keeps a group's
+ * descendants contiguous, so dragging one member moves the whole group and an
+ * outside element can never wedge into a group's run.
  */
 
-export interface GroupLayerEntry {
-  kind: 'group';
-  groupId: string;
-  memberIds: string[];
-}
-export interface ElementLayerEntry {
-  kind: 'element';
+export interface GroupMeta {
   id: string;
+  name?: string;
+  parentId?: string | null;
+  collapsed?: boolean;
 }
-export type LayerEntry = GroupLayerEntry | ElementLayerEntry;
 
-/** Build top-level Layers entries from elements in front→back order. */
-export function buildLayerEntries(order: { id: string; groupId?: string | null }[]): LayerEntry[] {
-  const entries: LayerEntry[] = [];
-  const byGroup = new Map<string, GroupLayerEntry>();
-  for (const { id, groupId } of order) {
-    if (groupId) {
-      let g = byGroup.get(groupId);
-      if (!g) {
-        g = { kind: 'group', groupId, memberIds: [] };
-        byGroup.set(groupId, g);
-        entries.push(g);
-      }
-      g.memberIds.push(id);
-    } else {
-      entries.push({ kind: 'element', id });
+export interface ElementRef {
+  id: string;
+  groupId?: string | null;
+}
+
+export type LayerNode =
+  | { kind: 'element'; id: string }
+  | { kind: 'group'; groupId: string; children: LayerNode[] };
+
+/**
+ * Build the nested Layers tree. `order` is elements front→back (highest z
+ * first); `groups` is the group hierarchy. Groups are positioned by their
+ * frontmost descendant element; empty groups sort to the back.
+ */
+export function buildLayerTree(order: ElementRef[], groups: GroupMeta[]): LayerNode[] {
+  const rank = new Map<string, number>();
+  order.forEach((e, i) => rank.set(e.id, i));
+  const elementGroup = new Map<string, string | null>(order.map((e) => [e.id, e.groupId ?? null]));
+  const groupParent = new Map<string, string | null>(groups.map((g) => [g.id, g.parentId ?? null]));
+  const knownGroup = new Set(groups.map((g) => g.id));
+
+  // Child lists keyed by parent ('' = root).
+  const ROOT = '';
+  const childElements = new Map<string, string[]>();
+  const childGroups = new Map<string, string[]>();
+  for (const e of order) {
+    const gid = elementGroup.get(e.id);
+    const key = gid && knownGroup.has(gid) ? gid : ROOT;
+    (childElements.get(key) ?? childElements.set(key, []).get(key)!).push(e.id);
+  }
+  for (const g of groups) {
+    const p = groupParent.get(g.id);
+    const key = p && knownGroup.has(p) ? p : ROOT;
+    (childGroups.get(key) ?? childGroups.set(key, []).get(key)!).push(g.id);
+  }
+
+  // Frontmost (min) rank of any descendant element — memoized, cycle-safe.
+  const groupRankCache = new Map<string, number>();
+  const computing = new Set<string>();
+  const groupRank = (gid: string): number => {
+    if (groupRankCache.has(gid)) return groupRankCache.get(gid)!;
+    if (computing.has(gid)) return Infinity; // guard against a cyclic parentId
+    computing.add(gid);
+    let best = Infinity;
+    for (const eid of childElements.get(gid) ?? []) best = Math.min(best, rank.get(eid) ?? Infinity);
+    for (const sub of childGroups.get(gid) ?? []) best = Math.min(best, groupRank(sub));
+    computing.delete(gid);
+    groupRankCache.set(gid, best);
+    return best;
+  };
+
+  const build = (parent: string): LayerNode[] => {
+    const entries: { rank: number; node: LayerNode }[] = [];
+    for (const eid of childElements.get(parent) ?? []) {
+      entries.push({ rank: rank.get(eid) ?? Infinity, node: { kind: 'element', id: eid } });
     }
-  }
-  return entries;
+    for (const gid of childGroups.get(parent) ?? []) {
+      entries.push({ rank: groupRank(gid), node: { kind: 'group', groupId: gid, children: build(gid) } });
+    }
+    entries.sort((a, b) => a.rank - b.rank);
+    return entries.map((e) => e.node);
+  };
+
+  return build(ROOT);
 }
 
-/** Flatten entries to a front→back element-id list (group members contiguous). */
-export function flattenLayerEntries(entries: LayerEntry[]): string[] {
+/** Flatten a tree to a front→back element-id list (group descendants contiguous). */
+export function flattenLayerTree(nodes: LayerNode[]): string[] {
   const out: string[] = [];
-  for (const e of entries) {
-    if (e.kind === 'group') out.push(...e.memberIds);
-    else out.push(e.id);
-  }
+  const walk = (ns: LayerNode[]) => {
+    for (const n of ns) {
+      if (n.kind === 'element') out.push(n.id);
+      else walk(n.children);
+    }
+  };
+  walk(nodes);
   return out;
-}
-
-/** Re-cluster a flat front→back order so each group's members are contiguous. */
-export function clusterByGroup(order: { id: string; groupId?: string | null }[]): string[] {
-  return flattenLayerEntries(buildLayerEntries(order));
 }
 
 interface ZBox {
@@ -60,31 +101,28 @@ interface ZBox {
 }
 
 /**
- * Reassign per-size z so the canvas stacking matches the Layers tree exactly:
- * within each size, take the current front→back order (z desc), re-cluster so a
- * group's members are contiguous, then write back contiguous z (front = highest).
- * Preserves each size's relative order; only pulls group members together.
- *
- * Returns a fresh `layouts` map; pass `elements` (for groupId) + `sizes` + the
- * existing `layouts`. Boxes keep every other field.
+ * Reassign per-size z so the canvas stacking matches the Layers tree: within
+ * each size, order by current z (front→back), re-derive the tree (which keeps
+ * group descendants contiguous), then write contiguous z back (front = highest).
  */
 export function normalizeGroupZ<B extends ZBox>(
-  elements: { id: string; groupId?: string | null }[],
+  elements: ElementRef[],
+  groups: GroupMeta[],
   sizes: { id: string }[],
   layouts: Record<string, Record<string, B>>,
 ): Record<string, Record<string, B>> {
   const groupOf = new Map(elements.map((e) => [e.id, e.groupId ?? null]));
-  const next: Record<string, Record<string, B>> = {};
+  const out: Record<string, Record<string, B>> = {};
   for (const s of sizes) {
     const lay = layouts[s.id] ?? {};
     const ids = Object.keys(lay).sort((a, b) => (lay[b].z ?? 0) - (lay[a].z ?? 0)); // front→back
-    const clustered = clusterByGroup(ids.map((id) => ({ id, groupId: groupOf.get(id) ?? null })));
-    const n = clustered.length;
+    const ordered = flattenLayerTree(buildLayerTree(ids.map((id) => ({ id, groupId: groupOf.get(id) ?? null })), groups));
+    const n = ordered.length;
     const sized: Record<string, B> = { ...lay };
-    clustered.forEach((id, i) => {
+    ordered.forEach((id, i) => {
       sized[id] = { ...sized[id], z: n - i }; // front of list = highest z
     });
-    next[s.id] = sized;
+    out[s.id] = sized;
   }
-  return next;
+  return out;
 }

@@ -1,45 +1,51 @@
 import { describe, it, expect } from 'vitest';
-import { buildLayerEntries, flattenLayerEntries, clusterByGroup, normalizeGroupZ } from './layer-tree';
+import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type GroupMeta } from './layer-tree';
 
-describe('layer-tree', () => {
-  it('nests a group at its frontmost member, members in order', () => {
-    const entries = buildLayerEntries([
-      { id: 'a', groupId: 'g1' },
-      { id: 'b' },
-      { id: 'c', groupId: 'g1' },
-    ]);
-    expect(entries).toEqual([
-      { kind: 'group', groupId: 'g1', memberIds: ['a', 'c'] },
+describe('layer-tree (nested)', () => {
+  it('nests a group at its frontmost member', () => {
+    const tree = buildLayerTree(
+      [{ id: 'a', groupId: 'g1' }, { id: 'b' }, { id: 'c', groupId: 'g1' }],
+      [{ id: 'g1' }],
+    );
+    expect(tree).toEqual([
+      { kind: 'group', groupId: 'g1', children: [{ kind: 'element', id: 'a' }, { kind: 'element', id: 'c' }] },
       { kind: 'element', id: 'b' },
     ]);
   });
 
-  it('keeps ungrouped elements standalone, in order', () => {
-    const entries = buildLayerEntries([{ id: 'x' }, { id: 'y' }]);
-    expect(entries).toEqual([
-      { kind: 'element', id: 'x' },
-      { kind: 'element', id: 'y' },
+  it('builds a group inside a group (parentId)', () => {
+    // g2 nested in g1; order front→back: a(g2), b(g1), c(root)
+    const groups: GroupMeta[] = [{ id: 'g1' }, { id: 'g2', parentId: 'g1' }];
+    const tree = buildLayerTree([{ id: 'a', groupId: 'g2' }, { id: 'b', groupId: 'g1' }, { id: 'c' }], groups);
+    expect(tree).toEqual([
+      {
+        kind: 'group',
+        groupId: 'g1',
+        children: [
+          { kind: 'group', groupId: 'g2', children: [{ kind: 'element', id: 'a' }] },
+          { kind: 'element', id: 'b' },
+        ],
+      },
+      { kind: 'element', id: 'c' },
     ]);
   });
 
-  it('clusterByGroup pulls scattered members together at the frontmost', () => {
-    // b (ungrouped) sits between two members of g1 → it gets pushed below the group.
-    expect(clusterByGroup([{ id: 'a', groupId: 'g1' }, { id: 'b' }, { id: 'c', groupId: 'g1' }])).toEqual(['a', 'c', 'b']);
+  it('flattens depth-first, keeping descendants contiguous', () => {
+    const groups: GroupMeta[] = [{ id: 'g1' }, { id: 'g2', parentId: 'g1' }];
+    const tree = buildLayerTree([{ id: 'a', groupId: 'g2' }, { id: 'b', groupId: 'g1' }, { id: 'c' }], groups);
+    expect(flattenLayerTree(tree)).toEqual(['a', 'b', 'c']);
   });
 
-  it('flatten is the inverse of build for already-contiguous input', () => {
-    const order = [{ id: 'a', groupId: 'g1' }, { id: 'c', groupId: 'g1' }, { id: 'b' }];
-    expect(flattenLayerEntries(buildLayerEntries(order))).toEqual(['a', 'c', 'b']);
-  });
-
-  it('normalizeGroupZ makes a group contiguous in z while preserving order, per size', () => {
-    // z desc (front→back): a(g1, z3), b(z2), c(g1, z1) — b sits between members.
-    const elements = [{ id: 'a', groupId: 'g1' }, { id: 'b' }, { id: 'c', groupId: 'g1' }];
-    const layouts = { sq: { a: { z: 3 }, b: { z: 2 }, c: { z: 1 } } };
-    const out = normalizeGroupZ(elements, [{ id: 'sq' }], layouts);
-    // Front→back becomes a, c (clustered), then b → z 3,2,1.
-    expect(out.sq.a.z).toBe(3);
-    expect(out.sq.c.z).toBe(2);
-    expect(out.sq.b.z).toBe(1);
+  it('normalizeGroupZ pulls a nested group together and reassigns z', () => {
+    // z desc: a(g2,z4) d(z3) b(g1,z2) c(z1) — d (root) sits between g1's members.
+    const elements = [{ id: 'a', groupId: 'g2' }, { id: 'd' }, { id: 'b', groupId: 'g1' }, { id: 'c' }];
+    const groups: GroupMeta[] = [{ id: 'g1' }, { id: 'g2', parentId: 'g1' }];
+    const layouts = { sq: { a: { z: 4 }, d: { z: 3 }, b: { z: 2 }, c: { z: 1 } } };
+    const out = normalizeGroupZ(elements, groups, [{ id: 'sq' }], layouts);
+    // g1 (a,b) clusters at front, then d, then c → z 4,3,2,1.
+    expect(out.sq.a.z).toBe(4);
+    expect(out.sq.b.z).toBe(3);
+    expect(out.sq.d.z).toBe(2);
+    expect(out.sq.c.z).toBe(1);
   });
 });

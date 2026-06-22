@@ -477,6 +477,8 @@ export default function AdBuilderPage() {
   const [dragOrder, setDragOrder] = useState<string[] | null>(null);
   // Right-click context menu (canvas + layers), positioned at the cursor.
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  // Inline text editing: double-click a text element to edit its value on-canvas.
+  const [editingText, setEditingText] = useState<{ id: string; value: string } | null>(null);
   // FLIP: gently slide Layers rows to their new spots when the drop order
   // actually changes during a drag. Transforms are cleared before measuring, so
   // an in-flight animation never pollutes the next measurement (no jitter).
@@ -545,6 +547,45 @@ export default function AdBuilderPage() {
       elements: prev.elements.map((e) => (e.id === id ? { ...e, ...patch } : e)),
     }));
   }, []);
+
+  // ── inline text editing (double-click a text element) ──
+  // Editable when the element binds to a STATIC literal or a plain FIELD.
+  // Brand-bound and computed (`_offer*`) text is derived, so it's read-only here.
+  const textEditTarget = useCallback((el: DocElement | null | undefined): 'static' | 'field' | null => {
+    if (!el || el.type !== 'text' || el.locked || !el.binding) return null;
+    if (el.binding.kind === 'static') return 'static';
+    if (el.binding.kind === 'field' && !el.binding.key.startsWith('_')) return 'field';
+    return null;
+  }, []);
+
+  const startTextEdit = useCallback(
+    (elId: string) => {
+      const el = doc.elements.find((e) => e.id === elId);
+      const target = textEditTarget(el);
+      if (!el || !target) return;
+      const cur = el.binding!.kind === 'static' ? el.binding!.value : String(previewData[(el.binding as { key: string }).key] ?? '');
+      setSelectedIds([elId]);
+      setEditingText({ id: elId, value: cur });
+    },
+    [doc.elements, previewData, textEditTarget],
+  );
+
+  // Commit writes back to the bound value: static → the literal; field → the
+  // field's default in `doc.defaults` (the form data the generator prefills).
+  const commitTextEdit = useCallback(() => {
+    setEditingText((cur) => {
+      if (!cur) return null;
+      const el = doc.elements.find((e) => e.id === cur.id);
+      const b = el?.binding;
+      if (b?.kind === 'static') {
+        setElement(cur.id, { binding: { kind: 'static', value: cur.value } });
+      } else if (b?.kind === 'field') {
+        const key = b.key;
+        setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: cur.value } }));
+      }
+      return null;
+    });
+  }, [doc.elements, setElement]);
 
   const deleteElement = useCallback((id: string) => {
     setDoc((prev) => {
@@ -2311,7 +2352,13 @@ export default function AdBuilderPage() {
                         onPointerDown={(e) => onBoxPointerDown(e, el.id)}
                         onContextMenu={(e) => openCanvasMenu(e, el.id)}
                         onDoubleClick={(e) => {
-                          // Drill into a group: double-click selects just this member.
+                          // Editable text: double-click to edit its value inline.
+                          if (textEditTarget(el)) {
+                            e.stopPropagation();
+                            startTextEdit(el.id);
+                            return;
+                          }
+                          // Otherwise drill into a group: select just this member.
                           if (el.groupId && !lockedIds.has(el.id)) {
                             e.stopPropagation();
                             selectOne(el.id);
@@ -2377,6 +2424,53 @@ export default function AdBuilderPage() {
                       </div>
                     );
                   })}
+
+                  {/* Inline text editor — double-click a text element to edit it. */}
+                  {editingText &&
+                    layout[editingText.id] &&
+                    (() => {
+                      const el = doc.elements.find((e) => e.id === editingText.id);
+                      if (!el) return null;
+                      const eb = layout[editingText.id];
+                      const color =
+                        el.color === 'brand'
+                          ? typeof previewData.brandColor === 'string'
+                            ? previewData.brandColor
+                            : '#111827'
+                          : el.color || '#111827';
+                      return (
+                        <textarea
+                          autoFocus
+                          value={editingText.value}
+                          onChange={(e) => setEditingText({ id: editingText.id, value: e.target.value })}
+                          onBlur={commitTextEdit}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              commitTextEdit();
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault();
+                              setEditingText(null);
+                            }
+                          }}
+                          className="absolute z-40 resize-none overflow-hidden rounded-[2px] bg-[var(--card)] p-0.5 shadow-[0_0_0_2px_var(--primary)] outline-none"
+                          style={{
+                            left: eb.x * frameW,
+                            top: eb.y * frameH,
+                            width: eb.w * frameW,
+                            height: eb.h * frameH,
+                            color,
+                            fontSize: (eb.fontSize ?? 16) * scale,
+                            fontWeight: el.fontWeight,
+                            lineHeight: el.lineHeight ?? 1.1,
+                            letterSpacing: el.letterSpacing ? el.letterSpacing * scale : undefined,
+                            textTransform: el.uppercase ? 'uppercase' : undefined,
+                            textAlign: el.align ?? 'left',
+                          }}
+                        />
+                      );
+                    })()}
 
                   {/* Group bounding box + resize handles (scale the whole selection) */}
                   {groupBox && (

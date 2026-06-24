@@ -414,6 +414,7 @@ export function LandingPageBuilderPage({ id }: { id: string }) {
         <LandingPageHtmlEditorShell
           template={template}
           onChange={applyChange}
+          pageId={id}
           accountKey={page?.accountKey ?? null}
           canUndo={canUndo}
           canRedo={canRedo}

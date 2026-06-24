@@ -5,16 +5,19 @@ import { createPortal } from 'react-dom';
 import {
   ArrowUturnLeftIcon,
   ArrowUturnRightIcon,
+  CodeBracketIcon,
   ComputerDesktopIcon,
   DevicePhoneMobileIcon,
   DocumentPlusIcon,
   PhotoIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type { editor as MonacoEditor } from 'monaco-editor';
 import type { LandingPageHtmlTemplate } from '../types';
 import EmbeddedFormBlock from '../components/EmbeddedForm';
 import { InsertEmbedModal, type InsertEmbedTab } from './InsertEmbedModal';
+import { LpAiPanel } from './LpAiPanel';
 
 const MOBILE_PREVIEW_WIDTH = 390;
 const PREVIEW_DEBOUNCE_MS = 300;
@@ -30,6 +33,8 @@ const EDITOR_STEP_PX = 24;
 interface LandingPageHtmlEditorShellProps {
   template: LandingPageHtmlTemplate;
   onChange: (next: LandingPageHtmlTemplate) => void;
+  /** Landing-page id — used by the Iris tab to reach its chat endpoint. */
+  pageId: string;
   /** Account key for the LP — scopes the Media + Forms tabs in the
    *  Insert modal so the user only sees their subaccount's assets. */
   accountKey: string | null;
@@ -53,6 +58,7 @@ interface LandingPageHtmlEditorShellProps {
 export function LandingPageHtmlEditorShell({
   template,
   onChange,
+  pageId,
   accountKey,
   canUndo,
   canRedo,
@@ -61,6 +67,10 @@ export function LandingPageHtmlEditorShell({
 }: LandingPageHtmlEditorShellProps) {
   const [previewDevice, setPreviewDevice] = React.useState<'desktop' | 'mobile'>('desktop');
   const [insertModalTab, setInsertModalTab] = React.useState<InsertEmbedTab | null>(null);
+  // Left pane toggles between the raw HTML editor and the Iris chat. Both share
+  // the resizable pane width; the preview on the right stays visible for both,
+  // so Iris's edits render live as the user chats.
+  const [leftTab, setLeftTab] = React.useState<'html' | 'iris'>('html');
   const editorRef = React.useRef<MonacoEditor.IStandaloneCodeEditor | null>(null);
 
   // ── Resizable editor pane (matches the blocks editor's pattern) ──
@@ -151,7 +161,6 @@ export function LandingPageHtmlEditorShell({
         canRedo={canRedo}
         onUndo={onUndo}
         onRedo={onRedo}
-        onOpenInsertModal={(tab) => setInsertModalTab(tab)}
       />
 
       <InsertEmbedModal
@@ -164,38 +173,85 @@ export function LandingPageHtmlEditorShell({
 
       <div className="flex-1 min-h-0 flex gap-3">
         <div
-          className="min-h-0 flex-shrink-0 border border-[var(--border)] rounded-xl overflow-hidden bg-[#1e1e1e]"
+          className="min-h-0 flex-shrink-0 flex flex-col gap-2"
           style={{ width: `${editorWidth}px` }}
         >
-          <Editor
-            defaultLanguage="html"
-            value={template.html}
-            onChange={handleHtmlChange}
-            onMount={handleEditorMount}
-            theme="vs-dark"
-            options={{
-              fontSize: 12,
-              fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
-              minimap: { enabled: false },
-              lineNumbers: 'on',
-              scrollBeyondLastLine: false,
-              wordWrap: 'on',
-              tabSize: 2,
-              insertSpaces: true,
-              automaticLayout: true,
-              bracketPairColorization: { enabled: true },
-              autoClosingBrackets: 'always',
-              autoClosingQuotes: 'always',
-              renderLineHighlight: 'line',
-              padding: { top: 12 },
-              overviewRulerBorder: false,
-              hideCursorInOverviewRuler: true,
-              scrollbar: {
-                verticalScrollbarSize: 8,
-                horizontalScrollbarSize: 8,
-              },
-            }}
-          />
+          {/* Left-pane header: tab switcher, plus the insert actions for the
+              HTML editor (hidden on the Iris tab — they only target Monaco). */}
+          <div className="flex items-center justify-between gap-2 flex-shrink-0">
+            <LeftPaneTabs tab={leftTab} onChange={setLeftTab} />
+            {leftTab === 'html' && (
+              <div className="flex items-center gap-0.5">
+                <ActionIconButton
+                  label="Insert media"
+                  icon={<PhotoIcon className="w-4 h-4" />}
+                  onClick={() => setInsertModalTab('media')}
+                />
+                <ActionIconButton
+                  label="Insert form"
+                  icon={<DocumentPlusIcon className="w-4 h-4" />}
+                  onClick={() => setInsertModalTab('forms')}
+                />
+              </div>
+            )}
+          </div>
+
+          <div className="flex-1 min-h-0 relative">
+            {/* HTML editor — kept mounted (hidden, never unmounted) when the
+                Iris tab is active so the Monaco cursor and insertAtCursor keep
+                working, and so "Insert form/media" still target the editor. */}
+            <div
+              className={`absolute inset-0 border border-[var(--border)] rounded-xl overflow-hidden bg-[#1e1e1e] ${
+                leftTab === 'html' ? '' : 'hidden'
+              }`}
+            >
+              <Editor
+                defaultLanguage="html"
+                value={template.html}
+                onChange={handleHtmlChange}
+                onMount={handleEditorMount}
+                theme="vs-dark"
+                options={{
+                  fontSize: 12,
+                  fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+                  minimap: { enabled: false },
+                  lineNumbers: 'on',
+                  scrollBeyondLastLine: false,
+                  wordWrap: 'on',
+                  tabSize: 2,
+                  insertSpaces: true,
+                  automaticLayout: true,
+                  bracketPairColorization: { enabled: true },
+                  autoClosingBrackets: 'always',
+                  autoClosingQuotes: 'always',
+                  renderLineHighlight: 'line',
+                  padding: { top: 12 },
+                  overviewRulerBorder: false,
+                  hideCursorInOverviewRuler: true,
+                  scrollbar: {
+                    verticalScrollbarSize: 8,
+                    horizontalScrollbarSize: 8,
+                  },
+                }}
+              />
+            </div>
+
+            {/* Iris chat — applies its HTML through onChange / insertAtCursor so
+                autosave + undo/redo are shared with manual edits. The panel
+                owns its own rounded corners + rainbow border (see
+                .ai-assist-panel), so this wrapper only positions it — adding a
+                border/rounding here would double up and clip the ring. */}
+            <div
+              className={`absolute inset-0 ${leftTab === 'iris' ? '' : 'hidden'}`}
+            >
+              <LpAiPanel
+                pageId={pageId}
+                getHtml={() => template.html}
+                onReplaceHtml={(html) => onChange({ ...template, html })}
+                onInsertHtml={insertAtCursor}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Resize handle — drag to widen/narrow the editor pane.
@@ -241,6 +297,61 @@ export function LandingPageHtmlEditorShell({
   );
 }
 
+// ── Left-pane tabs (HTML ⇄ Iris) ───────────────────────────────────
+
+function LeftPaneTabs({
+  tab,
+  onChange,
+}: {
+  tab: 'html' | 'iris';
+  onChange: (t: 'html' | 'iris') => void;
+}) {
+  return (
+    <div className="inline-flex items-center self-start rounded-lg border border-[var(--border)] bg-[var(--card)] p-1 gap-0.5 flex-shrink-0">
+      <LeftPaneTabButton
+        active={tab === 'html'}
+        onClick={() => onChange('html')}
+        icon={<CodeBracketIcon className="w-3.5 h-3.5" />}
+        label="HTML"
+      />
+      <LeftPaneTabButton
+        active={tab === 'iris'}
+        onClick={() => onChange('iris')}
+        icon={<SparklesIcon className="w-3.5 h-3.5" />}
+        label="Iris"
+      />
+    </div>
+  );
+}
+
+function LeftPaneTabButton({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex items-center justify-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded transition-colors ${
+        active
+          ? 'bg-[var(--primary)] text-white'
+          : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
 // ── Action bar ─────────────────────────────────────────────────────
 
 function ActionBar({
@@ -250,7 +361,6 @@ function ActionBar({
   canRedo,
   onUndo,
   onRedo,
-  onOpenInsertModal,
 }: {
   previewDevice: 'desktop' | 'mobile';
   onChangePreviewDevice: (d: 'desktop' | 'mobile') => void;
@@ -258,41 +368,12 @@ function ActionBar({
   canRedo?: boolean;
   onUndo?: () => void;
   onRedo?: () => void;
-  onOpenInsertModal: (tab: InsertEmbedTab) => void;
 }) {
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center px-2 flex-shrink-0">
-      <div className="flex items-center gap-2 justify-self-start">
-        <InsertButton
-          icon={<PhotoIcon className="w-3.5 h-3.5" />}
-          label="Insert media"
-          onClick={() => onOpenInsertModal('media')}
-        />
-        <InsertButton
-          icon={<DocumentPlusIcon className="w-3.5 h-3.5" />}
-          label="Insert form"
-          onClick={() => onOpenInsertModal('forms')}
-        />
-      </div>
-
-      <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-1 gap-0.5 justify-self-center">
-        <PreviewToggleButton
-          active={previewDevice === 'desktop'}
-          onClick={() => onChangePreviewDevice('desktop')}
-          title="Desktop preview"
-          icon={<ComputerDesktopIcon className="w-3.5 h-3.5" />}
-          label="Desktop"
-        />
-        <PreviewToggleButton
-          active={previewDevice === 'mobile'}
-          onClick={() => onChangePreviewDevice('mobile')}
-          title="Mobile preview"
-          icon={<DevicePhoneMobileIcon className="w-3.5 h-3.5" />}
-          label="Mobile"
-        />
-      </div>
-
-      <div className="flex items-center justify-end gap-0.5">
+    <div className="flex items-center justify-between gap-2 px-2 flex-shrink-0">
+      {/* Undo/redo sit over the editor (left); the device toggle sits over
+          the preview (right). */}
+      <div className="flex items-center gap-0.5">
         {onUndo && (
           <ActionIconButton
             label="Undo"
@@ -311,6 +392,23 @@ function ActionBar({
             icon={<ArrowUturnRightIcon className="w-4 h-4" />}
           />
         )}
+      </div>
+
+      <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-1 gap-0.5">
+        <PreviewToggleButton
+          active={previewDevice === 'desktop'}
+          onClick={() => onChangePreviewDevice('desktop')}
+          title="Desktop preview"
+          icon={<ComputerDesktopIcon className="w-3.5 h-3.5" />}
+          label="Desktop"
+        />
+        <PreviewToggleButton
+          active={previewDevice === 'mobile'}
+          onClick={() => onChangePreviewDevice('mobile')}
+          title="Mobile preview"
+          icon={<DevicePhoneMobileIcon className="w-3.5 h-3.5" />}
+          label="Mobile"
+        />
       </div>
     </div>
   );
@@ -368,29 +466,6 @@ function PreviewToggleButton({
           ? 'bg-[var(--primary)] text-white'
           : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
       }`}
-    >
-      {icon}
-      {label}
-    </button>
-  );
-}
-
-// ── Insert button ──────────────────────────────────────────────────
-
-function InsertButton({
-  icon,
-  label,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="inline-flex items-center gap-1.5 px-3 h-9 rounded-lg border border-[var(--border)] bg-[var(--card)] text-[12px] font-medium hover:border-[var(--primary)] hover:bg-[var(--accent)] transition-colors"
     >
       {icon}
       {label}

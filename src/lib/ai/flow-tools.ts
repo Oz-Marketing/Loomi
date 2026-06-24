@@ -383,7 +383,7 @@ When the user describes a flow they want to build from scratch, call \`apply_gen
 - Contact: firstName, lastName, fullName, email, phone, city, state, postalCode, source (all text).
 - Vehicle: vehicleYear, vehicleMake, vehicleModel, vehicleVin, vehicleMileage (text).
 - Lifecycle dates: dateAdded, purchaseDate, lastServiceDate, nextServiceDate, leaseEndDate, warrantyEndDate (date).
-- Messaging: hasReceivedMessage, hasReceivedEmail, hasReceivedSms, hasOpenedEmail (boolean); lastMessageDate (date). \`hasOpenedEmail\` is the right field for "branch on whether they opened a prior email" — it flips true once any past send to this contact recorded an \`open\` event from the ESP webhook.
+- Messaging: hasReceivedMessage, hasReceivedEmail, hasReceivedSms, hasOpenedEmail, hasClickedEmail (boolean); lastMessageDate (date). \`hasOpenedEmail\` flips true once any past send recorded an \`open\` event; \`hasClickedEmail\` flips true once any past send recorded a \`click\`. Prefer \`hasClickedEmail\` for "branch on whether they engaged" when emails drive clicks to off-platform content (it survives Apple Mail Privacy Protection, which auto-opens but never auto-clicks).
 - Meta: tags (tags).
 
 **Operators by field type**:

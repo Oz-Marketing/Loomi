@@ -108,6 +108,7 @@ export function serializeContact(
     hasReceivedEmail: summary?.hasReceivedEmail ?? false,
     hasReceivedSms: summary?.hasReceivedSms ?? false,
     hasOpenedEmail: summary?.hasOpenedEmail ?? false,
+    hasClickedEmail: summary?.hasClickedEmail ?? false,
     lastMessageDate: summary?.lastMessageDate ?? '',
     customFields: customFieldsFromJson(row.customFields),
   };
@@ -233,6 +234,10 @@ export interface MessagingSummary {
    *  EmailEvent. Used by the flow builder's condition node to branch
    *  on whether a recipient has opened a prior send. */
   hasOpenedEmail: boolean;
+  /** True when ANY past email to this contact recorded a `click`
+   *  EmailEvent. The strongest engagement signal — especially when
+   *  emails drive clicks to off-platform content (e.g. blog posts). */
+  hasClickedEmail: boolean;
   lastMessageDate: string;
 }
 
@@ -304,6 +309,19 @@ export async function getMessagingSummaryForContacts(
   });
   const openedIds = new Set(openRows.map((r) => r.contactId));
 
+  // Same EmailCampaignRecipient join shape for `click` events so we can
+  // flip `hasClickedEmail` — the engagement signal that survives Apple
+  // Mail Privacy Protection (which auto-opens but never auto-clicks).
+  const clickRows = await prisma.emailCampaignRecipient.findMany({
+    where: {
+      accountKey,
+      contactId: { in: contactIds },
+      events: { some: { eventType: 'click' } },
+    },
+    select: { contactId: true },
+  });
+  const clickedIds = new Set(clickRows.map((r) => r.contactId));
+
   for (const row of emailRows) {
     const last = row.events[0]?.timestamp;
     const current = out.get(row.contactId);
@@ -312,6 +330,7 @@ export async function getMessagingSummaryForContacts(
       hasReceivedEmail: true,
       hasReceivedSms: current?.hasReceivedSms ?? false,
       hasOpenedEmail: current?.hasOpenedEmail ?? openedIds.has(row.contactId),
+      hasClickedEmail: current?.hasClickedEmail ?? clickedIds.has(row.contactId),
       lastMessageDate: pickLatest(current?.lastMessageDate, last),
     });
   }
@@ -324,6 +343,7 @@ export async function getMessagingSummaryForContacts(
       hasReceivedEmail: current?.hasReceivedEmail ?? false,
       hasReceivedSms: true,
       hasOpenedEmail: current?.hasOpenedEmail ?? false,
+      hasClickedEmail: current?.hasClickedEmail ?? false,
       lastMessageDate: pickLatest(current?.lastMessageDate, last),
     });
   }

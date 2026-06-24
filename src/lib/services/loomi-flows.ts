@@ -2181,6 +2181,7 @@ async function evaluateConditionBranch(
     hasReceivedEmail: summary?.hasReceivedEmail ?? false,
     hasReceivedSms: summary?.hasReceivedSms ?? false,
     hasOpenedEmail: summary?.hasOpenedEmail ?? false,
+    hasClickedEmail: summary?.hasClickedEmail ?? false,
     lastMessageDate: summary?.lastMessageDate ?? '',
   };
 

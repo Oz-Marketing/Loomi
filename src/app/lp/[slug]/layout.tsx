@@ -3,6 +3,14 @@
  * short-circuits for /lp/* paths, so this layout's only job is to
  * normalize the body margins + stack columns/grids on narrow
  * viewports the same way the editor's mobile preview does.
+ *
+ * The root <body> is `display:flex` (it hosts the app's sidebar+main
+ * layout). On public LP pages LayoutShell renders the page as the
+ * body's lone child, so without an explicit grow it would size to its
+ * content (~the inner max-width) and pin to the left, leaving the
+ * page's full-bleed bands capped and left-aligned. The `flex-1` wrapper
+ * makes the page fill the viewport width so 100%-width sections truly
+ * span edge to edge.
  */
 export default function PublicLandingPageLayout({
   children,
@@ -34,7 +42,7 @@ export default function PublicLandingPageLayout({
           `,
         }}
       />
-      {children}
+      <div className="flex-1 min-w-0">{children}</div>
     </>
   );
 }

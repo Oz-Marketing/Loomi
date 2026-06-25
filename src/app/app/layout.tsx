@@ -41,19 +41,39 @@ export default async function AppSurfaceLayout({
     redirect(`${proto}://${studioHost}/`);
   }
 
+  // Publish the canonical studio origin (from NEXTAUTH_URL) so client cross-
+  // links (Open in Studio / Build it) resolve correctly whether studio lives
+  // at a sibling subdomain (prod: studio.loomilm.com) or the bare env domain
+  // (staging: staging.loomilm.com).
+  let studioOrigin: string | null = null;
+  try {
+    studioOrigin = process.env.NEXTAUTH_URL ? new URL(process.env.NEXTAUTH_URL).origin : null;
+  } catch {
+    studioOrigin = null;
+  }
+
   return (
-    <SurfaceShell
-      sidebar={<AppSidebar />}
-      topBar={
-        <AppTopBar
-          userName={session.user.name}
-          userEmail={session.user.email}
-          userAvatarUrl={session.user.avatarUrl}
-          userRole={session.user.role}
+    <>
+      {studioOrigin && (
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `window.__LOOMI_STUDIO_ORIGIN__=${JSON.stringify(studioOrigin)}`,
+          }}
         />
-      }
-    >
-      {children}
-    </SurfaceShell>
+      )}
+      <SurfaceShell
+        sidebar={<AppSidebar />}
+        topBar={
+          <AppTopBar
+            userName={session.user.name}
+            userEmail={session.user.email}
+            userAvatarUrl={session.user.avatarUrl}
+            userRole={session.user.role}
+          />
+        }
+      >
+        {children}
+      </SurfaceShell>
+    </>
   );
 }

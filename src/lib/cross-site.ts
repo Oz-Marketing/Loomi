@@ -65,6 +65,12 @@ export function getStudioUrl(path: string = ''): string | null {
   if (typeof window === 'undefined') return null;
   const { protocol, host } = window.location;
   const p = path === '' ? '' : path.startsWith('/') ? path : `/${path}`;
+  // Prefer the server-provided studio origin (set from NEXTAUTH_URL by the App
+  // layout). It's authoritative across host topologies — prod's sibling
+  // `studio.loomilm.com` vs staging's bare `staging.loomilm.com` — where the
+  // prefix-stripping fallback below would otherwise guess wrong.
+  const explicit = (window as unknown as { __LOOMI_STUDIO_ORIGIN__?: string }).__LOOMI_STUDIO_ORIGIN__;
+  if (typeof explicit === 'string' && explicit) return `${explicit}${p}`;
   for (const prefix of ['app.', 'reporting.', 'studio.']) {
     if (host.startsWith(prefix)) {
       const rest = host.slice(prefix.length);

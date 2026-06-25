@@ -7,7 +7,7 @@ import { AppSidebar } from './_components/app-sidebar';
 import { AppTopBar } from './_components/app-top-bar';
 
 export const metadata = {
-  title: 'Loomi App',
+  title: 'Loomi',
   description: 'Projects & operations workspace for the Loomi team',
 };
 

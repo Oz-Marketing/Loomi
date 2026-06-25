@@ -57,7 +57,7 @@ export function AppSidebar() {
       brand={
         <Link href="/projects" className="block">
           <div className="text-base font-semibold tracking-tight">
-            loomi <span className="text-[var(--primary)]">app</span>
+            loomi
           </div>
         </Link>
       }

@@ -15,7 +15,6 @@ import {
   kindLabel,
   formatShortDate,
 } from '@/lib/projects/ui';
-import { jsonFetcher } from './fetcher';
 import { useProjectOptions } from './use-project-options';
 
 type Thread = NonNullable<Awaited<ReturnType<typeof getTaskWithThread>>>;

@@ -16,7 +16,7 @@ import {
 import type { TaskDTO } from '@/lib/services/projects';
 import { jsonFetcher } from './fetcher';
 import { useProjectOptions } from './use-project-options';
-import { ProjectsFilterBar } from './filter-bar';
+import { ProjectsFilterBar, matchesFilters } from './filter-bar';
 
 type SortKey = 'title' | 'accountDealer' | 'dueDate' | 'priority' | 'status';
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
@@ -26,6 +26,9 @@ export function TableView() {
   const options = useProjectOptions();
   const [accountKey, setAccountKey] = useState('');
   const [teamKey, setTeamKey] = useState('');
+  const [assigneeUserId, setAssigneeUserId] = useState('');
+  const [priority, setPriority] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const [sort, setSort] = useState<SortKey>('dueDate');
   const [dir, setDir] = useState<'asc' | 'desc'>('asc');
 
@@ -39,7 +42,9 @@ export function TableView() {
   const tasks = data?.tasks ?? [];
 
   const sorted = useMemo(() => {
-    const arr = [...tasks];
+    const arr = tasks.filter((t) =>
+      matchesFilters(t, { assigneeUserId, priority, status: statusFilter }),
+    );
     arr.sort((a, b) => {
       let cmp = 0;
       if (sort === 'priority') {
@@ -54,7 +59,7 @@ export function TableView() {
       return dir === 'asc' ? cmp : -cmp;
     });
     return arr;
-  }, [tasks, sort, dir]);
+  }, [tasks, sort, dir, assigneeUserId, priority, statusFilter]);
 
   function toggleSort(key: SortKey) {
     if (sort === key) setDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -72,6 +77,12 @@ export function TableView() {
         teamKey={teamKey}
         onAccountKey={setAccountKey}
         onTeamKey={setTeamKey}
+        assigneeUserId={assigneeUserId}
+        onAssigneeUserId={setAssigneeUserId}
+        priority={priority}
+        onPriority={setPriority}
+        status={statusFilter}
+        onStatus={setStatusFilter}
         title="Table"
         subtitle="Every task, sortable and filterable."
       />

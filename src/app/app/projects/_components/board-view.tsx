@@ -19,7 +19,7 @@ import { STATUSES } from '@/lib/projects/ui';
 import type { TaskDTO } from '@/lib/services/projects';
 import { jsonFetcher } from './fetcher';
 import { useProjectOptions } from './use-project-options';
-import { ProjectsFilterBar } from './filter-bar';
+import { ProjectsFilterBar, matchesFilters } from './filter-bar';
 import { TaskCard } from './task-card';
 
 export function BoardView() {
@@ -27,6 +27,8 @@ export function BoardView() {
   const options = useProjectOptions();
   const [accountKey, setAccountKey] = useState('');
   const [teamKey, setTeamKey] = useState('');
+  const [assigneeUserId, setAssigneeUserId] = useState('');
+  const [priority, setPriority] = useState('');
 
   const qs = new URLSearchParams();
   if (accountKey) qs.set('accountKey', accountKey);
@@ -43,9 +45,12 @@ export function BoardView() {
   const byStatus = useMemo(() => {
     const map: Record<string, TaskDTO[]> = {};
     for (const s of STATUSES) map[s.key] = [];
-    for (const t of tasks) (map[t.status] ??= []).push(t);
+    for (const t of tasks) {
+      if (!matchesFilters(t, { assigneeUserId, priority })) continue;
+      (map[t.status] ??= []).push(t);
+    }
     return map;
-  }, [tasks]);
+  }, [tasks, assigneeUserId, priority]);
 
   const activeTask = activeId ? tasks.find((t) => t.id === activeId) ?? null : null;
 
@@ -80,6 +85,10 @@ export function BoardView() {
         teamKey={teamKey}
         onAccountKey={setAccountKey}
         onTeamKey={setTeamKey}
+        assigneeUserId={assigneeUserId}
+        onAssigneeUserId={setAssigneeUserId}
+        priority={priority}
+        onPriority={setPriority}
         title="Board"
         subtitle="Drag tasks across stages."
       />

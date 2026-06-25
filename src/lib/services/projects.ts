@@ -482,6 +482,56 @@ export async function archiveTask(id: string, authorUserId: string | null) {
   await writeTaskActivity({ taskId: id, action: 'archived', summary: 'Task archived', authorUserId });
 }
 
+/**
+ * Advance tasks whose linked campaign has progressed, so a ticket closes the
+ * loop without anyone re-opening it. Run from the daily internal job (the
+ * read-time nudge on task detail covers the instant case). Never downgrades,
+ * never touches done/blocked/archived tasks.
+ *   campaign 'partial' (an asset sent/published) → task 'done'
+ *   campaign 'ready'   (assets generated as drafts) → task 'in_review'
+ */
+export async function reconcileLinkedTaskStatuses(): Promise<{ advanced: number }> {
+  const linked = await prisma.task.findMany({
+    where: {
+      archivedAt: null,
+      linkedAssetType: 'campaign',
+      linkedAssetId: { not: null },
+      status: { notIn: ['done', 'blocked'] },
+    },
+    select: { id: true, status: true, linkedAssetId: true },
+  });
+
+  let advanced = 0;
+  for (const t of linked) {
+    if (!t.linkedAssetId) continue;
+    const campaign = await getCampaignWithAssets(t.linkedAssetId);
+    if (!campaign) continue;
+
+    let next: string | null = null;
+    if (campaign.status === 'partial') next = 'done';
+    else if (campaign.status === 'ready' && (t.status === 'todo' || t.status === 'in_progress'))
+      next = 'in_review';
+
+    if (next && next !== t.status) {
+      await prisma.task.update({
+        where: { id: t.id },
+        data: { status: next, completedAt: next === 'done' ? new Date() : null },
+      });
+      await writeTaskActivity({
+        taskId: t.id,
+        action: 'status_changed',
+        field: 'status',
+        fromValue: t.status,
+        toValue: next,
+        summary: `Auto-advanced from linked campaign (${campaign.status})`,
+        authorUserId: null,
+      });
+      advanced += 1;
+    }
+  }
+  return { advanced };
+}
+
 /** Back-link a generated Loomi asset to a task (Phase 2 "Build it"). */
 export async function linkTaskAsset(
   taskId: string,

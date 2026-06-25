@@ -7,7 +7,7 @@ import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import type { TaskDTO } from '@/lib/services/projects';
 import { jsonFetcher } from './fetcher';
 import { useProjectOptions } from './use-project-options';
-import { ProjectsFilterBar } from './filter-bar';
+import { ProjectsFilterBar, matchesFilters } from './filter-bar';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -20,6 +20,8 @@ export function CalendarView() {
   const options = useProjectOptions();
   const [accountKey, setAccountKey] = useState('');
   const [teamKey, setTeamKey] = useState('');
+  const [assigneeUserId, setAssigneeUserId] = useState('');
+  const [priority, setPriority] = useState('');
   const [cursor, setCursor] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -53,11 +55,12 @@ export function CalendarView() {
     const map: Record<string, TaskDTO[]> = {};
     for (const t of tasks) {
       if (!t.dueDate) continue;
+      if (!matchesFilters(t, { assigneeUserId, priority })) continue;
       const key = ymd(new Date(t.dueDate));
       (map[key] ??= []).push(t);
     }
     return map;
-  }, [tasks]);
+  }, [tasks, assigneeUserId, priority]);
 
   const todayKey = ymd(new Date());
 
@@ -69,6 +72,10 @@ export function CalendarView() {
         teamKey={teamKey}
         onAccountKey={setAccountKey}
         onTeamKey={setTeamKey}
+        assigneeUserId={assigneeUserId}
+        onAssigneeUserId={setAssigneeUserId}
+        priority={priority}
+        onPriority={setPriority}
         title="Calendar"
         subtitle="Tasks plotted by due date."
       />

@@ -875,20 +875,22 @@ function Tooltip({
     });
   }, [placement]);
 
-  // Keep the bubble pinned to the trigger if the page scrolls/resizes while
-  // it's open — hovering inside a scroll container is common here.
+  const hide = useCallback(() => setCoords(null), []);
+
+  // Dismiss on scroll/resize rather than re-pinning. The planner scrolls under a
+  // fixed cursor, so icons drift beneath the pointer and fire mouseenter on each
+  // one in turn; re-pinning would keep every one of them alive as a trail of
+  // stuck tooltips. Closing on scroll keeps the tooltip strictly hover-only —
+  // it reappears only on a fresh hover once scrolling stops.
   useEffect(() => {
     if (!coords) return;
-    const onMove = () => place();
-    window.addEventListener('scroll', onMove, true);
-    window.addEventListener('resize', onMove);
+    window.addEventListener('scroll', hide, true);
+    window.addEventListener('resize', hide);
     return () => {
-      window.removeEventListener('scroll', onMove, true);
-      window.removeEventListener('resize', onMove);
+      window.removeEventListener('scroll', hide, true);
+      window.removeEventListener('resize', hide);
     };
-  }, [coords, place]);
-
-  const hide = () => setCoords(null);
+  }, [coords, hide]);
 
   return (
     <span
@@ -915,7 +917,7 @@ function Tooltip({
                   ? 'translate(-50%, 0)'
                   : 'translate(-50%, -100%)',
             }}
-            className="pointer-events-none z-[1000] w-max max-w-[340px] whitespace-normal text-center rounded-md border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5 text-[10px] font-medium leading-snug text-[var(--foreground)] shadow-lg"
+            className="pointer-events-none z-[1000] w-max max-w-[340px] whitespace-normal text-center rounded-md border border-[var(--border)] bg-[var(--card-strong)] px-2.5 py-1.5 text-[10px] font-medium leading-snug text-[var(--foreground)] shadow-lg backdrop-blur-sm"
           >
             {label}
           </span>,

@@ -1467,6 +1467,51 @@ function Divider({ icon, label }: { icon?: ReactNode; label: string }) {
   );
 }
 
+// Same divider look as <Divider>, but the header is a toggle: click it to
+// height-animate the section open/closed (chevron rotates). The section's
+// dropdowns (StatusSelect/DatePicker portal, UserPicker is a native select) all
+// escape the collapse's overflow clip, so nothing gets cut off when open.
+function CollapsibleSection({
+  icon,
+  label,
+  defaultOpen = true,
+  children,
+}: {
+  icon?: ReactNode;
+  label: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="group flex w-full items-center gap-2.5 my-4"
+      >
+        <div className="h-px flex-1 bg-[var(--border)]" />
+        <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--muted-foreground)] whitespace-nowrap transition-colors group-hover:text-[var(--foreground)]">
+          {icon}
+          {label}
+          <ChevronDownIcon
+            className={`w-3.5 h-3.5 transition-transform duration-300 ${open ? '' : '-rotate-90'}`}
+          />
+        </span>
+        <div className="h-px flex-1 bg-[var(--border)]" />
+      </button>
+      <div
+        className={`grid transition-[grid-template-rows] duration-300 ease-out ${
+          open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+        }`}
+      >
+        <div className="overflow-hidden">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 function BudgetTypeToggle({
   value,
   onChange,
@@ -3151,10 +3196,10 @@ function PlanAdForm({
           )}
 
           {/* Creative & Design */}
-          <Divider
+          <CollapsibleSection
             icon={<PaintBrushIcon className="w-3 h-3" />}
             label="Creative & Design"
-          />
+          >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-3">
             <Field label="Design Status">
               <StatusSelect
@@ -3225,9 +3270,13 @@ function PlanAdForm({
               </div>
             </Field>
           </div>
+          </CollapsibleSection>
 
           {/* Approvals */}
-          <Divider icon={<CheckBadgeIcon className="w-3 h-3" />} label="Approvals" />
+          <CollapsibleSection
+            icon={<CheckBadgeIcon className="w-3 h-3" />}
+            label="Approvals"
+          >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-3 max-w-2xl">
             <Field label="Account Rep">
               <UserPicker
@@ -3295,6 +3344,7 @@ function PlanAdForm({
               <ApprovalPill status={ad.clientApproval} />
             </div>
           </div>
+          </CollapsibleSection>
 
     </div>
   );

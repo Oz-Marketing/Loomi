@@ -559,7 +559,11 @@ const RUN_DATE_GREEN_STATUSES = new Set([
   'Ready- Pending Approval',
 ]);
 function runDateColor(status: string): string {
-  if (status === 'In Draft') return '#9ca3af';
+  // A finished or paused flight is not an error: Completed Run reads as done
+  // (blue), Off as inactive (gray). Only genuinely-attention-worthy statuses
+  // get the red track.
+  if (status === 'Completed Run') return COLORS.daily; // blue
+  if (status === 'Off' || status === 'In Draft') return '#9ca3af'; // gray
   return RUN_DATE_GREEN_STATUSES.has(status) ? COLORS.success : COLORS.error;
 }
 // Share (0–100) of the flight window that has elapsed as of today.
@@ -1483,13 +1487,25 @@ function CollapsibleSection({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // Expand/collapse is a VIEW action, so the toggle must keep working even when
+  // the form is read-only (frozen month). The editor wraps the form in a
+  // <fieldset disabled>, which would disable a real <button> here — so this is a
+  // div-button (not form-associated, immune to the ancestor fieldset).
+  const toggle = () => setOpen((v) => !v);
   return (
     <div>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggle();
+          }
+        }}
         aria-expanded={open}
-        className="group flex w-full items-center gap-2.5 my-4"
+        className="group flex w-full items-center gap-2.5 my-4 cursor-pointer select-none"
       >
         <div className="h-px flex-1 bg-[var(--border)]" />
         <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--muted-foreground)] whitespace-nowrap transition-colors group-hover:text-[var(--foreground)]">
@@ -1500,7 +1516,7 @@ function CollapsibleSection({
           />
         </span>
         <div className="h-px flex-1 bg-[var(--border)]" />
-      </button>
+      </div>
       <div
         className={`grid transition-[grid-template-rows] duration-300 ease-out ${
           open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
@@ -2406,6 +2422,14 @@ function AdSummaryRow({
         <AdStatusPill status={ad.adStatus} />
       </td>
 
+      {/* Due date — user-set; muted dash when unset */}
+      <td
+        className="px-3 py-2 align-middle whitespace-nowrap text-xs"
+        style={{ color: ad.dueDate ? 'var(--foreground)' : 'var(--muted-foreground)' }}
+      >
+        {fmtDate(ad.dueDate)}
+      </td>
+
       {/* Budget tags */}
       <td className="px-3 py-2 align-middle whitespace-nowrap">
         <div className="flex items-center gap-1">
@@ -3024,7 +3048,16 @@ function PlanAdForm({
             </Field>
           </div>
 
-          <div className="mb-3 max-w-xs">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-3 max-w-xl">
+            {/* Due Date — plain user-set date, no auto-fill. */}
+            <Field label="Due Date">
+              <DatePicker
+                value={ad.dueDate}
+                onChange={(v) => onUpdate({ ...ad, dueDate: v })}
+                placeholder="Pick a date"
+                presets={[TODAY_PRESET]}
+              />
+            </Field>
             <Field label="Task Completed">
               <div className="relative">
                 <DatePicker
@@ -5849,6 +5882,9 @@ function AdPlannerPanel({
                   <th className="w-10 px-2 py-2"></th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Status
+                  </th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                    Due Date
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Budget

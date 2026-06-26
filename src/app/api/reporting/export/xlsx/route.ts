@@ -10,29 +10,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireReportingAccess } from '../../_lib/guard';
 import { renderReportXlsx } from '@/lib/reporting/xlsx';
-import type { ReportDoc } from '@/lib/reporting/report-doc';
+import { isValidReportDoc, reportDocSizeError, sanitizeReportFilename } from '@/lib/reporting/report-doc';
 
 export const dynamic = 'force-dynamic';
-
-function isValidDoc(d: unknown): d is ReportDoc {
-  if (!d || typeof d !== 'object') return false;
-  const doc = d as Record<string, unknown>;
-  if (typeof doc.title !== 'string') return false;
-  if (!Array.isArray(doc.sections)) return false;
-  return doc.sections.every(
-    (s) =>
-      s &&
-      typeof s === 'object' &&
-      typeof (s as ReportDoc['sections'][number]).title === 'string' &&
-      Array.isArray((s as ReportDoc['sections'][number]).columns) &&
-      Array.isArray((s as ReportDoc['sections'][number]).rows),
-  );
-}
-
-function sanitizeFileName(value: string): string {
-  const safe = value.trim().toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
-  return safe || 'report';
-}
 
 export async function POST(req: NextRequest) {
   const { error } = await requireReportingAccess();
@@ -45,13 +25,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  if (!isValidDoc(body)) {
+  if (!isValidReportDoc(body)) {
     return NextResponse.json({ error: 'Malformed report document' }, { status: 400 });
+  }
+
+  const sizeError = reportDocSizeError(body);
+  if (sizeError) {
+    return NextResponse.json({ error: sizeError }, { status: 413 });
   }
 
   try {
     const xlsx = await renderReportXlsx(body);
-    const filename = `${sanitizeFileName(body.title)}.xlsx`;
+    const filename = `${sanitizeReportFilename(body.title)}.xlsx`;
     return new NextResponse(xlsx as unknown as BodyInit, {
       status: 200,
       headers: {

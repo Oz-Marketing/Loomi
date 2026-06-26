@@ -84,3 +84,65 @@ export function excelNumFmt(type: CellType): string | undefined {
       return undefined;
   }
 }
+
+// ── Export-route helpers (shared by the PDF + XLSX routes) ──
+
+/**
+ * Structural validation for an inbound {@link ReportDoc} (untrusted request
+ * body). Confirms the shape the renderers rely on — a string title and an
+ * array of sections, each with title/columns/rows — without trusting the
+ * caller. Cell values are tolerated as-is; the renderers coerce them.
+ */
+export function isValidReportDoc(d: unknown): d is ReportDoc {
+  if (!d || typeof d !== 'object') return false;
+  const doc = d as Record<string, unknown>;
+  if (typeof doc.title !== 'string') return false;
+  if (!Array.isArray(doc.sections)) return false;
+  return doc.sections.every(
+    (s) =>
+      s &&
+      typeof s === 'object' &&
+      typeof (s as ReportSection).title === 'string' &&
+      Array.isArray((s as ReportSection).columns) &&
+      Array.isArray((s as ReportSection).rows),
+  );
+}
+
+/** Slugify a report title into a safe download filename stem. */
+export function sanitizeReportFilename(value: string): string {
+  const safe = value.trim().toLowerCase().replace(/[^a-z0-9-_]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+  return safe || 'report';
+}
+
+/**
+ * Upper bounds on an export payload. A single authenticated user could
+ * otherwise post a doc large enough to exhaust memory while rendering
+ * (headless Chromium for PDF, an in-memory workbook for XLSX). Real reports
+ * sit far below these, so they only ever trip on a runaway/abusive request.
+ */
+export const REPORT_DOC_LIMITS = {
+  maxSections: 40,
+  maxColumns: 64,
+  maxRowsTotal: 50_000,
+} as const;
+
+/**
+ * Returns a human-readable reason if the doc exceeds {@link REPORT_DOC_LIMITS},
+ * else null. Routes should treat a non-null result as a 413.
+ */
+export function reportDocSizeError(doc: ReportDoc): string | null {
+  if (doc.sections.length > REPORT_DOC_LIMITS.maxSections) {
+    return `Too many sections (${doc.sections.length} > ${REPORT_DOC_LIMITS.maxSections})`;
+  }
+  let totalRows = 0;
+  for (const s of doc.sections) {
+    if (s.columns.length > REPORT_DOC_LIMITS.maxColumns) {
+      return `Too many columns in "${s.title}" (${s.columns.length} > ${REPORT_DOC_LIMITS.maxColumns})`;
+    }
+    totalRows += s.rows.length;
+  }
+  if (totalRows > REPORT_DOC_LIMITS.maxRowsTotal) {
+    return `Too many rows (${totalRows} > ${REPORT_DOC_LIMITS.maxRowsTotal})`;
+  }
+  return null;
+}

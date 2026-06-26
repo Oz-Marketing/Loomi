@@ -2341,7 +2341,6 @@ function AdSummaryRow({
 }) {
   const readOnly = usePacerReadOnly();
   const allocation = num(ad.allocation);
-  const isLifetime = ad.budgetType === 'Lifetime';
   const updatesCount = ad.activityLog.length;
   const showTopLine = isDropTarget && dropEdge === 'top';
   const showBottomLine = isDropTarget && dropEdge === 'bottom';

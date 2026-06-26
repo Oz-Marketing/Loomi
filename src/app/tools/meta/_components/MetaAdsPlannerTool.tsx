@@ -5858,7 +5858,7 @@ function AdPlannerPanel({
                     Allocation
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Run Dates
+                    Flight Dates
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Design

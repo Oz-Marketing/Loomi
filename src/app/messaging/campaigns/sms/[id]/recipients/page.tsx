@@ -384,17 +384,9 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
     router.push('/messaging/campaigns');
   }
 
-  if (draftLoading) {
-    return (
-      <div className="max-w-5xl mx-auto py-12 px-6">
-        <p className="text-sm text-[var(--muted-foreground)] inline-flex items-center gap-2">
-          <ArrowPathIcon className="w-4 h-4 animate-spin" />
-          Loading campaign draft…
-        </p>
-      </div>
-    );
-  }
-
+  // NOTE: this hook MUST stay above the `draftLoading` early return below —
+  // a hook declared after a conditional return changes the hook count between
+  // renders and throws "Rendered more hooks than during the previous render."
   const tabButton = useCallback(
     (key: AudienceTab, label: string, icon: React.ComponentType<{ className?: string }>) => {
       const Icon = icon;
@@ -416,6 +408,17 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
     },
     [tab],
   );
+
+  if (draftLoading) {
+    return (
+      <div className="max-w-5xl mx-auto py-12 px-6">
+        <p className="text-sm text-[var(--muted-foreground)] inline-flex items-center gap-2">
+          <ArrowPathIcon className="w-4 h-4 animate-spin" />
+          Loading campaign draft…
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="pb-32">

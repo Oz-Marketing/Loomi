@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { FontSelect } from '@/components/font-select';
 import { createPortal } from 'react-dom';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
@@ -185,6 +186,19 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   const [brandTextColor, setBrandTextColor] = useState('#111827');
   const [brandHeadingFont, setBrandHeadingFont] = useState(DEFAULT_HEADING_FONT);
   const [brandBodyFont, setBrandBodyFont] = useState(DEFAULT_BODY_FONT);
+  // Uploaded custom font files (e.g. OEM-required). Persisted immediately via
+  // the fonts API (like logos), not through the branding Save button.
+  type CustomFontDef = { family: string; weight?: string; style?: string; url: string };
+  const [customFonts, setCustomFonts] = useState<CustomFontDef[]>([]);
+  const [fontUpload, setFontUpload] = useState<{ family: string; weight: string; style: string; file: File | null }>({
+    family: '',
+    weight: '400',
+    style: 'normal',
+    file: null,
+  });
+  const [fontUploading, setFontUploading] = useState(false);
+  const fontFileRef = useRef<HTMLInputElement>(null);
+  const [fontDragging, setFontDragging] = useState(false);
 
   // ── Custom Values ──
   type CustomValueDef = { name: string; value: string };
@@ -240,6 +254,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     // Custom values
     setCustomValues(accountData.customValues || {});
     setSavedCustomValues(accountData.customValues || {});
+    // Custom fonts
+    setCustomFonts(accountData.customFonts ?? []);
 
     // Snapshot for change detection
     formSnapshotRef.current = buildFormSnapshot(accountData);
@@ -557,6 +573,50 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
       }
     } catch {
       toast.error('Upload failed');
+    }
+  }
+
+  // ── Custom font handlers (persist immediately, like logos) ──
+  async function handleFontUpload() {
+    if (!fontUpload.file || !fontUpload.family.trim()) {
+      toast.error('Pick a font file and enter a family name');
+      return;
+    }
+    setFontUploading(true);
+    const fd = new FormData();
+    fd.append('file', fontUpload.file);
+    fd.append('family', fontUpload.family.trim());
+    fd.append('weight', fontUpload.weight);
+    fd.append('style', fontUpload.style);
+    try {
+      const res = await fetch(`/api/accounts/${key}/fonts`, { method: 'POST', body: fd });
+      const data = await res.json();
+      if (res.ok) {
+        setCustomFonts(data.customFonts ?? []);
+        setFontUpload({ family: '', weight: '400', style: 'normal', file: null });
+        toast.success('Font uploaded!');
+      } else {
+        toast.error(data.error || 'Upload failed');
+      }
+    } catch {
+      toast.error('Upload failed');
+    } finally {
+      setFontUploading(false);
+    }
+  }
+
+  async function handleFontDelete(url: string) {
+    try {
+      const res = await fetch(`/api/accounts/${key}/fonts?url=${encodeURIComponent(url)}`, { method: 'DELETE' });
+      const data = await res.json();
+      if (res.ok) {
+        setCustomFonts(data.customFonts ?? []);
+        toast.success('Font removed');
+      } else {
+        toast.error(data.error || 'Delete failed');
+      }
+    } catch {
+      toast.error('Delete failed');
     }
   }
 
@@ -1024,35 +1084,124 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
             </section>
 
             <section className={sectionCardClass}>
-              <h3 className={sectionHeadingClass}>Websafe Fonts</h3>
+              <h3 className={sectionHeadingClass}>Fonts</h3>
               <p className="text-[11px] text-[var(--muted-foreground)] mb-4 -mt-2">
-                Choose fallback-safe font stacks for headings and body copy.
+                Websafe stacks for everyday copy, plus uploaded OEM/brand fonts for the Ad Generator.
               </p>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className={labelClass}>Heading Font</label>
-                  <select value={brandHeadingFont} onChange={(e) => setBrandHeadingFont(e.target.value)} className={inputClass}>
-                    {WEBSAFE_FONTS.map((font) => (
-                      <option key={font.value} value={font.value}>{font.label}</option>
-                    ))}
-                  </select>
+                  <FontSelect value={brandHeadingFont} onChange={setBrandHeadingFont} options={WEBSAFE_FONTS} />
                 </div>
                 <div>
                   <label className={labelClass}>Body Font</label>
-                  <select value={brandBodyFont} onChange={(e) => setBrandBodyFont(e.target.value)} className={inputClass}>
-                    {WEBSAFE_FONTS.map((font) => (
-                      <option key={font.value} value={font.value}>{font.label}</option>
-                    ))}
-                  </select>
+                  <FontSelect value={brandBodyFont} onChange={setBrandBodyFont} options={WEBSAFE_FONTS} />
                 </div>
               </div>
-              <div className="mt-3 p-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/40">
-                <p className="text-sm text-[var(--foreground)]" style={{ fontFamily: brandHeadingFont }}>
-                  Heading preview
+
+              <div className="mt-6 pt-5 border-t border-[var(--border)]">
+                <p className="text-sm font-semibold text-[var(--foreground)]">Custom fonts</p>
+                <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5 mb-4">
+                  Upload brand font files (woff2, woff, ttf, otf) to use across your creative.
                 </p>
-                <p className="text-xs text-[var(--muted-foreground)] mt-1" style={{ fontFamily: brandBodyFont }}>
-                  Body preview in selected websafe stack.
-                </p>
+
+                {customFonts.length > 0 && (
+                  <div className="mb-4 space-y-2">
+                    {customFonts.map((f) => (
+                      <div key={f.url} className="flex items-center justify-between rounded-lg border border-[var(--border)] px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-[var(--foreground)]">{f.family}</p>
+                          <p className="text-[11px] text-[var(--muted-foreground)]">{f.weight || '400'} · {f.style || 'normal'}</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleFontDelete(f.url)}
+                          className="text-[11px] font-medium text-rose-400 hover:underline"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setFontDragging(true);
+                  }}
+                  onDragLeave={() => setFontDragging(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setFontDragging(false);
+                    const f = e.dataTransfer.files?.[0];
+                    if (f) setFontUpload((s) => ({ ...s, file: f }));
+                  }}
+                  onClick={() => fontFileRef.current?.click()}
+                  className={`relative flex h-28 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed transition-all ${
+                    fontDragging
+                      ? 'border-[var(--primary)] bg-[var(--primary)]/5'
+                      : 'border-[var(--border)] bg-[var(--muted)]/50 hover:border-[var(--muted-foreground)]'
+                  }`}
+                >
+                  <CloudArrowUpIcon className="h-6 w-6 text-[var(--muted-foreground)]" />
+                  <span className="text-[11px] text-[var(--muted-foreground)]">
+                    {fontUpload.file ? fontUpload.file.name : 'Drop font file or click to upload'}
+                  </span>
+                  <input
+                    ref={fontFileRef}
+                    type="file"
+                    accept=".woff2,.woff,.ttf,.otf"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) setFontUpload((s) => ({ ...s, file: f }));
+                      e.target.value = '';
+                    }}
+                  />
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className={labelClass}>Family name</label>
+                    <input
+                      type="text"
+                      value={fontUpload.family}
+                      placeholder="e.g. Toyota Type"
+                      onChange={(e) => setFontUpload((s) => ({ ...s, family: e.target.value }))}
+                      className={inputClass}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={labelClass}>Weight</label>
+                      <FontSelect
+                        previewFont={false}
+                        value={fontUpload.weight}
+                        onChange={(v) => setFontUpload((s) => ({ ...s, weight: v }))}
+                        options={['300', '400', '500', '600', '700', '800', '900'].map((w) => ({ value: w, label: w }))}
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass}>Style</label>
+                      <FontSelect
+                        previewFont={false}
+                        value={fontUpload.style}
+                        onChange={(v) => setFontUpload((s) => ({ ...s, style: v }))}
+                        options={[{ value: 'normal', label: 'Normal' }, { value: 'italic', label: 'Italic' }]}
+                      />
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleFontUpload}
+                  disabled={fontUploading}
+                  className="mt-3 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  {fontUploading ? 'Uploading…' : 'Upload font'}
+                </button>
               </div>
             </section>
           </div>

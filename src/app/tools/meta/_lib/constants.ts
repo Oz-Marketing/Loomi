@@ -68,15 +68,25 @@ export const AD_COLORS = [
   '#4ade80',
 ];
 
-/** Gross-to-actual-spend conversion factor (client gross × MARKUP = ad spend). */
-export const MARKUP = 0.77;
+// Markup (the gross→spend factor) is no longer a constant — it is per-account
+// (Account.markup) with an admin-configured agency default. Resolve it via
+// `accountMarginSetting` in _lib/markup (server reads the default from
+// services/markup). §0.1: no hardcoded markup literal anywhere in calc code.
 
 /**
  * A closed month whose |over/under| (actual − spend target) meets this is
  * flagged for carryover into the next month (Change 7). Configurable later;
  * a single agency-wide default for now.
  */
-export const CARRYOVER_THRESHOLD = 25;
+export const CARRYOVER_THRESHOLD = 15;
+
+/**
+ * §1 cross-month straddler: flag an ad whose flight crosses a month boundary
+ * when its in-month slice is below this fraction of the full-run target (i.e.
+ * materially short — a ~12.5% gap, inside the spec's 10–15% band), so a flight
+ * that's ~95% within one month doesn't trip the "variance expected" flag.
+ */
+export const CROSS_MONTH_IN_MONTH_THRESHOLD = 0.875;
 
 /**
  * Solid bg + white text for ad statuses (Monday-style "filled" tags).

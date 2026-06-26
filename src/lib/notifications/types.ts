@@ -10,13 +10,23 @@ export type NotificationType =
   | 'flight_ending'
   | 'period_over_allocated'
   | 'ad_assigned'
-  | 'approval_changed';
+  | 'approval_changed'
+  // §9 — config-driven alert engine (Meta channel)
+  | 'alert_account_pace'
+  | 'alert_budget_burn'
+  // Projects (App surface)
+  | 'task_assigned'
+  | 'ticket_filed'
+  | 'task_due_soon'
+  | 'task_overdue'
+  | 'task_comment'
+  | 'task_mention';
 
 export interface NotificationTypeMeta {
   type: NotificationType;
   label: string;
   description: string;
-  category: 'Meta Ads Planner';
+  category: 'Meta Ads Planner' | 'Projects';
   channel: 'digest' | 'immediate';
   defaultEnabled: boolean;
 }
@@ -92,6 +102,24 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     defaultEnabled: true,
   },
   {
+    type: 'alert_account_pace',
+    label: 'Account pacing off-target (alert engine)',
+    description:
+      'The account is pacing outside its target band (e.g. over 110% / under 85% of expected-to-date) for the live month. Fired by the §9 alert-rule engine.',
+    category: 'Meta Ads Planner',
+    channel: 'digest',
+    defaultEnabled: true,
+  },
+  {
+    type: 'alert_budget_burn',
+    label: 'Budget burning early (alert engine)',
+    description:
+      'A campaign has spent most of its monthly allocation with several flight-days still to go, so it may exhaust early. Fired by the §9 alert-rule engine.',
+    category: 'Meta Ads Planner',
+    channel: 'digest',
+    defaultEnabled: true,
+  },
+  {
     type: 'ad_assigned',
     label: 'You were assigned to an ad',
     description: 'You became the owner, designer, or account rep on an ad.',
@@ -106,6 +134,55 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     category: 'Meta Ads Planner',
     channel: 'immediate',
     defaultEnabled: false,
+  },
+  // ── Projects ──
+  {
+    type: 'task_assigned',
+    label: 'Task assigned to you',
+    description: 'You were assigned a task in a Projects initiative.',
+    category: 'Projects',
+    channel: 'immediate',
+    defaultEnabled: true,
+  },
+  {
+    type: 'ticket_filed',
+    label: 'Ticket filed to your team',
+    description: 'A new ticket was filed to a team you lead.',
+    category: 'Projects',
+    channel: 'immediate',
+    defaultEnabled: true,
+  },
+  {
+    type: 'task_due_soon',
+    label: 'Task due soon',
+    description: 'A task assigned to you is approaching its due date.',
+    category: 'Projects',
+    channel: 'digest',
+    defaultEnabled: true,
+  },
+  {
+    type: 'task_overdue',
+    label: 'Task overdue',
+    description: 'A task assigned to you has passed its due date and is not done.',
+    category: 'Projects',
+    channel: 'digest',
+    defaultEnabled: true,
+  },
+  {
+    type: 'task_comment',
+    label: 'New comment on your task',
+    description: 'Someone commented on a task assigned to you.',
+    category: 'Projects',
+    channel: 'immediate',
+    defaultEnabled: true,
+  },
+  {
+    type: 'task_mention',
+    label: 'You were mentioned',
+    description: 'Someone @mentioned you in a task comment.',
+    category: 'Projects',
+    channel: 'immediate',
+    defaultEnabled: true,
   },
 ];
 

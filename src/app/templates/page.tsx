@@ -7,17 +7,20 @@ import {
   EnvelopeIcon,
   DocumentTextIcon,
   RectangleStackIcon,
+  SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { FlowIcon } from '@/components/icon-map';
+import { AD_GENERATOR_ENABLED } from '@/lib/feature-flags';
 import { EmailTemplatesPanel, TemplatesHeaderActionsContext } from '@/app/email/templates/email-templates-view';
 import { FormTemplatesTab } from '@/components/templates/form-templates-tab';
 import { FlowTemplatesTab } from '@/components/templates/flow-templates-tab';
 import { LandingPageTemplatesTab } from '@/components/templates/landing-page-templates-tab';
+import { AdTemplatesTab } from '@/components/templates/ad-templates-tab';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
-type TabId = 'email' | 'forms' | 'flows' | 'landing-pages';
+type TabId = 'email' | 'forms' | 'flows' | 'landing-pages' | 'ads';
 
 interface TabDef {
   id: TabId;
@@ -32,6 +35,10 @@ const MANAGER_TABS: TabDef[] = [
   { id: 'flows', label: 'Flows', subtitle: 'Reusable flow templates you can adopt into an account.', icon: FlowIcon as IconComponent },
   { id: 'landing-pages', label: 'Landing Pages', subtitle: 'Saved landing page templates.', icon: RectangleStackIcon },
 ];
+
+// The Ad Generator is still feature-flagged, so the Ads tab only joins the
+// manager set when the flag is on (any admin+ can then edit ad templates).
+const ADS_TAB: TabDef = { id: 'ads', label: 'Ads', subtitle: 'Shared ad templates. Edit a layout here; create the account’s ad in the Ad Generator.', icon: SparklesIcon };
 
 // Clients only ever had access to email templates — keep the unified
 // page scoped to that surface for them.
@@ -54,7 +61,14 @@ function TemplatesPageInner() {
   const isClient = userRole === 'client';
   const canManage =
     userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
-  const tabs = canManage ? MANAGER_TABS : CLIENT_TABS;
+  // The Ad Generator is WIP — its Ads tab shows when the env flag is on (staging)
+  // or for developers (any env), matching the route/nav gating.
+  const showAdsTab = canManage && (AD_GENERATOR_ENABLED || userRole === 'developer');
+  const tabs = canManage
+    ? showAdsTab
+      ? [...MANAGER_TABS, ADS_TAB]
+      : MANAGER_TABS
+    : CLIENT_TABS;
 
   const requestedTab = searchParams.get('tab') as TabId | null;
   const initialTab: TabId =
@@ -85,7 +99,7 @@ function TemplatesPageInner() {
   return (
     <TemplatesHeaderActionsContext.Provider value={actionsSlot}>
       <div>
-        <div className="page-sticky-header mb-4">
+        <div className={`page-sticky-header ${tabs.length > 1 ? 'has-tabs ' : ''}mb-4`}>
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3 min-w-0">
               <BookOpenIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />
@@ -116,12 +130,10 @@ function TemplatesPageInner() {
               <div ref={setActionsSlot} className="flex items-center gap-2" />
             </div>
           </div>
-        </div>
 
-        {/* Tabs live between the sticky header and the page content (not
-            inside the sticky header) so they scroll with the content. */}
+        {/* Tabs pinned inside the sticky header so they don't scroll away. */}
         {tabs.length > 1 && (
-          <div className="mb-4 flex items-center gap-1 border-b border-[var(--border)]">
+          <div className="mt-4 flex items-center gap-1 border-b border-[var(--border)]">
             {tabs.map((t) => {
               const active = tab === t.id;
               return (
@@ -142,6 +154,7 @@ function TemplatesPageInner() {
             })}
           </div>
         )}
+        </div>
 
         {tab === 'email' && (
           <EmailTemplatesPanel
@@ -163,6 +176,7 @@ function TemplatesPageInner() {
         {tab === 'landing-pages' && (
           <LandingPageTemplatesTab accountKey={scopedAccountKey} />
         )}
+        {tab === 'ads' && <AdTemplatesTab accountKey={scopedAccountKey} />}
       </div>
     </TemplatesHeaderActionsContext.Provider>
   );

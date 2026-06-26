@@ -7,7 +7,7 @@ import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import {
   BuildingStorefrontIcon,
   UsersIcon, SwatchIcon, SparklesIcon,
-  CogIcon, BellIcon, TagIcon, Squares2X2Icon, BriefcaseIcon,
+  CogIcon, BellIcon, BellAlertIcon, TagIcon, Squares2X2Icon, BriefcaseIcon, CalculatorIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { CodeEditor } from '@/components/code-editor';
@@ -21,6 +21,8 @@ import { NotificationsTab } from '@/components/settings/notifications-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
 import { CustomFieldBlueprintsTab } from '@/components/settings/custom-field-blueprints-tab';
 import { IndustriesTab } from '@/components/settings/industries-tab';
+import { DefaultMarkupTab } from '@/components/settings/default-markup-tab';
+import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
 import { useIndustries } from '@/lib/hooks/use-industries';
 
 type Tab =
@@ -29,6 +31,8 @@ type Tab =
   | 'users'
   | 'knowledge'
   | 'industries'
+  | 'markup'
+  | 'alerts'
   | 'contact-fields'
   | 'contact-field-blueprints'
   | 'notifications'
@@ -60,6 +64,8 @@ export default function SettingsPage() {
   if (hasAdminAccess) tabs.push({ key: 'users', label: 'Users', titleLabel: 'User Settings', icon: UsersIcon });
   if (hasAdminAccess && isAdmin) tabs.push({ key: 'knowledge', label: 'Knowledge Base', titleLabel: 'Knowledge Base Settings', icon: SparklesIcon });
   if (isElevated && isAdmin) tabs.push({ key: 'industries', label: 'Industries', titleLabel: 'Industry Settings', icon: BriefcaseIcon });
+  if (isElevated && isAdmin) tabs.push({ key: 'markup', label: 'Markup', titleLabel: 'Default Markup', icon: CalculatorIcon });
+  if (isElevated && isAdmin) tabs.push({ key: 'alerts', label: 'Alerts', titleLabel: 'Alert Rules', icon: BellAlertIcon });
   tabs.push({ key: 'notifications', label: 'Notifications', titleLabel: 'Notification Settings', icon: BellIcon });
   tabs.push({ key: 'appearance', label: 'Appearance', titleLabel: 'Appearance Settings', icon: SwatchIcon });
 
@@ -87,24 +93,6 @@ export default function SettingsPage() {
 
   return (
     <div className="animate-fade-in-up pt-4">
-      <div className="mb-6 px-1 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
-            <TitleIcon className="w-6 h-6" />
-            {titleText}
-          </h1>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Manage your preferences and configuration
-          </p>
-        </div>
-        {/* Portal target for tab-specific action buttons (e.g. "Add User"
-            on the Users tab). Each tab calls `createPortal` into this
-            div, so swapping tabs swaps the actions. */}
-        <div id="settings-title-actions" className="flex items-center gap-2" />
-      </div>
-
-      <div className="border-b border-[var(--border)] mb-6" />
-
       {/* Sidebar nav + content */}
       <div className="flex gap-6">
         {/* Vertical nav — sticky */}
@@ -128,11 +116,26 @@ export default function SettingsPage() {
           ))}
         </nav>
 
-        {/* Tab content — no per-tab title bar; the active tab is
-            indicated by the highlighted item in the sidebar nav, and
-            tab-specific actions render into `#settings-title-actions`
-            up in the main Settings header. */}
+        {/* Tab content — the title section sits directly above the active
+            tab's content (the active tab is also highlighted in the nav).
+            Tab-specific actions (e.g. "Add User") portal into
+            #settings-title-actions. */}
         <div className="flex-1 min-w-0">
+          <div className="mb-6 px-1 flex items-start justify-between gap-4">
+            <div>
+              <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
+                <TitleIcon className="w-6 h-6" />
+                {titleText}
+              </h1>
+              <p className="text-sm text-[var(--muted-foreground)] mt-1">
+                Manage your preferences and configuration
+              </p>
+            </div>
+            <div id="settings-title-actions" className="flex items-center gap-2" />
+          </div>
+
+          <div className="border-b border-[var(--border)] mb-6" />
+
           {activeTab === 'subaccounts' && <AccountsList listPath="/settings/subaccounts" detailBasePath="/settings/subaccounts" />}
           {activeTab === 'subaccount' && <AccountSettingsTab />}
           {activeTab === 'contact-fields' && hasAdminAccess && isAccount && <CustomFieldsTab />}
@@ -140,6 +143,8 @@ export default function SettingsPage() {
           {activeTab === 'users' && <UsersTab />}
           {activeTab === 'knowledge' && hasAdminAccess && isAdmin && <KnowledgeBaseTab />}
           {activeTab === 'industries' && isElevated && isAdmin && <IndustriesTab />}
+          {activeTab === 'markup' && isElevated && isAdmin && <DefaultMarkupTab />}
+          {activeTab === 'alerts' && isElevated && isAdmin && <AlertRulesTab />}
           {activeTab === 'notifications' && <NotificationsTab />}
           {activeTab === 'appearance' && <AppearanceTab />}
         </div>

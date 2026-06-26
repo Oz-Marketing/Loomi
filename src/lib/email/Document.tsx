@@ -23,8 +23,9 @@ function renderBlock(block: Block, settings: EmailSettings, key: string | number
     );
   }
 
-  // Section blocks accept children
-  if (block.type === 'section' && Array.isArray(block.children)) {
+  // Container blocks (section, columns) render their children. Columns lays
+  // its child blocks (typically nested sections) out across the grid.
+  if ((block.type === 'section' || block.type === 'columns') && Array.isArray(block.children)) {
     return (
       <Component key={key} {...block.props}>
         {block.children.map((child, i) => renderBlock(child, settings, `${key}.${i}`))}

@@ -1,22 +1,63 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireInternalJobAuth } from '@/lib/internal-jobs';
 import { scanPacerAlerts } from '@/lib/notifications/service';
+import { evaluateAlertRules } from '@/lib/alerts/engine';
+import { refreshLinkedAccountsForAlerts } from '@/lib/alerts/refresh';
+import { reconcileLinkedTaskStatuses } from '@/lib/services/projects';
 
 /**
  * POST /api/internal/meta-pacer-alerts/scan
  *
- * Cron-triggered scan of the Meta Ads Pacer dataset. Creates in-app
- * notifications and sends a per-recipient digest email summarising the
- * newly-created alerts. Idempotent within a 20-hour window per (ad, type).
+ * Cron-triggered scan of the Meta Ads Pacer dataset. Runs:
+ *  - refreshLinkedAccountsForAlerts(): step 0 — pull fresh Meta spend for every
+ *    linked account's live month so both passes evaluate current numbers, not
+ *    stored data that's stale for accounts nobody has opened.
+ *  - scanPacerAlerts(): the built-in operational alerts (due dates, approvals,
+ *    stuck, dark, over-allocation, per-ad pacing) + per-recipient digest email.
+ *  - evaluateAlertRules(): the §9 config-driven engine (account pace, budget
+ *    burn — Google-metric rules join once §8 connects).
+ * Both scan passes are idempotent within each alert's cooldown window, so daily
+ * runs don't re-spam still-true conditions.
  */
 export async function POST(req: NextRequest) {
   const authError = requireInternalJobAuth(req);
   if (authError) return authError;
 
   try {
-    const result = await scanPacerAlerts();
-    const status = result.errors.length > 0 ? 207 : 200;
-    return NextResponse.json(result, { status });
+    // Step 0: freshen stored spend from Meta before evaluating. Independent —
+    // its failure (or a single account's) must not sink the scan; errors are
+    // surfaced via the 207 partial-success status.
+    let presync: Awaited<ReturnType<typeof refreshLinkedAccountsForAlerts>> | { errors: string[] };
+    try {
+      presync = await refreshLinkedAccountsForAlerts();
+    } catch (err) {
+      presync = { errors: [err instanceof Error ? err.message : 'pre-sync failed'] };
+    }
+
+    const scan = await scanPacerAlerts();
+    // The rules engine is independent — its failure must not sink the scan.
+    let engine: Awaited<ReturnType<typeof evaluateAlertRules>> | { errors: string[] };
+    try {
+      engine = await evaluateAlertRules();
+    } catch (err) {
+      engine = { errors: [err instanceof Error ? err.message : 'alert engine failed'] };
+    }
+    // Projects: advance tickets whose linked campaign has shipped. Independent
+    // and non-fatal — piggybacks on this daily job so it needs no separate cron.
+    let projects: { advanced: number } | { errors: string[] };
+    try {
+      projects = await reconcileLinkedTaskStatuses();
+    } catch (err) {
+      projects = { errors: [err instanceof Error ? err.message : 'projects reconcile failed'] };
+    }
+
+    const errorCount =
+      (presync.errors?.length ?? 0) +
+      scan.errors.length +
+      (engine.errors?.length ?? 0) +
+      ('errors' in projects ? projects.errors.length : 0);
+    const status = errorCount > 0 ? 207 : 200;
+    return NextResponse.json({ presync, scan, engine, projects }, { status });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to scan pacer alerts';
     return NextResponse.json({ error: message }, { status: 500 });

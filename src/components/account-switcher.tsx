@@ -9,6 +9,7 @@ import {
   MagnifyingGlassIcon,
   ShieldCheckIcon,
   CheckIcon,
+  CogIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount, type AccountData } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
@@ -27,6 +28,10 @@ interface AccountSwitcherProps {
   /** When true, render only the current account's avatar as the trigger
    *  and position the dropdown to the right (used by the collapsed sidebar). */
   compact?: boolean;
+  /** Open the dropdown upward (for triggers pinned to the bottom of the rail). */
+  openUp?: boolean;
+  /** When set, render a Settings link at the bottom of the dropdown. */
+  settingsHref?: string;
 }
 
 const RECENT_SUBACCOUNT_STORAGE_KEY_PREFIX = 'loomi-recent-subaccounts';
@@ -44,7 +49,7 @@ const SHARED_ACCOUNT_ROUTE_ROOTS = new Set([
 // Switching accounts should keep these paths unchanged — only the account
 // context updates. Used for admin-only tools that don't have a subaccount-
 // scoped route variant.
-const CONTEXT_SCOPED_ROUTE_ROOTS = new Set(['tools']);
+const CONTEXT_SCOPED_ROUTE_ROOTS = new Set(['tools', 'ad-generator']);
 
 const ADMIN_SETTINGS_TO_SUBACCOUNT_TAB: Record<string, string> = {
   subaccounts: 'company',
@@ -131,7 +136,10 @@ function resolveAdminPath(pathname: string): string {
     return SUBACCOUNT_SETTINGS_TO_ADMIN_PATH[segments[1] || ''] || '/settings/subaccounts';
   }
 
-  return '/dashboard';
+  // Default: stay on the current page (treat unknown roots as context-scoped),
+  // never bounce to the dashboard. The page reads the active account from
+  // context, so only the data refreshes.
+  return strippedPath || '/dashboard';
 }
 
 function resolveSubaccountPath(pathname: string, slug: string): string {
@@ -165,7 +173,10 @@ function resolveSubaccountPath(pathname: string, slug: string): string {
     return `/subaccount/${slug}/settings/company`;
   }
 
-  return subaccountPath(slug, 'dashboard');
+  // Default: stay on the current page (treat unknown roots as context-scoped) so
+  // switching accounts never bounces to the dashboard. The path is unchanged and
+  // the page re-reads the active account from context.
+  return `/${segments.join('/')}`;
 }
 
 
@@ -173,7 +184,7 @@ function resolveAccountCityStateLabel(accountData: AccountData): string | null {
   return formatAccountCityState(accountData) || null;
 }
 
-export function AccountSwitcher({ onSwitch, compact = false }: AccountSwitcherProps) {
+export function AccountSwitcher({ onSwitch, compact = false, openUp = false, settingsHref }: AccountSwitcherProps) {
   const { account, setAccount, accounts, accountsLoaded, userRole, userEmail } = useAccount();
   const { confirmNavigation } = useUnsavedChanges();
   const router = useRouter();
@@ -181,7 +192,7 @@ export function AccountSwitcher({ onSwitch, compact = false }: AccountSwitcherPr
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [recentAccountKeys, setRecentAccountKeys] = useState<string[]>([]);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number }>({ top: 0, left: 0 });
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -199,10 +210,15 @@ export function AccountSwitcher({ onSwitch, compact = false }: AccountSwitcherPr
     if (open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect();
       if (compact) {
+        // Collapsed rail: fly out to the RIGHT of the trigger, anchored to its
+        // top so the menu opens downward (the trigger sits near the top of the
+        // rail now).
         setPos({
           top: rect.top,
           left: rect.right + 12,
         });
+      } else if (openUp) {
+        setPos({ bottom: window.innerHeight - rect.top + 6, left: rect.left });
       } else {
         setPos({
           top: rect.bottom + 6,
@@ -210,7 +226,7 @@ export function AccountSwitcher({ onSwitch, compact = false }: AccountSwitcherPr
         });
       }
     }
-  }, [open, compact]);
+  }, [open, compact, openUp]);
 
   // Close on outside click (checks both trigger and portal dropdown)
   useEffect(() => {
@@ -443,7 +459,7 @@ export function AccountSwitcher({ onSwitch, compact = false }: AccountSwitcherPr
         <div
           ref={dropdownRef}
           className="fixed z-[200] w-72 rounded-xl glass-dropdown overflow-hidden animate-fade-in-up"
-          style={{ top: pos.top, left: pos.left }}
+          style={{ top: pos.top, bottom: pos.bottom, left: pos.left }}
         >
           {/* Search */}
           <div className="p-1.5 border-b border-[var(--border)]">
@@ -494,6 +510,23 @@ export function AccountSwitcher({ onSwitch, compact = false }: AccountSwitcherPr
               filteredAccounts.map(([key, accountData]) => renderAccountOption(key, accountData))
             )}
           </div>
+
+          {settingsHref && (
+            <div className="p-1 border-t border-[var(--border)]">
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  setSearch('');
+                  router.push(settingsHref);
+                }}
+                className="w-full flex items-center gap-2.5 px-2.5 py-2 text-xs rounded-lg text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+              >
+                <CogIcon className="w-4 h-4" />
+                Settings
+              </button>
+            </div>
+          )}
         </div>,
         document.body
       )}

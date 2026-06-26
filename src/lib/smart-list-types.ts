@@ -236,6 +236,7 @@ export const FILTERABLE_FIELDS: FieldDefinition[] = [
   { key: 'hasReceivedEmail', label: 'Has Received Email', type: 'boolean', category: 'messaging' },
   { key: 'hasReceivedSms', label: 'Has Received SMS', type: 'boolean', category: 'messaging' },
   { key: 'hasOpenedEmail', label: 'Has Opened Email', type: 'boolean', category: 'messaging' },
+  { key: 'hasClickedEmail', label: 'Has Clicked Email', type: 'boolean', category: 'messaging' },
   { key: 'lastMessageDate', label: 'Last Message Date', type: 'date', category: 'messaging' },
 
   // Meta

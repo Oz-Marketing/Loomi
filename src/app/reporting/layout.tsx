@@ -1,8 +1,8 @@
 import { redirect } from 'next/navigation';
 import { getAuthSession } from '@/lib/api-auth';
+import { SurfaceShell } from '@/components/surface-shell';
 import { ReportingSidebar } from './_components/reporting-sidebar';
 import { ReportingTopBar } from './_components/reporting-top-bar';
-import { ReportingMain } from './_components/reporting-main';
 
 export const metadata = {
   title: 'Loomi Reporting',
@@ -24,23 +24,22 @@ export default async function ReportingLayout({
     redirect('/login?callbackUrl=/');
   }
 
-  // Layout matches studio's AppShell structure for visual parity:
-  //   - Sidebar and main are siblings inside the root layout's flex body
-  //   - Main left-pads enough to clear the fixed sidebar
-  //   - No max-width / no centered container — content spans the full
-  //     available width, same as studio
+  // Reporting + studio share one shell (SurfaceShell) so the layout, content
+  // card, and scroll/sticky behavior stay identical across surfaces — only the
+  // sidebar + top bar differ.
   return (
-    <>
-      <ReportingSidebar />
-      <ReportingMain>
+    <SurfaceShell
+      sidebar={<ReportingSidebar />}
+      topBar={
         <ReportingTopBar
           userName={session.user.name}
           userEmail={session.user.email}
           userAvatarUrl={session.user.avatarUrl}
           userRole={session.user.role}
         />
-        {children}
-      </ReportingMain>
-    </>
+      }
+    >
+      {children}
+    </SurfaceShell>
   );
 }

@@ -1,13 +1,12 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { Sidebar } from '@/components/sidebar';
 import { TopUtilityBar } from '@/components/top-utility-bar';
 import { AppLogo } from '@/components/app-logo';
 import { stripSubaccountPrefix } from '@/lib/account-slugs';
-import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
+import { SurfaceShell } from '@/components/surface-shell';
 
 const BUILDER_STEPS = [
   { key: 'recipients', label: 'Recipients' },
@@ -94,9 +93,6 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const normalizedPath = stripSubaccountPrefix(pathname);
-  const mainRef = useRef<HTMLElement>(null);
-  const [isMainScrolled, setIsMainScrolled] = useState(false);
-  const { collapsed: sidebarCollapsed } = useSidebarCollapse();
   const isFullScreen =
     normalizedPath.startsWith('/preview')
     || normalizedPath.startsWith('/login')
@@ -131,30 +127,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
     /^\/websites\/landing-pages\/[^/]+\/edit$/.test(builderProbe) ||
     builderProbe === '/websites/landing-pages/demo';
 
-  useEffect(() => {
-    if (isFullScreen || isTemplateEditor || isCampaignBuilder || isFlowBuilder || isWebsiteBuilder) {
-      setIsMainScrolled(false);
-      return;
-    }
-
-    const main = mainRef.current;
-    if (!main) return;
-
-    const handleScroll = () => {
-      setIsMainScrolled(main.scrollTop > 0);
-    };
-
-    handleScroll();
-    main.addEventListener('scroll', handleScroll, { passive: true });
-    return () => main.removeEventListener('scroll', handleScroll);
-  }, [
-    pathname,
-    isFullScreen,
-    isTemplateEditor,
-    isCampaignBuilder,
-    isFlowBuilder,
-    isWebsiteBuilder,
-  ]);
+  // Ad Template Builder — the same focused full-viewport editor treatment as
+  // the website builders. Only the builder gets it; the generator + admin
+  // pages keep the standard app shell.
+  const isAdBuilder = /^\/ad-generator\/builder$/.test(builderProbe);
 
   if (isFullScreen) {
     return <div className="flex-1">{children}</div>;
@@ -165,9 +141,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
     return <div className="flex-1 min-w-0">{children}</div>;
   }
 
-  if (isWebsiteBuilder) {
+  if (isWebsiteBuilder || isAdBuilder) {
     // Mirror the email template editor wrapper (p-4 + main) so the
-    // Forms / Landing Pages builders inherit the same breathing room
+    // Forms / Landing Pages / Ad builders inherit the same breathing room
     // and the inner `h-[calc(100vh-2rem)]` math lines up correctly.
     return <main className="flex-1 p-4">{children}</main>;
   }
@@ -224,40 +200,25 @@ function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <>
-      <Sidebar />
-      <main
-        ref={mainRef}
-        data-scrolled={isMainScrolled ? 'true' : 'false'}
-        className={`flex-1 min-w-0 h-screen overflow-y-auto overflow-x-hidden overscroll-contain p-8 transition-[padding-left] duration-200 ease-out ${
-          sidebarCollapsed ? 'pl-[7.5rem]' : 'pl-[18.5rem]'
-        }`}
-      >
-        {/* Cap content width so pages don't stretch edge-to-edge on wide
-            monitors. Centered in the space to the right of the sidebar.
-            Only the standard app shell is constrained — the builder/editor
-            branches above stay full-bleed by design. */}
-        <div className="mx-auto w-full max-w-[1600px]">
-          <TopUtilityBar />
-          {children}
-        </div>
-      </main>
-    </>
+    <SurfaceShell sidebar={<Sidebar />} topBar={<TopUtilityBar />}>
+      {children}
+    </SurfaceShell>
   );
 }
 
 /** Which Loomi surface the current request is being rendered for. */
-export type Surface = 'studio' | 'reporting';
+export type Surface = 'studio' | 'reporting' | 'app';
 
 /**
  * Top-level layout shell.
  *
  * AppShell (studio sidebar + utility bar + authed providers) only mounts
  * for studio app routes. We bypass it for:
- *   - the `reporting` surface (host = reporting.*) — determined server-side
- *     in the root layout via the Host header and passed in as `surface`,
- *     since middleware rewrites mean `usePathname()` returns the BROWSER
- *     URL not the rewritten path
+ *   - the `reporting` and `app` surfaces (host = reporting.* / app.*) —
+ *     determined server-side in the root layout via the Host header and
+ *     passed in as `surface`, since middleware rewrites mean
+ *     `usePathname()` returns the BROWSER URL not the rewritten path. Each
+ *     surface's own route-group layout provides its SurfaceShell chrome.
  *   - public unauthenticated routes (`/f/<slug>`, `/lp/<slug>`) — kept on
  *     pathname so behavior is unchanged for those
  *   - the `/reporting/*` pathname when accessed from the studio host (rare
@@ -276,9 +237,11 @@ export function LayoutShell({
   const pathname = usePathname();
   if (
     surface === 'reporting' ||
+    surface === 'app' ||
     pathname.startsWith('/f/') ||
     pathname.startsWith('/lp/') ||
-    pathname.startsWith('/reporting')
+    pathname.startsWith('/reporting') ||
+    pathname.startsWith('/app')
   ) {
     return <>{children}</>;
   }

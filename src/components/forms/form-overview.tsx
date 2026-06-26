@@ -109,7 +109,7 @@ export function FormOverview() {
   return (
     <div className="space-y-5">
       {/* Sticky header */}
-      <div className="page-sticky-header">
+      <div className="page-sticky-header has-tabs">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3 min-w-0">
             <Link
@@ -178,12 +178,9 @@ export function FormOverview() {
             </Link>
           </div>
         </div>
-      </div>
 
-      {/* Tab bar — Overview / Settings. Mirrors the LP detail page
-          pattern; settings used to live behind a cog in the header
-          but a tab makes the surface area discoverable. */}
-      <div className="flex items-center gap-1 border-b border-[var(--border)]">
+      {/* Tab bar — pinned inside the sticky header so it doesn't scroll away. */}
+      <div className="mt-4 flex items-center gap-1 border-b border-[var(--border)]">
         {TABS.map((tab) => {
           const Icon = tab.icon;
           const active = activeTab === tab.key;
@@ -204,6 +201,7 @@ export function FormOverview() {
             </button>
           );
         })}
+      </div>
       </div>
 
       {activeTab === 'overview' && <OverviewBody />}

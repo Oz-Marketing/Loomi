@@ -468,7 +468,7 @@ function FlowOverview({ flowId }: { flowId: string }) {
   return (
     <div className="space-y-5">
       {/* Header */}
-      <div className="page-sticky-header">
+      <div className="page-sticky-header has-tabs">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3 min-w-0">
             <Link
@@ -543,6 +543,33 @@ function FlowOverview({ flowId }: { flowId: string }) {
             </Link>
           </div>
         </div>
+
+        {/* Tab bar — pinned inside the sticky header so it doesn't scroll away. */}
+        <div className="mt-4 flex items-center gap-1 border-b border-[var(--border)]">
+          {TABS.map((tab) => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.key;
+            // Settings tab is admin-only — sub-account users see the
+            // overview but can't archive/delete flows.
+            if (tab.key === 'settings' && !isAdmin) return null;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                aria-pressed={active}
+                className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  active
+                    ? 'border-[var(--primary)] text-[var(--foreground)]'
+                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {isAdmin && !flow.accountKey && (
@@ -563,35 +590,6 @@ function FlowOverview({ flowId }: { flowId: string }) {
           }}
         />
       )}
-
-      {/* Tab bar — Overview / Settings. Renamed/archive/delete used
-          to hide behind a header overflow menu; promoted into a
-          first-class Settings tab so admins can find them. */}
-      <div className="flex items-center gap-1 border-b border-[var(--border)]">
-        {TABS.map((tab) => {
-          const Icon = tab.icon;
-          const active = activeTab === tab.key;
-          // Settings tab is admin-only — sub-account users see the
-          // overview but can't archive/delete flows.
-          if (tab.key === 'settings' && !isAdmin) return null;
-          return (
-            <button
-              key={tab.key}
-              type="button"
-              onClick={() => setActiveTab(tab.key)}
-              aria-pressed={active}
-              className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                active
-                  ? 'border-[var(--primary)] text-[var(--foreground)]'
-                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
 
       {activeTab === 'settings' ? (
         <FlowSettingsTab

@@ -19,6 +19,15 @@ export const metadata: Metadata = {
 async function resolveSurface(): Promise<Surface> {
   const h = await headers();
   const host = (h.get('host') ?? '').toLowerCase();
+  // The App-surface host is configurable (prod: app.loomilm.com; staging:
+  // app-staging.loomilm.com), so match the configured host exactly — not just
+  // a hardcoded `app.` prefix — plus the prod convention and the dev host.
+  const appHost = (
+    process.env.NEXT_PUBLIC_APP_SURFACE_HOST ??
+    process.env.APP_SURFACE_HOST ??
+    'app.loomilm.com'
+  ).toLowerCase();
+  if (host === appHost || host.startsWith('app.')) return 'app';
   return host.startsWith('reporting.') ? 'reporting' : 'studio';
 }
 

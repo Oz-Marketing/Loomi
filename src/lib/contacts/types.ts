@@ -49,6 +49,7 @@ export interface Contact {
   hasReceivedEmail: boolean;
   hasReceivedSms: boolean;
   hasOpenedEmail: boolean;
+  hasClickedEmail: boolean;
   lastMessageDate: string;
   /** Account-extensible properties keyed by the custom field's `key`.
    *  Empty object when the contact has no custom data. Values are

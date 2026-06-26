@@ -239,12 +239,21 @@ export async function getChatSystemPrompt(): Promise<string> {
 }
 
 // ── System prompt for the template editor assistant ──
-export async function getAssistantSystemPrompt(accountContext?: string): Promise<string> {
+export async function getAssistantSystemPrompt(
+  accountContext?: string,
+  options?: { forceBuild?: boolean },
+): Promise<string> {
   const knowledge = await buildKnowledgeContext();
+
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  const year = now.getUTCFullYear();
 
   const sections = [
     'You are Iris, an expert email production assistant for the Loomi Studio template editor.',
     'You help users build complete emails, edit component props, write subject lines, improve copy, and answer questions about the template system.',
+    '',
+    `Today's date is ${todayStr} (current year ${year}). Use the correct current or upcoming year for any dates in subjects, preview text, or body copy — NEVER write a past year.`,
     '',
     'KNOWLEDGE BASE:',
     knowledge,
@@ -314,6 +323,25 @@ export async function getAssistantSystemPrompt(accountContext?: string): Promise
     '- When the user asks to change something across all components (e.g. "make all buttons black"), include edits for EVERY matching component using their componentIndex.',
     '- The context includes a "components" array with index, type, label, and current props for each component. Use this to find the right componentIndex values.',
   );
+
+  // Non-interactive build mode for the AI Campaign Builder: there is no user to
+  // answer questions, so the model must always produce a full email rather than
+  // ask a clarifying question. This overrides the "ask if unsure" rules above.
+  if (options?.forceBuild) {
+    sections.push(
+      '',
+      'NON-INTERACTIVE BUILD MODE (OVERRIDE — takes precedence over any clarification guidance above):',
+      '- You are generating this email automatically for a multi-channel campaign build. There is NO user available to answer questions.',
+      '- NEVER set "clarification" and NEVER ask a question. ALWAYS return a complete templateBuild.',
+      '- For any unknown specifics (exact prices, percentages, dates, audience), use sensible on-brand defaults and merge tags (e.g. {{location.name}}, {{contact.first_name}}) instead of asking.',
+      '- ALWAYS include frontmatter.subject and frontmatter.previewText.',
+      '- BRANDING IS MANDATORY here (overrides the "when available" softness above): when the CURRENT ACCOUNT CONTEXT has a "Logos" line you MUST place that logo URL in the email; when it has "Brand Colors" you MUST use those hex values for the hero band and primary CTA; when it has "Brand Fonts" you MUST use those font stacks. Only fall back to generic styling or {{custom_values.logo_url}} if the corresponding account-context line is absent.',
+      '- Choose the logo variant by background: light/white logo on dark or brand-colored bands, dark/black logo on light bands. Brand Fonts are already email-safe stacks — use them verbatim, never @import a web font.',
+      '- Always produce a polished, modern, MULTI-SECTION branded email: hidden preheader, a hero with the logo on a brand-colored band, a structured scannable body (subheads + short paragraphs, feature/benefit rows or bullets — never one flat text block), a bulletproof brand-colored CTA button, and a footer with business name/address/phone/website/unsubscribe from the account context. Avoid plain, single-column, all-default-styling output.',
+      '- NEVER use emojis anywhere in the email — not in the subject, preview text, headings, body, or buttons. No exceptions.',
+      '- For promotional / sale campaigns make it bold and exciting: a large brand-colored hero with a punchy headline, a striking offer/value spotlight (value cards or badges in the accent color, big numbers, rounded corners), an urgency strip, alternating background bands, and a large high-contrast CTA. Premium and modern — never plain.',
+    );
+  }
 
   return sections.join('\n');
 }

@@ -7,6 +7,8 @@ import { XMarkIcon } from '@heroicons/react/24/outline';
 type ConfirmDialogOptions = {
   title?: string;
   message: string;
+  /** Optional rich content rendered below the message (styled by the caller). */
+  body?: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   destructive?: boolean;
@@ -65,6 +67,7 @@ function normalizeConfirmInput(input: ConfirmInput): ConfirmDialogOptions {
   return {
     title: input.title,
     message: input.message,
+    body: input.body,
     confirmLabel: input.confirmLabel,
     cancelLabel: input.cancelLabel,
     destructive: input.destructive,
@@ -265,6 +268,8 @@ export function LoomiDialogProvider({ children }: { children: ReactNode }) {
                   {message}
                 </p>
               )}
+
+              {current.type === 'confirm' && current.options.body}
 
               {current.type === 'prompt' && (
                 <div>

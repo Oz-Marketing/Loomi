@@ -736,7 +736,7 @@ function SubaccountTabsView({
   return (
     <TemplatesHeaderActionsContext.Provider value={actionsSlot}>
     <div>
-      <div className="page-sticky-header mb-4">
+      <div className="page-sticky-header has-tabs mb-4">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <BookOpenIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />

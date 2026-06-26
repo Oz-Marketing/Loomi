@@ -40,10 +40,10 @@ export async function GET(
     userIds.length > 0
       ? await prisma.user.findMany({
           where: { id: { in: userIds } },
-          select: { id: true, name: true },
+          select: { id: true, name: true, email: true, avatarUrl: true },
         })
       : [];
-  const nameById = new Map(users.map((u) => [u.id, u.name]));
+  const byId = new Map(users.map((u) => [u.id, u]));
 
   return NextResponse.json({
     accountKey,
@@ -58,7 +58,13 @@ export async function GET(
       toValue: e.toValue,
       summary: e.summary,
       groupId: e.groupId,
-      authorName: e.authorUserId ? (nameById.get(e.authorUserId) ?? 'Unknown') : 'System',
+      authorName: e.authorUserId
+        ? (byId.get(e.authorUserId)?.name ?? 'Unknown')
+        : 'System',
+      authorEmail: e.authorUserId ? (byId.get(e.authorUserId)?.email ?? null) : null,
+      authorAvatarUrl: e.authorUserId
+        ? (byId.get(e.authorUserId)?.avatarUrl ?? null)
+        : null,
       createdAt: e.createdAt.toISOString(),
     })),
   });

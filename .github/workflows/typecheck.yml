@@ -48,3 +48,6 @@ jobs:
 
       - name: Run verification gate
         run: npm run verify
+
+      - name: Run tests
+        run: npm run test

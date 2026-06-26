@@ -10,6 +10,9 @@
   --background: #09090b;
   --foreground: #fafafa;
   --card: rgba(24, 24, 27, 0.62);
+  /* Elevated surface for elements WITHIN the content card (panels, rows,
+     ad-set cards, filter sidebar) — distinct from the content card itself. */
+  --surface: #1e1a25;
   /* Higher-opacity card surface for floating overlays (flow builder
      inspector, flow nodes) that need to feel solid rather than
      translucent. Pair with `backdrop-blur-*` utilities for the frost. */
@@ -31,19 +34,8 @@
   --ring: #6366f1;
   --radius: 0.5rem;
 
-  /* Gradient background — dark mode */
-  --gradient-bg:
-    radial-gradient(ellipse 60% 50% at 8% 30%, rgba(99, 60, 180, 0.2) 0%, transparent 70%),
-    radial-gradient(ellipse 40% 40% at 15% 70%, rgba(56, 100, 220, 0.14) 0%, transparent 60%),
-    linear-gradient(
-      145deg,
-      #09090b 0%,
-      #0c0c14 25%,
-      #0f0a18 45%,
-      #0a0d1a 65%,
-      #0d0b12 85%,
-      #09090b 100%
-    );
+  /* Background — dark mode: solid, no gradient art. */
+  --gradient-bg: #070112;
 
   /* Liquid glass sidebar — dark */
   --sidebar-bg: rgba(12, 12, 20, 0.7);
@@ -110,6 +102,8 @@
   --background: #f8f9fb;
   --foreground: #09090b;
   --card: rgba(255, 255, 255, 0.62);
+  /* Inner-element surface — white-ish on light, unchanged from before. */
+  --surface: rgba(255, 255, 255, 0.62);
   --card-strong: rgba(255, 255, 255, 0.96);
   /* Darker grid so the dots read against the gradient background.
      #d1d5db blended in; #9ca3af is the same as zinc-400 ish — visible
@@ -377,48 +371,81 @@ body {
   position: sticky;
   top: 0;
   z-index: 30;
-  /* Flush look at rest — the header reads as inline page content
-     until the user scrolls and it actually pins to the viewport edge,
-     at which point the rule below adds padding + frosted card chrome.
-     Animates via the transition below for a smooth handoff. */
-  padding: 0;
+  /* Full-bleed at ALL times: negative margins cancel the content card's
+     padding so the bar can span edge-to-edge, and matching horizontal padding
+     keeps the title aligned with the rest of the page.
+
+     TOP padding is generous at rest so the title clears the card's rounded
+     top edge, then compacts once the header docks on scroll (the stuck rule
+     below) so the pinned bar reads tight. Only the top padding changes —
+     horizontal + bottom stay constant. The content card is a fixed-height
+     scroll area and any page rendering a sticky header has enough content
+     that compacting can't make it un-scrollable, so the height change can't
+     bounce the stuck state. */
+  margin-left: -1.5rem;
+  margin-right: -1.5rem;
+  padding: 1.5rem 1.5rem 0.75rem;
   border: 1px solid transparent;
-  border-radius: 0.75rem;
-  transition:
-    padding 0.2s ease,
-    background-color 0.2s ease,
-    border-color 0.2s ease,
-    box-shadow 0.2s ease,
-    backdrop-filter 0.2s ease;
 }
 
-/* Back-compat alias — `.pad-on-scroll` used to be opt-in for this
-   behaviour; it's now the default. Kept as a no-op so existing
-   call sites don't need to be swept. */
-.page-sticky-header.pad-on-scroll {
-  padding: 0;
+@media (min-width: 768px) {
+  .page-sticky-header {
+    margin-left: -2rem;
+    margin-right: -2rem;
+    padding: 2rem 2rem 0.75rem;
+  }
 }
 
-/* Only apply the frosted card chrome when the header is *actually* stuck
-   to the viewport (page has scrolled). At rest it stays transparent and
-   flush with the page. Background is intentionally near-opaque so text
-   stays legible over busy page content. */
-main[data-scrolled='true'] .page-sticky-header {
-  padding: 0.75rem 1rem;
-  background: rgba(28, 28, 36, 0.96);
-  border-color: rgba(255, 255, 255, 0.14);
-  backdrop-filter: blur(28px) saturate(200%);
-  box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.4),
-    0 2px 4px rgba(0, 0, 0, 0.3);
+/* When the header holds sub-tabs, the tab row is the last child and its
+   underline is the divider, so it needs no bottom padding. */
+.page-sticky-header.has-tabs {
+  padding-bottom: 0;
 }
 
-[data-theme='light'] main[data-scrolled='true'] .page-sticky-header {
-  background: rgba(255, 255, 255, 0.96);
-  border-color: rgba(0, 0, 0, 0.08);
-  box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.12),
-    0 2px 4px rgba(0, 0, 0, 0.06);
+/* `.pad-on-scroll` is a legacy alias kept so existing call sites don't need
+   sweeping — it intentionally adds nothing now. */
+
+/* Stuck (page scrolled): go opaque so scrolled content can't show through,
+   add a bottom divider + shadow, and compact the top padding so the docked
+   bar reads tight (it's generous at rest, above). */
+[data-scrolled='true'] .page-sticky-header {
+  padding-top: 0.625rem;
+  /* Opaque so scrolled content can't show through; tuned to read as the
+     content card it pins to. */
+  background: #120f18;
+  border-bottom-color: var(--border);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
+}
+
+@media (min-width: 768px) {
+  [data-scrolled='true'] .page-sticky-header {
+    padding-top: 0.75rem;
+  }
+}
+
+[data-theme='light'] [data-scrolled='true'] .page-sticky-header {
+  background: rgb(255, 255, 255);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+}
+
+/* The dashboard greeting collapses once the header docks — it's a one-time
+   welcome, not a persistent label, so it shows only at rest (top). Scoped to
+   `.dashboard-welcome` so this is dashboards-only. */
+[data-scrolled='true'] .dashboard-welcome {
+  display: none;
+}
+
+/* Pages that don't render a sticky page header still need top breathing
+   room — bake it into the scroll card here. Header pages bake it into the
+   header instead (above) so the pinned bar can reach the card's top edge. */
+[data-scrolled]:not(:has(.page-sticky-header)) {
+  padding-top: 1.5rem;
+}
+
+@media (min-width: 768px) {
+  [data-scrolled]:not(:has(.page-sticky-header)) {
+    padding-top: 2rem;
+  }
 }
 
 /* Heavier frost variant — drop-in replacement for `.glass-panel` when
@@ -479,6 +506,26 @@ main[data-scrolled='true'] .page-sticky-header {
   pointer-events: none;
 }
 
+/* ── Shared form input (Projects + general use) ── */
+.loomi-input {
+  display: block;
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--background);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--foreground);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.loomi-input:focus {
+  border-color: var(--primary);
+}
+.loomi-input::placeholder {
+  color: var(--muted-foreground);
+}
+
 /* ── Dropdown popover — opaque frosted glass ── */
 .glass-dropdown {
   backdrop-filter: blur(40px) saturate(200%);
@@ -530,7 +577,14 @@ main[data-scrolled='true'] .page-sticky-header {
     inset 0 0.5px 0 rgba(255, 255, 255, 0.04);
   transition: border-color 0.2s ease, box-shadow 0.3s ease, transform 0.2s ease;
 }
-.glass-card:hover {
+/* The hover lift + primary border is a CLICKABLE affordance, so only apply
+   it to glass-cards that actually navigate or act: links (<Link> renders an
+   <a>), <button>s, or a div explicitly opted in with `.glass-card-interactive`.
+   Plain `.glass-card` containers (stat tiles, panels) stay static so they
+   don't signal a click that goes nowhere. */
+a.glass-card:hover,
+button.glass-card:hover,
+.glass-card-interactive:hover {
   border-color: var(--primary);
   transform: translateY(-2px);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15),
@@ -551,7 +605,9 @@ main[data-scrolled='true'] .page-sticky-header {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.6);
 }
-[data-theme='light'] .glass-card:hover {
+[data-theme='light'] a.glass-card:hover,
+[data-theme='light'] button.glass-card:hover,
+[data-theme='light'] .glass-card-interactive:hover {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08),
     0 0 0 1px rgba(37, 99, 235, 0.08),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.6);
@@ -667,9 +723,11 @@ main[data-scrolled='true'] .page-sticky-header {
   background: transparent !important;
 }
 
-/* ── Glass section card ── non-lifting frosted cards for form sections */
+/* ── Glass section card ── non-lifting cards for elements WITHIN the content
+   card (form sections, panels, rows). Uses --surface so it stays distinct from
+   the main content card (which uses --card). */
 .glass-section-card {
-  background: var(--card);
+  background: var(--surface);
   backdrop-filter: blur(16px) saturate(160%);
 
   border: 1px solid var(--border);
@@ -680,6 +738,26 @@ main[data-scrolled='true'] .page-sticky-header {
 [data-theme='light'] .glass-section-card {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.04),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.6);
+}
+
+/* ── Meta Ads pacer card ── a brighter card body so the inner metric boxes
+   (Projected Spend, Days Remaining, …) read as recessed dark panels. The
+   default glass-section-card body and its boxes sit at nearly the same value,
+   which looks flat; here we lift the body and sink the boxes. Scoped to the
+   pacer — other glass-section-cards keep the default look. */
+/* `.pacer-ad-card` no longer overrides the surface — it inherits --surface
+   (#1e1a25 on dark) via glass-section-card. Kept for the inner metric-box +
+   light-mode rules below. */
+.pacer-ad-card .metric-box {
+  background: rgba(0, 0, 0, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+[data-theme='light'] .pacer-ad-card {
+  background: rgba(255, 255, 255, 0.9);
+}
+[data-theme='light'] .pacer-ad-card .metric-box {
+  background: rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 0, 0, 0.04);
 }
 
 /* ── Glass modal ── dialogs, large overlays */

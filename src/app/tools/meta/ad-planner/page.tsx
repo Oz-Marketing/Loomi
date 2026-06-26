@@ -1,12 +1,8 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { AdminOnly } from '@/components/route-guard';
-import { MetaAdsPlannerTool } from '../_components/MetaAdsPlannerTool';
-
+// The Ad Planner + Ad Pacer pages were consolidated into /tools/meta with an
+// in-page Plan/Pace toggle. Keep this path as a redirect so existing links and
+// bookmarks land on the Planner view.
 export default function MetaAdPlannerPage() {
-  return (
-    <AdminOnly>
-      <MetaAdsPlannerTool mode="planner" />
-    </AdminOnly>
-  );
+  redirect('/tools/meta?view=planner');
 }

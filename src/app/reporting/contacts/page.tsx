@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAccount } from '@/contexts/account-context';
 import { ContactAnalytics } from '@/components/contacts/contact-analytics';
-import { ReportingPageHeader } from '../_components/page-header';
+import { UsersIcon } from '@heroicons/react/24/outline';
+import { PageHeader } from '@/components/page-header';
 
 /**
  * Contact reporting. Fetches contacts via the existing /api/contacts
@@ -62,7 +63,7 @@ export default function ReportingContactsPage() {
 
   return (
     <>
-      <ReportingPageHeader eyebrow="Contacts" title="Contact reporting" subtitle={subtitle} />
+      <PageHeader icon={UsersIcon} title="Contact reporting" subtitle={subtitle} />
       {accountKey && (
         <ContactAnalytics
           contacts={contacts as never}

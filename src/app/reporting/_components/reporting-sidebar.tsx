@@ -1,22 +1,23 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type ComponentType } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  ChevronDoubleLeftIcon,
-  ChevronDoubleRightIcon,
   ChevronDownIcon,
   CogIcon,
   GlobeAltIcon,
   HomeIcon,
   MegaphoneIcon,
   PaperAirplaneIcon,
+  StarIcon,
   UsersIcon,
 } from '@heroicons/react/24/outline';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
+import { SidebarFrame } from '@/components/sidebar-frame';
 import { AccountSwitcher } from '@/components/account-switcher';
+import { MetaBrandIcon, GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
 import { DIGITAL_ADS_REPORTS } from '../ads/_components/reports-config';
 
 /**
@@ -33,7 +34,12 @@ import { DIGITAL_ADS_REPORTS } from '../ads/_components/reports-config';
  * so active-state comparison uses the un-rewritten path.
  */
 
-type NavChild = { href: string; label: string; soon?: boolean };
+type NavChild = {
+  href: string;
+  label: string;
+  soon?: boolean;
+  icon?: ComponentType<{ className?: string }>;
+};
 type NavItem = {
   key: string;
   label: string;
@@ -43,11 +49,19 @@ type NavItem = {
   children?: NavChild[];
 };
 
+// Brand badges for platforms with a recognizable logo; other reports fall back
+// to their generic registry icon (TV, envelope, …).
+const REPORT_BRAND_ICON: Record<string, ComponentType<{ className?: string }>> = {
+  meta: MetaBrandIcon,
+  google: GoogleAdsBrandIcon,
+};
+
 const NAV: NavItem[] = [
   { key: 'dashboard', label: 'Dashboard', icon: HomeIcon, href: '/', matchExact: true },
   { key: 'contacts', label: 'Contacts', icon: UsersIcon, href: '/contacts' },
   { key: 'engagement', label: 'Engagement', icon: PaperAirplaneIcon, href: '/engagement' },
   { key: 'websites', label: 'Websites', icon: GlobeAltIcon, href: '/websites' },
+  { key: 'reputation', label: 'Reputation', icon: StarIcon, href: '/reputation' },
   {
     key: 'digital-ads',
     label: 'Digital Ads',
@@ -56,6 +70,7 @@ const NAV: NavItem[] = [
       href: `/ads/${r.key}`,
       label: r.label,
       soon: r.status !== 'live',
+      icon: REPORT_BRAND_ICON[r.key] ?? r.icon,
     })),
   },
 ];
@@ -64,7 +79,7 @@ const OPEN_GROUPS_KEY = 'reporting.sidebar.openGroups';
 
 export function ReportingSidebar() {
   const pathname = usePathname();
-  const { collapsed, toggle: toggleCollapse } = useSidebarCollapse();
+  const { collapsed } = useSidebarCollapse();
   const settingsActive = pathname.startsWith('/settings');
 
   const isChildActive = useCallback(
@@ -119,78 +134,52 @@ export function ReportingSidebar() {
   const toggleGroup = (key: string) => setOpen((o) => ({ ...o, [key]: !o[key] }));
 
   return (
-    <aside
-      data-collapsed={collapsed}
-      className={`glass-panel fixed left-3 top-3 bottom-3 z-50 flex flex-col rounded-2xl text-[var(--sidebar-foreground)] transition-[width] duration-200 ease-out ${
-        collapsed ? 'w-[4.5rem]' : 'w-60'
-      }`}
-    >
-      <div className={`border-b border-[var(--sidebar-border)] ${collapsed ? 'p-2 pb-3' : 'p-5 pb-4'}`}>
-        <div className={`flex items-center ${collapsed ? 'justify-center' : 'justify-between'} ${collapsed ? '' : 'mb-3'}`}>
-          {!collapsed && (
-            <Link href="/" className="block">
-              <div className="text-base font-semibold tracking-tight">
-                loomi <span className="text-[var(--primary)]">reporting</span>
-              </div>
-            </Link>
-          )}
-          <SidebarTooltip label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
-            <button
-              type="button"
-              onClick={toggleCollapse}
-              aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--sidebar-muted-foreground)] hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)] transition"
-            >
-              {collapsed ? <ChevronDoubleRightIcon className="h-4 w-4" /> : <ChevronDoubleLeftIcon className="h-4 w-4" />}
-            </button>
-          </SidebarTooltip>
-        </div>
-        {collapsed ? (
-          <div className="mt-2">
-            <AccountSwitcher compact />
+    <SidebarFrame
+      brand={
+        <Link href="/" className="block">
+          <div className="text-base font-semibold tracking-tight">
+            loomi <span className="text-[var(--primary)]">reporting</span>
           </div>
+        </Link>
+      }
+      account={collapsed ? <AccountSwitcher compact /> : <AccountSwitcher />}
+      bottom={
+        <div className={`${collapsed ? 'p-2' : 'px-2 py-2'}`}>
+          {(() => {
+            const settingsLink = (
+              <Link
+                href="/settings"
+                className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} rounded-xl py-2 text-sm font-normal transition-all duration-200 ${
+                  settingsActive
+                    ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
+                    : 'text-[var(--sidebar-muted-foreground)] hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]'
+                }`}
+              >
+                <CogIcon className="h-5 w-5" />
+                {!collapsed && 'Settings'}
+              </Link>
+            );
+            return collapsed ? <SidebarTooltip label="Settings">{settingsLink}</SidebarTooltip> : settingsLink;
+          })()}
+        </div>
+      }
+    >
+      {NAV.map((item) =>
+        item.children ? (
+          <GroupNav
+            key={item.key}
+            item={item}
+            collapsed={collapsed}
+            open={!!open[item.key]}
+            active={isGroupActive(item)}
+            isChildActive={isChildActive}
+            onToggle={() => toggleGroup(item.key)}
+          />
         ) : (
-          <AccountSwitcher />
-        )}
-      </div>
-
-      <nav className={`flex-1 space-y-0.5 overflow-y-auto ${collapsed ? 'p-2' : 'p-3'}`}>
-        {NAV.map((item) =>
-          item.children ? (
-            <GroupNav
-              key={item.key}
-              item={item}
-              collapsed={collapsed}
-              open={!!open[item.key]}
-              active={isGroupActive(item)}
-              isChildActive={isChildActive}
-              onToggle={() => toggleGroup(item.key)}
-            />
-          ) : (
-            <LeafNav key={item.key} item={item} collapsed={collapsed} active={isLeafActive(item)} />
-          ),
-        )}
-      </nav>
-
-      <div className={`border-t border-[var(--sidebar-border)] ${collapsed ? 'p-2' : 'p-3'}`}>
-        {(() => {
-          const settingsLink = (
-            <Link
-              href="/settings"
-              className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} rounded-xl py-2.5 text-sm font-medium transition-all duration-200 ${
-                settingsActive
-                  ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
-                  : 'text-[var(--sidebar-muted-foreground)] hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]'
-              }`}
-            >
-              <CogIcon className="h-5 w-5" />
-              {!collapsed && 'Settings'}
-            </Link>
-          );
-          return collapsed ? <SidebarTooltip label="Settings">{settingsLink}</SidebarTooltip> : settingsLink;
-        })()}
-      </div>
-    </aside>
+          <LeafNav key={item.key} item={item} collapsed={collapsed} active={isLeafActive(item)} />
+        ),
+      )}
+    </SidebarFrame>
   );
 }
 
@@ -200,7 +189,7 @@ function LeafNav({ item, collapsed, active }: { item: NavItem; collapsed: boolea
   const link = (
     <Link
       href={item.href!}
-      className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} rounded-xl py-2.5 text-sm font-medium transition-all duration-200 ${
+      className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} rounded-xl py-2 text-sm font-normal transition-all duration-200 ${
         active
           ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
           : 'text-[var(--sidebar-muted-foreground)] hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]'
@@ -236,7 +225,7 @@ function GroupNav({
       <div className="group/nav relative">
         <button
           type="button"
-          className={`flex w-full items-center justify-center rounded-xl px-2 py-2.5 transition-all duration-200 ${
+          className={`flex w-full items-center justify-center rounded-xl px-2 py-2 transition-all duration-200 ${
             active
               ? 'bg-[var(--sidebar-muted)] text-[var(--sidebar-foreground)]'
               : 'text-[var(--sidebar-muted-foreground)] hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]'
@@ -265,7 +254,7 @@ function GroupNav({
         type="button"
         onClick={onToggle}
         aria-expanded={open}
-        className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-200 ${
+        className={`flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm font-normal transition-all duration-200 ${
           active || open
             ? 'text-[var(--sidebar-foreground)]'
             : 'text-[var(--sidebar-muted-foreground)] hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]'
@@ -281,7 +270,7 @@ function GroupNav({
         style={{ gridTemplateRows: open ? '1fr' : '0fr' }}
       >
         <div className="overflow-hidden">
-          <div className="my-0.5 ml-[1.15rem] space-y-0.5 border-l border-[var(--sidebar-border)] pl-3">
+          <div className="my-0.5 ml-[1.15rem] space-y-0.5 pl-3">
             {item.children!.map((c) => (
               <ChildLink key={c.href} child={c} active={isChildActive(c)} />
             ))}
@@ -296,7 +285,10 @@ function ChildLink({ child, active }: { child: NavChild; active: boolean }) {
   if (child.soon) {
     return (
       <div className="flex items-center justify-between rounded-lg px-3 py-2 text-sm text-[var(--sidebar-muted-foreground)]/60">
-        <span>{child.label}</span>
+        <span className="flex items-center gap-2">
+          {child.icon && <child.icon className="h-4 w-4" />}
+          {child.label}
+        </span>
         <span className="rounded-full bg-[var(--sidebar-muted)] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider">
           soon
         </span>
@@ -306,12 +298,13 @@ function ChildLink({ child, active }: { child: NavChild; active: boolean }) {
   return (
     <Link
       href={child.href}
-      className={`flex items-center rounded-lg px-3 py-2 text-sm transition-colors ${
+      className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
         active
           ? 'bg-[var(--primary)]/10 font-medium text-[var(--primary)]'
           : 'text-[var(--sidebar-muted-foreground)] hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]'
       }`}
     >
+      {child.icon && <child.icon className="h-4 w-4" />}
       {child.label}
     </Link>
   );

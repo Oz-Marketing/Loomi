@@ -2,25 +2,39 @@
 
 import { ChatBubbleLeftRightIcon } from '@heroicons/react/24/outline';
 
-interface IphoneSmsPreviewProps {
-  dealerName: string;
+export interface SmsThreadMessage {
   message: string;
   mediaUrls: string[];
-  isMms: boolean;
+}
+
+interface IphoneSmsPreviewProps {
+  dealerName: string;
+  /** Thread of messages — rendered as stacked incoming bubbles (a conversation).
+   *  When omitted, falls back to the single-message props below. */
+  messages?: SmsThreadMessage[];
+  message?: string;
+  mediaUrls?: string[];
+  isMms?: boolean;
 }
 
 /**
- * Phone-mockup preview of an outbound SMS/MMS. Used by both the SMS-only
- * Message step and the multi-channel Message step (SMS tab). Renders the
- * campaign content as an incoming bubble — that's the perspective the
- * recipient sees on their phone.
+ * Phone-mockup preview of outbound SMS/MMS. Used by the SMS Message step (single
+ * message) and the campaign overview (a whole campaign's texts stacked as a
+ * conversation thread). Renders the content as incoming bubbles — the
+ * recipient's perspective.
  */
 export function IphoneSmsPreview({
   dealerName,
+  messages,
   message,
   mediaUrls,
   isMms,
 }: IphoneSmsPreviewProps) {
+  const items: SmsThreadMessage[] = messages ?? [
+    { message: message ?? '', mediaUrls: mediaUrls ?? [] },
+  ];
+  const hasContent = items.some((i) => i.message.trim() || i.mediaUrls.length > 0);
+  const showMms = isMms ?? items.some((i) => i.mediaUrls.length > 0);
   const initials = dealerName
     .split(/\s+/)
     .map((word) => word.charAt(0).toUpperCase())
@@ -70,35 +84,42 @@ export function IphoneSmsPreview({
                 {dealerName}
               </p>
               <p className="text-[9px] text-gray-500 -mt-0.5">
-                {isMms ? 'MMS' : 'Text Message'}
+                {showMms ? 'MMS' : 'Text Message'}
               </p>
             </div>
           </div>
 
-          {/* Messages */}
+          {/* Messages — each item is an incoming bubble; multiple stack as a thread */}
           <div className="flex flex-col gap-2 px-3 py-4 overflow-auto" style={{ height: 'calc(100% - 168px)' }}>
-            {message.trim() || mediaUrls.length > 0 ? (
-              <div className="flex flex-col gap-1 max-w-[80%] self-start">
-                {mediaUrls.length > 0 && (
-                  <div className={`grid gap-1 ${mediaUrls.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
-                    {mediaUrls.map((url) => (
-                      <div
-                        key={url}
-                        className="rounded-2xl overflow-hidden border border-gray-200 bg-gray-100"
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={url} alt="" className="w-full h-auto object-cover" />
+            {hasContent ? (
+              items.map((item, idx) => {
+                if (!item.message.trim() && item.mediaUrls.length === 0) return null;
+                return (
+                  <div key={idx} className="flex flex-col gap-1 max-w-[80%] self-start">
+                    {item.mediaUrls.length > 0 && (
+                      <div className={`grid gap-1 ${item.mediaUrls.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+                        {item.mediaUrls.map((url) => (
+                          <div
+                            key={url}
+                            className="rounded-2xl overflow-hidden border border-gray-200 bg-gray-100"
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={url} alt="" className="w-full h-auto object-cover" />
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
+                    {item.message.trim() && (
+                      <div className="bg-[#e5e5ea] text-black text-[13px] leading-snug rounded-2xl px-3 py-2 whitespace-pre-wrap break-words">
+                        {item.message}
+                      </div>
+                    )}
+                    {idx === items.length - 1 && (
+                      <span className="text-[9px] text-gray-400 mt-0.5 ml-2">Delivered</span>
+                    )}
                   </div>
-                )}
-                {message.trim() && (
-                  <div className="bg-[#e5e5ea] text-black text-[13px] leading-snug rounded-2xl px-3 py-2 whitespace-pre-wrap break-words">
-                    {message}
-                  </div>
-                )}
-                <span className="text-[9px] text-gray-400 mt-0.5 ml-2">Delivered</span>
-              </div>
+                );
+              })
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-center px-4 text-gray-400">
                 <ChatBubbleLeftRightIcon className="w-8 h-8 mb-2 opacity-40" />

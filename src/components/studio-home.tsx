@@ -16,6 +16,7 @@
  */
 import { useEffect, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   ArrowRightIcon,
@@ -34,7 +35,6 @@ import {
 } from '@heroicons/react/24/outline';
 import { FlowIcon } from '@/components/icon-map';
 import { useAccount } from '@/contexts/account-context';
-import { toast } from '@/lib/toast';
 
 // ── Animated placeholder examples ──
 // Same typewriter cycle as the flow empty-state hero, but tuned for
@@ -59,12 +59,29 @@ interface CampaignPreset {
   label: string;
   Icon: React.ComponentType<{ className?: string }>;
   tone: string;
+  /** Canned goal pre-filled into the builder when the chip is clicked. */
+  goal: string;
 }
 
 const CAMPAIGN_PRESETS: CampaignPreset[] = [
-  { label: 'Welcome series', Icon: UserPlusIcon, tone: 'bg-sky-100 text-sky-600' },
-  { label: 'Service follow-up', Icon: WrenchScrewdriverIcon, tone: 'bg-emerald-100 text-emerald-600' },
-  { label: 'Email campaigns', Icon: EnvelopeIcon, tone: 'bg-rose-100 text-rose-500' },
+  {
+    label: 'Welcome series',
+    Icon: UserPlusIcon,
+    tone: 'bg-sky-100 text-sky-600',
+    goal: 'Create a new-customer welcome series: a few emails over the first week introducing us, plus a friendly welcome text.',
+  },
+  {
+    label: 'Service follow-up',
+    Icon: WrenchScrewdriverIcon,
+    tone: 'bg-emerald-100 text-emerald-600',
+    goal: 'Build a service follow-up campaign reminding customers to book their next appointment, with an email and a reminder text.',
+  },
+  {
+    label: 'Email campaigns',
+    Icon: EnvelopeIcon,
+    tone: 'bg-rose-100 text-rose-500',
+    goal: 'Create a promotional email campaign — a short sequence of emails to drive engagement and bookings.',
+  },
 ];
 
 // ── Quick links ──
@@ -103,9 +120,9 @@ function buildQuickLinks(prefix: string): QuickLink[] {
   // mode so the destinations stay on the active surface.
   return [
     {
-      href: `${prefix}/messaging/campaigns`,
+      href: `${prefix}/campaign-builder`,
       label: 'Build a Campaign',
-      description: 'Email, SMS, or MMS sends across one or more sub-accounts.',
+      description: 'Multi-channel campaigns — email, SMS, and more — built together.',
       icon: ChatBubbleLeftRightIcon,
       tone: 'primary',
     },
@@ -170,9 +187,13 @@ function buildQuickLinks(prefix: string): QuickLink[] {
 
 export function StudioHome({ prefix = '' }: { prefix?: string }) {
   const { data: session } = useSession();
-  const { accountData, isAccount } = useAccount();
+  const router = useRouter();
+  const { accountData, isAccount, accountKey } = useAccount();
   const firstName = session?.user?.name?.split(' ')[0] ?? 'there';
   const accountLabel = isAccount && accountData?.dealer ? accountData.dealer : 'your accounts';
+
+  // The AI hero prompt the user types before launching the builder.
+  const [heroPrompt, setHeroPrompt] = useState('');
 
   // Animated typewriter placeholder — same cadence as the flow hero.
   const [placeholder, setPlaceholder] = useState('');
@@ -216,10 +237,14 @@ export function StudioHome({ prefix = '' }: { prefix?: string }) {
     return () => clearTimeout(timeoutId);
   }, []);
 
-  const handleComingSoon = () => {
-    toast.info(
-      'AI campaign builder is on the roadmap — keep an eye on the changelog.',
-    );
+  // Launch the AI campaign builder, carrying the prompt (and, in admin mode,
+  // the selected account via the existing ?account= cross-surface convention).
+  const goToBuilder = (goalText?: string) => {
+    const params = new URLSearchParams();
+    if (goalText?.trim()) params.set('goal', goalText.trim());
+    if (!prefix && accountKey) params.set('account', accountKey);
+    const qs = params.toString();
+    router.push(`${prefix}/campaign-builder/new${qs ? `?${qs}` : ''}`);
   };
 
   const quickLinks = buildQuickLinks(prefix);
@@ -239,8 +264,8 @@ export function StudioHome({ prefix = '' }: { prefix?: string }) {
 
       {/* AI hero — visual parity with the flow builder's empty-state hero
           (`EmptyStateNodes.tsx`). Same aurora backdrop, rainbow orb,
-          beam-wrapped textarea, preset chips. Generation isn't wired
-          yet; the button fires a toast pointing at the roadmap. */}
+          beam-wrapped textarea, preset chips. Submitting launches the AI
+          Campaign Builder with the typed goal. */}
       <section className="relative mb-12 flex justify-center">
         <div className="relative w-full max-w-[640px]">
           {/* Aurora — five independently-drifting colour blobs sitting
@@ -264,9 +289,6 @@ export function StudioHome({ prefix = '' }: { prefix?: string }) {
                 <h2 className="text-2xl font-bold text-[var(--foreground)] tracking-tight">
                   Create a campaign with AI
                 </h2>
-                <span className="iris-rainbow-gradient text-[9px] uppercase tracking-[0.12em] font-bold px-2 py-1 rounded-md text-zinc-900 shadow-sm">
-                  Coming soon
-                </span>
               </div>
               <p className="text-sm text-[var(--muted-foreground)]">
                 Describe what you want to promote and Loomi will draft email,
@@ -275,35 +297,42 @@ export function StudioHome({ prefix = '' }: { prefix?: string }) {
             </div>
 
             {/* Input — rainbow beam border + card-strong inner fill, same
-                wrapper classes as the flow hero. Disabled until the AI
-                campaign builder ships; clicking submit fires the
-                "coming soon" toast. */}
+                wrapper classes as the flow hero. Submitting launches the AI
+                Campaign Builder with the typed goal. */}
             <div className="iris-beam-wrap rounded-2xl">
               <div className="relative bg-[var(--card-strong)] rounded-2xl">
                 <textarea
-                  disabled
+                  value={heroPrompt}
+                  onChange={(e) => setHeroPrompt(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey && heroPrompt.trim()) {
+                      e.preventDefault();
+                      goToBuilder(heroPrompt);
+                    }
+                  }}
                   placeholder={placeholder}
                   rows={3}
-                  className="w-full resize-none px-4 py-3.5 pr-14 text-sm bg-transparent rounded-2xl text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] outline-none leading-relaxed disabled:cursor-not-allowed"
+                  className="w-full resize-none px-4 py-3.5 pr-14 text-sm bg-transparent rounded-2xl text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] outline-none leading-relaxed"
                 />
                 <button
                   type="button"
-                  onClick={handleComingSoon}
-                  title="Coming soon"
-                  className="iris-rainbow-gradient absolute bottom-2.5 right-2.5 w-9 h-9 rounded-full flex items-center justify-center text-white opacity-60 hover:opacity-80 transition-all shadow-md"
+                  onClick={() => goToBuilder(heroPrompt)}
+                  disabled={!heroPrompt.trim()}
+                  title="Build campaign"
+                  className="iris-rainbow-gradient absolute bottom-2.5 right-2.5 w-9 h-9 rounded-full flex items-center justify-center text-white transition-all shadow-md hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <ArrowUpIcon className="w-4 h-4" />
                 </button>
               </div>
             </div>
 
-            {/* Preset chips — same shape + tones as the flow hero. */}
+            {/* Preset chips — pre-fill a canned goal and launch the builder. */}
             <div className="flex flex-wrap items-center justify-center gap-2">
               {CAMPAIGN_PRESETS.map((preset) => (
                 <button
                   key={preset.label}
                   type="button"
-                  onClick={handleComingSoon}
+                  onClick={() => goToBuilder(preset.goal)}
                   className="inline-flex items-center gap-1.5 pl-1.5 pr-3.5 py-1.5 rounded-full border border-[var(--border)] bg-[var(--card)] hover:bg-[var(--muted)] transition-all"
                 >
                   <span
@@ -316,6 +345,16 @@ export function StudioHome({ prefix = '' }: { prefix?: string }) {
                   </span>
                 </button>
               ))}
+            </div>
+
+            {/* Manual fallback */}
+            <div className="text-center">
+              <Link
+                href={`${prefix}/campaign-builder/new/manual`}
+                className="text-xs font-medium text-[var(--muted-foreground)] underline-offset-2 transition hover:text-[var(--foreground)] hover:underline"
+              >
+                or get started manually →
+              </Link>
             </div>
           </div>
         </div>

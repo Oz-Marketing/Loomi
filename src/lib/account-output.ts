@@ -1,6 +1,6 @@
 import { applyAccountOutputAliases } from '@/lib/account-field-aliases';
 
-const JSON_ACCOUNT_FIELDS = ['oems', 'logos', 'branding', 'customValues'] as const;
+const JSON_ACCOUNT_FIELDS = ['oems', 'logos', 'branding', 'customFonts', 'customValues'] as const;
 
 function tryParseJson(value: unknown): unknown {
   if (typeof value !== 'string' || value.trim().length === 0) {

@@ -2,12 +2,14 @@
 
 import {
   createContext,
+  Fragment,
   useCallback,
   useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -19,16 +21,23 @@ import {
   ClipboardDocumentListIcon,
   ChartBarIcon,
   ChevronDownIcon,
+  ChevronUpDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   ExclamationTriangleIcon,
   ClockIcon,
   CalendarIcon,
+  InformationCircleIcon,
+  LinkSlashIcon,
   UserCircleIcon,
   PaintBrushIcon,
   CheckBadgeIcon,
   ChatBubbleOvalLeftIcon,
   TrashIcon,
+  BanknotesIcon,
+  PlusCircleIcon,
+  LockOpenIcon,
+  ArrowRightCircleIcon,
   FunnelIcon,
   ArrowPathIcon,
   PaperClipIcon,
@@ -51,7 +60,11 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { toast } from '@/lib/toast';
 import { AccountAvatar } from '@/components/account-avatar';
 import { UserAvatar } from '@/components/user-avatar';
-import { MetaLogoIcon } from '@/components/icons/meta-logo';
+// Shared searchable people picker (search + avatars). Aliased — this file has
+// its own department-filtered native-select `UserPicker` used by the planner
+// form; the import modal wants the searchable one.
+import { UserPicker as PeopleSearchPicker } from '@/components/user-picker';
+import { MetaBrandIcon } from '@/components/icons/platform-logos';
 import { BellIcon, BellOffIcon } from '@/components/icons/bell';
 import { InvestmentIcon } from '@/components/icons/investment';
 import { useAccount } from '@/contexts/account-context';
@@ -65,7 +78,14 @@ import {
 } from '@/components/ui/date-picker';
 import { DEFAULT_TIME_ZONE } from '@/lib/timezone';
 import { CARRYOVER_THRESHOLD } from '../_lib/constants';
-import { buildAdCalc, buildPacerCalc } from '../_lib/pacer-calc';
+import {
+  buildAdCalc,
+  buildPacerCalc,
+  isLifetimeInProgress,
+  effectiveActual,
+  effectiveTarget,
+} from '../_lib/pacer-calc';
+import { effectiveSpendTarget } from '../_lib/markup';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 const AD_STATUSES = [
@@ -231,7 +251,9 @@ function classifyPacerHealth(
   if (pct > 105) {
     return {
       state: 'overpacing',
-      color: '#f59e0b',
+      // Red: projected to overspend (shares red with the already-over-budget
+      // state — both are "spending too much", distinguished by their label).
+      color: '#ef4444',
       label: 'Overpacing',
       short: 'Overpacing',
     };
@@ -239,7 +261,8 @@ function classifyPacerHealth(
   if (pct < 95) {
     return {
       state: 'underpacing',
-      color: '#38bdf8',
+      // Amber: caution that the budget is on pace to be underspent.
+      color: '#f59e0b',
       label: 'Underpacing',
       short: 'Under',
     };
@@ -263,7 +286,13 @@ const AD_COLORS = [
   '#4ade80',
 ];
 
-const MARKUP = 0.77;
+// §0.1: the client never holds a markup literal. The server resolves the
+// per-account factor (Account.markup override, else the agency default) and
+// sends it on the plan / period / overview payloads; this just normalizes a
+// possibly-missing value, guarding it to 0 so an unconfigured markup surfaces
+// as $0 rather than a plausible-but-wrong number.
+const effMarkupOf = (markup: number | null | undefined): number =>
+  typeof markup === 'number' && Number.isFinite(markup) && markup > 0 ? markup : 0;
 
 // Per-ad contribution to the Base / Added budget pools. For a regular
 // single-source ad, the full allocation + pacerActual goes to its source.
@@ -347,6 +376,16 @@ function sourceTint(s: 'base' | 'added' | 'split'): string {
       : 'rgba(244,114,182,0.22)';
 }
 
+// Display helpers for the budget TYPE (Daily / Lifetime), mirroring the source
+// helpers above. Daily reads yellow, Lifetime violet — centralized so the pill
+// text and tint stay paired everywhere a type tag or type-colored figure renders.
+function budgetTypeColor(t: string): string {
+  return t === 'Lifetime' ? COLORS.lifetime : '#eab308';
+}
+function budgetTypeTint(t: string): string {
+  return t === 'Lifetime' ? 'rgba(167,139,250,0.18)' : 'rgba(234,179,8,0.18)';
+}
+
 // ─── Types ─────────────────────────────────────────────────────────────────
 interface DirectoryUser {
   id: string;
@@ -418,6 +457,10 @@ interface PacerAd {
   pacerSyncedAt: string | null;
   /** Full-run (all-time) spend across the ad set's whole flight; informational. */
   pacerRunSpend: string | null;
+  // §2a/§2b cross-month resolution (server-managed, survives sync) — mirror of
+  // _lib/types.ts PacerAd.
+  fullRunAppliedToMonth: string | null;
+  lifetimeMonthSplit: string | null;
   metaStartDate: string | null;
   metaEndDate: string | null;
   alertsMuted: boolean;
@@ -430,7 +473,7 @@ interface PacerPlan {
   baseBudgetGoal: string | null;
   addedBudgetGoal: string | null;
   // Per-account markup override (Account.markup). `null` → use the
-  // global MARKUP default. Drives the Budget Calculator's Client Budget
+  // the agency default markup. Drives the Budget Calculator's Client Budget
   // mode (gross × markup = actual spend).
   markup: number | null;
   // Resolved IANA zone for pacing math (Meta ad-account zone → valid stored
@@ -451,6 +494,11 @@ interface PacerPlan {
   // the prior month isn't closed yet or this month is frozen.
   priorOverUnder: PriorOverUnder | null;
   ads: PacerAd[];
+  // #58: same-title rows' planned (allocation) + in-month actual across every
+  // period, keyed by ad name → period. Lets a lifetime ad's card render its real
+  // cross-month split from the per-month rows the user planned, instead of an
+  // even split. Only names present in 2+ periods are included.
+  siblingsByName?: Record<string, Record<string, { allocation: number; actual: number }>>;
 }
 
 interface PriorOverUnder {
@@ -499,70 +547,57 @@ const calcDays = (start: string | null, end: string | null): number => {
     Math.ceil((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1,
   );
 };
-/** Subtract N business days (Mon–Fri only) from a YYYY-MM-DD date string. */
-function subtractBusinessDays(dateStr: string, n: number): string {
-  const d = new Date(dateStr + 'T00:00:00');
-  let count = 0;
-  while (count < n) {
-    d.setDate(d.getDate() - 1);
-    const dow = d.getDay();
-    if (dow !== 0 && dow !== 6) count++;
+// ─── Run-dates bar (Monday-style) ───────────────────────────────────────────
+// A status-colored progress bar behind the flight window: the elapsed share of
+// the run is filled in, the rest is a neutral track. Green = on track (Live /
+// Scheduled / Live - Changes Required / Ready- Pending Approval), gray = In
+// Draft, red = anything else (needs attention).
+const RUN_DATE_GREEN_STATUSES = new Set([
+  'Live',
+  'Scheduled',
+  'Live - Changes Required',
+  'Ready- Pending Approval',
+]);
+function runDateColor(status: string): string {
+  if (status === 'In Draft') return '#9ca3af';
+  return RUN_DATE_GREEN_STATUSES.has(status) ? COLORS.success : COLORS.error;
+}
+// Share (0–100) of the flight window that has elapsed as of today.
+function flightElapsedPct(
+  flightStart: string | null,
+  flightEnd: string | null,
+): number {
+  if (!flightStart || !flightEnd) return 0;
+  const start = new Date(flightStart + 'T00:00:00').getTime();
+  const end = new Date(flightEnd + 'T23:59:59').getTime();
+  if (!(end > start)) return 0;
+  const now = Date.now();
+  if (now <= start) return 0;
+  if (now >= end) return 100;
+  return ((now - start) / (end - start)) * 100;
+}
+function FlightBar({ ad }: { ad: PacerAd }) {
+  if (!ad.flightStart || !ad.flightEnd) {
+    return <span className="text-xs text-[var(--muted-foreground)]">—</span>;
   }
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-function autoDueDateFromFlightStart(flightStart: string | null): string | null {
-  if (!flightStart) return null;
-  return subtractBusinessDays(flightStart, 2);
-}
-
-/**
- * Classify the urgency of an ad's overall due date.
- * Returns null when there's nothing actionable to surface (no due date, or the
- * ad is already live/completed/off so the due date is moot).
- */
-type DueDateUrgency = {
-  label: string;
-  level: 'overdue' | 'today' | 'soon' | 'upcoming';
-};
-const DUE_DATE_DONE_STATUSES = new Set(['Live', 'Completed Run', 'Off']);
-function classifyDueDate(ad: PacerAd): DueDateUrgency | null {
-  if (!ad.dueDate) return null;
-  if (DUE_DATE_DONE_STATUSES.has(ad.adStatus)) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const due = new Date(ad.dueDate + 'T00:00:00');
-  const diff = Math.ceil((due.getTime() - today.getTime()) / 86400000);
-  if (diff < 0)
-    return { label: `Overdue ${Math.abs(diff)}d`, level: 'overdue' };
-  if (diff === 0) return { label: 'Due today', level: 'today' };
-  if (diff <= 2) return { label: `Due in ${diff}d`, level: 'soon' };
-  if (diff <= 7) return { label: `Due in ${diff}d`, level: 'upcoming' };
-  return null;
-}
-const DUE_DATE_CHIP_STYLES: Record<DueDateUrgency['level'], { bg: string; color: string }> = {
-  overdue: { bg: 'rgba(239,68,68,0.18)', color: '#fca5a5' },
-  today: { bg: 'rgba(252,211,77,0.22)', color: '#fcd34d' },
-  soon: { bg: 'rgba(252,211,77,0.18)', color: '#fcd34d' },
-  upcoming: { bg: 'rgba(190,242,100,0.18)', color: '#bef264' },
-};
-function DueDateChip({ ad }: { ad: PacerAd }) {
-  const urgency = classifyDueDate(ad);
-  if (!urgency) return null;
-  const { bg, color } = DUE_DATE_CHIP_STYLES[urgency.level];
+  const pct = flightElapsedPct(ad.flightStart, ad.flightEnd);
+  const color = runDateColor(ad.adStatus);
   return (
-    <span
-      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap"
-      style={{ background: bg, color }}
-    >
-      {urgency.level === 'overdue' || urgency.level === 'today' ? (
-        <ExclamationTriangleIcon className="w-3 h-3" />
-      ) : (
-        <ClockIcon className="w-3 h-3" />
-      )}
-      {urgency.label}
-    </span>
+    <div className="relative h-[22px] min-w-[132px] w-full overflow-hidden rounded-full bg-[var(--muted)]">
+      <div
+        className="absolute inset-y-0 left-0 transition-[width] duration-500"
+        style={{ width: `${pct}%`, background: color }}
+      />
+      <span
+        className="absolute inset-0 flex items-center justify-center px-2 text-[11px] font-semibold whitespace-nowrap text-white"
+        style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
+      >
+        {fmtDate(ad.flightStart)} – {fmtDate(ad.flightEnd)}
+      </span>
+    </div>
   );
 }
+
 const num = (s: string | null | undefined): number | null => {
   if (s == null || s === '') return null;
   const n = parseFloat(s);
@@ -611,6 +646,8 @@ function makeAd(position: number, period: string): PacerAd {
     metaEffectiveStatus: null,
     pacerSyncedAt: null,
     pacerRunSpend: null,
+    fullRunAppliedToMonth: null,
+    lifetimeMonthSplit: null,
     metaStartDate: null,
     metaEndDate: null,
     alertsMuted: false,
@@ -798,29 +835,91 @@ const PacerReadOnlyContext = createContext(false);
 const usePacerReadOnly = () => useContext(PacerReadOnlyContext);
 
 /**
- * Lightweight CSS-hover tooltip. Wraps any trigger; shows `label` on hover/
- * focus-within. `placement` flips it above (default) or below the trigger —
- * use 'bottom' for triggers near the top of the page so it doesn't clip.
+ * Loomi tooltip. Wraps any trigger and shows `label` on hover/focus. The bubble
+ * is rendered through a portal on document.body and pinned with fixed coords, so
+ * it is never clipped by an ancestor's `overflow-hidden` or scroll container —
+ * the planner/pacer are full of rounded, clipped cards, bars and tables. The
+ * wrapper is a bare `inline-flex` (no `relative`), so a passed-in `className`
+ * may freely position it (`absolute …` corner buttons) or shape it (flex/grid
+ * bar segments via `className`/`style`). `placement` puts the bubble above
+ * (default) or below the trigger.
  */
 function Tooltip({
   label,
   placement = 'top',
+  className = '',
+  style,
   children,
 }: {
-  label: string;
+  label: ReactNode;
   placement?: 'top' | 'bottom';
-  children: ReactNode;
+  className?: string;
+  style?: CSSProperties;
+  children?: ReactNode;
 }) {
-  const pos = placement === 'bottom' ? 'top-full mt-1.5' : 'bottom-full mb-1.5';
+  const ref = useRef<HTMLSpanElement>(null);
+  const [coords, setCoords] = useState<{ left: number; top: number } | null>(
+    null,
+  );
+
+  const place = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setCoords({
+      left: r.left + r.width / 2,
+      top: placement === 'bottom' ? r.bottom + 6 : r.top - 6,
+    });
+  }, [placement]);
+
+  const hide = useCallback(() => setCoords(null), []);
+
+  // Dismiss on scroll/resize rather than re-pinning. The planner scrolls under a
+  // fixed cursor, so icons drift beneath the pointer and fire mouseenter on each
+  // one in turn; re-pinning would keep every one of them alive as a trail of
+  // stuck tooltips. Closing on scroll keeps the tooltip strictly hover-only —
+  // it reappears only on a fresh hover once scrolling stops.
+  useEffect(() => {
+    if (!coords) return;
+    window.addEventListener('scroll', hide, true);
+    window.addEventListener('resize', hide);
+    return () => {
+      window.removeEventListener('scroll', hide, true);
+      window.removeEventListener('resize', hide);
+    };
+  }, [coords, hide]);
+
   return (
-    <span className="relative inline-flex group/tip">
+    <span
+      ref={ref}
+      className={`inline-flex ${className}`.trim()}
+      style={style}
+      onMouseEnter={place}
+      onMouseLeave={hide}
+      onFocus={place}
+      onBlur={hide}
+    >
       {children}
-      <span
-        role="tooltip"
-        className={`pointer-events-none absolute left-1/2 -translate-x-1/2 ${pos} z-[200] max-w-[220px] whitespace-normal text-center rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-[10px] font-medium leading-snug text-[var(--foreground)] opacity-0 shadow-lg transition-opacity duration-100 group-hover/tip:opacity-100`}
-      >
-        {label}
-      </span>
+      {coords &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <span
+            role="tooltip"
+            style={{
+              position: 'fixed',
+              left: coords.left,
+              top: coords.top,
+              transform:
+                placement === 'bottom'
+                  ? 'translate(-50%, 0)'
+                  : 'translate(-50%, -100%)',
+            }}
+            className="pointer-events-none z-[1000] w-max max-w-[340px] whitespace-normal text-center rounded-md border border-[var(--border)] bg-[var(--card-strong)] px-2.5 py-1.5 text-[10px] font-medium leading-snug text-[var(--foreground)] shadow-lg backdrop-blur-sm"
+          >
+            {label}
+          </span>,
+          document.body,
+        )}
     </span>
   );
 }
@@ -884,15 +983,19 @@ function DollarInput({
         className={`${inputClass} pl-6 ${hasValue && !readOnly ? 'pr-8' : ''} ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
       />
       {hasValue && !readOnly && (
-        <button
-          type="button"
-          onClick={() => onChange('')}
-          aria-label="Clear amount"
-          title="Clear"
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+        <Tooltip
+          label="Clear"
+          className="absolute right-2 top-1/2 -translate-y-1/2"
         >
-          <XMarkIcon className="w-3.5 h-3.5" />
-        </button>
+          <button
+            type="button"
+            onClick={() => onChange('')}
+            aria-label="Clear amount"
+            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+          >
+            <XMarkIcon className="w-3.5 h-3.5" />
+          </button>
+        </Tooltip>
       )}
     </div>
   );
@@ -1153,7 +1256,9 @@ function MetricBox({
   return (
     // No border + softer bg so it reads as a passive computed-info card,
     // not as another fillable field. Editable inputs stay bordered+filled.
-    <div className="rounded-lg bg-[var(--muted)]/40 px-3 py-2.5">
+    // `metric-box` lets the pacer card recess these into darker wells (see
+    // `.pacer-ad-card .metric-box` in globals.css); harmless elsewhere.
+    <div className="metric-box rounded-lg bg-[var(--muted)]/40 px-3 py-2.5">
       <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-1">
         {label}
       </div>
@@ -1186,8 +1291,8 @@ function CompactStat({
   color?: string;
   title?: string;
 }) {
-  return (
-    <div className="min-w-0 bg-[var(--muted)]/40 px-3 py-2.5" title={title}>
+  const box = (
+    <div className="min-w-0 w-full bg-[var(--muted)]/40 px-3 py-2.5">
       <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] truncate mb-0.5">
         {label}
       </div>
@@ -1198,6 +1303,15 @@ function CompactStat({
         {value}
       </div>
     </div>
+  );
+  // Loomi tooltip instead of the native title. The stat strip is a grid item,
+  // so the wrapper stretches to fill its cell (min-w-0 keeps truncation).
+  return title ? (
+    <Tooltip label={title} className="min-w-0">
+      {box}
+    </Tooltip>
+  ) : (
+    box
   );
 }
 
@@ -1306,9 +1420,9 @@ function StatusBattery({ ads, size = 'sm' }: { ads: PacerAd[]; size?: 'sm' | 'lg
             // (now #ffffff for every status, which would render the bar blank).
             const color = AD_STATUS_COLORS[status]?.[0] ?? 'var(--muted-foreground)';
             return (
-              <div
+              <Tooltip
                 key={status}
-                title={`${status}: ${count} of ${total} (${w.toFixed(0)}%)`}
+                label={`${status}: ${count} of ${total} (${w.toFixed(0)}%)`}
                 className="h-full transition-[width] duration-500"
                 style={{ width: `${w}%`, background: color }}
               />
@@ -1353,6 +1467,51 @@ function Divider({ icon, label }: { icon?: ReactNode; label: string }) {
   );
 }
 
+// Same divider look as <Divider>, but the header is a toggle: click it to
+// height-animate the section open/closed (chevron rotates). The section's
+// dropdowns (StatusSelect/DatePicker portal, UserPicker is a native select) all
+// escape the collapse's overflow clip, so nothing gets cut off when open.
+function CollapsibleSection({
+  icon,
+  label,
+  defaultOpen = true,
+  children,
+}: {
+  icon?: ReactNode;
+  label: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="group flex w-full items-center gap-2.5 my-4"
+      >
+        <div className="h-px flex-1 bg-[var(--border)]" />
+        <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--muted-foreground)] whitespace-nowrap transition-colors group-hover:text-[var(--foreground)]">
+          {icon}
+          {label}
+          <ChevronDownIcon
+            className={`w-3.5 h-3.5 transition-transform duration-300 ${open ? '' : '-rotate-90'}`}
+          />
+        </span>
+        <div className="h-px flex-1 bg-[var(--border)]" />
+      </button>
+      <div
+        className={`grid transition-[grid-template-rows] duration-300 ease-out ${
+          open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+        }`}
+      >
+        <div className="overflow-hidden">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 function BudgetTypeToggle({
   value,
   onChange,
@@ -1364,8 +1523,8 @@ function BudgetTypeToggle({
     <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--input)] overflow-hidden">
       {(['Daily', 'Lifetime'] as const).map((t) => {
         const active = value === t;
-        const tint = t === 'Daily' ? 'rgba(56,189,248,0.18)' : 'rgba(167,139,250,0.18)';
-        const fg = t === 'Daily' ? COLORS.daily : COLORS.lifetime;
+        const tint = budgetTypeTint(t);
+        const fg = budgetTypeColor(t);
         return (
           <button
             key={t}
@@ -1398,21 +1557,13 @@ function BudgetSourceToggle({
     <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--input)] overflow-hidden">
       {opts.map((t, i) => {
         const active = value === t;
-        const tint =
-          t === 'base'
-            ? 'rgba(56,189,248,0.18)'
-            : t === 'added'
-              ? 'rgba(52,211,153,0.18)'
-              : 'rgba(167,139,250,0.22)';
-        const fg =
-          t === 'base'
-            ? COLORS.base
-            : t === 'added'
-              ? COLORS.added
-              : COLORS.lifetime;
-        return (
+        // Tint + accent come straight from the shared source helpers so the
+        // toggle matches the overview's Base/Added/Split badges exactly —
+        // Split reads pink (COLORS.split), not the lifetime violet.
+        const tint = sourceTint(t);
+        const fg = sourceColor(t);
+        const button = (
           <button
-            key={t}
             type="button"
             onClick={() => onChange(t)}
             className="px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-colors"
@@ -1421,14 +1572,19 @@ function BudgetSourceToggle({
               color: active ? fg : 'var(--muted-foreground)',
               borderRight: i < opts.length - 1 ? '1px solid var(--border)' : 'none',
             }}
-            title={
-              t === 'split'
-                ? 'Split — allocation drawn from both Base and Added budgets'
-                : undefined
-            }
           >
             {t === 'base' ? 'Base' : t === 'added' ? 'Added' : 'Split'}
           </button>
+        );
+        return t === 'split' ? (
+          <Tooltip
+            key={t}
+            label="Split — allocation drawn from both Base and Added budgets"
+          >
+            {button}
+          </Tooltip>
+        ) : (
+          <Fragment key={t}>{button}</Fragment>
         );
       })}
     </div>
@@ -1811,11 +1967,7 @@ function MetaAdsPacerFilterSidebar({
               {(['all', 'Daily', 'Lifetime'] as const).map((t) => {
                 const isActive = filters.adType === t;
                 const accent =
-                  t === 'Daily'
-                    ? COLORS.daily
-                    : t === 'Lifetime'
-                      ? COLORS.lifetime
-                      : 'var(--primary)';
+                  t === 'all' ? 'var(--primary)' : budgetTypeColor(t);
                 return (
                   <button
                     key={t}
@@ -1975,9 +2127,9 @@ function UpdatesIndicator({
   titleParts.push(`${count} update${count === 1 ? '' : 's'}`);
   if (hasAttachments) titleParts.push('has attachments');
   return (
+    <Tooltip label={titleParts.join(' · ')} className="flex-shrink-0">
     <span
-      className="relative inline-flex flex-shrink-0 items-center justify-center"
-      title={titleParts.join(' · ')}
+      className="relative inline-flex items-center justify-center"
       style={{ width: 28, height: 28 }}
     >
       <ChatBubbleOvalLeftIcon
@@ -2011,6 +2163,7 @@ function UpdatesIndicator({
         />
       )}
     </span>
+    </Tooltip>
   );
 }
 
@@ -2254,21 +2407,14 @@ function AdSummaryRow({
         <AdStatusPill status={ad.adStatus} />
       </td>
 
-      {/* Due date chip */}
-      <td className="px-3 py-2 align-middle whitespace-nowrap">
-        <DueDateChip ad={ad} />
-      </td>
-
       {/* Budget tags */}
       <td className="px-3 py-2 align-middle whitespace-nowrap">
         <div className="flex items-center gap-1">
           <span
             className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
             style={{
-              background: isLifetime
-                ? 'rgba(167,139,250,0.18)'
-                : 'rgba(56,189,248,0.18)',
-              color: isLifetime ? COLORS.lifetime : COLORS.daily,
+              background: budgetTypeTint(ad.budgetType),
+              color: budgetTypeColor(ad.budgetType),
             }}
           >
             {ad.budgetType}
@@ -2295,11 +2441,9 @@ function AdSummaryRow({
         {allocation != null ? fmt(allocation) : '—'}
       </td>
 
-      {/* Flight */}
-      <td className="px-3 py-2 align-middle text-xs text-[var(--foreground)] whitespace-nowrap">
-        {ad.flightStart && ad.flightEnd
-          ? `${fmtDate(ad.flightStart)} – ${fmtDate(ad.flightEnd)}`
-          : '—'}
+      {/* Run dates (status-colored progress bar) */}
+      <td className="px-3 py-2 align-middle">
+        <FlightBar ad={ad} />
       </td>
 
       {/* Design */}
@@ -2329,6 +2473,7 @@ function AdSummaryRow({
       <td className="px-3 py-2 align-middle whitespace-nowrap text-right">
         {!readOnly && (
           <span className="inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            <Tooltip label="Clone ad">
             <button
               type="button"
               onClick={(e) => {
@@ -2337,10 +2482,11 @@ function AdSummaryRow({
               }}
               className="text-[var(--muted-foreground)] hover:text-[var(--primary)] hover:bg-[var(--muted)] rounded p-1 transition-colors"
               aria-label="Clone ad"
-              title="Clone ad"
             >
               <DocumentDuplicateIcon className="w-4 h-4" />
             </button>
+            </Tooltip>
+            <Tooltip label="Remove ad">
             <button
               type="button"
               onClick={(e) => {
@@ -2349,10 +2495,10 @@ function AdSummaryRow({
               }}
               className="text-[var(--muted-foreground)] hover:text-red-400 hover:bg-[var(--muted)] rounded p-1 transition-colors"
               aria-label="Remove ad"
-              title="Remove ad"
             >
               <TrashIcon className="w-4 h-4" />
             </button>
+            </Tooltip>
           </span>
         )}
       </td>
@@ -2565,25 +2711,27 @@ function ActivityLogPanel({
                   {!isEditing && (
                     <div className="flex items-center gap-1 flex-shrink-0">
                       {isMine && u.text && (
+                        <Tooltip label="Edit">
                         <button
                           type="button"
                           onClick={() => startEdit(u.id, u.text)}
                           className="text-[var(--muted-foreground)] hover:text-[var(--primary)] transition-colors"
                           aria-label="Edit update"
-                          title="Edit"
                         >
                           <PencilSquareIcon className="w-3.5 h-3.5" />
                         </button>
+                        </Tooltip>
                       )}
+                      <Tooltip label="Delete">
                       <button
                         type="button"
                         onClick={() => onDelete(ad.id, u.id)}
                         className="text-[var(--muted-foreground)] hover:text-red-400 transition-colors"
                         aria-label="Delete entry"
-                        title="Delete"
                       >
                         <TrashIcon className="w-3 h-3" />
                       </button>
+                      </Tooltip>
                     </div>
                   )}
                 </div>
@@ -2687,15 +2835,18 @@ function ActivityLogPanel({
 
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-[10px] text-[var(--muted-foreground)]">
+            <Tooltip
+              label={`Attach a file (max ${PACER_ACTIVITY_MAX_UPLOAD_BYTES / (1024 * 1024)} MB)`}
+            >
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-              title={`Attach a file (max ${PACER_ACTIVITY_MAX_UPLOAD_BYTES / (1024 * 1024)} MB)`}
             >
               <PaperClipIcon className="w-3 h-3" />
               Attach
             </button>
+            </Tooltip>
             <span>⌘/Ctrl+Enter to post</span>
           </div>
           <button
@@ -2718,10 +2869,14 @@ function PlanAdForm({
   ad,
   users,
   onUpdate,
+  markup,
 }: {
   ad: PacerAd;
   users: DirectoryUser[];
   onUpdate: (ad: PacerAd) => void;
+  // §0.1: resolved per-account factor (override, else agency default), passed
+  // down so the Gross Allocation display grosses up at the right rate.
+  markup: number | null;
 }) {
   const days = calcDays(ad.flightStart, ad.flightEnd);
   const allocation = num(ad.allocation) ?? 0;
@@ -2854,8 +3009,13 @@ function PlanAdForm({
                   onUpdate({
                     ...ad,
                     adStatus: newStatus,
+                    // Stamp the Task Completed date when the ad is scheduled —
+                    // that's when the build/setup task is done. Still fires on
+                    // Live too (an ad that skips straight to Live), and only
+                    // when not already set so a manual date is never overwritten.
                     dateCompleted:
-                      newStatus === 'Live' && !ad.dateCompleted
+                      (newStatus === 'Scheduled' || newStatus === 'Live') &&
+                      !ad.dateCompleted
                         ? today
                         : ad.dateCompleted,
                   });
@@ -2865,28 +3025,8 @@ function PlanAdForm({
             </Field>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-3 max-w-2xl">
-            <Field label="Due Date">
-              <div className="relative">
-                <DatePicker
-                  value={ad.dueDate}
-                  onChange={(v) => onUpdate({ ...ad, dueDate: v })}
-                  placeholder="Pick a date"
-                  presets={[TODAY_PRESET]}
-                />
-                {ad.dueDate &&
-                  ad.flightStart &&
-                  ad.dueDate === autoDueDateFromFlightStart(ad.flightStart) && (
-                    <span
-                      className="mt-1 inline-block text-[10px] font-bold uppercase tracking-wider"
-                      style={{ color: COLORS.daily }}
-                    >
-                      ● Auto-set from flight start
-                    </span>
-                  )}
-              </div>
-            </Field>
-            <Field label="Date Completed">
+          <div className="mb-3 max-w-xs">
+            <Field label="Task Completed">
               <div className="relative">
                 <DatePicker
                   value={ad.dateCompleted}
@@ -2894,14 +3034,15 @@ function PlanAdForm({
                   placeholder="Pick a date"
                   presets={[TODAY_PRESET]}
                 />
-                {ad.dateCompleted && ad.adStatus === 'Live' && (
-                  <span
-                    className="mt-1 inline-block text-[10px] font-bold uppercase tracking-wider"
-                    style={{ color: COLORS.success }}
-                  >
-                    ● Auto-filled when set Live
-                  </span>
-                )}
+                {ad.dateCompleted &&
+                  (ad.adStatus === 'Scheduled' || ad.adStatus === 'Live') && (
+                    <span
+                      className="mt-1 inline-block text-[10px] font-bold uppercase tracking-wider"
+                      style={{ color: COLORS.success }}
+                    >
+                      ● Auto-filled when scheduled
+                    </span>
+                  )}
               </div>
             </Field>
           </div>
@@ -2914,17 +3055,10 @@ function PlanAdForm({
                 mode="range"
                 value={{ start: ad.flightStart, end: ad.flightEnd }}
                 onChange={(r) => {
-                  const next = r.start;
-                  const previousAuto = autoDueDateFromFlightStart(ad.flightStart);
-                  const dueDateIsAuto =
-                    ad.dueDate == null || ad.dueDate === previousAuto;
                   onUpdate({
                     ...ad,
                     flightStart: r.start,
                     flightEnd: r.end,
-                    dueDate: dueDateIsAuto
-                      ? autoDueDateFromFlightStart(next)
-                      : ad.dueDate,
                   });
                 }}
                 placeholder="Click & drag to select flight window"
@@ -2987,13 +3121,7 @@ function PlanAdForm({
           <div className="mb-3 flex flex-wrap gap-3 items-end">
             <Field
               label="Actual Spend Amount"
-              color={
-                ad.budgetSource === 'base'
-                  ? COLORS.base
-                  : ad.budgetSource === 'added'
-                    ? COLORS.added
-                    : COLORS.lifetime
-              }
+              color={sourceColor(ad.budgetSource)}
             >
               {/* Sized for ~$999,999.99 — wide enough for 6 digits + cents
                   without dominating the form like a full-width input. */}
@@ -3052,28 +3180,26 @@ function PlanAdForm({
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
               <MetricBox
                 label="Gross Allocation"
-                value={fmt(Math.round((allocation / MARKUP) * 100) / 100)}
+                value={
+                  effMarkupOf(markup) > 0
+                    ? fmt(Math.round((allocation / effMarkupOf(markup)) * 100) / 100)
+                    : '—'
+                }
                 sub="client budget"
               />
               <MetricBox
                 label="Actual Spend"
                 value={fmt(allocation)}
-                color={
-                  ad.budgetSource === 'base'
-                    ? COLORS.base
-                    : ad.budgetSource === 'added'
-                      ? COLORS.added
-                      : COLORS.lifetime
-                }
+                color={sourceColor(ad.budgetSource)}
               />
             </div>
           )}
 
           {/* Creative & Design */}
-          <Divider
+          <CollapsibleSection
             icon={<PaintBrushIcon className="w-3 h-3" />}
             label="Creative & Design"
-          />
+          >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-3">
             <Field label="Design Status">
               <StatusSelect
@@ -3126,23 +3252,31 @@ function PlanAdForm({
                   className={`${inputClass} ${ad.creativeLink ? 'pr-10' : ''}`}
                 />
                 {ad.creativeLink && (
+                  <Tooltip
+                    label="Open in new tab"
+                    className="absolute right-2 top-1/2 -translate-y-1/2"
+                  >
                   <a
                     href={ad.creativeLink}
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label="Open creative link in new tab"
-                    title="Open in new tab"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded text-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
+                    className="p-1.5 rounded text-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
                   >
                     <ArrowTopRightOnSquareIcon className="w-4 h-4" />
                   </a>
+                  </Tooltip>
                 )}
               </div>
             </Field>
           </div>
+          </CollapsibleSection>
 
           {/* Approvals */}
-          <Divider icon={<CheckBadgeIcon className="w-3 h-3" />} label="Approvals" />
+          <CollapsibleSection
+            icon={<CheckBadgeIcon className="w-3 h-3" />}
+            label="Approvals"
+          >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-3 max-w-2xl">
             <Field label="Account Rep">
               <UserPicker
@@ -3210,6 +3344,7 @@ function PlanAdForm({
               <ApprovalPill status={ad.clientApproval} />
             </div>
           </div>
+          </CollapsibleSection>
 
     </div>
   );
@@ -3227,6 +3362,7 @@ function PlanAdForm({
  */
 function AdEditorModal({
   initialAd,
+  markup,
   liveActivityLog,
   mode,
   users,
@@ -3238,6 +3374,8 @@ function AdEditorModal({
   onDeleteActivity,
 }: {
   initialAd: PacerAd;
+  /** §0.1 resolved per-account markup factor, threaded to PlanAdForm. */
+  markup: number | null;
   /**
    * The current activity log for this ad pulled from the parent plan. The
    * modal's draft state is for form fields only — activity entries persist
@@ -3338,12 +3476,15 @@ function AdEditorModal({
                   className="w-full bg-transparent text-xl font-bold text-[var(--foreground)] focus:outline-none border-b border-[var(--primary)] py-0.5"
                 />
               ) : (
+                <Tooltip
+                  label={readOnly ? draft.name?.trim() || 'New Ad' : 'Click to edit ad name'}
+                  placement="bottom"
+                >
                 <button
                   type="button"
                   onClick={() => setEditingTitle(true)}
                   disabled={readOnly}
                   className="group/title inline-flex items-center gap-2 text-xl font-bold text-[var(--foreground)] truncate max-w-full hover:text-[var(--primary)] transition-colors text-left disabled:hover:text-[var(--foreground)] disabled:cursor-default"
-                  title={readOnly ? draft.name?.trim() || 'New Ad' : 'Click to edit ad name'}
                 >
                   <span className="truncate">
                     {draft.name?.trim() || 'New Ad'}
@@ -3352,6 +3493,7 @@ function AdEditorModal({
                     <PencilSquareIcon className="w-4 h-4 flex-shrink-0 opacity-0 group-hover/title:opacity-100 transition-opacity text-[var(--muted-foreground)]" />
                   )}
                 </button>
+                </Tooltip>
               )}
               <div className="text-[10px] text-[var(--muted-foreground)]">
                 {mode === 'create'
@@ -3396,7 +3538,7 @@ function AdEditorModal({
             {/* A disabled fieldset (display:contents → no layout change)
                 locks every form control at once when the month is frozen. */}
             <fieldset disabled={readOnly} className="contents">
-              <PlanAdForm ad={draft} users={users} onUpdate={setDraft} />
+              <PlanAdForm ad={draft} users={users} onUpdate={setDraft} markup={markup} />
             </fieldset>
           </div>
           {mode === 'create' ? (
@@ -3456,10 +3598,7 @@ function BudgetPanel({
     return s + (source === 'base' ? c.baseAllocation : c.addedAllocation);
   }, 0);
   // Per-account markup override when set, else the global default.
-  const effMarkup =
-    plan.markup != null && Number.isFinite(plan.markup) && plan.markup > 0
-      ? plan.markup
-      : MARKUP;
+  const effMarkup = effMarkupOf(plan.markup);
   // Carryover (Change 7) adjusts the DERIVED spend target only — the client
   // budget goal stays untouched. target = goal × markup + carryover.
   const carryover =
@@ -3481,187 +3620,279 @@ function BudgetPanel({
         ? COLORS.success
         : COLORS.warn;
 
-  return (
-    <div
-      className="glass-section-card relative flex-1 min-w-[280px] rounded-xl px-5 py-4 overflow-hidden"
-      style={{ borderColor: `${color}40` }}
-    >
-      <div
-        className="absolute top-0 left-0 right-0 h-0.5"
-        style={{ background: color }}
-      />
+  // Collapsed by default — the card condenses to a one-line summary plus the
+  // allocation bar (the live feedback you want while allocating), and expands
+  // for the goal input, metric boxes, and per-ad legend.
+  const [expanded, setExpanded] = useState(false);
 
-      <div className="flex items-center justify-between mb-3.5">
-        <span
-          className="text-sm font-bold uppercase tracking-wider"
-          style={{ color }}
-        >
-          {title}
-        </span>
-        {allocStatus && (
-          <span
-            className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
-            style={{
-              background:
-                allocStatus === 'over'
-                  ? 'rgba(239,68,68,0.18)'
-                  : allocStatus === 'perfect'
-                    ? 'rgba(34,197,94,0.18)'
-                    : 'rgba(245,158,11,0.18)',
-              color: statusColor,
-            }}
-          >
-            {allocStatus === 'over'
-              ? 'Over'
-              : allocStatus === 'perfect'
-                ? 'Full'
-                : 'Under'}
-          </span>
-        )}
-      </div>
-
-      {/* Goal input row */}
-      <div className="grid grid-cols-2 gap-2.5 mb-3.5">
-        <Field label="Client Budget Goal (Gross)">
-          <DollarInput
-            value={plan[goalKey]}
-            onChange={(v) => onChange({ ...plan, [goalKey]: v })}
-            placeholder="0.00"
-          />
-        </Field>
-        <Field label="Actual Spend Budget">
-          <div
-            className={`${readonlyClass} font-bold`}
-            style={{ color }}
-          >
-            {spendTarget != null
-              ? fmt(Math.round(spendTarget * 100) / 100)
-              : '—'}
-          </div>
-          {/* When a carryover is applied, show the traceable breakdown so the
-              target always reads as "base × markup + carryover", never a
-              silently moved number. */}
-          {carryover !== 0 && baseTarget != null && (
-            <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5 leading-snug">
-              {fmt(Math.round(baseTarget * 100) / 100)}{' '}
-              {carryover >= 0 ? '+' : '−'} {fmt(Math.abs(carryover))} carried
-              from {fmtPeriodShort(shiftPeriod(plan.period, -1))}
-            </div>
-          )}
-        </Field>
-      </div>
-
-      {/* Metric boxes */}
-      <div
-        className="grid grid-cols-2 md:grid-cols-3 gap-2"
-        style={{ marginBottom: goal != null && goal > 0 ? 14 : 0 }}
-      >
-        <MetricBox
-          label="Gross Allocation"
-          value={fmt(grossAlloc)}
-          sub={carryover !== 0 ? 'client budget + carryover' : 'client budget'}
-        />
-        <MetricBox
-          label="Total Allocated"
-          value={fmt(totalAlloc)}
-          sub="actual spend"
-          color={
-            allocPct != null
-              ? allocPct > 105
-                ? COLORS.error
-                : allocPct >= 95
-                  ? COLORS.success
-                  : COLORS.warn
-              : color
-          }
-        />
-        {goal != null && (
-          <MetricBox
-            label="Remaining Budget"
-            value={fmt(Math.abs(remaining ?? 0))}
-            sub={remaining != null && remaining < 0 ? 'over budget' : 'unallocated'}
-            color={remaining != null && remaining < 0 ? COLORS.error : COLORS.success}
-          />
-        )}
-      </div>
-
-      {/* Allocation bar — shows only this pool's portion of each ad's
-          allocation. For split ads, that's `splitBaseAmount` (Base card)
-          or `allocation − splitBaseAmount` (Added card), so a single
-          $192.50 split ad with $92.50 to base appears as $92.50 on the
-          Base card and $100.00 on the Added card. */}
-      {goal != null && goal > 0 && (() => {
-        const budgetCap = goal * MARKUP;
-        const poolEntries = srcAds
+  // Per-ad allocation slices for the bar (+ legend when expanded). Lifted out
+  // of the render so the compact and expanded layouts share them.
+  const budgetCap = goal != null ? goal * effMarkup : 0;
+  const poolEntries =
+    goal != null && goal > 0
+      ? srcAds
           .map((a, i) => {
             const c = adContribution(a);
-            const portion = source === 'base' ? c.baseAllocation : c.addedAllocation;
+            const portion =
+              source === 'base' ? c.baseAllocation : c.addedAllocation;
             return { ad: a, portion, colorIdx: i };
           })
-          .filter((e) => e.portion > 0);
-        return (
-          <>
-            <div className="flex justify-between mb-1">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                Allocation
-              </span>
-              <span
-                className="text-[10px] font-bold"
+          .filter((e) => e.portion > 0)
+      : [];
+
+  return (
+    <div
+      onClick={() => setExpanded((v) => !v)}
+      className="glass-section-card flex-1 min-w-[280px] cursor-pointer rounded-xl px-5 py-4"
+    >
+
+      <div className="mb-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span
+            className="text-sm font-bold uppercase tracking-wider"
+            style={{ color }}
+          >
+            {title}
+          </span>
+          {allocStatus && (
+            <span
+              className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded"
+              style={{
+                background:
+                  allocStatus === 'over'
+                    ? 'rgba(239,68,68,0.18)'
+                    : allocStatus === 'perfect'
+                      ? 'rgba(34,197,94,0.18)'
+                      : 'rgba(245,158,11,0.18)',
+                color: statusColor,
+              }}
+            >
+              {allocStatus === 'over'
+                ? 'Over'
+                : allocStatus === 'perfect'
+                  ? 'Full'
+                  : 'Under'}
+            </span>
+          )}
+        </div>
+        <Tooltip label={expanded ? 'Collapse' : 'Expand for budget goal & breakdown'}>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setExpanded((v) => !v);
+          }}
+          aria-expanded={expanded}
+          aria-label={expanded ? 'Collapse' : 'Expand for budget goal & breakdown'}
+          className="inline-flex items-center justify-center w-6 h-6 rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+        >
+          <ChevronDownIcon
+            className={`w-4 h-4 transition-transform duration-300 ${expanded ? '' : '-rotate-90'}`}
+          />
+        </button>
+        </Tooltip>
+      </div>
+
+      {/* Compact summary (collapsed) — height-animated open/close. */}
+      <div
+        className={`grid transition-[grid-template-rows] duration-300 ease-out ${
+          expanded ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'
+        }`}
+      >
+        <div className="overflow-hidden">
+          {/* Stacked label-over-value so the dollar figures read large at a
+              glance (the live feedback while allocating); labels stay small. */}
+          <div className="flex flex-wrap items-end gap-x-7 gap-y-2 pb-2.5">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Goal
+              </div>
+              <div className="text-2xl font-bold tabular-nums leading-none text-[var(--foreground)]">
+                {goal != null ? fmt(goal) : '—'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Allocated
+              </div>
+              <div
+                className="text-2xl font-bold tabular-nums leading-none"
                 style={{ color: statusColor }}
               >
-                {allocPct != null ? `${allocPct.toFixed(1)}%` : ''}
-              </span>
+                {fmt(totalAlloc)}
+              </div>
             </div>
-            <div className="h-2 rounded-full overflow-hidden bg-[var(--muted)] flex mb-2">
-              {poolEntries.map(({ ad, portion, colorIdx }) => {
-                const w = budgetCap > 0 ? Math.min((portion / budgetCap) * 100, 100) : 0;
-                const pct = budgetCap > 0 ? (portion / budgetCap) * 100 : 0;
-                const isSplit = ad.budgetSource === 'split';
-                return w > 0 ? (
-                  <div
-                    key={ad.id}
-                    title={`${ad.name || 'Untitled Ad'}${isSplit ? ` (split — ${source} portion)` : ''}: ${fmt(portion)} (${pct.toFixed(1)}% of budget)`}
-                    className="h-full transition-[width] duration-500"
-                    style={{
-                      width: `${w}%`,
-                      background: AD_COLORS[colorIdx % AD_COLORS.length],
-                      borderRight: '1px solid var(--background)',
-                    }}
-                  />
-                ) : null;
-              })}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {poolEntries.map(({ ad, portion, colorIdx }) => {
-                const pct = budgetCap > 0 ? (portion / budgetCap) * 100 : 0;
-                const isSplit = ad.budgetSource === 'split';
-                return (
-                  <div
-                    key={ad.id}
-                    className="flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]"
-                    title={`${pct.toFixed(1)}% of budget${isSplit ? ' (split portion)' : ''}`}
-                  >
+            {goal != null && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                  {remaining != null && remaining < 0 ? 'Over' : 'Remaining'}
+                </div>
+                <div
+                  className="text-2xl font-bold tabular-nums leading-none"
+                  style={{
+                    color:
+                      remaining != null && remaining < 0
+                        ? COLORS.error
+                        : COLORS.success,
+                  }}
+                >
+                  {fmt(Math.abs(remaining ?? 0))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Goal input + metric boxes (expanded) — height-animated open/close. */}
+      <div
+        className={`grid transition-[grid-template-rows] duration-300 ease-out ${
+          expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+        }`}
+      >
+        <div className="overflow-hidden">
+          {/* Goal input row — stop clicks here from toggling the card so the
+              user can focus/edit the goal without collapsing it. */}
+          <div
+            className="grid grid-cols-2 gap-2.5 pb-3.5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Field label="Client Budget Goal (Gross)">
+              <DollarInput
+                value={plan[goalKey]}
+                onChange={(v) => onChange({ ...plan, [goalKey]: v })}
+                placeholder="0.00"
+              />
+            </Field>
+            <Field label="Actual Spend Budget">
+              <div
+                className={`${readonlyClass} font-bold`}
+                style={{ color }}
+              >
+                {spendTarget != null
+                  ? fmt(Math.round(spendTarget * 100) / 100)
+                  : '—'}
+              </div>
+              {/* When a carryover is applied, show the traceable breakdown so
+                  the target always reads as "base × markup + carryover",
+                  never a silently moved number. */}
+              {carryover !== 0 && baseTarget != null && (
+                <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5 leading-snug">
+                  {fmt(Math.round(baseTarget * 100) / 100)}{' '}
+                  {carryover >= 0 ? '+' : '−'} {fmt(Math.abs(carryover))} carried
+                  from {fmtPeriodShort(shiftPeriod(plan.period, -1))}
+                </div>
+              )}
+            </Field>
+          </div>
+
+          {/* Metric boxes */}
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 pb-3.5">
+            <MetricBox
+              label="Gross Allocation"
+              value={fmt(grossAlloc)}
+              sub={carryover !== 0 ? 'client budget + carryover' : 'client budget'}
+            />
+            <MetricBox
+              label="Total Allocated"
+              value={fmt(totalAlloc)}
+              sub="actual spend"
+              color={
+                allocPct != null
+                  ? allocPct > 105
+                    ? COLORS.error
+                    : allocPct >= 95
+                      ? COLORS.success
+                      : COLORS.warn
+                  : color
+              }
+            />
+            {goal != null && (
+              <MetricBox
+                label="Remaining Budget"
+                value={fmt(Math.abs(remaining ?? 0))}
+                sub={remaining != null && remaining < 0 ? 'over budget' : 'unallocated'}
+                color={remaining != null && remaining < 0 ? COLORS.error : COLORS.success}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Allocation bar — always visible (the key live feedback). Each slice is
+          this pool's portion of an ad's allocation; for split ads that's the
+          base/added portion only. The per-ad legend shows only when expanded. */}
+      {goal != null && goal > 0 && (
+        <>
+          <div className="flex justify-between mb-1">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              Allocation
+            </span>
+            <span className="text-[10px] font-bold" style={{ color: statusColor }}>
+              {allocPct != null ? `${allocPct.toFixed(1)}%` : ''}
+            </span>
+          </div>
+          <div className="h-2 rounded-full overflow-hidden bg-[var(--muted)] flex">
+            {poolEntries.map(({ ad, portion, colorIdx }) => {
+              const w = budgetCap > 0 ? Math.min((portion / budgetCap) * 100, 100) : 0;
+              const pct = budgetCap > 0 ? (portion / budgetCap) * 100 : 0;
+              const isSplit = ad.budgetSource === 'split';
+              return w > 0 ? (
+                <Tooltip
+                  key={ad.id}
+                  label={`${ad.name || 'Untitled Ad'}${isSplit ? ` (split — ${source} portion)` : ''}: ${fmt(portion)} (${pct.toFixed(1)}% of budget)`}
+                  className="h-full transition-[width] duration-500"
+                  style={{
+                    width: `${w}%`,
+                    background: AD_COLORS[colorIdx % AD_COLORS.length],
+                    borderRight: '1px solid var(--background)',
+                  }}
+                />
+              ) : null;
+            })}
+          </div>
+          {/* Per-ad legend (expanded) — height-animated open/close. */}
+          <div
+            className={`grid transition-[grid-template-rows] duration-300 ease-out ${
+              expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+            }`}
+          >
+            <div className="overflow-hidden">
+              <div className="flex flex-wrap gap-2 pt-2">
+                {poolEntries.map(({ ad, portion, colorIdx }) => {
+                  const pct = budgetCap > 0 ? (portion / budgetCap) * 100 : 0;
+                  const isSplit = ad.budgetSource === 'split';
+                  return (
+                    <Tooltip
+                      key={ad.id}
+                      label={`${pct.toFixed(1)}% of budget${isSplit ? ' (split portion)' : ''}`}
+                    >
                     <div
-                      className="w-1.5 h-1.5 rounded-sm flex-shrink-0"
-                      style={{ background: AD_COLORS[colorIdx % AD_COLORS.length] }}
-                    />
-                    <span className="max-w-[110px] overflow-hidden text-ellipsis whitespace-nowrap text-[var(--foreground)]">
-                      {ad.name || 'Untitled Ad'}
-                      {isSplit && (
-                        <span className="text-[var(--muted-foreground)] ml-0.5">·split</span>
-                      )}
-                    </span>
-                    <span>{fmt(portion)}</span>
-                    <span className="text-[var(--muted-foreground)]">
-                      ({pct.toFixed(1)}%)
-                    </span>
-                  </div>
-                );
-              })}
+                      className="flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]"
+                    >
+                      <div
+                        className="w-1.5 h-1.5 rounded-sm flex-shrink-0"
+                        style={{ background: AD_COLORS[colorIdx % AD_COLORS.length] }}
+                      />
+                      <span className="max-w-[110px] overflow-hidden text-ellipsis whitespace-nowrap text-[var(--foreground)]">
+                        {ad.name || 'Untitled Ad'}
+                        {isSplit && (
+                          <span className="text-[var(--muted-foreground)] ml-0.5">·split</span>
+                        )}
+                      </span>
+                      <span>{fmt(portion)}</span>
+                      <span className="text-[var(--muted-foreground)]">
+                        ({pct.toFixed(1)}%)
+                      </span>
+                    </div>
+                    </Tooltip>
+                  );
+                })}
+              </div>
             </div>
-          </>
-        );
-      })()}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -3686,10 +3917,7 @@ function TotalAllocationHeader({ plan }: { plan: PacerPlan }) {
   // target (target = goal × markup + carryover). The total budget is the SUM of
   // the two cards' targets — applying an over/under carryover therefore grows
   // the total allocation cap the same way it grows the source card it lands in.
-  const effMarkup =
-    plan.markup != null && Number.isFinite(plan.markup) && plan.markup > 0
-      ? plan.markup
-      : MARKUP;
+  const effMarkup = effMarkupOf(plan.markup);
   const totalGross = Math.round((totalActual / effMarkup) * 100) / 100;
   const baseGoal = num(plan.baseBudgetGoal);
   const addedGoal = num(plan.addedBudgetGoal);
@@ -3736,7 +3964,7 @@ function TotalAllocationHeader({ plan }: { plan: PacerPlan }) {
     : 0;
 
   return (
-    <div className="glass-section-card rounded-xl px-5 py-4 mb-4">
+    <div className="px-5 py-4 mb-4">
       <div className="flex items-center justify-between mb-3 flex-wrap gap-2.5">
         <span className="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">
           Total Account Allocation
@@ -3772,23 +4000,23 @@ function TotalAllocationHeader({ plan }: { plan: PacerPlan }) {
       </div>
       <div className="h-2.5 rounded-full overflow-hidden bg-[var(--muted)] flex mb-2">
         {baseW > 0 && (
-          <div
+          <Tooltip
             className="h-full transition-[width] duration-500"
-            title={`Base: ${fmt(totalBase)} (${basePctOfBudget.toFixed(1)}% of budget)`}
+            label={`Base: ${fmt(totalBase)} (${basePctOfBudget.toFixed(1)}% of budget)`}
             style={{
               width: `${baseW}%`,
-              background: `linear-gradient(90deg, rgba(56,189,248,0.4), ${COLORS.base})`,
+              background: COLORS.base,
               borderRight: addedW > 0 ? '1px solid var(--background)' : 'none',
             }}
           />
         )}
         {addedW > 0 && (
-          <div
+          <Tooltip
             className="h-full transition-[width] duration-500"
-            title={`Added: ${fmt(totalAdded)} (${addedPctOfBudget.toFixed(1)}% of budget)`}
+            label={`Added: ${fmt(totalAdded)} (${addedPctOfBudget.toFixed(1)}% of budget)`}
             style={{
               width: `${addedW}%`,
-              background: `linear-gradient(90deg, rgba(52,211,153,0.4), ${COLORS.added})`,
+              background: COLORS.added,
             }}
           />
         )}
@@ -3887,10 +4115,12 @@ function EmptyPeriodState({
 function AddPlanButton({
   onCreateNew,
   onOpenCopy,
+  onImport,
   hasOtherPeriods,
 }: {
   onCreateNew: () => void;
   onOpenCopy: () => void;
+  onImport?: () => void;
   hasOtherPeriods: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -3971,6 +4201,27 @@ function AddPlanButton({
               </div>
             </div>
           </button>
+          {onImport && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setOpen(false);
+                onImport();
+              }}
+              className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-[var(--muted)] transition-colors"
+            >
+              <MetaBrandIcon className="w-4 h-4 flex-shrink-0 mt-0.5" />
+              <div>
+                <div className="text-xs font-semibold text-[var(--foreground)]">
+                  Import from Meta
+                </div>
+                <div className="text-[10px] text-[var(--muted-foreground)]">
+                  Bring existing ad sets in as rows
+                </div>
+              </div>
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -4434,10 +4685,7 @@ function BudgetCalculatorModal({
   // Effective markup — per-account override (Account.markup) when set,
   // otherwise the global default. Used here to convert the gross client
   // goal into the actual-spend default, and below for Client Budget mode.
-  const effectiveMarkup =
-    plan.markup != null && Number.isFinite(plan.markup) && plan.markup > 0
-      ? plan.markup
-      : MARKUP;
+  const effectiveMarkup = effMarkupOf(plan.markup);
   const goal =
     source === 'base' ? num(plan.baseBudgetGoal) : num(plan.addedBudgetGoal);
   const defaultBudget =
@@ -4782,10 +5030,11 @@ function BudgetCalculatorModal({
 
         {/* Total budget — fixed to the source's goal (client × markup), shown
             read-only on the right of the tabs. */}
-        <div
-          className="ml-auto self-center text-right"
-          title="Client budget goal × margin for this source"
+        <Tooltip
+          label="Client budget goal × margin for this source"
+          className="ml-auto self-center"
         >
+        <div className="text-right">
           <span className="block text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] leading-none">
             Total Budget
           </span>
@@ -4793,12 +5042,13 @@ function BudgetCalculatorModal({
             {fmt(totalBudget)}
           </span>
         </div>
+        </Tooltip>
         </div>
 
         {/* Compact stat strip — Mid-flight: 5 cells (Initial, Locked Spend,
             Remaining, Entered, Still). Setup: 2 cells (Entered, Still). */}
         <div
-          className={`grid shrink-0 gap-px mb-3 rounded-lg bg-[var(--border)] overflow-hidden ${
+          className={`grid shrink-0 gap-px mb-3 rounded-lg bg-[var(--border)] ${
             calcMode === 'midflight'
               ? 'grid-cols-2 md:grid-cols-5'
               : 'grid-cols-2'
@@ -4936,13 +5186,15 @@ function BudgetCalculatorModal({
                         : 'border-[var(--border)] opacity-60'
                     }`}
                   >
-                    <label
-                      className="flex items-center justify-center cursor-pointer"
-                      title={
+                    <Tooltip
+                      label={
                         spec.included
                           ? 'Uncheck to leave this ad untouched on Apply'
                           : 'This ad keeps its current allocation on Apply'
                       }
+                    >
+                    <label
+                      className="flex items-center justify-center cursor-pointer"
                     >
                       <input
                         type="checkbox"
@@ -4953,6 +5205,7 @@ function BudgetCalculatorModal({
                         className="w-4 h-4 accent-[var(--primary)]"
                       />
                     </label>
+                    </Tooltip>
                     <div className="min-w-0">
                       <div className="text-xs font-semibold text-[var(--foreground)] truncate">
                         {ad.name || 'Untitled Ad'}
@@ -4990,13 +5243,16 @@ function BudgetCalculatorModal({
                       )}
                     </div>
                     {adIsDonor ? (
+                      <Tooltip
+                        label={`Locked — status is ${ad.adStatus}. Allocation locks at Pacer spend on Apply.`}
+                      >
                       <div
                         className="flex items-center gap-1 px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--muted)]/60 text-[11px] text-[var(--muted-foreground)]"
-                        title={`Locked — status is ${ad.adStatus}. Allocation locks at Pacer spend on Apply.`}
                       >
                         <LockClosedIcon className="w-3 h-3 flex-shrink-0" />
                         <span>Locked</span>
                       </div>
+                      </Tooltip>
                     ) : (
                       <select
                         value={spec.mode}
@@ -5157,21 +5413,33 @@ function BudgetCalculatorModal({
           >
             Cancel
           </button>
-          <button
-            type="button"
-            onClick={handleApply}
-            disabled={includedCount === 0 || overBudget || hasUnderSpent}
-            title={
-              hasUnderSpent
-                ? 'One or more amounts are below the already-spent value'
-                : overBudget
-                  ? 'Allocations exceed the total budget'
-                  : undefined
-            }
-            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
-          >
-            Apply to {includedCount} ad{includedCount === 1 ? '' : 's'}
-          </button>
+          {hasUnderSpent || overBudget ? (
+            <Tooltip
+              label={
+                hasUnderSpent
+                  ? 'One or more amounts are below the already-spent value'
+                  : 'Allocations exceed the total budget'
+              }
+            >
+              <button
+                type="button"
+                onClick={handleApply}
+                disabled={includedCount === 0 || overBudget || hasUnderSpent}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
+              >
+                Apply to {includedCount} ad{includedCount === 1 ? '' : 's'}
+              </button>
+            </Tooltip>
+          ) : (
+            <button
+              type="button"
+              onClick={handleApply}
+              disabled={includedCount === 0 || overBudget || hasUnderSpent}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
+            >
+              Apply to {includedCount} ad{includedCount === 1 ? '' : 's'}
+            </button>
+          )}
         </div>
       </div>
     </div>,
@@ -5194,6 +5462,7 @@ function AdPlannerPanel({
   periodSummaries,
   onChange,
   onCopyFrom,
+  onImport,
   onModalOpenChange,
   onAddActivity,
   onEditActivity,
@@ -5207,6 +5476,7 @@ function AdPlannerPanel({
   currentUserId: string | null;
   periodSummaries: PeriodSummary[];
   onChange: (p: PacerPlan) => void;
+  onImport?: () => void;
   onCopyFrom: (
     from: string,
     adIds: string[] | undefined,
@@ -5505,24 +5775,28 @@ function AdPlannerPanel({
               </button>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => setShowCalcModal(true)}
-            disabled={plan.ads.length === 0 || readOnly}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            title={
+          <Tooltip
+            label={
               readOnly
                 ? 'This month is frozen'
                 : 'Spread a budget evenly or with locked amounts/percentages'
             }
           >
+          <button
+            type="button"
+            onClick={() => setShowCalcModal(true)}
+            disabled={plan.ads.length === 0 || readOnly}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
             <CalculatorIcon className="w-3.5 h-3.5" />
             Calculator
           </button>
+          </Tooltip>
           {!readOnly && (
             <AddPlanButton
               onCreateNew={openCreate}
               onOpenCopy={() => setShowCopyModal(true)}
+              onImport={onImport}
               hasOtherPeriods={otherPeriodsWithAds}
             />
           )}
@@ -5578,16 +5852,13 @@ function AdPlannerPanel({
                     Status
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Due
-                  </th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Budget
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Allocation
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Flight
+                    Flight Dates
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Design
@@ -5628,6 +5899,7 @@ function AdPlannerPanel({
       {editor && editorInitialAd && (
         <AdEditorModal
           initialAd={editorInitialAd}
+          markup={plan.markup}
           liveActivityLog={editorLiveActivityLog}
           mode={editor.mode}
           users={users}
@@ -6036,25 +6308,27 @@ function AccountNotesDrawer({
                       {!isEditing && (
                         <div className="flex items-center gap-1 flex-shrink-0">
                           {isMine && (
+                            <Tooltip label="Edit">
                             <button
                               type="button"
                               onClick={() => startEdit(note.id, note.text)}
                               className="text-[var(--muted-foreground)] hover:text-[var(--primary)] transition-colors"
                               aria-label="Edit note"
-                              title="Edit"
                             >
                               <PencilSquareIcon className="w-3.5 h-3.5" />
                             </button>
+                            </Tooltip>
                           )}
+                          <Tooltip label="Delete">
                           <button
                             type="button"
                             onClick={() => handleDelete(note.id)}
                             className="text-[var(--muted-foreground)] hover:text-red-400 transition-colors"
                             aria-label="Delete note"
-                            title="Delete"
                           >
                             <TrashIcon className="w-3 h-3" />
                           </button>
+                          </Tooltip>
                         </div>
                       )}
                     </div>
@@ -6213,10 +6487,8 @@ function BudgetLogMiniTable({ rows }: { rows: AdSnapshot[] }) {
                   <span
                     className="text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 rounded"
                     style={{
-                      background: isLifetime
-                        ? 'rgba(167,139,250,0.18)'
-                        : 'rgba(56,189,248,0.18)',
-                      color: isLifetime ? COLORS.lifetime : COLORS.daily,
+                      background: budgetTypeTint(r.budgetType),
+                      color: budgetTypeColor(r.budgetType),
                     }}
                   >
                     {r.budgetType}
@@ -6224,7 +6496,7 @@ function BudgetLogMiniTable({ rows }: { rows: AdSnapshot[] }) {
                 </td>
                 <td
                   className="px-1.5 py-1.5 tabular-nums whitespace-nowrap"
-                  style={{ color: isLifetime ? COLORS.lifetime : COLORS.daily }}
+                  style={{ color: budgetTypeColor(r.budgetType) }}
                 >
                   {fmt(r.budget)}
                   <span className="ml-0.5 text-[8px] text-[var(--muted-foreground)]">
@@ -6402,7 +6674,8 @@ function BudgetLogDrawer({
 
   if (typeof document === 'undefined') return null;
   return createPortal(
-    <div className="fixed inset-0 z-50" onClick={onClose}>
+    <div className="fixed inset-0 z-[120]">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
       <div
         onClick={(e) => e.stopPropagation()}
         className="frost-heavy fixed right-3 top-3 bottom-3 w-[640px] max-w-[calc(100vw-1.5rem)] rounded-2xl flex flex-col animate-slide-in-right overflow-hidden"
@@ -6546,15 +6819,16 @@ function BudgetLogDrawer({
                           </span>
                         </div>
                       </button>
+                      <Tooltip label="Delete" className="flex-shrink-0">
                       <button
                         type="button"
                         onClick={() => handleDelete(entry.id)}
-                        className="text-[var(--muted-foreground)] hover:text-red-400 transition-colors flex-shrink-0 p-1 rounded"
+                        className="text-[var(--muted-foreground)] hover:text-red-400 transition-colors p-1 rounded"
                         aria-label="Delete entry"
-                        title="Delete"
                       >
                         <TrashIcon className="w-3 h-3" />
                       </button>
+                      </Tooltip>
                     </div>
 
                     {/* Body — collapsed by default */}
@@ -6592,17 +6866,32 @@ interface AuditEntryView {
   summary: string;
   groupId: string | null;
   authorName: string;
+  authorEmail: string | null;
+  authorAvatarUrl: string | null;
   createdAt: string;
 }
 
+// Distinct hue per action so the log reads at a glance.
 const AUDIT_ACTION_COLORS: Record<string, string> = {
-  edit: 'var(--muted-foreground)',
+  budget_push: COLORS.added,
+  edit: COLORS.daily,
   created: COLORS.success,
   deleted: COLORS.error,
   carryover: COLORS.lifetime,
   freeze: COLORS.warn,
-  reopen: COLORS.warn,
-  sync: COLORS.daily,
+  reopen: COLORS.split,
+  sync: COLORS.lifetime,
+};
+
+const AUDIT_ACTION_ICONS: Record<string, typeof ClockIcon> = {
+  budget_push: BanknotesIcon,
+  edit: PencilSquareIcon,
+  created: PlusCircleIcon,
+  deleted: TrashIcon,
+  carryover: ArrowRightCircleIcon,
+  freeze: LockClosedIcon,
+  reopen: LockOpenIcon,
+  sync: ArrowPathIcon,
 };
 
 function ChangeLogDrawer({
@@ -6645,12 +6934,21 @@ function ChangeLogDrawer({
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  // Group ids that contain a `sync` entry. Imports/syncs write a sync line
+  // (plus, for imports, per-ad `created` lines under the same group), so any
+  // entry in one of these groups originated from Meta and gets a Meta badge.
+  const metaGroupIds = new Set(
+    (entries ?? [])
+      .filter((e) => e.action === 'sync' && e.groupId)
+      .map((e) => e.groupId),
+  );
+
   if (typeof document === 'undefined') return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[120] flex justify-end">
+    <div className="fixed inset-0 z-[120]">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="glass-modal relative h-full w-full max-w-md flex flex-col overflow-hidden">
+      <div className="frost-heavy fixed right-3 top-3 bottom-3 w-[420px] max-w-[calc(100vw-1.5rem)] rounded-2xl flex flex-col overflow-hidden animate-slide-in-right">
         <div className="px-5 py-4 border-b border-[var(--border)] flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="text-sm font-bold text-[var(--foreground)] flex items-center gap-2">
@@ -6683,33 +6981,61 @@ function ChangeLogDrawer({
             </div>
           ) : (
             <div className="space-y-1.5">
-              {entries.map((e) => (
-                <div
-                  key={e.id}
-                  className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2"
-                >
-                  <div className="flex items-center justify-between gap-2 mb-0.5">
-                    <span
-                      className="text-[8px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
-                      style={{
-                        background: `${AUDIT_ACTION_COLORS[e.action] ?? 'var(--muted-foreground)'}22`,
-                        color: AUDIT_ACTION_COLORS[e.action] ?? 'var(--muted-foreground)',
-                      }}
-                    >
-                      {e.action}
-                    </span>
-                    <span className="text-[10px] text-[var(--muted-foreground)] whitespace-nowrap">
-                      {fmtSyncedAgo(e.createdAt)}
-                    </span>
+              {entries.map((e) => {
+                const color = AUDIT_ACTION_COLORS[e.action] ?? 'var(--muted-foreground)';
+                const ActionIcon = AUDIT_ACTION_ICONS[e.action] ?? ClockIcon;
+                const isSystem = e.authorName === 'System';
+                const isFromMeta =
+                  e.action === 'sync' || (!!e.groupId && metaGroupIds.has(e.groupId));
+                return (
+                  <div
+                    key={e.id}
+                    className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2"
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <div className="flex items-center gap-1 min-w-0">
+                        <span
+                          className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+                          style={{ background: `${color}22`, color }}
+                        >
+                          <ActionIcon className="w-3 h-3" />
+                          {e.action.replace(/_/g, ' ')}
+                        </span>
+                        {isFromMeta && (
+                          <Tooltip label="From Meta">
+                          <span
+                            className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-[#0866FF]/15 text-[#0866FF]"
+                          >
+                            <MetaBrandIcon className="w-3 h-3" />
+                            Meta
+                          </span>
+                          </Tooltip>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-[var(--muted-foreground)] whitespace-nowrap">
+                        {fmtSyncedAgo(e.createdAt)}
+                      </span>
+                    </div>
+                    <div className="text-xs text-[var(--foreground)] leading-snug">
+                      {e.summary}
+                    </div>
+                    <div className="flex items-center gap-1.5 mt-1.5">
+                      {!isSystem && (
+                        <UserAvatar
+                          name={e.authorName}
+                          email={e.authorEmail}
+                          avatarUrl={e.authorAvatarUrl}
+                          size={18}
+                          className="w-[18px] h-[18px] rounded-full object-cover border border-[var(--border)] flex-shrink-0"
+                        />
+                      )}
+                      <span className="text-[10px] text-[var(--muted-foreground)]">
+                        {e.authorName}
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-xs text-[var(--foreground)] leading-snug">
-                    {e.summary}
-                  </div>
-                  <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
-                    {e.authorName}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -6732,11 +7058,11 @@ function AccountNotesButton({
   ariaLabel: string;
 }) {
   return (
+    <Tooltip label={ariaLabel}>
     <button
       type="button"
       onClick={onClick}
       aria-label={ariaLabel}
-      title={ariaLabel}
       className="relative inline-flex items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
     >
       <ChatBubbleOvalLeftIcon className="w-6 h-6" />
@@ -6749,6 +7075,7 @@ function AccountNotesButton({
         </span>
       )}
     </button>
+    </Tooltip>
   );
 }
 
@@ -7095,12 +7422,6 @@ function AdSetLinkPicker({
   const label = (o: MetaAdSetOption) =>
     `${o.campaignName ? `${o.campaignName} › ` : ''}${o.name}`;
   const selected = (options ?? []).find((o) => o.id === value) ?? null;
-  const buttonLabel = selected
-    ? label(selected)
-    : value
-      ? `Linked ad set (${value})`
-      : 'Not linked — match by name';
-
   const q = query.trim().toLowerCase();
   const filtered = (options ?? []).filter((o) =>
     `${o.campaignName ?? ''} ${o.name} ${o.effectiveStatus ?? ''}`
@@ -7115,27 +7436,66 @@ function AdSetLinkPicker({
 
   return (
     <>
-      <button
-        ref={triggerRef}
-        type="button"
-        disabled={disabled}
-        onClick={() => {
-          if (disabled) return;
-          if (!open) {
-            onOpen();
-            setQuery('');
-          }
-          setOpen((v) => !v);
-        }}
-        className="flex w-full items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-left text-[11px] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)] disabled:opacity-60 disabled:cursor-not-allowed"
-      >
-        <span
-          className={`truncate ${selected || value ? '' : 'text-[var(--muted-foreground)]'}`}
+      {value ? (
+        // Linked: show the ad-set NAME (never the raw id) + a quick Unlink.
+        // Clicking the name reopens the list to change the link.
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Tooltip label="Linked to a Meta ad set — click to change" className="min-w-0">
+          <button
+            ref={triggerRef}
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              if (disabled) return;
+              if (!open) {
+                onOpen();
+                setQuery('');
+              }
+              setOpen((v) => !v);
+            }}
+            className="inline-flex min-w-0 items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] px-2.5 py-1 text-xs text-[var(--foreground)] hover:border-[var(--primary)] focus:outline-none focus:border-[var(--primary)] disabled:opacity-60"
+          >
+            <MetaBrandIcon className="w-3.5 h-3.5 flex-shrink-0" />
+            <span className="truncate font-medium">
+              {loading && !options ? 'Loading…' : selected ? label(selected) : 'Linked'}
+            </span>
+            <ChevronDownIcon className="w-3 h-3 flex-shrink-0 text-[var(--muted-foreground)]" />
+          </button>
+          </Tooltip>
+          <Tooltip label="Unlink ad set" className="flex-shrink-0">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(null)}
+            aria-label="Unlink ad set"
+            className="inline-flex items-center justify-center rounded-md p-2 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[#ef4444] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <LinkSlashIcon className="w-4 h-4" />
+          </button>
+          </Tooltip>
+        </div>
+      ) : (
+        <Tooltip label="Link this line to a Meta ad set to pull its spend on Sync">
+        <button
+          ref={triggerRef}
+          type="button"
+          disabled={disabled}
+          onClick={() => {
+            if (disabled) return;
+            if (!open) {
+              onOpen();
+              setQuery('');
+            }
+            setOpen((v) => !v);
+          }}
+          className="inline-flex items-center gap-1.5 rounded-md bg-[#1877F2] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#1877F2]/90 focus:outline-none focus:ring-2 focus:ring-[#1877F2]/40 disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          {loading && !options ? 'Loading ad sets…' : buttonLabel}
-        </span>
-        <ChevronDownIcon className="w-3.5 h-3.5 flex-shrink-0 text-[var(--muted-foreground)]" />
-      </button>
+          <MetaBrandIcon className="w-3 h-3 flex-shrink-0 brightness-0 invert" />
+          Link ad set
+          <ChevronDownIcon className="w-3 h-3 flex-shrink-0 text-white/80" />
+        </button>
+        </Tooltip>
+      )}
 
       {open && pos && typeof document !== 'undefined'
         ? createPortal(
@@ -7237,6 +7597,8 @@ function PacerRow({
   onMuteToggle,
   onMarkOff,
   onPushDailyBudget,
+  onResolveCrossMonth,
+  siblings,
 }: {
   ad: PacerAd;
   index: number;
@@ -7254,9 +7616,19 @@ function PacerRow({
   onMarkOff: () => void;
   /** Push the row's current daily budget to its linked Meta ad set. */
   onPushDailyBudget: (value: string) => Promise<{ ok: boolean; text: string }>;
+  /** §2: resolve a cross-month straddler — count its full run in its own month
+   *  (apply_full_run), set a lifetime planned split, or clear. Persists server-side. */
+  onResolveCrossMonth: (
+    action: 'apply_full_run' | 'split' | 'clear',
+    splitMap?: Record<string, number>,
+  ) => void;
+  /** #58: this ad's same-title sibling rows across months (period →
+   *  {allocation, actual}), so the split reference shows each month's real plan
+   *  + spend. null when the ad has no same-name rows in other periods. */
+  siblings: Record<string, { allocation: number; actual: number }> | null;
 }) {
   const isLifetime = ad.budgetType === 'Lifetime';
-  const typeColor = isLifetime ? COLORS.lifetime : COLORS.daily;
+  const typeColor = budgetTypeColor(ad.budgetType);
   // Once a row is linked to Meta and has synced, Meta owns its actual spend
   // (read-only here) and its daily budget is edited-then-pushed, not free-typed.
   const syncedFromMeta = !!ad.metaObjectId && !!ad.pacerSyncedAt;
@@ -7271,7 +7643,6 @@ function PacerRow({
   // Full-run spend is opt-in per ad: a multi-month lifetime ad often only
   // needs its current-month figure, so we hide the full run behind a toggle and
   // show it only when the user asks for that ad.
-  const [showRunSpend, setShowRunSpend] = useState(false);
   const dailyChanged =
     dailyEditing && (ad.pacerDailyBudget ?? '') !== (dailyStart ?? '');
   const beginDailyEdit = () => {
@@ -7314,6 +7685,10 @@ function PacerRow({
   // projection or daily-adjustment makes sense. Past-flight ads without an
   // explicit status fall through to the "Mark as completed" prompt.
   const showCompletedSummary = isMarkedCompleted || isMarkedOff;
+  // Live-pacing case = the projection grid + pacing insight + mute control show.
+  // When the run is completed/past, those are hidden, but the cross-month toggle
+  // stays available (the classification is still editable).
+  const showsProjection = !showCompletedSummary && !isPastRun;
 
   // Color the recommended-vs-current daily comparison
   const dailyDelta = calc.recDaily - calc.dailyBudget;
@@ -7327,6 +7702,94 @@ function PacerRow({
   // Health-based accent colors the left stripe AND the compact pacing
   // badge in the summary row, so both UI elements agree on the bucket.
   const health = useMemo(() => classifyPacerHealth(ad, calc), [ad, calc]);
+
+  // Resolved = the user billed the ad's full run in its own month
+  // (fullRunAppliedToMonth). Cross-month accounting is a MANUAL choice via the
+  // dropdown on the input row — nothing is auto-detected.
+  const resolvedFullRun = ad.fullRunAppliedToMonth != null;
+
+  // ── Cross-month accounting (derived once) — the selector lives on the input
+  //    row; its Bill/Split detail renders just below the row. ──
+  const cmMonths: string[] = (() => {
+    const out: string[] = [];
+    const rawStart = ad.flightStart ?? ad.metaStartDate ?? ad.liveDate;
+    const rawEnd = ad.flightEnd ?? ad.metaEndDate;
+    if (rawStart && rawEnd) {
+      let y = Number(rawStart.slice(0, 4));
+      let mo = Number(rawStart.slice(5, 7));
+      const ey = Number(rawEnd.slice(0, 4));
+      const em = Number(rawEnd.slice(5, 7));
+      while ((y < ey || (y === ey && mo <= em)) && out.length < 25) {
+        out.push(`${y}-${String(mo).padStart(2, '0')}`);
+        mo += 1;
+        if (mo > 12) {
+          mo = 1;
+          y += 1;
+        }
+      }
+    }
+    return out;
+  })();
+  let cmSplit: Record<string, number> | null = null;
+  try {
+    cmSplit = ad.lifetimeMonthSplit
+      ? (JSON.parse(ad.lifetimeMonthSplit) as Record<string, number>)
+      : null;
+  } catch {
+    cmSplit = null;
+  }
+  // Full run can't be below the in-month slice; fall back to the entered actual
+  // when Meta run-spend isn't synced so the verdict isn't $0.
+  const cmRun = Math.max(num(ad.pacerRunSpend) ?? 0, num(ad.pacerActual) ?? 0);
+  const cmTarget = num(ad.allocation) ?? 0;
+  const cmSiblingPeriods = siblings ? Object.keys(siblings).sort() : [];
+  // #58: same-title rows in 2+ months drive the real per-month split reference.
+  const cmHasSiblings = isLifetime && cmSiblingPeriods.length > 1;
+  // 3-state classifier: '' (no choice) · 'split' · 'bill'. Selecting a value
+  // persists it; the detail surfaces only once a real option is chosen.
+  const cmSelValue: '' | 'split' | 'bill' = resolvedFullRun
+    ? 'bill'
+    : ad.lifetimeMonthSplit != null
+      ? 'split'
+      : '';
+  // Cross-month accounting is opt-in per ad via a footer toggle — the dropdown
+  // (and its detail) only appear when on. Defaults on for ads already
+  // classified so an existing Bill/Split stays visible.
+  const [showCrossMonth, setShowCrossMonth] = useState(cmSelValue !== '');
+
+  // Meta connection controls, extracted so the synced card's connection header
+  // and the unsynced field row can each place them without duplicating markup.
+  const linkPicker = (
+    <AdSetLinkPicker
+      value={ad.metaObjectId}
+      options={adSets}
+      loading={adSetsLoading}
+      error={adSetsError}
+      onOpen={onLoadAdSets}
+      onChange={onLinkChange}
+      disabled={readOnly}
+    />
+  );
+  // Tooltip shows just the Meta run window for now (the sync recency is shown
+  // inline next to it). No run dates → no info icon.
+  const metaSyncInfo =
+    ad.metaObjectId && (ad.metaStartDate || ad.metaEndDate)
+      ? (() => {
+          const parts: string[] = [
+            `Meta run: ${ad.metaStartDate ? fmtDate(ad.metaStartDate) : '—'} → ${ad.metaEndDate ? fmtDate(ad.metaEndDate) : 'ongoing'}`,
+          ];
+          if (effectiveEnd && (!ad.metaEndDate || ad.metaEndDate > effectiveEnd)) {
+            parts.push(`Paced to ${fmtDate(effectiveEnd)} (month end)`);
+          }
+          return (
+            <Tooltip label={parts.join(' · ')} placement="top">
+              <span className="inline-flex flex-shrink-0 items-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+                <InformationCircleIcon className="w-4 h-4" />
+              </span>
+            </Tooltip>
+          );
+        })()
+      : null;
 
   // Status indicator color — pulled from the same map AdStatusPill uses
   // so the dot matches the status the user sees on the planner page.
@@ -7388,6 +7851,9 @@ function PacerRow({
           />
           {ad.adStatus || 'No status'}
         </span>
+        {/* Cross-month treatment is indicated by a single pill inside the
+            expanded card's pill row (next to Daily/Lifetime + Base/Added),
+            not here in the collapsed header — keeps the row clean. */}
       </div>
       {/* Actual spend — labelled so the bare number isn't ambiguous. Fixed
           width + right-aligned so it forms a consistent column down the list. */}
@@ -7443,7 +7909,7 @@ function PacerRow({
   );
 
   return (
-    <div className="glass-section-card relative rounded-xl mb-2.5 overflow-hidden">
+    <div className="glass-section-card pacer-ad-card relative rounded-xl mb-2.5 overflow-hidden">
       {/* Left-edge accent stripe colored by pacing health — visible on
           both summary and expanded states. */}
       <div
@@ -7488,9 +7954,7 @@ function PacerRow({
               <span
                 className="font-bold uppercase tracking-wider px-2 py-0.5 rounded"
                 style={{
-                  background: isLifetime
-                    ? 'rgba(167,139,250,0.18)'
-                    : 'rgba(56,189,248,0.18)',
+                  background: budgetTypeTint(ad.budgetType),
                   color: typeColor,
                 }}
               >
@@ -7505,6 +7969,22 @@ function PacerRow({
               >
                 {sourceLabel(ad.budgetSource)}
               </span>
+              {(resolvedFullRun || ad.lifetimeMonthSplit != null) && (
+                <Tooltip
+                  label={
+                    resolvedFullRun
+                      ? "Cross-month: the full run is billed in this ad's month — the over/under compares the full run to the full target."
+                      : 'Cross-month: lifetime ad with a planned per-month split (reference only — the variance books once on completion).'
+                  }
+                >
+                <span
+                  className="font-bold uppercase tracking-wider px-2 py-0.5 rounded"
+                  style={{ background: 'rgba(249,115,22,0.18)', color: '#f97316' }}
+                >
+                  Cross-month
+                </span>
+                </Tooltip>
+              )}
               {ad.budgetSource === 'split' && (() => {
                 const baseAmt = num(ad.splitBaseAmount) ?? 0;
                 const addedAmt = Math.max(0, calc.budget - baseAmt);
@@ -7537,21 +8017,31 @@ function PacerRow({
       {/* Editable inputs row — just the two values reps actually edit.
           Today's date always uses the current date and end date uses
           the immutable flight end, so neither needs an input. */}
-      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,340px)_minmax(0,180px)] gap-4 mb-3.5">
+      <div className="mb-3.5 flex items-start justify-between gap-4 flex-wrap">
+        {/* Actual + Daily + Link. When the ad is connected to a Meta ad set,
+            these are contained in a card with a "from Meta" badge (Meta owns the
+            spend); otherwise they sit plainly. */}
+        <div
+          className={`${
+            syncedFromMeta
+              ? 'w-full md:w-[calc(50%_-_4px)] rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 py-3'
+              : 'w-fit'
+          }`}
+        >
+          <div
+            className={
+              syncedFromMeta
+                ? 'grid grid-cols-2 gap-2 [&>*]:px-3 [&_label]:mb-1'
+                : 'grid grid-cols-1 md:grid-cols-[minmax(0,150px)_minmax(0,150px)_minmax(0,max-content)] gap-4'
+            }
+          >
         <Field label="Actual Spend">
           {syncedFromMeta ? (
-            // Meta owns the spend once synced — plain read-only value, not a
-            // box that looks editable.
-            <div
-              className="flex items-center gap-2 py-2 cursor-default"
-              title="Actual spend is pulled from Meta and isn't editable here. Re-run Sync from Meta to refresh."
-            >
-              <span className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
+            // Meta owns the spend once synced — plain read-only value. The card's
+            // "from Meta" badge labels the source, so no per-field tag here.
+            <div className="flex items-center">
+              <span className="text-xl font-bold tabular-nums text-[var(--foreground)]">
                 {fmt(num(ad.pacerActual) ?? 0)}
-              </span>
-              <span className="flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]">
-                <MetaLogoIcon className="w-3 h-3" />
-                from Meta
               </span>
             </div>
           ) : (
@@ -7561,141 +8051,19 @@ function PacerRow({
               placeholder="0.00"
             />
           )}
-          {/* Meta ad-set link. Picking an ad set overrides the name-match;
-              spend (and ABO budget) then come from "Sync from Meta". */}
-          <div className="mt-1.5">
-            <AdSetLinkPicker
-              value={ad.metaObjectId}
-              options={adSets}
-              loading={adSetsLoading}
-              error={adSetsError}
-              onOpen={onLoadAdSets}
-              onChange={onLinkChange}
-              disabled={readOnly}
-            />
-            {adSetsError && (
-              <div className="mt-1 text-[10px] text-[#ef4444]">
-                {adSetsError}
-              </div>
-            )}
-            {ad.metaObjectId && ad.pacerSyncedAt ? (
-              <div
-                className="mt-1 flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]"
-                title="Spend pulled from the linked Meta ad set. Re-run Sync from Meta to refresh."
-              >
-                <MetaLogoIcon className="w-3 h-3 flex-shrink-0" />
-                <span>Synced from Meta · {fmtSyncedAgo(ad.pacerSyncedAt)}</span>
-              </div>
-            ) : ad.metaObjectId ? (
-              <div className="mt-1 flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]">
-                <MetaLogoIcon className="w-3 h-3 flex-shrink-0" />
-                <span>Linked — click &ldquo;Sync from Meta&rdquo; to pull spend</span>
-              </div>
-            ) : null}
-            {/* Meta's actual run schedule (from the sync), shown alongside the
-                planner's flight dates. When the run extends past the pacing
-                month, surface that the pacer is scoped to month-end so the
-                shorter "Days Remaining" reads as intended, not as a bug. */}
-            {(ad.metaStartDate || ad.metaEndDate) && (
-              <div className="mt-1 flex items-start gap-1 text-[10px] text-[var(--muted-foreground)]">
-                <CalendarIcon className="w-3 h-3 flex-shrink-0 mt-px" />
-                <span>
-                  Meta run: {ad.metaStartDate ? fmtDate(ad.metaStartDate) : '—'}{' '}
-                  → {ad.metaEndDate ? fmtDate(ad.metaEndDate) : 'ongoing'}
-                  {effectiveEnd &&
-                    (!ad.metaEndDate || ad.metaEndDate > effectiveEnd) && (
-                      <span className="text-[var(--foreground)]/70">
-                        {' '}· paced to {fmtDate(effectiveEnd)} (month end)
-                      </span>
-                    )}
-                </span>
-              </div>
-            )}
-            {/* Full-run (all-month) spend — opt-in per ad. Only offered when the
-                ad's total run exceeds this month's spend (a genuine multi-month
-                ad). Hidden behind a toggle so a lifetime ad you only care about
-                this month for stays uncluttered; click to see the full date
-                range. The monthly Actual above always drives this month's pacing. */}
-            {(() => {
-              const run = num(ad.pacerRunSpend);
-              const month = num(ad.pacerActual) ?? 0;
-              if (run == null || run <= month + 0.005) return null;
-              return (
-                <div className="mt-1">
-                  <button
-                    type="button"
-                    onClick={() => setShowRunSpend((v) => !v)}
-                    className="inline-flex items-center gap-1 text-[10px] text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
-                  >
-                    <MetaLogoIcon className="w-3 h-3 flex-shrink-0" />
-                    {showRunSpend ? 'Hide full-run spend' : 'View full-run spend'}
-                  </button>
-                  {showRunSpend && (
-                    <div
-                      className="mt-1 flex items-start gap-1 text-[10px] text-[var(--muted-foreground)]"
-                      title="Total spend across the ad's entire flight (all months), pulled from Meta. The monthly Actual above is what drives this month's pacing."
-                    >
-                      <span>
-                        Full run:{' '}
-                        <span className="font-semibold tabular-nums text-[var(--foreground)]">
-                          {fmt(run)}
-                        </span>
-                        {(ad.metaStartDate || ad.metaEndDate) && (
-                          <>
-                            {' '}·{' '}
-                            {ad.metaStartDate ? fmtDate(ad.metaStartDate) : '—'} →{' '}
-                            {ad.metaEndDate ? fmtDate(ad.metaEndDate) : 'ongoing'}
-                          </>
-                        )}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-            {/* Meta status mismatch (Change 11): Meta reports the ad not
-                delivering while the planner still says Live and it's mid-flight.
-                Don't auto-flip (Meta "paused" can be a daily cap / billing hold)
-                — surface a one-click confirm. Past-end ads auto-complete server
-                side, so they won't reach here. */}
-            {(() => {
-              const meta = ad.metaEffectiveStatus;
-              const plannerLive =
-                ad.adStatus === 'Live' || ad.adStatus === 'Live - Changes Required';
-              if (!meta || !plannerLive || meta.toUpperCase() === 'ACTIVE') {
-                return null;
-              }
-              const through = ad.metaEndDate ?? ad.flightEnd;
-              return (
-                <div
-                  className="mt-1.5 rounded-md border px-2 py-1.5 text-[10px]"
-                  style={{ borderColor: `${COLORS.warn}66`, background: 'rgba(245,158,11,0.08)' }}
-                >
-                  <div className="text-[var(--foreground)] leading-snug">
-                    Meta shows <span className="font-semibold">{meta}</span>
-                    {through ? <> — but scheduled through {fmtDate(through)}</> : null}.
-                  </div>
-                  <button
-                    type="button"
-                    onClick={onMarkOff}
-                    disabled={readOnly}
-                    className="mt-1 inline-flex items-center gap-1 rounded border border-[var(--border)] bg-[var(--card)] px-2 py-0.5 font-medium text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Mark Off in planner
-                  </button>
-                </div>
-              );
-            })()}
-          </div>
         </Field>
         <Field label="Daily Budget">
           {isLifetime ? (
+            <Tooltip
+              label="Lifetime ads use a fixed total budget, not a daily rate"
+              className="w-full"
+            >
             <div
               className={`${readonlyClass} italic`}
-              title="Lifetime ads use a fixed total budget, not a daily rate"
             >
               N/A — lifetime
             </div>
+            </Tooltip>
           ) : !syncedFromMeta ? (
             // Manual / unlinked — free-typed as before.
             <DollarInput
@@ -7706,22 +8074,23 @@ function PacerRow({
           ) : !dailyEditing ? (
             // Synced — plain read-only value with a pencil to reveal the input.
             // Not a box that looks editable until you click the pencil.
-            <div className="flex items-center gap-2 py-2">
-              <span className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
+            <div className="flex items-center gap-2">
+              <span className="text-xl font-bold tabular-nums text-[var(--foreground)]">
                 {ad.pacerDailyBudget != null && ad.pacerDailyBudget !== ''
                   ? fmt(num(ad.pacerDailyBudget) ?? 0)
                   : '—'}
               </span>
+              <Tooltip label="Edit daily budget">
               <button
                 type="button"
                 onClick={beginDailyEdit}
                 disabled={readOnly}
-                title="Edit daily budget"
                 aria-label="Edit daily budget"
                 className="inline-flex items-center justify-center rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <PencilSquareIcon className="w-3.5 h-3.5" />
               </button>
+              </Tooltip>
             </div>
           ) : (
             // Editing — the input, a full-width Push action shown only once the
@@ -7739,7 +8108,7 @@ function PacerRow({
                   disabled={pushing || readOnly}
                   className="flex w-full items-center justify-center gap-1.5 rounded-md bg-[var(--primary)] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <MetaLogoIcon className="w-3.5 h-3.5" />
+                  <MetaBrandIcon className="w-3.5 h-3.5" />
                   {pushing ? 'Pushing…' : 'Push to Meta'}
                 </button>
               )}
@@ -7775,7 +8144,201 @@ function PacerRow({
             </div>
           )}
         </Field>
+        {!syncedFromMeta && (
+          // Unsynced/manual: the link control is the third field. Once linked +
+          // synced, the connection header above replaces this.
+          <div>
+            <span className={labelClass} aria-hidden="true">&nbsp;</span>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {linkPicker}
+              {metaSyncInfo}
+            </div>
+          </div>
+        )}
+          </div>
+          {syncedFromMeta && (
+            // Connection footer — ad-set link + sync status below the spend
+            // metrics, instead of crammed in as a third field.
+            <div className="mt-3 flex items-center justify-between gap-4 border-t border-[var(--border)] px-3 pt-2.5">
+              {linkPicker}
+              <div className="flex flex-shrink-0 items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
+                {ad.pacerSyncedAt && (
+                  <span className="whitespace-nowrap">
+                    Synced {fmtSyncedAgo(ad.pacerSyncedAt)}
+                  </span>
+                )}
+                {metaSyncInfo}
+              </div>
+            </div>
+          )}
+          {adSetsError && (
+            <div className="mt-2 text-[10px] text-[#ef4444]">{adSetsError}</div>
+          )}
+        </div>
+        {/* Cross-month accounting — dropdown + its detail banner stacked into one
+            tidy column to the right of the spend fields, so the banner reads as
+            part of the chosen option. Shown only when the footer toggle is on. */}
+        {showCrossMonth && (
+          <div className="flex w-full flex-col gap-2 sm:w-[260px] flex-shrink-0">
+            <select
+              id={`cm-${ad.id}`}
+              value={cmSelValue}
+              disabled={readOnly}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === 'bill') {
+                  onResolveCrossMonth('apply_full_run');
+                } else if (v === 'split') {
+                  // Seed an even-split map so the single-row reference has values;
+                  // sibling rows override it when the ad spans months (#58).
+                  const per =
+                    cmMonths.length > 0
+                      ? Math.round((cmTarget / cmMonths.length) * 100) / 100
+                      : 0;
+                  const map: Record<string, number> = {};
+                  cmMonths.forEach((mm) => {
+                    map[mm] = per;
+                  });
+                  onResolveCrossMonth('split', map);
+                }
+              }}
+              className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] bg-[var(--input)] focus:outline-none focus:border-[var(--primary)] text-[var(--foreground)] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <option value="" disabled>
+                Cross-Month Accounting
+              </option>
+              <option value="split">Split across months</option>
+              <option value="bill">Bill in one month</option>
+            </select>
+            {cmSelValue === 'bill' && (
+              <div
+                className="rounded-md border px-2.5 py-2 text-[11px] leading-relaxed text-[var(--foreground)]"
+                style={{ borderColor: 'rgba(249,115,22,0.3)', background: 'rgba(249,115,22,0.08)' }}
+              >
+                Full run <span className="font-semibold">{fmt(cmRun)}</span> vs target{' '}
+                <span className="font-semibold">{fmt(cmTarget)}</span>
+                {cmTarget > 0 &&
+                  (() => {
+                    // The full-run pacing verdict — the whole run can pace
+                    // correctly even though the month's actual is just the slice.
+                    const d = cmRun / cmTarget - 1;
+                    const verdict =
+                      Math.abs(d) <= 0.1
+                        ? { t: '✓ on target', c: COLORS.success }
+                        : d > 0
+                          ? { t: `+${(d * 100).toFixed(0)}% over`, c: COLORS.error }
+                          : { t: `${(d * 100).toFixed(0)}% under`, c: COLORS.warn };
+                    return (
+                      <>
+                        {' — '}
+                        <span className="font-semibold" style={{ color: verdict.c }}>
+                          {verdict.t}
+                        </span>
+                      </>
+                    );
+                  })()}
+                {' · counts in '}
+                <span className="font-semibold" style={{ color: '#f97316' }}>
+                  {fmtPeriodLong(ad.fullRunAppliedToMonth ?? ad.period)}
+                </span>
+                .
+              </div>
+            )}
+            {cmSelValue === 'split' && (
+              <div className="rounded-md border border-[var(--border)] bg-[var(--muted)]/30 px-2.5 py-2 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                {isLifetime
+                  ? 'Each month keeps its own spend; the full variance settles when the run completes.'
+                  : "Each month keeps its own spend (the over/under uses this month's slice)."}
+                {cmHasSiblings && (
+                  <div className="mt-2 space-y-1.5 border-t border-[var(--border)] pt-2">
+                    <div className="font-semibold" style={{ color: COLORS.lifetime }}>
+                      Planned split (per month)
+                    </div>
+                    {cmSiblingPeriods.map((mm) => {
+                      const s = siblings![mm];
+                      const here = mm === ad.period;
+                      // The current month's line reads the live (possibly unsaved)
+                      // row values; other months come from the sibling rows.
+                      const planned = here ? (num(ad.allocation) ?? 0) : s.allocation;
+                      const actual = here ? (num(ad.pacerActual) ?? 0) : s.actual;
+                      return (
+                        <div key={mm} className="flex flex-col leading-tight">
+                          <span className="text-[var(--foreground)]">
+                            {fmtPeriodLong(mm)}
+                            {here && (
+                              <span className="text-[var(--muted-foreground)]">
+                                {' · this month'}
+                              </span>
+                            )}
+                          </span>
+                          <span className="text-[var(--muted-foreground)]">
+                            planned {fmt(planned)} · actual {fmt(actual)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {!cmHasSiblings && isLifetime && cmMonths.length > 1 && cmSplit != null && (
+                  <div className="mt-2 space-y-1.5 border-t border-[var(--border)] pt-2">
+                    <div className="font-semibold" style={{ color: COLORS.lifetime }}>
+                      Planned split (reference only)
+                    </div>
+                    {cmMonths.map((mm) => (
+                      <div key={mm} className="flex flex-col leading-tight">
+                        <span className="text-[var(--foreground)]">
+                          {fmtPeriodLong(mm)}
+                        </span>
+                        <span className="text-[var(--muted-foreground)]">
+                          {mm === ad.period
+                            ? `actual ${fmt(num(ad.pacerActual) ?? 0)} · `
+                            : ''}
+                          planned {fmt(cmSplit?.[mm] ?? 0)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+
+      {/* Meta status mismatch (Change 11): full-width below the inputs so the
+          warning + one-click confirm aren't cramped in the link column. Meta
+          reports the ad not delivering while the planner still says Live mid-
+          flight; don't auto-flip (Meta "paused" can be a daily cap / billing
+          hold) — surface a one-click confirm. */}
+      {(() => {
+        const meta = ad.metaEffectiveStatus;
+        const plannerLive =
+          ad.adStatus === 'Live' || ad.adStatus === 'Live - Changes Required';
+        if (!meta || !plannerLive || meta.toUpperCase() === 'ACTIVE') return null;
+        const through = ad.metaEndDate ?? ad.flightEnd;
+        return (
+          <div
+            className="mb-3.5 rounded-md border px-2.5 py-2 text-[10px]"
+            style={{ borderColor: `${COLORS.warn}66`, background: 'rgba(245,158,11,0.08)' }}
+          >
+            <div className="text-[var(--foreground)] leading-snug">
+              Meta shows <span className="font-semibold">{meta}</span>
+              {through ? <> — but scheduled through {fmtDate(through)}</> : null}.
+            </div>
+            <button
+              type="button"
+              onClick={onMarkOff}
+              disabled={readOnly}
+              className="mt-1 inline-flex items-center gap-1 rounded border border-[var(--border)] bg-[var(--card)] px-2 py-0.5 font-medium text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Mark Off in planner
+            </button>
+          </div>
+        );
+      })()}
+
+
 
       {/* Stopped / past-due states replace the projection grid. Off or
           Completed Run freezes the math at the entered actuals; past-flight
@@ -7932,12 +8495,16 @@ function PacerRow({
           color={recColor}
         />
       </div>
+        </>
+      )}
 
-      {/* Footer — plain-English insight on the left, Mute alerts toggle on the
-          right in its own area. */}
+      {/* Footer — the cross-month toggle stays available even on completed /
+          past runs (its classification is still editable); the pacing insight
+          and mute control show only while the ad is actively pacing. */}
       <div className="mt-3 pt-3 border-t border-[var(--border)] flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0 flex-1">
-          {(() => {
+          {showsProjection &&
+            (() => {
         if (calc.budget <= 0) return null;
         if (!calc.hasDates) return null;
         if (calc.spent >= calc.budget) {
@@ -8003,33 +8570,76 @@ function PacerRow({
         );
       })()}
         </div>
-        {/* Mute alerts — text button in the card footer (bell = on,
-            bell-with-slash + amber = muted). */}
-        <button
-          type="button"
-          onClick={onMuteToggle}
-          disabled={readOnly}
-          title={
-            ad.alertsMuted
-              ? 'Alerts muted for this ad — click to unmute'
-              : 'Mute pacing / dark / flight alerts for this ad'
-          }
-          className={`inline-flex flex-shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-            ad.alertsMuted
-              ? 'border-[rgba(245,158,11,0.45)] bg-[rgba(245,158,11,0.12)] text-[#f59e0b]'
-              : 'border-[var(--border)] text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
-          }`}
-        >
-          {ad.alertsMuted ? (
-            <BellOffIcon className="w-3.5 h-3.5" />
-          ) : (
-            <BellIcon className="w-3.5 h-3.5" />
+        {/* Footer controls — cross-month toggle + icon-only mute. */}
+        <div className="flex flex-shrink-0 items-center gap-3">
+          {/* Cross-month accounting toggle — reveals the dropdown on the input
+              row; turning it off clears any Bill/Split classification. Orange =
+              on (matches the cross-month theme). */}
+          <Tooltip label="Cross-month accounting for this ad">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showCrossMonth}
+            onClick={() => {
+              if (showCrossMonth) {
+                setShowCrossMonth(false);
+                if (cmSelValue !== '') onResolveCrossMonth('clear');
+              } else {
+                setShowCrossMonth(true);
+              }
+            }}
+            disabled={readOnly}
+            className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <span
+              className="relative inline-flex h-4 w-7 items-center rounded-full transition-colors"
+              style={{ background: showCrossMonth ? '#f97316' : 'var(--border)' }}
+            >
+              <span
+                className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                  showCrossMonth ? 'translate-x-3.5' : 'translate-x-0.5'
+                }`}
+              />
+            </span>
+            Cross-month
+          </button>
+          </Tooltip>
+          {/* Mute alerts — icon only; hidden on completed / past runs (pacing
+              alerts no longer apply there). */}
+          {showsProjection && (
+            <Tooltip
+              label={
+                ad.alertsMuted
+                  ? 'Alerts muted for this ad — click to unmute'
+                  : 'Mute pacing / dark / flight alerts for this ad'
+              }
+              className="flex-shrink-0"
+            >
+            <button
+              type="button"
+              onClick={onMuteToggle}
+              disabled={readOnly}
+              aria-label={
+                ad.alertsMuted
+                  ? 'Alerts muted for this ad — click to unmute'
+                  : 'Mute pacing / dark / flight alerts for this ad'
+              }
+              className={`inline-flex items-center justify-center rounded-md border p-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                ad.alertsMuted
+                  ? 'border-[rgba(245,158,11,0.45)] bg-[rgba(245,158,11,0.12)] text-[#f59e0b]'
+                  : 'border-[var(--border)] text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              {ad.alertsMuted ? (
+                <BellOffIcon className="w-3.5 h-3.5" />
+              ) : (
+                <BellIcon className="w-3.5 h-3.5" />
+              )}
+            </button>
+            </Tooltip>
           )}
-          {ad.alertsMuted ? 'Alerts muted' : 'Mute alerts'}
-        </button>
+        </div>
       </div>
-        </>
-      )}
         </div>
       )}
     </div>
@@ -8152,8 +8762,17 @@ function PacerCompletedSummary({
 
 // ─── Budget Pacer panel ────────────────────────────────────────────────────
 interface AccountPacing {
-  pct: number;
-  status: 'on-track' | 'over' | 'under';
+  // 'final' = a settled (frozen/closed) month's final variance (colored
+  // over/under verdict). 'progress' = a LIVE month's plain spend-of-target
+  // readout — deliberately NOT a pace verdict, so a mid-month "60% spent" can't
+  // false-alarm as "under"; the per-ad pacing badges carry the on-pace judgment.
+  mode: 'progress' | 'final';
+  pct: number; // spent ÷ target × 100
+  status: 'on-track' | 'over' | 'under' | 'neutral'; // 'progress' is always neutral
+  spent: number; // account actual spend
+  target: number; // effective spend target (client budget × markup + carryover)
+  dayElapsed: number; // live only: day-of-month so the % reads in context
+  dayTotal: number;
 }
 
 function PacerSpendTotals({
@@ -8169,24 +8788,46 @@ function PacerSpendTotals({
   // per-ad (finished ads contribute full target, mid-flight ads prorated).
   pacing?: AccountPacing | null;
 }) {
+  const isFinal = pacing?.mode === 'final';
+  const isProgress = pacing?.mode === 'progress';
+  // 'final' = a colored over/under verdict; 'progress' = a neutral readout.
   const pacingColor =
     pacing == null
       ? undefined
-      : pacing.status === 'on-track'
-        ? COLORS.success
-        : pacing.status === 'over'
-          ? COLORS.error
-          : COLORS.warn;
-  const pacingLabel =
+      : isProgress
+        ? 'var(--muted-foreground)'
+        : pacing.status === 'on-track'
+          ? COLORS.success
+          : pacing.status === 'over'
+            ? COLORS.error
+            : COLORS.warn;
+  const pacingHeader = isFinal ? 'Final variance' : 'Spend progress';
+  const pacingTitle = isFinal
+    ? "Settled month: total actual spend vs the account's effective target (client budget × markup + carryover) — the final over/under, matching the Over/Under page."
+    : "Account spend so far vs the month's effective target (client budget × markup + carryover), with day-of-month context. A plain progress readout — NOT a pace verdict; read the per-ad pacing badges for on-track health.";
+  // Big headline value (matches Total Spend / Actual) + a small gray sub-line.
+  const pacingMain =
     pacing == null
       ? ''
-      : pacing.status === 'on-track'
-        ? 'On track'
-        : pacing.status === 'over'
-          ? `Over ${pacing.pct.toFixed(0)}%`
-          : `Under ${pacing.pct.toFixed(0)}%`;
+      : isFinal
+        ? pacing.status === 'on-track'
+          ? 'On target'
+          : `${pacing.pct - 100 > 0 ? '+' : ''}${(pacing.pct - 100).toFixed(1)}% ${
+              pacing.status === 'over' ? 'over' : 'under'
+            }`
+        : `${pacing.pct.toFixed(0)}% of target`;
+  const pacingSub =
+    pacing == null
+      ? ''
+      : isFinal
+        ? 'final variance'
+        : `day ${pacing.dayElapsed}/${pacing.dayTotal}`;
+  const barPct = pacing ? Math.min(Math.max(pacing.pct, 0), 100) : 0;
+  // Neutral brand color for a live progress readout; status color for a
+  // settled month's verdict.
+  const barColor = isProgress ? COLORS.lifetime : pacingColor;
   return (
-    <div className="flex flex-wrap gap-6 items-center justify-end">
+    <div className="flex flex-wrap items-start justify-end gap-6">
       <div className="text-right">
         <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
           Total Spend
@@ -8204,18 +8845,28 @@ function PacerSpendTotals({
         </div>
       </div>
       {pacing && pacingColor && (
-        <div className="text-right">
+        <Tooltip label={pacingTitle}>
+        <div className="min-w-[160px]">
           <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-            Account pacing
+            {pacingHeader}
           </div>
-          <span
-            className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-2 py-1 rounded mt-0.5"
-            style={{ background: `${pacingColor}22`, color: pacingColor }}
-            title="Actual spend vs time-adjusted expected spend, summed per ad (finished ads count their full target, mid-flight ads their elapsed portion)."
+          <div
+            className="text-lg font-bold whitespace-nowrap"
+            style={{ color: isProgress ? 'var(--foreground)' : pacingColor }}
           >
-            {pacingLabel}
-          </span>
+            {pacingMain}
+          </div>
+          <div className="text-[10px] text-[var(--muted-foreground)]">
+            {pacingSub}
+          </div>
+          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[var(--muted)]">
+            <div
+              className="h-full rounded-full transition-[width] duration-500"
+              style={{ width: `${barPct}%`, background: barColor }}
+            />
+          </div>
         </div>
+        </Tooltip>
       )}
     </div>
   );
@@ -8227,23 +8878,25 @@ function BudgetPacerPanel({
   onFiltersChange,
   currentUserId,
   onChange,
-  totals,
   accountKey,
+  headerActions,
 }: {
   plan: PacerPlan;
   filters: PlanFilters;
   onFiltersChange: (next: PlanFilters) => void;
   currentUserId: string | null;
   onChange: (p: PacerPlan) => void;
-  totals: { base: number; added: number; actual: number };
   accountKey: string;
+  headerActions?: React.ReactNode;
 }) {
-  const { confirm } = useLoomiDialog();
   // Per-ad expand state. Auto-seeded on first render (and on plan
   // changes) so rows that need attention are open by default; rep can
   // still toggle each manually.
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const seededExpandedRef = useRef(false);
+  // Cross-month reassurance note is dismissible (X) — once closed it stays
+  // hidden for this view.
+  const [crossMonthNoteDismissed, setCrossMonthNoteDismissed] = useState(false);
 
   const updateAd = (u: PacerAd) =>
     onChange({ ...plan, ads: plan.ads.map((a) => (a.id === u.id ? u : a)) });
@@ -8296,31 +8949,76 @@ function BudgetPacerPanel({
     [accountKey, plan.period],
   );
 
+  // §2: resolve a cross-month straddler (count its full run in its own month),
+  // set a lifetime planned split, or clear. Optimistically updates the ad's
+  // persisted resolution fields, then writes through the dedicated endpoint
+  // (server-authoritative, so a re-sync or autosave can't clobber it).
+  const resolveCrossMonth = useCallback(
+    async (
+      adId: string,
+      action: 'apply_full_run' | 'split' | 'clear',
+      splitMap?: Record<string, number>,
+    ) => {
+      // The CTA is disabled when frozen and the endpoint rejects a frozen
+      // month (409), so no client-side readOnly guard is needed here.
+      const prior = plan.ads.find((a) => a.id === adId);
+      onChange({
+        ...plan,
+        ads: plan.ads.map((a) =>
+          a.id === adId
+            ? {
+                ...a,
+                fullRunAppliedToMonth:
+                  action === 'apply_full_run' ? plan.period : null,
+                lifetimeMonthSplit:
+                  action === 'split' ? JSON.stringify(splitMap ?? {}) : null,
+              }
+            : a,
+        ),
+      });
+      try {
+        const res = await fetch(
+          `/api/meta-ads-pacer/${accountKey}/resolve-cross-month?period=${plan.period}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              adId,
+              action,
+              ...(action === 'split' ? { splitMap } : {}),
+            }),
+          },
+        );
+        if (!res.ok) {
+          const d = await res.json().catch(() => null);
+          toast.error(d?.error || 'Failed to update cross-month resolution.');
+          if (prior) {
+            onChange({
+              ...plan,
+              ads: plan.ads.map((a) => (a.id === adId ? prior : a)),
+            });
+          }
+        }
+      } catch {
+        toast.error('Failed to update cross-month resolution — network error.');
+        if (prior) {
+          onChange({
+            ...plan,
+            ads: plan.ads.map((a) => (a.id === adId ? prior : a)),
+          });
+        }
+      }
+    },
+    [accountKey, plan, onChange],
+  );
+
   const visibleAds = useMemo(
     () => applyFilters(plan.ads, filters, currentUserId),
     [plan.ads, filters, currentUserId],
   );
-  const readOnly = usePacerReadOnly();
+  const allExpanded =
+    visibleAds.length > 0 && visibleAds.every((a) => expandedIds.has(a.id));
 
-  // Account-wide pacing (Change 9): actual vs time-adjusted expected, summed
-  // PER AD (not one account-wide date fraction) so a finished ad contributes
-  // its full target and a mid-flight ad its elapsed portion. Catches drift no
-  // single per-ad badge would (several ads each slightly off the same way).
-  const accountPacing = useMemo<AccountPacing | null>(() => {
-    const nowMs = Date.now();
-    let expected = 0;
-    let actual = 0;
-    for (const ad of plan.ads) {
-      const c = buildAdCalc(ad, nowMs, plan.timeZone);
-      if (c.target == null) continue; // skip un-budgeted ads
-      expected += c.expectedToDate;
-      actual += c.actual ?? 0;
-    }
-    if (expected <= 0) return null;
-    const pct = (actual / expected) * 100;
-    const status = pct >= 90 && pct <= 110 ? 'on-track' : pct > 110 ? 'over' : 'under';
-    return { pct, status };
-  }, [plan]);
 
   // Auto-expand needs-attention rows ONCE per mount so the rep lands on
   // the things that need work. Re-running on plan change would fight
@@ -8351,76 +9049,6 @@ function BudgetPacerPanel({
     });
   }, []);
 
-  // Bulk "Set all dailies to Rec." — applies recommended daily to every
-  // visible non-lifetime, non-stopped ad that has a valid recDaily.
-  const bulkSetDailies = async () => {
-    if (readOnly) return; // frozen month — bulk apply is disabled
-    const nowMs = Date.now();
-    const candidates = visibleAds.filter((ad) => {
-      if (ad.budgetType !== 'Daily') return false;
-      if (ad.adStatus === 'Off' || ad.adStatus === 'Completed Run') return false;
-      const c = buildPacerCalc(ad, nowMs, plan.timeZone);
-      return c.daysLeft > 0 && c.budget > 0 && c.recDaily > 0;
-    });
-    if (candidates.length === 0) {
-      toast.error('No visible ads have a recommended daily to apply');
-      return;
-    }
-    // Guardrail: a >20% single-day budget change can reset Meta's learning
-    // phase. Preview how many ads jump that much (from a non-zero current
-    // daily) so a blind "set all" can't quietly reset several at once.
-    const bigJumps = candidates.filter((ad) => {
-      const current = num(ad.pacerDailyBudget) ?? 0;
-      if (current <= 0) return false; // first-time set, not a learning-reset jump
-      const rec = buildPacerCalc(ad, nowMs, plan.timeZone).recDaily;
-      return Math.abs(rec - current) / current > 0.2;
-    });
-    const adWord = candidates.length === 1 ? 'ad' : 'ads';
-    const message =
-      bigJumps.length > 0
-        ? `This will change ${candidates.length} ${adWord}. ${bigJumps.length} ${
-            bigJumps.length === 1 ? 'is a' : 'are'
-          } >20% jump${bigJumps.length === 1 ? '' : 's'} — large changes can reset Meta's learning phase: ${bigJumps
-            .map((a) => a.name || 'Untitled')
-            .join(', ')}.`
-        : `Apply the recommended daily budget to ${candidates.length} visible ${adWord}?`;
-    const ok = await confirm({
-      title: 'Set dailies to recommended',
-      message,
-      confirmLabel: `Apply to ${candidates.length} ${adWord}`,
-    });
-    if (!ok) return;
-    const candidateIds = new Set(candidates.map((a) => a.id));
-    onChange({
-      ...plan,
-      ads: plan.ads.map((ad) => {
-        if (!candidateIds.has(ad.id)) return ad;
-        const c = buildPacerCalc(ad, nowMs, plan.timeZone);
-        return {
-          ...ad,
-          pacerDailyBudget: c.recDaily.toFixed(2),
-        };
-      }),
-    });
-    toast.success(
-      `Set daily budget on ${candidates.length} ad${candidates.length === 1 ? '' : 's'} to recommended`,
-    );
-  };
-
-  // Budget Log + Change Log moved to the account scope row (lifted to the
-  // parent), so they're no longer rendered from this panel.
-  const bulkDailyButton = readOnly ? null : (
-    <button
-      type="button"
-      onClick={bulkSetDailies}
-      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/10 text-[var(--primary)] hover:bg-[var(--primary)]/20 transition-colors"
-      title="Set every visible ad's daily budget to its recommended value"
-    >
-      <BoltIcon className="w-3.5 h-3.5" />
-      Set all dailies to Rec.
-    </button>
-  );
-
   if (plan.ads.length === 0) {
     return (
       <div>
@@ -8429,13 +9057,7 @@ function BudgetPacerPanel({
             <ChartBarIcon className="w-4 h-4" />
             Spend Pacing
           </h2>
-          <div className="flex items-center gap-4 flex-wrap">
-            <PacerSpendTotals
-              base={totals.base}
-              added={totals.added}
-              actual={totals.actual}
-            />
-          </div>
+          {headerActions}
         </div>
         <div className="glass-section-card rounded-xl px-6 py-12 text-center">
           <ClipboardDocumentListIcon className="w-10 h-10 mx-auto mb-3 text-[var(--muted-foreground)]" />
@@ -8459,46 +9081,74 @@ function BudgetPacerPanel({
             visibleAds.length !== plan.ads.length ? ` of ${plan.ads.length}` : ''
           } ad${plan.ads.length !== 1 ? 's' : ''})`}
         </h2>
-        <div className="flex items-center gap-4 flex-wrap">
-          <PacerSpendTotals
-            base={totals.base}
-            added={totals.added}
-            actual={totals.actual}
-            pacing={accountPacing}
-          />
+        {/* All actions live on one row, grouped: table/bulk controls first,
+            then a divider, then the account/Meta actions. */}
+        <div className="flex items-center justify-end gap-2 flex-wrap">
+          <Tooltip label={allExpanded ? 'Collapse all rows' : 'Expand all rows'}>
+          <button
+            type="button"
+            onClick={() =>
+              setExpandedIds(
+                allExpanded ? new Set() : new Set(visibleAds.map((a) => a.id)),
+              )
+            }
+            className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          >
+            <ChevronUpDownIcon className="w-3.5 h-3.5" />
+            {allExpanded ? 'Collapse all' : 'Expand all'}
+          </button>
+          </Tooltip>
+          {headerActions && (
+            <>
+              <div className="mx-1 h-5 w-px bg-[var(--border)]" />
+              {headerActions}
+            </>
+          )}
         </div>
       </div>
+      {(() => {
+        // Reassurance that an odd-looking total is explained — driven by the
+        // user's MANUAL cross-month marks (no auto-detection): a billed
+        // cross-month ad counts its full run in the over/under though only its
+        // in-month slice lands in the month total.
+        const crossMonthCount = visibleAds.filter(
+          (a) => a.fullRunAppliedToMonth != null,
+        ).length;
+        if (crossMonthCount === 0 || crossMonthNoteDismissed) return null;
+        return (
+          <div
+            className="mb-3 flex items-start justify-between gap-3 rounded-md border px-2.5 py-1.5 text-[11px]"
+            style={{
+              borderColor: 'rgba(249,115,22,0.3)',
+              background: 'rgba(249,115,22,0.08)',
+              color: '#f97316',
+            }}
+          >
+            <span>
+              {crossMonthCount} ad{crossMonthCount === 1 ? '' : 's'} billed
+              cross-month — the full run is counted in the over/under though part
+              spent in another month, so the monthly total can differ (expand a
+              flagged row for details).
+            </span>
+            <Tooltip label="Dismiss" className="flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => setCrossMonthNoteDismissed(true)}
+              aria-label="Dismiss"
+              className="-mr-0.5 rounded p-0.5 hover:bg-[var(--muted)] transition-colors"
+            >
+              <XMarkIcon className="w-3.5 h-3.5" />
+            </button>
+            </Tooltip>
+          </div>
+        );
+      })()}
       <FilterStatus
         filters={filters}
         onClear={() => onFiltersChange(EMPTY_FILTERS)}
         filteredCount={visibleAds.length}
         totalCount={plan.ads.length}
       />
-      <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
-        <p className="m-0 text-[11px] text-[var(--muted-foreground)] max-w-[640px]">
-          Click any row to expand. Rows that need attention (overpacing or
-          over-budget) are auto-expanded; the rest stay collapsed.
-        </p>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            type="button"
-            onClick={() =>
-              setExpandedIds(new Set(visibleAds.map((a) => a.id)))
-            }
-            className="text-[11px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline-offset-2 hover:underline"
-          >
-            Expand all
-          </button>
-          <button
-            type="button"
-            onClick={() => setExpandedIds(new Set())}
-            className="text-[11px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline-offset-2 hover:underline"
-          >
-            Collapse all
-          </button>
-          {bulkDailyButton}
-        </div>
-      </div>
       {visibleAds.length === 0 ? (
         <div className="rounded-xl border border-dashed border-[var(--border)] py-10 px-6 text-center text-sm text-[var(--muted-foreground)]">
           No ads match the current filters.
@@ -8530,6 +9180,10 @@ function BudgetPacerPanel({
             }
             onMarkOff={() => updateAd({ ...ad, adStatus: 'Off' })}
             onPushDailyBudget={(value) => pushDailyBudget(ad.id, value)}
+            onResolveCrossMonth={(action, splitMap) =>
+              resolveCrossMonth(ad.id, action, splitMap)
+            }
+            siblings={plan.siblingsByName?.[ad.name] ?? null}
           />
         ))
       )}
@@ -8633,10 +9287,8 @@ function SummaryPanel({ plan }: { plan: PacerPlan }) {
                   <span
                     className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
                     style={{
-                      background: c.isLifetime
-                        ? 'rgba(167,139,250,0.18)'
-                        : 'rgba(56,189,248,0.18)',
-                      color: c.isLifetime ? COLORS.lifetime : COLORS.daily,
+                      background: budgetTypeTint(c.ad.budgetType),
+                      color: budgetTypeColor(c.ad.budgetType),
                     }}
                   >
                     {c.ad.budgetType}
@@ -8663,7 +9315,7 @@ function SummaryPanel({ plan }: { plan: PacerPlan }) {
                 </td>
                 <td
                   className="px-2.5 py-2.5"
-                  style={{ color: c.isLifetime ? COLORS.lifetime : COLORS.daily }}
+                  style={{ color: budgetTypeColor(c.ad.budgetType) }}
                 >
                   {fmt(c.totalBudget)}
                   <span className="ml-1 text-[9px] text-[var(--muted-foreground)]">
@@ -8764,7 +9416,7 @@ function SummaryPanel({ plan }: { plan: PacerPlan }) {
                 </td>
                 <td colSpan={6} className="px-2.5 py-2.5">
                   <span className="text-[var(--foreground)] font-bold">
-                    {fmt(Math.round(combinedGoal * MARKUP * 100) / 100)}
+                    {fmt(Math.round(combinedGoal * effMarkupOf(plan.markup) * 100) / 100)}
                   </span>
                   <span className="text-[var(--muted-foreground)]"> actual / </span>
                   <span style={{ color: COLORS.daily }} className="font-bold">
@@ -8798,6 +9450,25 @@ interface ReconMonth {
   appliedOut: number;
   unapplied: number;
   appliedIn: number;
+  // §3: month has a lifetime ad still running — excluded from the over/under
+  // base (books once on completion); drives the 'lifetime · in progress' badge.
+  hasLifetimeInProgress: boolean;
+  // CM4: per-ad over/under contributions for this month — the row drill-down.
+  ads?: {
+    name: string;
+    inMonthSpend: number;
+    billedActual: number;
+    contribution: number;
+    klass: 'real' | 'billed-cross-month' | 'lifetime-in-progress';
+  }[];
+}
+interface CarryoverApplication {
+  id: string;
+  sourceMonth: string;
+  targetMonth: string;
+  bucket: 'base' | 'added';
+  amount: number;
+  appliedAt: string;
 }
 interface ReconData {
   year: number;
@@ -8807,7 +9478,13 @@ interface ReconData {
   ytdVariance: number;
   ytdCarryover: number;
   ytdUnapplied: number;
+  // §4: lifetime drift incl. the in-progress live month (health gauge), and the
+  // settled months still carrying unapplied over/under (named in the UI).
+  ytdVarianceInclLive: number;
+  unappliedMonths: string[];
   appliedThisMonth: { base: number; added: number; total: number };
+  // §5: individual ledger entries, newest first — powers both-ends provenance.
+  applications: CarryoverApplication[];
 }
 
 /**
@@ -8827,6 +9504,8 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
   const [bucket, setBucket] = useState<'base' | 'added'>('base');
   const [backfilling, setBackfilling] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  // CM4: which month rows are expanded to their per-ad variance breakdown.
+  const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
 
   const load = useCallback(() => {
     setData(null);
@@ -8902,6 +9581,19 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
   const net = data?.ytdUnapplied ?? 0;
   const netReconciled = Math.abs(net) < 0.005;
   const canApply = !!data?.targetPeriod && !netReconciled;
+  // §4: the health-gauge total (lifetime drift incl. the in-progress live
+  // month, variance convention) — distinct from `net` (the settle-able queue).
+  const inclLive = data?.ytdVarianceInclLive ?? 0;
+  const inclLiveGauge = overUnder(inclLive);
+  // §4: name the settled months still carrying unapplied over/under.
+  const unappliedMonthsLabel = (data?.unappliedMonths ?? [])
+    .map((p) =>
+      new Date(Number(p.slice(0, 4)), Number(p.slice(5, 7)) - 1, 1).toLocaleDateString(
+        'en-US',
+        { month: 'short' },
+      ),
+    )
+    .join(', ');
 
   return (
     <div>
@@ -8933,16 +9625,17 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
               <ChevronRightIcon className="w-4 h-4" />
             </button>
           </div>
+          <Tooltip label="Pull account-total monthly spend from Meta for pre-tool months this year">
           <button
             type="button"
             onClick={backfill}
             disabled={backfilling}
-            title="Pull account-total monthly spend from Meta for pre-tool months this year"
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-50"
           >
             <ArrowPathIcon className={`w-3.5 h-3.5 ${backfilling ? 'animate-spin' : ''}`} />
             {backfilling ? 'Backfilling…' : 'Backfill historical spend'}
           </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -8978,8 +9671,8 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                 {netReconciled
                   ? 'No outstanding over/under across settled months.'
                   : net > 0
-                    ? `Underspent overall — apply to add ${fmt(net)} to ${data.targetPeriod ? fmtPeriodLong(data.targetPeriod) : 'the live month'}.`
-                    : `Overspent overall — apply to pull ${fmt(-net)} from ${data.targetPeriod ? fmtPeriodLong(data.targetPeriod) : 'the live month'}.`}
+                    ? `Underspent ${unappliedMonthsLabel ? `across ${unappliedMonthsLabel}` : 'across settled months'} — apply to add ${fmt(net)} to ${data.targetPeriod ? fmtPeriodLong(data.targetPeriod) : 'the live month'}.`
+                    : `Overspent ${unappliedMonthsLabel ? `across ${unappliedMonthsLabel}` : 'across settled months'} — apply to pull ${fmt(-net)} from ${data.targetPeriod ? fmtPeriodLong(data.targetPeriod) : 'the live month'}.`}
               </div>
               {data.appliedThisMonth.total !== 0 && data.targetPeriod && (
                 <div className="text-[11px] text-[var(--muted-foreground)] mt-2 flex items-center gap-2 flex-wrap">
@@ -9000,6 +9693,30 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                   </button>
                 </div>
               )}
+              {/* §4: health-gauge total — lifetime drift INCLUDING the
+                  in-progress live month. Deliberately distinct from the
+                  settle-able "net still to reconcile" above (which excludes the
+                  open month) so the two can't be confused: one is the action
+                  queue, this is the overall over/under reading. */}
+              <div className="mt-3 pt-3 border-t border-[var(--border)]">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                  Net variance · incl. live month
+                </div>
+                <div className="flex items-baseline gap-2 mt-0.5 flex-wrap">
+                  <span
+                    className="text-base font-semibold tabular-nums"
+                    style={{ color: inclLiveGauge.color }}
+                  >
+                    {inclLiveGauge.text}
+                  </span>
+                  <span className="text-[10px] text-[var(--muted-foreground)]">
+                    health gauge — total drift including{' '}
+                    {data.targetPeriod
+                      ? `${fmtPeriodLong(data.targetPeriod)} in progress`
+                      : 'the live month'}
+                  </span>
+                </div>
+              </div>
             </div>
             <div className="flex flex-col items-end gap-2">
               <div className="flex items-center rounded-lg border border-[var(--border)] bg-[var(--background)] p-1">
@@ -9065,22 +9782,36 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                   const noData = !m.hasActual && !m.hasTarget;
                   const needsTarget = m.isBackfilled && !m.hasTarget;
                   const applied = Math.abs(m.appliedOut) >= 0.005;
-                  const reconcilable =
-                    !isLive &&
-                    m.period < data.targetPeriod &&
-                    Math.abs(m.unapplied) >= 0.005 &&
-                    m.hasActual &&
-                    m.hasTarget;
                   const ou = overUnder(m.variance);
+                  const hasAdDetail = (m.ads?.length ?? 0) > 0;
+                  const expanded = expandedMonths.has(m.period);
                   return (
+                    <Fragment key={m.period}>
                     <tr
-                      key={m.period}
                       className={`border-b border-[var(--border)] last:border-0 ${
                         isLive ? 'bg-[var(--primary)]/5' : ''
                       }`}
                     >
                       <td className="px-3 py-2.5">
                         <div className="font-semibold text-[var(--foreground)] flex items-center gap-2">
+                          {hasAdDetail && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setExpandedMonths((s) => {
+                                  const next = new Set(s);
+                                  if (next.has(m.period)) next.delete(m.period);
+                                  else next.add(m.period);
+                                  return next;
+                                })
+                              }
+                              aria-label={expanded ? 'Hide ad breakdown' : 'Show ad breakdown'}
+                              className="text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                              style={{ transform: expanded ? 'rotate(90deg)' : 'none' }}
+                            >
+                              <ChevronRightIcon className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           {fmtPeriodLong(m.period)}
                           {isLive && (
                             <span className="text-[9px] font-medium uppercase tracking-wider rounded px-1.5 py-0.5 bg-[var(--primary)]/15 text-[var(--primary)]">
@@ -9088,12 +9819,26 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                             </span>
                           )}
                           {m.isBackfilled && (
+                            <Tooltip label="Pre-tool month — actual pulled from Meta account spend">
                             <span
                               className="text-[9px] font-medium uppercase tracking-wider rounded px-1.5 py-0.5 bg-[var(--muted)] text-[var(--muted-foreground)]"
-                              title="Pre-tool month — actual pulled from Meta account spend"
                             >
                               Backfilled
                             </span>
+                            </Tooltip>
+                          )}
+                          {m.hasLifetimeInProgress && (
+                            <Tooltip label="A lifetime ad is still running this month — excluded from the over/under base (its single variance books once when the run completes). Its spend still shows in the Pacer's total spend.">
+                            <span
+                              className="text-[9px] font-medium uppercase tracking-wider rounded px-1.5 py-0.5"
+                              style={{
+                                background: 'rgba(167,139,250,0.15)',
+                                color: COLORS.lifetime,
+                              }}
+                            >
+                              Lifetime in progress
+                            </span>
+                            </Tooltip>
                           )}
                         </div>
                         {isLive && (
@@ -9144,13 +9889,27 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                               </div>
                             )}
                             {m.appliedIn !== 0 && (
+                              <Tooltip label="Carryover applied INTO this month from a prior month's over/under (adjusts this month's target; the client budget is unchanged).">
                               <div
                                 className="text-[9px]"
                                 style={{ color: COLORS.lifetime }}
                               >
-                                {m.appliedIn > 0 ? '+' : '−'}
-                                {fmt(Math.abs(m.appliedIn))} carryover
+                                ← {m.appliedIn > 0 ? '+' : '−'}
+                                {fmt(Math.abs(m.appliedIn))} from{' '}
+                                {(() => {
+                                  const srcs = Array.from(
+                                    new Set(
+                                      (data.applications ?? [])
+                                        .filter((a) => a.targetMonth === m.period)
+                                        .map((a) => a.sourceMonth),
+                                    ),
+                                  );
+                                  return srcs.length
+                                    ? srcs.map((s) => fmtPeriodLong(s)).join(', ')
+                                    : 'a prior month';
+                                })()}
                               </div>
+                              </Tooltip>
                             )}
                           </>
                         ) : (
@@ -9176,19 +9935,36 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                           </span>
                         ) : applied ? (
                           <div className="flex items-center justify-end gap-2">
-                            <span
-                              className="inline-flex items-center gap-1 text-[10px] font-semibold"
-                              style={{ color: COLORS.success }}
-                              title={`This month's over/under was applied into ${
+                            <Tooltip
+                              label={`This month's over/under was applied into ${
                                 data.targetPeriod
                                   ? fmtPeriodLong(data.targetPeriod)
                                   : 'the live month'
                               }`}
                             >
+                            <span
+                              className="inline-flex items-center gap-1 text-[10px] font-semibold"
+                              style={{ color: COLORS.success }}
+                            >
                               <CheckIcon className="w-3 h-3" />
                               Applied {m.appliedOut >= 0 ? '+' : '−'}
-                              {fmt(Math.abs(m.appliedOut))}
+                              {fmt(Math.abs(m.appliedOut))} →{' '}
+                              {(() => {
+                                const tgts = Array.from(
+                                  new Set(
+                                    (data.applications ?? [])
+                                      .filter((a) => a.sourceMonth === m.period)
+                                      .map((a) => a.targetMonth),
+                                  ),
+                                );
+                                return tgts.length
+                                  ? tgts.map((t) => fmtPeriodLong(t)).join(', ')
+                                  : data.targetPeriod
+                                    ? fmtPeriodLong(data.targetPeriod)
+                                    : 'live month';
+                              })()}
                             </span>
+                            </Tooltip>
                             <button
                               type="button"
                               onClick={() =>
@@ -9203,20 +9979,6 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                               {busy === `unapply:${m.period}` ? '…' : 'Undo'}
                             </button>
                           </div>
-                        ) : reconcilable ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              post(
-                                { type: 'apply', sourceMonth: m.period, bucket },
-                                `apply:${m.period}`,
-                              )
-                            }
-                            disabled={!data.targetPeriod || busy === `apply:${m.period}`}
-                            className="inline-flex items-center gap-1 rounded-md border border-[var(--primary)]/40 bg-[var(--primary)]/10 px-2.5 py-1 text-[10px] font-semibold text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/20 disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            {busy === `apply:${m.period}` ? 'Applying…' : 'Apply'}
-                          </button>
                         ) : noData ? (
                           <span className="text-[10px] text-[var(--muted-foreground)]">
                             No data
@@ -9228,6 +9990,74 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                         )}
                       </td>
                     </tr>
+                    {expanded && hasAdDetail && (
+                      <tr className={isLive ? 'bg-[var(--primary)]/5' : ''}>
+                        <td colSpan={5} className="px-3 pb-3 pt-0">
+                          <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)]/20 overflow-hidden">
+                            <div className="px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-[var(--muted-foreground)] border-b border-[var(--border)]">
+                              Variance by ad
+                            </div>
+                            <div className="divide-y divide-[var(--border)]/60">
+                              {(m.ads ?? []).map((av, i) => {
+                                const amtColor =
+                                  av.klass === 'lifetime-in-progress'
+                                    ? COLORS.lifetime
+                                    : av.klass === 'billed-cross-month'
+                                      ? '#f97316'
+                                      : overUnder(av.contribution).color;
+                                return (
+                                  <div
+                                    key={`${m.period}-${i}`}
+                                    className="flex items-center justify-between gap-3 px-3 py-1.5"
+                                  >
+                                    <div className="min-w-0 flex items-center gap-2">
+                                      <span className="text-[11px] text-[var(--foreground)] truncate">
+                                        {av.name || 'Untitled ad'}
+                                      </span>
+                                      {av.klass === 'billed-cross-month' && (
+                                        <Tooltip
+                                          label="Billed in this month though it ran across months — the over/under counts its full run; only part spent this month."
+                                          className="flex-shrink-0"
+                                        >
+                                        <span
+                                          className="text-[9px] font-semibold"
+                                          style={{ color: '#f97316' }}
+                                        >
+                                          billed cross-month
+                                        </span>
+                                        </Tooltip>
+                                      )}
+                                      {av.klass === 'lifetime-in-progress' && (
+                                        <Tooltip
+                                          label="Lifetime ad still running — its spend is held out of the over/under until the run completes."
+                                          className="flex-shrink-0"
+                                        >
+                                        <span
+                                          className="text-[9px] font-semibold"
+                                          style={{ color: COLORS.lifetime }}
+                                        >
+                                          lifetime · books on completion
+                                        </span>
+                                        </Tooltip>
+                                      )}
+                                    </div>
+                                    <span
+                                      className="text-[11px] font-semibold tabular-nums flex-shrink-0"
+                                      style={{ color: amtColor }}
+                                    >
+                                      {av.klass === 'lifetime-in-progress'
+                                        ? `${fmt(av.inMonthSpend)} held`
+                                        : `${av.contribution >= 0 ? '+' : '−'}${fmt(Math.abs(av.contribution))}`}
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -9259,18 +10089,34 @@ interface MonthAd {
   id: string;
   name: string;
   budgetSource: 'base' | 'added' | 'split';
+  budgetType: 'Daily' | 'Lifetime';
   // When budgetSource === 'split', this is the dollar portion of
   // `allocation` drawn from Base. The rest comes from Added. Spend
   // apportions proportionally for the Over/Under math.
   splitBaseAmount: string | null;
   allocation: number;
   actual: number;
+  // §3: a lifetime ad still running — excluded from the over/under base (both
+  // its actual slice AND its allocation) while in progress; books its single
+  // variance once it completes. Still counted in total month spend.
+  lifetimeInProgress: boolean;
+  // §2a: the YYYY-MM the ad's full run was counted in (resolved straddler), or
+  // null. Drives the 'full run → applied to [month]' badge on the row.
+  fullRunAppliedToMonth: string | null;
+  // Cross-month clarity: this ad's over/under contribution + WHY it differs from
+  // plan. Computed server-side (classifyAdVariance) so every surface agrees.
+  variance?: {
+    inMonthSpend: number;
+    billedActual: number;
+    contribution: number;
+    klass: 'real' | 'billed-cross-month' | 'lifetime-in-progress';
+  };
 }
 
 interface MonthPlanData {
   baseBudgetGoal: number;
   addedBudgetGoal: number;
-  // Per-account markup override; null = fall back to global MARKUP.
+  // Per-account markup override; null = fall back to the agency default markup.
   // Needed for the Over/Under math because pacerActual is in actual-spend
   // dollars while the budget goals are gross client dollars.
   markup: number | null;
@@ -9299,43 +10145,39 @@ function daysElapsedInPeriod(period: string): number {
   return today.getDate();
 }
 
-function ComparePanel({ accountKey }: { accountKey: string | null }) {
-  const [view, setView] = useState<'month' | 'year'>('month');
+function ComparePanel({
+  accountKey,
+  period,
+}: {
+  accountKey: string | null;
+  period: string;
+}) {
+  // §6: the Over/Under page is a within-month, per-ad diagnostic only. Everything
+  // cross-month/annual (running balance, adjusted targets, apply/undo, audit
+  // trail) lives on the Reconciliation page, which owns it — so the old "Year"
+  // tab here (an unadjusted, no-reconcile duplicate of that table) is removed.
   return (
     <div>
-      <div className="flex items-center justify-between gap-4 mb-6 flex-wrap">
+      <div className="flex items-center gap-4 mb-6 flex-wrap">
         <h2 className="m-0 flex items-center gap-2 text-base font-bold tracking-tight text-[var(--foreground)]">
           <ScaleIcon className="w-4 h-4" />
           {accountKey ? 'Over/Under Spend' : 'Over/Under Spend — all accounts'}
         </h2>
-        <div className="flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-1">
-          {(['month', 'year'] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setView(v)}
-              className={`px-3 py-1 text-[11px] font-medium rounded transition-colors ${
-                view === v
-                  ? 'bg-[var(--primary)] text-white'
-                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              {v === 'month' ? 'Month' : 'Year'}
-            </button>
-          ))}
-        </div>
       </div>
-      {view === 'month' ? (
-        <OverUnderMonthView accountKey={accountKey} />
-      ) : (
-        <OverUnderYearView accountKey={accountKey} />
-      )}
+      <OverUnderMonthView accountKey={accountKey} period={period} />
     </div>
   );
 }
 
-function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
-  const [period, setPeriod] = useState<string>(() => currentPeriod());
+function OverUnderMonthView({
+  accountKey,
+  period,
+}: {
+  accountKey: string | null;
+  // Driven by the page's sticky-header month selector — no separate in-page
+  // selector (single source of truth for the active month).
+  period: string;
+}) {
   const [data, setData] = useState<MonthPlanData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -9374,22 +10216,45 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                 id: string;
                 name?: string | null;
                 budgetSource?: string;
+                budgetType?: string;
+                period?: string;
                 splitBaseAmount?: string | null;
                 allocation?: string | null;
                 pacerActual?: string | null;
-              }) => ({
-                id: a.id,
-                name: a.name || 'Untitled Ad',
-                budgetSource:
-                  a.budgetSource === 'split'
-                    ? 'split'
-                    : a.budgetSource === 'added'
-                      ? 'added'
-                      : 'base',
-                splitBaseAmount: a.splitBaseAmount ?? null,
-                allocation: num(a.allocation) ?? 0,
-                actual: num(a.pacerActual) ?? 0,
-              }),
+                pacerRunSpend?: string | null;
+                fullRunAppliedToMonth?: string | null;
+                lifetimeInProgress?: boolean;
+                variance?: {
+                  inMonthSpend: number;
+                  billedActual: number;
+                  contribution: number;
+                  klass: 'real' | 'billed-cross-month' | 'lifetime-in-progress';
+                };
+              }) => {
+                const eff = { ...a, period: a.period ?? period };
+                return {
+                  id: a.id,
+                  name: a.name || 'Untitled Ad',
+                  budgetSource:
+                    a.budgetSource === 'split'
+                      ? ('split' as const)
+                      : a.budgetSource === 'added'
+                        ? ('added' as const)
+                        : ('base' as const),
+                  budgetType:
+                    a.budgetType === 'Lifetime'
+                      ? ('Lifetime' as const)
+                      : ('Daily' as const),
+                  splitBaseAmount: a.splitBaseAmount ?? null,
+                  allocation: effectiveTarget(eff),
+                  // Display/total = what actually spent THIS month (the slice);
+                  // the over/under uses billedActual from `variance` below.
+                  actual: a.variance?.inMonthSpend ?? effectiveActual(eff),
+                  lifetimeInProgress: a.lifetimeInProgress === true,
+                  fullRunAppliedToMonth: a.fullRunAppliedToMonth ?? null,
+                  variance: a.variance,
+                };
+              },
             ),
           });
         } else {
@@ -9411,9 +10276,12 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                     id: 'aggregate',
                     name: 'All tracked ads (aggregate)',
                     budgetSource: 'base' as const,
+                    budgetType: 'Daily' as const,
                     splitBaseAmount: null,
                     allocation: row.clientBudget,
                     actual: row.actual,
+                    lifetimeInProgress: false,
+                    fullRunAppliedToMonth: null,
                   },
                 ]
               : [],
@@ -9434,10 +10302,7 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
   // Budget goals are stored gross; pacerActual is actual-spend. Convert
   // budget through the account's effective markup so the comparison is
   // apples-to-apples (everything in actual-spend dollars).
-  const effectiveMarkup =
-    data?.markup != null && Number.isFinite(data.markup) && data.markup > 0
-      ? data.markup
-      : MARKUP;
+  const effectiveMarkup = effMarkupOf(data?.markup);
   const budgetGross = data ? data.baseBudgetGoal + data.addedBudgetGoal : 0;
   // All-accounts mode supplies a pre-summed, per-account-correct target;
   // single-account mode derives it from this account's goals × markup.
@@ -9445,19 +10310,41 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
     data?.spendTargetOverride != null
       ? data.spendTargetOverride
       : budgetGross * effectiveMarkup;
-  const trackedTotal = data ? data.ads.reduce((s, a) => s + a.actual, 0) : 0;
-  // Variance always uses the tracked total (sum of per-ad pacer actuals) —
-  // the single spend source.
-  const effectiveActual = trackedTotal;
+  // The split (X2): two reconciling totals.
+  //  • totalInMonth — what actually spent THIS calendar month (every ad's
+  //    in-month slice). The honest "total spend".
+  //  • overUnderActual — what the over/under is BILLED on: the full run for an
+  //    ad the user billed cross-month (variance.billedActual), and $0 for an
+  //    in-progress lifetime ad (§3, books on completion) — so both are handled
+  //    without a separate subtraction.
+  const allAds = data?.ads ?? [];
+  const inProgressLifetime = allAds.filter((a) => a.lifetimeInProgress);
+  const ipLifeAlloc = inProgressLifetime.reduce((s, a) => s + a.allocation, 0);
+  const totalInMonth = allAds.reduce((s, a) => s + a.actual, 0);
+  const overUnderActual = allAds.reduce(
+    (s, a) => s + (a.variance?.billedActual ?? a.actual),
+    0,
+  );
   const daysIn = daysInPeriod(period);
   const daysElapsed = daysElapsedInPeriod(period);
-  // "Should have spent" intentionally drops day-based proration — this view
-  // is used at end-of-month for retrospective review, so the target is just
-  // the full actual-spend budget (client goal × markup). The day count is
-  // still shown above for context only.
-  const shouldHaveSpent = budgetActual;
-  // Single variance: actual vs target.
-  const variance = effectiveActual - shouldHaveSpent;
+  // Target nets out an in-progress lifetime ad's allocation (§3).
+  const shouldHaveSpent = budgetActual - ipLifeAlloc;
+  const variance = overUnderActual - shouldHaveSpent;
+
+  // What explains total ≠ over/under basis: cross-month-billed runs (billed here
+  // but spent in another month) + in-progress lifetime spend (spent this month,
+  // not yet booked).
+  const billedElsewhere = allAds.reduce(
+    (s, a) =>
+      a.variance?.klass === 'billed-cross-month'
+        ? s + (a.variance.billedActual - a.variance.inMonthSpend)
+        : s,
+    0,
+  );
+  const heldOutLifetime = inProgressLifetime.reduce((s, a) => s + a.actual, 0);
+  const crossMonthCount = allAds.filter(
+    (a) => a.variance?.klass === 'billed-cross-month',
+  ).length;
 
   const varianceColor = (v: number) =>
     Math.abs(v) < 0.005
@@ -9468,35 +10355,12 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
-        <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--card)] p-1">
-          <button
-            type="button"
-            onClick={() => setPeriod((p) => shiftPeriod(p, -1))}
-            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-            aria-label="Previous month"
-          >
-            <ChevronLeftIcon className="w-4 h-4" />
-          </button>
-          <span className="text-xs font-bold px-3 min-w-[8rem] text-center">
-            {fmtPeriodLong(period)}
-          </span>
-          <button
-            type="button"
-            onClick={() => setPeriod((p) => shiftPeriod(p, 1))}
-            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-            aria-label="Next month"
-          >
-            <ChevronRightIcon className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setPeriod(currentPeriod())}
-            className="ml-1 px-2 py-1 text-[10px] font-medium rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-          >
-            Today
-          </button>
-        </div>
+      {/* Month is controlled by the page's sticky-header selector — this is a
+          read-only label for context, not a second selector. */}
+      <div className="flex items-baseline justify-between gap-3 mb-4 flex-wrap">
+        <span className="text-sm font-bold text-[var(--foreground)]">
+          {fmtPeriodLong(period)}
+        </span>
         <div className="text-[10px] text-[var(--muted-foreground)]">
           {daysElapsed} of {daysIn} day{daysIn === 1 ? '' : 's'} elapsed
         </div>
@@ -9550,21 +10414,63 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                               {' · '}
                               {ad.allocation > 0 ? fmt(ad.allocation) : '—'}
                             </span>
+                            {ad.lifetimeInProgress && (
+                              <Tooltip label="Lifetime ad still running — excluded from the over/under until its run completes (still counted in total spend).">
+                              <span
+                                className="ml-1 font-semibold"
+                                style={{ color: COLORS.lifetime }}
+                              >
+                                · lifetime · in progress
+                              </span>
+                              </Tooltip>
+                            )}
+                            {ad.fullRunAppliedToMonth && (
+                              <Tooltip label="Full run counted in this month — the over/under compares the full run to the full target.">
+                              <span
+                                className="ml-1 font-semibold"
+                                style={{ color: '#f97316' }}
+                              >
+                                · full run → {fmtPeriodLong(ad.fullRunAppliedToMonth)}
+                              </span>
+                              </Tooltip>
+                            )}
                           </div>
                         )}
                       </div>
-                      <div className="text-sm font-semibold text-[var(--foreground)] tabular-nums whitespace-nowrap">
-                        {fmt(ad.actual)}
+                      <div className="text-right whitespace-nowrap">
+                        <div className="text-sm font-semibold text-[var(--foreground)] tabular-nums">
+                          {fmt(ad.actual)}
+                        </div>
+                        {ad.id !== 'aggregate' &&
+                          ad.variance &&
+                          ad.variance.klass !== 'lifetime-in-progress' &&
+                          Math.abs(ad.variance.contribution) >= 0.005 && (
+                            <Tooltip
+                              label={
+                                ad.variance.klass === 'billed-cross-month'
+                                  ? "This ad's over/under on its FULL run vs target (billed in this month)."
+                                  : "This ad's over/under vs its allocation."
+                              }
+                            >
+                            <div
+                              className="text-[9px] font-semibold tabular-nums leading-tight"
+                              style={{ color: varianceColor(ad.variance.contribution) }}
+                            >
+                              {ad.variance.contribution >= 0 ? '+' : '−'}
+                              {fmt(Math.abs(ad.variance.contribution))}
+                            </div>
+                            </Tooltip>
+                          )}
                       </div>
                     </div>
                   ))}
                 </div>
                 <div className="flex items-center justify-between gap-3 px-3 py-2 bg-[var(--muted)]/40 border-t-2 border-[var(--border)]">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--foreground)]">
-                    Tracked total · {data.ads.length} ad{data.ads.length === 1 ? '' : 's'}
+                    Total spent this month · {data.ads.length} ad{data.ads.length === 1 ? '' : 's'}
                   </div>
                   <div className="text-sm font-bold tabular-nums text-[var(--foreground)]">
-                    {fmt(trackedTotal)}
+                    {fmt(totalInMonth)}
                   </div>
                 </div>
               </>
@@ -9602,6 +10508,9 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                   </div>
                   <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
                     {`${fmt(budgetGross)} × ${effectiveMarkup}`}
+                    {ipLifeAlloc > 0
+                      ? ` − ${fmt(ipLifeAlloc)} lifetime in progress`
+                      : ''}
                   </div>
                 </div>
               </div>
@@ -9626,9 +10535,9 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                 </span>
               </div>
               <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
-                tracked total{' '}
+                billed{' '}
                 <span className="font-semibold text-[var(--foreground)]">
-                  {fmt(effectiveActual)}
+                  {fmt(overUnderActual)}
                 </span>
                 {' − '}
                 <span className="font-semibold text-[var(--foreground)]">
@@ -9636,209 +10545,34 @@ function OverUnderMonthView({ accountKey }: { accountKey: string | null }) {
                 </span>
                 {' should have spent'}
               </div>
+              {crossMonthCount > 0 && (
+                <Tooltip label="These ads are billed in this month though they ran across months — the over/under counts their full run, so the month's total spend is lower by the part that spent in another month.">
+                <div
+                  className="text-[10px] mt-1"
+                  style={{ color: '#f97316' }}
+                >
+                  {crossMonthCount} ad{crossMonthCount === 1 ? '' : 's'} billed cross-month ·{' '}
+                  <span className="font-semibold text-[var(--foreground)]">
+                    {fmt(billedElsewhere)}
+                  </span>{' '}
+                  of the billed spend landed in another month (total spent this month{' '}
+                  {fmt(totalInMonth)})
+                </div>
+                </Tooltip>
+              )}
+              {inProgressLifetime.length > 0 && (
+                <Tooltip label="A lifetime ad still running is excluded from the over/under — both its spend and its target — until its run completes, when its single variance books once. Its spend is still counted in the tracked total above.">
+                <div
+                  className="text-[10px] mt-1"
+                  style={{ color: COLORS.lifetime }}
+                >
+                  Excludes {inProgressLifetime.length} lifetime ad
+                  {inProgressLifetime.length === 1 ? '' : 's'} in progress ·{' '}
+                  {fmt(heldOutLifetime)} spent · settles on completion
+                </div>
+                </Tooltip>
+              )}
             </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function OverUnderYearView({ accountKey }: { accountKey: string | null }) {
-  const initialYear = useMemo(() => new Date().getFullYear(), []);
-  const [year, setYear] = useState<number>(initialYear);
-  const [months, setMonths] = useState<YearMonthRow[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setMonths(null);
-    setLoadError(null);
-    const url = accountKey
-      ? `/api/meta-ads-pacer/${accountKey}/year-summary?year=${year}`
-      : `/api/meta-ads-pacer/year-summary?year=${year}`;
-    fetch(url)
-      .then(async (r) => {
-        if (!r.ok) {
-          const text = await r.text().catch(() => '');
-          throw new Error(`HTTP ${r.status} ${text.slice(0, 200)}`);
-        }
-        return r.json() as Promise<{ months: YearMonthRow[] }>;
-      })
-      .then((data) => {
-        if (cancelled) return;
-        setMonths(Array.isArray(data?.months) ? data.months : []);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        // eslint-disable-next-line no-console
-        console.error('[meta-ads-pacer] year-summary load failed', err);
-        setLoadError(err instanceof Error ? err.message : 'Failed to load');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [accountKey, year]);
-
-  const totals = useMemo(() => {
-    if (!months)
-      return { clientBudget: 0, spendTarget: 0, actual: 0, variance: 0 };
-    const clientBudget = months.reduce((s, m) => s + m.clientBudget, 0);
-    const spendTarget = months.reduce((s, m) => s + m.spendTarget, 0);
-    const actual = months.reduce((s, m) => s + m.actual, 0);
-    // Variance is vs the margin-adjusted spend target, never the gross client
-    // budget — otherwise the agency margin would read as underspend (Change 6).
-    return { clientBudget, spendTarget, actual, variance: actual - spendTarget };
-  }, [months]);
-
-  const variancePct =
-    totals.spendTarget > 0 ? (totals.variance / totals.spendTarget) * 100 : null;
-
-  return (
-    <div>
-      <div className="flex items-center justify-end gap-4 mb-4 flex-wrap">
-        <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] bg-[var(--card)] p-1">
-          <button
-            type="button"
-            onClick={() => setYear((y) => y - 1)}
-            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-            aria-label="Previous year"
-          >
-            <ChevronLeftIcon className="w-4 h-4" />
-          </button>
-          <span className="text-xs font-bold px-2 min-w-[3.5rem] text-center">
-            {year}
-          </span>
-          <button
-            type="button"
-            onClick={() => setYear((y) => y + 1)}
-            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-            aria-label="Next year"
-          >
-            <ChevronRightIcon className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)] px-3.5 py-2.5 mb-4 text-xs text-[var(--muted-foreground)]">
-        Variance compares <span className="font-semibold">actual spend</span> to the{' '}
-        <span className="font-semibold">spend target</span> (client budget ×
-        margin — the amount that should hit Meta), not the gross client budget,
-        so the agency margin doesn&apos;t read as underspend. Client budget is
-        shown for context. Variance flips negative when you underspent.
-      </div>
-
-      {loadError ? (
-        <div className="glass-section-card rounded-xl text-center py-12 px-6">
-          <ExclamationTriangleIcon className="w-8 h-8 mx-auto mb-3 text-red-400" />
-          <p className="text-sm text-[var(--foreground)] font-medium mb-1">
-            Could not load yearly comparison.
-          </p>
-          <p className="text-xs text-[var(--muted-foreground)]">{loadError}</p>
-        </div>
-      ) : months == null ? (
-        <div className="text-center py-12 text-[var(--muted-foreground)] text-sm">
-          Loading…
-        </div>
-      ) : (
-        <div className="glass-table">
-          <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px]">
-              <thead>
-                <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
-                  <th className="text-left px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Month
-                  </th>
-                  <th className="text-right px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Client Budget
-                  </th>
-                  <th className="text-right px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Spend Target
-                  </th>
-                  <th className="text-right px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Actual Spend
-                  </th>
-                  <th className="text-right px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Variance
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {months.map((m) => {
-                  const variance = m.actual - m.spendTarget;
-                  const hasData =
-                    m.clientBudget > 0 || m.spendTarget > 0 || m.actual > 0;
-                  const varianceColor = !hasData
-                    ? 'var(--muted-foreground)'
-                    : Math.abs(variance) < 0.005
-                      ? COLORS.success
-                      : variance > 0
-                        ? COLORS.error
-                        : COLORS.warn;
-                  return (
-                    <tr
-                      key={m.period}
-                      className="border-b border-[var(--border)]/40 last:border-b-0"
-                    >
-                      <td className="px-4 py-2 text-sm font-medium text-[var(--foreground)]">
-                        {fmtPeriodShort(m.period)}
-                      </td>
-                      <td className="px-4 py-2 text-sm text-right text-[var(--muted-foreground)]">
-                        {hasData ? fmt(m.clientBudget) : '—'}
-                      </td>
-                      <td className="px-4 py-2 text-sm text-right text-[var(--foreground)]">
-                        {hasData ? fmt(m.spendTarget) : '—'}
-                      </td>
-                      <td className="px-4 py-2 text-sm text-right text-[var(--foreground)]">
-                        {hasData ? fmt(m.actual) : '—'}
-                      </td>
-                      <td
-                        className="px-4 py-2 text-sm text-right font-semibold"
-                        style={{ color: varianceColor }}
-                      >
-                        {hasData
-                          ? `${variance >= 0 ? '+' : '-'}${fmt(Math.abs(variance))}`
-                          : '—'}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
-                <tr className="border-t-2 border-[var(--border)] bg-[var(--muted)]/40">
-                  <td className="px-4 py-3 text-sm font-bold text-[var(--foreground)]">
-                    {year} total
-                  </td>
-                  <td className="px-4 py-3 text-sm text-right font-bold text-[var(--muted-foreground)]">
-                    {fmt(totals.clientBudget)}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-right font-bold text-[var(--foreground)]">
-                    {fmt(totals.spendTarget)}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-right font-bold text-[var(--foreground)]">
-                    {fmt(totals.actual)}
-                  </td>
-                  <td
-                    className="px-4 py-3 text-sm text-right font-bold"
-                    style={{
-                      color:
-                        Math.abs(totals.variance) < 0.005
-                          ? COLORS.success
-                          : totals.variance > 0
-                            ? COLORS.error
-                            : COLORS.warn,
-                    }}
-                  >
-                    {`${totals.variance >= 0 ? '+' : '-'}${fmt(Math.abs(totals.variance))}`}
-                    {variancePct != null && (
-                      <span className="block text-[10px] font-normal text-[var(--muted-foreground)] mt-0.5">
-                        {`${variancePct >= 0 ? '+' : ''}${variancePct.toFixed(1)}% vs target`}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              </tfoot>
-            </table>
           </div>
         </div>
       )}
@@ -9850,8 +10584,15 @@ function OverUnderYearView({ accountKey }: { accountKey: string | null }) {
 interface OverviewAccount {
   accountKey: string;
   dealer: string;
+  // §0.1: resolved per-account markup factor for the gross-up display.
+  markup: number;
   baseBudgetGoal: string | null;
   addedBudgetGoal: string | null;
+  // Per-source carryover folded into the spend target (target = goal × markup
+  // + carryover). Lets the remaining-budget footer reconcile against the same
+  // target the planner uses, so an applied carryover doesn't read as unallocated.
+  baseCarryover: string | null;
+  addedCarryover: string | null;
   // Server-side aggregated count of account-level pacer notes — drives
   // the chat badge on the overview row without an extra round-trip.
   notesCount: number;
@@ -9944,9 +10685,9 @@ function OverviewAccountRow({
 
         <div className="flex items-center gap-5 flex-shrink-0">
           {combinedTotal > 0 && (
+            <Tooltip label="Billing figure — combined Base + Added client budget (gross). Should match the planner for this account and month.">
             <div
               className="text-right"
-              title="Billing figure — combined Base + Added client budget (gross). Should match the planner for this account and month."
             >
               <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
                 Total Budget
@@ -9964,6 +10705,7 @@ function OverviewAccountRow({
                 </span>
               </div>
             </div>
+            </Tooltip>
           )}
           <div onClick={(e) => e.stopPropagation()}>
             <AccountNotesButton
@@ -9972,6 +10714,7 @@ function OverviewAccountRow({
               ariaLabel={`Open notes for ${account.dealer}`}
             />
           </div>
+          <Tooltip label="Open account">
           <button
             type="button"
             onClick={(e) => {
@@ -9979,10 +10722,10 @@ function OverviewAccountRow({
               onOpenAccount();
             }}
             className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-            title="Open account"
           >
             Open
           </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -10051,14 +10794,15 @@ function OverviewAccountRow({
                       <td
                         className="px-2 py-2 font-semibold whitespace-nowrap"
                         style={{ color: COLORS.daily }}
-                        title="Gross client-facing dollars (allocation grossed up by markup)"
                       >
-                        {num(ad.allocation) != null && MARKUP > 0
-                          ? fmt(
-                              Math.round((num(ad.allocation)! / MARKUP) * 100) /
-                                100,
-                            )
-                          : '—'}
+                        <Tooltip label="Gross client-facing dollars (allocation grossed up by markup)">
+                        {(() => {
+                          const m = effMarkupOf(account.markup);
+                          return num(ad.allocation) != null && m > 0
+                            ? fmt(Math.round((num(ad.allocation)! / m) * 100) / 100)
+                            : '—';
+                        })()}
+                        </Tooltip>
                       </td>
                       <td className="px-2 py-2 text-[var(--foreground)]">
                         {num(ad.allocation) != null ? fmt(num(ad.allocation)!) : '—'}
@@ -10077,6 +10821,72 @@ function OverviewAccountRow({
               </table>
             </div>
           )}
+
+          {/* Remaining-budget summary — reconciles what's allocated to ads this
+              month against the account's SPEND TARGET, mirroring the planner:
+              target = client budget × markup + carryover. Folding carryover in
+              keeps an applied carryover from reading as unallocated budget (the
+              raw client budget would otherwise disagree with the planner). Uses
+              the full account, not the filtered subset, so it's a true total. */}
+          {combinedTotal > 0 &&
+            (() => {
+              const m = effMarkupOf(account.markup);
+              // Net (actual-spend) sums across the whole account.
+              const allocatedNet = account.ads.reduce(
+                (s, a) => s + (num(a.allocation) ?? 0),
+                0,
+              );
+              const carryoverNet =
+                (num(account.baseCarryover) ?? 0) +
+                (num(account.addedCarryover) ?? 0);
+              // Gross (client-dollar) equivalents so the readout matches the
+              // Total Budget figure and the Client Budget column.
+              const allocatedGross = m > 0 ? allocatedNet / m : 0;
+              const carryoverGross = m > 0 ? carryoverNet / m : 0;
+              const targetGross = combinedTotal + carryoverGross;
+              const remaining =
+                Math.round((targetGross - allocatedGross) * 100) / 100;
+              const hasCarry = Math.abs(carryoverGross) >= 0.005;
+              const over = remaining < -0.005;
+              const fullyAllocated = Math.abs(remaining) <= 0.005;
+              const accent = over
+                ? COLORS.error
+                : fullyAllocated
+                  ? COLORS.success
+                  : COLORS.warn;
+              return (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-[var(--border)] pt-2.5 text-xs">
+                  <span className="text-[var(--muted-foreground)]">
+                    <span className="font-semibold text-[var(--foreground)] tabular-nums">
+                      {fmt(allocatedGross)}
+                    </span>{' '}
+                    of{' '}
+                    <span className="font-semibold text-[var(--foreground)] tabular-nums">
+                      {fmt(hasCarry ? targetGross : combinedTotal)}
+                    </span>{' '}
+                    {hasCarry ? 'spend target allocated' : 'client budget allocated'}
+                    {hasCarry && (
+                      <span>
+                        {' · '}
+                        {fmt(combinedTotal)} budget{' '}
+                        {carryoverGross > 0 ? '+' : '−'}
+                        {fmt(Math.abs(carryoverGross))} carryover
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    className="font-semibold tabular-nums"
+                    style={{ color: accent }}
+                  >
+                    {over
+                      ? `Over budget by ${fmt(-remaining)}`
+                      : fullyAllocated
+                        ? 'Fully allocated'
+                        : `${fmt(remaining)} remaining to allocate`}
+                  </span>
+                </div>
+              );
+            })()}
         </div>
       )}
 
@@ -10188,6 +10998,395 @@ function OverviewView({
   );
 }
 
+// ─── Import from Meta (onboarding) ──────────────────────────────────────────
+/** Mirror of the server `DiscoveredAdSet` (lib/integrations/meta-ads.ts). */
+interface DiscoveredAdSet {
+  id: string;
+  name: string;
+  campaignName: string | null;
+  effectiveStatus: string | null;
+  active: boolean;
+  budgetType: 'Daily' | 'Lifetime';
+  dailyBudget: number | null;
+  lifetimeBudget: number | null;
+  startDate: string | null;
+  endDate: string | null;
+  periodSpend: number;
+  runSpend: number | null;
+  alreadyLinked: boolean;
+  suggestedStatus: string;
+}
+
+/**
+ * Bulk-import existing Meta ad sets as pacer rows — the onboarding fast path
+ * for a fresh subaccount that already has ads running. Lists every ad set in
+ * the account (active-only by default, with a toggle), lets the user check the
+ * ones to adopt, optionally stamp owner/designer/rep across the batch, and
+ * creates them already linked + synced. Already-imported ad sets show disabled
+ * so nothing is double-created.
+ */
+function ImportFromMetaModal({
+  accountKey,
+  period,
+  periodLabel,
+  users,
+  onClose,
+  onImported,
+}: {
+  accountKey: string;
+  period: string;
+  periodLabel: string;
+  users: DirectoryUser[];
+  onClose: () => void;
+  onImported: (data: unknown) => void;
+}) {
+  const [adSets, setAdSets] = useState<DiscoveredAdSet[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState('');
+  const [showInactive, setShowInactive] = useState(false);
+  const [ownerId, setOwnerId] = useState('');
+  const [designerId, setDesignerId] = useState('');
+  const [repId, setRepId] = useState('');
+  const [importing, setImporting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetch(`/api/meta-ads-pacer/${accountKey}/discover?period=${period}`)
+      .then(async (r) => {
+        const data = await r.json().catch(() => null);
+        if (!r.ok) throw new Error(data?.error || 'Failed to load ad sets');
+        return data;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setAdSets(Array.isArray(data?.adSets) ? data.adSets : []);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Failed to load ad sets');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey, period]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !importing) onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose, importing]);
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return (adSets ?? []).filter((s) => {
+      if (!showInactive && !s.active && !s.alreadyLinked) return false;
+      if (!q) return true;
+      return (
+        s.name.toLowerCase().includes(q) ||
+        (s.campaignName ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [adSets, search, showInactive]);
+
+  const selectable = useMemo(
+    () => visible.filter((s) => !s.alreadyLinked),
+    [visible],
+  );
+  const allSelected =
+    selectable.length > 0 && selectable.every((s) => selected.has(s.id));
+  const hiddenInactive = useMemo(
+    () =>
+      showInactive
+        ? 0
+        : (adSets ?? []).filter((s) => !s.active && !s.alreadyLinked).length,
+    [adSets, showInactive],
+  );
+
+  const toggle = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const toggleAll = () =>
+    setSelected((prev) => {
+      if (selectable.length > 0 && selectable.every((s) => prev.has(s.id))) {
+        const next = new Set(prev);
+        selectable.forEach((s) => next.delete(s.id));
+        return next;
+      }
+      const next = new Set(prev);
+      selectable.forEach((s) => next.add(s.id));
+      return next;
+    });
+
+  const doImport = async () => {
+    if (importing || selected.size === 0) return;
+    setImporting(true);
+    try {
+      const res = await fetch(
+        `/api/meta-ads-pacer/${accountKey}/import?period=${period}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            adSetIds: Array.from(selected),
+            assignments: {
+              ownerUserId: ownerId || null,
+              designerUserId: designerId || null,
+              accountRepUserId: repId || null,
+            },
+          }),
+        },
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast.error(data?.error || 'Import failed.');
+        return;
+      }
+      const n = data?.import?.imported ?? 0;
+      const skipped = data?.import?.skipped ?? 0;
+      onImported(data);
+      toast.success(
+        `Imported ${n} ad${n === 1 ? '' : 's'} from Meta.${
+          skipped ? ` ${skipped} skipped.` : ''
+        }`,
+      );
+      onClose();
+    } catch {
+      toast.error('Import failed.');
+    } finally {
+      setImporting(false);
+    }
+  };
+
+  if (typeof document === 'undefined') return null;
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[120] flex items-start justify-center p-4 sm:pt-16 bg-black/50 backdrop-blur-sm"
+      onClick={() => !importing && onClose()}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="glass-modal w-full max-w-2xl rounded-xl flex flex-col max-h-[85vh]"
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between p-5 pb-4 border-b border-[var(--border)]">
+          <div>
+            <h3 className="text-base font-bold text-[var(--foreground)] flex items-center gap-2">
+              <MetaBrandIcon className="w-4 h-4" />
+              Import ad sets from Meta
+            </h3>
+            <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
+              Pick which of this account&apos;s ad sets to bring into{' '}
+              {periodLabel}. They&apos;re created already linked and synced.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => !importing && onClose()}
+            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
+            aria-label="Close"
+          >
+            <XMarkIcon className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Controls */}
+        <div className="flex items-center gap-3 px-5 py-3 border-b border-[var(--border)]">
+          <div className="relative flex-1">
+            <MagnifyingGlassIcon className="w-4 h-4 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search ad sets or campaigns…"
+              className="w-full pl-8 pr-3 py-1.5 text-sm rounded-lg border border-[var(--border)] bg-[var(--input)] focus:outline-none focus:border-[var(--primary)] text-[var(--foreground)]"
+            />
+          </div>
+          <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)] whitespace-nowrap cursor-pointer">
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => setShowInactive(e.target.checked)}
+              className="accent-[var(--primary)]"
+            />
+            Show paused/archived
+          </label>
+        </div>
+
+        {/* List */}
+        <div className="flex-1 overflow-y-auto px-2 py-2 min-h-[160px]">
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 py-12 text-sm text-[var(--muted-foreground)]">
+              <ArrowPathIcon className="w-4 h-4 animate-spin" />
+              Loading ad sets…
+            </div>
+          ) : error ? (
+            <div className="py-12 text-center text-sm text-[#ef4444]">{error}</div>
+          ) : visible.length === 0 ? (
+            <div className="py-12 text-center text-sm text-[var(--muted-foreground)]">
+              {(adSets ?? []).length === 0
+                ? 'No ad sets found in this Meta ad account.'
+                : 'No ad sets match your filters.'}
+              {hiddenInactive > 0 && (
+                <div className="mt-1 text-xs">
+                  {hiddenInactive} paused/archived hidden — toggle above to show.
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center justify-between px-3 py-1.5">
+                <button
+                  type="button"
+                  onClick={toggleAll}
+                  disabled={selectable.length === 0}
+                  className="text-xs font-semibold text-[var(--primary)] hover:underline disabled:opacity-40 disabled:no-underline"
+                >
+                  {allSelected ? 'Clear all' : 'Select all'}
+                </button>
+                <span className="text-xs text-[var(--muted-foreground)]">
+                  {selected.size} selected
+                  {hiddenInactive > 0 && ` · ${hiddenInactive} hidden`}
+                </span>
+              </div>
+              {visible.map((s) => {
+                const checked = selected.has(s.id);
+                const budgetLabel =
+                  s.budgetType === 'Lifetime'
+                    ? s.lifetimeBudget != null
+                      ? `${fmt(s.lifetimeBudget)} lifetime`
+                      : '— lifetime'
+                    : s.dailyBudget != null
+                      ? `${fmt(s.dailyBudget)}/day`
+                      : 'No set budget';
+                const flight = s.startDate
+                  ? `${fmtDate(s.startDate)} – ${s.endDate ? fmtDate(s.endDate) : 'ongoing'}`
+                  : 'Open-ended';
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    disabled={s.alreadyLinked}
+                    onClick={() => toggle(s.id)}
+                    className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
+                      s.alreadyLinked
+                        ? 'opacity-50 cursor-not-allowed'
+                        : checked
+                          ? 'bg-[var(--primary)]/10'
+                          : 'hover:bg-[var(--muted)]'
+                    }`}
+                  >
+                    <span
+                      className={`mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded border ${
+                        checked && !s.alreadyLinked
+                          ? 'bg-[var(--primary)] border-[var(--primary)]'
+                          : 'border-[var(--border)]'
+                      }`}
+                    >
+                      {checked && !s.alreadyLinked && (
+                        <CheckIcon className="w-3 h-3 text-white" />
+                      )}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-medium text-[var(--foreground)] truncate">
+                          {s.name}
+                        </span>
+                        {s.alreadyLinked ? (
+                          <span className="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded bg-[var(--muted)] text-[var(--muted-foreground)] whitespace-nowrap">
+                            Imported
+                          </span>
+                        ) : (
+                          <AdStatusPill status={s.suggestedStatus} />
+                        )}
+                      </div>
+                      <div className="mt-0.5 text-xs text-[var(--muted-foreground)] truncate">
+                        {s.campaignName ? `${s.campaignName} · ` : ''}
+                        {budgetLabel} · {flight}
+                        {s.periodSpend > 0 && ` · ${fmt(s.periodSpend)} spent`}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+            </>
+          )}
+        </div>
+
+        {/* Footer: bulk assignment + import */}
+        <div className="border-t border-[var(--border)] p-5 pt-4">
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div>
+              <label className={labelClass}>Owner</label>
+              <PeopleSearchPicker
+                value={ownerId || null}
+                onChange={(v) => setOwnerId(v ?? '')}
+                users={users}
+                placeholder="— Unassigned —"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Designer</label>
+              <PeopleSearchPicker
+                value={designerId || null}
+                onChange={(v) => setDesignerId(v ?? '')}
+                users={users}
+                placeholder="— Unassigned —"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Account Rep</label>
+              <PeopleSearchPicker
+                value={repId || null}
+                onChange={(v) => setRepId(v ?? '')}
+                users={users}
+                placeholder="— Unassigned —"
+              />
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => !importing && onClose()}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={doImport}
+              disabled={importing || selected.size === 0}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold rounded-lg bg-[var(--primary)] text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {importing ? (
+                <ArrowPathIcon className="w-4 h-4 animate-spin" />
+              ) : (
+                <PlusIcon className="w-4 h-4" />
+              )}
+              {importing
+                ? 'Importing…'
+                : `Import ${selected.size || ''} ad set${selected.size === 1 ? '' : 's'}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
 // ─── Main tool component ───────────────────────────────────────────────────
 /**
  * Shared shell rendered by both the Ad Planner and Ad Pacer pages. The
@@ -10195,12 +11394,16 @@ function OverviewView({
  * header gets a Pacer | Summary toggle that swaps the body content.
  */
 type MetaToolMode = 'planner' | 'pacer';
-type PacerInnerTab = 'pacer' | 'summary' | 'compare' | 'reconcile';
+type PacerInnerTab = 'pacer' | 'summary' | 'compare';
+// Planner page sub-tabs: the planner itself + the Reconciliation view
+// (moved here from the Pacer page).
+type PlannerInnerTab = 'planner' | 'reconcile';
 
-export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
+export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }) {
   const { accountKey, accounts, setAccount } = useAccount();
   const { data: session } = useSession();
   const { markDirty, markClean } = useUnsavedChanges();
+  const { confirm } = useLoomiDialog();
   const currentUserId = session?.user?.id ?? null;
 
   const activeKey = accountKey;
@@ -10215,6 +11418,15 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
 
   const urlPeriod = searchParams.get('period');
   const urlPacerTab = searchParams.get('pacerTab');
+  const urlPlannerTab = searchParams.get('plannerTab');
+  const urlView = searchParams.get('view');
+
+  // Planner + Pacer are one consolidated page now; `mode` is switchable state
+  // (seeded from ?view= or the route default) and mirrors back to the URL via
+  // the sync effect below, so the Plan/Pace toggle is bookmarkable.
+  const [mode, setMode] = useState<MetaToolMode>(
+    urlView === 'pacer' ? 'pacer' : urlView === 'planner' ? 'planner' : initialMode,
+  );
 
   const [users, setUsers] = useState<DirectoryUser[]>([]);
   const [period, setPeriod] = useState<string>(
@@ -10236,6 +11448,8 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
   // their open-state + drawers are lifted here and work on every pacer sub-tab.
   const [budgetLogOpen, setBudgetLogOpen] = useState(false);
   const [changeLogOpen, setChangeLogOpen] = useState(false);
+  // "Import from Meta" onboarding modal (available in planner + pacer).
+  const [importOpen, setImportOpen] = useState(false);
   const adsSnapshot = useMemo<AdSnapshot[]>(
     () =>
       plan
@@ -10261,9 +11475,10 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
       ? 'summary'
       : urlPacerTab === 'compare'
         ? 'compare'
-        : urlPacerTab === 'reconcile'
-          ? 'reconcile'
-          : 'pacer',
+        : 'pacer',
+  );
+  const [plannerTab, setPlannerTab] = useState<PlannerInnerTab>(
+    urlPlannerTab === 'reconcile' ? 'reconcile' : 'planner',
   );
 
   // Mirror state changes back into the URL (replace, not push, so the
@@ -10271,15 +11486,18 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
   useEffect(() => {
     const next = new URLSearchParams(searchParams.toString());
     next.set('period', period);
+    next.set('view', mode);
     if (mode === 'pacer') next.set('pacerTab', pacerTab);
     else next.delete('pacerTab');
+    if (mode === 'planner') next.set('plannerTab', plannerTab);
+    else next.delete('plannerTab');
     const qs = next.toString();
     const url = qs ? `${pathname}?${qs}` : pathname;
     router.replace(url, { scroll: false });
     // Intentionally exclude `searchParams` so external param changes don't
     // re-trigger this loop (we read from it once on mount).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period, pacerTab, mode, pathname, router]);
+  }, [period, pacerTab, plannerTab, mode, pathname, router]);
   const [filters, setFilters] = useState<PlanFilters>(EMPTY_FILTERS);
   const [filterSidebarOpen, setFilterSidebarOpen] = useState(false);
   // Lifted overview list — fetched once per period when there's no
@@ -10413,6 +11631,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           addedCarryover: planData.addedCarryover ?? null,
           priorOverUnder: planData.priorOverUnder ?? null,
           ads: Array.isArray(planData.ads) ? planData.ads : [],
+          siblingsByName: planData.siblingsByName,
         });
         setPeriodSummaries(
           Array.isArray(periodsData?.periods) ? periodsData.periods : [],
@@ -10504,17 +11723,21 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
   // plan straight into state. Linked rows (or rows whose name matches a
   // campaign) get their pacerActual overwritten by Facebook's number; the
   // existing autosave effect persists the result.
-  const handleSyncMeta = async () => {
+  const handleSyncMeta = async (opts?: { auto?: boolean }) => {
     if (!activeKey || syncingMeta) return;
+    // Auto = the silent background refresh on load (stale-while-revalidate):
+    // no toasts, and the route skips the audit entry. The button spinner is
+    // the only surfaced signal.
+    const auto = opts?.auto === true;
     setSyncingMeta(true);
     try {
       const res = await fetch(
-        `/api/meta-ads-pacer/${activeKey}/sync-meta?period=${period}`,
+        `/api/meta-ads-pacer/${activeKey}/sync-meta?period=${period}${auto ? '&auto=1' : ''}`,
         { method: 'POST' },
       );
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        toast.error(data?.error || 'Meta sync failed.');
+        if (!auto) toast.error(data?.error || 'Meta sync failed.');
         return;
       }
       setPlan({
@@ -10537,7 +11760,10 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         addedCarryover: data.addedCarryover ?? null,
         priorOverUnder: data.priorOverUnder ?? null,
         ads: Array.isArray(data.ads) ? data.ads : [],
+        siblingsByName: data.siblingsByName,
       });
+      // Background refresh: the rows just updated silently — no toasts.
+      if (auto) return;
       const sync = data.sync as
         | { matched: number; total: number; results: { matched: boolean; name: string }[] }
         | undefined;
@@ -10560,10 +11786,73 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         );
       }
     } catch {
-      toast.error('Meta sync failed.');
+      if (!auto) toast.error('Meta sync failed.');
     } finally {
       setSyncingMeta(false);
     }
+  };
+
+  // ── Auto-refresh from Meta on load (stale-while-revalidate) ──
+  // The pacer renders from cached DB rows immediately; once loaded, if the
+  // linked ads' spend is stale we fire ONE silent background sync. Latest sync
+  // fn + plan live in refs so the effect fires once per account/period load
+  // without re-running on every plan edit or chasing the fn's identity.
+  const autoSyncFnRef = useRef<(opts?: { auto?: boolean }) => void>(() => {});
+  autoSyncFnRef.current = handleSyncMeta;
+  const planRef = useRef<PacerPlan | null>(null);
+  planRef.current = plan;
+  // Per account+period cooldown so a sync that keeps failing can't re-fire on
+  // every render — it retries at most once per stale window.
+  const autoSyncAttemptRef = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    if (mode !== 'pacer' || !activeKey || !loaded) return;
+    const p = planRef.current;
+    if (!p || p.frozen) return;
+    // Only ad sets actually linked to Meta can be refreshed.
+    const linked = p.ads.filter((a) => a.metaObjectId);
+    if (linked.length === 0) return;
+    const STALE_MS = 15 * 60 * 1000;
+    const now = Date.now();
+    const anyNeverSynced = linked.some((a) => !a.pacerSyncedAt);
+    const freshest = linked.reduce((max, a) => {
+      const t = a.pacerSyncedAt ? Date.parse(a.pacerSyncedAt) : NaN;
+      return Number.isFinite(t) && t > max ? t : max;
+    }, 0);
+    if (!anyNeverSynced && now - freshest <= STALE_MS) return; // still fresh
+    const key = `${activeKey}:${period}`;
+    const last = autoSyncAttemptRef.current.get(key) ?? 0;
+    if (now - last < STALE_MS) return; // attempted recently — don't loop
+    autoSyncAttemptRef.current.set(key, now);
+    autoSyncFnRef.current({ auto: true });
+  }, [activeKey, period, loaded, mode]);
+
+  // ── Apply the refreshed plan returned by the "Import from Meta" modal ──
+  // The import route returns the same period view as a sync, so the rows drop
+  // straight into state (the modal owns its own toast + close).
+  const handleImported = (raw: unknown) => {
+    const data = (raw ?? {}) as Record<string, unknown>;
+    setPlan({
+      accountKey: (data.accountKey as string) ?? activeKey ?? '',
+      period: (data.period as string) ?? period,
+      baseBudgetGoal: (data.baseBudgetGoal as string | null) ?? null,
+      addedBudgetGoal: (data.addedBudgetGoal as string | null) ?? null,
+      markup:
+        typeof data.markup === 'number' && Number.isFinite(data.markup)
+          ? (data.markup as number)
+          : null,
+      timeZone:
+        typeof data.timeZone === 'string' && data.timeZone
+          ? (data.timeZone as string)
+          : DEFAULT_TIME_ZONE,
+      frozen: data.frozen === true,
+      frozenAt: (data.frozenAt as string | null) ?? null,
+      reopened: data.reopened === true,
+      baseCarryover: (data.baseCarryover as string | null) ?? null,
+      addedCarryover: (data.addedCarryover as string | null) ?? null,
+      priorOverUnder: (data.priorOverUnder as PriorOverUnder | null) ?? null,
+      ads: Array.isArray(data.ads) ? (data.ads as PacerAd[]) : [],
+      siblingsByName: data.siblingsByName as PacerPlan['siblingsByName'],
+    });
   };
 
   // ── Reopen a frozen (closed) month for correction (admin escape hatch) ──
@@ -10600,6 +11889,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         addedCarryover: data.addedCarryover ?? null,
         priorOverUnder: data.priorOverUnder ?? null,
         ads: Array.isArray(data.ads) ? data.ads : [],
+        siblingsByName: data.siblingsByName,
       });
       // Re-enable autosave from the reopened baseline.
       lastSavedRef.current = '';
@@ -10647,6 +11937,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         addedCarryover: data.addedCarryover ?? null,
         priorOverUnder: data.priorOverUnder ?? null,
         ads: Array.isArray(data.ads) ? data.ads : [],
+        siblingsByName: data.siblingsByName,
       });
       toast.success(`${fmtPeriodLong(period)} re-frozen.`);
     } catch {
@@ -10697,6 +11988,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         addedCarryover: data.addedCarryover ?? null,
         priorOverUnder: data.priorOverUnder ?? null,
         ads: Array.isArray(data.ads) ? data.ads : [],
+        siblingsByName: data.siblingsByName,
       });
       toast.success(
         clear
@@ -10751,6 +12043,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         addedCarryover: updated.addedCarryover ?? null,
         priorOverUnder: updated.priorOverUnder ?? null,
         ads: Array.isArray(updated.ads) ? updated.ads : [],
+        siblingsByName: updated.siblingsByName,
       });
       lastSavedRef.current = JSON.stringify({
         baseBudgetGoal: updated.baseBudgetGoal,
@@ -10873,68 +12166,499 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
       const c = adContribution(ad);
       base += c.baseAllocation;
       added += c.addedAllocation;
-      actual += num(ad.pacerActual) ?? 0;
+      // §2: a resolved straddler counts its full run in its own month.
+      actual += effectiveActual(ad);
     });
     return { base, added, actual };
   }, [plan]);
 
+  // Account-wide pacing for the Pacer's scope-row "Spend Progress" readout —
+  // lifted here (from the pacer panel) so the metrics can live in the scope
+  // row. Live month = neutral progress; frozen = final variance. In-progress
+  // lifetime ads are excluded from both sides (mirrors the Over/Under page).
+  const pacerAccountPacing = useMemo<AccountPacing | null>(() => {
+    if (!plan) return null;
+    const nowMs = Date.now();
+    const gross =
+      (num(plan.baseBudgetGoal) ?? 0) + (num(plan.addedBudgetGoal) ?? 0);
+    const carry =
+      (num(plan.baseCarryover) ?? 0) + (num(plan.addedCarryover) ?? 0);
+    const target = effectiveSpendTarget(gross, effMarkupOf(plan.markup), carry);
+    let ipLifeActual = 0;
+    let ipLifeAlloc = 0;
+    for (const ad of plan.ads) {
+      if (!isLifetimeInProgress(ad, nowMs, plan.timeZone)) continue;
+      ipLifeActual += effectiveActual(ad);
+      ipLifeAlloc += num(ad.allocation) ?? 0;
+    }
+    const baseTarget = target - ipLifeAlloc;
+    const baseSpent = totals.actual - ipLifeActual;
+    if (baseTarget <= 0) return null;
+    if (plan.frozen) {
+      const pct = (baseSpent / baseTarget) * 100;
+      const delta = pct - 100;
+      const status =
+        Math.abs(delta) < 0.5 ? 'on-track' : delta > 0 ? 'over' : 'under';
+      return { mode: 'final', pct, status, spent: baseSpent, target: baseTarget, dayElapsed: 0, dayTotal: 0 };
+    }
+    const now = new Date(nowMs);
+    const [py, pm] = plan.period.split('-').map(Number);
+    const dayTotal = new Date(py, pm, 0).getDate();
+    const todayMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const dayElapsed =
+      todayMonth === plan.period ? now.getDate() : todayMonth > plan.period ? dayTotal : 0;
+    return { mode: 'progress', pct: (baseSpent / baseTarget) * 100, status: 'neutral', spent: baseSpent, target: baseTarget, dayElapsed, dayTotal };
+  }, [plan, totals.actual]);
+
+  // Bulk "Set all dailies to Rec." — lifted here (from the pacer panel) so the
+  // button can sit beside Sync in the shared action cluster. Applies the
+  // recommended daily to every visible non-lifetime, non-stopped ad with a
+  // valid recDaily; shows a per-ad before → after preview first.
+  const pacerVisibleAds = useMemo(
+    () => (plan ? applyFilters(plan.ads, filters, currentUserId) : []),
+    [plan, filters, currentUserId],
+  );
+  const bulkSetDailies = async () => {
+    if (!plan || plan.frozen) return;
+    const nowMs = Date.now();
+    const candidates = pacerVisibleAds.filter((ad) => {
+      if (ad.budgetType !== 'Daily') return false;
+      if (ad.adStatus === 'Off' || ad.adStatus === 'Completed Run') return false;
+      const c = buildPacerCalc(ad, nowMs, plan.timeZone);
+      return c.daysLeft > 0 && c.budget > 0 && c.recDaily > 0;
+    });
+    if (candidates.length === 0) {
+      toast.error('No visible ads have a recommended daily to apply');
+      return;
+    }
+    const bigJumps = candidates.filter((ad) => {
+      const current = num(ad.pacerDailyBudget) ?? 0;
+      if (current <= 0) return false;
+      const rec = buildPacerCalc(ad, nowMs, plan.timeZone).recDaily;
+      return Math.abs(rec - current) / current > 0.2;
+    });
+    const adWord = candidates.length === 1 ? 'ad' : 'ads';
+    const rows = candidates.map((ad) => {
+      const current = num(ad.pacerDailyBudget) ?? 0;
+      const rec = buildPacerCalc(ad, nowMs, plan.timeZone).recDaily;
+      return {
+        id: ad.id,
+        name: ad.name || 'Untitled Ad',
+        current,
+        rec,
+        isBig: current > 0 && Math.abs(rec - current) / current > 0.2,
+      };
+    });
+    const body = (
+      <div className="space-y-3">
+        <div className="overflow-hidden rounded-xl border border-[var(--border)] divide-y divide-[var(--border)]">
+          {rows.map((r) => (
+            <div
+              key={r.id}
+              className="flex items-center justify-between gap-3 px-3.5 py-2.5"
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-[var(--foreground)]">
+                  {r.name}
+                </div>
+                {r.isBig && (
+                  <span
+                    className="mt-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider"
+                    style={{ background: 'rgba(245,158,11,0.15)', color: COLORS.warn }}
+                  >
+                    <ExclamationTriangleIcon className="h-3 w-3" />
+                    &gt;20% jump
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-shrink-0 items-center gap-2 text-sm">
+                <span className="text-[var(--muted-foreground)]">
+                  {r.current > 0 ? `${fmt(r.current)}/day` : 'not set'}
+                </span>
+                <span className="text-[var(--muted-foreground)]">→</span>
+                <span className="font-bold" style={{ color: 'var(--primary)' }}>
+                  {fmt(r.rec)}/day
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+        {bigJumps.length > 0 && (
+          <div
+            className="flex items-start gap-2 rounded-lg px-3 py-2 text-xs"
+            style={{ background: 'rgba(245,158,11,0.1)', color: COLORS.warn }}
+          >
+            <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <span>
+              {bigJumps.length}{' '}
+              {bigJumps.length === 1 ? 'change is a' : 'changes are'} &gt;20% jump
+              — large changes can reset Meta&apos;s learning phase.
+            </span>
+          </div>
+        )}
+      </div>
+    );
+    const ok = await confirm({
+      title: 'Set dailies to recommended',
+      message: `This will set the daily budget on ${candidates.length} ${adWord}:`,
+      body,
+      confirmLabel: `Apply to ${candidates.length} ${adWord}`,
+    });
+    if (!ok) return;
+    const candidateIds = new Set(candidates.map((a) => a.id));
+    setPlan({
+      ...plan,
+      ads: plan.ads.map((ad) => {
+        if (!candidateIds.has(ad.id)) return ad;
+        const c = buildPacerCalc(ad, nowMs, plan.timeZone);
+        return { ...ad, pacerDailyBudget: c.recDaily.toFixed(2) };
+      }),
+    });
+    toast.success(
+      `Set daily budget on ${candidates.length} ad${candidates.length === 1 ? '' : 's'} to recommended`,
+    );
+  };
+
+  // Most-recent Meta spend sync across the plan's ads (ISO strings compare
+  // chronologically) — surfaced in the Sync button's tooltip.
+  const lastSyncedAt = useMemo(
+    () =>
+      plan
+        ? plan.ads.reduce<string | null>((latest, ad) => {
+            if (!ad.pacerSyncedAt) return latest;
+            return !latest || ad.pacerSyncedAt > latest ? ad.pacerSyncedAt : latest;
+          }, null)
+        : null,
+    [plan],
+  );
+
+  // Pacer action buttons (change/budget log + set-all-dailies + Meta
+  // import/sync). Built once here so they can render either in the scope row
+  // (summary / over-under sub-tabs) or inside the pacer panel's "Spend Pacing"
+  // header (passed via headerActions) — wherever the swap puts them per sub-tab.
+  const pacerActions =
+    mode === 'pacer' && activeKey ? (
+      <div className="flex items-center justify-end gap-3 flex-wrap">
+        <Tooltip label="Change log" placement="bottom">
+          <button
+            type="button"
+            onClick={() => setChangeLogOpen(true)}
+            aria-label="Change log"
+            className="inline-flex items-center justify-center text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+          >
+            <ClockIcon className="w-6 h-6" />
+          </button>
+        </Tooltip>
+        <Tooltip label="Budget Log" placement="bottom">
+          <button
+            type="button"
+            onClick={() => setBudgetLogOpen(true)}
+            aria-label="Budget Log"
+            className="inline-flex items-center justify-center text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+          >
+            <ClipboardDocumentListIcon className="w-6 h-6" />
+          </button>
+        </Tooltip>
+        {/* Set all dailies to Rec. — icon-only secondary, paired with Sync.
+            Pacer sub-tab only (where the dailies table lives); lights up to
+            the soft primary color on hover. */}
+        {pacerTab === 'pacer' && !plan?.frozen && (
+          <Tooltip label="Set all dailies to recommended" placement="bottom">
+            <button
+              type="button"
+              onClick={bulkSetDailies}
+              aria-label="Set all dailies to recommended"
+              className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] transition-colors hover:border-[var(--primary)]/40 hover:bg-[var(--primary)]/10 hover:text-[var(--primary)]"
+            >
+              <BoltIcon className="w-4 h-4" />
+            </button>
+          </Tooltip>
+        )}
+        {/* Sync — icon-only secondary, sits to the left of Import. */}
+        <Tooltip
+          label={
+            <span className="block">
+              <span className="block">
+                {plan?.frozen
+                  ? 'Frozen — reopen to re-sync'
+                  : 'Sync actual spend from Meta'}
+              </span>
+              {lastSyncedAt && (
+                <span className="mt-0.5 block text-[var(--muted-foreground)]">
+                  Last synced {fmtSyncedAgo(lastSyncedAt)}
+                </span>
+              )}
+            </span>
+          }
+          placement="bottom"
+        >
+          <button
+            type="button"
+            onClick={() => handleSyncMeta()}
+            disabled={syncingMeta || !!plan?.frozen}
+            aria-label="Sync from Meta"
+            className="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <ArrowPathIcon className={`w-4 h-4 ${syncingMeta ? 'animate-spin' : ''}`} />
+          </button>
+        </Tooltip>
+        {/* Import — primary, white Meta badge. */}
+        <Tooltip
+          label={
+            plan?.frozen
+              ? 'This month is frozen — reopen it to import'
+              : 'Bring existing Meta ad sets into this month as rows'
+          }
+          placement="bottom"
+        >
+        <button
+          type="button"
+          onClick={() => setImportOpen(true)}
+          disabled={!!plan?.frozen}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-[var(--primary)]/90 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          <MetaBrandIcon className="w-3.5 h-3.5 brightness-0 invert" />
+          Import from Meta
+        </button>
+        </Tooltip>
+      </div>
+    ) : null;
+
+  const hasTabs = mode === 'pacer' || (mode === 'planner' && !!activeKey);
+
+  // Carryover prompt (Change 7) — fold last month's settled over/under into
+  // this month's spend target, opt-in, per bucket. Never touches the client
+  // budget goal. Rendered up in the account scope row (planner only) so it
+  // doesn't add a dedicated row above the budget cards.
+  const carryoverNotice =
+    activeKey && plan && !plan.frozen && mode === 'planner' && plannerTab === 'planner'
+      ? (() => {
+          const prior = plan.priorOverUnder;
+          const appliedBase = num(plan.baseCarryover);
+          const appliedAdded = num(plan.addedCarryover);
+          const applied = appliedBase != null || appliedAdded != null;
+          // Always surface an unapplied prior over/under so you can decide
+          // whether to fold it in — even below the threshold. Only hide when
+          // there's nothing meaningful to show.
+          if (!applied && (!prior || Math.abs(prior.variance) < 0.005)) {
+            return null;
+          }
+          const fromLabel = fmtPeriodShort(shiftPeriod(period, -1));
+          if (applied) {
+            const amt = appliedBase != null ? appliedBase : appliedAdded ?? 0;
+            const bucket = appliedBase != null ? 'base' : 'added';
+            return (
+              <div className="flex items-center justify-between gap-3 flex-wrap rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 px-4 py-2.5">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <ArrowPathIcon className="w-4 h-4 flex-shrink-0 text-[var(--primary)]" />
+                  <span className="text-xs text-[var(--foreground)]">
+                    Carryover applied:{' '}
+                    <span className="font-semibold">
+                      {amt >= 0 ? '+' : '−'}
+                      {fmt(Math.abs(amt))}
+                    </span>{' '}
+                    to {bucket === 'base' ? 'Base' : 'Added'} (from {fromLabel}).
+                    The client budget is unchanged.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleApplyCarryover(bucket, true)}
+                  disabled={applyingCarryover}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  Remove
+                </button>
+              </div>
+            );
+          }
+          const variance = prior!.variance;
+          const under = variance < 0;
+          const carry = prior!.carryover;
+          const prominent = prior!.exceedsThreshold && !carryoverDismissed;
+          if (!prominent) {
+            return (
+              <div className="flex items-center justify-between gap-3 flex-wrap rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-4 py-2">
+                <div className="flex items-center gap-2 min-w-0 text-xs text-[var(--muted-foreground)]">
+                  <ScaleIcon className="w-3.5 h-3.5 flex-shrink-0" />
+                  <span>
+                    <span className="font-semibold text-[var(--foreground)]">
+                      {fromLabel}
+                    </span>{' '}
+                    {under ? 'underspent' : 'overspent'} by{' '}
+                    <span className="font-semibold text-[var(--foreground)]">
+                      {fmt(Math.abs(variance))}
+                    </span>{' '}
+                    vs target.
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <select
+                    value={carryoverBucket}
+                    onChange={(e) =>
+                      setCarryoverBucket(e.target.value === 'added' ? 'added' : 'base')
+                    }
+                    className="px-2 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--input)] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)]"
+                    aria-label="Carryover bucket"
+                  >
+                    <option value="base">Base</option>
+                    <option value="added">Added</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => handleApplyCarryover(carryoverBucket, false)}
+                    disabled={applyingCarryover}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {applyingCarryover
+                      ? 'Applying…'
+                      : `Apply ${carry >= 0 ? '+' : '−'}${fmt(Math.abs(carry))}`}
+                  </button>
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div
+              className="flex items-center justify-between gap-3 flex-wrap rounded-xl border px-4 py-2.5"
+              style={{ borderColor: `${COLORS.warn}66`, background: 'rgba(245,158,11,0.06)' }}
+            >
+              <div className="flex items-center gap-2.5 min-w-0">
+                <ScaleIcon className="w-4 h-4 flex-shrink-0" style={{ color: COLORS.warn }} />
+                <div className="min-w-0 text-xs text-[var(--foreground)]">
+                  <span className="font-semibold">{fromLabel}</span>{' '}
+                  {under ? 'underspent' : 'overspent'} by{' '}
+                  <span className="font-semibold" style={{ color: under ? COLORS.warn : COLORS.error }}>
+                    {fmt(Math.abs(variance))}
+                  </span>{' '}
+                  vs target — exceeds the {fmt(CARRYOVER_THRESHOLD)} threshold.
+                  <span className="text-[var(--muted-foreground)]">
+                    {' '}Apply{' '}
+                    <span className="font-semibold text-[var(--foreground)]">
+                      {carry >= 0 ? '+' : '−'}
+                      {fmt(Math.abs(carry))}
+                    </span>{' '}
+                    to this month&apos;s spend target?
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <select
+                  value={carryoverBucket}
+                  onChange={(e) =>
+                    setCarryoverBucket(e.target.value === 'added' ? 'added' : 'base')
+                  }
+                  className="px-2 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--input)] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)]"
+                  aria-label="Carryover bucket"
+                >
+                  <option value="base">Base</option>
+                  <option value="added">Added</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => handleApplyCarryover(carryoverBucket, false)}
+                  disabled={applyingCarryover}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--primary)] disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {applyingCarryover ? 'Applying…' : 'Apply'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCarryoverDismissed(true)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--muted)]"
+                >
+                  Leave as-is
+                </button>
+              </div>
+            </div>
+          );
+        })()
+      : null;
 
   return (
     <PacerReadOnlyContext.Provider value={!!plan?.frozen}>
     <div className="animate-fade-in-up">
-      {/* Page header */}
+      {/* Page header — title row + sub-tabs are pinned together inside one
+          sticky element so the tabs don't scroll away. */}
       <div
-        className={`page-sticky-header pad-on-scroll flex items-center justify-between gap-4 flex-wrap ${
-          mode === 'pacer' ? 'mb-6' : 'mb-10'
+        className={`page-sticky-header pad-on-scroll ${hasTabs ? 'has-tabs ' : ''}${
+          mode === 'pacer' ? 'mb-8' : 'mb-6'
         }`}
       >
-        <div className="flex items-center gap-3">
-          <MetaLogoIcon className="w-8 h-8" />
-          <div>
-            <h2 className="text-2xl font-bold">
-              {mode === 'planner' ? 'Meta Ad Planner' : 'Meta Ad Pacer'}
-            </h2>
-            <p className="text-[var(--muted-foreground)] text-sm mt-0.5">
-              {mode === 'planner'
-                ? 'Plan and allocate your monthly Meta ad budgets'
-                : 'Track spend pacing across the active period'}
-            </p>
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+          {/* Left: title */}
+          <div className="flex items-center gap-3 min-w-0">
+            <MetaBrandIcon className="w-8 h-8 flex-shrink-0" />
+            <div className="min-w-0">
+              <h2 className="text-2xl font-bold">Meta Ads</h2>
+              <p className="text-[var(--muted-foreground)] text-sm mt-0.5">
+                {mode === 'planner'
+                  ? 'Plan and allocate your monthly Meta ad budgets'
+                  : 'Track spend pacing across the active period'}
+              </p>
+            </div>
+          </div>
+
+          {/* Center: Plan / Pace mode switch — consolidates the former Ad
+              Planner + Ad Pacer pages. Each mode keeps its own sub-tabs. */}
+          <div className="flex justify-center">
+            <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
+              {(['planner', 'pacer'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMode(m)}
+                  aria-pressed={mode === m}
+                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                    mode === m
+                      ? 'bg-[var(--primary)] text-white'
+                      : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                  }`}
+                >
+                  {m === 'planner' ? 'Plan' : 'Pace'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Right: notes + month + filters */}
+          <div className="flex items-center justify-end gap-3 flex-wrap">
+            {activeKey && (
+              <AccountNotesButton
+                count={notesCount}
+                onClick={() => setNotesOpen(true)}
+                ariaLabel={`Open notes for ${activeAccount?.dealer ?? activeKey}`}
+              />
+            )}
+            <PeriodSelector period={period} onChange={setPeriod} />
+            <button
+              type="button"
+              onClick={() => setFilterSidebarOpen((o) => !o)}
+              aria-pressed={filterSidebarOpen}
+              aria-expanded={filterSidebarOpen}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                filterSidebarOpen
+                  ? 'border-[var(--primary)] bg-[var(--primary)]/12 text-[var(--primary)]'
+                  : 'border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] hover:bg-[var(--muted)]'
+              }`}
+            >
+              <FunnelIcon className="w-3.5 h-3.5" />
+              Filters
+              {activeFilterCount(filters) > 0 && (
+                <span
+                  className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full text-[10px] font-bold"
+                  style={{ background: 'var(--primary)', color: 'white' }}
+                >
+                  {activeFilterCount(filters)}
+                </span>
+              )}
+            </button>
           </div>
         </div>
 
-        {/* Month + general filters live up here in the title row (replacing
-            the old auto-save indicator). */}
-        <div className="flex items-center gap-3 flex-wrap">
-          <PeriodSelector period={period} onChange={setPeriod} />
-          <button
-            type="button"
-            onClick={() => setFilterSidebarOpen((o) => !o)}
-            aria-pressed={filterSidebarOpen}
-            aria-expanded={filterSidebarOpen}
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
-              filterSidebarOpen
-                ? 'border-[var(--primary)] bg-[var(--primary)]/12 text-[var(--primary)]'
-                : 'border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] hover:bg-[var(--muted)]'
-            }`}
-          >
-            <FunnelIcon className="w-3.5 h-3.5" />
-            Filters
-            {activeFilterCount(filters) > 0 && (
-              <span
-                className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1.5 rounded-full text-[10px] font-bold"
-                style={{ background: 'var(--primary)', color: 'white' }}
-              >
-                {activeFilterCount(filters)}
-              </span>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {/* Pacer sub-tabs — their own full-width row, sitting between the page
-          title above and the account name + actions row below. */}
+      {/* Sub-tabs — pinned inside the sticky header so they don't scroll away. */}
       {mode === 'pacer' && (
-        <div className="mb-8 flex items-center gap-1 border-b border-[var(--border)]">
+        <div className="mt-4 flex items-center gap-1 border-b border-[var(--border)]">
           {activeKey && (
             <>
               <button
@@ -10975,26 +12699,50 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
             <ScaleIcon className="w-3.5 h-3.5" />
             Over/Under Spend
           </button>
-          {activeKey && (
-            <button
-              type="button"
-              onClick={() => setPacerTab('reconcile')}
-              className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                pacerTab === 'reconcile'
-                  ? 'border-[var(--primary)] text-[var(--primary)]'
-                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              <InvestmentIcon className="w-3.5 h-3.5" />
-              Reconciliation
-            </button>
-          )}
         </div>
       )}
 
+      {/* Planner sub-tabs — Planner + Reconciliation, mirroring the Pacer
+          page's tab row. Only shown when an account is selected, since the
+          Reconciliation view needs an account. */}
+      {mode === 'planner' && activeKey && (
+        <div className="mt-4 flex items-center gap-1 border-b border-[var(--border)]">
+          <button
+            type="button"
+            onClick={() => setPlannerTab('planner')}
+            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              plannerTab === 'planner'
+                ? 'border-[var(--primary)] text-[var(--primary)]'
+                : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+            }`}
+          >
+            <ClipboardDocumentListIcon className="w-3.5 h-3.5" />
+            Planner
+          </button>
+          <button
+            type="button"
+            onClick={() => setPlannerTab('reconcile')}
+            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+              plannerTab === 'reconcile'
+                ? 'border-[var(--primary)] text-[var(--primary)]'
+                : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+            }`}
+          >
+            <InvestmentIcon className="w-3.5 h-3.5" />
+            Reconciliation
+          </button>
+        </div>
+      )}
+      </div>
+
       {/* Scope row — avatar + account name + status battery on the left;
-          period + filters on the right */}
-      <div className="mb-10 flex items-start justify-between gap-4 flex-wrap">
+          pacer actions on the right. The carryover banner renders full-width
+          directly below (planner), so the row hugs it when present. */}
+      <div
+        className={`flex items-start justify-between gap-4 flex-wrap ${
+          carryoverNotice ? 'mb-4' : 'mb-10'
+        }`}
+      >
         {activeKey ? (
           <div className="flex items-center gap-3 min-w-0">
             <AccountAvatar
@@ -11020,64 +12768,26 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           </div>
         )}
 
-        <div className="flex items-center gap-3 flex-wrap">
-          {activeKey && (
-            <AccountNotesButton
-              count={notesCount}
-              onClick={() => setNotesOpen(true)}
-              ariaLabel={`Open notes for ${activeAccount?.dealer ?? activeKey}`}
+        {/* Pacer scope-row right side: the Pacer sub-tab shows the spend
+            metrics here (its action buttons moved into the "Spend Pacing"
+            header). The other Pacer sub-tabs keep the action buttons here. */}
+        {mode === 'pacer' &&
+          activeKey &&
+          (pacerTab === 'pacer' ? (
+            <PacerSpendTotals
+              base={totals.base}
+              added={totals.added}
+              actual={totals.actual}
+              pacing={pacerAccountPacing}
             />
-          )}
-          {/* Pacer: Change log + Budget log as bare icons (names in tooltips),
-              sized to match the chat icon. */}
-          {activeKey && mode === 'pacer' && (
-            <>
-              <Tooltip label="Change log" placement="bottom">
-                <button
-                  type="button"
-                  onClick={() => setChangeLogOpen(true)}
-                  aria-label="Change log"
-                  className="inline-flex items-center justify-center text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
-                >
-                  <ClockIcon className="w-6 h-6" />
-                </button>
-              </Tooltip>
-              <Tooltip label="Budget Log" placement="bottom">
-                <button
-                  type="button"
-                  onClick={() => setBudgetLogOpen(true)}
-                  aria-label="Budget Log"
-                  className="inline-flex items-center justify-center text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
-                >
-                  <ClipboardDocumentListIcon className="w-6 h-6" />
-                </button>
-              </Tooltip>
-            </>
-          )}
-          {/* Sync from Meta sits to the right of the icons. Pacer only — the
-              planner is for planning, so it doesn't pull actual spend. */}
-          {activeKey && mode === 'pacer' && (
-            <button
-              type="button"
-              onClick={handleSyncMeta}
-              disabled={syncingMeta || !!plan?.frozen}
-              title={
-                plan?.frozen
-                  ? 'This month is frozen — reopen it to re-sync'
-                  : "Pull actual spend from Meta for this period's linked campaigns"
-              }
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {syncingMeta ? (
-                <ArrowPathIcon className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <MetaLogoIcon className="w-3.5 h-3.5" />
-              )}
-              {syncingMeta ? 'Syncing…' : 'Sync from Meta'}
-            </button>
-          )}
-        </div>
+          ) : (
+            pacerActions
+          ))}
       </div>
+
+      {/* Carryover prompt — full-width row directly under the account scope
+          (planner only, when present) so its text never wraps. */}
+      {carryoverNotice && <div className="mb-6">{carryoverNotice}</div>}
 
       {/* Frozen-month banner (Change 5). A closed month is a read-only,
           immutable snapshot of what was actually managed; admins can reopen
@@ -11103,11 +12813,11 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
               </div>
             </div>
           </div>
+          <Tooltip label="Reopen this month for corrections (admin). The original snapshot is kept.">
           <button
             type="button"
             onClick={handleReopenMonth}
             disabled={reopening}
-            title="Reopen this month for corrections (admin). The original snapshot is kept."
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <ArrowPathIcon
@@ -11115,6 +12825,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
             />
             {reopening ? 'Reopening…' : 'Reopen month'}
           </button>
+          </Tooltip>
         </div>
       )}
 
@@ -11139,16 +12850,17 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
               </div>
             </div>
           </div>
+          <Tooltip label="Re-freeze this month, locking it read-only again">
           <button
             type="button"
             onClick={handleRefreezeMonth}
             disabled={reopening}
-            title="Re-freeze this month, locking it read-only again"
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <LockClosedIcon className="w-3.5 h-3.5" />
             {reopening ? 'Working…' : 'Re-freeze month'}
           </button>
+          </Tooltip>
         </div>
       )}
 
@@ -11164,159 +12876,11 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
         }
       >
         <div className="min-w-0">
-          {/* Budget header (Total + Base/Added) — only on the Ad Planner page */}
-          {activeKey && plan && mode === 'planner' && (
+          {/* Budget header (Total + Base/Added) — only on the Planner tab */}
+          {activeKey && plan && mode === 'planner' && plannerTab === 'planner' && (
             <div className="mb-10 space-y-5">
-              {/* Carryover prompt (Change 7) — fold last month's settled
-                  over/under into this month's spend target, opt-in, per
-                  bucket. Never touches the client budget goal. */}
-              {!plan.frozen &&
-                (() => {
-                  const prior = plan.priorOverUnder;
-                  const appliedBase = num(plan.baseCarryover);
-                  const appliedAdded = num(plan.addedCarryover);
-                  const applied = appliedBase != null || appliedAdded != null;
-                  // Always surface an unapplied prior over/under so you can
-                  // decide whether to fold it in — even below the threshold.
-                  // Only hide when there's nothing meaningful to show.
-                  if (!applied && (!prior || Math.abs(prior.variance) < 0.005)) {
-                    return null;
-                  }
-                  const fromLabel = fmtPeriodShort(shiftPeriod(period, -1));
-                  if (applied) {
-                    const amt = appliedBase != null ? appliedBase : appliedAdded ?? 0;
-                    const bucket = appliedBase != null ? 'base' : 'added';
-                    return (
-                      <div className="flex items-center justify-between gap-3 flex-wrap rounded-xl border border-[var(--border)] bg-[var(--muted)]/40 px-4 py-3">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <ArrowPathIcon className="w-4 h-4 flex-shrink-0 text-[var(--primary)]" />
-                          <span className="text-xs text-[var(--foreground)]">
-                            Carryover applied:{' '}
-                            <span className="font-semibold">
-                              {amt >= 0 ? '+' : '−'}
-                              {fmt(Math.abs(amt))}
-                            </span>{' '}
-                            to {bucket === 'base' ? 'Base' : 'Added'} (from{' '}
-                            {fromLabel}). The client budget is unchanged.
-                          </span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleApplyCarryover(bucket, true)}
-                          disabled={applyingCarryover}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    );
-                  }
-                  // Not applied — surface the prior month's over/under.
-                  const variance = prior!.variance;
-                  const under = variance < 0;
-                  const carry = prior!.carryover;
-                  // Prominent (loud amber) only when it crosses the threshold and
-                  // hasn't been dismissed; otherwise a quiet, always-visible line.
-                  const prominent = prior!.exceedsThreshold && !carryoverDismissed;
-                  if (!prominent) {
-                    return (
-                      <div className="flex items-center justify-between gap-3 flex-wrap rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-4 py-2.5">
-                        <div className="flex items-center gap-2 min-w-0 text-xs text-[var(--muted-foreground)]">
-                          <ScaleIcon className="w-3.5 h-3.5 flex-shrink-0" />
-                          <span>
-                            <span className="font-semibold text-[var(--foreground)]">
-                              {fromLabel}
-                            </span>{' '}
-                            {under ? 'underspent' : 'overspent'} by{' '}
-                            <span className="font-semibold text-[var(--foreground)]">
-                              {fmt(Math.abs(variance))}
-                            </span>{' '}
-                            vs target.
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <select
-                            value={carryoverBucket}
-                            onChange={(e) =>
-                              setCarryoverBucket(e.target.value === 'added' ? 'added' : 'base')
-                            }
-                            className="px-2 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--input)] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)]"
-                            aria-label="Carryover bucket"
-                          >
-                            <option value="base">Base</option>
-                            <option value="added">Added</option>
-                          </select>
-                          <button
-                            type="button"
-                            onClick={() => handleApplyCarryover(carryoverBucket, false)}
-                            disabled={applyingCarryover}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-60 disabled:cursor-not-allowed"
-                          >
-                            {applyingCarryover
-                              ? 'Applying…'
-                              : `Apply ${carry >= 0 ? '+' : '−'}${fmt(Math.abs(carry))}`}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  }
-                  return (
-                    <div
-                      className="flex items-center justify-between gap-3 flex-wrap rounded-xl border px-4 py-3"
-                      style={{ borderColor: `${COLORS.warn}66`, background: 'rgba(245,158,11,0.06)' }}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <ScaleIcon className="w-4 h-4 flex-shrink-0" style={{ color: COLORS.warn }} />
-                        <div className="min-w-0 text-xs text-[var(--foreground)]">
-                          <span className="font-semibold">{fromLabel}</span>{' '}
-                          {under ? 'underspent' : 'overspent'} by{' '}
-                          <span className="font-semibold" style={{ color: under ? COLORS.warn : COLORS.error }}>
-                            {fmt(Math.abs(variance))}
-                          </span>{' '}
-                          vs target — exceeds the {fmt(CARRYOVER_THRESHOLD)} threshold.
-                          <span className="text-[var(--muted-foreground)]">
-                            {' '}Apply{' '}
-                            <span className="font-semibold text-[var(--foreground)]">
-                              {carry >= 0 ? '+' : '−'}
-                              {fmt(Math.abs(carry))}
-                            </span>{' '}
-                            to this month&apos;s spend target?
-                          </span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        <select
-                          value={carryoverBucket}
-                          onChange={(e) =>
-                            setCarryoverBucket(e.target.value === 'added' ? 'added' : 'base')
-                          }
-                          className="px-2 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--input)] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)]"
-                          aria-label="Carryover bucket"
-                        >
-                          <option value="base">Base</option>
-                          <option value="added">Added</option>
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => handleApplyCarryover(carryoverBucket, false)}
-                          disabled={applyingCarryover}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 px-3 py-1.5 text-xs font-medium text-white hover:bg-[var(--primary)] disabled:opacity-60 disabled:cursor-not-allowed"
-                        >
-                          {applyingCarryover ? 'Applying…' : 'Apply'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setCarryoverDismissed(true)}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--muted)]"
-                        >
-                          Leave as-is
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })()}
               <TotalAllocationHeader plan={plan} />
-              <div className="flex gap-5 flex-wrap">
+              <div className="flex items-start gap-5 flex-wrap">
                 <BudgetPanel
                   title="Base Budget"
                   source="base"
@@ -11340,7 +12904,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           {!activeKey ? (
             mode === 'pacer' && pacerTab === 'compare' ? (
               <div className="glass-section-card rounded-xl px-7 py-7">
-                <ComparePanel accountKey={null} />
+                <ComparePanel accountKey={null} period={period} />
               </div>
             ) : (
               <OverviewView
@@ -11379,28 +12943,33 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
             // Pacer + Over/Under Spend tabs keep the glass-section-card
             // chrome since their content benefits from the visual frame.
             const flat =
-              mode === 'planner' ||
-              (mode === 'pacer' && pacerTab === 'summary');
+              (mode === 'planner' && plannerTab === 'planner') ||
+              (mode === 'pacer' && (pacerTab === 'summary' || pacerTab === 'pacer'));
             const wrapperClass = flat
               ? ''
               : 'glass-section-card rounded-xl px-7 py-7';
             const inner =
               mode === 'planner' ? (
-                <AdPlannerPanel
-                  plan={plan}
-                  period={period}
-                  users={users}
-                  filters={filters}
-                  onFiltersChange={setFilters}
-                  currentUserId={currentUserId}
-                  periodSummaries={periodSummaries}
-                  onChange={setPlan}
-                  onCopyFrom={handleCopyFrom}
-                  onModalOpenChange={setEditorOpen}
-                  onAddActivity={onAddActivity}
-                  onEditActivity={onEditActivity}
-                  onDeleteActivity={onDeleteActivity}
-                />
+                plannerTab === 'reconcile' ? (
+                  <ReconciliationPanel accountKey={activeKey} />
+                ) : (
+                  <AdPlannerPanel
+                    plan={plan}
+                    period={period}
+                    users={users}
+                    filters={filters}
+                    onFiltersChange={setFilters}
+                    currentUserId={currentUserId}
+                    periodSummaries={periodSummaries}
+                    onChange={setPlan}
+                    onCopyFrom={handleCopyFrom}
+                    onImport={plan?.frozen ? undefined : () => setImportOpen(true)}
+                    onModalOpenChange={setEditorOpen}
+                    onAddActivity={onAddActivity}
+                    onEditActivity={onEditActivity}
+                    onDeleteActivity={onDeleteActivity}
+                  />
+                )
               ) : pacerTab === 'pacer' ? (
                 <BudgetPacerPanel
                   plan={plan}
@@ -11408,13 +12977,11 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
                   onFiltersChange={setFilters}
                   currentUserId={currentUserId}
                   onChange={setPlan}
-                  totals={totals}
                   accountKey={activeKey}
+                  headerActions={pacerActions}
                 />
               ) : pacerTab === 'compare' ? (
-                <ComparePanel accountKey={activeKey} />
-              ) : pacerTab === 'reconcile' ? (
-                <ReconciliationPanel accountKey={activeKey} />
+                <ComparePanel accountKey={activeKey} period={period} />
               ) : (
                 <SummaryPanel plan={plan} />
               );
@@ -11435,7 +13002,7 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           users={users}
           ads={activeKey ? plan?.ads ?? [] : overviewAds}
           currentUserId={currentUserId}
-          className={`glass-panel glass-panel-strong w-full transition-[opacity,transform,max-height] duration-300 ease-out lg:sticky lg:top-24 lg:w-[360px] ${
+          className={`glass-section-card pacer-ad-card w-full transition-[opacity,transform,max-height] duration-300 ease-out lg:sticky lg:top-24 lg:w-[360px] ${
             filterSidebarOpen
               ? 'pointer-events-auto max-h-[calc(100vh-8rem)] translate-x-0 opacity-100 animate-slide-in-right'
               : 'pointer-events-none max-h-0 translate-x-4 opacity-0 hidden'
@@ -11476,6 +13043,16 @@ export function MetaAdsPlannerTool({ mode }: { mode: MetaToolMode }) {
           accountLabel={activeAccount?.dealer ?? activeKey}
           period={period}
           onClose={() => setChangeLogOpen(false)}
+        />
+      )}
+      {importOpen && activeKey && (
+        <ImportFromMetaModal
+          accountKey={activeKey}
+          period={period}
+          periodLabel={fmtPeriodLong(period)}
+          users={users}
+          onClose={() => setImportOpen(false)}
+          onImported={handleImported}
         />
       )}
     </div>

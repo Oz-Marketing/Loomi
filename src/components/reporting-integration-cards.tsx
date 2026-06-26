@@ -18,13 +18,7 @@ import * as React from 'react';
 import { createPortal } from 'react-dom';
 import useSWR from 'swr';
 import { toast } from 'sonner';
-import {
-  TvIcon,
-  MagnifyingGlassIcon,
-  EnvelopeIcon,
-  XMarkIcon,
-  TrashIcon,
-} from '@heroicons/react/24/outline';
+import { XMarkIcon, TrashIcon } from '@heroicons/react/24/outline';
 
 type FieldType = 'text' | 'margin' | 'secret';
 
@@ -40,7 +34,8 @@ interface ReportingProvider {
   value: string;
   label: string;
   blurb: string;
-  icon: React.ComponentType<React.SVGProps<SVGSVGElement>>;
+  /** Hosted brand-logo URL, shown large on a white panel (like the CRM cards). */
+  logo: string;
   /** Account field whose presence marks the card "connected". */
   connectedKey: string;
   fields: FieldSpec[];
@@ -53,7 +48,7 @@ const PROVIDERS: ReportingProvider[] = [
     value: 'stackadapt',
     label: 'StackAdapt',
     blurb: 'OTT / CTV reporting — link this dealer’s advertiser.',
-    icon: TvIcon,
+    logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/5edb0c5d9209454294c9f7e5516fbb16/StackAdapt_Logo_StackAdapt_Logo+Wordmark_500px.jpg',
     connectedKey: 'stackadaptAdvertiserId',
     fields: [
       { key: 'stackadaptAdvertiserId', type: 'text', label: 'Advertiser ID', placeholder: '105923' },
@@ -64,7 +59,7 @@ const PROVIDERS: ReportingProvider[] = [
     value: 'google',
     label: 'Google Ads',
     blurb: 'Search / Display / PMax reporting — link the customer id.',
-    icon: MagnifyingGlassIcon,
+    logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/d0ee5bb79ca64c9d8a6f6a0b630716c3/6833828b-02f8-4d53-8223-523905b49da9.png',
     connectedKey: 'googleAdsCustomerId',
     fields: [
       { key: 'googleAdsCustomerId', type: 'text', label: 'Customer ID', placeholder: '2849021739', help: 'Digits only (dashes are fine).' },
@@ -75,7 +70,7 @@ const PROVIDERS: ReportingProvider[] = [
     value: 'gohighlevel',
     label: 'GoHighLevel',
     blurb: 'Email campaign reporting — Private Integration token.',
-    icon: EnvelopeIcon,
+    logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/0aae9fac5ab446939b4cb254004784e5/e3613822-6cb4-4e85-ba10-9abcb3782b6b.png',
     connectedKey: 'ghlConfigured',
     fields: [
       { key: 'ghlApiKey', type: 'secret', label: 'Private Integration token', placeholder: 'pit-…', help: 'Stored encrypted. Leave blank to keep the current token.' },
@@ -117,8 +112,17 @@ export function ReportingIntegrationCards({ accountKey }: { accountKey: string }
           onClick={() => setActive(p.value)}
           className="group overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] text-left transition-all hover:border-[var(--primary)] hover:shadow-md"
         >
-          <div className="flex h-28 w-full items-center justify-center border-b border-[var(--border)] bg-[var(--muted)]/30">
-            <p.icon className="h-10 w-10 text-[var(--muted-foreground)]" />
+          <div
+            className="flex h-28 w-full items-center justify-center border-b border-[var(--border)] px-8 py-6"
+            style={{ background: '#ffffff' }}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={p.logo}
+              alt={`${p.label} logo`}
+              loading="lazy"
+              className="max-h-12 w-auto max-w-[75%] object-contain"
+            />
           </div>
           <div className="p-4">
             <div className="flex items-center justify-between gap-2">
@@ -252,8 +256,16 @@ function ProviderModal({
       aria-modal="true"
     >
       <div className="glass-modal w-[520px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="relative flex h-24 w-full items-center justify-center border-b border-[var(--border)] bg-[var(--muted)]/30">
-          <provider.icon className="h-9 w-9 text-[var(--muted-foreground)]" />
+        <div
+          className="relative flex h-24 w-full items-center justify-center border-b border-[var(--border)] px-8 py-6"
+          style={{ background: '#ffffff' }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={provider.logo}
+            alt={`${provider.label} logo`}
+            className="max-h-10 w-auto max-w-[70%] object-contain"
+          />
           <button
             type="button"
             onClick={onClose}

@@ -72,6 +72,7 @@ const RESERVED_KEYS: ReadonlySet<string> = new Set<string>([
   'hasReceivedEmail',
   'hasReceivedSms',
   'hasOpenedEmail',
+  'hasClickedEmail',
   'lastMessageDate',
 ]);
 

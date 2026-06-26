@@ -100,6 +100,7 @@ export async function createAccount(data: {
   timezone?: string;
   logos?: string;
   branding?: string;
+  customFonts?: string;
   customValues?: string;
   accountRepId?: string;
 }) {
@@ -127,6 +128,7 @@ export async function updateAccount(
     timezone: string;
     logos: string;
     branding: string;
+    customFonts: string;
     customValues: string;
     accountRepId: string | null;
     // Pacer markup rate override. `null` clears the override and the

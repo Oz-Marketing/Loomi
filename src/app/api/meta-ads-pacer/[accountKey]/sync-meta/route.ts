@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import {
+  accountTimeZone,
   canAccessPacer,
   getOrCreatePlan,
   getPeriodPlanView,
@@ -11,14 +12,7 @@ import {
 } from '@/lib/meta-ads-pacer';
 import { MetaSyncError, syncPeriodFromMeta } from '@/lib/integrations/meta-ads';
 import { writeAudit } from '@/lib/meta-ads-audit';
-
-/** yyyy-MM-dd in server-local time. */
-function todayIso(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
-    d.getDate(),
-  ).padStart(2, '0')}`;
-}
+import { zonedTodayIso } from '@/lib/timezone';
 
 /**
  * Pull spend (and any available budget/status) from Facebook onto this
@@ -54,12 +48,21 @@ export async function POST(
     );
   }
 
+  // Automatic background refresh (stale-while-revalidate on pacer load) passes
+  // ?auto=1. Same sync, but we skip the audit entry so the change log only
+  // records deliberate manual syncs — not one line per page view.
+  const auto = req.nextUrl.searchParams.get('auto') === '1';
+
   try {
-    const sync = await syncPeriodFromMeta(accountKey, period, todayIso());
+    // "Today" in the account's pacing timezone (Meta zone → stored zone →
+    // default), matching the auto-refresh/alerts path — not the server's local
+    // clock, which on a UTC host drifts a day from the account near midnight.
+    const todayIso = zonedTodayIso(Date.now(), await accountTimeZone(accountKey));
+    const sync = await syncPeriodFromMeta(accountKey, period, todayIso);
     const userId = session.user?.id ?? null;
     // One grouped audit entry per sync (per the team decision) — captures that
     // spend refreshed without flooding the log with per-ad spend deltas.
-    if (sync.matched > 0) {
+    if (!auto && sync.matched > 0) {
       await writeAudit([
         {
           accountKey,

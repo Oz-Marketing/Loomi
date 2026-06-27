@@ -61,6 +61,9 @@ interface IncomingAd {
   metaObjectType?: string | null;
   // Per-ad alert mute (Change 9) — toggled from the pacer row.
   alertsMuted?: boolean;
+  // Ad platform — set once on create ('google' from the Google tool; null/Meta
+  // otherwise). Preserved on update.
+  platform?: string | null;
 }
 
 interface IncomingPeriodPayload {
@@ -96,6 +99,10 @@ export async function GET(
   }
 
   const userId = session.user?.id ?? null;
+  // Which platform's lines this surface shows (Meta tool default; the Google
+  // tool passes ?platform=google). Keeps the two pacers separate over the
+  // shared plan.
+  const platform = req.nextUrl.searchParams.get('platform') === 'google' ? 'google' : 'meta';
   // Status sync (Change 11): auto-complete ads whose flight has ended before
   // building the view. Skipped on frozen months (they're read-only).
   const planForReconcile = await getOrCreatePlan(accountKey);
@@ -105,7 +112,7 @@ export async function GET(
 
   // Live-vs-frozen: closed months serve their immutable snapshot (and freeze
   // lazily on first view); live months serve current data.
-  const view = await getPeriodPlanView(accountKey, period, userId);
+  const view = await getPeriodPlanView(accountKey, period, userId, platform);
   // Prior month's over/under for the carryover prompt — only on editable
   // months (a frozen month can't take a carryover; skip to avoid freezing
   // the month-before as a side effect of browsing history).
@@ -134,6 +141,10 @@ export async function PUT(
       { status: 400 },
     );
   }
+
+  // Scope the returned view to the caller's platform (Meta default; Google tool
+  // passes ?platform=google) so autosave responses stay platform-separated.
+  const postPlatform = req.nextUrl.searchParams.get('platform') === 'google' ? 'google' : 'meta';
 
   const plan = await getOrCreatePlan(accountKey);
 
@@ -253,15 +264,18 @@ export async function PUT(
         alertsMuted: ad.alertsMuted === true,
       };
 
+      // platform is set once on create (Google tool sends 'google'; Meta/legacy
+      // = null) and preserved on update so a save never re-tags an existing row.
+      const createPlatform = ad.platform === 'google' ? 'google' : null;
       if (ad.id) {
         await tx.metaAdsPacerAd.upsert({
           where: { id: ad.id },
-          create: { id: ad.id, planId: plan.id, ...data },
+          create: { id: ad.id, planId: plan.id, platform: createPlatform, ...data },
           update: data,
         });
       } else {
         await tx.metaAdsPacerAd.create({
-          data: { planId: plan.id, ...data },
+          data: { planId: plan.id, platform: createPlatform, ...data },
         });
       }
     }
@@ -394,6 +408,6 @@ export async function PUT(
     await writeAudit(entries);
   }
 
-  const payload = await fetchPeriodPlan(plan.id, period);
+  const payload = await fetchPeriodPlan(plan.id, period, postPlatform);
   return NextResponse.json({ accountKey, period, ...payload });
 }

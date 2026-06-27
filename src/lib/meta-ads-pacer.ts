@@ -101,7 +101,24 @@ export function isValidPeriod(period: string): boolean {
 }
 
 /** Pull the budget + ads for a single period. */
-export async function fetchPeriodPlan(planId: string, period: string) {
+/** Ad platform of a pacer surface. Legacy rows have null platform = Meta. */
+export type PacerPlatform = 'meta' | 'google';
+
+/**
+ * Prisma `where` fragment that scopes a pacer-ad query to one platform.
+ * Meta surfaces include legacy/null rows (everything that isn't Google);
+ * Google surfaces include only Google lines. Pass nothing for all platforms.
+ */
+export function adPlatformWhere(platform?: PacerPlatform) {
+  if (platform === 'google') return { platform: 'google' };
+  // Meta = everything that isn't Google. Legacy rows have platform=null, and in
+  // SQL `platform <> 'google'` is NULL (excluded) for those — so OR the nulls
+  // back in explicitly.
+  if (platform === 'meta') return { OR: [{ platform: null }, { platform: { not: 'google' } }] };
+  return {};
+}
+
+export async function fetchPeriodPlan(planId: string, period: string, platform?: PacerPlatform) {
   // Pull the parent plan so we can surface the account's markup override
   // (Account.markup) and resolved pacing timezone alongside the period data.
   // The calculator needs markup to translate Client Budget inputs into actual
@@ -111,7 +128,7 @@ export async function fetchPeriodPlan(planId: string, period: string) {
       where: { planId_period: { planId, period } },
     }),
     prisma.metaAdsPacerAd.findMany({
-      where: { planId, period },
+      where: { planId, period, ...adPlatformWhere(platform) },
       orderBy: { position: 'asc' },
       include: {
         designNotes: { orderBy: { createdAt: 'asc' } },
@@ -350,10 +367,20 @@ async function getSiblingAllocations(
   return out;
 }
 
+/** Drop the other platform's ads from a (possibly frozen-snapshot) view payload. */
+function filterViewAdsByPlatform<T extends { ads?: unknown }>(payload: T, platform?: PacerPlatform): T {
+  if (!platform) return payload;
+  const ads = (payload as { ads?: { platform?: string | null }[] }).ads;
+  if (!Array.isArray(ads)) return payload;
+  const keep = (p?: string | null) => (platform === 'google' ? p === 'google' : p !== 'google');
+  return { ...payload, ads: ads.filter((a) => keep(a.platform)) };
+}
+
 export async function getPeriodPlanView(
   accountKey: string,
   period: string,
   userId: string | null,
+  platform?: PacerPlatform,
 ) {
   const plan = await getOrCreatePlan(accountKey);
   const tz = await accountTimeZone(accountKey);
@@ -386,7 +413,7 @@ export async function getPeriodPlanView(
     });
     if (snap && snap.reopenedAt == null) {
       return {
-        ...reviveSnapshotPayload(snap.payloadJson),
+        ...filterViewAdsByPlatform(reviveSnapshotPayload(snap.payloadJson), platform),
         frozen: true,
         frozenAt: snap.frozenAt.toISOString(),
         monthState: state,
@@ -396,6 +423,8 @@ export async function getPeriodPlanView(
       // Lazy freeze: capture the settled month exactly once, on first view.
       // Two concurrent first-views can race the unique [planId, period]; if we
       // lose, fall back to reading the snapshot the other request created.
+      // The snapshot bakes the FULL month (both platforms); only the returned
+      // view is platform-filtered.
       const payload = await fetchPeriodPlan(plan.id, period);
       try {
         const created = await prisma.metaAdsPacerMonthSnapshot.create({
@@ -407,7 +436,7 @@ export async function getPeriodPlanView(
           },
         });
         return {
-          ...payload,
+          ...filterViewAdsByPlatform(payload, platform),
           frozen: true,
           frozenAt: created.frozenAt.toISOString(),
           monthState: state,
@@ -418,19 +447,24 @@ export async function getPeriodPlanView(
         });
         if (winner && winner.reopenedAt == null) {
           return {
-            ...reviveSnapshotPayload(winner.payloadJson),
+            ...filterViewAdsByPlatform(reviveSnapshotPayload(winner.payloadJson), platform),
             frozen: true,
             frozenAt: winner.frozenAt.toISOString(),
             monthState: state,
           };
         }
         // Reopened in the meantime (or still unreadable) — serve live.
-        return { ...payload, frozen: false, reopened: !!winner, monthState: state };
+        return {
+          ...filterViewAdsByPlatform(payload, platform),
+          frozen: false,
+          reopened: !!winner,
+          monthState: state,
+        };
       }
     }
     // Reopened by an admin — serve live rows so corrections are visible.
     return {
-      ...(await fetchPeriodPlan(plan.id, period)),
+      ...(await fetchPeriodPlan(plan.id, period, platform)),
       frozen: false,
       reopened: true,
       monthState: state,
@@ -438,7 +472,7 @@ export async function getPeriodPlanView(
   }
 
   return {
-    ...(await fetchPeriodPlan(plan.id, period)),
+    ...(await fetchPeriodPlan(plan.id, period, platform)),
     frozen: false,
     monthState: state,
   };
@@ -695,7 +729,7 @@ export async function fetchOverview(accountKeys: string[], period: string) {
       : Promise.resolve([]),
     planIds.length > 0
       ? prisma.metaAdsPacerAd.findMany({
-          where: { planId: { in: planIds }, period },
+          where: { planId: { in: planIds }, period, ...adPlatformWhere('meta') },
           orderBy: { position: 'asc' },
           include: {
             designNotes: { orderBy: { createdAt: 'asc' } },
@@ -812,7 +846,7 @@ export async function fetchYearSummary(
       },
     }),
     prisma.metaAdsPacerAd.findMany({
-      where: { planId: { in: planIds }, period: { in: periods } },
+      where: { planId: { in: planIds }, period: { in: periods }, ...adPlatformWhere('meta') },
       select: { period: true, pacerActual: true },
     }),
   ]);
@@ -1005,7 +1039,7 @@ export async function getYearReconciliation(
       },
     }),
     prisma.metaAdsPacerAd.findMany({
-      where: { planId: plan.id, period: { in: periods } },
+      where: { planId: plan.id, period: { in: periods }, ...adPlatformWhere('meta') },
       select: {
         period: true,
         name: true,

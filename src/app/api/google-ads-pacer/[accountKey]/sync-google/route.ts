@@ -70,7 +70,7 @@ export async function POST(
       ]);
     }
     await reconcileCompletedRuns(accountKey, plan.id, period, userId);
-    const view = await getPeriodPlanView(accountKey, period, userId);
+    const view = await getPeriodPlanView(accountKey, period, userId, 'google');
     const priorOverUnder = view.frozen
       ? null
       : await getPriorOverUnder(accountKey, period, userId);

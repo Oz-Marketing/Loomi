@@ -19,7 +19,6 @@ import {
   TrashIcon,
   ExclamationTriangleIcon,
   QuestionMarkCircleIcon,
-  CogIcon,
   PuzzlePieceIcon,
   TagIcon,
   XMarkIcon,
@@ -677,15 +676,63 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
         {/* ── Header ── */}
         {settingsMode ? (
           <div className="page-sticky-header mb-8">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
-                  <CogIcon className="w-6 h-6" />
-                  Settings for {dealer || key}
-                </h1>
-                <p className="text-sm text-[var(--muted-foreground)] mt-1">
-                  Manage settings and configuration for this sub-account
-                </p>
+            <div className="flex items-center justify-between gap-4">
+              <div className="group flex min-w-0 items-center gap-3">
+                <AccountAvatar
+                  name={dealer || key}
+                  accountKey={key}
+                  storefrontImage={storefrontImage}
+                  logos={{ light: logoLight, dark: logoDark, white: logoWhite, black: logoBlack }}
+                  size={44}
+                  className="flex-shrink-0 rounded-xl border border-[var(--border)]"
+                />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {isEditingDealerName ? (
+                      <input
+                        type="text"
+                        value={dealer}
+                        onChange={(event) => setDealer(event.target.value)}
+                        onBlur={() => setIsEditingDealerName(false)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            setIsEditingDealerName(false);
+                          }
+                          if (event.key === 'Escape') {
+                            event.preventDefault();
+                            setDealer(account?.dealer || '');
+                            setIsEditingDealerName(false);
+                          }
+                        }}
+                        className="w-full max-w-md min-w-0 bg-transparent border-b border-[var(--border)] text-2xl font-bold text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)]"
+                        autoFocus
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingDealerName(true)}
+                        className="truncate text-left text-2xl font-bold text-[var(--foreground)] transition hover:opacity-80"
+                        title="Edit name"
+                      >
+                        {dealer || key}
+                      </button>
+                    )}
+                    {!isEditingDealerName && (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingDealerName(true)}
+                        className="flex-shrink-0 rounded-lg p-1.5 text-[var(--muted-foreground)] opacity-0 transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] group-hover:opacity-100"
+                        title="Edit sub-account name"
+                      >
+                        <PencilSquareIcon className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-sm text-[var(--muted-foreground)] mt-0.5">
+                    Manage settings and configuration for this sub-account
+                  </p>
+                </div>
               </div>
               {showSaveButton && (
                 <button

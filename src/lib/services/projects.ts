@@ -252,10 +252,13 @@ export async function updateInitiative(
 }
 
 export async function archiveInitiative(id: string) {
-  await prisma.initiative.update({
-    where: { id },
-    data: { archivedAt: new Date(), status: 'archived' },
-  });
+  // Archive the initiative AND its still-active tasks together — otherwise the
+  // tasks linger on boards pointing at an initiative that's gone from the list.
+  const now = new Date();
+  await prisma.$transaction([
+    prisma.initiative.update({ where: { id }, data: { archivedAt: now, status: 'archived' } }),
+    prisma.task.updateMany({ where: { initiativeId: id, archivedAt: null }, data: { archivedAt: now } }),
+  ]);
 }
 
 export async function createInitiative(input: {
@@ -868,6 +871,9 @@ export async function createTicket(
   }
 
   const tasks: TaskDTO[] = [];
+  // Monotonic so the fan-out's tasks get distinct, ordered positions (plain
+  // Date.now() would collide within the same millisecond → unstable board order).
+  let posSeq = Date.now();
   for (const dept of departments) {
     // A shared creative collapses to a single task (owned by the primary
     // account, brief notes all accounts); everything else fans out per account.
@@ -902,7 +908,7 @@ export async function createTicket(
           requesterUserId,
           createdByUserId: requesterUserId,
           dueDate: input.dueDate ? new Date(input.dueDate) : null,
-          position: Date.now(),
+          position: posSeq++,
         },
         include: TASK_INCLUDE,
       });

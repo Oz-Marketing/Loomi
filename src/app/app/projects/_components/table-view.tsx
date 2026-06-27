@@ -17,6 +17,7 @@ import type { TaskDTO } from '@/lib/services/projects';
 import { jsonFetcher } from './fetcher';
 import { useProjectOptions } from './use-project-options';
 import { ProjectsFilterBar, matchesFilters } from './filter-bar';
+import { FetchError } from './fetch-states';
 
 type SortKey = 'title' | 'accountDealer' | 'dueDate' | 'priority' | 'status';
 const PRIORITY_ORDER: Record<string, number> = { urgent: 0, high: 1, medium: 2, low: 3 };
@@ -36,7 +37,7 @@ export function TableView() {
   if (accountKey) qs.set('accountKey', accountKey);
   if (teamKey) qs.set('teamKey', teamKey);
   const swrKey = `/api/projects/tasks${qs.toString() ? `?${qs}` : ''}`;
-  const { data, isLoading } = useSWR<{ tasks: TaskDTO[] }>(swrKey, jsonFetcher, {
+  const { data, isLoading, error, mutate } = useSWR<{ tasks: TaskDTO[] }>(swrKey, jsonFetcher, {
     revalidateOnFocus: false,
   });
   const tasks = data?.tasks ?? [];
@@ -86,6 +87,9 @@ export function TableView() {
         title="Table"
         subtitle="Every task, sortable and filterable."
       />
+      {error && !data ? (
+        <FetchError onRetry={() => mutate()} />
+      ) : (
       <div className="overflow-x-auto rounded-2xl border border-[var(--border)]">
         <table className="w-full min-w-max text-sm whitespace-nowrap">
           <thead>
@@ -184,6 +188,7 @@ export function TableView() {
           </tbody>
         </table>
       </div>
+      )}
     </div>
   );
 }

@@ -8,6 +8,7 @@ import type { TaskDTO } from '@/lib/services/projects';
 import { jsonFetcher } from './fetcher';
 import { useProjectOptions } from './use-project-options';
 import { ProjectsFilterBar, matchesFilters } from './filter-bar';
+import { FetchError } from './fetch-states';
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -31,7 +32,9 @@ export function CalendarView() {
   if (accountKey) qs.set('accountKey', accountKey);
   if (teamKey) qs.set('teamKey', teamKey);
   const swrKey = `/api/projects/tasks${qs.toString() ? `?${qs}` : ''}`;
-  const { data } = useSWR<{ tasks: TaskDTO[] }>(swrKey, jsonFetcher, { revalidateOnFocus: false });
+  const { data, error, mutate } = useSWR<{ tasks: TaskDTO[] }>(swrKey, jsonFetcher, {
+    revalidateOnFocus: false,
+  });
   const tasks = data?.tasks ?? [];
 
   const { weeks, monthLabel, month } = useMemo(() => {
@@ -114,6 +117,9 @@ export function CalendarView() {
         </button>
       </div>
 
+      {error && !data ? (
+        <FetchError onRetry={() => mutate()} />
+      ) : (
       <div className="overflow-hidden rounded-2xl border border-[var(--border)]">
         <div className="grid grid-cols-7 border-b border-[var(--border)] bg-[var(--muted)]/30 text-center text-[11px] font-medium text-[var(--muted-foreground)]">
           {WEEKDAYS.map((d) => (
@@ -172,6 +178,7 @@ export function CalendarView() {
           })}
         </div>
       </div>
+      )}
     </div>
   );
 }

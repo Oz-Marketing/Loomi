@@ -27,6 +27,7 @@ import { jsonFetcher } from './fetcher';
 import { useProjectOptions } from './use-project-options';
 import { ProjectsFilterBar, matchesFilters } from './filter-bar';
 import { TaskCard } from './task-card';
+import { FetchError } from './fetch-states';
 
 export function BoardView() {
   const router = useRouter();
@@ -40,7 +41,7 @@ export function BoardView() {
   if (accountKey) qs.set('accountKey', accountKey);
   if (teamKey) qs.set('teamKey', teamKey);
   const swrKey = `/api/projects/tasks${qs.toString() ? `?${qs}` : ''}`;
-  const { data, isLoading, mutate } = useSWR<{ tasks: TaskDTO[] }>(swrKey, jsonFetcher, {
+  const { data, isLoading, error, mutate } = useSWR<{ tasks: TaskDTO[] }>(swrKey, jsonFetcher, {
     revalidateOnFocus: false,
   });
   const tasks = data?.tasks ?? [];
@@ -73,12 +74,20 @@ export function BoardView() {
     const isColumn = STATUSES.some((s) => s.key === overId);
     const destCol = isColumn ? overId : tasks.find((t) => t.id === overId)?.status ?? task.status;
 
-    // Dest column order, excluding the dragged task, to find neighbors.
-    const destItems = (byStatus[destCol] ?? []).filter((t) => t.id !== taskId);
-    let index = destItems.length;
+    // Full dest order (for direction), and the order without the dragged task
+    // (to read the insertion neighbors).
+    const fullDest = byStatus[destCol] ?? [];
+    const destItems = fullDest.filter((t) => t.id !== taskId);
+    let index = destItems.length; // default: drop at end (column header / empty)
     if (!isColumn) {
       const overIdx = destItems.findIndex((t) => t.id === overId);
-      if (overIdx !== -1) index = overIdx;
+      if (overIdx !== -1) {
+        // Within the same column, dropping onto a card BELOW the dragged one
+        // should land AFTER it; dropping onto one above lands BEFORE it.
+        const activeIdx = fullDest.findIndex((t) => t.id === taskId);
+        const movingDown = activeIdx !== -1 && activeIdx < fullDest.findIndex((t) => t.id === overId);
+        index = movingDown ? overIdx + 1 : overIdx;
+      }
     }
     const before = destItems[index - 1];
     const after = destItems[index];
@@ -123,6 +132,9 @@ export function BoardView() {
         title="Board"
         subtitle="Drag tasks across stages."
       />
+      {error && !data ? (
+        <FetchError onRetry={() => mutate()} />
+      ) : (
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
@@ -158,6 +170,7 @@ export function BoardView() {
           ) : null}
         </DragOverlay>
       </DndContext>
+      )}
     </div>
   );
 }

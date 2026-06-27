@@ -58,8 +58,13 @@ export function FieldRenderer({
       control = (
         <input
           type="number"
+          inputMode="decimal"
           value={typeof value === 'string' ? value : ''}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => {
+            // Accept only empty or a plain number — rejects "1e5", "--", etc.
+            const v = e.target.value;
+            if (v === '' || /^-?\d*\.?\d*$/.test(v)) onChange(v);
+          }}
           className="loomi-input"
         />
       );

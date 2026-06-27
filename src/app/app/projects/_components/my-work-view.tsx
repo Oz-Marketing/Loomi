@@ -7,6 +7,7 @@ import { STATUSES, dueState } from '@/lib/projects/ui';
 import type { TaskDTO } from '@/lib/services/projects';
 import { jsonFetcher } from './fetcher';
 import { TaskCard } from './task-card';
+import { FetchError } from './fetch-states';
 
 type Group = { key: string; label: string; dot: string; tasks: TaskDTO[] };
 
@@ -17,7 +18,7 @@ function byDue(a: TaskDTO, b: TaskDTO) {
 }
 
 export function MyWorkView() {
-  const { data, isLoading } = useSWR<{ tasks: TaskDTO[] }>(
+  const { data, isLoading, error, mutate } = useSWR<{ tasks: TaskDTO[] }>(
     '/api/projects/tasks?assigneeUserId=me',
     jsonFetcher,
     { revalidateOnFocus: false },
@@ -64,7 +65,9 @@ export function MyWorkView() {
         </p>
       </div>
 
-      {!isLoading && openCount === 0 && (
+      {error && !data && <FetchError onRetry={() => mutate()} />}
+
+      {!error && !isLoading && openCount === 0 && (
         <div className="mt-6 rounded-2xl border border-dashed border-[var(--border)] py-16 text-center text-sm text-[var(--muted-foreground)]">
           You&apos;re all caught up — nothing open assigned to you.
         </div>

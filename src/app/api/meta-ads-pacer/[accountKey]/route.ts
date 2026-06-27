@@ -205,9 +205,13 @@ export async function PUT(
   // The account budget goals live on a single per-plan+period row SHARED across
   // platforms, so only touch the fields the caller actually sent — a Google
   // autosave (which omits them) must never null Meta's budget, and vice-versa.
-  const budgetData: { baseBudgetGoal?: string | null; addedBudgetGoal?: string | null } = {};
-  if ('baseBudgetGoal' in body) budgetData.baseBudgetGoal = nullable(body.baseBudgetGoal);
-  if ('addedBudgetGoal' in body) budgetData.addedBudgetGoal = nullable(body.addedBudgetGoal);
+  // Per-platform budget columns: the Google tool writes the google* pair, Meta
+  // the original pair.
+  const baseCol = postPlatform === 'google' ? 'googleBaseBudgetGoal' : 'baseBudgetGoal';
+  const addedCol = postPlatform === 'google' ? 'googleAddedBudgetGoal' : 'addedBudgetGoal';
+  const budgetData: Record<string, string | null> = {};
+  if ('baseBudgetGoal' in body) budgetData[baseCol] = nullable(body.baseBudgetGoal);
+  if ('addedBudgetGoal' in body) budgetData[addedCol] = nullable(body.addedBudgetGoal);
 
   await prisma.$transaction(async (tx) => {
     // Period budget — upsert only when the caller manages budget goals.

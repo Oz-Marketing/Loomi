@@ -154,8 +154,12 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
   );
   const nowMs = Date.now();
   return {
-    baseBudgetGoal: budget?.baseBudgetGoal ?? null,
-    addedBudgetGoal: budget?.addedBudgetGoal ?? null,
+    // Account budget goals are per-platform: Google reads its own columns, Meta
+    // (and legacy/unspecified) reads the original pair.
+    baseBudgetGoal:
+      (platform === 'google' ? budget?.googleBaseBudgetGoal : budget?.baseBudgetGoal) ?? null,
+    addedBudgetGoal:
+      (platform === 'google' ? budget?.googleAddedBudgetGoal : budget?.addedBudgetGoal) ?? null,
     // Opt-in carryover applied to each bucket's DERIVED spend target (Change 7).
     baseCarryover: budget?.baseCarryover ?? null,
     addedCarryover: budget?.addedCarryover ?? null,

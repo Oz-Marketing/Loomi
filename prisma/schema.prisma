@@ -1632,8 +1632,14 @@ model MetaAdsPacerPeriodBudget {
   planId           String
   plan             MetaAdsPacerPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
   period           String // YYYY-MM, e.g. "2026-04"
-  baseBudgetGoal   String?
-  addedBudgetGoal  String?
+  // Account budget goals are PER-PLATFORM (Meta vs Google specialists own their
+  // own budgets). The base/added pair below is Meta's; the google* pair is
+  // Google's. Same single row per plan+period; the surface resolves its pair by
+  // platform. (§8 Google pacer.)
+  baseBudgetGoal       String?
+  addedBudgetGoal      String?
+  googleBaseBudgetGoal  String?
+  googleAddedBudgetGoal String?
   // Carryover applied from the prior month's over/under (Change 7), in
   // actual-spend dollars, per bucket. Opt-in (null = none). Added to the
   // DERIVED spend target only (target = clientBudget × markup + carryover);

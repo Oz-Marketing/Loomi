@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import useSWR from 'swr';
 import {
@@ -49,7 +49,14 @@ type GoogleAd = {
   googleCampaignId?: string | null;
 };
 
-type PlanView = { ads: GoogleAd[]; timeZone: string; frozen?: boolean };
+type PlanView = {
+  ads: GoogleAd[];
+  timeZone: string;
+  frozen?: boolean;
+  markup?: number;
+  baseBudgetGoal?: string | null;
+  addedBudgetGoal?: string | null;
+};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 const money = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
@@ -98,6 +105,41 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     }
     return { total, base, added };
   }, [ads]);
+
+  // Per-platform account budget goals (Google's own — see schema). Client gross;
+  // spend target = goal × markup.
+  const markup = data?.markup ?? 0.77;
+  const [baseGoal, setBaseGoal] = useState('');
+  const [addedGoal, setAddedGoal] = useState('');
+  useEffect(() => {
+    setBaseGoal(data?.baseBudgetGoal ?? '');
+    setAddedGoal(data?.addedBudgetGoal ?? '');
+  }, [data?.baseBudgetGoal, data?.addedBudgetGoal]);
+
+  async function persistBudget(nextBase: string, nextAdded: string) {
+    if (!accountKey) return;
+    try {
+      const res = await fetch(
+        `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}?period=${period}&platform=google`,
+        {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          // Full ad set is required (PUT is full-replace, platform-scoped) plus
+          // the Google budget goals.
+          body: JSON.stringify({
+            ads: ads.map((a) => ({ ...a, platform: 'google' })),
+            baseBudgetGoal: nextBase || null,
+            addedBudgetGoal: nextAdded || null,
+          }),
+        },
+      );
+      if (!res.ok) throw new Error();
+      mutate();
+    } catch {
+      toast.error('Could not save budget');
+      mutate();
+    }
+  }
 
   const { data: acct } = useSWR<{ googleAdsCustomerId?: string | null }>(
     accountKey ? `/api/accounts/${encodeURIComponent(accountKey)}` : null,
@@ -243,22 +285,26 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         </div>
       )}
 
-      {ads.length > 0 && (
-        <div className="mt-4 grid grid-cols-3 gap-3">
-          {[
-            { label: 'Total allocated', value: totals.total },
-            { label: 'Base', value: totals.base },
-            { label: 'Added', value: totals.added },
-          ].map((s) => (
-            <div key={s.label} className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 px-4 py-3">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
-                {s.label}
-              </p>
-              <p className="mt-0.5 text-lg font-semibold text-[var(--foreground)]">{money(s.value)}</p>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <BudgetCard
+          label="Base budget"
+          goal={baseGoal}
+          onGoal={setBaseGoal}
+          onCommit={() => persistBudget(baseGoal, addedGoal)}
+          markup={markup}
+          allocated={totals.base}
+          disabled={frozen}
+        />
+        <BudgetCard
+          label="Added budget"
+          goal={addedGoal}
+          onGoal={setAddedGoal}
+          onCommit={() => persistBudget(baseGoal, addedGoal)}
+          markup={markup}
+          allocated={totals.added}
+          disabled={frozen}
+        />
+      </div>
 
       <div className="mt-4 -mx-6 overflow-x-auto px-6 md:-mx-8 md:px-8">
         <table className="w-full min-w-[760px] text-sm">
@@ -591,6 +637,56 @@ function CampaignModal({
             {campaign ? 'Save' : 'Add campaign'}
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+function BudgetCard({
+  label,
+  goal,
+  onGoal,
+  onCommit,
+  markup,
+  allocated,
+  disabled,
+}: {
+  label: string;
+  goal: string;
+  onGoal: (v: string) => void;
+  onCommit: () => void;
+  markup: number;
+  allocated: number;
+  disabled: boolean;
+}) {
+  const target = (Number(goal) || 0) * markup; // spend target = client gross × markup
+  const remaining = target - allocated;
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 px-4 py-3">
+      <div className="flex items-center justify-between">
+        <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
+          {label}
+        </p>
+        <span className="text-[11px] text-[var(--muted-foreground)]">target {money(target)}</span>
+      </div>
+      <div className="mt-1 flex items-baseline gap-1.5">
+        <span className="text-[var(--muted-foreground)]">$</span>
+        <input
+          value={goal}
+          disabled={disabled}
+          onChange={(e) => /^\d*\.?\d*$/.test(e.target.value) && onGoal(e.target.value)}
+          onBlur={onCommit}
+          onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
+          placeholder="0"
+          className="w-28 rounded-lg border border-transparent bg-transparent px-1 py-0.5 text-lg font-semibold text-[var(--foreground)] outline-none hover:border-[var(--border)] focus:border-[var(--primary)] disabled:opacity-60"
+        />
+        <span className="text-xs text-[var(--muted-foreground)]">client / mo</span>
+      </div>
+      <div className="mt-1.5 flex items-center justify-between text-xs">
+        <span className="text-[var(--muted-foreground)]">Allocated {money(allocated)}</span>
+        <span className={remaining < 0 ? 'font-medium text-red-500' : 'text-[var(--muted-foreground)]'}>
+          {remaining < 0 ? `${money(-remaining)} over` : `${money(remaining)} left`}
+        </span>
       </div>
     </div>
   );

@@ -35,7 +35,7 @@ export function canAccess(scope: Scope, accountKey: string): boolean {
 // ── Serialization (plain JSON shapes the UI consumes) ──
 
 const TASK_INCLUDE = {
-  account: { select: { dealer: true } },
+  account: { select: { dealer: true, logos: true } },
   team: { select: { name: true, color: true } },
   initiative: { select: { name: true } },
   assignee: { select: { id: true, name: true, email: true, avatarUrl: true } },
@@ -64,7 +64,7 @@ type TaskRow = {
   details: unknown;
   createdAt: Date;
   updatedAt: Date;
-  account?: { dealer: string } | null;
+  account?: { dealer: string; logos: string | null } | null;
   team?: { name: string; color: string | null } | null;
   initiative?: { name: string } | null;
   assignee?: { id: string; name: string; email: string; avatarUrl: string | null } | null;
@@ -72,11 +72,24 @@ type TaskRow = {
   _count?: { comments: number };
 };
 
+/** Parse the account's stored logos JSON so cards/tables can render its avatar. */
+function parseAccountLogos(
+  raw: string | null,
+): { light?: string; dark?: string; white?: string; black?: string } | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 export function serializeTask(t: TaskRow) {
   return {
     id: t.id,
     accountKey: t.accountKey,
     accountDealer: t.account?.dealer ?? null,
+    accountLogos: parseAccountLogos(t.account?.logos ?? null),
     initiativeId: t.initiativeId,
     initiativeName: t.initiative?.name ?? null,
     teamKey: t.teamKey,

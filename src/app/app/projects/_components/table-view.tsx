@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChatBubbleOvalLeftIcon, ChevronUpDownIcon } from '@heroicons/react/24/outline';
 import { UserAvatar } from '@/components/user-avatar';
+import { AccountAvatar } from '@/components/account-avatar';
 import {
   STATUS_LABEL,
   STATUS_DOT,
@@ -69,6 +70,7 @@ export function TableBody({
         <thead>
           <tr className="border-b border-[var(--border)] text-left text-xs text-[var(--muted-foreground)]">
             <Th label="Task" onClick={() => toggleSort('title')} active={sort === 'title'} />
+            <th className="px-3 py-2" aria-label="Comments" />
             <Th label="Account" onClick={() => toggleSort('accountDealer')} active={sort === 'accountDealer'} />
             <th className="px-3 py-2 font-medium">Team</th>
             <th className="px-3 py-2 font-medium">Assignee</th>
@@ -91,7 +93,33 @@ export function TableBody({
                 <td className="max-w-[22rem] px-3 py-2.5">
                   <span className="block truncate font-medium text-[var(--foreground)]">{t.title}</span>
                 </td>
-                <td className="px-3 py-2.5 text-[var(--muted-foreground)]">{t.accountDealer ?? '—'}</td>
+                <td className="px-3 py-2.5">
+                  {t.commentCount > 0 && (
+                    <span
+                      className="inline-flex items-center gap-1 text-[var(--muted-foreground)]"
+                      title={`${t.commentCount} comment${t.commentCount === 1 ? '' : 's'}`}
+                    >
+                      <ChatBubbleOvalLeftIcon className="h-4 w-4" />
+                      {t.commentCount}
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2.5">
+                  {t.accountDealer ? (
+                    <span className="flex items-center gap-1.5">
+                      <AccountAvatar
+                        name={t.accountDealer}
+                        accountKey={t.accountKey}
+                        logos={t.accountLogos ?? undefined}
+                        size={20}
+                        className="h-5 w-5 flex-shrink-0 rounded object-cover"
+                      />
+                      <span className="text-[var(--muted-foreground)]">{t.accountDealer}</span>
+                    </span>
+                  ) : (
+                    <span className="text-[var(--muted-foreground)]">—</span>
+                  )}
+                </td>
                 <td className="px-3 py-2.5">
                   {t.teamName ? (
                     <span
@@ -105,31 +133,20 @@ export function TableBody({
                   )}
                 </td>
                 <td className="px-3 py-2.5">
-                  <span className="flex items-center gap-2">
-                    {t.commentCount > 0 && (
-                      <span
-                        className="inline-flex items-center gap-0.5 text-[11px] text-[var(--muted-foreground)]"
-                        title={`${t.commentCount} comment${t.commentCount === 1 ? '' : 's'}`}
-                      >
-                        <ChatBubbleOvalLeftIcon className="h-3.5 w-3.5" />
-                        {t.commentCount}
-                      </span>
-                    )}
-                    {t.assignee ? (
-                      <span className="flex items-center gap-1.5">
-                        <UserAvatar
-                          name={t.assignee.name}
-                          email={t.assignee.email}
-                          avatarUrl={t.assignee.avatarUrl}
-                          size={20}
-                          className="h-5 w-5 rounded-full object-cover"
-                        />
-                        <span className="text-[var(--muted-foreground)]">{t.assignee.name}</span>
-                      </span>
-                    ) : (
-                      <span className="text-[var(--muted-foreground)]">Unassigned</span>
-                    )}
-                  </span>
+                  {t.assignee ? (
+                    <span className="flex items-center gap-1.5">
+                      <UserAvatar
+                        name={t.assignee.name}
+                        email={t.assignee.email}
+                        avatarUrl={t.assignee.avatarUrl}
+                        size={20}
+                        className="h-5 w-5 rounded-full object-cover"
+                      />
+                      <span className="text-[var(--muted-foreground)]">{t.assignee.name}</span>
+                    </span>
+                  ) : (
+                    <span className="text-[var(--muted-foreground)]">Unassigned</span>
+                  )}
                 </td>
                 <td className="px-3 py-2.5">
                   <span className="inline-flex items-center gap-1.5 text-[var(--muted-foreground)]">
@@ -165,7 +182,7 @@ export function TableBody({
           })}
           {!isLoading && sorted.length === 0 && (
             <tr>
-              <td colSpan={7} className="px-3 py-12 text-center text-sm text-[var(--muted-foreground)]">
+              <td colSpan={8} className="px-3 py-12 text-center text-sm text-[var(--muted-foreground)]">
                 No tasks match these filters.
               </td>
             </tr>

@@ -40,6 +40,7 @@ const TASK_INCLUDE = {
   initiative: { select: { name: true } },
   assignee: { select: { id: true, name: true, email: true, avatarUrl: true } },
   requester: { select: { id: true, name: true } },
+  _count: { select: { comments: true } },
 } as const;
 
 type TaskRow = {
@@ -68,6 +69,7 @@ type TaskRow = {
   initiative?: { name: string } | null;
   assignee?: { id: string; name: string; email: string; avatarUrl: string | null } | null;
   requester?: { id: string; name: string } | null;
+  _count?: { comments: number };
 };
 
 export function serializeTask(t: TaskRow) {
@@ -87,6 +89,7 @@ export function serializeTask(t: TaskRow) {
     priority: t.priority,
     assignee: t.assignee ?? null,
     requester: t.requester ?? null,
+    commentCount: t._count?.comments ?? 0,
     // Date-only fields — slice to YYYY-MM-DD so the UI parses them as LOCAL
     // dates (full ISO is UTC-midnight → renders a day early west of UTC).
     startDate: t.startDate ? t.startDate.toISOString().slice(0, 10) : null,

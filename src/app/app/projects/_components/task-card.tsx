@@ -1,5 +1,6 @@
 'use client';
 
+import { ChatBubbleOvalLeftIcon } from '@heroicons/react/24/outline';
 import { UserAvatar } from '@/components/user-avatar';
 import type { TaskDTO } from '@/lib/services/projects';
 import {
@@ -69,17 +70,28 @@ export function TaskCard({ task, showAccount = true }: { task: TaskDTO; showAcco
         ) : (
           <span />
         )}
-        {task.assignee ? (
-          <UserAvatar
-            name={task.assignee.name}
-            email={task.assignee.email}
-            avatarUrl={task.assignee.avatarUrl}
-            size={20}
-            className="h-5 w-5 rounded-full object-cover"
-          />
-        ) : (
-          <span className="text-[11px] text-[var(--muted-foreground)]">Unassigned</span>
-        )}
+        <div className="flex items-center gap-2">
+          {task.commentCount > 0 && (
+            <span
+              className="inline-flex items-center gap-0.5 text-[11px] text-[var(--muted-foreground)]"
+              title={`${task.commentCount} comment${task.commentCount === 1 ? '' : 's'}`}
+            >
+              <ChatBubbleOvalLeftIcon className="h-3.5 w-3.5" />
+              {task.commentCount}
+            </span>
+          )}
+          {task.assignee ? (
+            <UserAvatar
+              name={task.assignee.name}
+              email={task.assignee.email}
+              avatarUrl={task.assignee.avatarUrl}
+              size={20}
+              className="h-5 w-5 rounded-full object-cover"
+            />
+          ) : (
+            <span className="text-[11px] text-[var(--muted-foreground)]">Unassigned</span>
+          )}
+        </div>
       </div>
     </div>
   );

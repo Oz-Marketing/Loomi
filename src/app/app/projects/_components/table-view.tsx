@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ChevronUpDownIcon } from '@heroicons/react/24/outline';
+import { ChatBubbleOvalLeftIcon, ChevronUpDownIcon } from '@heroicons/react/24/outline';
 import { UserAvatar } from '@/components/user-avatar';
 import {
   STATUS_LABEL,
@@ -105,20 +105,31 @@ export function TableBody({
                   )}
                 </td>
                 <td className="px-3 py-2.5">
-                  {t.assignee ? (
-                    <span className="flex items-center gap-1.5">
-                      <UserAvatar
-                        name={t.assignee.name}
-                        email={t.assignee.email}
-                        avatarUrl={t.assignee.avatarUrl}
-                        size={20}
-                        className="h-5 w-5 rounded-full object-cover"
-                      />
-                      <span className="text-[var(--muted-foreground)]">{t.assignee.name}</span>
-                    </span>
-                  ) : (
-                    <span className="text-[var(--muted-foreground)]">Unassigned</span>
-                  )}
+                  <span className="flex items-center gap-2">
+                    {t.commentCount > 0 && (
+                      <span
+                        className="inline-flex items-center gap-0.5 text-[11px] text-[var(--muted-foreground)]"
+                        title={`${t.commentCount} comment${t.commentCount === 1 ? '' : 's'}`}
+                      >
+                        <ChatBubbleOvalLeftIcon className="h-3.5 w-3.5" />
+                        {t.commentCount}
+                      </span>
+                    )}
+                    {t.assignee ? (
+                      <span className="flex items-center gap-1.5">
+                        <UserAvatar
+                          name={t.assignee.name}
+                          email={t.assignee.email}
+                          avatarUrl={t.assignee.avatarUrl}
+                          size={20}
+                          className="h-5 w-5 rounded-full object-cover"
+                        />
+                        <span className="text-[var(--muted-foreground)]">{t.assignee.name}</span>
+                      </span>
+                    ) : (
+                      <span className="text-[var(--muted-foreground)]">Unassigned</span>
+                    )}
+                  </span>
                 </td>
                 <td className="px-3 py-2.5">
                   <span className="inline-flex items-center gap-1.5 text-[var(--muted-foreground)]">

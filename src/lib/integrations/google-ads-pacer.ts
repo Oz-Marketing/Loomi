@@ -235,7 +235,9 @@ export async function previewGoogleImport(
   const plan = await getOrCreatePlan(accountKey);
   const campaigns = await importGoogleCampaigns(cfg, customerId);
   const existing = await prisma.metaAdsPacerAd.findMany({
-    where: { planId: plan.id, period },
+    // Only diff against Google lines — Meta rows must never appear as
+    // adds/removes in the Google import preview.
+    where: { planId: plan.id, period, platform: 'google' },
     select: {
       id: true,
       name: true,

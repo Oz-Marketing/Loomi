@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { getUserTeamIds } from '@/lib/services/teams';
 
 function parseAccountKeys(raw: string): string[] {
   try {
@@ -41,8 +42,10 @@ export async function GET(
   }
 
   const accountKeys = parseAccountKeys(user.accountKeys);
+  const teamIds = await getUserTeamIds(id);
   return NextResponse.json({
     ...user,
     accountKeys,
+    teamIds,
   });
 }

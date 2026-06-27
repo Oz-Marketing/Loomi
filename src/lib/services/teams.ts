@@ -81,6 +81,7 @@ type TeamRow = {
   name: string;
   description: string | null;
   color: string | null;
+  icon: string | null;
   memberships: Array<{
     userId: string;
     role: string;
@@ -97,6 +98,7 @@ export function serializeTeam(t: TeamRow) {
     name: t.name,
     description: t.description,
     color: t.color,
+    icon: t.icon,
     taskCount: t._count.tasks,
     members: t.memberships.map((m) => ({
       userId: m.userId,
@@ -139,6 +141,7 @@ export async function createTeam(input: {
   name: string;
   description?: string | null;
   color?: string | null;
+  icon?: string | null;
 }) {
   const name = input.name.trim();
   const key = await uniqueKey(name);
@@ -149,6 +152,7 @@ export async function createTeam(input: {
       name,
       description: input.description?.trim() || null,
       color: input.color || null,
+      icon: input.icon || null,
       sortOrder: (max._max.sortOrder ?? 0) + 1,
     },
   });
@@ -160,6 +164,7 @@ export async function updateTeam(
     name?: string;
     description?: string | null;
     color?: string | null;
+    icon?: string | null;
     sortOrder?: number;
   },
 ) {
@@ -167,8 +172,39 @@ export async function updateTeam(
   if (patch.name !== undefined) data.name = patch.name.trim();
   if (patch.description !== undefined) data.description = patch.description?.trim() || null;
   if (patch.color !== undefined) data.color = patch.color || null;
+  if (patch.icon !== undefined) data.icon = patch.icon || null;
   if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
   return prisma.team.update({ where: { id }, data });
+}
+
+/** The team ids a user belongs to (for the user-settings Teams field). */
+export async function getUserTeamIds(userId: string): Promise<string[]> {
+  const rows = await prisma.teamMembership.findMany({
+    where: { userId },
+    select: { teamId: true },
+  });
+  return rows.map((r) => r.teamId);
+}
+
+/** Sync a user's team memberships to exactly `teamIds` (added rows are plain
+ *  members; removed rows are deleted; existing rows — incl. lead role — kept). */
+export async function setUserTeams(userId: string, teamIds: string[]) {
+  const want = new Set(teamIds);
+  const existing = await prisma.teamMembership.findMany({
+    where: { userId },
+    select: { teamId: true },
+  });
+  const have = new Set(existing.map((e) => e.teamId));
+  const toAdd = [...want].filter((t) => !have.has(t));
+  const toRemove = [...have].filter((t) => !want.has(t));
+  await prisma.$transaction([
+    ...(toRemove.length
+      ? [prisma.teamMembership.deleteMany({ where: { userId, teamId: { in: toRemove } } })]
+      : []),
+    ...toAdd.map((teamId) =>
+      prisma.teamMembership.create({ data: { userId, teamId, role: 'member' } }),
+    ),
+  ]);
 }
 
 /** Soft-archive (hide) a team — tasks keep their teamKey but the team drops

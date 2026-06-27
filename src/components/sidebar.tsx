@@ -27,7 +27,6 @@ import {
   DocumentTextIcon,
   RectangleStackIcon,
   PaperAirplaneIcon,
-  PuzzlePieceIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
@@ -36,6 +35,7 @@ import { SidebarTooltip, SidebarPopout } from '@/components/sidebar-collapsed-ui
 import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
 import { FlowIcon } from '@/components/icon-map';
 import { AccountSwitcher } from '@/components/account-switcher';
+import { SurfaceSwitch } from '@/components/surface-switch';
 import { AppLogo } from '@/components/app-logo';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { accountKeyToSlug, isSubaccountRoute, stripSubaccountPrefix } from '@/lib/account-slugs';
@@ -260,13 +260,8 @@ export function Sidebar() {
       : '/settings/subaccounts';
 
 
-  // Integrations — jump to the active sub-account's integration settings.
-  const integrationsHref = slug ? `/subaccount/${slug}/settings/integrations` : '/settings/integrations';
-  const integrationsActive = normalizedPath.startsWith('/settings/integrations');
-  // Settings lives in the footer (where the account switcher briefly was);
-  // active on any /settings route except integrations (its own item above).
-  const settingsActive =
-    normalizedPath.startsWith('/settings') && !integrationsActive;
+  // Settings lives in the footer (where the account switcher briefly was).
+  const settingsActive = normalizedPath.startsWith('/settings');
 
   return (
     <SidebarFrame
@@ -280,25 +275,9 @@ export function Sidebar() {
       }
       bottom={
         <>
-          {/* Integrations — quick jump to the active sub-account's integration
-              settings, pinned at the bottom above the footer. */}
-          <div className={`${collapsed ? 'px-2' : 'px-2'} pb-1`}>
-            {(() => {
-              const intLink = (
-                <Link
-                  href={integrationsHref}
-                  className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
-                    integrationsActive
-                      ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
-                      : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
-                  }`}
-                >
-                  <PuzzlePieceIcon className="w-5 h-5" />
-                  {!collapsed && 'Integrations'}
-                </Link>
-              );
-              return collapsed ? <SidebarTooltip label="Integrations">{intLink}</SidebarTooltip> : intLink;
-            })()}
+          {/* Quick switch between Studio and Projects (App). */}
+          <div className="px-2 pb-1">
+            <SurfaceSwitch collapsed={collapsed} />
           </div>
 
           {/* Settings / Theme Toggle */}
@@ -327,7 +306,7 @@ export function Sidebar() {
                   href={settingsHref}
                   className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
                     settingsActive
-                      ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
+                      ? 'bg-[var(--primary)]/10 text-[var(--primary)] font-medium'
                       : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
                   }`}
                 >
@@ -447,7 +426,7 @@ export function Sidebar() {
               href={leafHref}
               className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
                 isActive
-                  ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
+                  ? 'bg-[var(--primary)]/10 text-[var(--primary)] font-medium'
                   : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
               }`}
             >

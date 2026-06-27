@@ -11,6 +11,7 @@ import { UserAvatar } from '@/components/user-avatar';
 import { AccountAvatar } from '@/components/account-avatar';
 import { roleDisplayName } from '@/lib/roles';
 import { formatAccountCityState } from '@/lib/account-resolvers';
+import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 
 interface User {
   id: string;
@@ -31,7 +32,6 @@ const roleColors: Record<string, string> = {
   client: 'text-green-400 bg-green-500/10',
 };
 
-const USERS_PAGE_SIZE = 10;
 type UserSortField = 'name' | 'email' | 'role' | 'accounts' | 'lastLogin';
 type UserSortDirection = 'asc' | 'desc';
 
@@ -86,6 +86,7 @@ export function UsersTab() {
   const [sortField, setSortField] = useState<UserSortField>('name');
   const [sortDirection, setSortDirection] = useState<UserSortDirection>('asc');
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   useEffect(() => {
     fetch('/api/users')
@@ -155,7 +156,7 @@ export function UsersTab() {
     return sorted;
   }, [filteredUsers, sortDirection, sortField]);
 
-  const totalPages = Math.max(1, Math.ceil(sortedUsers.length / USERS_PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(sortedUsers.length / pageSize));
 
   useEffect(() => {
     if (page > totalPages) {
@@ -163,11 +164,11 @@ export function UsersTab() {
     }
   }, [page, totalPages]);
 
-  const pageStart = (page - 1) * USERS_PAGE_SIZE;
-  const pagedUsers = sortedUsers.slice(pageStart, pageStart + USERS_PAGE_SIZE);
+  const pageStart = (page - 1) * pageSize;
+  const pagedUsers = sortedUsers.slice(pageStart, pageStart + pageSize);
   const visiblePages = getVisiblePages(page, totalPages);
   const showingStart = sortedUsers.length === 0 ? 0 : pageStart + 1;
-  const showingEnd = Math.min(pageStart + USERS_PAGE_SIZE, sortedUsers.length);
+  const showingEnd = Math.min(pageStart + pageSize, sortedUsers.length);
 
   const toggleSort = (field: UserSortField) => {
     if (sortField === field) {
@@ -371,10 +372,24 @@ export function UsersTab() {
       </div>
 
       {!loading && sortedUsers.length > 0 && (
-        <div className="flex items-center justify-between mt-3">
-          <p className="text-xs text-[var(--muted-foreground)]">
-            Showing {showingStart}-{showingEnd} of {sortedUsers.length}
-          </p>
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[var(--muted-foreground)]">Show</span>
+            <div className="w-20">
+              <SearchableSelect
+                value={String(pageSize)}
+                onChange={(v) => {
+                  setPageSize(Number(v));
+                  setPage(1);
+                }}
+                options={[10, 20, 50, 100].map((n) => ({ value: String(n), label: String(n) }))}
+                searchable={false}
+              />
+            </div>
+            <span className="text-xs text-[var(--muted-foreground)]">
+              · {showingStart}-{showingEnd} of {sortedUsers.length}
+            </span>
+          </div>
           <div className="flex items-center gap-1">
             <button
               type="button"
@@ -399,7 +414,7 @@ export function UsersTab() {
                 onClick={() => setPage(pageNumber)}
                 className={`px-2 py-1 text-xs rounded-md border transition-colors ${
                   pageNumber === page
-                    ? 'bg-[var(--primary)] text-white border-[var(--primary)]'
+                    ? 'bg-[var(--primary)]/10 text-[var(--primary)] border-[var(--primary)] font-medium'
                     : 'border-[var(--border)] hover:bg-[var(--muted)]'
                 }`}
               >

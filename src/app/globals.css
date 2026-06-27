@@ -816,13 +816,11 @@ button.glass-card:hover,
 }
 
 .users-table-scroll {
-  overflow: visible;
-}
-
-@media (max-width: 900px) {
-  .users-table-scroll {
-    overflow-x: auto;
-  }
+  /* Always allow horizontal scroll so a wide (min-width) table stays reachable
+     even when the content area is narrower than the table — e.g. settings with
+     the sidebar + tab rail. Previously `visible`, which overflowed without a
+     scrollbar on desktop. */
+  overflow-x: auto;
 }
 
 /* ── Glass action bar ── fixed bottom bulk-action bars */

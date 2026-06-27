@@ -33,6 +33,7 @@ export async function POST(req: NextRequest) {
     name,
     description: typeof body.description === 'string' ? body.description : null,
     color: typeof body.color === 'string' ? body.color : null,
+    icon: typeof body.icon === 'string' ? body.icon : null,
   });
   const team = await teams.getTeamWithMembers(created.id);
   return NextResponse.json({ team }, { status: 201 });

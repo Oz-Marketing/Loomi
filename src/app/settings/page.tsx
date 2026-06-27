@@ -6,7 +6,7 @@ import { useAccount } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import {
   BuildingStorefrontIcon,
-  UsersIcon, SwatchIcon, SparklesIcon,
+  UsersIcon, UserGroupIcon, SwatchIcon, SparklesIcon,
   CogIcon, BellIcon, BellAlertIcon, TagIcon, Squares2X2Icon, BriefcaseIcon, CalculatorIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
@@ -23,6 +23,7 @@ import { CustomFieldBlueprintsTab } from '@/components/settings/custom-field-blu
 import { IndustriesTab } from '@/components/settings/industries-tab';
 import { DefaultMarkupTab } from '@/components/settings/default-markup-tab';
 import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
+import { TeamsTab } from '@/components/settings/teams-tab';
 import { useIndustries } from '@/lib/hooks/use-industries';
 
 type Tab =
@@ -33,6 +34,7 @@ type Tab =
   | 'industries'
   | 'markup'
   | 'alerts'
+  | 'teams'
   | 'contact-fields'
   | 'contact-field-blueprints'
   | 'notifications'
@@ -62,6 +64,8 @@ export default function SettingsPage() {
   if (hasAdminAccess && isAccount) tabs.push({ key: 'contact-fields', label: 'Custom Fields', titleLabel: 'Contact Custom Fields', icon: TagIcon });
   if (hasAdminAccess && isAdmin) tabs.push({ key: 'contact-field-blueprints', label: 'Field Blueprints', titleLabel: 'Contact Field Blueprints', icon: Squares2X2Icon });
   if (hasAdminAccess) tabs.push({ key: 'users', label: 'Users', titleLabel: 'User Settings', icon: UsersIcon });
+  // Delivery teams that Projects tickets route to (internal-staff only).
+  if (hasAdminAccess) tabs.push({ key: 'teams', label: 'Teams', titleLabel: 'Teams', icon: UserGroupIcon });
   if (hasAdminAccess && isAdmin) tabs.push({ key: 'knowledge', label: 'Knowledge Base', titleLabel: 'Knowledge Base Settings', icon: SparklesIcon });
   if (isElevated && isAdmin) tabs.push({ key: 'industries', label: 'Industries', titleLabel: 'Industry Settings', icon: BriefcaseIcon });
   if (isElevated && isAdmin) tabs.push({ key: 'markup', label: 'Markup', titleLabel: 'Default Markup', icon: CalculatorIcon });
@@ -141,6 +145,7 @@ export default function SettingsPage() {
           {activeTab === 'contact-fields' && hasAdminAccess && isAccount && <CustomFieldsTab />}
           {activeTab === 'contact-field-blueprints' && hasAdminAccess && isAdmin && <CustomFieldBlueprintsTab />}
           {activeTab === 'users' && <UsersTab />}
+          {activeTab === 'teams' && hasAdminAccess && <TeamsTab />}
           {activeTab === 'knowledge' && hasAdminAccess && isAdmin && <KnowledgeBaseTab />}
           {activeTab === 'industries' && isElevated && isAdmin && <IndustriesTab />}
           {activeTab === 'markup' && isElevated && isAdmin && <DefaultMarkupTab />}

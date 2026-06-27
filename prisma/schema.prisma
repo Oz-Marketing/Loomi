@@ -2113,6 +2113,7 @@ model Team {
   name        String // "Digital Ads"
   description String?
   color       String? // hex chip color for boards (e.g. "#6366f1")
+  icon        String? // optional lucide icon name (kebab-case); UI defaults to a 2-person glyph
   sortOrder   Int       @default(0)
   archivedAt  DateTime?
   createdAt   DateTime  @default(now())

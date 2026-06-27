@@ -19,6 +19,7 @@ import { useIsMobile } from '@/hooks/use-is-mobile';
 import { SidebarTooltip, SidebarPopout } from '@/components/sidebar-collapsed-ui';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { AccountSwitcher } from '@/components/account-switcher';
+import { SurfaceSwitch } from '@/components/surface-switch';
 import { MetaBrandIcon, GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
 import { LoomiWordmark } from './loomi-wordmark';
 
@@ -90,7 +91,7 @@ export function AppSidebar() {
   // The icon-rail collapse is desktop-only; the mobile drawer always renders
   // nav items expanded regardless of the persisted collapse preference.
   const showCollapsed = collapsed && !isMobile;
-  const teamsActive = pathname.startsWith('/projects/teams');
+  const settingsActive = pathname.startsWith('/settings');
 
   return (
     <SidebarFrame
@@ -101,15 +102,21 @@ export function AppSidebar() {
       }
       account={showCollapsed ? <AccountSwitcher compact /> : <AccountSwitcher />}
       bottom={
-        <div className={showCollapsed ? 'p-2' : 'px-2 py-2'}>
-          <BottomLink
-            href="/projects/teams"
-            label="Teams"
-            icon={CogIcon}
-            active={teamsActive}
-            collapsed={showCollapsed}
-          />
-        </div>
+        <>
+          {/* Quick switch between Projects (App) and Studio. */}
+          <div className="px-2 pb-1">
+            <SurfaceSwitch collapsed={showCollapsed} />
+          </div>
+          <div className={showCollapsed ? 'p-2' : 'px-2 py-2'}>
+            <BottomLink
+              href="/settings"
+              label="Settings"
+              icon={CogIcon}
+              active={settingsActive}
+              collapsed={showCollapsed}
+            />
+          </div>
+        </>
       }
     >
       {/* New ticket — primary CTA */}

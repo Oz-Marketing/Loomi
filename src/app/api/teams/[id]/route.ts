@@ -18,6 +18,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     body.name !== undefined ||
     body.description !== undefined ||
     body.color !== undefined ||
+    body.icon !== undefined ||
     body.sortOrder !== undefined;
 
   if (hasFieldEdit) {
@@ -25,6 +26,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       name: body.name,
       description: body.description,
       color: body.color,
+      icon: body.icon,
       sortOrder: body.sortOrder,
     });
   }

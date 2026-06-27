@@ -40,6 +40,7 @@ type GoogleAd = {
   googleChannelType: string | null;
   adStatus: string;
   budgetType: string;
+  budgetSource: string;
   allocation: string | null;
   pacerActual: string | null;
   pacerDailyBudget: string | null;
@@ -83,6 +84,20 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const ads = useMemo(() => data?.ads ?? [], [data]);
   const tz = data?.timeZone ?? 'America/Denver';
   const frozen = !!data?.frozen;
+
+  // Allocation rollup for the Plan view (campaign budgets summed, split by source).
+  const totals = useMemo(() => {
+    let total = 0,
+      base = 0,
+      added = 0;
+    for (const a of ads) {
+      const v = num(a.allocation);
+      total += v;
+      if (a.budgetSource === 'added') added += v;
+      else base += v;
+    }
+    return { total, base, added };
+  }, [ads]);
 
   const { data: acct } = useSWR<{ googleAdsCustomerId?: string | null }>(
     accountKey ? `/api/accounts/${encodeURIComponent(accountKey)}` : null,
@@ -225,6 +240,23 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           >
             Connect
           </Link>
+        </div>
+      )}
+
+      {ads.length > 0 && (
+        <div className="mt-4 grid grid-cols-3 gap-3">
+          {[
+            { label: 'Total allocated', value: totals.total },
+            { label: 'Base', value: totals.base },
+            { label: 'Added', value: totals.added },
+          ].map((s) => (
+            <div key={s.label} className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 px-4 py-3">
+              <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--muted-foreground)]">
+                {s.label}
+              </p>
+              <p className="mt-0.5 text-lg font-semibold text-[var(--foreground)]">{money(s.value)}</p>
+            </div>
+          ))}
         </div>
       )}
 
@@ -431,6 +463,7 @@ function CampaignModal({
   const [channel, setChannel] = useState(campaign?.googleChannelType ?? 'Search');
   const [status, setStatus] = useState(campaign?.adStatus ?? 'Live');
   const [budgetType, setBudgetType] = useState(campaign?.budgetType ?? 'Daily');
+  const [budgetSource, setBudgetSource] = useState(campaign?.budgetSource ?? 'base');
   const [allocation, setAllocation] = useState(campaign?.allocation ?? '');
   const [dailyBudget, setDailyBudget] = useState(campaign?.pacerDailyBudget ?? '');
   const [flightStart, setFlightStart] = useState<string | null>(campaign?.flightStart ?? null);
@@ -447,6 +480,7 @@ function CampaignModal({
       googleChannelType: channel,
       adStatus: status,
       budgetType,
+      budgetSource,
       allocation: allocation || null,
       pacerActual: campaign?.pacerActual ?? null,
       pacerDailyBudget: dailyBudget || null,
@@ -501,16 +535,26 @@ function CampaignModal({
                 options={BUDGET_TYPES.map((b) => ({ value: b, label: b }))}
               />
             </Field>
-            <Field label={budgetType === 'Lifetime' ? 'Total budget ($)' : 'Monthly budget ($)'}>
-              <input
-                inputMode="decimal"
-                value={allocation}
-                onChange={(e) => /^\d*\.?\d*$/.test(e.target.value) && setAllocation(e.target.value)}
-                className={fieldCls}
-                placeholder="0"
+            <Field label="Funding">
+              <SearchableSelect
+                value={budgetSource}
+                onChange={setBudgetSource}
+                options={[
+                  { value: 'base', label: 'Base' },
+                  { value: 'added', label: 'Added' },
+                ]}
               />
             </Field>
           </div>
+          <Field label={budgetType === 'Lifetime' ? 'Total budget ($)' : 'Monthly budget ($)'}>
+            <input
+              inputMode="decimal"
+              value={allocation}
+              onChange={(e) => /^\d*\.?\d*$/.test(e.target.value) && setAllocation(e.target.value)}
+              className={fieldCls}
+              placeholder="0"
+            />
+          </Field>
           {budgetType !== 'Lifetime' && (
             <Field label="Planned daily ($)">
               <input

@@ -202,21 +202,22 @@ export async function PUT(
       select: { dealer: true },
     }))?.dealer ?? accountKey;
 
+  // The account budget goals live on a single per-plan+period row SHARED across
+  // platforms, so only touch the fields the caller actually sent — a Google
+  // autosave (which omits them) must never null Meta's budget, and vice-versa.
+  const budgetData: { baseBudgetGoal?: string | null; addedBudgetGoal?: string | null } = {};
+  if ('baseBudgetGoal' in body) budgetData.baseBudgetGoal = nullable(body.baseBudgetGoal);
+  if ('addedBudgetGoal' in body) budgetData.addedBudgetGoal = nullable(body.addedBudgetGoal);
+
   await prisma.$transaction(async (tx) => {
-    // Period budget — upsert
-    await tx.metaAdsPacerPeriodBudget.upsert({
-      where: { planId_period: { planId: plan.id, period } },
-      create: {
-        planId: plan.id,
-        period,
-        baseBudgetGoal: nullable(body.baseBudgetGoal),
-        addedBudgetGoal: nullable(body.addedBudgetGoal),
-      },
-      update: {
-        baseBudgetGoal: nullable(body.baseBudgetGoal),
-        addedBudgetGoal: nullable(body.addedBudgetGoal),
-      },
-    });
+    // Period budget — upsert only when the caller manages budget goals.
+    if (Object.keys(budgetData).length > 0) {
+      await tx.metaAdsPacerPeriodBudget.upsert({
+        where: { planId_period: { planId: plan.id, period } },
+        create: { planId: plan.id, period, ...budgetData },
+        update: budgetData,
+      });
+    }
 
     // Reconcile only ads in THIS period + platform — the other platform's rows
     // (and other periods) are left untouched, so a Google save never deletes

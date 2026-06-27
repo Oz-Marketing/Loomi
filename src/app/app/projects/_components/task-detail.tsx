@@ -15,12 +15,20 @@ import {
   kindLabel,
   formatShortDate,
 } from '@/lib/projects/ui';
+import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
+import { DatePicker } from '@/components/ui/date-picker';
 import { useProjectOptions } from './use-project-options';
 import { TaskExtraDetails } from './details-view';
+import { MentionTextarea, MentionText, extractMentions } from './mention-textarea';
+import { MediaUpload, type UploadedFile } from './media-upload';
+
+const PROP_TRIGGER = '!bg-[var(--background)] !rounded-lg !px-2.5 !py-1.5 !text-sm';
+const propDot = (color: string) => (
+  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
+);
 
 type Thread = NonNullable<Awaited<ReturnType<typeof getTaskWithThread>>>;
 
-const PRIORITIES = ['low', 'medium', 'high', 'urgent'];
 const CAMPAIGN_KINDS = new Set(['email', 'sms', 'landing_page', 'form']);
 
 const CAMPAIGN_STATUS_BADGE: Record<string, string> = {
@@ -115,6 +123,28 @@ export function TaskDetail({ initial }: { initial: Thread }) {
     }
   }
 
+  const attachments = (((task.details as Record<string, unknown> | null)?._attachments as
+    | UploadedFile[]
+    | undefined) ?? []);
+
+  async function saveAttachments(files: UploadedFile[]) {
+    const prevDetails = (task.details as Record<string, unknown> | null) ?? {};
+    setTask({ ...task, details: { ...prevDetails, _attachments: files } });
+    try {
+      const res = await fetch(`/api/projects/tasks/${task.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ details: { _attachments: files } }),
+      });
+      if (!res.ok) throw new Error();
+      const { task: updated } = (await res.json()) as { task: typeof task };
+      if (updated) setTask(updated);
+    } catch {
+      setTask({ ...task, details: prevDetails });
+      toast.error('Could not save attachments');
+    }
+  }
+
   async function postComment() {
     const body = draft.trim();
     if (!body) return;
@@ -123,7 +153,7 @@ export function TaskDetail({ initial }: { initial: Thread }) {
       const res = await fetch(`/api/projects/tasks/${task.id}/comments`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ body }),
+        body: JSON.stringify({ body, mentions: extractMentions(body, options?.users ?? []) }),
       });
       if (!res.ok) throw new Error();
       const { comment } = await res.json();
@@ -246,6 +276,12 @@ export function TaskDetail({ initial }: { initial: Thread }) {
             </div>
           )}
 
+          {/* Attachments */}
+          <div className="mt-8">
+            <h2 className="mb-2 text-sm font-medium text-[var(--foreground)]">Attachments</h2>
+            <MediaUpload accountKey={task.accountKey} value={attachments} onChange={saveAttachments} />
+          </div>
+
           {/* Subtasks */}
           <div className="mt-8">
             <div className="flex items-center gap-2">
@@ -316,7 +352,9 @@ export function TaskDetail({ initial }: { initial: Thread }) {
                       <span className="font-medium text-[var(--foreground)]">{c.author?.name ?? 'User'}</span>{' '}
                       <span className="text-[var(--muted-foreground)]">{formatShortDate(c.createdAt)}</span>
                     </p>
-                    <p className="mt-0.5 whitespace-pre-wrap text-sm text-[var(--foreground)]">{c.body}</p>
+                    <p className="mt-0.5 whitespace-pre-wrap text-sm text-[var(--foreground)]">
+                      <MentionText text={c.body} users={options?.users ?? []} />
+                    </p>
                   </div>
                 </div>
               ))}
@@ -326,12 +364,12 @@ export function TaskDetail({ initial }: { initial: Thread }) {
             </div>
 
             <div className="mt-4">
-              <textarea
+              <MentionTextarea
                 value={draft}
-                onChange={(e) => setDraft(e.target.value)}
+                onChange={setDraft}
+                users={options?.users ?? []}
                 rows={3}
-                placeholder="Add a comment…"
-                className="loomi-input resize-y"
+                placeholder="Add a comment… use @ to mention"
               />
               <div className="mt-2 flex justify-end">
                 <button
@@ -350,71 +388,87 @@ export function TaskDetail({ initial }: { initial: Thread }) {
         {/* Properties sidebar */}
         <aside className="space-y-4">
           <Prop label="Status">
-            <select value={task.status} onChange={(e) => patch({ status: e.target.value })} className="loomi-input !py-1.5 text-xs">
-              {STATUSES.map((s) => (
-                <option key={s.key} value={s.key}>
-                  {s.label}
-                </option>
-              ))}
-            </select>
+            <SearchableSelect
+              value={task.status}
+              onChange={(v) => patch({ status: v })}
+              searchable={false}
+              options={STATUSES.map((s) => ({ value: s.key, label: s.label, icon: propDot(s.dot) }))}
+              className={PROP_TRIGGER}
+            />
           </Prop>
 
           <Prop label="Assignee">
-            <select
+            <SearchableSelect
               value={task.assignee?.id ?? ''}
-              onChange={(e) => patch({ assigneeUserId: e.target.value || null })}
-              className="loomi-input !py-1.5 text-xs"
-            >
-              <option value="">Unassigned</option>
-              {options?.users.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => patch({ assigneeUserId: v || null })}
+              options={[
+                { value: '', label: 'Unassigned' },
+                ...(options?.users ?? []).map((u) => ({
+                  value: u.id,
+                  label: u.name,
+                  icon: (
+                    <UserAvatar
+                      name={u.name}
+                      email={u.email}
+                      avatarUrl={u.avatarUrl}
+                      size={16}
+                      className="rounded-full flex-shrink-0"
+                    />
+                  ),
+                })),
+              ]}
+              placeholder="Unassigned"
+              className={PROP_TRIGGER}
+            />
           </Prop>
 
           <Prop label="Team">
-            <select
+            <SearchableSelect
               value={task.teamKey ?? ''}
-              onChange={(e) => patch({ teamKey: e.target.value || null })}
-              className="loomi-input !py-1.5 text-xs"
-            >
-              <option value="">No team</option>
-              {options?.teams.map((t) => (
-                <option key={t.key} value={t.key}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => patch({ teamKey: v || null })}
+              options={[
+                { value: '', label: 'No team' },
+                ...(options?.teams ?? []).map((t) => ({
+                  value: t.key,
+                  label: t.name,
+                  icon: propDot(t.color ?? 'var(--primary)'),
+                })),
+              ]}
+              placeholder="No team"
+              className={PROP_TRIGGER}
+            />
           </Prop>
 
           <Prop label="Type">
-            <select value={task.kind} onChange={(e) => patch({ kind: e.target.value })} className="loomi-input !py-1.5 text-xs">
-              {KIND_OPTIONS.map((k) => (
-                <option key={k.key} value={k.key}>
-                  {k.label}
-                </option>
-              ))}
-            </select>
+            <SearchableSelect
+              value={task.kind}
+              onChange={(v) => patch({ kind: v })}
+              options={KIND_OPTIONS.map((k) => ({ value: k.key, label: k.label }))}
+              className={PROP_TRIGGER}
+            />
           </Prop>
 
           <Prop label="Priority">
-            <select value={task.priority} onChange={(e) => patch({ priority: e.target.value })} className="loomi-input !py-1.5 text-xs">
-              {PRIORITIES.map((p) => (
-                <option key={p} value={p}>
-                  {PRIORITY_META[p as keyof typeof PRIORITY_META].label}
-                </option>
-              ))}
-            </select>
+            <SearchableSelect
+              value={task.priority}
+              onChange={(v) => patch({ priority: v })}
+              searchable={false}
+              options={(['low', 'medium', 'high', 'urgent'] as const).map((p) => ({
+                value: p,
+                label: PRIORITY_META[p].label,
+                icon: propDot(PRIORITY_META[p].color),
+              }))}
+              className={PROP_TRIGGER}
+            />
           </Prop>
 
           <Prop label="Due date">
-            <input
-              type="date"
-              value={dueValue}
-              onChange={(e) => patch({ dueDate: e.target.value || null })}
-              className="loomi-input !py-1.5 text-xs"
+            <DatePicker
+              mode="single"
+              value={dueValue || null}
+              onChange={(v) => patch({ dueDate: v || null })}
+              placeholder="Set a due date"
+              className="group inline-flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-sm text-[var(--foreground)] transition hover:border-[var(--primary)] focus:outline-none"
             />
           </Prop>
 

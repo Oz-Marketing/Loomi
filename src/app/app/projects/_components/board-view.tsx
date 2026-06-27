@@ -7,13 +7,19 @@ import {
   DndContext,
   DragOverlay,
   PointerSensor,
+  closestCorners,
   useSensor,
   useSensors,
-  useDraggable,
   useDroppable,
   type DragEndEvent,
   type DragStartEvent,
 } from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { toast } from '@/lib/toast';
 import { STATUSES } from '@/lib/projects/ui';
 import type { TaskDTO } from '@/lib/services/projects';
@@ -57,17 +63,42 @@ export function BoardView() {
   async function onDragEnd(e: DragEndEvent) {
     setActiveId(null);
     const taskId = String(e.active.id);
-    const overCol = e.over ? String(e.over.id) : null;
-    if (!overCol) return;
+    if (!e.over) return;
+    const overId = String(e.over.id);
     const task = tasks.find((t) => t.id === taskId);
-    if (!task || task.status === overCol) return;
+    if (!task) return;
 
-    mutate({ tasks: tasks.map((t) => (t.id === taskId ? { ...t, status: overCol } : t)) }, { revalidate: false });
+    // Dropping on a column header/empty area → that column, at the end.
+    // Dropping on/near a card → that card's column, at its slot.
+    const isColumn = STATUSES.some((s) => s.key === overId);
+    const destCol = isColumn ? overId : tasks.find((t) => t.id === overId)?.status ?? task.status;
+
+    // Dest column order, excluding the dragged task, to find neighbors.
+    const destItems = (byStatus[destCol] ?? []).filter((t) => t.id !== taskId);
+    let index = destItems.length;
+    if (!isColumn) {
+      const overIdx = destItems.findIndex((t) => t.id === overId);
+      if (overIdx !== -1) index = overIdx;
+    }
+    const before = destItems[index - 1];
+    const after = destItems[index];
+    let position: number;
+    if (before && after) position = (before.position + after.position) / 2;
+    else if (before) position = before.position + 1000;
+    else if (after) position = after.position - 1000;
+    else position = 0;
+
+    if (destCol === task.status && position === task.position) return;
+
+    mutate(
+      { tasks: tasks.map((t) => (t.id === taskId ? { ...t, status: destCol, position } : t)) },
+      { revalidate: false },
+    );
     try {
       const res = await fetch(`/api/projects/tasks/${taskId}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ status: overCol }),
+        body: JSON.stringify({ status: destCol, position }),
       });
       if (!res.ok) throw new Error();
       mutate();
@@ -94,6 +125,7 @@ export function BoardView() {
       />
       <DndContext
         sensors={sensors}
+        collisionDetection={closestCorners}
         onDragStart={(e: DragStartEvent) => setActiveId(String(e.active.id))}
         onDragEnd={onDragEnd}
         onDragCancel={() => setActiveId(null)}
@@ -104,9 +136,14 @@ export function BoardView() {
         <div className="flex flex-1 gap-3 overflow-x-auto pb-4 -mx-6 px-6 md:-mx-8 md:px-8 [mask-image:linear-gradient(to_right,transparent,#000_1rem,#000_calc(100%-1rem),transparent)]">
           {STATUSES.map((s) => (
             <Column key={s.key} status={s.key} label={s.label} dot={s.dot} count={byStatus[s.key]?.length ?? 0}>
-              {(byStatus[s.key] ?? []).map((t) => (
-                <DraggableCard key={t.id} task={t} onOpen={() => router.push(`/projects/tasks/${t.id}`)} />
-              ))}
+              <SortableContext
+                items={(byStatus[s.key] ?? []).map((t) => t.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {(byStatus[s.key] ?? []).map((t) => (
+                  <SortableCard key={t.id} task={t} onOpen={() => router.push(`/projects/tasks/${t.id}`)} />
+                ))}
+              </SortableContext>
               {!isLoading && (byStatus[s.key]?.length ?? 0) === 0 && (
                 <p className="px-1 py-6 text-center text-xs text-[var(--muted-foreground)]">Nothing here</p>
               )}
@@ -158,11 +195,14 @@ function Column({
   );
 }
 
-function DraggableCard({ task, onOpen }: { task: TaskDTO; onOpen: () => void }) {
-  const { setNodeRef, listeners, attributes, transform, isDragging } = useDraggable({ id: task.id });
-  const style = transform
-    ? { transform: `translate3d(${transform.x}px, ${transform.y}px, 0)` }
-    : undefined;
+function SortableCard({ task, onOpen }: { task: TaskDTO; onOpen: () => void }) {
+  const { setNodeRef, listeners, attributes, transform, transition, isDragging } = useSortable({
+    id: task.id,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
   return (
     <div
       ref={setNodeRef}

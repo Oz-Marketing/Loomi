@@ -427,6 +427,7 @@ export async function updateTask(
     position?: number;
     linkedAssetType?: string | null;
     linkedAssetId?: string | null;
+    details?: Record<string, unknown>;
   },
   authorUserId: string | null,
 ): Promise<TaskDTO | null> {
@@ -447,6 +448,13 @@ export async function updateTask(
   if (patch.dueDate !== undefined) data.dueDate = patch.dueDate ? new Date(patch.dueDate) : null;
   if (patch.startDate !== undefined)
     data.startDate = patch.startDate ? new Date(patch.startDate) : null;
+  if (patch.details !== undefined) {
+    // Shallow-merge so per-type intake fields and _attachments coexist.
+    data.details = {
+      ...((before.details as Record<string, unknown> | null) ?? {}),
+      ...patch.details,
+    } as Prisma.InputJsonValue;
+  }
   if (patch.status !== undefined) {
     data.status = patch.status;
     data.completedAt = patch.status === 'done' ? new Date() : null;

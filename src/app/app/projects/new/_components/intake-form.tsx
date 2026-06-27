@@ -17,7 +17,7 @@ import { MultiSelect } from '@/components/ui/multi-select';
 import { AccountAvatar } from '@/components/account-avatar';
 import { DatePicker } from '@/components/ui/date-picker';
 import { FieldRenderer, DATE_TRIGGER, type FieldValue } from './field-renderer';
-import { MediaUpload, type UploadedFile } from './media-upload';
+import { MediaUpload, type UploadedFile } from '../../_components/media-upload';
 
 // Per-(department,type) field values, keyed `${teamKey}:${kind}` → { fieldKey: value }.
 type TypeDetails = Record<string, Record<string, FieldValue>>;

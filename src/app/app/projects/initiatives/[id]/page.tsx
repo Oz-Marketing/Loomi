@@ -56,7 +56,7 @@ export default async function InitiativeDetailPage({
         <InitiativeExtraDetails details={dto.details} />
       </div>
 
-      <div className="mt-6 flex gap-3 overflow-x-auto pb-4">
+      <div className="mt-6 flex gap-3 overflow-x-auto pb-4 -mx-6 px-6 md:-mx-8 md:px-8 [mask-image:linear-gradient(to_right,transparent,#000_1rem,#000_calc(100%-1rem),transparent)]">
         {byStatus.map((s) => (
           <div
             key={s.key}

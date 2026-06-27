@@ -8,6 +8,7 @@ import { CogIcon, SparklesIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { CodeEditor } from '@/components/code-editor';
 import { AccountsList } from '@/components/accounts-list';
+import { AccountAvatar } from '@/components/account-avatar';
 import { OemMultiSelect } from '@/components/oem-multi-select';
 import PrimaryButton from '@/components/primary-button';
 import { getAccountOems, industryHasBrands, brandsForIndustry } from '@/lib/oems';
@@ -27,7 +28,7 @@ import { useIndustries } from '@/lib/hooks/use-industries';
 type Tab = SettingsTabKey;
 
 export default function SettingsPage() {
-  const { isAdmin, isAccount, userRole } = useAccount();
+  const { isAdmin, isAccount, userRole, accountKey, accountData } = useAccount();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -65,15 +66,39 @@ export default function SettingsPage() {
     // the content spans the whole page-content width.
     <div className="animate-fade-in-up pt-4">
       <div className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
-            <TitleIcon className="w-6 h-6" />
-            {titleText}
-          </h1>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Manage your preferences and configuration
-          </p>
-        </div>
+        {isAccount && accountData ? (
+          // Account-mode: title is the sub-account's avatar + name (matches the
+          // Studio sub-account settings header). The name is editable in the
+          // Sub-Account tab content.
+          <div className="flex min-w-0 items-center gap-3">
+            <AccountAvatar
+              name={accountData.dealer || accountKey || ''}
+              accountKey={accountKey || ''}
+              storefrontImage={accountData.storefrontImage}
+              logos={accountData.logos}
+              size={44}
+              className="flex-shrink-0 rounded-xl border border-[var(--border)]"
+            />
+            <div className="min-w-0">
+              <h1 className="truncate text-2xl font-bold text-[var(--foreground)]">
+                {accountData.dealer || accountKey}
+              </h1>
+              <p className="text-sm text-[var(--muted-foreground)] mt-0.5">
+                Manage settings and configuration for this sub-account
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
+              <TitleIcon className="w-6 h-6" />
+              {titleText}
+            </h1>
+            <p className="text-sm text-[var(--muted-foreground)] mt-1">
+              Manage your preferences and configuration
+            </p>
+          </div>
+        )}
         <div id="settings-title-actions" className="flex items-center gap-2" />
       </div>
 

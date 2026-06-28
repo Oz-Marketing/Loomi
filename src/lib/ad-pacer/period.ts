@@ -75,3 +75,25 @@ export const TODAY_PRESET: DatePreset = {
   label: 'Today',
   single: () => toIso(new Date()),
 };
+
+/** Calendar days in a period's month (e.g. 30 for 2026-06). 30 if invalid. */
+export function daysInPeriod(period: string): number {
+  if (!isValidPeriod(period)) return 30;
+  const [y, m] = period.split('-').map(Number);
+  return new Date(y, m, 0).getDate();
+}
+
+/**
+ * Days elapsed in a period as of today — 0 before the month, the full month
+ * length after it, today's date within it. Drives within-month pacing math.
+ */
+export function daysElapsedInPeriod(period: string): number {
+  if (!isValidPeriod(period)) return 0;
+  const [y, m] = period.split('-').map(Number);
+  const today = new Date();
+  const monthStart = new Date(y, m - 1, 1);
+  const monthEnd = new Date(y, m, 0);
+  if (today < monthStart) return 0;
+  if (today > monthEnd) return monthEnd.getDate();
+  return today.getDate();
+}

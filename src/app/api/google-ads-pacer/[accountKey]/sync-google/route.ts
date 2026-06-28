@@ -77,9 +77,13 @@ export async function POST(
     return NextResponse.json({ accountKey, period, sync, ...view, priorOverUnder });
   } catch (err) {
     if (err instanceof GoogleAdsError) {
-      // Upstream API failures → 502; config / no-customer are the caller's to fix.
-      const status = err.code === 'api_error' ? 502 : 400;
-      return NextResponse.json({ error: err.message, code: err.code }, { status });
+      // NEVER 5xx here: nginx/Cloudflare intercept 5xx responses and swap the
+      // JSON body for an HTML error page, so the real Google message would be
+      // lost (client sees "Unexpected token '<'"). Return 422 so the body passes
+      // through, and log it so prod has the message too.
+      // eslint-disable-next-line no-console
+      console.error('[google-ads-pacer] sync-google Google API error:', err.code, err.message);
+      return NextResponse.json({ error: err.message, code: err.code }, { status: 422 });
     }
     // eslint-disable-next-line no-console
     console.error('[google-ads-pacer] sync-google failed', err);

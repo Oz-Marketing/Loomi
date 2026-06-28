@@ -37,6 +37,7 @@ export function AdSummaryRow({
   dropEdge,
   isSelected,
   onSelectToggle,
+  showCreativeWorkflow = true,
 }: {
   ad: PacerAd;
   index: number;
@@ -49,6 +50,9 @@ export function AdSummaryRow({
   dropEdge?: DropEdge | null;
   isSelected: boolean;
   onSelectToggle: () => void;
+  // Meta shows Design + Approvals columns; Google hides them (its campaigns
+  // have no creative-workflow). Must match the parent table's <th> set.
+  showCreativeWorkflow?: boolean;
 }) {
   const readOnly = usePacerReadOnly();
   const allocation = num(ad.allocation);
@@ -164,28 +168,32 @@ export function AdSummaryRow({
         <FlightBar ad={ad} />
       </td>
 
-      {/* Design */}
-      <td className="px-3 py-2 align-middle whitespace-nowrap">
-        <DesignPill status={ad.designStatus} />
-      </td>
+      {showCreativeWorkflow && (
+        <>
+          {/* Design */}
+          <td className="px-3 py-2 align-middle whitespace-nowrap">
+            <DesignPill status={ad.designStatus} />
+          </td>
 
-      {/* Approvals */}
-      <td className="px-3 py-2 align-middle whitespace-nowrap">
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-1">
-            <span className="text-[8px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] w-5 flex-shrink-0">
-              Int
-            </span>
-            <ApprovalPill status={ad.internalApproval} />
-          </div>
-          <div className="flex items-center gap-1">
-            <span className="text-[8px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] w-5 flex-shrink-0">
-              Cli
-            </span>
-            <ApprovalPill status={ad.clientApproval} />
-          </div>
-        </div>
-      </td>
+          {/* Approvals */}
+          <td className="px-3 py-2 align-middle whitespace-nowrap">
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-1">
+                <span className="text-[8px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] w-5 flex-shrink-0">
+                  Int
+                </span>
+                <ApprovalPill status={ad.internalApproval} />
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="text-[8px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] w-5 flex-shrink-0">
+                  Cli
+                </span>
+                <ApprovalPill status={ad.clientApproval} />
+              </div>
+            </div>
+          </td>
+        </>
+      )}
 
       {/* Hover-only actions — hidden on a frozen month (read-only). */}
       <td className="px-3 py-2 align-middle whitespace-nowrap text-right">

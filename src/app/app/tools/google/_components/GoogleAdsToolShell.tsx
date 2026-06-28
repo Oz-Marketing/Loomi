@@ -605,7 +605,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
             <thead className="sticky top-0 z-10">
               <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
                 <th className="w-9 pl-3 pr-1 py-2" />
-                {['Ad', '', 'Status', 'Due Date', 'Budget', 'Allocation', 'Flight Dates', 'Design', 'Approvals'].map((h, i) => (
+                {['Ad', '', 'Status', 'Due Date', 'Budget', 'Allocation', 'Flight Dates'].map((h, i) => (
                   <th
                     key={i}
                     className={`text-left px-3 py-2 text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)] ${h === '' ? 'w-10 px-2' : ''}`}
@@ -627,6 +627,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
                   onClone={() => cloneCampaign(ad.id)}
                   isSelected={false}
                   onSelectToggle={() => {}}
+                  showCreativeWorkflow={false}
                 />
               ))}
             </tbody>

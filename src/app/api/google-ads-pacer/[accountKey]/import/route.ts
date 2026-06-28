@@ -34,8 +34,11 @@ export async function POST(
     return NextResponse.json({ accountKey, period, ...preview });
   } catch (err) {
     if (err instanceof GoogleAdsError) {
-      const status = err.code === 'api_error' ? 502 : 400;
-      return NextResponse.json({ error: err.message, code: err.code }, { status });
+      // Never 5xx — the gateway swaps 5xx bodies for HTML, hiding the real
+      // Google message. 422 passes the JSON through; log it for prod too.
+      // eslint-disable-next-line no-console
+      console.error('[google-ads-pacer] import Google API error:', err.code, err.message);
+      return NextResponse.json({ error: err.message, code: err.code }, { status: 422 });
     }
     // eslint-disable-next-line no-console
     console.error('[google-ads-pacer] import preview failed', err);

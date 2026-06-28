@@ -69,6 +69,17 @@ type PlanView = {
 };
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
+
+// Parse a response body without throwing on non-JSON (e.g. a gateway HTML error
+// page). Returns a usable error object instead of "Unexpected token '<'".
+async function readJsonSafe(res: Response): Promise<Record<string, unknown>> {
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: `Server error (${res.status})` };
+  }
+}
 const money = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 const num = (s: string | null | undefined) => (s == null || s === '' ? 0 : Number(s) || 0);
 
@@ -240,9 +251,9 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         `/api/google-ads-pacer/${encodeURIComponent(accountKey)}/import?period=${period}`,
         { method: 'POST' },
       );
-      const body = await res.json();
-      if (!res.ok) throw new Error(body?.error || 'Import failed');
-      const diff: ImportDiff | undefined = body?.diff;
+      const body = await readJsonSafe(res);
+      if (!res.ok) throw new Error((body?.error as string) || `Import failed (${res.status})`);
+      const diff = body?.diff as ImportDiff | undefined;
       if (!diff || (diff.adds.length === 0 && diff.removes.length === 0 && diff.changes.length === 0)) {
         toast.success('Already in sync with Google — nothing to import');
         return;
@@ -290,9 +301,10 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         `/api/google-ads-pacer/${encodeURIComponent(accountKey)}/sync-google?period=${period}`,
         { method: 'POST' },
       );
-      const body = await res.json();
-      if (!res.ok) throw new Error(body?.error || 'Sync failed');
-      toast.success(`Synced ${body?.sync?.matched ?? 0} campaign(s) from Google`);
+      const body = await readJsonSafe(res);
+      if (!res.ok) throw new Error((body?.error as string) || `Sync failed (${res.status})`);
+      const matched = (body?.sync as { matched?: number } | undefined)?.matched ?? 0;
+      toast.success(`Synced ${matched} campaign(s) from Google`);
       mutate();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Sync failed');

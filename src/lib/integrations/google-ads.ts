@@ -140,16 +140,28 @@ export async function gaql(cfg: GoogleAdsConfig, customerId: string, query: stri
     );
   }
 
-  const json = (await res.json().catch(() => null)) as
-    | SearchStreamBatch[]
-    | { error?: { message?: string } }
-    | null;
+  const json = (await res.json().catch(() => null)) as unknown;
   if (!res.ok) {
-    const msg = (json && !Array.isArray(json) && json.error?.message) || `HTTP ${res.status}`;
+    // searchStream errors come back as either { error: {...} } or [{ error: {...} }].
+    // The human-readable reason is usually buried in error.details[].errors[].message
+    // (Google Ads' specific failure), with error.message as the generic fallback.
+    type GAdsError = {
+      message?: string;
+      details?: Array<{ errors?: Array<{ message?: string }> }>;
+    };
+    const container = Array.isArray(json)
+      ? (json.find((b) => b && typeof b === 'object' && 'error' in b) as { error?: GAdsError } | undefined)
+      : (json as { error?: GAdsError } | null);
+    const errObj = container?.error;
+    const detailMsg = errObj?.details?.[0]?.errors?.[0]?.message;
+    const msg = detailMsg || errObj?.message || `HTTP ${res.status}`;
+    // Log the raw payload so prod always has the full reason even if the shape shifts.
+    // eslint-disable-next-line no-console
+    console.error('[google-ads] GAQL error', res.status, JSON.stringify(json)?.slice(0, 1000));
     throw new GoogleAdsError(`Google Ads: ${msg}`, 'api_error', res.status);
   }
   // searchStream returns a JSON array of batches, each with `results`.
-  const batches = Array.isArray(json) ? json : [];
+  const batches = (Array.isArray(json) ? json : []) as SearchStreamBatch[];
   return batches.flatMap((b) => b.results ?? []);
 }
 

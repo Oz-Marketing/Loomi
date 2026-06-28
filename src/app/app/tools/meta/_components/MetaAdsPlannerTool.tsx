@@ -91,7 +91,7 @@ import { ImportFromMetaModal } from './ImportFromMetaModal';
 import { AdPlannerPanel } from './AdPlannerPanel';
 import { MetaAdsPacerFilterSidebar } from './FilterSidebar';
 import { type CopyFieldOptions } from './CopyPlanModal';
-import { SummaryPanel } from './SummaryPanel';
+import { SummaryPanel } from '@/app/app/tools/_shared';
 import { BudgetPacerPanel, PacerSpendTotals, type AccountPacing } from './BudgetPacerPanel';
 
 // ─── Constants ─────────────────────────────────────────────────────────────

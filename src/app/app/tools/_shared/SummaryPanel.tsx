@@ -16,7 +16,7 @@ import {
   fmtFullDate,
 } from '@/lib/ad-pacer/helpers';
 import { buildAdCalc } from '@/lib/ad-pacer/pacer-calc';
-import { SectionLabel } from '@/app/app/tools/_shared';
+import { SectionLabel } from './metrics';
 
 // Meta planner Summary tab. Split out of MetaAdsPlannerTool to shrink the file.
 export function SummaryPanel({ plan }: { plan: PacerPlan }) {

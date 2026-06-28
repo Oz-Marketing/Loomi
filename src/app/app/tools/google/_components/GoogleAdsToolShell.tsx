@@ -34,6 +34,7 @@ import {
   Tooltip,
   AdEditorModal,
   Field,
+  SummaryPanel,
 } from '@/app/app/tools/_shared';
 
 // ── Reference data ──
@@ -145,7 +146,9 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const { confirm } = useLoomiDialog();
   const { data: session } = useSession();
   const currentUserId = session?.user?.id ?? null;
-  const [view, setView] = useState<'plan' | 'pace'>(mode === 'planner' ? 'plan' : 'pace');
+  const [view, setView] = useState<'plan' | 'pace' | 'summary'>(
+    mode === 'planner' ? 'plan' : 'pace',
+  );
   const [period, setPeriod] = useState(currentPeriod);
   const [editing, setEditing] = useState<PacerAd | 'new' | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -485,7 +488,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         </div>
       )}
 
-      {plan && (
+      {plan && view !== 'summary' && (
         <div className="mt-5">
           <TotalAllocationHeader plan={plan} />
           <div className="mt-4 flex flex-wrap items-start gap-4">
@@ -510,6 +513,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
       )}
 
       {/* Action row above the table (mirrors Meta's Ad Plan header + CTAs). */}
+      {view !== 'summary' && (
       <div className="mt-8 mb-3 flex flex-wrap items-center justify-between gap-3">
         <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
           Campaigns · {periodLabel(period)}{' '}
@@ -556,8 +560,13 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           )}
         </div>
       </div>
+      )}
 
-      {!isLoading && ads.length === 0 ? (
+      {view === 'summary' ? (
+        plan ? (
+          <SummaryPanel plan={plan} />
+        ) : null
+      ) : !isLoading && ads.length === 0 ? (
         <div className="rounded-xl border border-dashed border-[var(--border)] px-6 py-12 text-center text-sm text-[var(--muted-foreground)]">
           No Google campaigns for {periodLabel(period)} yet.
           {!frozen && ' Add one, or sync from Google.'}
@@ -679,8 +688,8 @@ function Header({
   period,
   onShiftPeriod,
 }: {
-  mode: 'plan' | 'pace';
-  onMode: (m: 'plan' | 'pace') => void;
+  mode: 'plan' | 'pace' | 'summary';
+  onMode: (m: 'plan' | 'pace' | 'summary') => void;
   dealer: string | null;
   accountKey: string | null;
   logos: PacerLogos;
@@ -710,7 +719,9 @@ function Header({
             <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">
               {mode === 'plan'
                 ? 'Plan & allocate Google campaign budgets'
-                : 'Track Google spend pacing across the month'}
+                : mode === 'summary'
+                  ? 'Per-campaign summary across the month'
+                  : 'Track Google spend pacing across the month'}
             </p>
           </div>
         </div>
@@ -718,19 +729,19 @@ function Header({
         {/* Center: Plan / Pace switch */}
         <div className="flex justify-center">
           <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
-            {(['plan', 'pace'] as const).map((m) => (
+            {(['plan', 'pace', 'summary'] as const).map((m) => (
               <button
                 key={m}
                 type="button"
                 onClick={() => onMode(m)}
                 aria-pressed={mode === m}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                className={`rounded-md px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
                   mode === m
                     ? 'bg-[var(--primary)] text-white'
                     : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                 }`}
               >
-                {m === 'plan' ? 'Plan' : 'Pace'}
+                {m}
               </button>
             ))}
           </div>

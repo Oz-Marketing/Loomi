@@ -41,6 +41,8 @@ import {
   SpendBar,
   SpendDonut,
 } from './shared';
+import { ExportMenu } from './export-menu';
+import type { ReportDoc } from '@/lib/reporting/report-doc';
 
 interface Metrics {
   impressions: number;
@@ -122,17 +124,70 @@ export function StackAdaptReport({
     );
   }
 
+  const perfCols = (firstCol: string): ReportDoc['sections'][number]['columns'] => [
+    { header: firstCol, type: 'text' },
+    { header: 'Spend', type: 'currency' },
+    { header: 'Impr.', type: 'integer' },
+    { header: 'CPM', type: 'currency', total: 'none' },
+    { header: 'Conv.', type: 'integer' },
+  ];
+  const perfRows = (rows: Row[]) =>
+    [...rows].sort((a, b) => b.spend - a.spend).map((r) => [r.name, r.spend, r.impressions, r.cpm, r.conversions]);
+  const sections: ReportDoc['sections'] = [
+    { title: 'Campaigns', columns: perfCols('Campaign'), rows: perfRows(data.campaigns) },
+  ];
+  if (data.campaignGroups.length) {
+    sections.push({ title: 'Campaign groups', columns: perfCols('Group'), rows: perfRows(data.campaignGroups) });
+  }
+  if (data.creatives.length) {
+    sections.push({ title: 'Creatives', columns: perfCols('Creative'), rows: perfRows(data.creatives) });
+  }
+  if (data.daily.length) {
+    sections.push({
+      title: 'Daily',
+      columns: [
+        { header: 'Date', type: 'text' },
+        { header: 'Spend', type: 'currency' },
+        { header: 'Impr.', type: 'integer' },
+        { header: 'CPM', type: 'currency', total: 'none' },
+        { header: 'Conv.', type: 'integer' },
+      ],
+      rows: data.daily.map((d) => [d.date, d.spend, d.impressions, d.cpm, d.conversions]),
+    });
+  }
+  const doc: ReportDoc = {
+    title: `StackAdapt (OTT / CTV) — ${data.dealer}`,
+    subtitle: `${prettyDate(data.startDate)} – ${prettyDate(data.endDate)}`,
+    meta: [
+      { label: 'Account', value: data.dealer },
+      { label: 'Range', value: `${prettyDate(data.startDate)} → ${prettyDate(data.endDate)}` },
+      ...(data.compare ? [{ label: 'Compared to', value: data.compare.label }] : []),
+    ],
+    kpis: [
+      { label: 'Spend', value: usd(m.spend) },
+      { label: 'Impressions', value: num(m.impressions) },
+      { label: 'Reach', value: num(m.unique_impressions), secondary: 'unique' },
+      { label: 'Frequency', value: m.frequency.toFixed(1), secondary: 'avg / user' },
+      { label: 'CPM', value: usd(m.cpm) },
+      { label: 'Conversions', value: num(m.conversions), secondary: m.conversions > 0 ? `${usd(m.cost_per_conversion)} / conv` : undefined },
+    ],
+    sections,
+  };
+
   return (
     <div className="space-y-8">
-      <p className="text-xs text-[var(--muted-foreground)]">
-        <span className="font-medium text-[var(--foreground)]">{prettyDate(data.startDate)}</span> →{' '}
-        <span className="font-medium text-[var(--foreground)]">{prettyDate(data.endDate)}</span>
-        {data.compare && (
-          <>
-            {' '}· vs. <span className="font-medium text-[var(--foreground)]">{data.compare.label}</span>
-          </>
-        )}
-      </p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-[var(--muted-foreground)]">
+          <span className="font-medium text-[var(--foreground)]">{prettyDate(data.startDate)}</span> →{' '}
+          <span className="font-medium text-[var(--foreground)]">{prettyDate(data.endDate)}</span>
+          {data.compare && (
+            <>
+              {' '}· vs. <span className="font-medium text-[var(--foreground)]">{data.compare.label}</span>
+            </>
+          )}
+        </p>
+        <ExportMenu doc={doc} filenameBase={`stackadapt-${data.dealer}-${data.startDate}-${data.endDate}`} />
+      </div>
 
       {/* OTT/CTV is impression-based — no clicks/CTR/CPC. Surface reach,
           frequency and CPM instead. */}

@@ -9,6 +9,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -76,15 +77,15 @@ import {
   type DatePreset,
 } from '@/components/ui/date-picker';
 import { DEFAULT_TIME_ZONE } from '@/lib/timezone';
-import { CARRYOVER_THRESHOLD } from '../_lib/constants';
+import { CARRYOVER_THRESHOLD } from '@/lib/ad-pacer/constants';
 import {
   buildAdCalc,
   buildPacerCalc,
   isLifetimeInProgress,
   effectiveActual,
   effectiveTarget,
-} from '../_lib/pacer-calc';
-import { effectiveSpendTarget } from '../_lib/markup';
+} from '@/lib/ad-pacer/pacer-calc';
+import { effectiveSpendTarget } from '@/lib/ad-pacer/markup';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 const AD_STATUSES = [
@@ -375,6 +376,16 @@ function sourceTint(s: 'base' | 'added' | 'split'): string {
       : 'rgba(244,114,182,0.22)';
 }
 
+// Display helpers for the budget TYPE (Daily / Lifetime), mirroring the source
+// helpers above. Daily reads yellow, Lifetime violet — centralized so the pill
+// text and tint stay paired everywhere a type tag or type-colored figure renders.
+function budgetTypeColor(t: string): string {
+  return t === 'Lifetime' ? COLORS.lifetime : '#eab308';
+}
+function budgetTypeTint(t: string): string {
+  return t === 'Lifetime' ? 'rgba(167,139,250,0.18)' : 'rgba(234,179,8,0.18)';
+}
+
 // ─── Types ─────────────────────────────────────────────────────────────────
 interface DirectoryUser {
   id: string;
@@ -536,70 +547,60 @@ const calcDays = (start: string | null, end: string | null): number => {
     Math.ceil((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1,
   );
 };
-/** Subtract N business days (Mon–Fri only) from a YYYY-MM-DD date string. */
-function subtractBusinessDays(dateStr: string, n: number): string {
-  const d = new Date(dateStr + 'T00:00:00');
-  let count = 0;
-  while (count < n) {
-    d.setDate(d.getDate() - 1);
-    const dow = d.getDay();
-    if (dow !== 0 && dow !== 6) count++;
+// ─── Run-dates bar (Monday-style) ───────────────────────────────────────────
+// A status-colored progress bar behind the flight window: the elapsed share of
+// the run is filled in, the rest is a neutral track. Blue = live/on track (Live /
+// Scheduled / Live - Changes Required / Ready- Pending Approval), green = a
+// finished run (Completed Run), gray = In Draft / Off, red = needs attention.
+const RUN_DATE_LIVE_STATUSES = new Set([
+  'Live',
+  'Scheduled',
+  'Live - Changes Required',
+  'Ready- Pending Approval',
+]);
+function runDateColor(status: string): string {
+  // Completed reads as done (green); live/on-track reads as in-flight (blue);
+  // Off/In Draft as inactive (gray); only attention-worthy statuses get red.
+  if (status === 'Completed Run') return COLORS.success; // green
+  if (status === 'Off' || status === 'In Draft') return '#9ca3af'; // gray
+  return RUN_DATE_LIVE_STATUSES.has(status) ? COLORS.daily : COLORS.error;
+}
+// Share (0–100) of the flight window that has elapsed as of today.
+function flightElapsedPct(
+  flightStart: string | null,
+  flightEnd: string | null,
+): number {
+  if (!flightStart || !flightEnd) return 0;
+  const start = new Date(flightStart + 'T00:00:00').getTime();
+  const end = new Date(flightEnd + 'T23:59:59').getTime();
+  if (!(end > start)) return 0;
+  const now = Date.now();
+  if (now <= start) return 0;
+  if (now >= end) return 100;
+  return ((now - start) / (end - start)) * 100;
+}
+function FlightBar({ ad }: { ad: PacerAd }) {
+  if (!ad.flightStart || !ad.flightEnd) {
+    return <span className="text-xs text-[var(--muted-foreground)]">—</span>;
   }
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-function autoDueDateFromFlightStart(flightStart: string | null): string | null {
-  if (!flightStart) return null;
-  return subtractBusinessDays(flightStart, 2);
-}
-
-/**
- * Classify the urgency of an ad's overall due date.
- * Returns null when there's nothing actionable to surface (no due date, or the
- * ad is already live/completed/off so the due date is moot).
- */
-type DueDateUrgency = {
-  label: string;
-  level: 'overdue' | 'today' | 'soon' | 'upcoming';
-};
-const DUE_DATE_DONE_STATUSES = new Set(['Live', 'Completed Run', 'Off']);
-function classifyDueDate(ad: PacerAd): DueDateUrgency | null {
-  if (!ad.dueDate) return null;
-  if (DUE_DATE_DONE_STATUSES.has(ad.adStatus)) return null;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const due = new Date(ad.dueDate + 'T00:00:00');
-  const diff = Math.ceil((due.getTime() - today.getTime()) / 86400000);
-  if (diff < 0)
-    return { label: `Overdue ${Math.abs(diff)}d`, level: 'overdue' };
-  if (diff === 0) return { label: 'Due today', level: 'today' };
-  if (diff <= 2) return { label: `Due in ${diff}d`, level: 'soon' };
-  if (diff <= 7) return { label: `Due in ${diff}d`, level: 'upcoming' };
-  return null;
-}
-const DUE_DATE_CHIP_STYLES: Record<DueDateUrgency['level'], { bg: string; color: string }> = {
-  overdue: { bg: 'rgba(239,68,68,0.18)', color: '#fca5a5' },
-  today: { bg: 'rgba(252,211,77,0.22)', color: '#fcd34d' },
-  soon: { bg: 'rgba(252,211,77,0.18)', color: '#fcd34d' },
-  upcoming: { bg: 'rgba(190,242,100,0.18)', color: '#bef264' },
-};
-function DueDateChip({ ad }: { ad: PacerAd }) {
-  const urgency = classifyDueDate(ad);
-  if (!urgency) return null;
-  const { bg, color } = DUE_DATE_CHIP_STYLES[urgency.level];
+  const pct = flightElapsedPct(ad.flightStart, ad.flightEnd);
+  const color = runDateColor(ad.adStatus);
   return (
-    <span
-      className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap"
-      style={{ background: bg, color }}
-    >
-      {urgency.level === 'overdue' || urgency.level === 'today' ? (
-        <ExclamationTriangleIcon className="w-3 h-3" />
-      ) : (
-        <ClockIcon className="w-3 h-3" />
-      )}
-      {urgency.label}
-    </span>
+    <div className="relative h-[22px] min-w-[132px] w-full overflow-hidden rounded-full bg-[var(--muted)]">
+      <div
+        className="absolute inset-y-0 left-0 transition-[width] duration-500"
+        style={{ width: `${pct}%`, background: color }}
+      />
+      <span
+        className="absolute inset-0 flex items-center justify-center px-2 text-[11px] font-semibold whitespace-nowrap text-white"
+        style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
+      >
+        {fmtDate(ad.flightStart)} – {fmtDate(ad.flightEnd)}
+      </span>
+    </div>
   );
 }
+
 const num = (s: string | null | undefined): number | null => {
   if (s == null || s === '') return null;
   const n = parseFloat(s);
@@ -837,29 +838,91 @@ const PacerReadOnlyContext = createContext(false);
 const usePacerReadOnly = () => useContext(PacerReadOnlyContext);
 
 /**
- * Lightweight CSS-hover tooltip. Wraps any trigger; shows `label` on hover/
- * focus-within. `placement` flips it above (default) or below the trigger —
- * use 'bottom' for triggers near the top of the page so it doesn't clip.
+ * Loomi tooltip. Wraps any trigger and shows `label` on hover/focus. The bubble
+ * is rendered through a portal on document.body and pinned with fixed coords, so
+ * it is never clipped by an ancestor's `overflow-hidden` or scroll container —
+ * the planner/pacer are full of rounded, clipped cards, bars and tables. The
+ * wrapper is a bare `inline-flex` (no `relative`), so a passed-in `className`
+ * may freely position it (`absolute …` corner buttons) or shape it (flex/grid
+ * bar segments via `className`/`style`). `placement` puts the bubble above
+ * (default) or below the trigger.
  */
 function Tooltip({
   label,
   placement = 'top',
+  className = '',
+  style,
   children,
 }: {
   label: ReactNode;
   placement?: 'top' | 'bottom';
-  children: ReactNode;
+  className?: string;
+  style?: CSSProperties;
+  children?: ReactNode;
 }) {
-  const pos = placement === 'bottom' ? 'top-full mt-1.5' : 'bottom-full mb-1.5';
+  const ref = useRef<HTMLSpanElement>(null);
+  const [coords, setCoords] = useState<{ left: number; top: number } | null>(
+    null,
+  );
+
+  const place = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    setCoords({
+      left: r.left + r.width / 2,
+      top: placement === 'bottom' ? r.bottom + 6 : r.top - 6,
+    });
+  }, [placement]);
+
+  const hide = useCallback(() => setCoords(null), []);
+
+  // Dismiss on scroll/resize rather than re-pinning. The planner scrolls under a
+  // fixed cursor, so icons drift beneath the pointer and fire mouseenter on each
+  // one in turn; re-pinning would keep every one of them alive as a trail of
+  // stuck tooltips. Closing on scroll keeps the tooltip strictly hover-only —
+  // it reappears only on a fresh hover once scrolling stops.
+  useEffect(() => {
+    if (!coords) return;
+    window.addEventListener('scroll', hide, true);
+    window.addEventListener('resize', hide);
+    return () => {
+      window.removeEventListener('scroll', hide, true);
+      window.removeEventListener('resize', hide);
+    };
+  }, [coords, hide]);
+
   return (
-    <span className="relative inline-flex group/tip">
+    <span
+      ref={ref}
+      className={`inline-flex ${className}`.trim()}
+      style={style}
+      onMouseEnter={place}
+      onMouseLeave={hide}
+      onFocus={place}
+      onBlur={hide}
+    >
       {children}
-      <span
-        role="tooltip"
-        className={`pointer-events-none absolute left-1/2 -translate-x-1/2 ${pos} z-[200] w-max max-w-[340px] whitespace-normal text-center rounded-md border border-[var(--border)] bg-[var(--card)] px-2.5 py-1.5 text-[10px] font-medium leading-snug text-[var(--foreground)] opacity-0 shadow-lg transition-opacity duration-100 group-hover/tip:opacity-100`}
-      >
-        {label}
-      </span>
+      {coords &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <span
+            role="tooltip"
+            style={{
+              position: 'fixed',
+              left: coords.left,
+              top: coords.top,
+              transform:
+                placement === 'bottom'
+                  ? 'translate(-50%, 0)'
+                  : 'translate(-50%, -100%)',
+            }}
+            className="pointer-events-none z-[1000] w-max max-w-[340px] whitespace-normal text-center rounded-md border border-[var(--border)] bg-[var(--card-strong)] px-2.5 py-1.5 text-[10px] font-medium leading-snug text-[var(--foreground)] shadow-lg backdrop-blur-sm"
+          >
+            {label}
+          </span>,
+          document.body,
+        )}
     </span>
   );
 }
@@ -923,15 +986,19 @@ function DollarInput({
         className={`${inputClass} pl-6 ${hasValue && !readOnly ? 'pr-8' : ''} ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
       />
       {hasValue && !readOnly && (
-        <button
-          type="button"
-          onClick={() => onChange('')}
-          aria-label="Clear amount"
-          title="Clear"
-          className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+        <Tooltip
+          label="Clear"
+          className="absolute right-2 top-1/2 -translate-y-1/2"
         >
-          <XMarkIcon className="w-3.5 h-3.5" />
-        </button>
+          <button
+            type="button"
+            onClick={() => onChange('')}
+            aria-label="Clear amount"
+            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+          >
+            <XMarkIcon className="w-3.5 h-3.5" />
+          </button>
+        </Tooltip>
       )}
     </div>
   );
@@ -1227,8 +1294,8 @@ function CompactStat({
   color?: string;
   title?: string;
 }) {
-  return (
-    <div className="min-w-0 bg-[var(--muted)]/40 px-3 py-2.5" title={title}>
+  const box = (
+    <div className="min-w-0 w-full bg-[var(--muted)]/40 px-3 py-2.5">
       <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] truncate mb-0.5">
         {label}
       </div>
@@ -1239,6 +1306,15 @@ function CompactStat({
         {value}
       </div>
     </div>
+  );
+  // Loomi tooltip instead of the native title. The stat strip is a grid item,
+  // so the wrapper stretches to fill its cell (min-w-0 keeps truncation).
+  return title ? (
+    <Tooltip label={title} className="min-w-0">
+      {box}
+    </Tooltip>
+  ) : (
+    box
   );
 }
 
@@ -1347,9 +1423,9 @@ function StatusBattery({ ads, size = 'sm' }: { ads: PacerAd[]; size?: 'sm' | 'lg
             // (now #ffffff for every status, which would render the bar blank).
             const color = AD_STATUS_COLORS[status]?.[0] ?? 'var(--muted-foreground)';
             return (
-              <div
+              <Tooltip
                 key={status}
-                title={`${status}: ${count} of ${total} (${w.toFixed(0)}%)`}
+                label={`${status}: ${count} of ${total} (${w.toFixed(0)}%)`}
                 className="h-full transition-[width] duration-500"
                 style={{ width: `${w}%`, background: color }}
               />
@@ -1394,6 +1470,63 @@ function Divider({ icon, label }: { icon?: ReactNode; label: string }) {
   );
 }
 
+// Same divider look as <Divider>, but the header is a toggle: click it to
+// height-animate the section open/closed (chevron rotates). The section's
+// dropdowns (StatusSelect/DatePicker portal, UserPicker is a native select) all
+// escape the collapse's overflow clip, so nothing gets cut off when open.
+function CollapsibleSection({
+  icon,
+  label,
+  defaultOpen = true,
+  children,
+}: {
+  icon?: ReactNode;
+  label: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  // Expand/collapse is a VIEW action, so the toggle must keep working even when
+  // the form is read-only (frozen month). The editor wraps the form in a
+  // <fieldset disabled>, which would disable a real <button> here — so this is a
+  // div-button (not form-associated, immune to the ancestor fieldset).
+  const toggle = () => setOpen((v) => !v);
+  return (
+    <div>
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            toggle();
+          }
+        }}
+        aria-expanded={open}
+        className="group flex w-full items-center gap-2.5 my-4 cursor-pointer select-none"
+      >
+        <div className="h-px flex-1 bg-[var(--border)]" />
+        <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--muted-foreground)] whitespace-nowrap transition-colors group-hover:text-[var(--foreground)]">
+          {icon}
+          {label}
+          <ChevronDownIcon
+            className={`w-3.5 h-3.5 transition-transform duration-300 ${open ? '' : '-rotate-90'}`}
+          />
+        </span>
+        <div className="h-px flex-1 bg-[var(--border)]" />
+      </div>
+      <div
+        className={`grid transition-[grid-template-rows] duration-300 ease-out ${
+          open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+        }`}
+      >
+        <div className="overflow-hidden">{children}</div>
+      </div>
+    </div>
+  );
+}
+
 function BudgetTypeToggle({
   value,
   onChange,
@@ -1405,8 +1538,8 @@ function BudgetTypeToggle({
     <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--input)] overflow-hidden">
       {(['Daily', 'Lifetime'] as const).map((t) => {
         const active = value === t;
-        const tint = t === 'Daily' ? 'rgba(56,189,248,0.18)' : 'rgba(167,139,250,0.18)';
-        const fg = t === 'Daily' ? COLORS.daily : COLORS.lifetime;
+        const tint = budgetTypeTint(t);
+        const fg = budgetTypeColor(t);
         return (
           <button
             key={t}
@@ -1439,21 +1572,13 @@ function BudgetSourceToggle({
     <div className="inline-flex rounded-lg border border-[var(--border)] bg-[var(--input)] overflow-hidden">
       {opts.map((t, i) => {
         const active = value === t;
-        const tint =
-          t === 'base'
-            ? 'rgba(56,189,248,0.18)'
-            : t === 'added'
-              ? 'rgba(52,211,153,0.18)'
-              : 'rgba(167,139,250,0.22)';
-        const fg =
-          t === 'base'
-            ? COLORS.base
-            : t === 'added'
-              ? COLORS.added
-              : COLORS.lifetime;
-        return (
+        // Tint + accent come straight from the shared source helpers so the
+        // toggle matches the overview's Base/Added/Split badges exactly —
+        // Split reads pink (COLORS.split), not the lifetime violet.
+        const tint = sourceTint(t);
+        const fg = sourceColor(t);
+        const button = (
           <button
-            key={t}
             type="button"
             onClick={() => onChange(t)}
             className="px-3.5 py-1.5 text-[11px] font-bold uppercase tracking-wider transition-colors"
@@ -1462,14 +1587,19 @@ function BudgetSourceToggle({
               color: active ? fg : 'var(--muted-foreground)',
               borderRight: i < opts.length - 1 ? '1px solid var(--border)' : 'none',
             }}
-            title={
-              t === 'split'
-                ? 'Split — allocation drawn from both Base and Added budgets'
-                : undefined
-            }
           >
             {t === 'base' ? 'Base' : t === 'added' ? 'Added' : 'Split'}
           </button>
+        );
+        return t === 'split' ? (
+          <Tooltip
+            key={t}
+            label="Split — allocation drawn from both Base and Added budgets"
+          >
+            {button}
+          </Tooltip>
+        ) : (
+          <Fragment key={t}>{button}</Fragment>
         );
       })}
     </div>
@@ -1852,11 +1982,7 @@ function MetaAdsPacerFilterSidebar({
               {(['all', 'Daily', 'Lifetime'] as const).map((t) => {
                 const isActive = filters.adType === t;
                 const accent =
-                  t === 'Daily'
-                    ? COLORS.daily
-                    : t === 'Lifetime'
-                      ? COLORS.lifetime
-                      : 'var(--primary)';
+                  t === 'all' ? 'var(--primary)' : budgetTypeColor(t);
                 return (
                   <button
                     key={t}
@@ -2016,9 +2142,9 @@ function UpdatesIndicator({
   titleParts.push(`${count} update${count === 1 ? '' : 's'}`);
   if (hasAttachments) titleParts.push('has attachments');
   return (
+    <Tooltip label={titleParts.join(' · ')} className="flex-shrink-0">
     <span
-      className="relative inline-flex flex-shrink-0 items-center justify-center"
-      title={titleParts.join(' · ')}
+      className="relative inline-flex items-center justify-center"
       style={{ width: 28, height: 28 }}
     >
       <ChatBubbleOvalLeftIcon
@@ -2052,6 +2178,7 @@ function UpdatesIndicator({
         />
       )}
     </span>
+    </Tooltip>
   );
 }
 
@@ -2229,7 +2356,6 @@ function AdSummaryRow({
 }) {
   const readOnly = usePacerReadOnly();
   const allocation = num(ad.allocation);
-  const isLifetime = ad.budgetType === 'Lifetime';
   const updatesCount = ad.activityLog.length;
   const showTopLine = isDropTarget && dropEdge === 'top';
   const showBottomLine = isDropTarget && dropEdge === 'bottom';
@@ -2295,9 +2421,12 @@ function AdSummaryRow({
         <AdStatusPill status={ad.adStatus} />
       </td>
 
-      {/* Due date chip */}
-      <td className="px-3 py-2 align-middle whitespace-nowrap">
-        <DueDateChip ad={ad} />
+      {/* Due date — user-set; muted dash when unset */}
+      <td
+        className="px-3 py-2 align-middle whitespace-nowrap text-xs"
+        style={{ color: ad.dueDate ? 'var(--foreground)' : 'var(--muted-foreground)' }}
+      >
+        {fmtDate(ad.dueDate)}
       </td>
 
       {/* Budget tags */}
@@ -2306,10 +2435,8 @@ function AdSummaryRow({
           <span
             className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
             style={{
-              background: isLifetime
-                ? 'rgba(167,139,250,0.18)'
-                : 'rgba(56,189,248,0.18)',
-              color: isLifetime ? COLORS.lifetime : COLORS.daily,
+              background: budgetTypeTint(ad.budgetType),
+              color: budgetTypeColor(ad.budgetType),
             }}
           >
             {ad.budgetType}
@@ -2336,11 +2463,9 @@ function AdSummaryRow({
         {allocation != null ? fmt(allocation) : '—'}
       </td>
 
-      {/* Flight */}
-      <td className="px-3 py-2 align-middle text-xs text-[var(--foreground)] whitespace-nowrap">
-        {ad.flightStart && ad.flightEnd
-          ? `${fmtDate(ad.flightStart)} – ${fmtDate(ad.flightEnd)}`
-          : '—'}
+      {/* Run dates (status-colored progress bar) */}
+      <td className="px-3 py-2 align-middle">
+        <FlightBar ad={ad} />
       </td>
 
       {/* Design */}
@@ -2370,6 +2495,7 @@ function AdSummaryRow({
       <td className="px-3 py-2 align-middle whitespace-nowrap text-right">
         {!readOnly && (
           <span className="inline-flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+            <Tooltip label="Clone ad">
             <button
               type="button"
               onClick={(e) => {
@@ -2378,10 +2504,11 @@ function AdSummaryRow({
               }}
               className="text-[var(--muted-foreground)] hover:text-[var(--primary)] hover:bg-[var(--muted)] rounded p-1 transition-colors"
               aria-label="Clone ad"
-              title="Clone ad"
             >
               <DocumentDuplicateIcon className="w-4 h-4" />
             </button>
+            </Tooltip>
+            <Tooltip label="Remove ad">
             <button
               type="button"
               onClick={(e) => {
@@ -2390,10 +2517,10 @@ function AdSummaryRow({
               }}
               className="text-[var(--muted-foreground)] hover:text-red-400 hover:bg-[var(--muted)] rounded p-1 transition-colors"
               aria-label="Remove ad"
-              title="Remove ad"
             >
               <TrashIcon className="w-4 h-4" />
             </button>
+            </Tooltip>
           </span>
         )}
       </td>
@@ -2606,25 +2733,27 @@ function ActivityLogPanel({
                   {!isEditing && (
                     <div className="flex items-center gap-1 flex-shrink-0">
                       {isMine && u.text && (
+                        <Tooltip label="Edit">
                         <button
                           type="button"
                           onClick={() => startEdit(u.id, u.text)}
                           className="text-[var(--muted-foreground)] hover:text-[var(--primary)] transition-colors"
                           aria-label="Edit update"
-                          title="Edit"
                         >
                           <PencilSquareIcon className="w-3.5 h-3.5" />
                         </button>
+                        </Tooltip>
                       )}
+                      <Tooltip label="Delete">
                       <button
                         type="button"
                         onClick={() => onDelete(ad.id, u.id)}
                         className="text-[var(--muted-foreground)] hover:text-red-400 transition-colors"
                         aria-label="Delete entry"
-                        title="Delete"
                       >
                         <TrashIcon className="w-3 h-3" />
                       </button>
+                      </Tooltip>
                     </div>
                   )}
                 </div>
@@ -2728,15 +2857,18 @@ function ActivityLogPanel({
 
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 text-[10px] text-[var(--muted-foreground)]">
+            <Tooltip
+              label={`Attach a file (max ${PACER_ACTIVITY_MAX_UPLOAD_BYTES / (1024 * 1024)} MB)`}
+            >
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
               className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-              title={`Attach a file (max ${PACER_ACTIVITY_MAX_UPLOAD_BYTES / (1024 * 1024)} MB)`}
             >
               <PaperClipIcon className="w-3 h-3" />
               Attach
             </button>
+            </Tooltip>
             <span>⌘/Ctrl+Enter to post</span>
           </div>
           <button
@@ -2899,8 +3031,13 @@ function PlanAdForm({
                   onUpdate({
                     ...ad,
                     adStatus: newStatus,
+                    // Stamp the Task Completed date when the ad is scheduled —
+                    // that's when the build/setup task is done. Still fires on
+                    // Live too (an ad that skips straight to Live), and only
+                    // when not already set so a manual date is never overwritten.
                     dateCompleted:
-                      newStatus === 'Live' && !ad.dateCompleted
+                      (newStatus === 'Scheduled' || newStatus === 'Live') &&
+                      !ad.dateCompleted
                         ? today
                         : ad.dateCompleted,
                   });
@@ -2910,28 +3047,17 @@ function PlanAdForm({
             </Field>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-3 max-w-2xl">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-3 max-w-xl">
+            {/* Due Date — plain user-set date, no auto-fill. */}
             <Field label="Due Date">
-              <div className="relative">
-                <DatePicker
-                  value={ad.dueDate}
-                  onChange={(v) => onUpdate({ ...ad, dueDate: v })}
-                  placeholder="Pick a date"
-                  presets={[TODAY_PRESET]}
-                />
-                {ad.dueDate &&
-                  ad.flightStart &&
-                  ad.dueDate === autoDueDateFromFlightStart(ad.flightStart) && (
-                    <span
-                      className="mt-1 inline-block text-[10px] font-bold uppercase tracking-wider"
-                      style={{ color: COLORS.daily }}
-                    >
-                      ● Auto-set from flight start
-                    </span>
-                  )}
-              </div>
+              <DatePicker
+                value={ad.dueDate}
+                onChange={(v) => onUpdate({ ...ad, dueDate: v })}
+                placeholder="Pick a date"
+                presets={[TODAY_PRESET]}
+              />
             </Field>
-            <Field label="Date Completed">
+            <Field label="Task Completed">
               <div className="relative">
                 <DatePicker
                   value={ad.dateCompleted}
@@ -2939,14 +3065,15 @@ function PlanAdForm({
                   placeholder="Pick a date"
                   presets={[TODAY_PRESET]}
                 />
-                {ad.dateCompleted && ad.adStatus === 'Live' && (
-                  <span
-                    className="mt-1 inline-block text-[10px] font-bold uppercase tracking-wider"
-                    style={{ color: COLORS.success }}
-                  >
-                    ● Auto-filled when set Live
-                  </span>
-                )}
+                {ad.dateCompleted &&
+                  (ad.adStatus === 'Scheduled' || ad.adStatus === 'Live') && (
+                    <span
+                      className="mt-1 inline-block text-[10px] font-bold uppercase tracking-wider"
+                      style={{ color: COLORS.success }}
+                    >
+                      ● Auto-filled when scheduled
+                    </span>
+                  )}
               </div>
             </Field>
           </div>
@@ -2959,17 +3086,10 @@ function PlanAdForm({
                 mode="range"
                 value={{ start: ad.flightStart, end: ad.flightEnd }}
                 onChange={(r) => {
-                  const next = r.start;
-                  const previousAuto = autoDueDateFromFlightStart(ad.flightStart);
-                  const dueDateIsAuto =
-                    ad.dueDate == null || ad.dueDate === previousAuto;
                   onUpdate({
                     ...ad,
                     flightStart: r.start,
                     flightEnd: r.end,
-                    dueDate: dueDateIsAuto
-                      ? autoDueDateFromFlightStart(next)
-                      : ad.dueDate,
                   });
                 }}
                 placeholder="Click & drag to select flight window"
@@ -3032,13 +3152,7 @@ function PlanAdForm({
           <div className="mb-3 flex flex-wrap gap-3 items-end">
             <Field
               label="Actual Spend Amount"
-              color={
-                ad.budgetSource === 'base'
-                  ? COLORS.base
-                  : ad.budgetSource === 'added'
-                    ? COLORS.added
-                    : COLORS.lifetime
-              }
+              color={sourceColor(ad.budgetSource)}
             >
               {/* Sized for ~$999,999.99 — wide enough for 6 digits + cents
                   without dominating the form like a full-width input. */}
@@ -3107,22 +3221,16 @@ function PlanAdForm({
               <MetricBox
                 label="Actual Spend"
                 value={fmt(allocation)}
-                color={
-                  ad.budgetSource === 'base'
-                    ? COLORS.base
-                    : ad.budgetSource === 'added'
-                      ? COLORS.added
-                      : COLORS.lifetime
-                }
+                color={sourceColor(ad.budgetSource)}
               />
             </div>
           )}
 
           {/* Creative & Design */}
-          <Divider
+          <CollapsibleSection
             icon={<PaintBrushIcon className="w-3 h-3" />}
             label="Creative & Design"
-          />
+          >
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 mb-3">
             <Field label="Design Status">
               <StatusSelect
@@ -3175,23 +3283,31 @@ function PlanAdForm({
                   className={`${inputClass} ${ad.creativeLink ? 'pr-10' : ''}`}
                 />
                 {ad.creativeLink && (
+                  <Tooltip
+                    label="Open in new tab"
+                    className="absolute right-2 top-1/2 -translate-y-1/2"
+                  >
                   <a
                     href={ad.creativeLink}
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label="Open creative link in new tab"
-                    title="Open in new tab"
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded text-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
+                    className="p-1.5 rounded text-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
                   >
                     <ArrowTopRightOnSquareIcon className="w-4 h-4" />
                   </a>
+                  </Tooltip>
                 )}
               </div>
             </Field>
           </div>
+          </CollapsibleSection>
 
           {/* Approvals */}
-          <Divider icon={<CheckBadgeIcon className="w-3 h-3" />} label="Approvals" />
+          <CollapsibleSection
+            icon={<CheckBadgeIcon className="w-3 h-3" />}
+            label="Approvals"
+          >
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-3 max-w-2xl">
             <Field label="Account Rep">
               <UserPicker
@@ -3259,6 +3375,7 @@ function PlanAdForm({
               <ApprovalPill status={ad.clientApproval} />
             </div>
           </div>
+          </CollapsibleSection>
 
     </div>
   );
@@ -3390,12 +3507,15 @@ function AdEditorModal({
                   className="w-full bg-transparent text-xl font-bold text-[var(--foreground)] focus:outline-none border-b border-[var(--primary)] py-0.5"
                 />
               ) : (
+                <Tooltip
+                  label={readOnly ? draft.name?.trim() || 'New Ad' : 'Click to edit ad name'}
+                  placement="bottom"
+                >
                 <button
                   type="button"
                   onClick={() => setEditingTitle(true)}
                   disabled={readOnly}
                   className="group/title inline-flex items-center gap-2 text-xl font-bold text-[var(--foreground)] truncate max-w-full hover:text-[var(--primary)] transition-colors text-left disabled:hover:text-[var(--foreground)] disabled:cursor-default"
-                  title={readOnly ? draft.name?.trim() || 'New Ad' : 'Click to edit ad name'}
                 >
                   <span className="truncate">
                     {draft.name?.trim() || 'New Ad'}
@@ -3404,6 +3524,7 @@ function AdEditorModal({
                     <PencilSquareIcon className="w-4 h-4 flex-shrink-0 opacity-0 group-hover/title:opacity-100 transition-opacity text-[var(--muted-foreground)]" />
                   )}
                 </button>
+                </Tooltip>
               )}
               <div className="text-[10px] text-[var(--muted-foreground)]">
                 {mode === 'create'
@@ -3585,6 +3706,7 @@ function BudgetPanel({
             </span>
           )}
         </div>
+        <Tooltip label={expanded ? 'Collapse' : 'Expand for budget goal & breakdown'}>
         <button
           type="button"
           onClick={(e) => {
@@ -3592,13 +3714,14 @@ function BudgetPanel({
             setExpanded((v) => !v);
           }}
           aria-expanded={expanded}
-          title={expanded ? 'Collapse' : 'Expand for budget goal & breakdown'}
+          aria-label={expanded ? 'Collapse' : 'Expand for budget goal & breakdown'}
           className="inline-flex items-center justify-center w-6 h-6 rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
         >
           <ChevronDownIcon
             className={`w-4 h-4 transition-transform duration-300 ${expanded ? '' : '-rotate-90'}`}
           />
         </button>
+        </Tooltip>
       </div>
 
       {/* Compact summary (collapsed) — height-animated open/close. */}
@@ -3608,24 +3731,35 @@ function BudgetPanel({
         }`}
       >
         <div className="overflow-hidden">
-          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 pb-2.5 text-xs">
-            <span className="text-[var(--muted-foreground)]">
-              Goal{' '}
-              <span className="font-semibold text-[var(--foreground)]">
+          {/* Stacked label-over-value so the dollar figures read large at a
+              glance (the live feedback while allocating); labels stay small. */}
+          <div className="flex flex-wrap items-end gap-x-7 gap-y-2 pb-2.5">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Goal
+              </div>
+              <div className="text-2xl font-bold tabular-nums leading-none text-[var(--foreground)]">
                 {goal != null ? fmt(goal) : '—'}
-              </span>
-            </span>
-            <span className="text-[var(--muted-foreground)]">
-              Allocated{' '}
-              <span className="font-semibold" style={{ color: statusColor }}>
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Allocated
+              </div>
+              <div
+                className="text-2xl font-bold tabular-nums leading-none"
+                style={{ color: statusColor }}
+              >
                 {fmt(totalAlloc)}
-              </span>
-            </span>
+              </div>
+            </div>
             {goal != null && (
-              <span className="text-[var(--muted-foreground)]">
-                {remaining != null && remaining < 0 ? 'Over' : 'Remaining'}{' '}
-                <span
-                  className="font-semibold"
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                  {remaining != null && remaining < 0 ? 'Over' : 'Remaining'}
+                </div>
+                <div
+                  className="text-2xl font-bold tabular-nums leading-none"
                   style={{
                     color:
                       remaining != null && remaining < 0
@@ -3634,8 +3768,8 @@ function BudgetPanel({
                   }}
                 >
                   {fmt(Math.abs(remaining ?? 0))}
-                </span>
-              </span>
+                </div>
+              </div>
             )}
           </div>
         </div>
@@ -3735,9 +3869,9 @@ function BudgetPanel({
               const pct = budgetCap > 0 ? (portion / budgetCap) * 100 : 0;
               const isSplit = ad.budgetSource === 'split';
               return w > 0 ? (
-                <div
+                <Tooltip
                   key={ad.id}
-                  title={`${ad.name || 'Untitled Ad'}${isSplit ? ` (split — ${source} portion)` : ''}: ${fmt(portion)} (${pct.toFixed(1)}% of budget)`}
+                  label={`${ad.name || 'Untitled Ad'}${isSplit ? ` (split — ${source} portion)` : ''}: ${fmt(portion)} (${pct.toFixed(1)}% of budget)`}
                   className="h-full transition-[width] duration-500"
                   style={{
                     width: `${w}%`,
@@ -3760,10 +3894,12 @@ function BudgetPanel({
                   const pct = budgetCap > 0 ? (portion / budgetCap) * 100 : 0;
                   const isSplit = ad.budgetSource === 'split';
                   return (
-                    <div
+                    <Tooltip
                       key={ad.id}
+                      label={`${pct.toFixed(1)}% of budget${isSplit ? ' (split portion)' : ''}`}
+                    >
+                    <div
                       className="flex items-center gap-1 text-[10px] text-[var(--muted-foreground)]"
-                      title={`${pct.toFixed(1)}% of budget${isSplit ? ' (split portion)' : ''}`}
                     >
                       <div
                         className="w-1.5 h-1.5 rounded-sm flex-shrink-0"
@@ -3780,6 +3916,7 @@ function BudgetPanel({
                         ({pct.toFixed(1)}%)
                       </span>
                     </div>
+                    </Tooltip>
                   );
                 })}
               </div>
@@ -3894,9 +4031,9 @@ function TotalAllocationHeader({ plan }: { plan: PacerPlan }) {
       </div>
       <div className="h-2.5 rounded-full overflow-hidden bg-[var(--muted)] flex mb-2">
         {baseW > 0 && (
-          <div
+          <Tooltip
             className="h-full transition-[width] duration-500"
-            title={`Base: ${fmt(totalBase)} (${basePctOfBudget.toFixed(1)}% of budget)`}
+            label={`Base: ${fmt(totalBase)} (${basePctOfBudget.toFixed(1)}% of budget)`}
             style={{
               width: `${baseW}%`,
               background: COLORS.base,
@@ -3905,9 +4042,9 @@ function TotalAllocationHeader({ plan }: { plan: PacerPlan }) {
           />
         )}
         {addedW > 0 && (
-          <div
+          <Tooltip
             className="h-full transition-[width] duration-500"
-            title={`Added: ${fmt(totalAdded)} (${addedPctOfBudget.toFixed(1)}% of budget)`}
+            label={`Added: ${fmt(totalAdded)} (${addedPctOfBudget.toFixed(1)}% of budget)`}
             style={{
               width: `${addedW}%`,
               background: COLORS.added,
@@ -4924,10 +5061,11 @@ function BudgetCalculatorModal({
 
         {/* Total budget — fixed to the source's goal (client × markup), shown
             read-only on the right of the tabs. */}
-        <div
-          className="ml-auto self-center text-right"
-          title="Client budget goal × margin for this source"
+        <Tooltip
+          label="Client budget goal × margin for this source"
+          className="ml-auto self-center"
         >
+        <div className="text-right">
           <span className="block text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] leading-none">
             Total Budget
           </span>
@@ -4935,12 +5073,13 @@ function BudgetCalculatorModal({
             {fmt(totalBudget)}
           </span>
         </div>
+        </Tooltip>
         </div>
 
         {/* Compact stat strip — Mid-flight: 5 cells (Initial, Locked Spend,
             Remaining, Entered, Still). Setup: 2 cells (Entered, Still). */}
         <div
-          className={`grid shrink-0 gap-px mb-3 rounded-lg bg-[var(--border)] overflow-hidden ${
+          className={`grid shrink-0 gap-px mb-3 rounded-lg bg-[var(--border)] ${
             calcMode === 'midflight'
               ? 'grid-cols-2 md:grid-cols-5'
               : 'grid-cols-2'
@@ -5078,13 +5217,15 @@ function BudgetCalculatorModal({
                         : 'border-[var(--border)] opacity-60'
                     }`}
                   >
-                    <label
-                      className="flex items-center justify-center cursor-pointer"
-                      title={
+                    <Tooltip
+                      label={
                         spec.included
                           ? 'Uncheck to leave this ad untouched on Apply'
                           : 'This ad keeps its current allocation on Apply'
                       }
+                    >
+                    <label
+                      className="flex items-center justify-center cursor-pointer"
                     >
                       <input
                         type="checkbox"
@@ -5095,6 +5236,7 @@ function BudgetCalculatorModal({
                         className="w-4 h-4 accent-[var(--primary)]"
                       />
                     </label>
+                    </Tooltip>
                     <div className="min-w-0">
                       <div className="text-xs font-semibold text-[var(--foreground)] truncate">
                         {ad.name || 'Untitled Ad'}
@@ -5132,13 +5274,16 @@ function BudgetCalculatorModal({
                       )}
                     </div>
                     {adIsDonor ? (
+                      <Tooltip
+                        label={`Locked — status is ${ad.adStatus}. Allocation locks at Pacer spend on Apply.`}
+                      >
                       <div
                         className="flex items-center gap-1 px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--muted)]/60 text-[11px] text-[var(--muted-foreground)]"
-                        title={`Locked — status is ${ad.adStatus}. Allocation locks at Pacer spend on Apply.`}
                       >
                         <LockClosedIcon className="w-3 h-3 flex-shrink-0" />
                         <span>Locked</span>
                       </div>
+                      </Tooltip>
                     ) : (
                       <select
                         value={spec.mode}
@@ -5299,21 +5444,33 @@ function BudgetCalculatorModal({
           >
             Cancel
           </button>
-          <button
-            type="button"
-            onClick={handleApply}
-            disabled={includedCount === 0 || overBudget || hasUnderSpent}
-            title={
-              hasUnderSpent
-                ? 'One or more amounts are below the already-spent value'
-                : overBudget
-                  ? 'Allocations exceed the total budget'
-                  : undefined
-            }
-            className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
-          >
-            Apply to {includedCount} ad{includedCount === 1 ? '' : 's'}
-          </button>
+          {hasUnderSpent || overBudget ? (
+            <Tooltip
+              label={
+                hasUnderSpent
+                  ? 'One or more amounts are below the already-spent value'
+                  : 'Allocations exceed the total budget'
+              }
+            >
+              <button
+                type="button"
+                onClick={handleApply}
+                disabled={includedCount === 0 || overBudget || hasUnderSpent}
+                className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
+              >
+                Apply to {includedCount} ad{includedCount === 1 ? '' : 's'}
+              </button>
+            </Tooltip>
+          ) : (
+            <button
+              type="button"
+              onClick={handleApply}
+              disabled={includedCount === 0 || overBudget || hasUnderSpent}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg bg-[var(--primary)] text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-[var(--primary)]/90 transition-colors"
+            >
+              Apply to {includedCount} ad{includedCount === 1 ? '' : 's'}
+            </button>
+          )}
         </div>
       </div>
     </div>,
@@ -5649,20 +5806,23 @@ function AdPlannerPanel({
               </button>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => setShowCalcModal(true)}
-            disabled={plan.ads.length === 0 || readOnly}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            title={
+          <Tooltip
+            label={
               readOnly
                 ? 'This month is frozen'
                 : 'Spread a budget evenly or with locked amounts/percentages'
             }
           >
+          <button
+            type="button"
+            onClick={() => setShowCalcModal(true)}
+            disabled={plan.ads.length === 0 || readOnly}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
             <CalculatorIcon className="w-3.5 h-3.5" />
             Calculator
           </button>
+          </Tooltip>
           {!readOnly && (
             <AddPlanButton
               onCreateNew={openCreate}
@@ -5723,7 +5883,7 @@ function AdPlannerPanel({
                     Status
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Due
+                    Due Date
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Budget
@@ -5732,7 +5892,7 @@ function AdPlannerPanel({
                     Allocation
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Flight
+                    Flight Dates
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Design
@@ -6182,25 +6342,27 @@ function AccountNotesDrawer({
                       {!isEditing && (
                         <div className="flex items-center gap-1 flex-shrink-0">
                           {isMine && (
+                            <Tooltip label="Edit">
                             <button
                               type="button"
                               onClick={() => startEdit(note.id, note.text)}
                               className="text-[var(--muted-foreground)] hover:text-[var(--primary)] transition-colors"
                               aria-label="Edit note"
-                              title="Edit"
                             >
                               <PencilSquareIcon className="w-3.5 h-3.5" />
                             </button>
+                            </Tooltip>
                           )}
+                          <Tooltip label="Delete">
                           <button
                             type="button"
                             onClick={() => handleDelete(note.id)}
                             className="text-[var(--muted-foreground)] hover:text-red-400 transition-colors"
                             aria-label="Delete note"
-                            title="Delete"
                           >
                             <TrashIcon className="w-3 h-3" />
                           </button>
+                          </Tooltip>
                         </div>
                       )}
                     </div>
@@ -6359,10 +6521,8 @@ function BudgetLogMiniTable({ rows }: { rows: AdSnapshot[] }) {
                   <span
                     className="text-[8px] font-bold uppercase tracking-wider px-1 py-0.5 rounded"
                     style={{
-                      background: isLifetime
-                        ? 'rgba(167,139,250,0.18)'
-                        : 'rgba(56,189,248,0.18)',
-                      color: isLifetime ? COLORS.lifetime : COLORS.daily,
+                      background: budgetTypeTint(r.budgetType),
+                      color: budgetTypeColor(r.budgetType),
                     }}
                   >
                     {r.budgetType}
@@ -6370,7 +6530,7 @@ function BudgetLogMiniTable({ rows }: { rows: AdSnapshot[] }) {
                 </td>
                 <td
                   className="px-1.5 py-1.5 tabular-nums whitespace-nowrap"
-                  style={{ color: isLifetime ? COLORS.lifetime : COLORS.daily }}
+                  style={{ color: budgetTypeColor(r.budgetType) }}
                 >
                   {fmt(r.budget)}
                   <span className="ml-0.5 text-[8px] text-[var(--muted-foreground)]">
@@ -6693,15 +6853,16 @@ function BudgetLogDrawer({
                           </span>
                         </div>
                       </button>
+                      <Tooltip label="Delete" className="flex-shrink-0">
                       <button
                         type="button"
                         onClick={() => handleDelete(entry.id)}
-                        className="text-[var(--muted-foreground)] hover:text-red-400 transition-colors flex-shrink-0 p-1 rounded"
+                        className="text-[var(--muted-foreground)] hover:text-red-400 transition-colors p-1 rounded"
                         aria-label="Delete entry"
-                        title="Delete"
                       >
                         <TrashIcon className="w-3 h-3" />
                       </button>
+                      </Tooltip>
                     </div>
 
                     {/* Body — collapsed by default */}
@@ -6875,13 +7036,14 @@ function ChangeLogDrawer({
                           {e.action.replace(/_/g, ' ')}
                         </span>
                         {isFromMeta && (
+                          <Tooltip label="From Meta">
                           <span
-                            title="From Meta"
                             className="inline-flex items-center gap-1 text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-[#0866FF]/15 text-[#0866FF]"
                           >
                             <MetaBrandIcon className="w-3 h-3" />
                             Meta
                           </span>
+                          </Tooltip>
                         )}
                       </div>
                       <span className="text-[10px] text-[var(--muted-foreground)] whitespace-nowrap">
@@ -6930,11 +7092,11 @@ function AccountNotesButton({
   ariaLabel: string;
 }) {
   return (
+    <Tooltip label={ariaLabel}>
     <button
       type="button"
       onClick={onClick}
       aria-label={ariaLabel}
-      title={ariaLabel}
       className="relative inline-flex items-center justify-center text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
     >
       <ChatBubbleOvalLeftIcon className="w-6 h-6" />
@@ -6947,6 +7109,7 @@ function AccountNotesButton({
         </span>
       )}
     </button>
+    </Tooltip>
   );
 }
 
@@ -7311,6 +7474,7 @@ function AdSetLinkPicker({
         // Linked: show the ad-set NAME (never the raw id) + a quick Unlink.
         // Clicking the name reopens the list to change the link.
         <div className="flex items-center gap-1.5 min-w-0">
+          <Tooltip label="Linked to a Meta ad set — click to change" className="min-w-0">
           <button
             ref={triggerRef}
             type="button"
@@ -7323,7 +7487,6 @@ function AdSetLinkPicker({
               }
               setOpen((v) => !v);
             }}
-            title="Linked to a Meta ad set — click to change"
             className="inline-flex min-w-0 items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] px-2.5 py-1 text-xs text-[var(--foreground)] hover:border-[var(--primary)] focus:outline-none focus:border-[var(--primary)] disabled:opacity-60"
           >
             <MetaBrandIcon className="w-3.5 h-3.5 flex-shrink-0" />
@@ -7332,18 +7495,21 @@ function AdSetLinkPicker({
             </span>
             <ChevronDownIcon className="w-3 h-3 flex-shrink-0 text-[var(--muted-foreground)]" />
           </button>
+          </Tooltip>
+          <Tooltip label="Unlink ad set" className="flex-shrink-0">
           <button
             type="button"
             disabled={disabled}
             onClick={() => onChange(null)}
-            title="Unlink ad set"
             aria-label="Unlink ad set"
-            className="flex-shrink-0 inline-flex items-center justify-center rounded-md p-2 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[#ef4444] disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex items-center justify-center rounded-md p-2 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[#ef4444] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <LinkSlashIcon className="w-4 h-4" />
           </button>
+          </Tooltip>
         </div>
       ) : (
+        <Tooltip label="Link this line to a Meta ad set to pull its spend on Sync">
         <button
           ref={triggerRef}
           type="button"
@@ -7356,13 +7522,13 @@ function AdSetLinkPicker({
             }
             setOpen((v) => !v);
           }}
-          title="Link this line to a Meta ad set to pull its spend on Sync"
           className="inline-flex items-center gap-1.5 rounded-md bg-[#1877F2] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#1877F2]/90 focus:outline-none focus:ring-2 focus:ring-[#1877F2]/40 disabled:opacity-60 disabled:cursor-not-allowed"
         >
           <MetaBrandIcon className="w-3 h-3 flex-shrink-0 brightness-0 invert" />
           Link ad set
           <ChevronDownIcon className="w-3 h-3 flex-shrink-0 text-white/80" />
         </button>
+        </Tooltip>
       )}
 
       {open && pos && typeof document !== 'undefined'
@@ -7496,7 +7662,7 @@ function PacerRow({
   siblings: Record<string, { allocation: number; actual: number }> | null;
 }) {
   const isLifetime = ad.budgetType === 'Lifetime';
-  const typeColor = isLifetime ? COLORS.lifetime : COLORS.daily;
+  const typeColor = budgetTypeColor(ad.budgetType);
   // Once a row is linked to Meta and has synced, Meta owns its actual spend
   // (read-only here) and its daily budget is edited-then-pushed, not free-typed.
   const syncedFromMeta = !!ad.metaObjectId && !!ad.pacerSyncedAt;
@@ -7822,9 +7988,7 @@ function PacerRow({
               <span
                 className="font-bold uppercase tracking-wider px-2 py-0.5 rounded"
                 style={{
-                  background: isLifetime
-                    ? 'rgba(167,139,250,0.18)'
-                    : 'rgba(56,189,248,0.18)',
+                  background: budgetTypeTint(ad.budgetType),
                   color: typeColor,
                 }}
               >
@@ -7840,17 +8004,20 @@ function PacerRow({
                 {sourceLabel(ad.budgetSource)}
               </span>
               {(resolvedFullRun || ad.lifetimeMonthSplit != null) && (
-                <span
-                  className="font-bold uppercase tracking-wider px-2 py-0.5 rounded"
-                  style={{ background: 'rgba(249,115,22,0.18)', color: '#f97316' }}
-                  title={
+                <Tooltip
+                  label={
                     resolvedFullRun
                       ? "Cross-month: the full run is billed in this ad's month — the over/under compares the full run to the full target."
                       : 'Cross-month: lifetime ad with a planned per-month split (reference only — the variance books once on completion).'
                   }
                 >
+                <span
+                  className="font-bold uppercase tracking-wider px-2 py-0.5 rounded"
+                  style={{ background: 'rgba(249,115,22,0.18)', color: '#f97316' }}
+                >
                   Cross-month
                 </span>
+                </Tooltip>
               )}
               {ad.budgetSource === 'split' && (() => {
                 const baseAmt = num(ad.splitBaseAmount) ?? 0;
@@ -7921,12 +8088,16 @@ function PacerRow({
         </Field>
         <Field label="Daily Budget">
           {isLifetime ? (
+            <Tooltip
+              label="Lifetime ads use a fixed total budget, not a daily rate"
+              className="w-full"
+            >
             <div
               className={`${readonlyClass} italic`}
-              title="Lifetime ads use a fixed total budget, not a daily rate"
             >
               N/A — lifetime
             </div>
+            </Tooltip>
           ) : !syncedFromMeta ? (
             // Manual / unlinked — free-typed as before.
             <DollarInput
@@ -7943,16 +8114,17 @@ function PacerRow({
                   ? fmt(num(ad.pacerDailyBudget) ?? 0)
                   : '—'}
               </span>
+              <Tooltip label="Edit daily budget">
               <button
                 type="button"
                 onClick={beginDailyEdit}
                 disabled={readOnly}
-                title="Edit daily budget"
                 aria-label="Edit daily budget"
                 className="inline-flex items-center justify-center rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <PencilSquareIcon className="w-3.5 h-3.5" />
               </button>
+              </Tooltip>
             </div>
           ) : (
             // Editing — the input, a full-width Push action shown only once the
@@ -8437,6 +8609,7 @@ function PacerRow({
           {/* Cross-month accounting toggle — reveals the dropdown on the input
               row; turning it off clears any Bill/Split classification. Orange =
               on (matches the cross-month theme). */}
+          <Tooltip label="Cross-month accounting for this ad">
           <button
             type="button"
             role="switch"
@@ -8450,7 +8623,6 @@ function PacerRow({
               }
             }}
             disabled={readOnly}
-            title="Cross-month accounting for this ad"
             className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <span
@@ -8465,19 +8637,28 @@ function PacerRow({
             </span>
             Cross-month
           </button>
+          </Tooltip>
           {/* Mute alerts — icon only; hidden on completed / past runs (pacing
               alerts no longer apply there). */}
           {showsProjection && (
-            <button
-              type="button"
-              onClick={onMuteToggle}
-              disabled={readOnly}
-              title={
+            <Tooltip
+              label={
                 ad.alertsMuted
                   ? 'Alerts muted for this ad — click to unmute'
                   : 'Mute pacing / dark / flight alerts for this ad'
               }
-              className={`inline-flex flex-shrink-0 items-center justify-center rounded-md border p-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              className="flex-shrink-0"
+            >
+            <button
+              type="button"
+              onClick={onMuteToggle}
+              disabled={readOnly}
+              aria-label={
+                ad.alertsMuted
+                  ? 'Alerts muted for this ad — click to unmute'
+                  : 'Mute pacing / dark / flight alerts for this ad'
+              }
+              className={`inline-flex items-center justify-center rounded-md border p-1.5 transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                 ad.alertsMuted
                   ? 'border-[rgba(245,158,11,0.45)] bg-[rgba(245,158,11,0.12)] text-[#f59e0b]'
                   : 'border-[var(--border)] text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
@@ -8489,6 +8670,7 @@ function PacerRow({
                 <BellIcon className="w-3.5 h-3.5" />
               )}
             </button>
+            </Tooltip>
           )}
         </div>
       </div>
@@ -8697,7 +8879,8 @@ function PacerSpendTotals({
         </div>
       </div>
       {pacing && pacingColor && (
-        <div className="min-w-[160px]" title={pacingTitle}>
+        <Tooltip label={pacingTitle}>
+        <div className="min-w-[160px]">
           <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
             {pacingHeader}
           </div>
@@ -8717,6 +8900,7 @@ function PacerSpendTotals({
             />
           </div>
         </div>
+        </Tooltip>
       )}
     </div>
   );
@@ -8934,6 +9118,7 @@ function BudgetPacerPanel({
         {/* All actions live on one row, grouped: table/bulk controls first,
             then a divider, then the account/Meta actions. */}
         <div className="flex items-center justify-end gap-2 flex-wrap">
+          <Tooltip label={allExpanded ? 'Collapse all rows' : 'Expand all rows'}>
           <button
             type="button"
             onClick={() =>
@@ -8941,12 +9126,12 @@ function BudgetPacerPanel({
                 allExpanded ? new Set() : new Set(visibleAds.map((a) => a.id)),
               )
             }
-            title={allExpanded ? 'Collapse all rows' : 'Expand all rows'}
             className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
           >
             <ChevronUpDownIcon className="w-3.5 h-3.5" />
             {allExpanded ? 'Collapse all' : 'Expand all'}
           </button>
+          </Tooltip>
           {headerActions && (
             <>
               <div className="mx-1 h-5 w-px bg-[var(--border)]" />
@@ -8979,15 +9164,16 @@ function BudgetPacerPanel({
               spent in another month, so the monthly total can differ (expand a
               flagged row for details).
             </span>
+            <Tooltip label="Dismiss" className="flex-shrink-0">
             <button
               type="button"
               onClick={() => setCrossMonthNoteDismissed(true)}
               aria-label="Dismiss"
-              title="Dismiss"
-              className="flex-shrink-0 -mr-0.5 rounded p-0.5 hover:bg-[var(--muted)] transition-colors"
+              className="-mr-0.5 rounded p-0.5 hover:bg-[var(--muted)] transition-colors"
             >
               <XMarkIcon className="w-3.5 h-3.5" />
             </button>
+            </Tooltip>
           </div>
         );
       })()}
@@ -9135,10 +9321,8 @@ function SummaryPanel({ plan }: { plan: PacerPlan }) {
                   <span
                     className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
                     style={{
-                      background: c.isLifetime
-                        ? 'rgba(167,139,250,0.18)'
-                        : 'rgba(56,189,248,0.18)',
-                      color: c.isLifetime ? COLORS.lifetime : COLORS.daily,
+                      background: budgetTypeTint(c.ad.budgetType),
+                      color: budgetTypeColor(c.ad.budgetType),
                     }}
                   >
                     {c.ad.budgetType}
@@ -9165,7 +9349,7 @@ function SummaryPanel({ plan }: { plan: PacerPlan }) {
                 </td>
                 <td
                   className="px-2.5 py-2.5"
-                  style={{ color: c.isLifetime ? COLORS.lifetime : COLORS.daily }}
+                  style={{ color: budgetTypeColor(c.ad.budgetType) }}
                 >
                   {fmt(c.totalBudget)}
                   <span className="ml-1 text-[9px] text-[var(--muted-foreground)]">
@@ -9475,16 +9659,17 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
               <ChevronRightIcon className="w-4 h-4" />
             </button>
           </div>
+          <Tooltip label="Pull account-total monthly spend from Meta for pre-tool months this year">
           <button
             type="button"
             onClick={backfill}
             disabled={backfilling}
-            title="Pull account-total monthly spend from Meta for pre-tool months this year"
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-50"
           >
             <ArrowPathIcon className={`w-3.5 h-3.5 ${backfilling ? 'animate-spin' : ''}`} />
             {backfilling ? 'Backfilling…' : 'Backfill historical spend'}
           </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -9668,24 +9853,26 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                             </span>
                           )}
                           {m.isBackfilled && (
+                            <Tooltip label="Pre-tool month — actual pulled from Meta account spend">
                             <span
                               className="text-[9px] font-medium uppercase tracking-wider rounded px-1.5 py-0.5 bg-[var(--muted)] text-[var(--muted-foreground)]"
-                              title="Pre-tool month — actual pulled from Meta account spend"
                             >
                               Backfilled
                             </span>
+                            </Tooltip>
                           )}
                           {m.hasLifetimeInProgress && (
+                            <Tooltip label="A lifetime ad is still running this month — excluded from the over/under base (its single variance books once when the run completes). Its spend still shows in the Pacer's total spend.">
                             <span
                               className="text-[9px] font-medium uppercase tracking-wider rounded px-1.5 py-0.5"
                               style={{
                                 background: 'rgba(167,139,250,0.15)',
                                 color: COLORS.lifetime,
                               }}
-                              title="A lifetime ad is still running this month — excluded from the over/under base (its single variance books once when the run completes). Its spend still shows in the Pacer's total spend."
                             >
                               Lifetime in progress
                             </span>
+                            </Tooltip>
                           )}
                         </div>
                         {isLive && (
@@ -9736,10 +9923,10 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                               </div>
                             )}
                             {m.appliedIn !== 0 && (
+                              <Tooltip label="Carryover applied INTO this month from a prior month's over/under (adjusts this month's target; the client budget is unchanged).">
                               <div
                                 className="text-[9px]"
                                 style={{ color: COLORS.lifetime }}
-                                title="Carryover applied INTO this month from a prior month's over/under (adjusts this month's target; the client budget is unchanged)."
                               >
                                 ← {m.appliedIn > 0 ? '+' : '−'}
                                 {fmt(Math.abs(m.appliedIn))} from{' '}
@@ -9756,6 +9943,7 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                                     : 'a prior month';
                                 })()}
                               </div>
+                              </Tooltip>
                             )}
                           </>
                         ) : (
@@ -9781,14 +9969,16 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                           </span>
                         ) : applied ? (
                           <div className="flex items-center justify-end gap-2">
-                            <span
-                              className="inline-flex items-center gap-1 text-[10px] font-semibold"
-                              style={{ color: COLORS.success }}
-                              title={`This month's over/under was applied into ${
+                            <Tooltip
+                              label={`This month's over/under was applied into ${
                                 data.targetPeriod
                                   ? fmtPeriodLong(data.targetPeriod)
                                   : 'the live month'
                               }`}
+                            >
+                            <span
+                              className="inline-flex items-center gap-1 text-[10px] font-semibold"
+                              style={{ color: COLORS.success }}
                             >
                               <CheckIcon className="w-3 h-3" />
                               Applied {m.appliedOut >= 0 ? '+' : '−'}
@@ -9808,6 +9998,7 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                                     : 'live month';
                               })()}
                             </span>
+                            </Tooltip>
                             <button
                               type="button"
                               onClick={() =>
@@ -9858,22 +10049,30 @@ function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                                         {av.name || 'Untitled ad'}
                                       </span>
                                       {av.klass === 'billed-cross-month' && (
+                                        <Tooltip
+                                          label="Billed in this month though it ran across months — the over/under counts its full run; only part spent this month."
+                                          className="flex-shrink-0"
+                                        >
                                         <span
-                                          className="text-[9px] font-semibold flex-shrink-0"
+                                          className="text-[9px] font-semibold"
                                           style={{ color: '#f97316' }}
-                                          title="Billed in this month though it ran across months — the over/under counts its full run; only part spent this month."
                                         >
                                           billed cross-month
                                         </span>
+                                        </Tooltip>
                                       )}
                                       {av.klass === 'lifetime-in-progress' && (
+                                        <Tooltip
+                                          label="Lifetime ad still running — its spend is held out of the over/under until the run completes."
+                                          className="flex-shrink-0"
+                                        >
                                         <span
-                                          className="text-[9px] font-semibold flex-shrink-0"
+                                          className="text-[9px] font-semibold"
                                           style={{ color: COLORS.lifetime }}
-                                          title="Lifetime ad still running — its spend is held out of the over/under until the run completes."
                                         >
                                           lifetime · books on completion
                                         </span>
+                                        </Tooltip>
                                       )}
                                     </div>
                                     <span
@@ -10250,22 +10449,24 @@ function OverUnderMonthView({
                               {ad.allocation > 0 ? fmt(ad.allocation) : '—'}
                             </span>
                             {ad.lifetimeInProgress && (
+                              <Tooltip label="Lifetime ad still running — excluded from the over/under until its run completes (still counted in total spend).">
                               <span
                                 className="ml-1 font-semibold"
                                 style={{ color: COLORS.lifetime }}
-                                title="Lifetime ad still running — excluded from the over/under until its run completes (still counted in total spend)."
                               >
                                 · lifetime · in progress
                               </span>
+                              </Tooltip>
                             )}
                             {ad.fullRunAppliedToMonth && (
+                              <Tooltip label="Full run counted in this month — the over/under compares the full run to the full target.">
                               <span
                                 className="ml-1 font-semibold"
                                 style={{ color: '#f97316' }}
-                                title="Full run counted in this month — the over/under compares the full run to the full target."
                               >
                                 · full run → {fmtPeriodLong(ad.fullRunAppliedToMonth)}
                               </span>
+                              </Tooltip>
                             )}
                           </div>
                         )}
@@ -10278,18 +10479,21 @@ function OverUnderMonthView({
                           ad.variance &&
                           ad.variance.klass !== 'lifetime-in-progress' &&
                           Math.abs(ad.variance.contribution) >= 0.005 && (
-                            <div
-                              className="text-[9px] font-semibold tabular-nums leading-tight"
-                              style={{ color: varianceColor(ad.variance.contribution) }}
-                              title={
+                            <Tooltip
+                              label={
                                 ad.variance.klass === 'billed-cross-month'
                                   ? "This ad's over/under on its FULL run vs target (billed in this month)."
                                   : "This ad's over/under vs its allocation."
                               }
                             >
+                            <div
+                              className="text-[9px] font-semibold tabular-nums leading-tight"
+                              style={{ color: varianceColor(ad.variance.contribution) }}
+                            >
                               {ad.variance.contribution >= 0 ? '+' : '−'}
                               {fmt(Math.abs(ad.variance.contribution))}
                             </div>
+                            </Tooltip>
                           )}
                       </div>
                     </div>
@@ -10376,10 +10580,10 @@ function OverUnderMonthView({
                 {' should have spent'}
               </div>
               {crossMonthCount > 0 && (
+                <Tooltip label="These ads are billed in this month though they ran across months — the over/under counts their full run, so the month's total spend is lower by the part that spent in another month.">
                 <div
                   className="text-[10px] mt-1"
                   style={{ color: '#f97316' }}
-                  title="These ads are billed in this month though they ran across months — the over/under counts their full run, so the month's total spend is lower by the part that spent in another month."
                 >
                   {crossMonthCount} ad{crossMonthCount === 1 ? '' : 's'} billed cross-month ·{' '}
                   <span className="font-semibold text-[var(--foreground)]">
@@ -10388,17 +10592,19 @@ function OverUnderMonthView({
                   of the billed spend landed in another month (total spent this month{' '}
                   {fmt(totalInMonth)})
                 </div>
+                </Tooltip>
               )}
               {inProgressLifetime.length > 0 && (
+                <Tooltip label="A lifetime ad still running is excluded from the over/under — both its spend and its target — until its run completes, when its single variance books once. Its spend is still counted in the tracked total above.">
                 <div
                   className="text-[10px] mt-1"
                   style={{ color: COLORS.lifetime }}
-                  title="A lifetime ad still running is excluded from the over/under — both its spend and its target — until its run completes, when its single variance books once. Its spend is still counted in the tracked total above."
                 >
                   Excludes {inProgressLifetime.length} lifetime ad
                   {inProgressLifetime.length === 1 ? '' : 's'} in progress ·{' '}
                   {fmt(heldOutLifetime)} spent · settles on completion
                 </div>
+                </Tooltip>
               )}
             </div>
           </div>
@@ -10416,6 +10622,11 @@ interface OverviewAccount {
   markup: number;
   baseBudgetGoal: string | null;
   addedBudgetGoal: string | null;
+  // Per-source carryover folded into the spend target (target = goal × markup
+  // + carryover). Lets the remaining-budget footer reconcile against the same
+  // target the planner uses, so an applied carryover doesn't read as unallocated.
+  baseCarryover: string | null;
+  addedCarryover: string | null;
   // Server-side aggregated count of account-level pacer notes — drives
   // the chat badge on the overview row without an extra round-trip.
   notesCount: number;
@@ -10508,9 +10719,9 @@ function OverviewAccountRow({
 
         <div className="flex items-center gap-5 flex-shrink-0">
           {combinedTotal > 0 && (
+            <Tooltip label="Billing figure — combined Base + Added client budget (gross). Should match the planner for this account and month.">
             <div
               className="text-right"
-              title="Billing figure — combined Base + Added client budget (gross). Should match the planner for this account and month."
             >
               <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
                 Total Budget
@@ -10528,6 +10739,7 @@ function OverviewAccountRow({
                 </span>
               </div>
             </div>
+            </Tooltip>
           )}
           <div onClick={(e) => e.stopPropagation()}>
             <AccountNotesButton
@@ -10536,6 +10748,7 @@ function OverviewAccountRow({
               ariaLabel={`Open notes for ${account.dealer}`}
             />
           </div>
+          <Tooltip label="Open account">
           <button
             type="button"
             onClick={(e) => {
@@ -10543,10 +10756,10 @@ function OverviewAccountRow({
               onOpenAccount();
             }}
             className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-            title="Open account"
           >
             Open
           </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -10615,14 +10828,15 @@ function OverviewAccountRow({
                       <td
                         className="px-2 py-2 font-semibold whitespace-nowrap"
                         style={{ color: COLORS.daily }}
-                        title="Gross client-facing dollars (allocation grossed up by markup)"
                       >
+                        <Tooltip label="Gross client-facing dollars (allocation grossed up by markup)">
                         {(() => {
                           const m = effMarkupOf(account.markup);
                           return num(ad.allocation) != null && m > 0
                             ? fmt(Math.round((num(ad.allocation)! / m) * 100) / 100)
                             : '—';
                         })()}
+                        </Tooltip>
                       </td>
                       <td className="px-2 py-2 text-[var(--foreground)]">
                         {num(ad.allocation) != null ? fmt(num(ad.allocation)!) : '—'}
@@ -10641,6 +10855,72 @@ function OverviewAccountRow({
               </table>
             </div>
           )}
+
+          {/* Remaining-budget summary — reconciles what's allocated to ads this
+              month against the account's SPEND TARGET, mirroring the planner:
+              target = client budget × markup + carryover. Folding carryover in
+              keeps an applied carryover from reading as unallocated budget (the
+              raw client budget would otherwise disagree with the planner). Uses
+              the full account, not the filtered subset, so it's a true total. */}
+          {combinedTotal > 0 &&
+            (() => {
+              const m = effMarkupOf(account.markup);
+              // Net (actual-spend) sums across the whole account.
+              const allocatedNet = account.ads.reduce(
+                (s, a) => s + (num(a.allocation) ?? 0),
+                0,
+              );
+              const carryoverNet =
+                (num(account.baseCarryover) ?? 0) +
+                (num(account.addedCarryover) ?? 0);
+              // Gross (client-dollar) equivalents so the readout matches the
+              // Total Budget figure and the Client Budget column.
+              const allocatedGross = m > 0 ? allocatedNet / m : 0;
+              const carryoverGross = m > 0 ? carryoverNet / m : 0;
+              const targetGross = combinedTotal + carryoverGross;
+              const remaining =
+                Math.round((targetGross - allocatedGross) * 100) / 100;
+              const hasCarry = Math.abs(carryoverGross) >= 0.005;
+              const over = remaining < -0.005;
+              const fullyAllocated = Math.abs(remaining) <= 0.005;
+              const accent = over
+                ? COLORS.error
+                : fullyAllocated
+                  ? COLORS.success
+                  : COLORS.warn;
+              return (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-[var(--border)] pt-2.5 text-xs">
+                  <span className="text-[var(--muted-foreground)]">
+                    <span className="font-semibold text-[var(--foreground)] tabular-nums">
+                      {fmt(allocatedGross)}
+                    </span>{' '}
+                    of{' '}
+                    <span className="font-semibold text-[var(--foreground)] tabular-nums">
+                      {fmt(hasCarry ? targetGross : combinedTotal)}
+                    </span>{' '}
+                    {hasCarry ? 'spend target allocated' : 'client budget allocated'}
+                    {hasCarry && (
+                      <span>
+                        {' · '}
+                        {fmt(combinedTotal)} budget{' '}
+                        {carryoverGross > 0 ? '+' : '−'}
+                        {fmt(Math.abs(carryoverGross))} carryover
+                      </span>
+                    )}
+                  </span>
+                  <span
+                    className="font-semibold tabular-nums"
+                    style={{ color: accent }}
+                  >
+                    {over
+                      ? `Over budget by ${fmt(-remaining)}`
+                      : fullyAllocated
+                        ? 'Fully allocated'
+                        : `${fmt(remaining)} remaining to allocate`}
+                  </span>
+                </div>
+              );
+            })()}
         </div>
       )}
 
@@ -12157,20 +12437,24 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
           </button>
         </Tooltip>
         {/* Import — primary, white Meta badge. */}
-        <button
-          type="button"
-          onClick={() => setImportOpen(true)}
-          disabled={!!plan?.frozen}
-          title={
+        <Tooltip
+          label={
             plan?.frozen
               ? 'This month is frozen — reopen it to import'
               : 'Bring existing Meta ad sets into this month as rows'
           }
+          placement="bottom"
+        >
+        <button
+          type="button"
+          onClick={() => setImportOpen(true)}
+          disabled={!!plan?.frozen}
           className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-[var(--primary)]/90 disabled:cursor-not-allowed disabled:opacity-60"
         >
           <MetaBrandIcon className="w-3.5 h-3.5 brightness-0 invert" />
           Import from Meta
         </button>
+        </Tooltip>
       </div>
     ) : null;
 
@@ -12563,11 +12847,11 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
               </div>
             </div>
           </div>
+          <Tooltip label="Reopen this month for corrections (admin). The original snapshot is kept.">
           <button
             type="button"
             onClick={handleReopenMonth}
             disabled={reopening}
-            title="Reopen this month for corrections (admin). The original snapshot is kept."
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <ArrowPathIcon
@@ -12575,6 +12859,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
             />
             {reopening ? 'Reopening…' : 'Reopen month'}
           </button>
+          </Tooltip>
         </div>
       )}
 
@@ -12599,16 +12884,17 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
               </div>
             </div>
           </div>
+          <Tooltip label="Re-freeze this month, locking it read-only again">
           <button
             type="button"
             onClick={handleRefreezeMonth}
             disabled={reopening}
-            title="Re-freeze this month, locking it read-only again"
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
           >
             <LockClosedIcon className="w-3.5 h-3.5" />
             {reopening ? 'Working…' : 'Re-freeze month'}
           </button>
+          </Tooltip>
         </div>
       )}
 

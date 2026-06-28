@@ -22,12 +22,16 @@ interface SidebarCollapseContextValue {
   collapsed: boolean;
   toggle: () => void;
   setCollapsed: (value: boolean) => void;
+  /** Mobile off-canvas drawer state (not persisted — session-only). */
+  mobileOpen: boolean;
+  setMobileOpen: (value: boolean) => void;
 }
 
 const SidebarCollapseContext = createContext<SidebarCollapseContextValue | null>(null);
 
 export function SidebarCollapseProvider({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsedState] = useState<boolean>(false);
+  const [mobileOpen, setMobileOpen] = useState<boolean>(false);
 
   // Read persisted value once on mount.
   useEffect(() => {
@@ -53,7 +57,7 @@ export function SidebarCollapseProvider({ children }: { children: React.ReactNod
   }, [collapsed, setCollapsed]);
 
   return (
-    <SidebarCollapseContext.Provider value={{ collapsed, toggle, setCollapsed }}>
+    <SidebarCollapseContext.Provider value={{ collapsed, toggle, setCollapsed, mobileOpen, setMobileOpen }}>
       {children}
     </SidebarCollapseContext.Provider>
   );
@@ -65,7 +69,13 @@ export function useSidebarCollapse(): SidebarCollapseContextValue {
     // Safe fallback: if a component outside the provider tries to read,
     // pretend the sidebar is expanded (no-op toggle). Avoids crashes in
     // edge cases like Storybook or isolated tests.
-    return { collapsed: false, toggle: () => {}, setCollapsed: () => {} };
+    return {
+      collapsed: false,
+      toggle: () => {},
+      setCollapsed: () => {},
+      mobileOpen: false,
+      setMobileOpen: () => {},
+    };
   }
   return ctx;
 }

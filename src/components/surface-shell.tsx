@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
+import { Bars3Icon } from '@heroicons/react/24/outline';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 
 /**
@@ -25,10 +26,23 @@ export function SurfaceShell({
   topBar: React.ReactNode;
   children: React.ReactNode;
 }) {
-  const { collapsed } = useSidebarCollapse();
+  const { collapsed, mobileOpen, setMobileOpen } = useSidebarCollapse();
   const pathname = usePathname();
   const mainRef = useRef<HTMLDivElement>(null);
   const [scrolled, setScrolled] = useState(false);
+
+  // Close the mobile drawer on navigation (e.g. tapping a nav link).
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname, setMobileOpen]);
+
+  // Close the mobile drawer on Escape.
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMobileOpen(false);
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [mobileOpen, setMobileOpen]);
 
   // Track whether the content card has scrolled (drives the pinned header's
   // opaque state). Re-sync on navigation since the card element persists.
@@ -44,15 +58,38 @@ export function SurfaceShell({
   return (
     <>
       {sidebar}
+
+      {/* Mobile drawer backdrop — sits below the sidebar (z-50) but above
+          content; tapping it closes the drawer. */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm md:hidden"
+          onClick={() => setMobileOpen(false)}
+          aria-hidden
+        />
+      )}
+
       {/* Fixed-height column: the top bar + card never scroll; only the
-          card's inner content does. */}
+          card's inner content does. On mobile the sidebar is an off-canvas
+          drawer, so the column spans full width (just the p-3 gutter); from
+          md up it offsets by the rail width. */}
       <main
         className={`flex-1 min-w-0 h-screen flex flex-col overflow-hidden p-3 transition-[padding-left] duration-200 ease-out ${
-          collapsed ? 'pl-[4.5rem]' : 'pl-[16.5rem]'
+          collapsed ? 'md:pl-[4.5rem]' : 'md:pl-[16.5rem]'
         }`}
       >
         <div className="flex w-full flex-1 flex-col min-h-0 gap-3">
-          {topBar}
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setMobileOpen(true)}
+              aria-label="Open menu"
+              className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] md:hidden"
+            >
+              <Bars3Icon className="h-5 w-5" />
+            </button>
+            <div className="min-w-0 flex-1">{topBar}</div>
+          </div>
           <div
             ref={mainRef}
             data-scrolled={scrolled ? 'true' : 'false'}

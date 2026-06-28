@@ -283,19 +283,22 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   const handleSelect = (key: string | '__admin__') => {
     const destinationLabel = key === '__admin__' ? 'Admin Account' : (accounts[key]?.dealer || key);
     confirmNavigation(() => {
-      // Reporting surface routes don't use the studio `/subaccount/<slug>/*`
-      // URL structure — pages read the active account from context and
-      // filter their data accordingly. So on reporting we update context
-      // and skip URL navigation (which would land on a 404 if we pushed
-      // a /subaccount/... path that the reporting tree doesn't have).
-      const onReporting = getCurrentSurface() === 'reporting';
+      // The reporting AND app surfaces don't use the studio `/subaccount/<slug>/*`
+      // URL structure — their pages read the active account from context/cookie
+      // and filter their data accordingly. So there we update context and skip
+      // URL navigation (which would 404), then refresh() so any server-rendered
+      // page (e.g. App's Initiatives list) re-reads the new active-account cookie.
+      const surface = getCurrentSurface();
+      const contextOnly = surface === 'reporting' || surface === 'app';
 
       if (key === '__admin__') {
         setAccount({ mode: 'admin' });
-        if (!onReporting) router.push(resolveAdminPath(pathname));
+        if (!contextOnly) router.push(resolveAdminPath(pathname));
+        else router.refresh();
       } else {
-        if (onReporting) {
+        if (contextOnly) {
           setAccount({ mode: 'account', accountKey: key });
+          router.refresh();
         } else {
           const slug = accountKeyToSlug(key, accounts);
           const targetPath = slug ? resolveSubaccountPath(pathname, slug) : null;

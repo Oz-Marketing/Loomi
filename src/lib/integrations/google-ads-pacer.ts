@@ -15,9 +15,9 @@ import {
 } from './google-ads';
 // The pure module owns the shape (it's plain data, used by the channel/budget
 // mappers + import reconciliation); this client just produces it.
-import type { ImportedGoogleCampaign } from '@/app/tools/meta/_lib/google-pacer-calc';
-import { reconcileImport, type ImportDiff } from '@/app/tools/meta/_lib/google-pacer-calc';
-import type { PacerAd } from '@/app/tools/meta/_lib/types';
+import type { ImportedGoogleCampaign } from '@/lib/ad-pacer/google-pacer-calc';
+import { reconcileImport, type ImportDiff } from '@/lib/ad-pacer/google-pacer-calc';
+import type { PacerAd } from '@/lib/ad-pacer/types';
 import { prisma } from '@/lib/prisma';
 import { getOrCreatePlan } from '@/lib/meta-ads-pacer';
 
@@ -235,7 +235,9 @@ export async function previewGoogleImport(
   const plan = await getOrCreatePlan(accountKey);
   const campaigns = await importGoogleCampaigns(cfg, customerId);
   const existing = await prisma.metaAdsPacerAd.findMany({
-    where: { planId: plan.id, period },
+    // Only diff against Google lines — Meta rows must never appear as
+    // adds/removes in the Google import preview.
+    where: { planId: plan.id, period, platform: 'google' },
     select: {
       id: true,
       name: true,

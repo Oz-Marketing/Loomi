@@ -26,6 +26,9 @@ export interface SearchableSelectOption {
    *  together under a single category label. Pass undefined for
    *  ungrouped lists. */
   group?: string;
+  /** Optional leading visual (e.g. an avatar/logo) shown before the label
+   *  in both the trigger and the option rows. */
+  icon?: React.ReactNode;
 }
 
 export interface SearchableSelectProps {
@@ -83,10 +86,8 @@ export function SearchableSelect({
 
   // Selected option label for the trigger. Looking it up on every
   // render is cheap enough — the option list is short.
-  const selectedLabel = useMemo(() => {
-    const match = options.find((o) => o.value === value);
-    return match?.label ?? '';
-  }, [options, value]);
+  const selectedOption = useMemo(() => options.find((o) => o.value === value), [options, value]);
+  const selectedLabel = selectedOption?.label ?? '';
 
   const positionPopover = useCallback(() => {
     const trigger = triggerRef.current;
@@ -181,8 +182,11 @@ export function SearchableSelect({
         onClick={() => setOpen((o) => !o)}
         className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs text-left hover:border-[var(--primary)] focus:outline-none focus:border-[var(--primary)] transition-colors ${className ?? ''}`}
       >
-        <span className={`flex-1 min-w-0 truncate ${selectedLabel ? '' : 'text-[var(--muted-foreground)]'}`}>
-          {selectedLabel || placeholder}
+        <span className="flex flex-1 min-w-0 items-center gap-1.5">
+          {selectedOption?.icon}
+          <span className={`min-w-0 truncate ${selectedLabel ? '' : 'text-[var(--muted-foreground)]'}`}>
+            {selectedLabel || placeholder}
+          </span>
         </span>
         <ChevronUpDownIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)] flex-shrink-0" />
       </button>
@@ -216,7 +220,7 @@ export function SearchableSelect({
                       setHighlight(0);
                     }}
                     placeholder="Search"
-                    className="w-full pl-7 pr-2 py-1 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
+                    className="w-full pl-7 pr-2 py-2 rounded-md border border-[var(--border)] bg-[var(--input)] text-sm placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
                   />
                 </div>
               </div>
@@ -294,13 +298,14 @@ function GroupSection({
                 type="button"
                 onClick={() => onPick(opt.value)}
                 onMouseEnter={() => onHover(absIdx)}
-                className={`w-full text-left px-2 py-1.5 rounded text-xs transition-colors ${
+                className={`w-full flex items-center gap-2 text-left px-2.5 py-2 rounded-md text-sm transition-colors ${
                   isHighlighted
                     ? 'bg-[var(--primary)] text-white'
                     : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
                 } ${isSelected && !isHighlighted ? 'font-semibold' : ''}`}
               >
-                {opt.label}
+                {opt.icon}
+                <span className="flex-1 min-w-0 truncate">{opt.label}</span>
               </button>
             </li>
           );

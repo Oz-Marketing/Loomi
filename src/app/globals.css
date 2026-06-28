@@ -506,6 +506,26 @@ body {
   pointer-events: none;
 }
 
+/* ── Shared form input (Projects + general use) ── */
+.loomi-input {
+  display: block;
+  width: 100%;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border);
+  background: var(--background);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: var(--foreground);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+.loomi-input:focus {
+  border-color: var(--primary);
+}
+.loomi-input::placeholder {
+  color: var(--muted-foreground);
+}
+
 /* ── Dropdown popover — opaque frosted glass ── */
 .glass-dropdown {
   backdrop-filter: blur(40px) saturate(200%);
@@ -796,13 +816,11 @@ button.glass-card:hover,
 }
 
 .users-table-scroll {
-  overflow: visible;
-}
-
-@media (max-width: 900px) {
-  .users-table-scroll {
-    overflow-x: auto;
-  }
+  /* Always allow horizontal scroll so a wide (min-width) table stays reachable
+     even when the content area is narrower than the table — e.g. settings with
+     the sidebar + tab rail. Previously `visible`, which overflowed without a
+     scrollbar on desktop. */
+  overflow-x: auto;
 }
 
 /* ── Glass action bar ── fixed bottom bulk-action bars */

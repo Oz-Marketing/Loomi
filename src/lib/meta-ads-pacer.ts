@@ -7,13 +7,13 @@ import { resolveAccountTimeZone, zonedTodayIso } from '@/lib/timezone';
 import {
   CARRYOVER_THRESHOLD,
   ACTIVE_STATUSES,
-} from '@/app/tools/meta/_lib/constants';
+} from '@/lib/ad-pacer/constants';
 // §0.1: the ONE markup resolution + spend-target formula (no hardcoded
 // literal); the agency default comes from admin settings (DB-backed).
 import {
   accountMarginSetting,
   effectiveSpendTarget,
-} from '@/app/tools/meta/_lib/markup';
+} from '@/lib/ad-pacer/markup';
 import { getGlobalDefaultMarkup } from '@/lib/services/markup';
 // §3: the ONE "lifetime ad still running" predicate, shared with the client so
 // the over/under base excludes the same ads everywhere.
@@ -21,7 +21,7 @@ import {
   isLifetimeInProgress,
   effectiveActual,
   classifyAdVariance,
-} from '@/app/tools/meta/_lib/pacer-calc';
+} from '@/lib/ad-pacer/pacer-calc';
 import { writeAudit } from '@/lib/meta-ads-audit';
 
 function attachUrl<T extends { attachmentKey: string | null }>(entry: T): T & { attachmentUrl: string | null } {
@@ -101,7 +101,24 @@ export function isValidPeriod(period: string): boolean {
 }
 
 /** Pull the budget + ads for a single period. */
-export async function fetchPeriodPlan(planId: string, period: string) {
+/** Ad platform of a pacer surface. Legacy rows have null platform = Meta. */
+export type PacerPlatform = 'meta' | 'google';
+
+/**
+ * Prisma `where` fragment that scopes a pacer-ad query to one platform.
+ * Meta surfaces include legacy/null rows (everything that isn't Google);
+ * Google surfaces include only Google lines. Pass nothing for all platforms.
+ */
+export function adPlatformWhere(platform?: PacerPlatform) {
+  if (platform === 'google') return { platform: 'google' };
+  // Meta = everything that isn't Google. Legacy rows have platform=null, and in
+  // SQL `platform <> 'google'` is NULL (excluded) for those — so OR the nulls
+  // back in explicitly.
+  if (platform === 'meta') return { OR: [{ platform: null }, { platform: { not: 'google' } }] };
+  return {};
+}
+
+export async function fetchPeriodPlan(planId: string, period: string, platform?: PacerPlatform) {
   // Pull the parent plan so we can surface the account's markup override
   // (Account.markup) and resolved pacing timezone alongside the period data.
   // The calculator needs markup to translate Client Budget inputs into actual
@@ -111,7 +128,7 @@ export async function fetchPeriodPlan(planId: string, period: string) {
       where: { planId_period: { planId, period } },
     }),
     prisma.metaAdsPacerAd.findMany({
-      where: { planId, period },
+      where: { planId, period, ...adPlatformWhere(platform) },
       orderBy: { position: 'asc' },
       include: {
         designNotes: { orderBy: { createdAt: 'asc' } },
@@ -137,8 +154,12 @@ export async function fetchPeriodPlan(planId: string, period: string) {
   );
   const nowMs = Date.now();
   return {
-    baseBudgetGoal: budget?.baseBudgetGoal ?? null,
-    addedBudgetGoal: budget?.addedBudgetGoal ?? null,
+    // Account budget goals are per-platform: Google reads its own columns, Meta
+    // (and legacy/unspecified) reads the original pair.
+    baseBudgetGoal:
+      (platform === 'google' ? budget?.googleBaseBudgetGoal : budget?.baseBudgetGoal) ?? null,
+    addedBudgetGoal:
+      (platform === 'google' ? budget?.googleAddedBudgetGoal : budget?.addedBudgetGoal) ?? null,
     // Opt-in carryover applied to each bucket's DERIVED spend target (Change 7).
     baseCarryover: budget?.baseCarryover ?? null,
     addedCarryover: budget?.addedCarryover ?? null,
@@ -350,10 +371,20 @@ async function getSiblingAllocations(
   return out;
 }
 
+/** Drop the other platform's ads from a (possibly frozen-snapshot) view payload. */
+function filterViewAdsByPlatform<T extends { ads?: unknown }>(payload: T, platform?: PacerPlatform): T {
+  if (!platform) return payload;
+  const ads = (payload as { ads?: { platform?: string | null }[] }).ads;
+  if (!Array.isArray(ads)) return payload;
+  const keep = (p?: string | null) => (platform === 'google' ? p === 'google' : p !== 'google');
+  return { ...payload, ads: ads.filter((a) => keep(a.platform)) };
+}
+
 export async function getPeriodPlanView(
   accountKey: string,
   period: string,
   userId: string | null,
+  platform?: PacerPlatform,
 ) {
   const plan = await getOrCreatePlan(accountKey);
   const tz = await accountTimeZone(accountKey);
@@ -362,6 +393,22 @@ export async function getPeriodPlanView(
   // ad's card can show its real per-month split. Computed once here so both the
   // live and frozen views carry it.
   const siblingsByName = await getSiblingAllocations(plan.id);
+  // §0.1: markup is a LIVE factor, never part of the frozen historical record.
+  // Resolve it here (Account.markup override, else the agency default) and
+  // override whatever a snapshot baked in — months frozen before markup config
+  // existed (or before this account's markup was set) carry markup=0/undefined,
+  // which would surface every derived target as $0 / $∞ and make the carryover
+  // banner treat the WHOLE spend as the over/under. Re-resolving live keeps the
+  // frozen planner view + the carryover prompt in lockstep with Reconciliation,
+  // which already re-resolves markup the same way.
+  const [account, globalDefaultMarkup] = await Promise.all([
+    prisma.account.findUnique({
+      where: { key: accountKey },
+      select: { markup: true },
+    }),
+    getGlobalDefaultMarkup(),
+  ]);
+  const liveMarkup = accountMarginSetting(account?.markup ?? null, globalDefaultMarkup);
 
   const view = await (async () => {
   if (state === 'closed') {
@@ -370,7 +417,7 @@ export async function getPeriodPlanView(
     });
     if (snap && snap.reopenedAt == null) {
       return {
-        ...reviveSnapshotPayload(snap.payloadJson),
+        ...filterViewAdsByPlatform(reviveSnapshotPayload(snap.payloadJson), platform),
         frozen: true,
         frozenAt: snap.frozenAt.toISOString(),
         monthState: state,
@@ -380,6 +427,8 @@ export async function getPeriodPlanView(
       // Lazy freeze: capture the settled month exactly once, on first view.
       // Two concurrent first-views can race the unique [planId, period]; if we
       // lose, fall back to reading the snapshot the other request created.
+      // The snapshot bakes the FULL month (both platforms); only the returned
+      // view is platform-filtered.
       const payload = await fetchPeriodPlan(plan.id, period);
       try {
         const created = await prisma.metaAdsPacerMonthSnapshot.create({
@@ -391,7 +440,7 @@ export async function getPeriodPlanView(
           },
         });
         return {
-          ...payload,
+          ...filterViewAdsByPlatform(payload, platform),
           frozen: true,
           frozenAt: created.frozenAt.toISOString(),
           monthState: state,
@@ -402,19 +451,24 @@ export async function getPeriodPlanView(
         });
         if (winner && winner.reopenedAt == null) {
           return {
-            ...reviveSnapshotPayload(winner.payloadJson),
+            ...filterViewAdsByPlatform(reviveSnapshotPayload(winner.payloadJson), platform),
             frozen: true,
             frozenAt: winner.frozenAt.toISOString(),
             monthState: state,
           };
         }
         // Reopened in the meantime (or still unreadable) — serve live.
-        return { ...payload, frozen: false, reopened: !!winner, monthState: state };
+        return {
+          ...filterViewAdsByPlatform(payload, platform),
+          frozen: false,
+          reopened: !!winner,
+          monthState: state,
+        };
       }
     }
     // Reopened by an admin — serve live rows so corrections are visible.
     return {
-      ...(await fetchPeriodPlan(plan.id, period)),
+      ...(await fetchPeriodPlan(plan.id, period, platform)),
       frozen: false,
       reopened: true,
       monthState: state,
@@ -422,13 +476,13 @@ export async function getPeriodPlanView(
   }
 
   return {
-    ...(await fetchPeriodPlan(plan.id, period)),
+    ...(await fetchPeriodPlan(plan.id, period, platform)),
     frozen: false,
     monthState: state,
   };
   })();
 
-  return { ...view, siblingsByName };
+  return { ...view, markup: liveMarkup, siblingsByName };
 }
 
 // ─── Carryover (Change 7) ──────────────────────────────────────────────────
@@ -679,7 +733,7 @@ export async function fetchOverview(accountKeys: string[], period: string) {
       : Promise.resolve([]),
     planIds.length > 0
       ? prisma.metaAdsPacerAd.findMany({
-          where: { planId: { in: planIds }, period },
+          where: { planId: { in: planIds }, period, ...adPlatformWhere('meta') },
           orderBy: { position: 'asc' },
           include: {
             designNotes: { orderBy: { createdAt: 'asc' } },
@@ -719,6 +773,12 @@ export async function fetchOverview(accountKeys: string[], period: string) {
         markup: accountMarginSetting(acct.markup, globalDefaultMarkup),
         baseBudgetGoal: budget?.baseBudgetGoal ?? null,
         addedBudgetGoal: budget?.addedBudgetGoal ?? null,
+        // Carryover folded into each source's spend target (target = goal ×
+        // markup + carryover), so the overview's remaining-budget footer can
+        // reconcile against the same target the planner uses instead of the
+        // raw client budget.
+        baseCarryover: budget?.baseCarryover ?? null,
+        addedCarryover: budget?.addedCarryover ?? null,
         notesCount: noteCountByKey.get(acct.key) ?? 0,
         ads: acctAds.map((ad) => ({
           ...ad,
@@ -790,7 +850,7 @@ export async function fetchYearSummary(
       },
     }),
     prisma.metaAdsPacerAd.findMany({
-      where: { planId: { in: planIds }, period: { in: periods } },
+      where: { planId: { in: planIds }, period: { in: periods }, ...adPlatformWhere('meta') },
       select: { period: true, pacerActual: true },
     }),
   ]);
@@ -983,7 +1043,7 @@ export async function getYearReconciliation(
       },
     }),
     prisma.metaAdsPacerAd.findMany({
-      where: { planId: plan.id, period: { in: periods } },
+      where: { planId: plan.id, period: { in: periods }, ...adPlatformWhere('meta') },
       select: {
         period: true,
         name: true,

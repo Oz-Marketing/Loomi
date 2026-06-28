@@ -3,6 +3,11 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
 import type { UserRole } from '@/lib/auth';
+import {
+  ADMIN_VALUE,
+  readActiveAccountCookie,
+  writeActiveAccountCookie,
+} from '@/lib/active-account';
 
 export interface AccountData {
   slug?: string;
@@ -138,6 +143,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
             (userRole === 'admin' && userAccountKeys.length > 0);
           if (!restricted || userAccountKeys.includes(accountParam)) {
             setAccountState({ mode: 'account', accountKey: accountParam });
+            // Persist the handed-off account so it survives reloads and is
+            // shared with the other surfaces.
+            writeActiveAccountCookie(accountParam);
             setInitialized(true);
             params.delete('account');
             const q = params.toString();
@@ -148,6 +156,24 @@ export function AccountProvider({ children }: { children: ReactNode }) {
                 (q ? `?${q}` : '') +
                 window.location.hash,
             );
+            return;
+          }
+        }
+      }
+
+      // Restore the shared active account (cookie) — persists across reloads
+      // and stays in sync across the studio / app / reporting surfaces. An
+      // account key restores account mode (if the role may access it);
+      // ADMIN_VALUE / unset falls through to the role default below.
+      if (typeof window !== 'undefined') {
+        const cookieVal = readActiveAccountCookie();
+        if (cookieVal && cookieVal !== ADMIN_VALUE) {
+          const restricted =
+            (userRole === 'client' && userAccountKeys.length > 0) ||
+            (userRole === 'admin' && userAccountKeys.length > 0);
+          if (!restricted || userAccountKeys.includes(cookieVal)) {
+            setAccountState({ mode: 'account', accountKey: cookieVal });
+            setInitialized(true);
             return;
           }
         }
@@ -203,6 +229,11 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       if (!userAccountKeys.includes(newAccount.accountKey)) return;
     }
     setAccountState(newAccount);
+    // Persist so the selection survives reloads and stays in sync across the
+    // studio / app / reporting surfaces (shared parent-domain cookie).
+    writeActiveAccountCookie(
+      newAccount.mode === 'admin' ? ADMIN_VALUE : newAccount.accountKey,
+    );
   };
 
   const refreshAccounts = useCallback(async () => {

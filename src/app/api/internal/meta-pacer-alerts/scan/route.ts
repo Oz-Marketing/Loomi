@@ -3,6 +3,7 @@ import { requireInternalJobAuth } from '@/lib/internal-jobs';
 import { scanPacerAlerts } from '@/lib/notifications/service';
 import { evaluateAlertRules } from '@/lib/alerts/engine';
 import { refreshLinkedAccountsForAlerts } from '@/lib/alerts/refresh';
+import { reconcileLinkedTaskStatuses, scanTaskDueDates } from '@/lib/services/projects';
 
 /**
  * POST /api/internal/meta-pacer-alerts/scan
@@ -41,10 +42,30 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       engine = { errors: [err instanceof Error ? err.message : 'alert engine failed'] };
     }
+    // Projects: advance tickets whose linked campaign has shipped. Independent
+    // and non-fatal — piggybacks on this daily job so it needs no separate cron.
+    let projects: { advanced: number } | { errors: string[] };
+    try {
+      projects = await reconcileLinkedTaskStatuses();
+    } catch (err) {
+      projects = { errors: [err instanceof Error ? err.message : 'projects reconcile failed'] };
+    }
+    // Projects: due-soon / overdue task pings. Independent + non-fatal.
+    let taskDueDates: { dueSoon: number; overdue: number } | { errors: string[] };
+    try {
+      taskDueDates = await scanTaskDueDates();
+    } catch (err) {
+      taskDueDates = { errors: [err instanceof Error ? err.message : 'task due-date scan failed'] };
+    }
+
     const errorCount =
-      (presync.errors?.length ?? 0) + scan.errors.length + (engine.errors?.length ?? 0);
+      (presync.errors?.length ?? 0) +
+      scan.errors.length +
+      (engine.errors?.length ?? 0) +
+      ('errors' in projects ? projects.errors.length : 0) +
+      ('errors' in taskDueDates ? taskDueDates.errors.length : 0);
     const status = errorCount > 0 ? 207 : 200;
-    return NextResponse.json({ presync, scan, engine }, { status });
+    return NextResponse.json({ presync, scan, engine, projects, taskDueDates }, { status });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to scan pacer alerts';
     return NextResponse.json({ error: message }, { status: 500 });

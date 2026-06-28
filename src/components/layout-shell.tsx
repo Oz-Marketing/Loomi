@@ -207,17 +207,18 @@ function AppShell({ children }: { children: React.ReactNode }) {
 }
 
 /** Which Loomi surface the current request is being rendered for. */
-export type Surface = 'studio' | 'reporting';
+export type Surface = 'studio' | 'reporting' | 'app';
 
 /**
  * Top-level layout shell.
  *
  * AppShell (studio sidebar + utility bar + authed providers) only mounts
  * for studio app routes. We bypass it for:
- *   - the `reporting` surface (host = reporting.*) — determined server-side
- *     in the root layout via the Host header and passed in as `surface`,
- *     since middleware rewrites mean `usePathname()` returns the BROWSER
- *     URL not the rewritten path
+ *   - the `reporting` and `app` surfaces (host = reporting.* / app.*) —
+ *     determined server-side in the root layout via the Host header and
+ *     passed in as `surface`, since middleware rewrites mean
+ *     `usePathname()` returns the BROWSER URL not the rewritten path. Each
+ *     surface's own route-group layout provides its SurfaceShell chrome.
  *   - public unauthenticated routes (`/f/<slug>`, `/lp/<slug>`) — kept on
  *     pathname so behavior is unchanged for those
  *   - the `/reporting/*` pathname when accessed from the studio host (rare
@@ -236,9 +237,11 @@ export function LayoutShell({
   const pathname = usePathname();
   if (
     surface === 'reporting' ||
+    surface === 'app' ||
     pathname.startsWith('/f/') ||
     pathname.startsWith('/lp/') ||
-    pathname.startsWith('/reporting')
+    pathname.startsWith('/reporting') ||
+    pathname.startsWith('/app')
   ) {
     return <>{children}</>;
   }

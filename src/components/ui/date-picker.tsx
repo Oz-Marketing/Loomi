@@ -593,8 +593,9 @@ export function DatePicker(props: DatePickerProps) {
   const triggerLabel = (() => {
     if (isRange) {
       const { start, end } = (props as RangeProps).value;
-      if (start && end) return `${fmtShort(start)} – ${fmtShort(end)}`;
-      if (start) return `${fmtShort(start)} – …`;
+      // A single selected date (only start, or start === end) shows as one date.
+      if (start && end && start !== end) return `${fmtShort(start)} – ${fmtShort(end)}`;
+      if (start) return fmtShort(start);
       return props.placeholder ?? 'Select date range';
     }
     const v = (props as SingleProps).value;

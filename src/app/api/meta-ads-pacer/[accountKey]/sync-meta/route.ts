@@ -77,7 +77,7 @@ export async function POST(
     // After refreshing Meta status/spend, auto-complete any ad past its
     // flight end (Change 11).
     await reconcileCompletedRuns(accountKey, plan.id, period, userId);
-    const view = await getPeriodPlanView(accountKey, period, userId);
+    const view = await getPeriodPlanView(accountKey, period, userId, 'meta');
     const priorOverUnder = view.frozen
       ? null
       : await getPriorOverUnder(accountKey, period, userId);

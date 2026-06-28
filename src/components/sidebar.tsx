@@ -17,7 +17,6 @@ import {
   SunIcon,
   MoonIcon,
   Cog6ToothIcon,
-  MegaphoneIcon,
   ArrowTopRightOnSquareIcon,
   ChartBarSquareIcon,
   ChevronDownIcon,
@@ -28,7 +27,6 @@ import {
   DocumentTextIcon,
   RectangleStackIcon,
   PaperAirplaneIcon,
-  PuzzlePieceIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
@@ -36,8 +34,9 @@ import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { SidebarTooltip, SidebarPopout } from '@/components/sidebar-collapsed-ui';
 import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
 import { FlowIcon } from '@/components/icon-map';
-import { MetaBrandIcon, GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
 import { AccountSwitcher } from '@/components/account-switcher';
+import { SurfaceSwitch } from '@/components/surface-switch';
+import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav';
 import { AppLogo } from '@/components/app-logo';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { accountKeyToSlug, isSubaccountRoute, stripSubaccountPrefix } from '@/lib/account-slugs';
@@ -68,42 +67,9 @@ type NavDivider = { divider: true; label?: string };
 type NavCrosslink = { crosslink: 'reporting'; label: string; icon: IconComponent };
 type NavEntry = NavItem | NavDivider | NavCrosslink;
 
-const toolsNavItem: NavItem = {
-  href: '/tools',
-  label: 'Ad Planning & Pacing',
-  icon: MegaphoneIcon,
-  absolute: true,
-  children: [
-    {
-      // Planner + Pacer consolidated into one page with an in-page
-      // Plan/Pace toggle — a single leaf instead of a Planner/Pacer pair.
-      href: '/tools/meta',
-      label: 'Meta',
-      icon: MetaBrandIcon,
-      badge: true,
-      absolute: true,
-    },
-    {
-      href: '/tools/google',
-      label: 'Google',
-      icon: GoogleAdsBrandIcon,
-      absolute: true,
-      comingSoon: true,
-      children: [
-        {
-          href: '/tools/google/ad-planner',
-          label: 'Ad Planner',
-          absolute: true,
-        },
-        {
-          href: '/tools/google/ad-pacer',
-          label: 'Ad Pacer',
-          absolute: true,
-        },
-      ],
-    },
-  ],
-};
+// Ad Planning & Pacing (Meta/Google) moved to the App surface (app.loomilm.com).
+// Studio `/tools/*` now redirects there via the proxy; the nav entry lives in
+// the App sidebar.
 
 // Campaigns — the AI Campaign Builder: multi-channel campaigns generated
 // (or built manually) and reviewed as one. Distinct from the per-channel
@@ -192,8 +158,6 @@ const adminNavItems: NavEntry[] = [
   flowsNavItem,
   adGeneratorNav,
   mediaNav,
-  { divider: true, label: 'Tools' },
-  toolsNavItem,
 ];
 
 // Admin viewing a sub-account uses the same structure (routes get prefixed at
@@ -297,13 +261,8 @@ export function Sidebar() {
       : '/settings/subaccounts';
 
 
-  // Integrations — jump to the active sub-account's integration settings.
-  const integrationsHref = slug ? `/subaccount/${slug}/settings/integrations` : '/settings/integrations';
-  const integrationsActive = normalizedPath.startsWith('/settings/integrations');
-  // Settings lives in the footer (where the account switcher briefly was);
-  // active on any /settings route except integrations (its own item above).
-  const settingsActive =
-    normalizedPath.startsWith('/settings') && !integrationsActive;
+  // Settings lives in the footer (where the account switcher briefly was).
+  const settingsActive = normalizedPath.startsWith('/settings');
 
   return (
     <SidebarFrame
@@ -317,25 +276,9 @@ export function Sidebar() {
       }
       bottom={
         <>
-          {/* Integrations — quick jump to the active sub-account's integration
-              settings, pinned at the bottom above the footer. */}
-          <div className={`${collapsed ? 'px-2' : 'px-2'} pb-1`}>
-            {(() => {
-              const intLink = (
-                <Link
-                  href={integrationsHref}
-                  className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
-                    integrationsActive
-                      ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
-                      : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
-                  }`}
-                >
-                  <PuzzlePieceIcon className="w-5 h-5" />
-                  {!collapsed && 'Integrations'}
-                </Link>
-              );
-              return collapsed ? <SidebarTooltip label="Integrations">{intLink}</SidebarTooltip> : intLink;
-            })()}
+          {/* Quick switch between Studio and Projects (App). */}
+          <div className="px-2 pb-1">
+            <SurfaceSwitch collapsed={collapsed} />
           </div>
 
           {/* Settings / Theme Toggle */}
@@ -364,7 +307,7 @@ export function Sidebar() {
                   href={settingsHref}
                   className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
                     settingsActive
-                      ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
+                      ? 'bg-[var(--primary)]/10 text-[var(--primary)] font-medium'
                       : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
                   }`}
                 >
@@ -382,7 +325,10 @@ export function Sidebar() {
         </>
       }
     >
-        {resolvedNavItems.map((entry, i) => {
+      {isSettingsPath(normalizedPath) ? (
+        <SettingsNav backHref="/dashboard" backLabel="Back to Studio" collapsed={collapsed} />
+      ) : (
+        resolvedNavItems.map((entry, i) => {
           if ('divider' in entry) {
             if (collapsed) {
               return <div key={`sep-${i}`} className="mx-2 my-2 border-t border-[var(--sidebar-border)]" />;
@@ -484,7 +430,7 @@ export function Sidebar() {
               href={leafHref}
               className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 ${
                 isActive
-                  ? 'bg-[var(--primary)] text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)]'
+                  ? 'bg-[var(--primary)]/10 text-[var(--primary)] font-medium'
                   : 'text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]'
               }`}
             >
@@ -497,7 +443,8 @@ export function Sidebar() {
               {leaf}
             </SidebarTooltip>
           ) : leaf;
-        })}
+        })
+      )}
     </SidebarFrame>
   );
 }

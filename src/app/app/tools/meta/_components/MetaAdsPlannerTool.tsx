@@ -1,15 +1,12 @@
 'use client';
 
 import {
-  createContext,
   Fragment,
   useCallback,
-  useContext,
   useEffect,
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -127,8 +124,6 @@ import {
   sourceTint,
   budgetTypeColor,
   budgetTypeTint,
-  runDateColor,
-  flightElapsedPct,
   adContribution,
   classifyPacerHealth,
 } from '@/lib/ad-pacer/helpers';
@@ -149,31 +144,23 @@ import {
   applyFilters,
   activeFilterCount,
 } from '@/lib/ad-pacer/filters';
+import {
+  PacerReadOnlyContext,
+  usePacerReadOnly,
+  Tooltip,
+  FlightBar,
+  inputClass,
+  readonlyClass,
+  labelClass,
+  DollarInput,
+  Field,
+  AdStatusPill,
+  ApprovalPill,
+  DesignPill,
+} from '@/app/app/tools/_shared';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 // Status/option lists + color maps now live in @/lib/ad-pacer/constants (imported above).
-
-function FlightBar({ ad }: { ad: PacerAd }) {
-  if (!ad.flightStart || !ad.flightEnd) {
-    return <span className="text-xs text-[var(--muted-foreground)]">—</span>;
-  }
-  const pct = flightElapsedPct(ad.flightStart, ad.flightEnd);
-  const color = runDateColor(ad.adStatus);
-  return (
-    <div className="relative h-[22px] min-w-[132px] w-full overflow-hidden rounded-full bg-[var(--muted)]">
-      <div
-        className="absolute inset-y-0 left-0 transition-[width] duration-500"
-        style={{ width: `${pct}%`, background: color }}
-      />
-      <span
-        className="absolute inset-0 flex items-center justify-center px-2 text-[11px] font-semibold whitespace-nowrap text-white"
-        style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
-      >
-        {fmtDate(ad.flightStart)} – {fmtDate(ad.flightEnd)}
-      </span>
-    </div>
-  );
-}
 
 const num = (s: string | null | undefined): number | null => {
   if (s == null || s === '') return null;
@@ -192,224 +179,7 @@ const TODAY_PRESET: DatePreset = {
 };
 
 
-/**
- * Read-only context for the pacer/planner (Change 5). True when the viewed
- * month is frozen, so editable primitives (DollarInput, the ad editor) and
- * mutation buttons disable themselves without prop-threading. The data layer
- * (autosave suppression + server 409 guards) is the real lock; this is the UX.
- */
-const PacerReadOnlyContext = createContext(false);
-const usePacerReadOnly = () => useContext(PacerReadOnlyContext);
-
-/**
- * Loomi tooltip. Wraps any trigger and shows `label` on hover/focus. The bubble
- * is rendered through a portal on document.body and pinned with fixed coords, so
- * it is never clipped by an ancestor's `overflow-hidden` or scroll container —
- * the planner/pacer are full of rounded, clipped cards, bars and tables. The
- * wrapper is a bare `inline-flex` (no `relative`), so a passed-in `className`
- * may freely position it (`absolute …` corner buttons) or shape it (flex/grid
- * bar segments via `className`/`style`). `placement` puts the bubble above
- * (default) or below the trigger.
- */
-function Tooltip({
-  label,
-  placement = 'top',
-  className = '',
-  style,
-  children,
-}: {
-  label: ReactNode;
-  placement?: 'top' | 'bottom';
-  className?: string;
-  style?: CSSProperties;
-  children?: ReactNode;
-}) {
-  const ref = useRef<HTMLSpanElement>(null);
-  const [coords, setCoords] = useState<{ left: number; top: number } | null>(
-    null,
-  );
-
-  const place = useCallback(() => {
-    const el = ref.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    setCoords({
-      left: r.left + r.width / 2,
-      top: placement === 'bottom' ? r.bottom + 6 : r.top - 6,
-    });
-  }, [placement]);
-
-  const hide = useCallback(() => setCoords(null), []);
-
-  // Dismiss on scroll/resize rather than re-pinning. The planner scrolls under a
-  // fixed cursor, so icons drift beneath the pointer and fire mouseenter on each
-  // one in turn; re-pinning would keep every one of them alive as a trail of
-  // stuck tooltips. Closing on scroll keeps the tooltip strictly hover-only —
-  // it reappears only on a fresh hover once scrolling stops.
-  useEffect(() => {
-    if (!coords) return;
-    window.addEventListener('scroll', hide, true);
-    window.addEventListener('resize', hide);
-    return () => {
-      window.removeEventListener('scroll', hide, true);
-      window.removeEventListener('resize', hide);
-    };
-  }, [coords, hide]);
-
-  return (
-    <span
-      ref={ref}
-      className={`inline-flex ${className}`.trim()}
-      style={style}
-      onMouseEnter={place}
-      onMouseLeave={hide}
-      onFocus={place}
-      onBlur={hide}
-    >
-      {children}
-      {coords &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <span
-            role="tooltip"
-            style={{
-              position: 'fixed',
-              left: coords.left,
-              top: coords.top,
-              transform:
-                placement === 'bottom'
-                  ? 'translate(-50%, 0)'
-                  : 'translate(-50%, -100%)',
-            }}
-            className="pointer-events-none z-[1000] w-max max-w-[340px] whitespace-normal text-center rounded-md border border-[var(--border)] bg-[var(--card-strong)] px-2.5 py-1.5 text-[10px] font-medium leading-snug text-[var(--foreground)] shadow-lg backdrop-blur-sm"
-          >
-            {label}
-          </span>,
-          document.body,
-        )}
-    </span>
-  );
-}
-
-// ─── Shared input chrome ───────────────────────────────────────────────────
-const inputClass =
-  'w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] bg-[var(--input)] focus:outline-none focus:border-[var(--primary)] text-[var(--foreground)]';
-// Drop-in for places where we render a value inside a Field but the field
-// is read-only (computed totals, "N/A" placeholders, etc.). Borderless +
-// transparent bg + muted text + no horizontal padding so the value sits
-// flush with the Field's label, not indented like an editable input.
-const readonlyClass =
-  'w-full py-2 text-sm bg-transparent text-[var(--muted-foreground)] cursor-default';
-const labelClass =
-  'block text-[10px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5';
-
 // ─── Atomic UI ─────────────────────────────────────────────────────────────
-
-function DollarInput({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string | null;
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
-  const readOnly = usePacerReadOnly();
-  const hasValue = value != null && value !== '';
-  return (
-    <div className="relative">
-      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-[var(--muted-foreground)] pointer-events-none">
-        $
-      </span>
-      <input
-        type="text"
-        inputMode="decimal"
-        value={value ?? ''}
-        disabled={readOnly}
-        onChange={(e) => {
-          const v = e.target.value;
-          // Accept only digits + a single decimal point. Reject anything else
-          // so the field stays numeric without using <input type="number">
-          // (which adds the spinner arrows we want gone).
-          if (v === '' || /^\d*\.?\d*$/.test(v)) onChange(v);
-        }}
-        placeholder={placeholder ?? '0.00'}
-        className={`${inputClass} pl-6 ${hasValue && !readOnly ? 'pr-8' : ''} ${readOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-      />
-      {hasValue && !readOnly && (
-        <Tooltip
-          label="Clear"
-          className="absolute right-2 top-1/2 -translate-y-1/2"
-        >
-          <button
-            type="button"
-            onClick={() => onChange('')}
-            aria-label="Clear amount"
-            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-          >
-            <XMarkIcon className="w-3.5 h-3.5" />
-          </button>
-        </Tooltip>
-      )}
-    </div>
-  );
-}
-
-function Field({ label, color, children }: { label: string; color?: string; children: ReactNode }) {
-  return (
-    <div>
-      <label className={labelClass} style={color ? { color } : undefined}>
-        {label}
-      </label>
-      {children}
-    </div>
-  );
-}
-
-/**
- * Status color tables: [bg, fg] pairs used by AdStatusPill, the StatusSelect
- * dropdown's colored options, and the StatusBattery overview bar. Adding a
- * status here automatically tints it everywhere it's rendered.
- */
-// Design statuses use the same solid bg + white text family as ad statuses
-// and approval pills so the three sit together visually as one signal set.
-function AdStatusPill({ status }: { status: string }) {
-  const [bg, color] = AD_STATUS_COLORS[status] ?? ['var(--muted)', 'var(--muted-foreground)'];
-  return (
-    <span
-      className="inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded whitespace-nowrap"
-      style={{ background: bg, color }}
-    >
-      {status || '—'}
-    </span>
-  );
-}
-
-function ApprovalPill({ status }: { status: string }) {
-  const [bg, color] =
-    APPROVAL_STATUS_COLORS[status] ?? ['var(--muted)', 'var(--muted-foreground)'];
-  return (
-    <span
-      className="inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded whitespace-nowrap"
-      style={{ background: bg, color }}
-    >
-      {status || '—'}
-    </span>
-  );
-}
-
-function DesignPill({ status }: { status: string }) {
-  const [bg, color] =
-    DESIGN_STATUS_COLORS[status] ?? ['var(--muted)', 'var(--muted-foreground)'];
-  return (
-    <span
-      className="inline-block text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded whitespace-nowrap"
-      style={{ background: bg, color }}
-    >
-      {status || '—'}
-    </span>
-  );
-}
 
 /**
  * Monday-style status dropdown. The trigger renders the current value as a

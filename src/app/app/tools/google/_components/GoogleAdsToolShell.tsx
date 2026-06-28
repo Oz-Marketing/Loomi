@@ -102,13 +102,20 @@ const COLORS = {
   error: '#ef4444',
 };
 
-// Same palette + pill chrome as Meta's AdStatusPill.
+// Identical palette + pill chrome to Meta's AdStatusPill (full map).
 const AD_STATUS_COLORS: Record<string, [string, string]> = {
   Live: ['#22c55e', '#ffffff'],
+  'Ready- Pending Approval': ['#0ea5e9', '#ffffff'],
+  'In Draft': ['#6b7280', '#ffffff'],
   Scheduled: ['#f59e0b', '#ffffff'],
+  'Live - Changes Required': ['#a78bfa', '#ffffff'],
+  'Pending Design': ['#ec4899', '#ffffff'],
   'Completed Run': ['#16a34a', '#ffffff'],
   Off: ['#14b8a6', '#ffffff'],
-  'In Draft': ['#6b7280', '#ffffff'],
+  'Waiting on Rep': ['#eab308', '#ffffff'],
+  'Working on it': ['#f97316', '#ffffff'],
+  Stuck: ['#ef4444', '#ffffff'],
+  'Budget Adjustment': ['#06b6d4', '#ffffff'],
 };
 
 function AdStatusPill({ status }: { status: string }) {
@@ -365,69 +372,9 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         dealer={accountData?.dealer ?? accountKey}
         accountKey={accountKey}
         logos={accountData?.logos ?? null}
+        period={period}
+        onShiftPeriod={(d) => setPeriod((p) => shiftPeriod(p, d))}
       />
-
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] p-0.5">
-          <button
-            type="button"
-            onClick={() => setPeriod((p) => shiftPeriod(p, -1))}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[var(--muted-foreground)] hover:bg-[var(--muted)]"
-            aria-label="Previous month"
-          >
-            <ChevronLeftIcon className="h-4 w-4" />
-          </button>
-          <span className="min-w-[8.5rem] text-center text-sm font-medium">{periodLabel(period)}</span>
-          <button
-            type="button"
-            onClick={() => setPeriod((p) => shiftPeriod(p, 1))}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[var(--muted-foreground)] hover:bg-[var(--muted)]"
-            aria-label="Next month"
-          >
-            <ChevronRightIcon className="h-4 w-4" />
-          </button>
-        </div>
-
-        <div className="flex-1" />
-
-        {connected && (
-          <button
-            type="button"
-            onClick={() => setImportOpen(true)}
-            disabled={frozen}
-            title={
-              frozen
-                ? 'This month is frozen — reopen it to import'
-                : 'Bring existing Google campaigns into this month as rows'
-            }
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--muted-foreground)] transition hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <GoogleAdsBrandIcon className="h-4 w-4" />
-            Import campaigns
-          </button>
-        )}
-        {connected && (
-          <button
-            type="button"
-            onClick={syncFromGoogle}
-            disabled={syncing || frozen}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--muted-foreground)] transition hover:text-[var(--foreground)] disabled:opacity-50"
-          >
-            <ArrowPathIcon className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-            Sync from Google
-          </button>
-        )}
-        {!frozen && (
-          <button
-            type="button"
-            onClick={() => setEditing('new')}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[var(--primary)] px-3.5 py-2 text-sm font-medium text-white shadow-[0_2px_8px_rgba(59,130,246,0.3)] transition hover:opacity-90"
-          >
-            <PlusIcon className="h-4 w-4" />
-            Add campaign
-          </button>
-        )}
-      </div>
 
       {!connected && (
         <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 px-4 py-2.5 text-xs text-[var(--muted-foreground)]">
@@ -476,7 +423,55 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         </div>
       </div>
 
-      <div className="mt-6 -mx-6 overflow-x-auto px-6 md:-mx-8 md:px-8">
+      {/* Action row above the table (mirrors Meta's Ad Plan header + CTAs). */}
+      <div className="mt-8 mb-3 flex flex-wrap items-center justify-between gap-3">
+        <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
+          Campaigns · {periodLabel(period)}{' '}
+          <span className="font-normal text-[var(--muted-foreground)]">({ads.length})</span>
+        </span>
+        <div className="flex items-center gap-2">
+          {connected && (
+            <button
+              type="button"
+              onClick={syncFromGoogle}
+              disabled={syncing || frozen}
+              title="Sync actual spend from Google"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
+              aria-label="Sync from Google"
+            >
+              <ArrowPathIcon className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+            </button>
+          )}
+          {connected && (
+            <button
+              type="button"
+              onClick={() => setImportOpen(true)}
+              disabled={frozen}
+              title={
+                frozen
+                  ? 'This month is frozen — reopen it to import'
+                  : 'Bring existing Google campaigns into this month as rows'
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <GoogleAdsBrandIcon className="h-3.5 w-3.5" />
+              Import campaigns
+            </button>
+          )}
+          {!frozen && (
+            <button
+              type="button"
+              onClick={() => setEditing('new')}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-[var(--primary)]/90"
+            >
+              <PlusIcon className="h-3.5 w-3.5" />
+              Add campaign
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="-mx-6 overflow-x-auto px-6 md:-mx-8 md:px-8">
         <table className="w-full min-w-[900px]">
           <thead className="sticky top-0 z-10">
             <tr className="border-b border-[var(--border)] bg-[var(--muted)]">
@@ -545,52 +540,92 @@ function Header({
   dealer,
   accountKey,
   logos,
+  period,
+  onShiftPeriod,
 }: {
   mode: 'plan' | 'pace';
   onMode: (m: 'plan' | 'pace') => void;
   dealer: string | null;
   accountKey: string | null;
   logos: PacerLogos;
+  period?: string;
+  onShiftPeriod?: (delta: number) => void;
 }) {
   return (
-    <div className="flex items-start justify-between gap-4 pt-2">
-      <div className="flex items-center gap-3">
-        {accountKey && dealer ? (
-          <AccountAvatar
-            name={dealer}
-            accountKey={accountKey}
-            logos={logos ?? undefined}
-            size={40}
-            className="flex-shrink-0 rounded-xl border border-[var(--border)]"
-          />
-        ) : (
-          <GoogleAdsBrandIcon className="h-9 w-9" />
-        )}
-        <div>
-          <h1 className="text-xl font-semibold text-[var(--foreground)]">{dealer ?? 'Google Ads'}</h1>
-          <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">
-            {mode === 'plan'
-              ? 'Plan & allocate Google campaign budgets'
-              : 'Track Google spend pacing across the month'}
-          </p>
+    <div className="page-sticky-header mb-6">
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
+        {/* Left: title */}
+        <div className="flex min-w-0 items-center gap-3">
+          {accountKey && dealer ? (
+            <AccountAvatar
+              name={dealer}
+              accountKey={accountKey}
+              logos={logos ?? undefined}
+              size={40}
+              className="flex-shrink-0 rounded-xl border border-[var(--border)]"
+            />
+          ) : (
+            <GoogleAdsBrandIcon className="h-8 w-8 flex-shrink-0" />
+          )}
+          <div className="min-w-0">
+            <h2 className="truncate text-2xl font-bold text-[var(--foreground)]">
+              {dealer ?? 'Google Ads'}
+            </h2>
+            <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">
+              {mode === 'plan'
+                ? 'Plan & allocate Google campaign budgets'
+                : 'Track Google spend pacing across the month'}
+            </p>
+          </div>
         </div>
-      </div>
-      <div className="inline-flex flex-shrink-0 items-center gap-0.5 rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 p-0.5">
-        {(['plan', 'pace'] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            onClick={() => onMode(m)}
-            aria-pressed={mode === m}
-            className={`rounded-lg px-3 py-1 text-xs font-medium transition ${
-              mode === m
-                ? 'bg-[var(--background)] text-[var(--foreground)] shadow-sm'
-                : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-            }`}
-          >
-            {m === 'plan' ? 'Plan' : 'Pace'}
-          </button>
-        ))}
+
+        {/* Center: Plan / Pace switch */}
+        <div className="flex justify-center">
+          <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
+            {(['plan', 'pace'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => onMode(m)}
+                aria-pressed={mode === m}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  mode === m
+                    ? 'bg-[var(--primary)] text-white'
+                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                {m === 'plan' ? 'Plan' : 'Pace'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Right: month nav */}
+        <div className="flex items-center justify-end gap-3">
+          {period && onShiftPeriod && (
+            <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
+              <button
+                type="button"
+                onClick={() => onShiftPeriod(-1)}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted-foreground)] hover:bg-[var(--muted)]"
+                aria-label="Previous month"
+              >
+                <ChevronLeftIcon className="h-4 w-4" />
+              </button>
+              <span className="min-w-[8.5rem] text-center text-sm font-medium">
+                {periodLabel(period)}
+              </span>
+              <button
+                type="button"
+                onClick={() => onShiftPeriod(1)}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--muted-foreground)] hover:bg-[var(--muted)]"
+                aria-label="Next month"
+              >
+                <ChevronRightIcon className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

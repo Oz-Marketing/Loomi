@@ -99,6 +99,15 @@ import {
   effectiveActual,
   effectiveTarget,
 } from '@/lib/ad-pacer/pacer-calc';
+import type {
+  DirectoryUser,
+  ActivityEntry,
+  PacerAd,
+  PacerPlan,
+  PriorOverUnder,
+  PeriodSummary,
+  SaveStatus,
+} from '@/lib/ad-pacer/types';
 import { effectiveSpendTarget } from '@/lib/ad-pacer/markup';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
@@ -342,136 +351,6 @@ function budgetTypeTint(t: string): string {
   return t === 'Lifetime' ? 'rgba(167,139,250,0.18)' : 'rgba(234,179,8,0.18)';
 }
 
-// ─── Types ─────────────────────────────────────────────────────────────────
-interface DirectoryUser {
-  id: string;
-  name: string;
-  title: string | null;
-  email: string;
-  avatarUrl: string | null;
-  role: string;
-  department: string | null;
-  accountKeys?: string[];
-}
-interface DesignNote {
-  id: string;
-  text: string;
-  createdAt: string;
-  authorUserId: string | null;
-}
-interface ActivityEntry {
-  id: string;
-  text: string;
-  createdAt: string;
-  authorUserId: string | null;
-  attachmentKey: string | null;
-  attachmentFilename: string | null;
-  attachmentMimeType: string | null;
-  attachmentSize: number | null;
-  attachmentUrl: string | null;
-}
-interface PacerAd {
-  id: string;
-  position: number;
-  name: string;
-  period: string;
-  ownerUserId: string | null;
-  designerUserId: string | null;
-  accountRepUserId: string | null;
-  actionNeeded: string | null;
-  recurring: string;
-  coop: string;
-  budgetType: 'Daily' | 'Lifetime';
-  budgetSource: 'base' | 'added' | 'split';
-  // When budgetSource === 'split', this is the dollar portion of
-  // `allocation` drawn from the Base pool. The Added portion is the
-  // remainder (allocation − splitBaseAmount). pacerActual apportions
-  // proportionally so both pools' over/under math stays accurate.
-  splitBaseAmount: string | null;
-  flightStart: string | null;
-  flightEnd: string | null;
-  liveDate: string | null;
-  creativeDueDate: string | null;
-  dueDate: string | null;
-  dateCompleted: string | null;
-  adStatus: string;
-  designStatus: string;
-  internalApproval: string;
-  clientApproval: string;
-  allocation: string | null;
-  pacerActual: string | null;
-  pacerDailyBudget: string | null;
-  pacerTodayDate: string | null;
-  pacerEndDate: string | null;
-  creativeLink: string | null;
-  clientName: string | null;
-  digitalDetails: string | null;
-  // Facebook (Meta) sync — server-managed, mirror of _lib/types.ts PacerAd.
-  metaObjectType: string | null;
-  metaObjectId: string | null;
-  metaEffectiveStatus: string | null;
-  pacerSyncedAt: string | null;
-  /** Full-run (all-time) spend across the ad set's whole flight; informational. */
-  pacerRunSpend: string | null;
-  // §2a/§2b cross-month resolution (server-managed, survives sync) — mirror of
-  // _lib/types.ts PacerAd.
-  fullRunAppliedToMonth: string | null;
-  lifetimeMonthSplit: string | null;
-  metaStartDate: string | null;
-  metaEndDate: string | null;
-  alertsMuted: boolean;
-  designNotes: DesignNote[];
-  activityLog: ActivityEntry[];
-}
-interface PacerPlan {
-  accountKey: string;
-  period: string;
-  baseBudgetGoal: string | null;
-  addedBudgetGoal: string | null;
-  // Per-account markup override (Account.markup). `null` → use the
-  // the agency default markup. Drives the Budget Calculator's Client Budget
-  // mode (gross × markup = actual spend).
-  markup: number | null;
-  // Resolved IANA zone for pacing math (Meta ad-account zone → valid stored
-  // zone → DEFAULT_TIME_ZONE). Always present; the server resolves it.
-  timeZone: string;
-  // Live-vs-frozen month model (Change 5). A frozen month is a closed-month
-  // immutable snapshot: read-only, no autosave, no sync until an admin reopens.
-  // `reopened` = a closed month an admin unlocked for correction (editable
-  // again, with the original snapshot preserved) until it's re-frozen.
-  frozen: boolean;
-  frozenAt: string | null;
-  reopened: boolean;
-  // Carryover applied to each bucket's derived spend target (Change 7), in
-  // actual-spend dollars. null = none. Never affects the typed budget goal.
-  baseCarryover: string | null;
-  addedCarryover: string | null;
-  // The prior month's settled over/under, for the carryover prompt. null when
-  // the prior month isn't closed yet or this month is frozen.
-  priorOverUnder: PriorOverUnder | null;
-  ads: PacerAd[];
-  // #58: same-title rows' planned (allocation) + in-month actual across every
-  // period, keyed by ad name → period. Lets a lifetime ad's card render its real
-  // cross-month split from the per-month rows the user planned, instead of an
-  // even split. Only names present in 2+ periods are included.
-  siblingsByName?: Record<string, Record<string, { allocation: number; actual: number }>>;
-}
-
-interface PriorOverUnder {
-  period: string;
-  clientBudget: number;
-  spendTarget: number;
-  actual: number;
-  variance: number; // actual − spendTarget (negative = underspent)
-  carryover: number; // −variance: +ve = spend this much more next month
-  exceedsThreshold: boolean;
-}
-interface PeriodSummary {
-  period: string;
-  adCount: number;
-}
-
-type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 const fmt = (val: number | string | null | undefined): string => {

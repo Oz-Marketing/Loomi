@@ -77,7 +77,21 @@ import {
   type DatePreset,
 } from '@/components/ui/date-picker';
 import { DEFAULT_TIME_ZONE } from '@/lib/timezone';
-import { CARRYOVER_THRESHOLD } from '@/lib/ad-pacer/constants';
+import {
+  CARRYOVER_THRESHOLD,
+  COLORS,
+  AD_COLORS,
+  AD_STATUSES,
+  DESIGN_STATUSES,
+  APPROVAL_STATUSES,
+  ACTION_NEEDED,
+  RECURRING_OPTS,
+  COOP_OPTS,
+  AD_STATUS_COLORS,
+  DESIGN_STATUS_COLORS,
+  APPROVAL_STATUS_COLORS,
+  PACER_ACTIVITY_MAX_UPLOAD_BYTES,
+} from '@/lib/ad-pacer/constants';
 import {
   buildAdCalc,
   buildPacerCalc,
@@ -88,54 +102,7 @@ import {
 import { effectiveSpendTarget } from '@/lib/ad-pacer/markup';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
-const AD_STATUSES = [
-  'Ready- Pending Approval',
-  'Live',
-  'Stuck',
-  'In Draft',
-  'Live - Changes Required',
-  'Pending Design',
-  'Completed Run',
-  'Off',
-  'Waiting on Rep',
-  'Scheduled',
-  'Working on it',
-  'Budget Adjustment',
-];
-const DESIGN_STATUSES = [
-  'Work In Progress',
-  'Approved',
-  'Stuck',
-  'Revisions Needed',
-  'Not Started',
-  'In Proofing/Pending Approval',
-  'N/A',
-];
-const APPROVAL_STATUSES = [
-  'Pending Approval',
-  'Approved',
-  'Does Not Approve',
-  'Changes Requested',
-];
-const ACTION_NEEDED = [
-  'Extending Ad',
-  'Create New',
-  'Updating Recurring Ad',
-  'Update Existing Ad',
-];
-const RECURRING_OPTS = ['Yes', 'No', 'Unknown'];
-const COOP_OPTS = ['Yes', 'No', 'Unknown'];
-
-const COLORS = {
-  daily: '#38bdf8',
-  lifetime: '#a78bfa',
-  base: '#38bdf8',
-  added: '#34d399',
-  split: '#f472b6',
-  success: '#22c55e',
-  warn: '#f59e0b',
-  error: '#ef4444',
-};
+// Status/option lists + color maps now live in @/lib/ad-pacer/constants (imported above).
 
 /**
  * Bare fractional-days number for display — 2 decimals so a partial first/last
@@ -274,17 +241,6 @@ function classifyPacerHealth(
     short: 'On track',
   };
 }
-
-const AD_COLORS = [
-  '#38bdf8',
-  '#a78bfa',
-  '#34d399',
-  '#fb923c',
-  '#f472b6',
-  '#facc15',
-  '#60a5fa',
-  '#4ade80',
-];
 
 // §0.1: the client never holds a markup literal. The server resolves the
 // per-account factor (Account.markup override, else the agency default) and
@@ -659,7 +615,6 @@ function makeAd(position: number, period: string): PacerAd {
   };
 }
 
-const PACER_ACTIVITY_MAX_UPLOAD_BYTES = 25 * 1024 * 1024; // mirror the API limit (25 MB)
 function fmtBytes(n: number | null | undefined): string {
   if (n == null || isNaN(n)) return '';
   if (n < 1024) return `${n} B`;
@@ -1022,43 +977,6 @@ function Field({ label, color, children }: { label: string; color?: string; chil
  */
 // Design statuses use the same solid bg + white text family as ad statuses
 // and approval pills so the three sit together visually as one signal set.
-const DESIGN_STATUS_COLORS: Record<string, [string, string]> = {
-  Approved: ['#22c55e', '#ffffff'],
-  'Work In Progress': ['#fb923c', '#ffffff'],
-  Stuck: ['#ef4444', '#ffffff'],
-  'Revisions Needed': ['#facc15', '#ffffff'],
-  'Not Started': ['var(--muted)', 'var(--muted-foreground)'],
-  'In Proofing/Pending Approval': ['#0ea5e9', '#ffffff'],
-  'N/A': ['var(--muted)', 'var(--muted-foreground)'],
-};
-
-// Internal & client approval pills share the same solid bg + white text
-// treatment as ad statuses so the two read as the same family of signal.
-const APPROVAL_STATUS_COLORS: Record<string, [string, string]> = {
-  Approved: ['#22c55e', '#ffffff'],
-  'Pending Approval': ['#f59e0b', '#ffffff'],
-  'Does Not Approve': ['#ef4444', '#ffffff'],
-  'Changes Requested': ['#0ea5e9', '#ffffff'],
-};
-
-// Solid bg + white text for ad statuses (Monday-style "filled" tags).
-// DESIGN_STATUS_COLORS stays translucent — saturation there is reserved for
-// non-primary signals.
-const AD_STATUS_COLORS: Record<string, [string, string]> = {
-  Live: ['#22c55e', '#ffffff'],
-  'Ready- Pending Approval': ['#0ea5e9', '#ffffff'],
-  'In Draft': ['#6b7280', '#ffffff'],
-  Scheduled: ['#f59e0b', '#ffffff'],
-  'Live - Changes Required': ['#a78bfa', '#ffffff'],
-  'Pending Design': ['#ec4899', '#ffffff'],
-  'Completed Run': ['#16a34a', '#ffffff'],
-  Off: ['#14b8a6', '#ffffff'],
-  'Waiting on Rep': ['#eab308', '#ffffff'],
-  'Working on it': ['#f97316', '#ffffff'],
-  Stuck: ['#ef4444', '#ffffff'],
-  'Budget Adjustment': ['#06b6d4', '#ffffff'],
-};
-
 function AdStatusPill({ status }: { status: string }) {
   const [bg, color] = AD_STATUS_COLORS[status] ?? ['var(--muted)', 'var(--muted-foreground)'];
   return (

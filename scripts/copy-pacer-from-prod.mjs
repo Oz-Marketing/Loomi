@@ -83,6 +83,24 @@ function fail(msg) {
   process.exit(1);
 }
 
+/** Pool with SSL enabled when the URL asks for it (DO managed DB = sslmode=require;
+ *  its CA isn't in the system store, so don't verify the chain). Local/staging
+ *  (no sslmode) connects without SSL. */
+function makePool(url) {
+  let sslmode = null;
+  try {
+    sslmode = new URL(url).searchParams.get('sslmode');
+  } catch {
+    /* ignore */
+  }
+  const needSsl = sslmode && !['disable', 'allow'].includes(sslmode);
+  return new Pool({
+    connectionString: url,
+    max: 4,
+    ...(needSsl ? { ssl: { rejectUnauthorized: false } } : {}),
+  });
+}
+
 if (!PROD_URL) fail('PROD_DATABASE_URL is not set (the source / production DB).');
 if (!TARGET_URL) fail('DATABASE_URL is not set (the target — should be staging).');
 if (PROD_URL === TARGET_URL) fail('PROD_DATABASE_URL and DATABASE_URL are identical — refusing to run.');
@@ -169,8 +187,8 @@ async function main() {
   log('  mode:            ' + (APPLY ? 'APPLY (will write)' : 'DRY RUN (no writes)'));
   log('');
 
-  const prod = new Pool({ connectionString: PROD_URL, max: 4 });
-  const target = new Pool({ connectionString: TARGET_URL, max: 4 });
+  const prod = makePool(PROD_URL);
+  const target = makePool(TARGET_URL);
 
   try {
     // ── Read everything from prod ──

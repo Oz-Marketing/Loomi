@@ -27,3 +27,9 @@ export { StatusBattery } from './StatusBattery';
 export { CollapsibleSection } from './CollapsibleSection';
 export { BudgetTypeToggle, BudgetSourceToggle } from './toggles';
 export { UserPicker } from './UserPicker';
+export {
+  BudgetPanel,
+  TotalAllocationHeader,
+  EmptyPeriodState,
+  AddPlanButton,
+} from './budget-panels';

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import useSWR from 'swr';
 import {
@@ -8,10 +8,10 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   PlusIcon,
-  TrashIcon,
   MagnifyingGlassIcon,
   CheckIcon,
   XMarkIcon,
+  InformationCircleIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -22,45 +22,25 @@ import { UserPicker, type UserPickerUser } from '@/components/user-picker';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { toast } from '@/lib/toast';
 import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
-import type { PacerAd } from '@/lib/ad-pacer/types';
+import type { PacerAd, PacerPlan } from '@/lib/ad-pacer/types';
+import { makeAd, fmtDate } from '@/lib/ad-pacer/helpers';
+import { COLORS as SHARED_COLORS } from '@/lib/ad-pacer/constants';
+import {
+  PacerReadOnlyContext,
+  BudgetPanel,
+  TotalAllocationHeader,
+  AdSummaryRow,
+  PacerRow,
+  Tooltip,
+} from '@/app/app/tools/_shared';
 
 // ── Reference data ──
 const CHANNELS = ['Search', 'Display', 'Video', 'Shopping', 'PMax'] as const;
-const CHANNEL_COLOR: Record<string, string> = {
-  Search: '#4285F4',
-  Display: '#0F9D58',
-  Video: '#DB4437',
-  Shopping: '#F4B400',
-  PMax: '#A142F4',
-};
 const STATUSES = ['Live', 'Scheduled', 'Completed Run', 'Off', 'In Draft'] as const;
 const BUDGET_TYPES = ['Daily', 'Lifetime'] as const;
 
 type PacerLogos = { light?: string; dark?: string; white?: string; black?: string } | null;
 
-type GoogleAd = {
-  id?: string;
-  name: string;
-  googleChannelType: string | null;
-  adStatus: string;
-  budgetType: string;
-  budgetSource: string;
-  allocation: string | null;
-  pacerActual: string | null;
-  pacerDailyBudget: string | null;
-  flightStart: string | null;
-  flightEnd: string | null;
-  googleCampaignId?: string | null;
-};
-
-type PlanView = {
-  ads: GoogleAd[];
-  timeZone: string;
-  frozen?: boolean;
-  markup?: number;
-  baseBudgetGoal?: string | null;
-  addedBudgetGoal?: string | null;
-};
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
@@ -75,7 +55,6 @@ async function readJsonSafe(res: Response): Promise<Record<string, unknown>> {
   }
 }
 const money = (n: number) => `$${n.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-const num = (s: string | null | undefined) => (s == null || s === '' ? 0 : Number(s) || 0);
 
 function currentPeriod(): string {
   const d = new Date();
@@ -91,16 +70,6 @@ function periodLabel(period: string): string {
   return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
 }
 
-// ── Meta-matched visual language (mirrors MetaAdsPlannerTool) ──
-const COLORS = {
-  daily: '#38bdf8',
-  lifetime: '#a78bfa',
-  base: '#38bdf8',
-  added: '#34d399',
-  success: '#22c55e',
-  warn: '#f59e0b',
-  error: '#ef4444',
-};
 
 // Identical palette + pill chrome to Meta's AdStatusPill (full map).
 const AD_STATUS_COLORS: Record<string, [string, string]> = {
@@ -131,68 +100,43 @@ function AdStatusPill({ status }: { status: string }) {
 }
 
 // Budget type / source tag styling (mirrors Meta's row tags).
-const budgetTypeTint = (t: string) =>
-  t === 'Lifetime' ? 'rgba(167,139,250,0.18)' : 'rgba(56,189,248,0.18)';
-const budgetTypeColor = (t: string) => (t === 'Lifetime' ? COLORS.lifetime : COLORS.daily);
-const sourceTint = (s: string) =>
-  s === 'added' ? 'rgba(52,211,153,0.18)' : 'rgba(56,189,248,0.18)';
-const sourceColor = (s: string) => (s === 'added' ? COLORS.added : COLORS.base);
 
-// Flight progress bar — status-colored (mirrors Meta's FlightBar).
-function runDateColor(status: string): string {
-  if (status === 'Completed Run') return COLORS.success;
-  if (status === 'Off' || status === 'In Draft') return '#9ca3af';
-  return status === 'Live' || status === 'Scheduled' ? COLORS.daily : COLORS.error;
-}
-function flightElapsedPct(start: string, end: string): number {
-  const s = new Date(start).getTime();
-  const e = new Date(end).getTime();
-  if (!(e > s)) return 0;
-  return Math.max(0, Math.min(100, ((Date.now() - s) / (e - s)) * 100));
-}
-function FlightBar({
-  start,
-  end,
-  status,
-}: {
-  start: string | null;
-  end: string | null;
-  status: string;
-}) {
-  if (!start || !end) return <span className="text-xs text-[var(--muted-foreground)]">—</span>;
-  const pct = flightElapsedPct(start, end);
+// Google-specific slots injected into the shared <PacerRow> (mirrors Meta's
+// MetaSyncInfo / link picker). Read google* fields instead of meta* ones.
+function GoogleSyncInfo({ ad, timeZone }: { ad: PacerAd; timeZone: string }) {
+  if (!ad.googleCampaignId || (!ad.googleStartDate && !ad.googleEndDate)) return null;
+  const effectiveEnd = buildPacerCalc(ad, Date.now(), timeZone).effectiveEnd;
+  const parts: string[] = [
+    `Google run: ${ad.googleStartDate ? fmtDate(ad.googleStartDate) : '—'} → ${
+      ad.googleEndDate ? fmtDate(ad.googleEndDate) : 'ongoing'
+    }`,
+  ];
+  if (effectiveEnd && (!ad.googleEndDate || ad.googleEndDate > effectiveEnd)) {
+    parts.push(`Paced to ${fmtDate(effectiveEnd)} (month end)`);
+  }
   return (
-    <div className="relative h-[22px] min-w-[132px] w-full overflow-hidden rounded-full bg-[var(--muted)]">
-      <div
-        className="absolute inset-y-0 left-0 transition-[width] duration-500"
-        style={{ width: `${pct}%`, background: runDateColor(status) }}
-      />
-      <span
-        className="absolute inset-0 flex items-center justify-center whitespace-nowrap px-2 text-[11px] font-semibold text-white"
-        style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
-      >
-        {start.slice(5)} – {end.slice(5)}
+    <Tooltip label={parts.join(' · ')} placement="top">
+      <span className="inline-flex flex-shrink-0 items-center text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+        <InformationCircleIcon className="w-4 h-4" />
       </span>
-    </div>
+    </Tooltip>
   );
 }
 
-// Spend pacing bar — same chrome as FlightBar (mirrors Meta's pacing bars).
-function PacingBar({ spent, budget }: { spent: number; budget: number }) {
-  const pct = budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
+// Read-only link status for the PacerRow's link slot. Google campaigns are
+// linked at import time (no manual ad-set picker like Meta), so this just
+// reflects the connection state.
+function GoogleLinkBadge({ ad }: { ad: PacerAd }) {
+  if (!ad.googleCampaignId) {
+    return (
+      <span className="text-[11px] text-[var(--muted-foreground)]">Not linked to Google</span>
+    );
+  }
   return (
-    <div className="relative h-[22px] min-w-[132px] w-full overflow-hidden rounded-full bg-[var(--muted)]">
-      <div
-        className="absolute inset-y-0 left-0 transition-[width] duration-500"
-        style={{ width: `${pct}%`, background: pct >= 95 ? COLORS.success : COLORS.daily }}
-      />
-      <span
-        className="absolute inset-0 flex items-center justify-center whitespace-nowrap px-2 text-[11px] font-semibold text-white"
-        style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
-      >
-        {money(spent)} / {money(budget)}
-      </span>
-    </div>
+    <span className="inline-flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)]">
+      <GoogleAdsBrandIcon className="h-3.5 w-3.5" />
+      {ad.googleChannelType || 'Google'} · linked
+    </span>
   );
 }
 
@@ -201,66 +145,95 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const { confirm } = useLoomiDialog();
   const [view, setView] = useState<'plan' | 'pace'>(mode === 'planner' ? 'plan' : 'pace');
   const [period, setPeriod] = useState(currentPeriod);
-  const [editing, setEditing] = useState<GoogleAd | 'new' | null>(null);
+  const [editing, setEditing] = useState<PacerAd | 'new' | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  // Pace-view per-card expand state (mirrors Meta's BudgetPacerPanel).
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const toggleExpanded = (id: string) =>
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   const swrKey = accountKey
     ? `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}?period=${period}&platform=google`
     : null;
-  const { data, isLoading, mutate } = useSWR<PlanView>(swrKey, fetcher, { revalidateOnFocus: false });
-  const ads = useMemo(() => data?.ads ?? [], [data]);
+  const { data, isLoading, mutate } = useSWR<PacerPlan>(swrKey, fetcher, { revalidateOnFocus: false });
+  const ads = useMemo<PacerAd[]>(() => data?.ads ?? [], [data]);
   const tz = data?.timeZone ?? 'America/Denver';
   const frozen = !!data?.frozen;
 
-  // Allocation rollup for the Plan view (campaign budgets summed, split by source).
-  const totals = useMemo(() => {
-    let total = 0,
-      base = 0,
-      added = 0;
-    for (const a of ads) {
-      const v = num(a.allocation);
-      total += v;
-      if (a.budgetSource === 'added') added += v;
-      else base += v;
-    }
-    return { total, base, added };
-  }, [ads]);
+  // A full PacerPlan for the shared budget components (BudgetPanel +
+  // TotalAllocationHeader read goals/markup/carryover and sum every ad via
+  // adContribution). The server already returns this shape; normalize the
+  // optional fields so the shared types are satisfied.
+  const plan: PacerPlan | null = useMemo(
+    () =>
+      data
+        ? {
+            accountKey: accountKey ?? '',
+            period,
+            baseBudgetGoal: data.baseBudgetGoal ?? null,
+            addedBudgetGoal: data.addedBudgetGoal ?? null,
+            markup: data.markup ?? null,
+            timeZone: tz,
+            frozen,
+            frozenAt: data.frozenAt ?? null,
+            reopened: data.reopened ?? false,
+            baseCarryover: data.baseCarryover ?? null,
+            addedCarryover: data.addedCarryover ?? null,
+            priorOverUnder: data.priorOverUnder ?? null,
+            ads,
+            siblingsByName: data.siblingsByName,
+          }
+        : null,
+    [data, accountKey, period, tz, frozen, ads],
+  );
 
-  // Per-platform account budget goals (Google's own — see schema). Client gross;
-  // spend target = goal × markup.
-  const markup = data?.markup ?? 0.77;
-  const [baseGoal, setBaseGoal] = useState('');
-  const [addedGoal, setAddedGoal] = useState('');
-  useEffect(() => {
-    setBaseGoal(data?.baseBudgetGoal ?? '');
-    setAddedGoal(data?.addedBudgetGoal ?? '');
-  }, [data?.baseBudgetGoal, data?.addedBudgetGoal]);
-
-  async function persistBudget(nextBase: string, nextAdded: string) {
+  // Debounced budget-goal persist — BudgetPanel calls onChange per keystroke;
+  // optimistically update the cached plan, then flush to the server after a pause.
+  const budgetSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistBudget = (nextBase: string | null, nextAdded: string | null) => {
     if (!accountKey) return;
-    try {
-      const res = await fetch(
-        `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}?period=${period}&platform=google`,
-        {
-          method: 'PUT',
-          headers: { 'content-type': 'application/json' },
-          // Full ad set is required (PUT is full-replace, platform-scoped) plus
-          // the Google budget goals.
-          body: JSON.stringify({
-            ads: ads.map((a) => ({ ...a, platform: 'google' })),
-            baseBudgetGoal: nextBase || null,
-            addedBudgetGoal: nextAdded || null,
-          }),
-        },
-      );
-      if (!res.ok) throw new Error();
-      mutate();
-    } catch {
-      toast.error('Could not save budget');
-      mutate();
-    }
-  }
+    if (budgetSaveTimer.current) clearTimeout(budgetSaveTimer.current);
+    budgetSaveTimer.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}?period=${period}&platform=google`,
+          {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            // Full ad set is required (PUT is full-replace, platform-scoped) plus
+            // the Google budget goals.
+            body: JSON.stringify({
+              ads: ads.map((a) => ({ ...a, platform: 'google' })),
+              baseBudgetGoal: nextBase || null,
+              addedBudgetGoal: nextAdded || null,
+            }),
+          },
+        );
+        if (!res.ok) throw new Error();
+        mutate();
+      } catch {
+        toast.error('Could not save budget');
+        mutate();
+      }
+    }, 700);
+  };
+
+  // BudgetPanel hands back the whole plan with an edited goal; reflect it
+  // optimistically + schedule the save.
+  const onPlanChange = (next: PacerPlan) => {
+    if (!data) return;
+    mutate(
+      { ...data, baseBudgetGoal: next.baseBudgetGoal, addedBudgetGoal: next.addedBudgetGoal },
+      { revalidate: false },
+    );
+    persistBudget(next.baseBudgetGoal, next.addedBudgetGoal);
+  };
 
   const { data: acct } = useSWR<{ googleAdsCustomerId?: string | null }>(
     accountKey ? `/api/accounts/${encodeURIComponent(accountKey)}` : null,
@@ -286,9 +259,9 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
 
   // Persist the full Google set for this period — autosave full-replace, scoped
   // to platform=google on the server so Meta lines are never touched.
-  async function persist(next: GoogleAd[]) {
-    if (!accountKey) return;
-    mutate({ ...(data as PlanView), ads: next }, { revalidate: false });
+  async function persist(next: PacerAd[]) {
+    if (!accountKey || !data) return;
+    mutate({ ...data, ads: next }, { revalidate: false });
     try {
       const res = await fetch(
         `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}?period=${period}&platform=google`,
@@ -306,11 +279,11 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     }
   }
 
-  function saveCampaign(c: GoogleAd) {
-    persist(c.id ? ads.map((a) => (a.id === c.id ? c : a)) : [...ads, c]);
+  function saveCampaign(c: PacerAd) {
+    persist(ads.some((a) => a.id === c.id) ? ads.map((a) => (a.id === c.id ? c : a)) : [...ads, c]);
     setEditing(null);
   }
-  async function deleteCampaign(c: GoogleAd) {
+  async function deleteCampaign(c: PacerAd) {
     const ok = await confirm({
       title: 'Delete campaign?',
       message: `Remove "${c.name || 'Untitled'}" from this month's plan.`,
@@ -319,10 +292,36 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     });
     if (ok) persist(ads.filter((a) => a.id !== c.id));
   }
+  function cloneCampaign(id: string) {
+    const src = ads.find((a) => a.id === id);
+    if (!src) return;
+    const copy = makeAd(ads.length, period);
+    persist([...ads, { ...src, ...copy, name: `${src.name || 'Untitled'} (copy)` }]);
+  }
+  // One-ad mutation → optimistic full-replace persist (autosave).
+  const updateAd = (next: PacerAd) =>
+    persist(ads.map((a) => (a.id === next.id ? next : a)));
+  // Cross-month accounting persists onto the row itself (fullRunAppliedToMonth /
+  // lifetimeMonthSplit), so the standard full-replace PUT saves it.
+  const resolveCrossMonth = (
+    ad: PacerAd,
+    action: 'apply_full_run' | 'split' | 'clear',
+    splitMap?: Record<string, number>,
+  ) => {
+    if (action === 'apply_full_run')
+      updateAd({ ...ad, fullRunAppliedToMonth: ad.period, lifetimeMonthSplit: null });
+    else if (action === 'split')
+      updateAd({
+        ...ad,
+        fullRunAppliedToMonth: null,
+        lifetimeMonthSplit: JSON.stringify(splitMap ?? {}),
+      });
+    else updateAd({ ...ad, fullRunAppliedToMonth: null, lifetimeMonthSplit: null });
+  };
 
   // The import modal returns the refreshed plan view (rows born linked + synced);
   // drop it straight into state, like the Meta importer's handleImported.
-  function handleImported(data: PlanView & { import?: { imported: number; skipped: number } }) {
+  function handleImported(data: PacerPlan & { import?: { imported: number; skipped: number } }) {
     mutate(data, { revalidate: false });
     const n = data.import?.imported ?? 0;
     const s = data.import?.skipped ?? 0;
@@ -365,6 +364,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   }
 
   return (
+    <PacerReadOnlyContext.Provider value={frozen}>
     <div className="flex h-full flex-col pb-2">
       <Header
         mode={view}
@@ -391,37 +391,29 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         </div>
       )}
 
-      <div className="mt-5">
-        <TotalAllocationHeader
-          baseGoal={baseGoal}
-          addedGoal={addedGoal}
-          base={totals.base}
-          added={totals.added}
-          markup={markup}
-        />
-        <div className="mt-4 flex flex-wrap items-start gap-4">
-          <BudgetCard
-            label="Base Budget"
-            color={COLORS.base}
-            goal={baseGoal}
-            onGoal={setBaseGoal}
-            onCommit={() => persistBudget(baseGoal, addedGoal)}
-            markup={markup}
-            allocated={totals.base}
-            disabled={frozen}
-          />
-          <BudgetCard
-            label="Added Budget"
-            color={COLORS.added}
-            goal={addedGoal}
-            onGoal={setAddedGoal}
-            onCommit={() => persistBudget(baseGoal, addedGoal)}
-            markup={markup}
-            allocated={totals.added}
-            disabled={frozen}
-          />
+      {plan && (
+        <div className="mt-5">
+          <TotalAllocationHeader plan={plan} />
+          <div className="mt-4 flex flex-wrap items-start gap-4">
+            <BudgetPanel
+              title="Base Budget"
+              source="base"
+              color={SHARED_COLORS.base}
+              goalKey="baseBudgetGoal"
+              plan={plan}
+              onChange={onPlanChange}
+            />
+            <BudgetPanel
+              title="Added Budget"
+              source="added"
+              color={SHARED_COLORS.added}
+              goalKey="addedBudgetGoal"
+              plan={plan}
+              onChange={onPlanChange}
+            />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Action row above the table (mirrors Meta's Ad Plan header + CTAs). */}
       <div className="mt-8 mb-3 flex flex-wrap items-center justify-between gap-3">
@@ -471,50 +463,81 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         </div>
       </div>
 
-      <div className="-mx-6 overflow-x-auto px-6 md:-mx-8 md:px-8">
-        <table className="w-full min-w-[900px]">
-          <thead className="sticky top-0 z-10">
-            <tr className="border-b border-[var(--border)] bg-[var(--muted)]">
-              {['Campaign', 'Status', 'Budget', 'Allocation', view === 'pace' ? 'Spend / Pacing' : 'Flight Dates', view === 'pace' ? 'Rec. daily' : 'Daily'].map(
-                (h) => (
+      {!isLoading && ads.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-[var(--border)] px-6 py-12 text-center text-sm text-[var(--muted-foreground)]">
+          No Google campaigns for {periodLabel(period)} yet.
+          {!frozen && ' Add one, or sync from Google.'}
+        </div>
+      ) : view === 'pace' ? (
+        // Pace view — stacked PacerRow cards (mirrors Meta's Spend Pacing).
+        <div className="mt-1">
+          {ads.map((ad, i) => (
+            <PacerRow
+              key={ad.id}
+              ad={ad}
+              index={i}
+              timeZone={tz}
+              expanded={expandedIds.has(ad.id)}
+              onToggleExpanded={() => toggleExpanded(ad.id)}
+              onActualChange={(v) => updateAd({ ...ad, pacerActual: v })}
+              onDailyBudgetChange={(v) => updateAd({ ...ad, pacerDailyBudget: v })}
+              onMuteToggle={() => updateAd({ ...ad, alertsMuted: !ad.alertsMuted })}
+              onPushDailyBudget={async () => ({
+                ok: false,
+                text: 'Push to Google Ads isn’t available yet.',
+              })}
+              onResolveCrossMonth={(action, splitMap) =>
+                resolveCrossMonth(ad, action, splitMap)
+              }
+              siblings={data?.siblingsByName?.[ad.name] ?? null}
+              synced={!!ad.googleCampaignId && !!ad.pacerSyncedAt}
+              linkPicker={<GoogleLinkBadge ad={ad} />}
+              syncInfo={<GoogleSyncInfo ad={ad} timeZone={tz} />}
+              pushLabel="Push to Google"
+              pushIcon={<GoogleAdsBrandIcon className="h-3.5 w-3.5" />}
+            />
+          ))}
+        </div>
+      ) : (
+        // Plan view — Meta-style table of AdSummaryRow.
+        <div className="-mx-6 overflow-x-auto px-6 md:-mx-8 md:px-8">
+          <table className="w-full min-w-[900px]">
+            <thead className="sticky top-0 z-10">
+              <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
+                <th className="w-9 pl-3 pr-1 py-2" />
+                {['Ad', '', 'Status', 'Due Date', 'Budget', 'Allocation', 'Flight Dates', 'Design', 'Approvals'].map((h, i) => (
                   <th
-                    key={h}
-                    className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)]"
+                    key={i}
+                    className={`text-left px-3 py-2 text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)] ${h === '' ? 'w-10 px-2' : ''}`}
                   >
                     {h}
                   </th>
-                ),
-              )}
-              <th className="w-10 px-3 py-2" />
-            </tr>
-          </thead>
-          <tbody>
-            {ads.map((ad, i) => (
-              <CampaignRow
-                key={ad.id ?? `new-${i}`}
-                ad={ad}
-                view={view}
-                tz={tz}
-                frozen={frozen}
-                onEdit={() => !frozen && setEditing(ad)}
-                onDelete={() => deleteCampaign(ad)}
-              />
-            ))}
-            {!isLoading && ads.length === 0 && (
-              <tr>
-                <td colSpan={7} className="px-3 py-12 text-center text-sm text-[var(--muted-foreground)]">
-                  No Google campaigns for {periodLabel(period)} yet.
-                  {!frozen && ' Add one, or sync from Google.'}
-                </td>
+                ))}
+                <th className="px-3 py-2" />
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {ads.map((ad, i) => (
+                <AdSummaryRow
+                  key={ad.id}
+                  ad={ad}
+                  index={i}
+                  onClick={() => !frozen && setEditing(ad)}
+                  onRemove={() => deleteCampaign(ad)}
+                  onClone={() => cloneCampaign(ad.id)}
+                  isSelected={false}
+                  onSelectToggle={() => {}}
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {editing && (
         <CampaignModal
           campaign={editing === 'new' ? null : editing}
+          period={period}
           onClose={() => setEditing(null)}
           onSave={saveCampaign}
         />
@@ -531,6 +554,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         />
       )}
     </div>
+    </PacerReadOnlyContext.Provider>
   );
 }
 
@@ -631,128 +655,23 @@ function Header({
   );
 }
 
-function CampaignRow({
-  ad,
-  view,
-  tz,
-  frozen,
-  onEdit,
-  onDelete,
-}: {
-  ad: GoogleAd;
-  view: 'plan' | 'pace';
-  tz: string;
-  frozen: boolean;
-  onEdit: () => void;
-  onDelete: () => void;
-}) {
-  const calc = useMemo(() => buildPacerCalc(ad as unknown as PacerAd, Date.now(), tz), [ad, tz]);
-  const budget = num(ad.allocation);
-  const spent = num(ad.pacerActual);
-  const channelColor = ad.googleChannelType ? CHANNEL_COLOR[ad.googleChannelType] ?? '#888' : '#888';
-
-  return (
-    <tr className="group border-b border-[var(--border)] last:border-b-0 cursor-pointer transition-colors hover:bg-[var(--muted)]/50">
-      {/* Campaign — color dot + name + channel tag */}
-      <td className="min-w-[200px] px-3 py-2 align-middle" onClick={onEdit}>
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="h-2 w-2 flex-shrink-0 rounded-sm" style={{ background: channelColor }} />
-          <span className="truncate text-sm font-semibold text-[var(--foreground)]">
-            {ad.name || 'Untitled campaign'}
-          </span>
-          {ad.googleChannelType && (
-            <span
-              className="whitespace-nowrap rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white"
-              style={{ background: channelColor }}
-            >
-              {ad.googleChannelType}
-            </span>
-          )}
-        </div>
-      </td>
-
-      {/* Status */}
-      <td className="whitespace-nowrap px-3 py-2 align-middle" onClick={onEdit}>
-        <AdStatusPill status={ad.adStatus} />
-      </td>
-
-      {/* Budget — type + source tags */}
-      <td className="whitespace-nowrap px-3 py-2 align-middle" onClick={onEdit}>
-        <div className="flex items-center gap-1">
-          <span
-            className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
-            style={{ background: budgetTypeTint(ad.budgetType), color: budgetTypeColor(ad.budgetType) }}
-          >
-            {ad.budgetType}
-          </span>
-          <span
-            className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider"
-            style={{ background: sourceTint(ad.budgetSource), color: sourceColor(ad.budgetSource) }}
-          >
-            {ad.budgetSource === 'added' ? 'Added' : 'Base'}
-          </span>
-        </div>
-      </td>
-
-      {/* Allocation */}
-      <td
-        className="whitespace-nowrap px-3 py-2 align-middle text-xs font-semibold"
-        style={{ color: sourceColor(ad.budgetSource) }}
-        onClick={onEdit}
-      >
-        {money(budget)}
-        <span className="ml-1 font-normal opacity-60">{ad.budgetType === 'Lifetime' ? 'total' : '/mo'}</span>
-      </td>
-
-      {/* Flight bar (plan) / spend pacing bar (pace) */}
-      <td className="px-3 py-2 align-middle" onClick={onEdit}>
-        {view === 'pace' ? (
-          <PacingBar spent={spent} budget={budget} />
-        ) : (
-          <FlightBar start={ad.flightStart} end={ad.flightEnd} status={ad.adStatus} />
-        )}
-      </td>
-
-      {/* Daily (plan) / recommended daily (pace) */}
-      <td className="whitespace-nowrap px-3 py-2 align-middle text-xs text-[var(--muted-foreground)]" onClick={onEdit}>
-        {view === 'pace'
-          ? ad.budgetType === 'Lifetime'
-            ? '—'
-            : money(calc.recDaily)
-          : money(num(ad.pacerDailyBudget))}
-      </td>
-
-      {/* Hover delete */}
-      <td className="px-3 py-2 align-middle text-right">
-        {!frozen && (
-          <button
-            type="button"
-            onClick={onDelete}
-            aria-label="Delete campaign"
-            className="rounded-lg p-1.5 text-[var(--muted-foreground)] opacity-0 transition hover:bg-red-500/10 hover:text-red-500 group-hover:opacity-100"
-          >
-            <TrashIcon className="h-4 w-4" />
-          </button>
-        )}
-      </td>
-    </tr>
-  );
-}
 
 function CampaignModal({
   campaign,
+  period,
   onClose,
   onSave,
 }: {
-  campaign: GoogleAd | null;
+  campaign: PacerAd | null;
+  period: string;
   onClose: () => void;
-  onSave: (c: GoogleAd) => void;
+  onSave: (c: PacerAd) => void;
 }) {
   const [name, setName] = useState(campaign?.name ?? '');
   const [channel, setChannel] = useState(campaign?.googleChannelType ?? 'Search');
   const [status, setStatus] = useState(campaign?.adStatus ?? 'Live');
-  const [budgetType, setBudgetType] = useState(campaign?.budgetType ?? 'Daily');
-  const [budgetSource, setBudgetSource] = useState(campaign?.budgetSource ?? 'base');
+  const [budgetType, setBudgetType] = useState<string>(campaign?.budgetType ?? 'Daily');
+  const [budgetSource, setBudgetSource] = useState<string>(campaign?.budgetSource ?? 'base');
   const [allocation, setAllocation] = useState(campaign?.allocation ?? '');
   const [dailyBudget, setDailyBudget] = useState(campaign?.pacerDailyBudget ?? '');
   const [flightStart, setFlightStart] = useState<string | null>(campaign?.flightStart ?? null);
@@ -763,15 +682,18 @@ function CampaignModal({
       toast.error('Campaign name is required');
       return;
     }
+    // Seed a full PacerAd for new rows so the shared components have every
+    // field; existing rows keep their server-managed fields via the spread.
+    const base = campaign ?? makeAd(0, period);
     onSave({
-      ...campaign,
+      ...base,
+      platform: 'google',
       name: name.trim(),
       googleChannelType: channel,
       adStatus: status,
-      budgetType,
-      budgetSource,
+      budgetType: budgetType === 'Lifetime' ? 'Lifetime' : 'Daily',
+      budgetSource: budgetSource === 'added' ? 'added' : budgetSource === 'split' ? 'split' : 'base',
       allocation: allocation || null,
-      pacerActual: campaign?.pacerActual ?? null,
       pacerDailyBudget: dailyBudget || null,
       flightStart,
       flightEnd,
@@ -918,7 +840,7 @@ function ImportFromGoogleModal({
   periodLabelText: string;
   users: UserPickerUser[];
   onClose: () => void;
-  onImported: (data: PlanView & { import?: { imported: number; skipped: number } }) => void;
+  onImported: (data: PacerPlan & { import?: { imported: number; skipped: number } }) => void;
 }) {
   const [campaigns, setCampaigns] = useState<DiscoveredGoogleCampaign[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1006,7 +928,9 @@ function ImportFromGoogleModal({
       );
       const body = await readJsonSafe(res);
       if (!res.ok) throw new Error((body?.error as string) || `Import failed (${res.status})`);
-      onImported(body as PlanView & { import?: { imported: number; skipped: number } });
+      onImported(
+        body as unknown as PacerPlan & { import?: { imported: number; skipped: number } },
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Import failed');
     } finally {
@@ -1206,194 +1130,6 @@ function ImportFromGoogleModal({
 /** Account-level allocation summary above the budget cards (mirrors Meta's
  *  TotalAllocationHeader): total spend budget, total allocated, % + a combined
  *  Base/Added bar with legend. */
-function TotalAllocationHeader({
-  baseGoal,
-  addedGoal,
-  base,
-  added,
-  markup,
-}: {
-  baseGoal: string;
-  addedGoal: string;
-  base: number;
-  added: number;
-  markup: number;
-}) {
-  const target = ((Number(baseGoal) || 0) + (Number(addedGoal) || 0)) * markup;
-  const allocated = base + added;
-  const pct = target > 0 ? (allocated / target) * 100 : null;
-  const pctColor =
-    pct == null ? 'var(--muted-foreground)' : pct > 105 ? COLORS.error : pct >= 95 ? COLORS.success : COLORS.warn;
-  const baseW = target > 0 ? Math.min((base / target) * 100, 100) : 0;
-  const addedW = target > 0 ? Math.min((added / target) * 100, 100 - baseW) : 0;
-
-  return (
-    <div className="px-1">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2.5">
-        <span className="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">
-          Total Account Allocation
-        </span>
-        <div className="flex flex-wrap gap-4">
-          <div className="text-right">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-              Spend budget
-            </div>
-            <div className="text-base font-bold tabular-nums text-[var(--foreground)]">{money(target)}</div>
-          </div>
-          <div className="text-right">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-              Allocated
-            </div>
-            <div className="text-base font-bold tabular-nums text-[var(--foreground)]">{money(allocated)}</div>
-          </div>
-          {pct != null && (
-            <div className="text-right">
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">%</div>
-              <div className="text-base font-bold tabular-nums" style={{ color: pctColor }}>
-                {pct.toFixed(1)}%
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="mb-2 flex h-2.5 overflow-hidden rounded-full bg-[var(--muted)]">
-        {baseW > 0 && (
-          <div className="h-full transition-[width] duration-500" style={{ width: `${baseW}%`, background: COLORS.base }} />
-        )}
-        {addedW > 0 && (
-          <div className="h-full transition-[width] duration-500" style={{ width: `${addedW}%`, background: COLORS.added }} />
-        )}
-      </div>
-      <div className="flex flex-wrap gap-4">
-        <div className="flex items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
-          <span className="h-2 w-2 rounded-sm" style={{ background: COLORS.base }} />
-          Base <span className="font-bold" style={{ color: COLORS.base }}>{money(base)}</span>
-        </div>
-        <div className="flex items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
-          <span className="h-2 w-2 rounded-sm" style={{ background: COLORS.added }} />
-          Added <span className="font-bold" style={{ color: COLORS.added }}>{money(added)}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function BudgetCard({
-  label,
-  color,
-  goal,
-  onGoal,
-  onCommit,
-  markup,
-  allocated,
-  disabled,
-}: {
-  label: string;
-  color: string;
-  goal: string;
-  onGoal: (v: string) => void;
-  onCommit: () => void;
-  markup: number;
-  allocated: number;
-  disabled: boolean;
-}) {
-  const target = (Number(goal) || 0) * markup; // spend target = client gross × markup
-  const remaining = target - allocated;
-  const pct = target > 0 ? (allocated / target) * 100 : null;
-  const status = pct == null ? null : pct > 105 ? 'over' : pct >= 95 ? 'perfect' : 'under';
-  const statusColor = status === 'over' ? COLORS.error : status === 'perfect' ? COLORS.success : COLORS.warn;
-
-  return (
-    <div className="glass-section-card min-w-[280px] flex-1 rounded-xl px-5 py-4">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-bold uppercase tracking-wider" style={{ color }}>
-            {label}
-          </span>
-          {status && (
-            <span
-              className="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
-              style={{
-                background:
-                  status === 'over'
-                    ? 'rgba(239,68,68,0.18)'
-                    : status === 'perfect'
-                      ? 'rgba(34,197,94,0.18)'
-                      : 'rgba(245,158,11,0.18)',
-                color: statusColor,
-              }}
-            >
-              {status === 'over' ? 'Over' : status === 'perfect' ? 'Full' : 'Under'}
-            </span>
-          )}
-        </div>
-        <span className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-          target {money(target)}
-        </span>
-      </div>
-
-      <div className="mb-3">
-        <span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-          Client Budget Goal (Gross)
-        </span>
-        <div className="relative">
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-[var(--muted-foreground)]">
-            $
-          </span>
-          <input
-            value={goal}
-            disabled={disabled}
-            onChange={(e) => /^\d*\.?\d*$/.test(e.target.value) && onGoal(e.target.value)}
-            onBlur={onCommit}
-            onKeyDown={(e) => e.key === 'Enter' && e.currentTarget.blur()}
-            placeholder="0.00"
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] py-2 pl-6 pr-3 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none disabled:opacity-60"
-          />
-        </div>
-      </div>
-
-      <div className="mb-3 flex flex-wrap items-end gap-x-7 gap-y-2">
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Allocated</div>
-          <div className="text-2xl font-bold leading-none tabular-nums" style={{ color: statusColor }}>
-            {money(allocated)}
-          </div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-            {remaining < 0 ? 'Over' : 'Remaining'}
-          </div>
-          <div
-            className="text-2xl font-bold leading-none tabular-nums"
-            style={{ color: remaining < 0 ? COLORS.error : COLORS.success }}
-          >
-            {money(Math.abs(remaining))}
-          </div>
-        </div>
-      </div>
-
-      {target > 0 && (
-        <>
-          <div className="mb-1 flex justify-between">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-              Allocation
-            </span>
-            <span className="text-[10px] font-bold" style={{ color: statusColor }}>
-              {pct != null ? `${pct.toFixed(1)}%` : ''}
-            </span>
-          </div>
-          <div className="h-2 overflow-hidden rounded-full bg-[var(--muted)]">
-            <div
-              className="h-full transition-[width] duration-500"
-              style={{ width: `${Math.min(pct ?? 0, 100)}%`, background: color }}
-            />
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>

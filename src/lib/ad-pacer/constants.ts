@@ -51,6 +51,7 @@ export const COLORS = {
   lifetime: '#a78bfa',
   base: '#38bdf8',
   added: '#34d399',
+  split: '#f472b6',
   success: '#22c55e',
   warn: '#f59e0b',
   error: '#ef4444',
@@ -89,10 +90,8 @@ export const CARRYOVER_THRESHOLD = 15;
 export const CROSS_MONTH_IN_MONTH_THRESHOLD = 0.875;
 
 /**
- * Solid bg + white text for ad statuses (Monday-style "filled" tags).
- * Other status palettes (DESIGN_STATUS_COLORS, APPROVAL_STATUS_COLORS) keep
- * the translucent treatment — saturation here is reserved for the primary
- * state-of-the-ad signal.
+ * Solid bg + white text for ad statuses (Monday-style "filled" tags). Design +
+ * approval pills use the same solid treatment so all three read as one family.
  */
 export const AD_STATUS_COLORS: Record<string, [string, string]> = {
   Live: ['#22c55e', '#ffffff'],
@@ -110,20 +109,20 @@ export const AD_STATUS_COLORS: Record<string, [string, string]> = {
 };
 
 export const DESIGN_STATUS_COLORS: Record<string, [string, string]> = {
-  Approved: ['rgba(34,197,94,0.18)', '#4ade80'],
-  'Work In Progress': ['rgba(251,146,60,0.18)', '#fb923c'],
-  Stuck: ['rgba(239,68,68,0.18)', '#fca5a5'],
-  'Revisions Needed': ['rgba(252,211,77,0.18)', '#fcd34d'],
+  Approved: ['#22c55e', '#ffffff'],
+  'Work In Progress': ['#fb923c', '#ffffff'],
+  Stuck: ['#ef4444', '#ffffff'],
+  'Revisions Needed': ['#facc15', '#ffffff'],
   'Not Started': ['var(--muted)', 'var(--muted-foreground)'],
-  'In Proofing/Pending Approval': ['rgba(56,189,248,0.18)', '#7dd3fc'],
+  'In Proofing/Pending Approval': ['#0ea5e9', '#ffffff'],
   'N/A': ['var(--muted)', 'var(--muted-foreground)'],
 };
 
 export const APPROVAL_STATUS_COLORS: Record<string, [string, string]> = {
-  Approved: ['rgba(34,197,94,0.18)', '#4ade80'],
-  'Pending Approval': ['rgba(245,158,11,0.18)', '#fbbf24'],
-  'Does Not Approve': ['rgba(239,68,68,0.18)', '#f87171'],
-  'Changes Requested': ['rgba(56,189,248,0.18)', '#7dd3fc'],
+  Approved: ['#22c55e', '#ffffff'],
+  'Pending Approval': ['#f59e0b', '#ffffff'],
+  'Does Not Approve': ['#ef4444', '#ffffff'],
+  'Changes Requested': ['#0ea5e9', '#ffffff'],
 };
 
 /**

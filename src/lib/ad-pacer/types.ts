@@ -104,6 +104,16 @@ export interface PacerAd {
   activityLog: ActivityEntry[];
 }
 
+export interface PriorOverUnder {
+  period: string;
+  clientBudget: number;
+  spendTarget: number;
+  actual: number;
+  variance: number; // actual − spendTarget (negative = underspent)
+  carryover: number; // −variance: +ve = spend this much more next month
+  exceedsThreshold: boolean;
+}
+
 export interface PacerPlan {
   accountKey: string;
   period: string;
@@ -113,7 +123,27 @@ export interface PacerPlan {
   // platform default (the admin-configured agency markup). Drives the
   // gross↔actual conversion in the Budget Calculator's Client Budget mode.
   markup: number | null;
+  // Resolved IANA zone for pacing math (Meta ad-account zone → stored zone →
+  // DEFAULT_TIME_ZONE). Always present; the server resolves it.
+  timeZone: string;
+  // Live-vs-frozen month model. A frozen month is a closed-month immutable
+  // snapshot: read-only, no autosave/sync until an admin reopens. `reopened` =
+  // a closed month unlocked for correction (snapshot preserved) until re-frozen.
+  frozen: boolean;
+  frozenAt: string | null;
+  reopened: boolean;
+  // Carryover applied to each bucket's derived spend target (actual-spend $).
+  // null = none. Never affects the typed budget goal.
+  baseCarryover: string | null;
+  addedCarryover: string | null;
+  // Prior month's settled over/under for the carryover prompt. null when the
+  // prior month isn't closed yet or this month is frozen.
+  priorOverUnder: PriorOverUnder | null;
   ads: PacerAd[];
+  // Same-title rows' planned (allocation) + in-month actual across every period,
+  // keyed by ad name → period — lets a lifetime ad render its real cross-month
+  // split. Only names present in 2+ periods are included.
+  siblingsByName?: Record<string, Record<string, { allocation: number; actual: number }>>;
 }
 
 export interface PeriodSummary {

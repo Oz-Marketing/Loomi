@@ -90,6 +90,7 @@ import {
   AD_STATUS_COLORS,
   DESIGN_STATUS_COLORS,
   APPROVAL_STATUS_COLORS,
+  ACTIVE_STATUSES,
   PACER_ACTIVITY_MAX_UPLOAD_BYTES,
 } from '@/lib/ad-pacer/constants';
 import {
@@ -118,6 +119,13 @@ import {
   fmtPeriodShort,
   flightDatePresets,
 } from '@/lib/ad-pacer/period';
+import {
+  type PlanFilters,
+  EMPTY_FILTERS,
+  isAdOverdue,
+  applyFilters,
+  activeFilterCount,
+} from '@/lib/ad-pacer/filters';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
 // Status/option lists + color maps now live in @/lib/ad-pacer/constants (imported above).
@@ -439,98 +447,6 @@ const TODAY_PRESET: DatePreset = {
   single: () => datePickerToIso(new Date()),
 };
 
-// ─── Filter types + helpers ────────────────────────────────────────────────
-interface PlanFilters {
-  status: string | null; // adStatus value | null
-  source: 'all' | 'base' | 'added';
-  adType: 'all' | 'Daily' | 'Lifetime';
-  assigneeUserId: string | null;
-  accountRepUserId: string | null;
-  showMine: boolean;
-  showOverdue: boolean;
-  showNeedsApproval: boolean;
-  showActive: boolean;
-}
-
-const EMPTY_FILTERS: PlanFilters = {
-  status: null,
-  source: 'all',
-  adType: 'all',
-  assigneeUserId: null,
-  accountRepUserId: null,
-  showMine: false,
-  showOverdue: false,
-  showNeedsApproval: false,
-  showActive: false,
-};
-
-function filtersAreEmpty(f: PlanFilters): boolean {
-  return (
-    !f.status &&
-    f.source === 'all' &&
-    f.adType === 'all' &&
-    !f.assigneeUserId &&
-    !f.accountRepUserId &&
-    !f.showMine &&
-    !f.showOverdue &&
-    !f.showNeedsApproval &&
-    !f.showActive
-  );
-}
-
-function isAdOverdue(ad: PacerAd): boolean {
-  if (!ad.creativeDueDate || ad.designStatus === 'Approved') return false;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return new Date(ad.creativeDueDate + 'T00:00:00') < today;
-}
-
-const ACTIVE_STATUSES = ['Live', 'Live - Changes Required'];
-
-function applyFilters(
-  ads: PacerAd[],
-  filters: PlanFilters,
-  currentUserId: string | null,
-): PacerAd[] {
-  if (filtersAreEmpty(filters)) return ads;
-  return ads.filter((ad) => {
-    if (filters.status && ad.adStatus !== filters.status) return false;
-    if (filters.source !== 'all' && ad.budgetSource !== filters.source) return false;
-    if (filters.adType !== 'all' && ad.budgetType !== filters.adType) return false;
-    if (filters.accountRepUserId && ad.accountRepUserId !== filters.accountRepUserId) {
-      return false;
-    }
-    if (filters.assigneeUserId) {
-      const id = filters.assigneeUserId;
-      if (
-        ad.ownerUserId !== id &&
-        ad.designerUserId !== id &&
-        ad.accountRepUserId !== id
-      ) {
-        return false;
-      }
-    }
-    if (filters.showMine && currentUserId) {
-      if (
-        ad.ownerUserId !== currentUserId &&
-        ad.designerUserId !== currentUserId &&
-        ad.accountRepUserId !== currentUserId
-      ) {
-        return false;
-      }
-    }
-    if (filters.showOverdue && !isAdOverdue(ad)) return false;
-    if (
-      filters.showNeedsApproval &&
-      ad.internalApproval !== 'Pending Approval' &&
-      ad.clientApproval !== 'Pending Approval'
-    ) {
-      return false;
-    }
-    if (filters.showActive && !ACTIVE_STATUSES.includes(ad.adStatus)) return false;
-    return true;
-  });
-}
 
 /**
  * Read-only context for the pacer/planner (Change 5). True when the viewed
@@ -1342,20 +1258,6 @@ function UserPicker({
 }
 
 // ─── Filter UI: status indicator + slide-from-right sidebar ────────────────
-function activeFilterCount(f: PlanFilters): number {
-  let n = 0;
-  if (f.status) n++;
-  if (f.source !== 'all') n++;
-  if (f.adType !== 'all') n++;
-  if (f.assigneeUserId) n++;
-  if (f.accountRepUserId) n++;
-  if (f.showMine) n++;
-  if (f.showOverdue) n++;
-  if (f.showNeedsApproval) n++;
-  if (f.showActive) n++;
-  return n;
-}
-
 function FilterChip({
   active,
   onClick,

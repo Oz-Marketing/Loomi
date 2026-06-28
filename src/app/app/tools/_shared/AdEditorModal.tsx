@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ChatBubbleOvalLeftIcon,
@@ -410,6 +410,8 @@ export function AdEditorModal({
   onAddActivity,
   onEditActivity,
   onDeleteActivity,
+  platform = 'meta',
+  editorExtraFields,
 }: {
   initialAd: PacerAd;
   /** §0.1 resolved per-account markup factor, threaded to PlanAdForm. */
@@ -429,6 +431,10 @@ export function AdEditorModal({
   onAddActivity: (adId: string, text: string, file: File | null) => Promise<void>;
   onEditActivity: (adId: string, entryId: string, text: string) => Promise<void>;
   onDeleteActivity: (adId: string, entryId: string) => Promise<void>;
+  /** Forwarded to PlanAdForm — 'google' hides the Meta creative-workflow fields. */
+  platform?: 'meta' | 'google';
+  /** Forwarded to PlanAdForm's Ad Details grid (Google passes its Channel picker). */
+  editorExtraFields?: (ad: PacerAd, onUpdate: (ad: PacerAd) => void) => ReactNode;
 }) {
   const readOnly = usePacerReadOnly();
   const [draft, setDraft] = useState<PacerAd>(initialAd);
@@ -576,7 +582,14 @@ export function AdEditorModal({
             {/* A disabled fieldset (display:contents → no layout change)
                 locks every form control at once when the month is frozen. */}
             <fieldset disabled={readOnly} className="contents">
-              <PlanAdForm ad={draft} users={users} onUpdate={setDraft} markup={markup} />
+              <PlanAdForm
+                ad={draft}
+                users={users}
+                onUpdate={setDraft}
+                markup={markup}
+                platform={platform}
+                extraDetailFields={editorExtraFields}
+              />
             </fieldset>
           </div>
           {mode === 'create' ? (

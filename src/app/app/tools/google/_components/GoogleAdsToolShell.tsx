@@ -13,16 +13,16 @@ import {
   XMarkIcon,
   InformationCircleIcon,
 } from '@heroicons/react/24/outline';
+import { useSession } from 'next-auth/react';
 import { useAccount } from '@/contexts/account-context';
 import { AccountAvatar } from '@/components/account-avatar';
 import { GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
-import { DatePicker } from '@/components/ui/date-picker';
 import { UserPicker, type UserPickerUser } from '@/components/user-picker';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { toast } from '@/lib/toast';
 import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
-import type { PacerAd, PacerPlan } from '@/lib/ad-pacer/types';
+import type { PacerAd, PacerPlan, DirectoryUser } from '@/lib/ad-pacer/types';
 import { makeAd, fmtDate } from '@/lib/ad-pacer/helpers';
 import { COLORS as SHARED_COLORS } from '@/lib/ad-pacer/constants';
 import {
@@ -32,12 +32,12 @@ import {
   AdSummaryRow,
   PacerRow,
   Tooltip,
+  AdEditorModal,
+  Field,
 } from '@/app/app/tools/_shared';
 
 // ── Reference data ──
 const CHANNELS = ['Search', 'Display', 'Video', 'Shopping', 'PMax'] as const;
-const STATUSES = ['Live', 'Scheduled', 'Completed Run', 'Off', 'In Draft'] as const;
-const BUDGET_TYPES = ['Daily', 'Lifetime'] as const;
 
 type PacerLogos = { light?: string; dark?: string; white?: string; black?: string } | null;
 
@@ -143,6 +143,8 @@ function GoogleLinkBadge({ ad }: { ad: PacerAd }) {
 export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const { accountKey, accountData } = useAccount();
   const { confirm } = useLoomiDialog();
+  const { data: session } = useSession();
+  const currentUserId = session?.user?.id ?? null;
   const [view, setView] = useState<'plan' | 'pace'>(mode === 'planner' ? 'plan' : 'pace');
   const [period, setPeriod] = useState(currentPeriod);
   const [editing, setEditing] = useState<PacerAd | 'new' | null>(null);
@@ -243,7 +245,15 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
 
   // Directory for the import modal's Owner/Designer/Rep pickers.
   const { data: usersData } = useSWR<
-    Array<{ id: string; name: string; title?: string | null; email: string; avatarUrl?: string | null }>
+    Array<{
+      id: string;
+      name: string;
+      title?: string | null;
+      email: string;
+      avatarUrl?: string | null;
+      role?: string | null;
+      department?: string | null;
+    }>
   >(accountKey ? '/api/users' : null, fetcher);
   const users: UserPickerUser[] = useMemo(
     () =>
@@ -253,6 +263,20 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         title: u.title,
         email: u.email,
         avatarUrl: u.avatarUrl,
+      })),
+    [usersData],
+  );
+  // Full directory shape for the shared editor's role pickers.
+  const directoryUsers: DirectoryUser[] = useMemo(
+    () =>
+      (usersData ?? []).map((u) => ({
+        id: u.id,
+        name: u.name,
+        title: u.title ?? null,
+        email: u.email,
+        avatarUrl: u.avatarUrl ?? null,
+        role: u.role ?? '',
+        department: u.department ?? null,
       })),
     [usersData],
   );
@@ -317,6 +341,50 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         lifetimeMonthSplit: JSON.stringify(splitMap ?? {}),
       });
     else updateAd({ ...ad, fullRunAppliedToMonth: null, lifetimeMonthSplit: null });
+  };
+
+  // Activity log — the per-ad endpoints are keyed by accountKey + adId on the
+  // shared MetaAdsPacerAd table, so Google rows reuse them. Refetch after each
+  // change so the editor's live log updates.
+  const onAddActivity = async (adId: string, text: string, file: File | null) => {
+    if (!accountKey) return;
+    const url = `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}/ads/${adId}/activity`;
+    let res: Response;
+    if (file) {
+      const fd = new FormData();
+      fd.append('text', text);
+      fd.append('file', file);
+      res = await fetch(url, { method: 'POST', body: fd });
+    } else {
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+    }
+    if (!res.ok) throw new Error((await res.text().catch(() => '')) || `HTTP ${res.status}`);
+    mutate();
+  };
+  const onEditActivity = async (adId: string, entryId: string, text: string) => {
+    if (!accountKey) return;
+    const res = await fetch(
+      `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}/ads/${adId}/activity/${entryId}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      },
+    );
+    if (!res.ok) throw new Error((await res.text().catch(() => '')) || `HTTP ${res.status}`);
+    mutate();
+  };
+  const onDeleteActivity = async (adId: string, entryId: string) => {
+    if (!accountKey) return;
+    const res = await fetch(
+      `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}/ads/${adId}/activity/${entryId}`,
+      { method: 'DELETE' },
+    );
+    if (res.ok) mutate();
   };
 
   // The import modal returns the refreshed plan view (rows born linked + synced);
@@ -535,11 +603,32 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
       )}
 
       {editing && (
-        <CampaignModal
-          campaign={editing === 'new' ? null : editing}
-          period={period}
-          onClose={() => setEditing(null)}
+        <AdEditorModal
+          initialAd={editing === 'new' ? makeAd(ads.length, period) : editing}
+          markup={data?.markup ?? null}
+          liveActivityLog={
+            editing === 'new'
+              ? []
+              : ads.find((a) => a.id === editing.id)?.activityLog ?? editing.activityLog
+          }
+          mode={editing === 'new' ? 'create' : 'edit'}
+          users={directoryUsers}
+          currentUserId={currentUserId}
           onSave={saveCampaign}
+          onCancel={() => setEditing(null)}
+          onAddActivity={onAddActivity}
+          onEditActivity={onEditActivity}
+          onDeleteActivity={onDeleteActivity}
+          platform="google"
+          editorExtraFields={(ad, onUpdate) => (
+            <Field label="Channel">
+              <SearchableSelect
+                value={ad.googleChannelType ?? 'Search'}
+                onChange={(v) => onUpdate({ ...ad, googleChannelType: v })}
+                options={CHANNELS.map((c) => ({ value: c, label: c }))}
+              />
+            </Field>
+          )}
         />
       )}
 
@@ -656,156 +745,6 @@ function Header({
 }
 
 
-function CampaignModal({
-  campaign,
-  period,
-  onClose,
-  onSave,
-}: {
-  campaign: PacerAd | null;
-  period: string;
-  onClose: () => void;
-  onSave: (c: PacerAd) => void;
-}) {
-  const [name, setName] = useState(campaign?.name ?? '');
-  const [channel, setChannel] = useState(campaign?.googleChannelType ?? 'Search');
-  const [status, setStatus] = useState(campaign?.adStatus ?? 'Live');
-  const [budgetType, setBudgetType] = useState<string>(campaign?.budgetType ?? 'Daily');
-  const [budgetSource, setBudgetSource] = useState<string>(campaign?.budgetSource ?? 'base');
-  const [allocation, setAllocation] = useState(campaign?.allocation ?? '');
-  const [dailyBudget, setDailyBudget] = useState(campaign?.pacerDailyBudget ?? '');
-  const [flightStart, setFlightStart] = useState<string | null>(campaign?.flightStart ?? null);
-  const [flightEnd, setFlightEnd] = useState<string | null>(campaign?.flightEnd ?? null);
-
-  function submit() {
-    if (!name.trim()) {
-      toast.error('Campaign name is required');
-      return;
-    }
-    // Seed a full PacerAd for new rows so the shared components have every
-    // field; existing rows keep their server-managed fields via the spread.
-    const base = campaign ?? makeAd(0, period);
-    onSave({
-      ...base,
-      platform: 'google',
-      name: name.trim(),
-      googleChannelType: channel,
-      adStatus: status,
-      budgetType: budgetType === 'Lifetime' ? 'Lifetime' : 'Daily',
-      budgetSource: budgetSource === 'added' ? 'added' : budgetSource === 'split' ? 'split' : 'base',
-      allocation: allocation || null,
-      pacerDailyBudget: dailyBudget || null,
-      flightStart,
-      flightEnd,
-    });
-  }
-
-  const fieldCls =
-    'w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]';
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm" onClick={onClose}>
-      <div
-        className="glass-modal w-full max-w-lg rounded-xl p-5"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <h2 className="mb-4 text-lg font-semibold text-[var(--foreground)]">
-          {campaign ? 'Edit campaign' : 'Add Google campaign'}
-        </h2>
-        <div className="space-y-3">
-          <Field label="Campaign name">
-            <input
-              autoFocus
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className={fieldCls}
-              placeholder="e.g. Summer Search — Brand"
-            />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Channel">
-              <SearchableSelect
-                value={channel ?? 'Search'}
-                onChange={setChannel}
-                options={CHANNELS.map((c) => ({ value: c, label: c }))}
-              />
-            </Field>
-            <Field label="Status">
-              <SearchableSelect
-                value={status}
-                onChange={setStatus}
-                options={STATUSES.map((s) => ({ value: s, label: s }))}
-              />
-            </Field>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Budget type">
-              <SearchableSelect
-                value={budgetType}
-                onChange={setBudgetType}
-                options={BUDGET_TYPES.map((b) => ({ value: b, label: b }))}
-              />
-            </Field>
-            <Field label="Funding">
-              <SearchableSelect
-                value={budgetSource}
-                onChange={setBudgetSource}
-                options={[
-                  { value: 'base', label: 'Base' },
-                  { value: 'added', label: 'Added' },
-                ]}
-              />
-            </Field>
-          </div>
-          <Field label={budgetType === 'Lifetime' ? 'Total budget ($)' : 'Monthly budget ($)'}>
-            <input
-              inputMode="decimal"
-              value={allocation}
-              onChange={(e) => /^\d*\.?\d*$/.test(e.target.value) && setAllocation(e.target.value)}
-              className={fieldCls}
-              placeholder="0"
-            />
-          </Field>
-          {budgetType !== 'Lifetime' && (
-            <Field label="Planned daily ($)">
-              <input
-                inputMode="decimal"
-                value={dailyBudget}
-                onChange={(e) => /^\d*\.?\d*$/.test(e.target.value) && setDailyBudget(e.target.value)}
-                className={fieldCls}
-                placeholder="0"
-              />
-            </Field>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Flight start">
-              <DatePicker mode="single" value={flightStart} onChange={(v) => setFlightStart(v ?? null)} placeholder="Start" />
-            </Field>
-            <Field label="Flight end">
-              <DatePicker mode="single" value={flightEnd} onChange={(v) => setFlightEnd(v ?? null)} placeholder="End" />
-            </Field>
-          </div>
-        </div>
-        <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg px-3.5 py-2 text-sm font-medium text-[var(--muted-foreground)] hover:bg-[var(--muted)]"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={submit}
-            className="rounded-lg bg-[var(--primary)] px-3.5 py-2 text-sm font-medium text-white hover:opacity-90"
-          >
-            {campaign ? 'Save' : 'Add campaign'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 type DiscoveredGoogleCampaign = {
   id: string;
@@ -1130,11 +1069,3 @@ function ImportFromGoogleModal({
 /** Account-level allocation summary above the budget cards (mirrors Meta's
  *  TotalAllocationHeader): total spend budget, total allocated, % + a combined
  *  Base/Added bar with legend. */
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <span className="mb-1 block text-xs font-medium text-[var(--muted-foreground)]">{label}</span>
-      {children}
-    </div>
-  );
-}

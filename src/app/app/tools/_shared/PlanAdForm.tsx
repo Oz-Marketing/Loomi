@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import {
   ArrowTopRightOnSquareIcon,
   CalendarIcon,
@@ -46,6 +46,8 @@ export function PlanAdForm({
   users,
   onUpdate,
   markup,
+  platform = 'meta',
+  extraDetailFields,
 }: {
   ad: PacerAd;
   users: DirectoryUser[];
@@ -53,7 +55,16 @@ export function PlanAdForm({
   // §0.1: resolved per-account factor (override, else agency default), passed
   // down so the Gross Allocation display grosses up at the right rate.
   markup: number | null;
+  // 'meta' (default) shows the full creative-workflow form. 'google' hides the
+  // Meta-only fields that don't map to Google campaigns (action needed,
+  // recurring, co-op, the Creative & Design + Approvals sections).
+  platform?: 'meta' | 'google';
+  // Platform-specific extra field(s) rendered in the Ad Details grid — Google
+  // passes its Channel picker. A render-prop so the field can read/write the
+  // editor's live draft.
+  extraDetailFields?: (ad: PacerAd, onUpdate: (ad: PacerAd) => void) => ReactNode;
 }) {
+  const isMeta = platform === 'meta';
   const days = calcDays(ad.flightStart, ad.flightEnd);
   const allocation = num(ad.allocation) ?? 0;
 
@@ -116,6 +127,8 @@ export function PlanAdForm({
                 onChange={(v) => onUpdate({ ...ad, ownerUserId: v })}
               />
             </Field>
+            {/* Platform extras (Google passes its Channel picker). */}
+            {extraDetailFields?.(ad, onUpdate)}
           </div>
 
           <div className="mb-3">
@@ -133,48 +146,54 @@ export function PlanAdForm({
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3">
-            <Field label="Action Needed">
-              <select
-                value={ad.actionNeeded ?? ''}
-                onChange={(e) =>
-                  onUpdate({ ...ad, actionNeeded: e.target.value || null })
-                }
-                className={inputClass}
-              >
-                <option value="">—</option>
-                {ACTION_NEEDED.map((a) => (
-                  <option key={a} value={a}>
-                    {a}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Recurring?">
-              <select
-                value={ad.recurring}
-                onChange={(e) => onUpdate({ ...ad, recurring: e.target.value })}
-                className={inputClass}
-              >
-                {RECURRING_OPTS.map((o) => (
-                  <option key={o} value={o}>
-                    {o}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Co-op?">
-              <select
-                value={ad.coop}
-                onChange={(e) => onUpdate({ ...ad, coop: e.target.value })}
-                className={inputClass}
-              >
-                {COOP_OPTS.map((o) => (
-                  <option key={o} value={o}>
-                    {o}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            {isMeta && (
+              <Field label="Action Needed">
+                <select
+                  value={ad.actionNeeded ?? ''}
+                  onChange={(e) =>
+                    onUpdate({ ...ad, actionNeeded: e.target.value || null })
+                  }
+                  className={inputClass}
+                >
+                  <option value="">—</option>
+                  {ACTION_NEEDED.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+            {isMeta && (
+              <Field label="Recurring?">
+                <select
+                  value={ad.recurring}
+                  onChange={(e) => onUpdate({ ...ad, recurring: e.target.value })}
+                  className={inputClass}
+                >
+                  {RECURRING_OPTS.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
+            {isMeta && (
+              <Field label="Co-op?">
+                <select
+                  value={ad.coop}
+                  onChange={(e) => onUpdate({ ...ad, coop: e.target.value })}
+                  className={inputClass}
+                >
+                  {COOP_OPTS.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
             <Field label="Ad Status">
               <StatusSelect
                 value={ad.adStatus}
@@ -380,7 +399,9 @@ export function PlanAdForm({
             </div>
           )}
 
-          {/* Creative & Design */}
+          {/* Creative & Design + Approvals — Meta creative-workflow only. */}
+          {isMeta && (
+          <>
           <CollapsibleSection
             icon={<PaintBrushIcon className="w-3 h-3" />}
             label="Creative & Design"
@@ -530,6 +551,8 @@ export function PlanAdForm({
             </div>
           </div>
           </CollapsibleSection>
+          </>
+          )}
 
     </div>
   );

@@ -41,3 +41,4 @@ export {
 export { AdSummaryRow } from './AdSummaryRow';
 export { PacerRow, PacerCompletedSummary } from './PacerRow';
 export { PlanAdForm } from './PlanAdForm';
+export { AdEditorModal } from './AdEditorModal';

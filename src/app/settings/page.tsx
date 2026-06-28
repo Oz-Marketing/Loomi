@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAccount } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
@@ -152,6 +153,11 @@ function AccountSettingsTab() {
   const [logoWhite, setLogoWhite] = useState('');
   const [logoBlack, setLogoBlack] = useState('');
   const [saving, setSaving] = useState(false);
+  // Portal target for the Save button — lives in the settings title bar.
+  const [titleActionsEl, setTitleActionsEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setTitleActionsEl(document.getElementById('settings-title-actions'));
+  }, []);
 
   const snapshotRef = useRef<Record<string, string> | null>(null);
 
@@ -314,14 +320,15 @@ function AccountSettingsTab() {
         </div>
       </section>
 
-      <div className="lg:col-span-2 flex items-center justify-end gap-3">
+      {titleActionsEl && createPortal(
         <PrimaryButton
           onClick={handleSave}
           disabled={saving || !hasChanges}
         >
           {saving ? 'Saving...' : 'Save Settings'}
-        </PrimaryButton>
-      </div>
+        </PrimaryButton>,
+        titleActionsEl,
+      )}
     </div>
   );
 }

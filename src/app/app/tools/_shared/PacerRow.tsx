@@ -790,33 +790,46 @@ export function PacerRow({
         <>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {isLifetime ? (
+          // Lifetime ads: Meta distributes the budget across the flight however
+          // it wants, so there's nothing to pace day-to-day (Prompt 1/2). Show
+          // run-level reconciliation only — spent-to-date vs the lifetime cap +
+          // an actual-vs-budget status — never daily projection / rec-daily.
           (() => {
-            const pct = calc.lifetimePacingPct;
-            const onTrack = pct != null && pct >= 95 && pct <= 105;
-            const overpacing = pct != null && pct > 105;
-            const underpacing = pct != null && pct < 95;
-            const color = onTrack
-              ? COLORS.success
-              : overpacing
-                ? COLORS.warn
-                : underpacing
-                  ? COLORS.error
-                  : undefined;
+            const lifetimeBudget = num(ad.metaLifetimeBudget) ?? calc.budget;
+            const spentToDate = num(ad.pacerRunSpend) ?? calc.spent;
+            const ratio = lifetimeBudget > 0 ? spentToDate / lifetimeBudget : null;
+            const over = ratio != null && ratio > 1;
             return (
-              <MetricBox
-                label="Pacing"
-                value={pct != null ? `${pct.toFixed(1)}%` : '—'}
-                sub={
-                  pct == null
-                    ? 'set flight start, end, and target'
-                    : onTrack
-                      ? 'on track'
-                      : overpacing
-                        ? 'spending faster than scheduled'
-                        : 'spending slower than scheduled'
-                }
-                color={color}
-              />
+              <>
+                <MetricBox
+                  label="Spent to date"
+                  value={fmt(spentToDate)}
+                  sub={
+                    ratio != null
+                      ? `${(ratio * 100).toFixed(0)}% of lifetime budget`
+                      : 'set a lifetime budget'
+                  }
+                />
+                <MetricBox
+                  label="Lifetime budget"
+                  value={lifetimeBudget > 0 ? fmt(lifetimeBudget) : '—'}
+                  sub="Meta spend cap"
+                />
+                <MetricBox
+                  label="Status"
+                  value={
+                    ratio == null
+                      ? '—'
+                      : over
+                        ? `Over by ${fmt(spentToDate - lifetimeBudget)}`
+                        : `${fmt(lifetimeBudget - spentToDate)} left`
+                  }
+                  sub="Meta controls delivery"
+                  color={
+                    ratio == null ? undefined : over ? COLORS.error : COLORS.success
+                  }
+                />
+              </>
             );
           })()
         ) : (
@@ -836,6 +849,8 @@ export function PacerRow({
             }
           />
         )}
+        {!isLifetime && (
+        <>
         <MetricBox
           label="Days Remaining"
           value={
@@ -902,6 +917,8 @@ export function PacerRow({
           }
           color={recColor}
         />
+        </>
+        )}
       </div>
         </>
       )}
@@ -932,9 +949,9 @@ export function PacerRow({
         if (isLifetime) {
           return (
             <p className="m-0 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
-              {fmt(calc.remaining)} of the lifetime budget left across{' '}
-              {fmtDaysLeft(calc.daysLeft)}. To finish on time, average ~
-              {fmt(calc.recDaily)}/day.
+              Meta controls how this lifetime budget is delivered across the
+              flight — there&apos;s no daily rate to steer. The full variance
+              settles when the run completes.
             </p>
           );
         }

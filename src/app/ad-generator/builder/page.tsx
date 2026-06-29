@@ -1969,18 +1969,7 @@ export default function AdBuilderPage() {
               <PlusIcon className="h-3.5 w-3.5" />
               Insert
             </h2>
-            <div className="grid grid-cols-2 gap-2">
-              {adders.map((a) => (
-                <button
-                  key={a.label}
-                  onClick={a.onAdd}
-                  className="flex flex-col items-center justify-center gap-2 rounded-xl border border-[var(--border)] px-2 py-5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)]"
-                >
-                  <a.Icon className="h-6 w-6 text-[var(--muted-foreground)]" />
-                  {a.label}
-                </button>
-              ))}
-            </div>
+            <AdderGrid adders={adders} variant="panel" />
             <p className="mt-3 text-[11px] leading-snug text-[var(--muted-foreground)]">Click to add to the canvas, then drag to position. The panel stays open so you can add several.</p>
           </section>
           )}
@@ -2775,18 +2764,7 @@ export default function AdBuilderPage() {
                     <p className="mx-auto mt-1 mb-4 max-w-xs text-xs text-[var(--muted-foreground)]">
                       Add your first element to get started — drop in text, an image, a button, or a shape.
                     </p>
-                    <div className="grid grid-cols-4 gap-2">
-                      {adders.map((a) => (
-                        <button
-                          key={a.label}
-                          onClick={a.onAdd}
-                          className="flex flex-col items-center gap-1.5 rounded-xl border border-[var(--border)] px-2 py-3 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)]"
-                        >
-                          <a.Icon className="h-5 w-5 text-[var(--muted-foreground)]" />
-                          {a.label}
-                        </button>
-                      ))}
-                    </div>
+                    <AdderGrid adders={adders} variant="onboarding" />
                     <p className="mt-4 text-[11px] text-[var(--muted-foreground)]">
                       Need a different size? Open the <span className="font-medium text-[var(--foreground)]">Sizes</span> panel on the left.
                     </p>
@@ -3529,6 +3507,31 @@ function RailButton({ label, Icon, active, onClick }: { label: string; Icon: Rea
   );
 }
 
+type Adder = { label: string; Icon: React.ComponentType<{ className?: string }>; onAdd: () => void };
+
+/** The element palette — a grid of tiles that drop an element on the canvas.
+ *  Shared by the Insert flyout (`panel`) and the empty-canvas onboarding
+ *  (`onboarding`); `variant` only tunes density. */
+function AdderGrid({ adders, variant }: { adders: Adder[]; variant: 'panel' | 'onboarding' }) {
+  const cols = variant === 'panel' ? 'grid-cols-2' : 'grid-cols-4';
+  const tile = variant === 'panel' ? 'justify-center gap-2 py-5 text-xs' : 'gap-1.5 py-3 text-[11px]';
+  const icon = variant === 'panel' ? 'h-6 w-6' : 'h-5 w-5';
+  return (
+    <div className={`grid ${cols} gap-2`}>
+      {adders.map((a) => (
+        <button
+          key={a.label}
+          onClick={a.onAdd}
+          className={`flex flex-col items-center rounded-xl border border-[var(--border)] px-2 font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)] ${tile}`}
+        >
+          <a.Icon className={`${icon} text-[var(--muted-foreground)]`} />
+          {a.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Tiny pictographic icons for the align / distribute actions. */
 function AlignIcon({ edge }: { edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom' | 'dist-h' | 'dist-v' }) {
   const s = 'h-4 w-4';
@@ -3628,6 +3631,13 @@ function SizesOverviewModal({
 }) {
   const MAX_W = 240;
   const MAX_H = 200;
+  // Render each size's HTML once per (doc, previewData) rather than on every
+  // parent render — each result feeds an <iframe srcDoc>, so recomputing would
+  // reload every iframe on each tick.
+  const previews = useMemo(
+    () => doc.sizes.map((s) => ({ s, html: renderDoc(doc, previewData, s, { preview: true }) })),
+    [doc, previewData],
+  );
   return createPortal(
     <div className="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-12" onClick={onClose}>
       <div className="w-full max-w-4xl rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-5 shadow-xl backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
@@ -3641,10 +3651,9 @@ function SizesOverviewModal({
           </button>
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {doc.sizes.map((s) => {
+          {previews.map(({ s, html }) => {
             const sc = Math.min(MAX_W / s.width, MAX_H / s.height);
             const active = s.id === currentSizeId;
-            const html = renderDoc(doc, previewData, s, { preview: true });
             return (
               <button
                 key={s.id}

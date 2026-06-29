@@ -519,7 +519,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         </div>
       )}
 
-      {plan && (tab === 'planner' || tab === 'pacing') && (
+      {plan && tab === 'planner' && (
         <div className="mt-5">
           <TotalAllocationHeader plan={plan} />
           <div className="mt-4 flex flex-wrap items-start gap-4">

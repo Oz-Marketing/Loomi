@@ -7,13 +7,13 @@ import { resolveAccountTimeZone, zonedTodayIso } from '@/lib/timezone';
 import {
   CARRYOVER_THRESHOLD,
   ACTIVE_STATUSES,
-} from '@/app/tools/meta/_lib/constants';
+} from '@/lib/ad-pacer/constants';
 // §0.1: the ONE markup resolution + spend-target formula (no hardcoded
 // literal); the agency default comes from admin settings (DB-backed).
 import {
   accountMarginSetting,
   effectiveSpendTarget,
-} from '@/app/tools/meta/_lib/markup';
+} from '@/lib/ad-pacer/markup';
 import { getGlobalDefaultMarkup } from '@/lib/services/markup';
 // §3: the ONE "lifetime ad still running" predicate, shared with the client so
 // the over/under base excludes the same ads everywhere.
@@ -21,7 +21,8 @@ import {
   isLifetimeInProgress,
   effectiveActual,
   classifyAdVariance,
-} from '@/app/tools/meta/_lib/pacer-calc';
+  computeSplitRunSettlement,
+} from '@/lib/ad-pacer/pacer-calc';
 import { writeAudit } from '@/lib/meta-ads-audit';
 
 function attachUrl<T extends { attachmentKey: string | null }>(entry: T): T & { attachmentUrl: string | null } {
@@ -76,6 +77,80 @@ export async function getOrCreatePlan(accountKey: string) {
 }
 
 /**
+ * Undo Meta history backfill for an account: clear the `historicalActual`
+ * pulled for pre-tool (untracked) months so it stops feeding reconciliation
+ * variance. Optionally scope to a single year. A row whose ONLY content was
+ * the backfill is deleted outright, returning that month to its true
+ * pre-backfill state (it drops off the Reconciliation tab); a row that also
+ * carries a typed budget goal or carryover keeps those and just loses the
+ * backfilled actual. Never touches a tracked month — those have no
+ * `historicalActual` to begin with. Returns the periods cleared. Re-runnable.
+ */
+export async function clearBackfillHistory(
+  accountKey: string,
+  opts: { year?: number; authorUserId?: string | null } = {},
+): Promise<{ cleared: string[] }> {
+  const plan = await getOrCreatePlan(accountKey);
+
+  // Tracked months get their actual from their ad rows, never from a backfill —
+  // belt-and-suspenders so we can't strip a real month even if one somehow has
+  // a stray historicalActual.
+  const trackedRows = await prisma.metaAdsPacerAd.findMany({
+    where: { planId: plan.id },
+    select: { period: true },
+    distinct: ['period'],
+  });
+  const tracked = new Set(trackedRows.map((r) => r.period));
+
+  const rows = await prisma.metaAdsPacerPeriodBudget.findMany({
+    where: {
+      planId: plan.id,
+      historicalActual: { not: null },
+      ...(opts.year ? { period: { startsWith: `${opts.year}-` } } : {}),
+    },
+  });
+
+  const cleared: string[] = [];
+  for (const row of rows) {
+    if (tracked.has(row.period)) continue;
+    const pureBackfill =
+      row.baseBudgetGoal == null &&
+      row.addedBudgetGoal == null &&
+      row.googleBaseBudgetGoal == null &&
+      row.googleAddedBudgetGoal == null &&
+      row.baseCarryover == null &&
+      row.addedCarryover == null &&
+      row.googleBaseCarryover == null &&
+      row.googleAddedCarryover == null;
+    if (pureBackfill) {
+      await prisma.metaAdsPacerPeriodBudget.delete({ where: { id: row.id } });
+    } else {
+      await prisma.metaAdsPacerPeriodBudget.update({
+        where: { id: row.id },
+        data: { historicalActual: null },
+      });
+    }
+    cleared.push(row.period);
+  }
+
+  if (cleared.length > 0) {
+    await writeAudit(
+      cleared.map((period) => ({
+        accountKey,
+        planId: plan.id,
+        period,
+        action: 'edit',
+        field: 'historicalActual',
+        summary: `Cleared backfilled actual spend for ${period}`,
+        authorUserId: opts.authorUserId ?? null,
+      })),
+    );
+  }
+
+  return { cleared: cleared.sort() };
+}
+
+/**
  * Pull the full plan with ads + nested children, ordered for the UI.
  */
 export async function fetchPlanWithRelations(planId: string) {
@@ -101,7 +176,24 @@ export function isValidPeriod(period: string): boolean {
 }
 
 /** Pull the budget + ads for a single period. */
-export async function fetchPeriodPlan(planId: string, period: string) {
+/** Ad platform of a pacer surface. Legacy rows have null platform = Meta. */
+export type PacerPlatform = 'meta' | 'google';
+
+/**
+ * Prisma `where` fragment that scopes a pacer-ad query to one platform.
+ * Meta surfaces include legacy/null rows (everything that isn't Google);
+ * Google surfaces include only Google lines. Pass nothing for all platforms.
+ */
+export function adPlatformWhere(platform?: PacerPlatform) {
+  if (platform === 'google') return { platform: 'google' };
+  // Meta = everything that isn't Google. Legacy rows have platform=null, and in
+  // SQL `platform <> 'google'` is NULL (excluded) for those — so OR the nulls
+  // back in explicitly.
+  if (platform === 'meta') return { OR: [{ platform: null }, { platform: { not: 'google' } }] };
+  return {};
+}
+
+export async function fetchPeriodPlan(planId: string, period: string, platform?: PacerPlatform) {
   // Pull the parent plan so we can surface the account's markup override
   // (Account.markup) and resolved pacing timezone alongside the period data.
   // The calculator needs markup to translate Client Budget inputs into actual
@@ -111,7 +203,7 @@ export async function fetchPeriodPlan(planId: string, period: string) {
       where: { planId_period: { planId, period } },
     }),
     prisma.metaAdsPacerAd.findMany({
-      where: { planId, period },
+      where: { planId, period, ...adPlatformWhere(platform) },
       orderBy: { position: 'asc' },
       include: {
         designNotes: { orderBy: { createdAt: 'asc' } },
@@ -137,11 +229,18 @@ export async function fetchPeriodPlan(planId: string, period: string) {
   );
   const nowMs = Date.now();
   return {
-    baseBudgetGoal: budget?.baseBudgetGoal ?? null,
-    addedBudgetGoal: budget?.addedBudgetGoal ?? null,
+    // Account budget goals are per-platform: Google reads its own columns, Meta
+    // (and legacy/unspecified) reads the original pair.
+    baseBudgetGoal:
+      (platform === 'google' ? budget?.googleBaseBudgetGoal : budget?.baseBudgetGoal) ?? null,
+    addedBudgetGoal:
+      (platform === 'google' ? budget?.googleAddedBudgetGoal : budget?.addedBudgetGoal) ?? null,
     // Opt-in carryover applied to each bucket's DERIVED spend target (Change 7).
-    baseCarryover: budget?.baseCarryover ?? null,
-    addedCarryover: budget?.addedCarryover ?? null,
+    // Per-platform, same as the budget goals — Google reads its own pair.
+    baseCarryover:
+      (platform === 'google' ? budget?.googleBaseCarryover : budget?.baseCarryover) ?? null,
+    addedCarryover:
+      (platform === 'google' ? budget?.googleAddedCarryover : budget?.addedCarryover) ?? null,
     // §0.1: resolved at this single boundary — Account.markup override, else
     // the agency default — so every consumer (client + getPriorOverUnder) gets
     // a concrete factor and never re-resolves or holds a literal.
@@ -235,6 +334,7 @@ export async function reconcileCompletedRuns(
       adStatus: true,
       flightEnd: true,
       metaEndDate: true,
+      platform: true,
     },
   });
   const toComplete = ads.filter((a) => {
@@ -252,6 +352,7 @@ export async function reconcileCompletedRuns(
       accountKey,
       planId,
       period,
+      platform: a.platform === 'google' ? 'google' : null,
       adId: a.id,
       adName: a.name,
       action: 'edit',
@@ -350,10 +451,20 @@ async function getSiblingAllocations(
   return out;
 }
 
+/** Drop the other platform's ads from a (possibly frozen-snapshot) view payload. */
+function filterViewAdsByPlatform<T extends { ads?: unknown }>(payload: T, platform?: PacerPlatform): T {
+  if (!platform) return payload;
+  const ads = (payload as { ads?: { platform?: string | null }[] }).ads;
+  if (!Array.isArray(ads)) return payload;
+  const keep = (p?: string | null) => (platform === 'google' ? p === 'google' : p !== 'google');
+  return { ...payload, ads: ads.filter((a) => keep(a.platform)) };
+}
+
 export async function getPeriodPlanView(
   accountKey: string,
   period: string,
   userId: string | null,
+  platform?: PacerPlatform,
 ) {
   const plan = await getOrCreatePlan(accountKey);
   const tz = await accountTimeZone(accountKey);
@@ -362,6 +473,22 @@ export async function getPeriodPlanView(
   // ad's card can show its real per-month split. Computed once here so both the
   // live and frozen views carry it.
   const siblingsByName = await getSiblingAllocations(plan.id);
+  // §0.1: markup is a LIVE factor, never part of the frozen historical record.
+  // Resolve it here (Account.markup override, else the agency default) and
+  // override whatever a snapshot baked in — months frozen before markup config
+  // existed (or before this account's markup was set) carry markup=0/undefined,
+  // which would surface every derived target as $0 / $∞ and make the carryover
+  // banner treat the WHOLE spend as the over/under. Re-resolving live keeps the
+  // frozen planner view + the carryover prompt in lockstep with Reconciliation,
+  // which already re-resolves markup the same way.
+  const [account, globalDefaultMarkup] = await Promise.all([
+    prisma.account.findUnique({
+      where: { key: accountKey },
+      select: { markup: true },
+    }),
+    getGlobalDefaultMarkup(),
+  ]);
+  const liveMarkup = accountMarginSetting(account?.markup ?? null, globalDefaultMarkup);
 
   const view = await (async () => {
   if (state === 'closed') {
@@ -370,7 +497,7 @@ export async function getPeriodPlanView(
     });
     if (snap && snap.reopenedAt == null) {
       return {
-        ...reviveSnapshotPayload(snap.payloadJson),
+        ...filterViewAdsByPlatform(reviveSnapshotPayload(snap.payloadJson), platform),
         frozen: true,
         frozenAt: snap.frozenAt.toISOString(),
         monthState: state,
@@ -380,6 +507,8 @@ export async function getPeriodPlanView(
       // Lazy freeze: capture the settled month exactly once, on first view.
       // Two concurrent first-views can race the unique [planId, period]; if we
       // lose, fall back to reading the snapshot the other request created.
+      // The snapshot bakes the FULL month (both platforms); only the returned
+      // view is platform-filtered.
       const payload = await fetchPeriodPlan(plan.id, period);
       try {
         const created = await prisma.metaAdsPacerMonthSnapshot.create({
@@ -391,7 +520,7 @@ export async function getPeriodPlanView(
           },
         });
         return {
-          ...payload,
+          ...filterViewAdsByPlatform(payload, platform),
           frozen: true,
           frozenAt: created.frozenAt.toISOString(),
           monthState: state,
@@ -402,19 +531,24 @@ export async function getPeriodPlanView(
         });
         if (winner && winner.reopenedAt == null) {
           return {
-            ...reviveSnapshotPayload(winner.payloadJson),
+            ...filterViewAdsByPlatform(reviveSnapshotPayload(winner.payloadJson), platform),
             frozen: true,
             frozenAt: winner.frozenAt.toISOString(),
             monthState: state,
           };
         }
         // Reopened in the meantime (or still unreadable) — serve live.
-        return { ...payload, frozen: false, reopened: !!winner, monthState: state };
+        return {
+          ...filterViewAdsByPlatform(payload, platform),
+          frozen: false,
+          reopened: !!winner,
+          monthState: state,
+        };
       }
     }
     // Reopened by an admin — serve live rows so corrections are visible.
     return {
-      ...(await fetchPeriodPlan(plan.id, period)),
+      ...(await fetchPeriodPlan(plan.id, period, platform)),
       frozen: false,
       reopened: true,
       monthState: state,
@@ -422,13 +556,13 @@ export async function getPeriodPlanView(
   }
 
   return {
-    ...(await fetchPeriodPlan(plan.id, period)),
+    ...(await fetchPeriodPlan(plan.id, period, platform)),
     frozen: false,
     monthState: state,
   };
   })();
 
-  return { ...view, siblingsByName };
+  return { ...view, markup: liveMarkup, siblingsByName };
 }
 
 // ─── Carryover (Change 7) ──────────────────────────────────────────────────
@@ -549,9 +683,11 @@ export async function setCarryover(
 async function recomputeCarryoverColumns(
   planId: string,
   targetMonth: string,
+  platform: PacerPlatform = 'meta',
 ): Promise<void> {
+  const isGoogle = platform === 'google';
   const entries = await prisma.metaAdsPacerCarryoverApplication.findMany({
-    where: { planId, targetMonth },
+    where: { planId, targetMonth, ...adPlatformWhere(platform) },
     select: { bucket: true, amount: true },
   });
   let base = 0;
@@ -564,15 +700,16 @@ async function recomputeCarryoverColumns(
   }
   const baseVal = base !== 0 ? base.toFixed(2) : null;
   const addedVal = added !== 0 ? added.toFixed(2) : null;
+  // Write the platform's own carryover pair so a Google reconcile never lands in
+  // Meta's cached columns (and vice versa). The pacing math reads the matching
+  // pair by platform (fetchPeriodPlan).
+  const cols = isGoogle
+    ? { googleBaseCarryover: baseVal, googleAddedCarryover: addedVal }
+    : { baseCarryover: baseVal, addedCarryover: addedVal };
   await prisma.metaAdsPacerPeriodBudget.upsert({
     where: { planId_period: { planId, period: targetMonth } },
-    create: {
-      planId,
-      period: targetMonth,
-      baseCarryover: baseVal,
-      addedCarryover: addedVal,
-    },
-    update: { baseCarryover: baseVal, addedCarryover: addedVal },
+    create: { planId, period: targetMonth, ...cols },
+    update: cols,
   });
 }
 
@@ -679,7 +816,7 @@ export async function fetchOverview(accountKeys: string[], period: string) {
       : Promise.resolve([]),
     planIds.length > 0
       ? prisma.metaAdsPacerAd.findMany({
-          where: { planId: { in: planIds }, period },
+          where: { planId: { in: planIds }, period, ...adPlatformWhere('meta') },
           orderBy: { position: 'asc' },
           include: {
             designNotes: { orderBy: { createdAt: 'asc' } },
@@ -719,6 +856,12 @@ export async function fetchOverview(accountKeys: string[], period: string) {
         markup: accountMarginSetting(acct.markup, globalDefaultMarkup),
         baseBudgetGoal: budget?.baseBudgetGoal ?? null,
         addedBudgetGoal: budget?.addedBudgetGoal ?? null,
+        // Carryover folded into each source's spend target (target = goal ×
+        // markup + carryover), so the overview's remaining-budget footer can
+        // reconcile against the same target the planner uses instead of the
+        // raw client budget.
+        baseCarryover: budget?.baseCarryover ?? null,
+        addedCarryover: budget?.addedCarryover ?? null,
         notesCount: noteCountByKey.get(acct.key) ?? 0,
         ads: acctAds.map((ad) => ({
           ...ad,
@@ -790,7 +933,7 @@ export async function fetchYearSummary(
       },
     }),
     prisma.metaAdsPacerAd.findMany({
-      where: { planId: { in: planIds }, period: { in: periods } },
+      where: { planId: { in: planIds }, period: { in: periods }, ...adPlatformWhere('meta') },
       select: { period: true, pacerActual: true },
     }),
   ]);
@@ -837,6 +980,9 @@ export interface ReconAdVariance {
   /** billedActual − target — the ad's over/under contribution. */
   contribution: number;
   klass: 'real' | 'billed-cross-month' | 'lifetime-in-progress';
+  /** false = a cross-month lifetime run deferred to a future month; true =
+   *  settles at this month's close (incl. a single-month lifetime ad). */
+  settlesThisMonth: boolean;
 }
 
 export interface ReconciliationMonth {
@@ -934,7 +1080,9 @@ export async function getYearReconciliation(
   accountKey: string,
   year: number,
   _userId: string | null,
+  platform: PacerPlatform = 'meta',
 ): Promise<YearReconciliation> {
+  const isGoogle = platform === 'google';
   const plan = await getOrCreatePlan(accountKey);
   const tz = await accountTimeZone(accountKey);
   const [account, globalDefaultMarkup] = await Promise.all([
@@ -979,12 +1127,15 @@ export async function getYearReconciliation(
         period: true,
         baseBudgetGoal: true,
         addedBudgetGoal: true,
+        googleBaseBudgetGoal: true,
+        googleAddedBudgetGoal: true,
         historicalActual: true,
       },
     }),
     prisma.metaAdsPacerAd.findMany({
-      where: { planId: plan.id, period: { in: periods } },
+      where: { planId: plan.id, period: { in: periods }, ...adPlatformWhere(platform) },
       select: {
+        id: true,
         period: true,
         name: true,
         pacerActual: true,
@@ -998,11 +1149,17 @@ export async function getYearReconciliation(
         flightStart: true,
         metaEndDate: true,
         flightEnd: true,
+        // Cross-month SPLIT run settlement (Prompt 1):
+        metaObjectId: true, // synced runs auto-chain by ad-set id
+        linkedPrevAdId: true, // manual runs chain via the prev-month link
+        lifetimeMonthSplit: true, // the "split across months" mark (any member)
+        metaLifetimeBudget: true, // the settlement cap
       },
     }),
     prisma.metaAdsPacerCarryoverApplication.findMany({
       where: {
         planId: plan.id,
+        ...adPlatformWhere(platform),
         OR: [{ sourceMonth: { in: periods } }, { targetMonth: { in: periods } }],
       },
       select: {
@@ -1030,6 +1187,17 @@ export async function getYearReconciliation(
   // the Reconciliation row drill-down (same classifier the Over/Under page uses).
   const adVarByPeriod = new Map<string, ReconAdVariance[]>();
   const reconNowMs = Date.now();
+
+  // Cross-month SPLIT run settlement (Prompt 1) — pure helper groups the runs
+  // and computes per-month exclusions + the single final-month settlement.
+  const {
+    memberIds: splitMemberIds,
+    finalPeriodByMember: splitMemberFinalPeriod,
+    excludeActualByPeriod: splitExcludeActualByPeriod,
+    excludeAllocByPeriod: splitExcludeAllocByPeriod,
+    settlementByPeriod: runSettlementByPeriod,
+  } = computeSplitRunSettlement(adRows, reconNowMs, tz);
+
   for (const a of adRows) {
     adCountByPeriod.set(a.period, (adCountByPeriod.get(a.period) ?? 0) + 1);
     // §2: a resolved cross-month straddler contributes its FULL run in its own
@@ -1038,15 +1206,34 @@ export async function getYearReconciliation(
     actualByPeriod.set(a.period, (actualByPeriod.get(a.period) ?? 0) + n);
     const v = classifyAdVariance(a, a.period, reconNowMs, tz);
     const list = adVarByPeriod.get(a.period) ?? [];
-    list.push({
-      name: a.name ?? '',
-      inMonthSpend: v.inMonthSpend,
-      billedActual: v.billedActual,
-      contribution: v.contribution,
-      klass: v.klass,
-    });
+    // A split-run member never books a per-month variance in the drill-down — its
+    // whole run settles once on the final month (added to that month's total).
+    // Show it as held out, labeled by whether THIS is the run's final month.
+    const splitFinal = splitMemberFinalPeriod.get(a.id);
+    list.push(
+      splitFinal !== undefined
+        ? {
+            name: a.name ?? '',
+            inMonthSpend: v.inMonthSpend,
+            billedActual: 0,
+            contribution: 0,
+            klass: 'lifetime-in-progress',
+            settlesThisMonth: a.period === splitFinal,
+          }
+        : {
+            name: a.name ?? '',
+            inMonthSpend: v.inMonthSpend,
+            billedActual: v.billedActual,
+            contribution: v.contribution,
+            klass: v.klass,
+            settlesThisMonth: v.settlesThisMonth,
+          },
+    );
     adVarByPeriod.set(a.period, list);
-    if (isLifetimeInProgress(a, reconNowMs, tz)) {
+    // Split-run members are excluded via the split maps above (their whole run
+    // is held out of every month's base + settled once on the final month), so
+    // don't ALSO fold them into the in-progress hold-out — that would double-count.
+    if (isLifetimeInProgress(a, reconNowMs, tz) && !splitMemberIds.has(a.id)) {
       ipLifePeriods.add(a.period);
       ipLifeActualByPeriod.set(a.period, (ipLifeActualByPeriod.get(a.period) ?? 0) + n);
       const alloc = Number(a.allocation ?? 0);
@@ -1067,10 +1254,15 @@ export async function getYearReconciliation(
   const months: ReconciliationMonth[] = periods.map((period) => {
     const b = budgetByPeriod.get(period);
     const tracked = (adCountByPeriod.get(period) ?? 0) > 0;
-    const base = Number(b?.baseBudgetGoal ?? 0);
-    const added = Number(b?.addedBudgetGoal ?? 0);
+    // Per-platform budget goals: Google reads its own pair (the Meta specialist
+    // and Google specialist each own their own monthly budget on the shared row).
+    const base = Number((isGoogle ? b?.googleBaseBudgetGoal : b?.baseBudgetGoal) ?? 0);
+    const added = Number((isGoogle ? b?.googleAddedBudgetGoal : b?.addedBudgetGoal) ?? 0);
     const clientBudget = (isNaN(base) ? 0 : base) + (isNaN(added) ? 0 : added);
-    const histActual = b?.historicalActual != null ? Number(b.historicalActual) : null;
+    // historicalActual is a Meta-only pre-tool backfill (account-total from Meta);
+    // Google has no pre-tool backfill, so its untracked months are simply absent.
+    const histActual =
+      !isGoogle && b?.historicalActual != null ? Number(b.historicalActual) : null;
     const isBackfilled = !tracked && histActual != null && !isNaN(histActual);
     const actual = tracked
       ? actualByPeriod.get(period) ?? 0
@@ -1087,13 +1279,26 @@ export async function getYearReconciliation(
     // uses the base. Settled months have no in-progress lifetime ad, so for them
     // base == total and nothing changes.
     const hasLifetimeInProgress = ipLifePeriods.has(period);
-    const baseActual = actual - (ipLifeActualByPeriod.get(period) ?? 0);
-    const baseTarget = spendTarget - (ipLifeAllocByPeriod.get(period) ?? 0);
+    // Remove both the §3 in-progress lifetime ads AND any cross-month SPLIT run
+    // members from this month's settle-able base (actual + allocation). A split
+    // run never measures against the month's client budget — it settles once,
+    // against its Meta lifetime budget, on its final month (added below).
+    const baseActual =
+      actual -
+      (ipLifeActualByPeriod.get(period) ?? 0) -
+      (splitExcludeActualByPeriod.get(period) ?? 0);
+    const baseTarget =
+      spendTarget -
+      (ipLifeAllocByPeriod.get(period) ?? 0) -
+      (splitExcludeAllocByPeriod.get(period) ?? 0);
     // The live month's target includes carryover applied INTO it, mirroring the
     // Pacer's adjusted target (base × markup + carryover). Past months never
     // receive carryover (appliedIn = 0), so theirs is unchanged.
     const adjustedSpendTarget = spendTarget + appliedIn;
-    const variance = baseActual - (baseTarget + appliedIn);
+    // A completed split run books its single (Σ run actual − Meta lifetime
+    // budget) variance on its final month only; $0 on every other month.
+    const variance =
+      baseActual - (baseTarget + appliedIn) + (runSettlementByPeriod.get(period) ?? 0);
     const carryover = -variance;
     const appliedOut = appliedOutByPeriod.get(period) ?? 0;
     return {
@@ -1200,11 +1405,13 @@ export async function applyCarryover(
   targetMonth: string,
   bucket: 'base' | 'added',
   userId: string | null,
+  platform: PacerPlatform = 'meta',
 ): Promise<{ applied: number }> {
   const recon = await getYearReconciliation(
     accountKey,
     Number(sourceMonth.slice(0, 4)),
     userId,
+    platform,
   );
   const m = recon.months.find((x) => x.period === sourceMonth);
   if (!m) throw new Error('Month not found for carryover.');
@@ -1213,6 +1420,7 @@ export async function applyCarryover(
   await prisma.metaAdsPacerCarryoverApplication.create({
     data: {
       planId,
+      platform: platform === 'google' ? 'google' : null,
       bucket,
       sourceMonth,
       targetMonth,
@@ -1220,7 +1428,7 @@ export async function applyCarryover(
       appliedByUserId: userId,
     },
   });
-  await recomputeCarryoverColumns(planId, targetMonth);
+  await recomputeCarryoverColumns(planId, targetMonth, platform);
   return { applied: amount };
 }
 
@@ -1235,11 +1443,13 @@ export async function applyAllUnapplied(
   targetMonth: string,
   bucket: 'base' | 'added',
   userId: string | null,
+  platform: PacerPlatform = 'meta',
 ): Promise<{ applied: number; count: number }> {
   const recon = await getYearReconciliation(
     accountKey,
     Number(targetMonth.slice(0, 4)),
     userId,
+    platform,
   );
   let total = 0;
   let count = 0;
@@ -1250,6 +1460,7 @@ export async function applyAllUnapplied(
     await prisma.metaAdsPacerCarryoverApplication.create({
       data: {
         planId,
+        platform: platform === 'google' ? 'google' : null,
         bucket,
         sourceMonth: m.period,
         targetMonth,
@@ -1260,7 +1471,7 @@ export async function applyAllUnapplied(
     total += amount;
     count++;
   }
-  if (count > 0) await recomputeCarryoverColumns(planId, targetMonth);
+  if (count > 0) await recomputeCarryoverColumns(planId, targetMonth, platform);
   return { applied: total, count };
 }
 
@@ -1273,15 +1484,17 @@ export async function unapplyCarryover(
   planId: string,
   targetMonth: string,
   sourceMonth: string | null,
+  platform: PacerPlatform = 'meta',
 ): Promise<void> {
   await prisma.metaAdsPacerCarryoverApplication.deleteMany({
     where: {
       planId,
       targetMonth,
+      ...adPlatformWhere(platform),
       ...(sourceMonth ? { sourceMonth } : {}),
     },
   });
-  await recomputeCarryoverColumns(planId, targetMonth);
+  await recomputeCarryoverColumns(planId, targetMonth, platform);
 }
 
 /**
@@ -1294,15 +1507,20 @@ export async function setHistoricalTarget(
   planId: string,
   period: string,
   clientBudget: number | null,
+  platform: PacerPlatform = 'meta',
 ): Promise<void> {
   const value =
     clientBudget != null && Number.isFinite(clientBudget) && clientBudget > 0
       ? clientBudget.toFixed(2)
       : null;
+  // Write the platform's own budget-goal column so a pre-tool target is scoped
+  // to the surface that set it.
+  const col =
+    platform === 'google' ? { googleBaseBudgetGoal: value } : { baseBudgetGoal: value };
   await prisma.metaAdsPacerPeriodBudget.upsert({
     where: { planId_period: { planId, period } },
-    create: { planId, period, baseBudgetGoal: value },
-    update: { baseBudgetGoal: value },
+    create: { planId, period, ...col },
+    update: col,
   });
 }
 

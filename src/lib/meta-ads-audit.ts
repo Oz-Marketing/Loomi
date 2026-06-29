@@ -57,6 +57,8 @@ export interface AuditInput {
   accountKey: string;
   planId: string;
   period: string;
+  /** Platform the change belongs to: 'google' for Google, null/'meta' for Meta. */
+  platform?: string | null;
   adId?: string | null;
   adName?: string | null;
   action: string;
@@ -82,6 +84,7 @@ export async function writeAudit(entries: AuditInput[]): Promise<void> {
         accountKey: e.accountKey,
         planId: e.planId,
         period: e.period,
+        platform: e.platform ?? null,
         adId: e.adId ?? null,
         adName: e.adName ?? null,
         action: e.action,

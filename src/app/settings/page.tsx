@@ -1,17 +1,15 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAccount } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
-import {
-  BuildingStorefrontIcon,
-  UsersIcon, SwatchIcon, SparklesIcon,
-  CogIcon, BellIcon, BellAlertIcon, TagIcon, Squares2X2Icon, BriefcaseIcon, CalculatorIcon,
-} from '@heroicons/react/24/outline';
+import { CogIcon, SparklesIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { CodeEditor } from '@/components/code-editor';
 import { AccountsList } from '@/components/accounts-list';
+import { AccountAvatar } from '@/components/account-avatar';
 import { OemMultiSelect } from '@/components/oem-multi-select';
 import PrimaryButton from '@/components/primary-button';
 import { getAccountOems, industryHasBrands, brandsForIndustry } from '@/lib/oems';
@@ -23,58 +21,31 @@ import { CustomFieldBlueprintsTab } from '@/components/settings/custom-field-blu
 import { IndustriesTab } from '@/components/settings/industries-tab';
 import { DefaultMarkupTab } from '@/components/settings/default-markup-tab';
 import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
+import { TeamsTab } from '@/components/settings/teams-tab';
+import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
+import { useSettingsTabs, type SettingsTabKey } from '@/components/settings/use-settings-tabs';
 import { useIndustries } from '@/lib/hooks/use-industries';
 
-type Tab =
-  | 'subaccounts'
-  | 'subaccount'
-  | 'users'
-  | 'knowledge'
-  | 'industries'
-  | 'markup'
-  | 'alerts'
-  | 'contact-fields'
-  | 'contact-field-blueprints'
-  | 'notifications'
-  | 'appearance';
+type Tab = SettingsTabKey;
 
 export default function SettingsPage() {
-  const { isAdmin, isAccount, userRole } = useAccount();
-  const { confirmNavigation } = useUnsavedChanges();
+  const { isAdmin, isAccount, userRole, accountKey, accountData } = useAccount();
   const router = useRouter();
   const pathname = usePathname();
 
-  // Determine available tabs based on role/mode. `label` is the sidebar
-  // nav text; `titleLabel` is the page-header title (singularised /
-  // suffixed with "Settings" for clean grammar).
-  const tabs: {
-    key: Tab;
-    label: string;
-    titleLabel: string;
-    icon: React.ComponentType<{ className?: string }>;
-  }[] = [];
+  // Role-gated tabs (shared with the sidebar's settings nav).
+  const tabs = useSettingsTabs();
   const hasAdminAccess = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
-  // Elevated = developer / super_admin only (no plain admin). Gates the
-  // app-wide Industries manager.
+  // Elevated = developer / super_admin only (no plain admin).
   const isElevated = userRole === 'developer' || userRole === 'super_admin';
-  if (hasAdminAccess && isAdmin) tabs.push({ key: 'subaccounts', label: 'Sub-Accounts', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
-  if (isAccount) tabs.push({ key: 'subaccount', label: 'Sub-Account', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
-  if (hasAdminAccess && isAccount) tabs.push({ key: 'contact-fields', label: 'Custom Fields', titleLabel: 'Contact Custom Fields', icon: TagIcon });
-  if (hasAdminAccess && isAdmin) tabs.push({ key: 'contact-field-blueprints', label: 'Field Blueprints', titleLabel: 'Contact Field Blueprints', icon: Squares2X2Icon });
-  if (hasAdminAccess) tabs.push({ key: 'users', label: 'Users', titleLabel: 'User Settings', icon: UsersIcon });
-  if (hasAdminAccess && isAdmin) tabs.push({ key: 'knowledge', label: 'Knowledge Base', titleLabel: 'Knowledge Base Settings', icon: SparklesIcon });
-  if (isElevated && isAdmin) tabs.push({ key: 'industries', label: 'Industries', titleLabel: 'Industry Settings', icon: BriefcaseIcon });
-  if (isElevated && isAdmin) tabs.push({ key: 'markup', label: 'Markup', titleLabel: 'Default Markup', icon: CalculatorIcon });
-  if (isElevated && isAdmin) tabs.push({ key: 'alerts', label: 'Alerts', titleLabel: 'Alert Rules', icon: BellAlertIcon });
-  tabs.push({ key: 'notifications', label: 'Notifications', titleLabel: 'Notification Settings', icon: BellIcon });
-  tabs.push({ key: 'appearance', label: 'Appearance', titleLabel: 'Appearance Settings', icon: SwatchIcon });
 
-  const pathSegments = pathname.split('/').filter(Boolean);
-  const routeTab = pathSegments[0] === 'settings'
-    ? pathSegments[1]
-    : undefined;
+  // Active tab from the path (handles admin `/settings/<tab>` + sub-account
+  // `/…/settings/<tab>`).
+  const settingsIdx = pathname.indexOf('/settings');
+  const base = settingsIdx >= 0 ? pathname.slice(0, settingsIdx + '/settings'.length) : '/settings';
+  const routeTab = pathname.slice(base.length).split('/').filter(Boolean)[0];
   const defaultTab = tabs[0]?.key || 'appearance';
-  const defaultTabPath = `/settings/${defaultTab}`;
+  const defaultTabPath = `${base}/${defaultTab}`;
   const activeTab = tabs.some(t => t.key === routeTab)
     ? (routeTab as Tab)
     : defaultTab;
@@ -92,63 +63,78 @@ export default function SettingsPage() {
   const titleText = activeTabObj?.titleLabel ?? 'Settings';
 
   return (
+    // Full-width: the settings tabs live in the sidebar (SettingsNav) now, so
+    // the content spans the whole page-content width.
     <div className="animate-fade-in-up pt-4">
-      {/* Sidebar nav + content */}
-      <div className="flex gap-6">
-        {/* Vertical nav — sticky */}
-        <nav className="flex flex-col gap-1 w-48 shrink-0 sticky top-4 self-start">
-          {tabs.map(tab => (
-            <button
-              key={tab.key}
-              onClick={() => {
-                const destination = `/settings/${tab.key}`;
-                confirmNavigation(() => router.push(destination), destination);
-              }}
-              className={`flex items-center gap-2.5 px-3 py-2 text-sm font-medium rounded-lg transition-colors text-left ${
-                activeTab === tab.key
-                  ? 'bg-[var(--accent)] text-[var(--foreground)]'
-                  : 'text-[var(--muted-foreground)] hover:bg-[var(--accent)]/50 hover:text-[var(--foreground)]'
-              }`}
-            >
-              <tab.icon className="w-4 h-4 shrink-0" />
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-
-        {/* Tab content — the title section sits directly above the active
-            tab's content (the active tab is also highlighted in the nav).
-            Tab-specific actions (e.g. "Add User") portal into
-            #settings-title-actions. */}
-        <div className="flex-1 min-w-0">
-          <div className="mb-6 px-1 flex items-start justify-between gap-4">
-            <div>
-              <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
-                <TitleIcon className="w-6 h-6" />
-                {titleText}
+      <div className="mb-6 flex items-start justify-between gap-4">
+        {isAccount && accountData ? (
+          // Account-mode: title is the sub-account's avatar + name (matches the
+          // Studio sub-account settings header). The name is editable in the
+          // Sub-Account tab content.
+          <div className="flex min-w-0 items-center gap-3">
+            <AccountAvatar
+              name={accountData.dealer || accountKey || ''}
+              accountKey={accountKey || ''}
+              storefrontImage={accountData.storefrontImage}
+              logos={accountData.logos}
+              size={44}
+              className="flex-shrink-0 rounded-xl border border-[var(--border)]"
+            />
+            <div className="min-w-0">
+              <h1 className="truncate text-2xl font-bold text-[var(--foreground)]">
+                {accountData.dealer || accountKey}
               </h1>
-              <p className="text-sm text-[var(--muted-foreground)] mt-1">
-                Manage your preferences and configuration
+              <p className="text-sm text-[var(--muted-foreground)] mt-0.5">
+                Manage settings and configuration for this sub-account
               </p>
             </div>
-            <div id="settings-title-actions" className="flex items-center gap-2" />
           </div>
-
-          <div className="border-b border-[var(--border)] mb-6" />
-
-          {activeTab === 'subaccounts' && <AccountsList listPath="/settings/subaccounts" detailBasePath="/settings/subaccounts" />}
-          {activeTab === 'subaccount' && <AccountSettingsTab />}
-          {activeTab === 'contact-fields' && hasAdminAccess && isAccount && <CustomFieldsTab />}
-          {activeTab === 'contact-field-blueprints' && hasAdminAccess && isAdmin && <CustomFieldBlueprintsTab />}
-          {activeTab === 'users' && <UsersTab />}
-          {activeTab === 'knowledge' && hasAdminAccess && isAdmin && <KnowledgeBaseTab />}
-          {activeTab === 'industries' && isElevated && isAdmin && <IndustriesTab />}
-          {activeTab === 'markup' && isElevated && isAdmin && <DefaultMarkupTab />}
-          {activeTab === 'alerts' && isElevated && isAdmin && <AlertRulesTab />}
-          {activeTab === 'notifications' && <NotificationsTab />}
-          {activeTab === 'appearance' && <AppearanceTab />}
-        </div>
+        ) : (
+          <div>
+            <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
+              <TitleIcon className="w-6 h-6" />
+              {titleText}
+            </h1>
+            <p className="text-sm text-[var(--muted-foreground)] mt-1">
+              Manage your preferences and configuration
+            </p>
+          </div>
+        )}
+        <div id="settings-title-actions" className="flex items-center gap-2" />
       </div>
+
+      <div className="border-b border-[var(--border)] mb-6" />
+
+      {activeTab === 'subaccounts' && <AccountsList listPath="/settings/subaccounts" detailBasePath="/settings/subaccounts" />}
+      {activeTab === 'subaccount' && <AccountSettingsTab />}
+      {activeTab === 'integrations' && hasAdminAccess && isAccount && <IntegrationsTab />}
+      {activeTab === 'contact-fields' && hasAdminAccess && isAccount && <CustomFieldsTab />}
+      {activeTab === 'contact-field-blueprints' && hasAdminAccess && isAdmin && <CustomFieldBlueprintsTab />}
+      {activeTab === 'users' && <UsersTab />}
+      {activeTab === 'teams' && hasAdminAccess && <TeamsTab />}
+      {activeTab === 'knowledge' && hasAdminAccess && isAdmin && <KnowledgeBaseTab />}
+      {activeTab === 'industries' && isElevated && isAdmin && <IndustriesTab />}
+      {activeTab === 'markup' && isElevated && isAdmin && <DefaultMarkupTab />}
+      {activeTab === 'alerts' && isElevated && isAdmin && <AlertRulesTab />}
+      {activeTab === 'notifications' && <NotificationsTab />}
+      {activeTab === 'appearance' && <AppearanceTab />}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════
+// Integrations Tab (account-scoped)
+// ════════════════════════════════════════
+function IntegrationsTab() {
+  const { accountKey } = useAccount();
+  if (!accountKey) {
+    return <div className="text-[var(--muted-foreground)]">Select a sub-account to manage its integrations.</div>;
+  }
+  // ReportingIntegrationCards renders bare card buttons (no wrapper) — give them
+  // a responsive grid so they don't flow inline and wrap unevenly.
+  return (
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <ReportingIntegrationCards accountKey={accountKey} />
     </div>
   );
 }
@@ -173,6 +159,11 @@ function AccountSettingsTab() {
   const [logoWhite, setLogoWhite] = useState('');
   const [logoBlack, setLogoBlack] = useState('');
   const [saving, setSaving] = useState(false);
+  // Portal target for the Save button — lives in the settings title bar.
+  const [titleActionsEl, setTitleActionsEl] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setTitleActionsEl(document.getElementById('settings-title-actions'));
+  }, []);
 
   const snapshotRef = useRef<Record<string, string> | null>(null);
 
@@ -335,14 +326,15 @@ function AccountSettingsTab() {
         </div>
       </section>
 
-      <div className="lg:col-span-2 flex items-center justify-end gap-3">
+      {titleActionsEl && createPortal(
         <PrimaryButton
           onClick={handleSave}
           disabled={saving || !hasChanges}
         >
           {saving ? 'Saving...' : 'Save Settings'}
-        </PrimaryButton>
-      </div>
+        </PrimaryButton>,
+        titleActionsEl,
+      )}
     </div>
   );
 }

@@ -39,7 +39,14 @@ export async function GET(
   }
 
   const year = resolveYear(req);
-  const data = await getYearReconciliation(accountKey, year, session.user?.id ?? null);
+  const platform =
+    req.nextUrl.searchParams.get('platform') === 'google' ? 'google' : 'meta';
+  const data = await getYearReconciliation(
+    accountKey,
+    year,
+    session.user?.id ?? null,
+    platform,
+  );
   return NextResponse.json({ accountKey, ...data });
 }
 
@@ -83,6 +90,9 @@ export async function POST(
   const bucket = body.bucket === 'added' ? 'added' : 'base';
   const bucketLabel = bucket === 'base' ? 'Base' : 'Added';
   const year = resolveYear(req);
+  const platform =
+    req.nextUrl.searchParams.get('platform') === 'google' ? 'google' : 'meta';
+  const auditPlatform = platform === 'google' ? 'google' : null;
 
   try {
     // set-target writes a past month's client budget — no live-month needed.
@@ -97,12 +107,13 @@ export async function POST(
       if (value != null && !Number.isFinite(value)) {
         return NextResponse.json({ error: 'Invalid client budget' }, { status: 400 });
       }
-      await setHistoricalTarget(plan.id, period, value);
+      await setHistoricalTarget(plan.id, period, value, platform);
       await writeAudit([
         {
           accountKey,
           planId: plan.id,
           period,
+          platform: auditPlatform,
           action: 'edit',
           authorUserId: userId,
           summary: `Reconciliation: set ${monthLabel(period)} client budget to ${
@@ -110,7 +121,7 @@ export async function POST(
           }`,
         },
       ]);
-      const data = await getYearReconciliation(accountKey, year, userId);
+      const data = await getYearReconciliation(accountKey, year, userId, platform);
       return NextResponse.json({ accountKey, ...data });
     }
 
@@ -144,12 +155,14 @@ export async function POST(
         targetPeriod,
         bucket,
         userId,
+        platform,
       );
       await writeAudit([
         {
           accountKey,
           planId: plan.id,
           period: targetPeriod,
+          platform: auditPlatform,
           action: 'carryover',
           authorUserId: userId,
           summary: `Reconciled ${monthLabel(sourceMonth)} → ${monthLabel(
@@ -164,12 +177,14 @@ export async function POST(
         targetPeriod,
         bucket,
         userId,
+        platform,
       );
       await writeAudit([
         {
           accountKey,
           planId: plan.id,
           period: targetPeriod,
+          platform: auditPlatform,
           action: 'carryover',
           authorUserId: userId,
           summary: `Reconciled all unapplied months → ${monthLabel(
@@ -182,12 +197,13 @@ export async function POST(
         body.sourceMonth && isValidPeriod(body.sourceMonth)
           ? body.sourceMonth
           : null;
-      await unapplyCarryover(plan.id, targetPeriod, sourceMonth);
+      await unapplyCarryover(plan.id, targetPeriod, sourceMonth, platform);
       await writeAudit([
         {
           accountKey,
           planId: plan.id,
           period: targetPeriod,
+          platform: auditPlatform,
           action: 'carryover',
           authorUserId: userId,
           summary: sourceMonth
@@ -205,6 +221,6 @@ export async function POST(
     );
   }
 
-  const data = await getYearReconciliation(accountKey, year, userId);
+  const data = await getYearReconciliation(accountKey, year, userId, platform);
   return NextResponse.json({ accountKey, ...data });
 }

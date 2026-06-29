@@ -25,17 +25,28 @@ export function adTemplateFromDoc(id: string, doc: TemplateDoc): AdTemplate {
   };
 }
 
-/** A minimal, empty TemplateDoc — one square size, no fields/elements/layers.
- *  Backs "New ad → From scratch" (and the builder's blank New). */
-export function blankTemplateDoc(id: string, name = 'Untitled ad'): TemplateDoc {
+/** The blank-doc fallback size when no starting sizes are chosen. */
+const DEFAULT_BLANK_SIZE = { id: 'square', label: 'Square 1080×1080', width: 1080, height: 1080 };
+
+/** A minimal, empty TemplateDoc — no fields/elements/layers. Backs "New ad →
+ *  From scratch" (and the builder's blank New). Pass one or more `sizes` to start
+ *  at chosen dimensions; defaults to a single 1080×1080 square. */
+export function blankTemplateDoc(
+  id: string,
+  name = 'Untitled ad',
+  sizes: { id: string; label: string; width: number; height: number }[] = [DEFAULT_BLANK_SIZE],
+): TemplateDoc {
+  const list = sizes.length ? sizes : [DEFAULT_BLANK_SIZE];
+  const layouts: TemplateDoc['layouts'] = {};
+  for (const s of list) layouts[s.id] = {};
   return {
     id,
     name,
-    sizes: [{ id: 'square', label: 'Square 1080×1080', width: 1080, height: 1080 }],
+    sizes: list,
     fields: [],
     background: { color: '#ffffff' },
     elements: [],
-    layouts: { square: {} },
+    layouts,
     defaults: {},
   };
 }

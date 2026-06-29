@@ -41,7 +41,10 @@ export function getGoogleAdsConfig(): GoogleAdsConfig | null {
     clientSecret,
     refreshToken,
     loginCustomerId: process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID?.replace(/-/g, '').trim() || null,
-    apiVersion: process.env.GOOGLE_ADS_API_VERSION?.trim() || 'v20',
+    // Google sunsets the oldest of its ~3 live versions each release; keep this
+    // on a current one (override per-env with GOOGLE_ADS_API_VERSION). v20 was
+    // deprecated/blocked — v24 is current as of 2026-06.
+    apiVersion: process.env.GOOGLE_ADS_API_VERSION?.trim() || 'v24',
   };
 }
 
@@ -140,17 +143,96 @@ export async function gaql(cfg: GoogleAdsConfig, customerId: string, query: stri
     );
   }
 
-  const json = (await res.json().catch(() => null)) as
-    | SearchStreamBatch[]
-    | { error?: { message?: string } }
-    | null;
+  const json = (await res.json().catch(() => null)) as unknown;
   if (!res.ok) {
-    const msg = (json && !Array.isArray(json) && json.error?.message) || `HTTP ${res.status}`;
+    // searchStream errors come back as either { error: {...} } or [{ error: {...} }].
+    // The human-readable reason is usually buried in error.details[].errors[].message
+    // (Google Ads' specific failure), with error.message as the generic fallback.
+    type GAdsError = {
+      message?: string;
+      details?: Array<{ errors?: Array<{ message?: string }> }>;
+    };
+    const container = Array.isArray(json)
+      ? (json.find((b) => b && typeof b === 'object' && 'error' in b) as { error?: GAdsError } | undefined)
+      : (json as { error?: GAdsError } | null);
+    const errObj = container?.error;
+    const detailMsg = errObj?.details?.[0]?.errors?.[0]?.message;
+    const msg = detailMsg || errObj?.message || `HTTP ${res.status}`;
+    // Log the raw payload so prod always has the full reason even if the shape shifts.
+    // eslint-disable-next-line no-console
+    console.error('[google-ads] GAQL error', res.status, JSON.stringify(json)?.slice(0, 1000));
     throw new GoogleAdsError(`Google Ads: ${msg}`, 'api_error', res.status);
   }
   // searchStream returns a JSON array of batches, each with `results`.
-  const batches = Array.isArray(json) ? json : [];
+  const batches = (Array.isArray(json) ? json : []) as SearchStreamBatch[];
   return batches.flatMap((b) => b.results ?? []);
+}
+
+// ── Mutate: push a campaign budget (the one write path) ──
+
+/** Pull the human-readable reason out of a Google Ads error payload. */
+function googleAdsErrorMessage(json: unknown, status: number): string {
+  type GAdsError = {
+    message?: string;
+    details?: Array<{ errors?: Array<{ message?: string }> }>;
+  };
+  const container = Array.isArray(json)
+    ? (json.find((b) => b && typeof b === 'object' && 'error' in b) as { error?: GAdsError } | undefined)
+    : (json as { error?: GAdsError } | null);
+  const errObj = container?.error;
+  return errObj?.details?.[0]?.errors?.[0]?.message || errObj?.message || `HTTP ${status}`;
+}
+
+/**
+ * Write a daily budget back to a Google campaign's CampaignBudget resource —
+ * the only write path in the integration (everything else is read-only). The
+ * row must be linked (carry its `googleBudgetResourceName` from import/sync).
+ * `amountUnits` is in account currency; Google stores micros (millionths).
+ */
+export async function pushCampaignDailyBudget(
+  cfg: GoogleAdsConfig,
+  customerId: string,
+  budgetResourceName: string,
+  amountUnits: number,
+): Promise<void> {
+  const token = await getAccessToken(cfg);
+  const cid = stripDashes(customerId);
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    'developer-token': cfg.developerToken,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  };
+  if (cfg.loginCustomerId) headers['login-customer-id'] = cfg.loginCustomerId;
+
+  const amountMicros = Math.round(amountUnits * 1_000_000).toString();
+  let res: Response;
+  try {
+    res = await fetch(`${ADS_BASE}/${cfg.apiVersion}/customers/${cid}/campaignBudgets:mutate`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        operations: [
+          {
+            update: { resourceName: budgetResourceName, amountMicros },
+            updateMask: 'amount_micros',
+          },
+        ],
+      }),
+    });
+  } catch (err) {
+    throw new GoogleAdsError(
+      `Could not reach the Google Ads API: ${err instanceof Error ? err.message : 'network error'}`,
+      'api_error',
+    );
+  }
+
+  const json = (await res.json().catch(() => null)) as unknown;
+  if (!res.ok) {
+    // eslint-disable-next-line no-console
+    console.error('[google-ads] budget mutate error', res.status, JSON.stringify(json)?.slice(0, 1000));
+    throw new GoogleAdsError(`Google Ads: ${googleAdsErrorMessage(json, res.status)}`, 'api_error', res.status);
+  }
 }
 
 // ── Row shapes (proto JSON: int64 fields arrive as strings, enums as names) ──

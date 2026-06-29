@@ -6,17 +6,21 @@
  * root-level middleware.ts that Next 16 no longer auto-detects when
  * proxy.ts is present) and the auth/role checks.
  *
- * Three host classes:
+ * Four host classes:
  *   1. Studio base (`studio.loomilm.com`, localhost, APP_HOST_EXTRAS) —
  *      passthrough; serve the full app as-is.
- *   2. Reporting (`reporting.loomilm.com`) — rewrite non-global app
+ *   2. App (`app.loomilm.com`) — rewrite non-global app paths to
+ *      `/app/*`. The App surface hosts the internal Projects workspace
+ *      (and, in a fast-follow, the relocated Reporting tree).
+ *   3. Reporting (`reporting.loomilm.com`) — rewrite non-global app
  *      paths to `/reporting/*` so one Next.js app serves the client
  *      reporting surface from its own hostname.
- *   3. Custom landing-page domains — rewrite to `/lp/<slug>`; the
+ *   4. Custom landing-page domains — rewrite to `/lp/<slug>`; the
  *      route resolves AccountDomain from the Host header.
  *
  * After host rewriting, the existing auth check runs against the
- * rewritten path so /reporting/* still gets gated to logged-in users.
+ * rewritten path so /app/* and /reporting/* still get gated to
+ * logged-in users.
  */
 import { getToken } from 'next-auth/jwt';
 import { NextResponse } from 'next/server';
@@ -65,13 +69,43 @@ function isReportingHost(host: string): boolean {
   return false;
 }
 
+// Note: the studio base host already claims APP_HOST / NEXT_PUBLIC_APP_HOST
+// (see resolveBaseHost), so the App SURFACE host gets its own env name.
+function resolveAppHost(): string {
+  const explicit = process.env.NEXT_PUBLIC_APP_SURFACE_HOST ?? process.env.APP_SURFACE_HOST;
+  if (explicit) return explicit.toLowerCase();
+  return 'app.loomilm.com';
+}
+
+function isAppHost(host: string): boolean {
+  const lower = host.toLowerCase();
+  if (lower === resolveAppHost()) return true;
+  // Local dev: app.localhost(:PORT)
+  if (lower === 'app.localhost' || lower.startsWith('app.localhost:')) return true;
+  return false;
+}
+
+/**
+ * The App-surface host that corresponds to the current Studio/base host.
+ * Mirrors the client `getAppUrl` host logic so the Ad Pacer redirect lands on
+ * the right host in every environment (prod sibling subdomain + dev localhost).
+ */
+function appHostForBaseHost(host: string): string {
+  const lower = host.toLowerCase();
+  if (lower.startsWith('studio.')) return `app.${lower.slice('studio.'.length)}`;
+  if (lower === 'localhost' || lower.startsWith('localhost:')) return `app.${lower}`;
+  return resolveAppHost();
+}
+
 function isBaseHost(host: string): boolean {
   const lower = host.toLowerCase();
   const base = resolveBaseHost();
   if (lower === base) return true;
   if (lower === 'localhost' || lower.startsWith('localhost:')) return true;
-  // Other `*.localhost` (excluding reporting.localhost which is handled separately)
-  if (lower.endsWith('.localhost') && !lower.startsWith('reporting.')) return true;
+  // Other `*.localhost` (excluding reporting.localhost / app.localhost which
+  // are handled as their own surfaces)
+  if (lower.endsWith('.localhost') && !lower.startsWith('reporting.') && !lower.startsWith('app.'))
+    return true;
   const extras = (process.env.APP_HOST_EXTRAS ?? process.env.NEXT_PUBLIC_APP_HOST_EXTRAS ?? '')
     .split(',')
     .map((s) => s.trim().toLowerCase())
@@ -114,7 +148,25 @@ export async function proxy(request: NextRequest) {
 
   // ── Host-aware routing ─────────────────────────────────────────────
 
-  if (host && isReportingHost(host)) {
+  // Ad Pacer/Planner relocated from Studio to the App surface. Redirect any
+  // lingering Studio `/tools/*` hits (bookmarks, old email/notification links,
+  // dashboard links) to the App host so nothing 404s after the move.
+  if (host && isBaseHost(host) && (pathname === '/tools' || pathname.startsWith('/tools/'))) {
+    const target = request.nextUrl.clone();
+    target.host = appHostForBaseHost(host);
+    return NextResponse.redirect(target);
+  }
+
+  if (host && isAppHost(host)) {
+    // Rewrite non-global app paths into the /app tree. Already-canonical
+    // /app/* paths and global paths (api/auth, login, _next, etc.) fall
+    // through to the auth check below.
+    if (!pathname.startsWith('/app') && !isGlobalAppPath(pathname)) {
+      const url = request.nextUrl.clone();
+      url.pathname = pathname === '/' ? '/app' : `/app${pathname}`;
+      return NextResponse.rewrite(url);
+    }
+  } else if (host && isReportingHost(host)) {
     // Rewrite non-global app paths into the /reporting tree. Already-canonical
     // /reporting/* paths and global paths (api/auth, login, _next, etc.) fall
     // through to the auth check below.
@@ -148,6 +200,10 @@ export async function proxy(request: NextRequest) {
     // NextAuth session, so they must skip the session gate here or the proxy
     // 401s them before the route's own secret check can run.
     pathname.startsWith('/api/internal/') ||
+    // Public form submission endpoint — accepts cross-origin POSTs from forms
+    // embedded on customer sites (iframe / JS snippet), so it must skip the
+    // session gate just like the public /f/ form page below.
+    pathname.startsWith('/api/f/') ||
     pathname.startsWith('/login') ||
     pathname.startsWith('/onboarding') ||
     pathname.startsWith('/_next') ||

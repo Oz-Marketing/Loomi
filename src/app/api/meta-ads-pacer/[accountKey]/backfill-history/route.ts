@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
-import { canAccessPacer, getOrCreatePlan } from '@/lib/meta-ads-pacer';
+import { canAccessPacer, clearBackfillHistory, getOrCreatePlan } from '@/lib/meta-ads-pacer';
 import {
   MetaSyncError,
   fetchAccountMonthlySpend,
@@ -95,4 +95,32 @@ export async function POST(
     console.error('[meta-ads-pacer] backfill-history failed', err);
     return NextResponse.json({ error: 'Failed to backfill history' }, { status: 500 });
   }
+}
+
+/**
+ * Undo the backfill — clear the Meta-pulled `historicalActual` for pre-tool
+ * (untracked) months so it stops tainting reconciliation variance. Optional
+ * `?year=` scopes to one year; omitted = all backfilled months. Never touches
+ * a tracked month. The POST above can re-fill later if needed.
+ */
+export async function DELETE(
+  req: NextRequest,
+  { params }: { params: Promise<{ accountKey: string }> },
+) {
+  const { session, error } = await requireAuth();
+  if (error) return error;
+
+  const { accountKey } = await params;
+  if (!canAccessPacer(session, accountKey)) {
+    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+  }
+
+  const yearParam = Number(req.nextUrl.searchParams.get('year'));
+  const year = Number.isInteger(yearParam) && yearParam > 2000 ? yearParam : undefined;
+
+  const { cleared } = await clearBackfillHistory(accountKey, {
+    year,
+    authorUserId: session!.user.id,
+  });
+  return NextResponse.json({ ok: true, cleared });
 }

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
-import { canAccessPacer, getOrCreatePlan, isValidPeriod } from '@/lib/meta-ads-pacer';
+import { adPlatformWhere, canAccessPacer, getOrCreatePlan, isValidPeriod } from '@/lib/meta-ads-pacer';
 
 /**
  * The automatic audit log (Change 10) for an account+period: every tracked
@@ -27,9 +27,11 @@ export async function GET(
     );
   }
 
+  const platform =
+    req.nextUrl.searchParams.get('platform') === 'google' ? 'google' : 'meta';
   const plan = await getOrCreatePlan(accountKey);
   const entries = await prisma.metaAdsPacerAuditEntry.findMany({
-    where: { planId: plan.id, period },
+    where: { planId: plan.id, period, ...adPlatformWhere(platform) },
     orderBy: { createdAt: 'desc' },
     take: 500,
   });

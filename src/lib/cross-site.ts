@@ -52,8 +52,70 @@ export function getOtherSurfaceUrl(path: string = ''): string | null {
   return null;
 }
 
-/** Which surface we are currently on. */
-export function getCurrentSurface(): 'studio' | 'reporting' | null {
+/**
+ * Absolute URL of the Studio surface, computed from the current host —
+ * works from any surface (studio / reporting / app). Used by the App
+ * surface's user dropdown to jump back to Studio. Returns null on SSR.
+ *
+ *   app.loomilm.com        → https://studio.loomilm.com
+ *   app.localhost:3000     → http://localhost:3000
+ *   reporting.loomilm.com  → https://studio.loomilm.com
+ */
+export function getStudioUrl(path: string = ''): string | null {
   if (typeof window === 'undefined') return null;
-  return window.location.host.startsWith('reporting.') ? 'reporting' : 'studio';
+  const { protocol, host } = window.location;
+  const p = path === '' ? '' : path.startsWith('/') ? path : `/${path}`;
+  // Prefer the server-provided studio origin (set from NEXTAUTH_URL by the App
+  // layout). It's authoritative across host topologies — prod's sibling
+  // `studio.loomilm.com` vs staging's bare `staging.loomilm.com` — where the
+  // prefix-stripping fallback below would otherwise guess wrong.
+  const explicit = (window as unknown as { __LOOMI_STUDIO_ORIGIN__?: string }).__LOOMI_STUDIO_ORIGIN__;
+  if (typeof explicit === 'string' && explicit) return `${explicit}${p}`;
+  for (const prefix of ['app.', 'reporting.', 'studio.']) {
+    if (host.startsWith(prefix)) {
+      const rest = host.slice(prefix.length);
+      // studio lives on the bare domain in dev (localhost) and on studio.* in prod
+      const base = rest.startsWith('localhost')
+        ? `${protocol}//${rest}`
+        : `${protocol}//studio.${rest}`;
+      return `${base}${p}`;
+    }
+  }
+  if (host === 'localhost' || host.startsWith('localhost:')) {
+    return `${protocol}//${host}${p}`;
+  }
+  return null;
+}
+
+/**
+ * Absolute URL of the App surface (Projects + Reporting), computed from
+ * the current host. Used by the Studio sidebar to cross-link into App.
+ * Returns null on SSR.
+ *
+ *   studio.loomilm.com → https://app.loomilm.com
+ *   localhost:3000     → http://app.localhost:3000
+ */
+export function getAppUrl(path: string = ''): string | null {
+  if (typeof window === 'undefined') return null;
+  const { protocol, host } = window.location;
+  const p = path === '' ? '' : path.startsWith('/') ? path : `/${path}`;
+  for (const prefix of ['studio.', 'reporting.']) {
+    if (host.startsWith(prefix)) {
+      return `${protocol}//app.${host.slice(prefix.length)}${p}`;
+    }
+  }
+  if (host.startsWith('app.')) return `${protocol}//${host}${p}`;
+  if (host === 'localhost' || host.startsWith('localhost:')) {
+    return `${protocol}//app.${host}${p}`;
+  }
+  return null;
+}
+
+/** Which surface we are currently on. */
+export function getCurrentSurface(): 'studio' | 'reporting' | 'app' | null {
+  if (typeof window === 'undefined') return null;
+  const host = window.location.host;
+  if (host.startsWith('reporting.')) return 'reporting';
+  if (host.startsWith('app.')) return 'app';
+  return 'studio';
 }

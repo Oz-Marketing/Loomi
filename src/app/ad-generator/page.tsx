@@ -15,13 +15,14 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon } from '@heroicons/react/24/outline';
+import { SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { ListToolbar } from '@/components/list-toolbar';
 import type { StatusFilterValue } from '@/components/status-filter';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
+import { catalogByCategory, aspectLabel, type CatalogSize } from '@/lib/ad-generator/ad-size-catalog';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import type { AdTemplate, AdData } from '@/lib/ad-generator/types';
@@ -43,6 +44,7 @@ export default function AdGeneratorListPage() {
   const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
   const [creatives, setCreatives] = useState<Creative[] | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [scratchOpen, setScratchOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all');
@@ -147,20 +149,32 @@ export default function AdGeneratorListPage() {
     }
   }
 
-  // From scratch: a blank ad (empty doc), opened straight in the builder's ad
-  // mode so the designer starts on an empty canvas with no layers.
-  async function createBlank() {
+  // From scratch: a blank ad (empty doc) at the chosen name + starting size(s),
+  // opened straight in the builder's ad mode so the designer starts on an empty
+  // canvas with no layers.
+  async function createBlank(name: string, sizes: CatalogSize[]) {
     if (!accountKey) {
       toast.error('Select an account first');
       return;
     }
+    const chosen = sizes.length ? sizes : [{ name: 'Square', width: 1080, height: 1080 } as CatalogSize];
     setCreating(true);
     try {
-      const doc = blankTemplateDoc(`blank-${Date.now()}`);
+      const trimmed = name.trim() || 'Untitled ad';
+      const docSizes = chosen.map((size, i) => {
+        const slug = size.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+        return {
+          id: slug || `size-${i}`,
+          label: `${size.name} ${size.width}×${size.height}`,
+          width: size.width,
+          height: size.height,
+        };
+      });
+      const doc = blankTemplateDoc(`blank-${Date.now()}`, trimmed, docSizes);
       const res = await fetch('/api/ad-generator/creatives', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountKey, name: 'Untitled ad', templateId: 'blank', data: {}, doc }),
+        body: JSON.stringify({ accountKey, name: trimmed, templateId: 'blank', data: {}, doc }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
@@ -254,14 +268,14 @@ export default function AdGeneratorListPage() {
                     disabled={creating || !accountKey}
                     onClick={() => {
                       setNewOpen(false);
-                      void createBlank();
+                      setScratchOpen(true);
                     }}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50"
                   >
                     <Squares2X2Icon className="w-4 h-4 flex-shrink-0" />
                     <span>
                       From scratch
-                      <span className="block text-[11px] text-[var(--muted-foreground)]">Start blank and design it in the builder.</span>
+                      <span className="block text-[11px] text-[var(--muted-foreground)]">Name it and pick a size, then design in the builder.</span>
                     </span>
                   </button>
                 </div>
@@ -395,7 +409,7 @@ export default function AdGeneratorListPage() {
                   disabled={creating}
                   onClick={() => {
                     setPickerOpen(false);
-                    void createBlank();
+                    setScratchOpen(true);
                   }}
                   className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
                 >
@@ -425,6 +439,131 @@ export default function AdGeneratorListPage() {
         </div>,
         document.body,
       )}
+
+      {scratchOpen && (
+        <ScratchSetupModal
+          creating={creating}
+          onClose={() => !creating && setScratchOpen(false)}
+          onStart={(name, sizes) => void createBlank(name, sizes)}
+        />
+      )}
     </div>
   );
+}
+
+/**
+ * "From scratch" setup step — name the ad and pick a starting size before the
+ * builder opens, so a brand-new design starts at the right dimensions instead
+ * of always defaulting to a 1080 square. Sizes come from the shared catalog.
+ */
+function ScratchSetupModal({
+  creating,
+  onClose,
+  onStart,
+}: {
+  creating: boolean;
+  onClose: () => void;
+  onStart: (name: string, sizes: CatalogSize[]) => void;
+}) {
+  const groups = useMemo(() => catalogByCategory(), []);
+  const [name, setName] = useState('Untitled ad');
+  const [selected, setSelected] = useState<CatalogSize[]>(() => [AD_SIZE_CATALOG_DEFAULT(groups)]);
+  const toggle = (s: CatalogSize) =>
+    setSelected((cur) => (cur.some((x) => x.name === s.name) ? cur.filter((x) => x.name !== s.name) : [...cur, s]));
+
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-16" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-5 shadow-xl backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-start justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-[var(--foreground)]">Start from scratch</h2>
+            <p className="text-xs text-[var(--muted-foreground)]">Name it and pick one or more starting sizes — you can add more or change everything in the builder.</p>
+          </div>
+          <button onClick={onClose} className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+
+        <label className="mb-4 block">
+          <span className="mb-1 block text-xs font-medium text-[var(--foreground)]">Name</span>
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Untitled ad"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+          />
+        </label>
+
+        <div className="mb-1 flex items-baseline justify-between">
+          <span className="text-xs font-medium text-[var(--foreground)]">Starting sizes</span>
+          <span className="text-[11px] text-[var(--muted-foreground)]">{selected.length} selected</span>
+        </div>
+        <div className="max-h-[44vh] space-y-4 overflow-y-auto pr-1">
+          {groups.map((grp) => (
+            <div key={grp.category}>
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{grp.label}</div>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                {grp.sizes.map((s) => {
+                  const ratio = s.width / s.height;
+                  const boxW = ratio >= 1 ? 28 : 28 * ratio;
+                  const boxH = ratio >= 1 ? 28 / ratio : 28;
+                  const on = selected.some((x) => x.name === s.name);
+                  return (
+                    <button
+                      key={s.name}
+                      type="button"
+                      onClick={() => toggle(s)}
+                      aria-pressed={on}
+                      title={`${s.name} · ${s.width}×${s.height}`}
+                      className={`relative flex items-center gap-2 rounded-xl border p-2.5 text-left transition-colors ${
+                        on ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]/40' : 'border-[var(--border)] hover:border-[var(--primary)]'
+                      }`}
+                    >
+                      {on && (
+                        <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--primary)] text-white">
+                          <CheckIcon className="h-3 w-3" />
+                        </span>
+                      )}
+                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded bg-[var(--muted)]/50">
+                        <div className="rounded-[2px] bg-[var(--primary)]/30 ring-1 ring-[var(--primary)]/50" style={{ width: boxW, height: boxH }} />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-[11px] font-semibold text-[var(--foreground)]">{s.name}</div>
+                        <div className="truncate text-[10px] text-[var(--muted-foreground)]">
+                          {s.width}×{s.height} · {aspectLabel(s.width, s.height)}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <button onClick={onClose} disabled={creating} className="rounded-lg px-3 py-2 text-sm text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50">
+            Cancel
+          </button>
+          <button
+            onClick={() => onStart(name, selected)}
+            disabled={creating || selected.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Squares2X2Icon className="h-4 w-4" />
+            {creating ? 'Creating…' : selected.length > 1 ? `Start with ${selected.length} sizes` : 'Start designing'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** Default starting size for the scratch modal — Instagram Square if present
+ *  (matches the prior 1080 default), else the first catalog size. */
+function AD_SIZE_CATALOG_DEFAULT(groups: { sizes: CatalogSize[] }[]): CatalogSize {
+  const all = groups.flatMap((g) => g.sizes);
+  return all.find((s) => s.name === 'Instagram Square') ?? all[0];
 }

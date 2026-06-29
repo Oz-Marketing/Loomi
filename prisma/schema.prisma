@@ -43,6 +43,14 @@ model User {
   metaPacerBudgetLogs          MetaAdsPacerBudgetLog[]   @relation("MetaPacerBudgetLogAuthor")
   notifications                Notification[]
   notificationPreferences      NotificationPreference[]
+
+  // Projects (App surface)
+  teamMemberships  TeamMembership[]
+  initiativesOwned Initiative[]     @relation("InitiativeOwner")
+  tasksAssigned    Task[]           @relation("TaskAssignee")
+  tasksRequested   Task[]           @relation("TaskRequester")
+  taskComments     TaskComment[]    @relation("TaskCommentAuthor")
+  taskActivity     TaskActivity[]   @relation("TaskActivityAuthor")
 }
 
 model UserInvite {
@@ -195,6 +203,8 @@ model Account {
   metaAdsPacerAccountNotes MetaAdsPacerAccountNote[]
   metaAdsPacerBudgetLogs   MetaAdsPacerBudgetLog[]
   campaigns                Campaign[]
+  initiatives              Initiative[]
+  tasks                    Task[]
 
   @@index([accountRepId])
 }
@@ -1578,6 +1588,10 @@ model MetaAdsPacerAuditEntry {
   planId       String
   plan         MetaAdsPacerPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
   period       String // YYYY-MM
+  // Platform the change belongs to, so Meta and Google keep separate change
+  // logs. null / anything ≠ "google" = Meta (legacy rows have null); "google"
+  // = Google. Resolved with adPlatformWhere() on read.
+  platform     String?
   adId         String? // null for period-level (budget goals) / account-level events
   adName       String? // denormalized so the trail survives ad deletion
   action       String // edit | created | deleted | carryover | freeze | reopen | sync
@@ -1622,8 +1636,14 @@ model MetaAdsPacerPeriodBudget {
   planId           String
   plan             MetaAdsPacerPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
   period           String // YYYY-MM, e.g. "2026-04"
-  baseBudgetGoal   String?
-  addedBudgetGoal  String?
+  // Account budget goals are PER-PLATFORM (Meta vs Google specialists own their
+  // own budgets). The base/added pair below is Meta's; the google* pair is
+  // Google's. Same single row per plan+period; the surface resolves its pair by
+  // platform. (§8 Google pacer.)
+  baseBudgetGoal       String?
+  addedBudgetGoal      String?
+  googleBaseBudgetGoal  String?
+  googleAddedBudgetGoal String?
   // Carryover applied from the prior month's over/under (Change 7), in
   // actual-spend dollars, per bucket. Opt-in (null = none). Added to the
   // DERIVED spend target only (target = clientBudget × markup + carryover);
@@ -1631,6 +1651,11 @@ model MetaAdsPacerPeriodBudget {
   // record. Single-month: set once on approval, not auto-chained.
   baseCarryover    String?
   addedCarryover   String?
+  // Google's carryover pair — kept separate so a Google specialist's
+  // reconciliation never writes into Meta's carryover (and vice versa). The
+  // surface resolves its pair by platform, same as the budget goals above.
+  googleBaseCarryover  String?
+  googleAddedCarryover String?
   // Backfilled actual spend for a pre-pacer month (account-total from Meta,
   // combined — not bucket-split). Lets year reconciliation include months from
   // before the tool existed. Null for normally-tracked months (their actual is
@@ -1652,6 +1677,9 @@ model MetaAdsPacerCarryoverApplication {
   id              String           @id @default(cuid())
   planId          String
   plan            MetaAdsPacerPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  // null = Meta (legacy); "google" = Google. Scopes the reconciliation ledger
+  // per platform so each specialist's applies stay independent.
+  platform        String?
   bucket          String // "base" | "added" — the target month bucket it lands in
   sourceMonth     String // YYYY-MM the over/under came from
   targetMonth     String // YYYY-MM it was applied into
@@ -1716,6 +1744,13 @@ model MetaAdsPacerAd {
   // surfaced for multi-month ads so the full date-range spend is visible; never
   // drives the month's pacing math.
   pacerRunSpend         String?
+  // The ad set's LIFETIME budget pulled from Meta (the true spend cap Meta
+  // distributes toward), in dollars. Synced from the Marketing API's
+  // lifetime_budget. This is the settlement baseline for a lifetime run:
+  // variance settles as Σ actual across the run − metaLifetimeBudget. Distinct
+  // from `allocation` (the team's per-month planned slice) and `pacerRunSpend`
+  // (actual full-run spend). Null for daily-budget ad sets / before first sync.
+  metaLifetimeBudget    String?
   // §2a: the YYYY-MM the ad's FULL run was counted in (single-month straddler
   // resolution). When set, the assigned month uses pacerRunSpend + allocation
   // (full scope) and the ad contributes 0 to any other month. Server-managed
@@ -1725,6 +1760,13 @@ model MetaAdsPacerAd {
   // across the months its flight touches. DISPLAY-ONLY (planned vs actual);
   // never books a variance (§3 owns the over/under). Server-managed too.
   lifetimeMonthSplit    String?
+  // Cross-month SPLIT run linkage (Prompt 1): this month-instance continues the
+  // linked prior-month ad's run. The chain (followed via this pointer) is one
+  // logical lifetime run that settles ONCE at flight end — the final month books
+  // Σ actual across the chain − the Meta lifetime budget; every earlier linked
+  // month books $0. Null = not part of a linked split run. Set via the
+  // "link to previous month" dropdown; server-managed (survives Meta re-sync).
+  linkedPrevAdId        String?
 
   // Pacer-only date scoping: lets the user adjust "today" and "end" per ad
   // without affecting the Ad Planner flight dates.
@@ -1836,6 +1878,9 @@ model MetaAdsPacerAccountNote {
   // month, so May notes only show in May and June starts a fresh log. Nullable
   // for pre-existing account-wide notes (which won't surface in a month view).
   period       String?
+  // null = Meta (legacy); "google" = Google. Keeps each platform's account
+  // notes separate even though they share the account + period.
+  platform     String?
   text         String
   authorUserId String?
   author       User?    @relation("MetaPacerAccountNoteAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
@@ -1853,6 +1898,8 @@ model MetaAdsPacerBudgetLog {
   accountKey   String
   account      Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
   period       String // YYYY-MM
+  // null = Meta (legacy); "google" = Google.
+  platform     String?
   // JSON-encoded AdSnapshot[] — per-ad numbers matching the Summary tab
   // columns (budgetType, budget, projected, actual, target, recDaily).
   // See BudgetLogDrawer for the exact shape.
@@ -2080,4 +2127,194 @@ model AdCreative {
   updatedAt     DateTime @updatedAt
 
   @@index([accountKey, updatedAt])
+}
+
+// ─────────────────────────────────────────────────────
+// Projects — internal team project management (App surface)
+// ─────────────────────────────────────────────────────
+//
+// A Monday/Asana-style work system for the agency's delivery teams.
+// Account reps file tickets (Tasks) against an account, grouped into an
+// Initiative (a body of work), and routed to a Team. Mirrors the proven
+// MetaAdsPacerAd workflow primitives (assignee, status, activity log)
+// generalized across every team, and reuses the existing Notification
+// system for assignment/due/mention alerts. Internal-staff only in v1.
+
+// Managed team/department list that tickets route to. Distinct from
+// User.department (an HR label): a Team is the work-routing unit, a user
+// can belong to several, and Tasks reference a team by `key`. Seeded with
+// the agency's delivery teams; managed in Settings → Teams.
+model Team {
+  id          String    @id @default(cuid())
+  key         String    @unique // stable slug, e.g. "digital-ads"
+  name        String // "Digital Ads"
+  description String?
+  color       String? // hex chip color for boards (e.g. "#6366f1")
+  icon        String? // optional lucide icon name (kebab-case); UI defaults to a 2-person glyph
+  sortOrder   Int       @default(0)
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  memberships TeamMembership[]
+  tasks       Task[]
+
+  @@index([sortOrder])
+}
+
+// Which users belong to which teams. A user can lead/serve several teams,
+// independent of their HR User.department.
+model TeamMembership {
+  id        String   @id @default(cuid())
+  teamId    String
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String   @default("member") // member | lead
+  createdAt DateTime @default(now())
+
+  @@unique([teamId, userId])
+  @@index([userId])
+  @@index([teamId])
+}
+
+// A body of work for a single account (e.g. "New client onboarding",
+// "Q3 Summer Sale launch"). Groups the Tasks the delivery teams work, and
+// optionally links to a generated Campaign container (Phase 2).
+model Initiative {
+  id          String    @id @default(cuid())
+  accountKey  String
+  account     Account   @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  name        String
+  description String?   @db.Text
+  // Ticket-level metadata captured at intake — billing (costs, billing months,
+  // retainer) and any project-wide fields. JSON for flexibility.
+  details     Json?
+  status      String    @default("active") // active | on_hold | completed | archived
+  priority    String    @default("medium") // low | medium | high | urgent
+  startDate   DateTime?
+  dueDate     DateTime?
+  // The rep who owns the engagement.
+  ownerUserId String?
+  owner       User?     @relation("InitiativeOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  // Soft link to the multi-channel Campaign this initiative spun up. Loose
+  // string (no FK) — kept symmetric with Task's polymorphic asset link and
+  // to avoid coupling the Campaign container to Projects.
+  campaignId      String?
+  // Slug of the project template that seeded this initiative (e.g.
+  // "new-client-onboarding"); null for ad-hoc.
+  templateKey     String?
+  createdByUserId String?
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  tasks Task[]
+
+  @@index([accountKey, status])
+  @@index([ownerUserId])
+  @@index([createdAt])
+  @@index([archivedAt])
+}
+
+// A unit of work: the "ticket". Denormalizes accountKey (matches the
+// codebase's FK-to-Account.key pattern) so board / my-work queries filter
+// without a join.
+model Task {
+  id           String      @id @default(cuid())
+  accountKey   String
+  account      Account     @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  initiativeId String?
+  initiative   Initiative? @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
+  // Routing team (Team.key). Nullable so a deleted team leaves orphan tasks
+  // visible rather than cascading them away.
+  teamKey      String?
+  team         Team?       @relation(fields: [teamKey], references: [key], onDelete: SetNull)
+
+  title       String
+  description String? @db.Text
+  // Per-type intake fields (budgets, dates, audience, etc.), keyed by FieldDef
+  // key from TYPE_FIELDS (src/lib/projects/ui.ts). Flexible by design so field
+  // sets can change without a migration.
+  details     Json?
+  // What kind of work — drives the "Build it" launch action in Phase 2:
+  // generic | email | sms | landing_page | form | flow | ads | design |
+  // print | video | media_buy | pr | dev | social
+  kind        String  @default("generic")
+  status      String  @default("todo") // todo | in_progress | in_review | blocked | done
+  priority    String  @default("medium") // low | medium | high | urgent
+
+  assigneeUserId  String?
+  assignee        User?   @relation("TaskAssignee", fields: [assigneeUserId], references: [id], onDelete: SetNull)
+  // The rep who filed the ticket.
+  requesterUserId String?
+  requester       User?   @relation("TaskRequester", fields: [requesterUserId], references: [id], onDelete: SetNull)
+
+  startDate   DateTime?
+  dueDate     DateTime?
+  // Manual board ordering within a status column (gap-spaced floats).
+  position    Float     @default(0)
+  completedAt DateTime?
+
+  // Subtasks (self-relation).
+  parentTaskId String?
+  parentTask   Task?   @relation("TaskSubtasks", fields: [parentTaskId], references: [id], onDelete: Cascade)
+  subtasks     Task[]  @relation("TaskSubtasks")
+
+  // Soft link to a generated asset (Phase 2). linkedAssetType ∈ campaign |
+  // landing_page | flow | meta_pacer_plan | media_asset; linkedAssetId is
+  // that record's id. Loose strings (no FK) — the target is polymorphic
+  // across surfaces.
+  linkedAssetType String?
+  linkedAssetId   String?
+
+  createdByUserId String?
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  comments TaskComment[]
+  activity TaskActivity[]
+
+  @@index([accountKey, status])
+  @@index([initiativeId, status])
+  @@index([teamKey, status])
+  @@index([assigneeUserId, status])
+  @@index([dueDate])
+  // Supports the daily due-soon/overdue scan (status + dueDate filter).
+  @@index([status, dueDate])
+  @@index([archivedAt])
+}
+
+// Threaded updates on a task. @mentions drive notifications.
+model TaskComment {
+  id           String   @id @default(cuid())
+  taskId       String
+  task         Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  body         String   @db.Text
+  mentions     String   @default("[]") // JSON array of mentioned userIds
+  authorUserId String?
+  author       User?    @relation("TaskCommentAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([taskId, createdAt])
+}
+
+// Auto-logged activity feed for a task (who changed what, when). Modeled on
+// MetaAdsPacerActivityLog — written transparently, never by a button press.
+model TaskActivity {
+  id           String   @id @default(cuid())
+  taskId       String
+  task         Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  action       String // created | assigned | status_changed | edited | linked | archived
+  field        String?
+  fromValue    String?
+  toValue      String?
+  summary      String // human-readable one-liner
+  authorUserId String?
+  author       User?    @relation("TaskActivityAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  @@index([taskId, createdAt])
 }

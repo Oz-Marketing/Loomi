@@ -15,18 +15,43 @@ import {
 } from './google-ads';
 // The pure module owns the shape (it's plain data, used by the channel/budget
 // mappers + import reconciliation); this client just produces it.
-import type { ImportedGoogleCampaign } from '@/app/tools/meta/_lib/google-pacer-calc';
-import { reconcileImport, type ImportDiff } from '@/app/tools/meta/_lib/google-pacer-calc';
-import type { PacerAd } from '@/app/tools/meta/_lib/types';
+import type { ImportedGoogleCampaign } from '@/lib/ad-pacer/google-pacer-calc';
+import {
+  reconcileImport,
+  mapChannelGroup,
+  mapGoogleBudgetType,
+  type ImportDiff,
+} from '@/lib/ad-pacer/google-pacer-calc';
+import type { PacerAd } from '@/lib/ad-pacer/types';
 import { prisma } from '@/lib/prisma';
 import { getOrCreatePlan } from '@/lib/meta-ads-pacer';
+import { randomUUID } from 'node:crypto';
+import type { Prisma } from '@prisma/client';
+
+/** Google campaign status → the planner's status vocabulary (mirrors the Meta
+ *  equivalent + the client mapGoogleStatus). */
+export function googleStatusToAdStatus(status: string | null | undefined): string {
+  switch ((status ?? '').toUpperCase()) {
+    case 'ENABLED':
+      return 'Live';
+    case 'PAUSED':
+      return 'Off';
+    default:
+      return 'In Draft';
+  }
+}
 
 export { getGoogleCustomer, isGoogleAdsConfigured, GoogleAdsError };
 export type { ImportedGoogleCampaign };
 
 // The §8 onboarding query: every non-removed campaign with its budget + channel.
+// NOTE: campaign.start_date / campaign.end_date are intentionally NOT selected —
+// newer Google Ads API versions reject them as "unrecognized fields", which 400s
+// the whole sync. Flight dates aren't essential to a spend sync (the planner sets
+// them, and channel/status/budget/spend all still import), so we omit them rather
+// than couple the sync to a churning field set.
 const IMPORT_QUERY = `SELECT campaign.id, campaign.name, campaign.status,
-       campaign.advertising_channel_type, campaign.start_date, campaign.end_date,
+       campaign.advertising_channel_type,
        campaign_budget.amount_micros, campaign_budget.total_amount_micros,
        campaign_budget.resource_name
 FROM campaign
@@ -235,7 +260,9 @@ export async function previewGoogleImport(
   const plan = await getOrCreatePlan(accountKey);
   const campaigns = await importGoogleCampaigns(cfg, customerId);
   const existing = await prisma.metaAdsPacerAd.findMany({
-    where: { planId: plan.id, period },
+    // Only diff against Google lines — Meta rows must never appear as
+    // adds/removes in the Google import preview.
+    where: { planId: plan.id, period, platform: 'google' },
     select: {
       id: true,
       name: true,
@@ -246,4 +273,197 @@ export async function previewGoogleImport(
   });
   const diff = reconcileImport(campaigns, existing as unknown as PacerAd[]);
   return { customerId, diff, totalCampaigns: campaigns.length };
+}
+
+// ── Discovery + adopt (mirrors Meta's discoverAdSets / importAdSets) ──
+
+export interface DiscoveredGoogleCampaign {
+  id: string;
+  name: string;
+  /** Raw advertising_channel_type enum (e.g. SEARCH). */
+  channelType: string;
+  /** Display rollup group (Search/Display/Video/Shopping/PMax/Other). */
+  channelGroup: string;
+  /** Raw campaign status (ENABLED / PAUSED). */
+  effectiveStatus: string;
+  /** True when actively delivering (status ENABLED). */
+  active: boolean;
+  budgetType: 'Daily' | 'Lifetime';
+  dailyBudget: number | null;
+  lifetimeBudget: number | null;
+  /** Spend in the requested period ($). */
+  periodSpend: number;
+  /** Already linked to a Google pacer row in THIS period — excluded from import. */
+  alreadyLinked: boolean;
+  /** The planner status this campaign would map to on import. */
+  suggestedStatus: string;
+}
+
+export interface DiscoverGoogleResult {
+  ok: true;
+  customerId: string;
+  since: string;
+  until: string;
+  campaigns: DiscoveredGoogleCampaign[];
+}
+
+/**
+ * List every non-removed campaign in the account's Google Ads customer, enriched
+ * with budget + period spend, and flagged for the ones already linked to a Google
+ * pacer row in `period`. Read-only — feeds the "Import campaigns" modal. Mirrors
+ * discoverAdSets. (Flight dates aren't pulled — newer API versions reject the
+ * campaign date fields; the planner sets flight dates.)
+ */
+export async function discoverGoogleCampaigns(
+  accountKey: string,
+  period: string,
+  todayIso: string,
+): Promise<DiscoverGoogleResult> {
+  const { cfg, customerId } = await getGoogleCustomer(accountKey);
+  const { since, until } = periodWindow(period, todayIso);
+
+  const [campaigns, periodSpend] = await Promise.all([
+    importGoogleCampaigns(cfg, customerId),
+    fetchCampaignSpend(cfg, customerId, since, until).catch(() => new Map<string, number>()),
+  ]);
+
+  const plan = await prisma.metaAdsPacerPlan.findUnique({
+    where: { accountKey },
+    select: { id: true },
+  });
+  const linkedRows = plan
+    ? await prisma.metaAdsPacerAd.findMany({
+        where: { planId: plan.id, period, platform: 'google', googleCampaignId: { not: null } },
+        select: { googleCampaignId: true },
+      })
+    : [];
+  const linkedIds = new Set(
+    linkedRows.map((r) => r.googleCampaignId).filter((id): id is string => !!id),
+  );
+
+  const out: DiscoveredGoogleCampaign[] = campaigns.map((c) => ({
+    id: c.id,
+    name: c.name,
+    channelType: c.channelType,
+    channelGroup: mapChannelGroup(c.channelType),
+    effectiveStatus: c.status,
+    active: (c.status ?? '').toUpperCase() === 'ENABLED',
+    budgetType: mapGoogleBudgetType(c.dailyBudget, c.totalBudget),
+    dailyBudget: c.dailyBudget,
+    lifetimeBudget: c.totalBudget,
+    periodSpend: periodSpend.get(c.id) ?? 0,
+    alreadyLinked: linkedIds.has(c.id),
+    suggestedStatus: googleStatusToAdStatus(c.status),
+  }));
+
+  return { ok: true, customerId, since, until, campaigns: out };
+}
+
+export interface ImportedGoogleAdSummary {
+  adId: string;
+  campaignId: string;
+  name: string;
+  status: string;
+}
+
+export interface ImportGoogleResult {
+  ok: true;
+  imported: ImportedGoogleAdSummary[];
+  /** Ids requested but skipped (not found, or already linked in this period). */
+  skipped: string[];
+}
+
+export interface ImportGoogleAssignments {
+  ownerUserId?: string | null;
+  designerUserId?: string | null;
+  accountRepUserId?: string | null;
+}
+
+/**
+ * Adopt the chosen Google campaigns as new pacer rows in `period`, born already
+ * linked (googleCampaignId) and synced (period spend, status, budget, channel).
+ * Mirrors importAdSets. allocation is left null (the planner sets the monthly
+ * target; observed budget is a suggestion, not intent).
+ */
+export async function importGoogleCampaignsAsRows(
+  accountKey: string,
+  planId: string,
+  period: string,
+  todayIso: string,
+  campaignIds: string[],
+  assignments: ImportGoogleAssignments = {},
+): Promise<ImportGoogleResult> {
+  const requested = Array.from(new Set(campaignIds.filter(Boolean)));
+  if (requested.length === 0) return { ok: true, imported: [], skipped: [] };
+
+  const { cfg, customerId } = await getGoogleCustomer(accountKey);
+  const { since, until } = periodWindow(period, todayIso);
+
+  const [campaigns, periodSpend] = await Promise.all([
+    importGoogleCampaigns(cfg, customerId),
+    fetchCampaignSpend(cfg, customerId, since, until).catch(() => new Map<string, number>()),
+  ]);
+  const byId = new Map(campaigns.map((c) => [c.id, c]));
+
+  const linkedRows = await prisma.metaAdsPacerAd.findMany({
+    where: { planId, period, platform: 'google', googleCampaignId: { not: null } },
+    select: { googleCampaignId: true },
+  });
+  const linkedIds = new Set(
+    linkedRows.map((r) => r.googleCampaignId).filter((id): id is string => !!id),
+  );
+
+  // Append after this period's existing Google rows.
+  const maxPos = await prisma.metaAdsPacerAd.aggregate({
+    where: { planId, period, platform: 'google' },
+    _max: { position: true },
+  });
+  let position = (maxPos._max.position ?? -1) + 1;
+
+  const syncedAt = new Date();
+  const creates: Prisma.MetaAdsPacerAdCreateManyInput[] = [];
+  const imported: ImportedGoogleAdSummary[] = [];
+  const skipped: string[] = [];
+
+  for (const id of requested) {
+    const c = byId.get(id);
+    if (!c || linkedIds.has(id)) {
+      skipped.push(id);
+      continue;
+    }
+    const budgetType = mapGoogleBudgetType(c.dailyBudget, c.totalBudget);
+    const status = googleStatusToAdStatus(c.status);
+    const spend = periodSpend.get(c.id) ?? 0;
+    const adId = randomUUID();
+    creates.push({
+      id: adId,
+      planId,
+      platform: 'google',
+      position: position++,
+      name: c.name,
+      period,
+      ownerUserId: assignments.ownerUserId ?? null,
+      designerUserId: assignments.designerUserId ?? null,
+      accountRepUserId: assignments.accountRepUserId ?? null,
+      budgetType,
+      adStatus: status,
+      // See importAdSets: never seed allocation from observed budget.
+      allocation: null,
+      googleCampaignId: c.id,
+      googleChannelType: mapChannelGroup(c.channelType),
+      googleEffectiveStatus: c.status,
+      googleBudgetResourceName: c.budgetResourceName,
+      pacerActual: spend.toFixed(2),
+      pacerDailyBudget:
+        budgetType !== 'Lifetime' && c.dailyBudget != null ? c.dailyBudget.toFixed(2) : null,
+      pacerSyncedAt: syncedAt,
+    });
+    imported.push({ adId, campaignId: c.id, name: c.name, status });
+  }
+
+  if (creates.length > 0) {
+    await prisma.metaAdsPacerAd.createMany({ data: creates });
+  }
+
+  return { ok: true, imported, skipped };
 }

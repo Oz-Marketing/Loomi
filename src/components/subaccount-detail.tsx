@@ -19,7 +19,6 @@ import {
   TrashIcon,
   ExclamationTriangleIcon,
   QuestionMarkCircleIcon,
-  CogIcon,
   PuzzlePieceIcon,
   TagIcon,
   XMarkIcon,
@@ -98,15 +97,47 @@ const TABS: TabDef[] = [
 // messaging-scoped settings page at /subaccount/<slug>/messaging/settings
 // since they're tightly coupled to the email engine. Legacy URLs are
 // redirected from the [tab] page below.
+// Order: Company → Users → Branding → rest. Shared with the sidebar settings
+// nav (see SUBACCOUNT_SETTINGS_SECTIONS in settings-nav).
 const SETTINGS_TABS: TabDef[] = [
   { key: 'company', label: 'Company', icon: BuildingStorefrontIcon },
+  { key: 'users', label: 'Users', icon: UsersIcon },
   { key: 'branding', label: 'Branding', icon: PaintBrushIcon },
   { key: 'domains', label: 'Domains', icon: GlobeAltIcon },
   { key: 'integrations', label: 'Integrations', icon: PuzzlePieceIcon },
   { key: 'contact-fields', label: 'Custom Fields', icon: TagIcon },
-  { key: 'users', label: 'Users', icon: UsersIcon },
   { key: 'appearance', label: 'Appearance', icon: SwatchIcon },
 ];
+
+// Settings mode lives at two URL shapes:
+//   • Studio scoped:  /subaccount/<slug>/settings/<tab>            (section in path)
+//   • Admin browse:   [<surface>/]settings/subaccounts/<key>?tab=  (section in query —
+//     keeps the single [key] route, no per-tab route files needed)
+// These read/write the active section for whichever shape we're on.
+function isStudioSettingsScheme(pathname: string): boolean {
+  return pathname.split('/').filter(Boolean)[0] === 'subaccount';
+}
+function readSettingsSectionTab(
+  pathname: string,
+  search?: { get(name: string): string | null } | null,
+): string | undefined {
+  if (isStudioSettingsScheme(pathname)) {
+    const segments = pathname.split('/').filter(Boolean);
+    const i = segments.indexOf('settings');
+    return i >= 0 ? segments[i + 1] : undefined;
+  }
+  return search?.get('tab') ?? undefined;
+}
+function buildSettingsSectionPath(pathname: string, key: string, tab: string): string {
+  if (isStudioSettingsScheme(pathname)) {
+    const slug = pathname.split('/').filter(Boolean)[1];
+    return `/subaccount/${slug}/settings/${tab}`;
+  }
+  // Preserve any surface prefix (e.g. /reporting) that sits before /settings.
+  const i = pathname.indexOf('/settings/subaccounts');
+  const prefix = i > 0 ? pathname.slice(0, i) : '';
+  return `${prefix}/settings/subaccounts/${key}?tab=${tab}`;
+}
 
 interface SubAccountDetailPageProps {
   /** Base path for navigation, e.g. '/subaccounts' or '/settings/subaccounts' */
@@ -354,19 +385,16 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   // ── Settings mode: resolve tab from URL path ──
   const settingsUrlTab = useMemo(() => {
     if (!settingsMode) return undefined;
-    const segments = pathname.split('/').filter(Boolean);
-    const settingsIdx = segments.indexOf('settings');
-    return settingsIdx >= 0 ? segments[settingsIdx + 1] : undefined;
-  }, [settingsMode, pathname]);
+    return readSettingsSectionTab(pathname, searchParams);
+  }, [settingsMode, pathname, searchParams]);
 
   // Settings mode: sync activeTab from URL on initial load and popstate
   useEffect(() => {
     if (!settingsMode) return;
     const allTabKeys = SETTINGS_TABS.map(t => t.key);
     const syncFromUrl = () => {
-      const segments = window.location.pathname.split('/').filter(Boolean);
-      const settingsIdx = segments.indexOf('settings');
-      const tab = settingsIdx >= 0 ? segments[settingsIdx + 1] : 'company';
+      const url = new URL(window.location.href);
+      const tab = readSettingsSectionTab(url.pathname, url.searchParams) ?? 'company';
       if (allTabKeys.includes(tab as DetailTab)) {
         setActiveTab(tab as DetailTab);
       }
@@ -375,10 +403,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     if (settingsUrlTab && allTabKeys.includes(settingsUrlTab as DetailTab)) {
       setActiveTab(settingsUrlTab as DetailTab);
     } else if (!settingsUrlTab) {
-      // No tab segment — add /company to URL
-      const segments = pathname.split('/').filter(Boolean);
-      const slug = segments[1];
-      window.history.replaceState({}, '', `/subaccount/${slug}/settings/company`);
+      // No tab segment — add /company to URL (scheme-aware)
+      window.history.replaceState({}, '', buildSettingsSectionPath(pathname, key, 'company'));
     }
     // Sync on browser back/forward
     window.addEventListener('popstate', syncFromUrl);
@@ -660,10 +686,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   // ── Settings mode: tab click navigates via pushState (no full route transition) ──
   const handleTabClick = (tabKey: DetailTab) => {
     if (settingsMode) {
-      const segments = pathname.split('/').filter(Boolean);
-      const slug = segments[1]; // /subaccount/[slug]/settings/...
-      const newUrl = `/subaccount/${slug}/settings/${tabKey}`;
-      window.history.pushState({}, '', newUrl);
+      window.history.pushState({}, '', buildSettingsSectionPath(pathname, key, tabKey));
       setActiveTab(tabKey);
     } else {
       setActiveTab(tabKey);
@@ -675,15 +698,63 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
         {/* ── Header ── */}
         {settingsMode ? (
           <div className="page-sticky-header mb-8">
-            <div className="flex items-center justify-between">
-              <div>
-                <h1 className="flex items-center gap-2 text-2xl font-bold text-[var(--foreground)]">
-                  <CogIcon className="w-6 h-6" />
-                  Settings for {dealer || key}
-                </h1>
-                <p className="text-sm text-[var(--muted-foreground)] mt-1">
-                  Manage settings and configuration for this sub-account
-                </p>
+            <div className="flex items-center justify-between gap-4">
+              <div className="group flex min-w-0 items-center gap-3">
+                <AccountAvatar
+                  name={dealer || key}
+                  accountKey={key}
+                  storefrontImage={storefrontImage}
+                  logos={{ light: logoLight, dark: logoDark, white: logoWhite, black: logoBlack }}
+                  size={44}
+                  className="flex-shrink-0 rounded-xl border border-[var(--border)]"
+                />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    {isEditingDealerName ? (
+                      <input
+                        type="text"
+                        value={dealer}
+                        onChange={(event) => setDealer(event.target.value)}
+                        onBlur={() => setIsEditingDealerName(false)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') {
+                            event.preventDefault();
+                            setIsEditingDealerName(false);
+                          }
+                          if (event.key === 'Escape') {
+                            event.preventDefault();
+                            setDealer(account?.dealer || '');
+                            setIsEditingDealerName(false);
+                          }
+                        }}
+                        className="w-full max-w-md min-w-0 bg-transparent border-b border-[var(--border)] text-2xl font-bold text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)]"
+                        autoFocus
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingDealerName(true)}
+                        className="truncate text-left text-2xl font-bold text-[var(--foreground)] transition hover:opacity-80"
+                        title="Edit name"
+                      >
+                        {dealer || key}
+                      </button>
+                    )}
+                    {!isEditingDealerName && (
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingDealerName(true)}
+                        className="flex-shrink-0 rounded-lg p-1.5 text-[var(--muted-foreground)] opacity-0 transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] group-hover:opacity-100"
+                        title="Edit sub-account name"
+                      >
+                        <PencilSquareIcon className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-sm text-[var(--muted-foreground)] mt-0.5">
+                    Manage settings and configuration for this sub-account
+                  </p>
+                </div>
               </div>
               {showSaveButton && (
                 <button
@@ -760,9 +831,13 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
           </div>
         )}
 
-        {/* ── Sidebar nav + content wrapper ── */}
-        <div className="flex gap-6">
-        {/* Vertical nav */}
+        {/* ── Sidebar nav + content wrapper ──
+            In settings mode the section nav lives in the app sidebar
+            (SettingsNav), so we drop the inner rail and go full-width. The
+            admin drill-in (non-settings) keeps its own rail. */}
+        <div className={settingsMode ? '' : 'flex gap-6'}>
+        {/* Vertical nav (admin drill-in only) */}
+        {!settingsMode && (
         <nav className="flex flex-col gap-1 w-48 shrink-0 sticky top-4 self-start">
           {visibleTabs.map(tab => (
             <button
@@ -781,6 +856,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
             </button>
           ))}
         </nav>
+        )}
 
         {/* Tab content */}
         <div className="flex-1 min-w-0">

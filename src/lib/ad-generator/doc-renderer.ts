@@ -78,9 +78,13 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   if (el.type === 'image' || el.type === 'logo') {
     const url = esc(resolveBinding(el.binding, data));
     const minEdge = Math.min(box.w * width, box.h * height);
+    // Designer-set opacity (0–100). Undefined / 100 = fully opaque.
+    const opacity = el.opacity != null && el.opacity < 100 ? `opacity:${clamp01(el.opacity / 100)};` : '';
     if (!url) {
-      // Empty slot placeholder so the builder canvas shows where it goes.
-      return `<div${idAttr} style="${dim}${pos}display:flex;align-items:center;justify-content:center;border:2px dashed #cbd5e1;border-radius:${minEdge * 0.06}px;color:#cbd5e1;font-size:${minEdge * 0.14}px;font-family:${brandStack};">${el.type === 'logo' ? 'Logo' : 'Image'}</div>`;
+      // Empty slot placeholder so the builder canvas shows where it goes. Honor a
+      // set corner radius so the rounding is visible before an image is chosen.
+      const phRadius = el.radius != null ? el.radius : minEdge * 0.06;
+      return `<div${idAttr} style="${dim}${opacity}${pos}display:flex;align-items:center;justify-content:center;border:2px dashed #cbd5e1;border-radius:${phRadius}px;color:#cbd5e1;font-size:${minEdge * 0.14}px;font-family:${brandStack};">${el.type === 'logo' ? 'Logo' : 'Image'}</div>`;
     }
     const fit = el.fit ?? 'contain';
     // A cover image can carry a per-size focal point (object-position) so one
@@ -91,7 +95,9 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
         : el.type === 'logo'
           ? 'left center'
           : 'center';
-    return `<div${idAttr} style="${dim}${pos}overflow:hidden;"><img src="${url}" alt="" style="width:100%;height:100%;object-fit:${fit};object-position:${objectPos};" /></div>`;
+    // Corner radius rounds the image — the wrapper clips it via overflow:hidden.
+    const radius = el.radius ? `border-radius:${el.radius}px;` : '';
+    return `<div${idAttr} style="${dim}${opacity}${pos}overflow:hidden;${radius}"><img src="${url}" alt="" style="width:100%;height:100%;object-fit:${fit};object-position:${objectPos};" /></div>`;
   }
 
   // text
@@ -146,7 +152,7 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
   // doc-level field — so it flows through renderElement like everything else.
   const bg = doc.background;
   const bgCss = bg?.gradient
-    ? `linear-gradient(135deg, ${esc(bg.gradient[0])} 0%, ${esc(bg.gradient[1])} 100%)`
+    ? `linear-gradient(${bg.gradientAngle ?? 135}deg, ${esc(bg.gradient[0])} 0%, ${esc(bg.gradient[1])} 100%)`
     : bg?.color
       ? esc(bg.color)
       : '#ffffff';

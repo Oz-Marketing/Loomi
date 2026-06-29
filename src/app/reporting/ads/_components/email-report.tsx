@@ -29,6 +29,8 @@ import {
   LoadingState,
   DataTable,
 } from './shared';
+import { ExportMenu } from './export-menu';
+import type { ReportDoc } from '@/lib/reporting/report-doc';
 
 interface Aggregate {
   total_campaigns: number;
@@ -107,8 +109,76 @@ export function EmailReport({
 
   const statuses = Object.entries(data.statusBreakdown).sort((a, b) => b[1] - a[1]);
 
+  const sections: ReportDoc['sections'] = [
+    {
+      title: 'Campaigns',
+      columns: [
+        { header: 'Campaign', type: 'text' },
+        { header: 'Status', type: 'text' },
+        { header: 'Scheduled', type: 'text' },
+        { header: 'Sent', type: 'integer' },
+        { header: 'Delivered', type: 'integer' },
+        { header: 'Del. %', type: 'percent' },
+        { header: 'Opens', type: 'integer' },
+        { header: 'Clicks', type: 'integer' },
+      ],
+      rows: data.campaigns.map((c) => [
+        c.name,
+        c.status,
+        shortDate(c.scheduled_at),
+        c.sent,
+        c.delivered,
+        c.delivery_rate,
+        c.opened,
+        c.clicked,
+      ]),
+    },
+  ];
+  if (statuses.length) {
+    sections.push({
+      title: 'Status breakdown',
+      columns: [
+        { header: 'Status', type: 'text' },
+        { header: 'Campaigns', type: 'integer' },
+      ],
+      rows: statuses.map(([status, count]) => [status, count]),
+    });
+  }
+
+  const campaignHead = ['Campaign', 'Status', 'Scheduled', 'Sent', 'Delivered', 'Del. %', 'Opens', 'Clicks'];
+  const campaignRows = data.campaigns.map((c) => [
+    c.name,
+    c.status,
+    shortDate(c.scheduled_at),
+    num(c.sent),
+    num(c.delivered),
+    rate(c.delivery_rate),
+    num(c.opened),
+    num(c.clicked),
+  ]);
+  const doc: ReportDoc = {
+    title: `Email Campaigns — ${data.dealer}`,
+    subtitle: `${from} – ${to}`,
+    meta: [
+      { label: 'Account', value: data.dealer },
+      { label: 'Range', value: `${from} → ${to}` },
+    ],
+    kpis: [
+      { label: 'Campaigns', value: num(s.total_campaigns) },
+      { label: 'Sent', value: num(s.total_sent), secondary: `${num(s.avg_recipients)} avg/campaign` },
+      { label: 'Delivered', value: num(s.total_delivered), secondary: `${rate(s.delivery_rate)} delivered` },
+      { label: 'Failed', value: num(s.total_failed), secondary: `${rate(s.fail_rate)} failed` },
+      { label: 'Open rate', value: rate(s.avg_open_rate) },
+      { label: 'Click rate', value: rate(s.avg_click_rate) },
+    ],
+    sections,
+  };
+
   return (
     <div className="space-y-8">
+      <div className="flex items-center justify-end">
+        <ExportMenu doc={doc} filenameBase={`email-${data.dealer}-${from}-${to}`} />
+      </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <Kpi icon={EnvelopeIcon} label="Campaigns" value={num(s.total_campaigns)} tone="primary" />
         <Kpi icon={PaperAirplaneIcon} label="Sent" value={num(s.total_sent)} secondary={`${num(s.avg_recipients)} avg/campaign`} tone="sky" />
@@ -145,20 +215,7 @@ export function EmailReport({
       )}
 
       <Section title="Campaigns" icon={EnvelopeIcon} subtitle={`${data.campaigns.length} in range`}>
-        <DataTable
-          head={['Campaign', 'Status', 'Scheduled', 'Sent', 'Delivered', 'Del. %', 'Opens', 'Clicks']}
-          rows={data.campaigns.map((c) => [
-            c.name,
-            c.status,
-            shortDate(c.scheduled_at),
-            num(c.sent),
-            num(c.delivered),
-            rate(c.delivery_rate),
-            num(c.opened),
-            num(c.clicked),
-          ])}
-          maxRows={12}
-        />
+        <DataTable head={campaignHead} rows={campaignRows} maxRows={12} />
       </Section>
     </div>
   );

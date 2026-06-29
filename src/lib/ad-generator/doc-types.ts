@@ -57,10 +57,14 @@ export interface DocElement {
   align?: 'left' | 'center' | 'right';
   // ── image / logo ──
   fit?: 'contain' | 'cover';
+  /** Element opacity, 0–100 (percent). Undefined = fully opaque. Used by
+   *  images/logos for watermarks & overlays; rendered on the element wrapper. */
+  opacity?: number;
   // ── shape ──
   /** Hex fill, or `'brand'`. */
   fill?: string;
-  /** Corner radius in px. */
+  /** Corner radius in px. Applies to shapes AND images/logos (rounds the
+   *  image, which is clipped by the wrapper's overflow:hidden). */
   radius?: number;
 }
 
@@ -90,8 +94,10 @@ export interface DocLayoutBox {
 export interface DocBackground {
   /** Solid fill (hex). Ignored when `gradient` is set. */
   color?: string;
-  /** Two-stop linear gradient [from, to] at 135deg. */
+  /** Two-stop linear gradient [from, to]. */
   gradient?: [string, string];
+  /** Gradient direction in degrees (CSS linear-gradient angle). Defaults to 135. */
+  gradientAngle?: number;
   /** Thin brand-colored bar across the top (the current Vehicle Offer look). */
   accentBar?: boolean;
 }

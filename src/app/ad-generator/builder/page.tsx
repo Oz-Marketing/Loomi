@@ -49,6 +49,10 @@ import {
   ChevronRightIcon,
   RectangleStackIcon,
   Squares2X2Icon,
+  QuestionMarkCircleIcon,
+  MagnifyingGlassPlusIcon,
+  MagnifyingGlassMinusIcon,
+  SwatchIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
@@ -62,7 +66,7 @@ import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type LayerNode } fro
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon } from '@/components/ad-generator/builder-icons';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
-import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox } from '@/lib/ad-generator/doc-types';
+import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, DocBackground } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType, AdData } from '@/lib/ad-generator/types';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -302,7 +306,11 @@ function makeDefaultElement(id: string, type: DocElementType): DocElement {
     case 'logo':
       return { id, type, binding: { kind: 'brand', key: 'logoUrl' }, fit: 'contain' };
     case 'image':
-      return { id, type, fit: 'contain' };
+      // Empty static binding (not undefined) so the inspector treats it as an
+      // editable image — that's what surfaces the thumbnail + "Choose / upload"
+      // (MediaPickerModal) control. Without a binding the Content section, and
+      // thus the upload button, never render.
+      return { id, type, binding: { kind: 'static', value: '' }, fit: 'contain' };
     case 'shape':
       return { id, type, fill: 'brand', radius: 8 };
   }
@@ -322,6 +330,15 @@ export default function AdBuilderPage() {
   const clearSelection = useCallback(() => setSelectedIds([]), []);
   const toggleSelect = useCallback((id: string) => setSelectedIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id])), []);
   const [showOutlines, setShowOutlines] = useState(true);
+  // "Wide view" — an overview of every size rendered side-by-side (multi-size docs only).
+  const [overviewOpen, setOverviewOpen] = useState(false);
+  // Keyboard-shortcuts cheatsheet overlay.
+  const [helpOpen, setHelpOpen] = useState(false);
+  // Manual zoom multiplier on top of the fit-to-pane scale (1 = fit the pane).
+  const [zoom, setZoom] = useState(1);
+  // The background panel shows on deselect; dismissing it sets this until the
+  // toolbar's "Background" button reopens it.
+  const [bgPanelHidden, setBgPanelHidden] = useState(false);
   const [showSafe, setShowSafe] = useState(false);
   const [dragBox, setDragBox] = useState<DocLayoutBox | null>(null);
   // Figma-style alignment guides shown while dragging (fractions, or null).
@@ -330,9 +347,8 @@ export default function AdBuilderPage() {
   const [fieldsOpen, setFieldsOpen] = useState(false);
   // Left rail: which panel (Elements / Layers / Industries / Sizes) is open as a
   // flyout. null = collapsed to just the icons.
-  const [leftPanel, setLeftPanel] = useState<'layers' | 'industries' | 'sizes' | null>(null);
+  const [leftPanel, setLeftPanel] = useState<'insert' | 'layers' | 'industries' | 'sizes' | null>(null);
   // The on-canvas "add element" popover (top-left of the artboard).
-  const [addOpen, setAddOpen] = useState(false);
   const [addSizeOpen, setAddSizeOpen] = useState(false);
   const [customName, setCustomName] = useState('');
   const [customW, setCustomW] = useState('');
@@ -410,9 +426,17 @@ export default function AdBuilderPage() {
   const frameRef = useRef<HTMLDivElement>(null); // the artboard frame (for panel alignment)
   const availW = canvasSize.width - CANVAS_PAD;
   const availH = canvasSize.height - CANVAS_PAD;
-  const scale = availW > 0 && availH > 0 ? Math.min(availW / size.width, availH / size.height) : Math.min(560 / size.width, 560 / size.height);
+  // Base scale fits the artboard to the pane; `zoom` (1 = fit) layers manual
+  // zoom on top. Everything downstream uses `scale`, so the overlay + drag math
+  // stay consistent at any zoom.
+  const fitScale = availW > 0 && availH > 0 ? Math.min(availW / size.width, availH / size.height) : Math.min(560 / size.width, 560 / size.height);
+  const scale = fitScale * zoom;
   const frameW = size.width * scale;
   const frameH = size.height * scale;
+  // Each size refits when you switch to it (drop any manual zoom).
+  useEffect(() => {
+    setZoom(1);
+  }, [sizeId]);
 
   const layout = doc.layouts[size.id] ?? {};
   const placed = useMemo(
@@ -785,6 +809,26 @@ export default function AdBuilderPage() {
     setSelectedIds([id]);
   }, []);
 
+  // Add a full-bleed background photo: a cover image element pinned to the whole
+  // canvas, behind everything, on every size. Background images are full-bleed
+  // image ELEMENTS (not a doc-level field), so this flows through the normal
+  // renderer/export + per-size focal point. Selecting it surfaces the inspector's
+  // Choose/upload control.
+  const addBackgroundImage = useCallback(() => {
+    const id = `image-${rid()}`;
+    setDoc((prev) => {
+      const layouts = { ...prev.layouts };
+      for (const s of prev.sizes) {
+        const cur = layouts[s.id] ?? {};
+        const minZ = Object.values(cur).reduce((m, b) => Math.min(m, b.z ?? 0), 0);
+        layouts[s.id] = { ...cur, [id]: { x: 0, y: 0, w: 1, h: 1, z: minZ - 1 } };
+      }
+      const el: DocElement = { id, type: 'image', name: 'Background', binding: { kind: 'static', value: '' }, fit: 'cover' };
+      return { ...prev, elements: [...prev.elements, el], layouts };
+    });
+    setSelectedIds([id]);
+  }, []);
+
   // Patch the selected element's style.
   const updEl = (patch: Partial<DocElement>) => {
     if (selected) setElement(selected.id, patch);
@@ -1023,19 +1067,6 @@ export default function AdBuilderPage() {
     };
   }, [ctxMenu]);
 
-  // Close the on-canvas add popover on outside click / Escape.
-  useEffect(() => {
-    if (!addOpen) return;
-    const onDown = () => setAddOpen(false);
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setAddOpen(false);
-    window.addEventListener('pointerdown', onDown);
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('pointerdown', onDown);
-      window.removeEventListener('keydown', onKey);
-    };
-  }, [addOpen]);
-
   function toggleGroupCollapsed(gid: string) {
     setDoc((prev) => ({ ...prev, groups: (prev.groups ?? []).map((g) => (g.id === gid ? { ...g, collapsed: !g.collapsed } : g)) }));
   }
@@ -1130,6 +1161,10 @@ export default function AdBuilderPage() {
       const cur = prev.safeArea ?? { value: 5, unit: 'percent' as MarginUnit };
       return { ...prev, safeArea: { ...cur, ...patch } };
     });
+  }
+  // Edit the artboard background (shown in the inspector when nothing is selected).
+  function setBackground(patch: Partial<DocBackground>) {
+    setDoc((prev) => ({ ...prev, background: { ...(prev.background ?? {}), ...patch } }));
   }
   // The Margins toggle (on shows the guide + controls; seeds a default if unset).
   function toggleMargins() {
@@ -1832,7 +1867,7 @@ export default function AdBuilderPage() {
 
       {/* Editor header bar — an empty rail-width slot keeps the row below aligned
           with the canvas column; the title centers over the canvas. */}
-      <header className="flex flex-shrink-0 items-center gap-4 pb-3">
+      <header className="flex flex-shrink-0 items-center gap-4 border-b border-[var(--border)] pb-3">
         <div className="w-12 flex-shrink-0" aria-hidden="true" />
 
         {/* main row — spans the canvas: back at the left edge, title centered, actions right */}
@@ -1916,9 +1951,10 @@ export default function AdBuilderPage() {
         <aside className="relative flex flex-shrink-0">
           {/* Icon rail — click an icon to open that panel as a flyout to the right */}
           <div className="flex w-12 flex-col items-center gap-1.5 pt-1">
-            {/* Elements adding now lives on the canvas (top-left +); keep a spacer
-                so Layers / Sizes stay where they were. */}
-            <div className="h-11 w-11" aria-hidden="true" />
+            {/* Insert — opens the Elements flyout (Text / Image / Button / Shape).
+                Lives in the rail alongside Layers / Sizes so adding never collides
+                with an open panel. */}
+            <RailButton label="Insert" Icon={PlusIcon} active={leftPanel === 'insert'} onClick={() => setLeftPanel((p) => (p === 'insert' ? null : 'insert'))} />
             <RailButton label="Layers" Icon={LayersIcon} active={leftPanel === 'layers'} onClick={() => setLeftPanel((p) => (p === 'layers' ? null : 'layers'))} />
             {!adId && <RailButton label="Industries" Icon={BuildingStorefrontIcon} active={leftPanel === 'industries'} onClick={() => setLeftPanel((p) => (p === 'industries' ? null : 'industries'))} />}
             <RailButton label="Sizes" Icon={DashboardLayoutIcon} active={leftPanel === 'sizes'} onClick={() => setLeftPanel((p) => (p === 'sizes' ? null : 'sizes'))} />
@@ -1926,6 +1962,18 @@ export default function AdBuilderPage() {
 
           {leftPanel && (
             <div className="absolute inset-y-0 left-full z-30 ml-2 flex w-[320px] flex-col gap-4 overflow-y-auto pb-1 pr-1">
+          {/* Insert — element palette. Click a tile to drop it on the canvas. */}
+          {leftPanel === 'insert' && (
+          <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
+            <h2 className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              <PlusIcon className="h-3.5 w-3.5" />
+              Insert
+            </h2>
+            <AdderGrid adders={adders} variant="panel" />
+            <p className="mt-3 text-[11px] leading-snug text-[var(--muted-foreground)]">Click to add to the canvas, then drag to position. The panel stays open so you can add several.</p>
+          </section>
+          )}
+
           {/* Layers — the stack of placed elements (top of the list = front).
               Double-click to rename · lock icon to lock · drag to reorder (z). */}
           {leftPanel === 'layers' && (
@@ -2342,11 +2390,88 @@ export default function AdBuilderPage() {
 
         {/* Canvas */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)]">
-          <div className="relative flex flex-shrink-0 items-center justify-end border-b border-[var(--border)] px-3 py-2">
+          <div className="relative flex flex-shrink-0 items-center justify-end gap-2 border-b border-[var(--border)] px-3 py-2">
+            {/* Zoom — fit-relative; the % click resets to fit. */}
+            <div className="mr-auto flex items-center gap-0.5">
+              <button
+                onClick={() => setZoom((z) => Math.max(0.2, +(z / 1.25).toFixed(3)))}
+                title="Zoom out"
+                aria-label="Zoom out"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+              >
+                <MagnifyingGlassMinusIcon className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => setZoom(1)}
+                title="Fit to screen"
+                aria-label="Fit to screen"
+                className="min-w-[3.25rem] rounded-lg px-1.5 py-1 text-center text-xs font-medium tabular-nums text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+              >
+                {Math.round(scale * 100)}%
+              </button>
+              <button
+                onClick={() => setZoom((z) => Math.min(5, +(z * 1.25).toFixed(3)))}
+                title="Zoom in"
+                aria-label="Zoom in"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+              >
+                <MagnifyingGlassPlusIcon className="h-4 w-4" />
+              </button>
+            </div>
             {/* Current size name, centered */}
-            <span className="pointer-events-none absolute left-1/2 -translate-x-1/2 truncate text-xs font-semibold text-[var(--foreground)]">
+            <span className="pointer-events-none absolute left-1/2 max-w-[36%] -translate-x-1/2 truncate rounded-md bg-[var(--muted)] px-2.5 py-1 text-xs font-semibold text-[var(--foreground)]">
               {size.label}
             </span>
+            {/* View toggles — outlines + safe-area margins */}
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={() => setShowOutlines((v) => !v)}
+                title="Toggle element outlines"
+                aria-label="Toggle element outlines"
+                aria-pressed={showOutlines}
+                className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showOutlines ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
+              >
+                <OutlinesIcon className="h-4 w-4" />
+              </button>
+              <div className="relative">
+                <button
+                  onClick={toggleMargins}
+                  title="Safe-area margins"
+                  aria-label="Safe-area margins"
+                  aria-pressed={showSafe}
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showSafe ? 'bg-[#14b8a6]/15 text-[#14b8a6]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
+                >
+                  <MarginsIcon className="h-4 w-4" />
+                </button>
+                {showSafe && (
+                  <div className="absolute right-0 top-9 z-50 flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-md backdrop-blur-2xl">
+                    <input
+                      type="number"
+                      value={doc.safeArea?.value ?? 5}
+                      onChange={(e) => setMargin({ value: Math.max(0, Number(e.target.value)) })}
+                      title="Margin size"
+                      className="w-12 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                    />
+                    <select
+                      value={doc.safeArea?.unit ?? 'percent'}
+                      onChange={(e) => setMargin({ unit: e.target.value as MarginUnit })}
+                      title="Unit"
+                      className="rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                    >
+                      {MARGIN_UNITS.map((u) => (
+                        <option key={u.value} value={u.value}>
+                          {u.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div className="h-5 w-px bg-[var(--border)]" />
+
             {/* Undo / Redo */}
             <div className="flex items-center gap-0.5">
               <button
@@ -2368,18 +2493,43 @@ export default function AdBuilderPage() {
                 <ArrowUturnRightIcon className="h-4 w-4" />
               </button>
             </div>
+
+            {/* Reopen the background panel after it's been dismissed. */}
+            {!selected && bgPanelHidden && (
+              <button
+                onClick={() => setBgPanelHidden(false)}
+                title="Background"
+                aria-label="Show background panel"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+              >
+                <SwatchIcon className="h-4 w-4" />
+              </button>
+            )}
+
+            {/* Divider */}
+            <div className="h-5 w-px bg-[var(--border)]" />
+
+            {/* Keyboard shortcuts */}
+            <button
+              onClick={() => setHelpOpen(true)}
+              title="Keyboard shortcuts"
+              aria-label="Keyboard shortcuts"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+            >
+              <QuestionMarkCircleIcon className="h-4 w-4" />
+            </button>
           </div>
 
           <div
             ref={canvasRef}
-            className="relative flex flex-1 flex-col items-center justify-center gap-4 overflow-auto bg-[var(--muted)]/30 p-6"
+            className="relative flex flex-1 flex-col gap-4 overflow-auto bg-[var(--muted)]/30 p-3 [align-items:safe_center] [background-image:radial-gradient(var(--canvas-dot)_1px,transparent_1.5px)] [background-position:center] [background-size:18px_18px] [justify-content:safe_center] sm:p-6"
             style={{ userSelect: 'none' }}
             onPointerDown={(e) => {
               // Clicking the empty area around the artboard clears the selection.
               if (e.target === e.currentTarget) clearSelection();
             }}
           >
-              <div ref={frameRef} className="relative shadow-lg ring-1 ring-black/5" style={{ width: frameW, height: frameH }}>
+              <div ref={frameRef} className="relative rounded-md shadow-[0_12px_48px_-8px_rgba(0,0,0,0.28),0_2px_8px_rgba(0,0,0,0.12)] ring-1 ring-black/10" style={{ width: frameW, height: frameH }}>
                 {/* The export renderer, scaled to fit. */}
                 <div className="absolute inset-0 overflow-hidden rounded-md">
                   <iframe
@@ -2599,87 +2749,29 @@ export default function AdBuilderPage() {
                 </div>
               </div>
 
-              {/* In-canvas controls — anchored to the canvas container's corners */}
-              <div className="pointer-events-none absolute inset-x-3 top-3 z-50 flex items-start justify-between">
-                {/* Add element (top-left) */}
-                <div className="pointer-events-auto relative" onPointerDown={(e) => e.stopPropagation()}>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setAddOpen((v) => !v);
-                    }}
-                    title="Add element"
-                    aria-label="Add element"
-                    className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--primary)] text-white shadow-md transition-opacity hover:opacity-90"
-                  >
-                    <PlusIcon className="h-5 w-5" />
-                  </button>
-                  {addOpen && (
-                    <div className="absolute left-0 top-11 w-40 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-xl backdrop-blur-2xl">
-                      {adders.map((a) => (
-                        <button
-                          key={a.label}
-                          onClick={() => {
-                            a.onAdd();
-                            setAddOpen(false);
-                          }}
-                          className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-                        >
-                          <a.Icon className="h-4 w-4 text-[var(--muted-foreground)]" />
-                          {a.label}
-                        </button>
-                      ))}
+              {/* Empty-canvas onboarding — guides a brand-new template's first
+                  element. Reactive on placed.length, so it clears the moment an
+                  element is added and returns if all are removed. The wrapper is
+                  click-through (pointer-events-none) so canvas pan/marquee still
+                  work around the card; only the card itself is interactive. */}
+              {placed.length === 0 && (
+                <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center p-4">
+                  <div className="pointer-events-auto w-full max-w-sm rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-6 text-center shadow-xl backdrop-blur-2xl">
+                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--primary)]/10">
+                      <Squares2X2Icon className="h-6 w-6 text-[var(--primary)]" />
                     </div>
-                  )}
-                </div>
-
-                {/* View toggles (top-right): outlines + margins */}
-                <div className="pointer-events-auto flex flex-col items-end gap-1.5" onPointerDown={(e) => e.stopPropagation()}>
-                  <div className="flex items-center gap-1.5 [filter:drop-shadow(0_1px_2px_rgba(0,0,0,0.35))]">
-                    <button
-                      onClick={() => setShowOutlines((v) => !v)}
-                      title="Toggle element outlines"
-                      aria-label="Toggle element outlines"
-                      aria-pressed={showOutlines}
-                      className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showOutlines ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
-                    >
-                      <OutlinesIcon className="h-5 w-5" />
-                    </button>
-                    <button
-                      onClick={toggleMargins}
-                      title="Safe-area margins"
-                      aria-label="Safe-area margins"
-                      aria-pressed={showSafe}
-                      className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showSafe ? 'text-[#14b8a6]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
-                    >
-                      <MarginsIcon className="h-5 w-5" />
-                    </button>
+                    <h3 className="text-sm font-bold text-[var(--foreground)]">Design your ad</h3>
+                    <p className="mx-auto mt-1 mb-4 max-w-xs text-xs text-[var(--muted-foreground)]">
+                      Add your first element to get started — drop in text, an image, a button, or a shape.
+                    </p>
+                    <AdderGrid adders={adders} variant="onboarding" />
+                    <p className="mt-4 text-[11px] text-[var(--muted-foreground)]">
+                      Need a different size? Open the <span className="font-medium text-[var(--foreground)]">Sizes</span> panel on the left.
+                    </p>
                   </div>
-                  {showSafe && (
-                    <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-md backdrop-blur-2xl">
-                      <input
-                        type="number"
-                        value={doc.safeArea?.value ?? 5}
-                        onChange={(e) => setMargin({ value: Math.max(0, Number(e.target.value)) })}
-                        title="Margin size"
-                        className="w-12 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                      />
-                      <select
-                        value={doc.safeArea?.unit ?? 'percent'}
-                        onChange={(e) => setMargin({ unit: e.target.value as MarginUnit })}
-                        title="Unit"
-                        className="rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                      >
-                        {MARGIN_UNITS.map((u) => (
-                          <option key={u.value} value={u.value}>
-                            {u.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
                 </div>
-              </div>
+              )}
+
 
               {/* Size navigation — arrow-paginated, scales to any number of sizes */}
               {doc.sizes.length > 0 &&
@@ -2697,9 +2789,21 @@ export default function AdBuilderPage() {
                       >
                         <ChevronLeftIcon className="h-4 w-4" />
                       </button>
-                      <span className="min-w-[6.5rem] text-center text-xs font-medium text-[var(--foreground)]">
-                        {doc.sizes[idx]?.label.split(' ')[0]} <span className="tabular-nums text-[var(--muted-foreground)]">{idx + 1}/{doc.sizes.length}</span>
-                      </span>
+                      {doc.sizes.length > 1 ? (
+                        <button
+                          onClick={() => setOverviewOpen(true)}
+                          title="View all sizes"
+                          aria-label="View all sizes"
+                          className="inline-flex min-w-[6.5rem] items-center justify-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                        >
+                          <Squares2X2Icon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+                          {doc.sizes[idx]?.label.split(' ')[0]} <span className="tabular-nums text-[var(--muted-foreground)]">{idx + 1}/{doc.sizes.length}</span>
+                        </button>
+                      ) : (
+                        <span className="min-w-[6.5rem] text-center text-xs font-medium text-[var(--foreground)]">
+                          {doc.sizes[idx]?.label.split(' ')[0]} <span className="tabular-nums text-[var(--muted-foreground)]">{idx + 1}/{doc.sizes.length}</span>
+                        </span>
+                      )}
                       <button
                         onClick={() => go(1)}
                         disabled={doc.sizes.length < 2}
@@ -2717,6 +2821,8 @@ export default function AdBuilderPage() {
                 <SelectionPanel
                   el={selected}
                   box={selectedBox}
+                  sizeW={size.width}
+                  sizeH={size.height}
                   fontOptions={fontOptions}
                   content={selectionContent}
                   onContentChange={setSelectedContent}
@@ -2724,6 +2830,20 @@ export default function AdBuilderPage() {
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch })}
                   onClose={clearSelection}
+                  shifted={fieldsOpen}
+                  topPx={canvasTop}
+                />
+              )}
+
+              {!selected && !bgPanelHidden && (
+                <BackgroundPanel
+                  background={doc.background}
+                  onChange={setBackground}
+                  onClose={() => setBgPanelHidden(true)}
+                  hasBgImage={!!bgImageId}
+                  onAddImage={addBackgroundImage}
+                  onEditImage={() => bgImageId && selectOne(bgImageId)}
+                  onRemoveImage={() => bgImageId && deleteElement(bgImageId)}
                   shifted={fieldsOpen}
                   topPx={canvasTop}
                 />
@@ -2755,6 +2875,21 @@ export default function AdBuilderPage() {
           onDelete={deleteSaved}
         />
       )}
+
+      {overviewOpen && (
+        <SizesOverviewModal
+          doc={doc}
+          previewData={previewData}
+          currentSizeId={sizeId}
+          onClose={() => setOverviewOpen(false)}
+          onPick={(id) => {
+            setSizeId(id);
+            setOverviewOpen(false);
+          }}
+        />
+      )}
+
+      {helpOpen && <ShortcutsModal onClose={() => setHelpOpen(false)} />}
 
       {/* Right-click context menu (canvas + layers) */}
       {ctxMenu && typeof document !== 'undefined' &&
@@ -3076,6 +3211,8 @@ function FieldsSidebar({
 function SelectionPanel({
   el,
   box,
+  sizeW,
+  sizeH,
   fontOptions,
   content,
   onContentChange,
@@ -3088,6 +3225,8 @@ function SelectionPanel({
 }: {
   el: DocElement;
   box: DocLayoutBox;
+  sizeW: number;
+  sizeH: number;
   fontOptions: FontSelectOption[];
   content: { mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly'; value: string; note?: string } | null;
   onContentChange: (value: string) => void;
@@ -3124,7 +3263,7 @@ function SelectionPanel({
         </button>
       </div>
 
-      <div className="space-y-4 p-3">
+      <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
         {/* Content — edit the element's value directly; writes to the form data */}
         {content && content.mode !== 'none' && (
           <PanelSection title="Content">
@@ -3169,6 +3308,29 @@ function SelectionPanel({
             )}
           </PanelSection>
         )}
+
+        {/* Precise position + size (px at the current size). Boxes are stored as
+            fractions of the canvas, so we convert px ↔ fraction here. */}
+        <PanelSection title="Position & size">
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+              X
+              <MiniNum title="X position (px)" value={Math.round(box.x * sizeW)} onChange={(v) => onBox({ x: v / sizeW })} />
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+              Y
+              <MiniNum title="Y position (px)" value={Math.round(box.y * sizeH)} onChange={(v) => onBox({ y: v / sizeH })} />
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+              W
+              <MiniNum title="Width (px)" value={Math.round(box.w * sizeW)} onChange={(v) => onBox({ w: Math.max(1, v) / sizeW })} />
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+              H
+              <MiniNum title="Height (px)" value={Math.round(box.h * sizeH)} onChange={(v) => onBox({ h: Math.max(1, v) / sizeH })} />
+            </label>
+          </div>
+        </PanelSection>
 
         {el.type === 'text' && (
           <>
@@ -3277,6 +3439,24 @@ function SelectionPanel({
                 <ArrowsPointingOutIcon className="h-4 w-4" />
               </BarBtn>
             </div>
+            <div className="mt-3 flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                Radius
+                <MiniNum title="Corner radius (px)" value={el.radius ?? 0} onChange={(v) => onEl({ radius: v > 0 ? Math.round(v) : undefined })} />
+              </label>
+              <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                Opacity
+                <MiniNum
+                  title="Opacity (%)"
+                  value={el.opacity ?? 100}
+                  step={5}
+                  onChange={(v) => {
+                    const n = Math.max(0, Math.min(100, Math.round(v)));
+                    onEl({ opacity: n >= 100 ? undefined : n });
+                  }}
+                />
+              </label>
+            </div>
             {el.type === 'image' && el.fit === 'cover' && (
               <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Drag the image on the canvas to reposition it — the off-canvas bleed shows while you drag (saved per size).</p>
             )}
@@ -3301,8 +3481,8 @@ function SelectionPanel({
 /** A labeled group of controls in the selection panel. */
 function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div>
-      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">{title}</div>
+    <div className="py-3">
+      <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">{title}</div>
       {children}
     </div>
   );
@@ -3324,6 +3504,31 @@ function RailButton({ label, Icon, active, onClick }: { label: string; Icon: Rea
         <Icon className="h-5 w-5" />
       </button>
     </SidebarTooltip>
+  );
+}
+
+type Adder = { label: string; Icon: React.ComponentType<{ className?: string }>; onAdd: () => void };
+
+/** The element palette — a grid of tiles that drop an element on the canvas.
+ *  Shared by the Insert flyout (`panel`) and the empty-canvas onboarding
+ *  (`onboarding`); `variant` only tunes density. */
+function AdderGrid({ adders, variant }: { adders: Adder[]; variant: 'panel' | 'onboarding' }) {
+  const cols = variant === 'panel' ? 'grid-cols-2' : 'grid-cols-4';
+  const tile = variant === 'panel' ? 'justify-center gap-2 py-5 text-xs' : 'gap-1.5 py-3 text-[11px]';
+  const icon = variant === 'panel' ? 'h-6 w-6' : 'h-5 w-5';
+  return (
+    <div className={`grid ${cols} gap-2`}>
+      {adders.map((a) => (
+        <button
+          key={a.label}
+          onClick={a.onAdd}
+          className={`flex flex-col items-center rounded-xl border border-[var(--border)] px-2 font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)] ${tile}`}
+        >
+          <a.Icon className={`${icon} text-[var(--muted-foreground)]`} />
+          {a.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -3403,6 +3608,281 @@ function ColorSwatchInput({ title, value, onChange }: { title: string; value: st
       <span className="h-4 w-4 rounded-full border border-[var(--border)]" style={{ background: value }} />
       <input type="color" value={value} onChange={(e) => onChange(e.target.value)} className="sr-only" />
     </label>
+  );
+}
+
+/**
+ * "Wide view" — every size in the doc rendered side-by-side through the same
+ * `renderDoc` the canvas/export use, so the overview is WYSIWYG. Click a size to
+ * jump back to editing it. Only shown for multi-size docs.
+ */
+function SizesOverviewModal({
+  doc,
+  previewData,
+  currentSizeId,
+  onClose,
+  onPick,
+}: {
+  doc: TemplateDoc;
+  previewData: AdData;
+  currentSizeId: string;
+  onClose: () => void;
+  onPick: (id: string) => void;
+}) {
+  const MAX_W = 240;
+  const MAX_H = 200;
+  // Render each size's HTML once per (doc, previewData) rather than on every
+  // parent render — each result feeds an <iframe srcDoc>, so recomputing would
+  // reload every iframe on each tick.
+  const previews = useMemo(
+    () => doc.sizes.map((s) => ({ s, html: renderDoc(doc, previewData, s, { preview: true }) })),
+    [doc, previewData],
+  );
+  return createPortal(
+    <div className="fixed inset-0 z-[90] flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-12" onClick={onClose}>
+      <div className="w-full max-w-4xl rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-5 shadow-xl backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-start justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-[var(--foreground)]">All sizes</h2>
+            <p className="text-xs text-[var(--muted-foreground)]">Every size at a glance — click one to edit it.</p>
+          </div>
+          <button onClick={onClose} aria-label="Close" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {previews.map(({ s, html }) => {
+            const sc = Math.min(MAX_W / s.width, MAX_H / s.height);
+            const active = s.id === currentSizeId;
+            return (
+              <button
+                key={s.id}
+                onClick={() => onPick(s.id)}
+                className={`flex flex-col items-center gap-2 rounded-xl border p-3 transition-colors ${active ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]/40' : 'border-[var(--border)] hover:border-[var(--primary)]'}`}
+              >
+                <div className="flex items-center justify-center" style={{ height: MAX_H }}>
+                  <div className="overflow-hidden rounded shadow-md ring-1 ring-black/10" style={{ width: s.width * sc, height: s.height * sc }}>
+                    <iframe
+                      title={s.label}
+                      srcDoc={html}
+                      style={{ width: s.width, height: s.height, border: 0, transform: `scale(${sc})`, transformOrigin: 'top left', pointerEvents: 'none' }}
+                    />
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="flex items-center justify-center gap-1.5 text-xs font-semibold text-[var(--foreground)]">
+                    {s.label.split(' ')[0]}
+                    {active && (
+                      <span className="rounded bg-[var(--primary)]/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--primary)]">Editing</span>
+                    )}
+                  </div>
+                  <div className="text-[11px] tabular-nums text-[var(--muted-foreground)]">{s.width}×{s.height}</div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * Background panel — shown in the inspector slot when nothing is selected, so
+ * the artboard's fill (solid or gradient) and the brand accent bar are editable
+ * without selecting an element. Mirrors the SelectionPanel's docked styling.
+ */
+function BackgroundPanel({
+  background,
+  onChange,
+  onClose,
+  hasBgImage,
+  onAddImage,
+  onEditImage,
+  onRemoveImage,
+  shifted,
+  topPx,
+}: {
+  background?: DocBackground;
+  onChange: (patch: Partial<DocBackground>) => void;
+  onClose: () => void;
+  hasBgImage: boolean;
+  onAddImage: () => void;
+  onEditImage: () => void;
+  onRemoveImage: () => void;
+  shifted: boolean;
+  topPx: number;
+}) {
+  const bg = background ?? {};
+  const grad = bg.gradient;
+  return (
+    <div
+      style={{ top: topPx, maxHeight: `calc(100vh - ${topPx + 16}px)` }}
+      className={`fixed z-40 flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[372px]' : 'right-6'}`}
+    >
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-sm font-semibold text-[var(--foreground)]">Background</span>
+          <span className="shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">Canvas</span>
+        </div>
+        <button onClick={onClose} title="Hide background panel" aria-label="Hide background panel" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+          <XMarkIcon className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
+        <PanelSection title="Fill">
+          {grad ? (
+            <div className="space-y-3">
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                  From
+                  <ColorSwatchInput title="Gradient start" value={grad[0]} onChange={(v) => onChange({ gradient: [v, grad[1]] })} />
+                </label>
+                <label className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                  To
+                  <ColorSwatchInput title="Gradient end" value={grad[1]} onChange={(v) => onChange({ gradient: [grad[0], v] })} />
+                </label>
+              </div>
+              <div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-xs text-[var(--muted-foreground)]">Angle</span>
+                  <span className="text-[11px] tabular-nums text-[var(--muted-foreground)]">{bg.gradientAngle ?? 135}°</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={360}
+                  step={1}
+                  value={bg.gradientAngle ?? 135}
+                  onChange={(e) => onChange({ gradientAngle: Number(e.target.value) })}
+                  aria-label="Gradient angle"
+                  className="range-slider"
+                />
+              </div>
+            </div>
+          ) : (
+            <label className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+              Color
+              <ColorSwatchInput title="Background color" value={bg.color && bg.color !== 'brand' ? bg.color : '#ffffff'} onChange={(v) => onChange({ color: v })} />
+            </label>
+          )}
+          <button
+            onClick={() =>
+              grad
+                ? onChange({ gradient: undefined })
+                : onChange({ gradient: [bg.color && bg.color !== 'brand' ? bg.color : '#ffffff', '#1e293b'] })
+            }
+            className="mt-2 text-[11px] font-medium text-[var(--primary)] transition-opacity hover:opacity-80"
+          >
+            {grad ? 'Use a solid color' : 'Use a gradient'}
+          </button>
+        </PanelSection>
+        <PanelSection title="Image">
+          {hasBgImage ? (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={onEditImage}
+                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+              >
+                <PhotoIcon className="h-4 w-4" />
+                Replace
+              </button>
+              <button
+                onClick={onRemoveImage}
+                title="Remove background image"
+                aria-label="Remove background image"
+                className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500"
+              >
+                <TrashIcon className="h-4 w-4" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onAddImage}
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+            >
+              <PhotoIcon className="h-4 w-4" />
+              Add background image
+            </button>
+          )}
+          <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
+            A full-bleed photo behind everything. Pick/upload it in the panel that opens, then drag to reposition.
+          </p>
+        </PanelSection>
+        <PanelSection title="Accent">
+          <ToggleRow label="Brand accent bar" on={!!bg.accentBar} onClick={() => onChange({ accentBar: !bg.accentBar })} />
+        </PanelSection>
+      </div>
+    </div>
+  );
+}
+
+/** Keyboard-shortcuts cheatsheet — surfaces the shortcuts the builder already
+ *  supports so they're discoverable. */
+function ShortcutsModal({ onClose }: { onClose: () => void }) {
+  const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+  const mod = isMac ? '⌘' : 'Ctrl';
+  const groups: { title: string; rows: [string, string][] }[] = [
+    {
+      title: 'Edit',
+      rows: [
+        [`${mod} Z`, 'Undo'],
+        [`${mod} ⇧ Z`, 'Redo'],
+        ['Delete', 'Remove selected'],
+        [`${mod} G`, 'Group selection'],
+        [`${mod} ⇧ G`, 'Ungroup'],
+      ],
+    },
+    {
+      title: 'Move',
+      rows: [
+        ['↑ ↓ ← →', 'Nudge 1px'],
+        ['⇧ + arrows', 'Nudge 10px'],
+        ['Drag', 'Move element'],
+        ['Drag handles', 'Resize'],
+      ],
+    },
+    {
+      title: 'Select',
+      rows: [
+        ['Click', 'Select element'],
+        ['⇧ Click', 'Add to selection'],
+        ['Drag empty', 'Marquee select'],
+        ['Double-click', 'Edit text'],
+      ],
+    },
+  ];
+  return createPortal(
+    <div className="fixed inset-0 z-[95] flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-16" onClick={onClose}>
+      <div className="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-5 shadow-xl backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-start justify-between">
+          <div>
+            <h2 className="text-sm font-bold text-[var(--foreground)]">Keyboard shortcuts</h2>
+            <p className="text-xs text-[var(--muted-foreground)]">Speed up editing on the canvas.</p>
+          </div>
+          <button onClick={onClose} aria-label="Close" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+          {groups.map((g) => (
+            <div key={g.title}>
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">{g.title}</div>
+              <div className="space-y-1.5">
+                {g.rows.map(([keys, label]) => (
+                  <div key={label} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-[var(--muted-foreground)]">{label}</span>
+                    <kbd className="flex-shrink-0 rounded border border-[var(--border)] bg-[var(--muted)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--foreground)]">{keys}</kbd>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

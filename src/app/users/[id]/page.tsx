@@ -10,6 +10,7 @@ import { useAccount } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { UserAvatar } from '@/components/user-avatar';
+import { MultiSelect } from '@/components/ui/multi-select';
 import { roleDisplayName } from '@/lib/roles';
 import { safeJson } from '@/lib/safe-json';
 import { toast } from '@/lib/toast';
@@ -27,16 +28,12 @@ interface User {
   avatarUrl: string | null;
   role: string;
   department: string | null;
+  teamIds: string[];
   accountKeys: string[];
   createdAt: string;
 }
 
-const DEPARTMENTS = [
-  'Web Development',
-  'Digital',
-  'Graphic Design',
-  'Account Representative',
-];
+type TeamOption = { id: string; name: string; color: string | null };
 
 const roleColors: Record<string, string> = {
   developer: 'text-purple-400 bg-purple-500/10',
@@ -78,9 +75,20 @@ function UserDetailContent() {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('client');
-  const [department, setDepartment] = useState('');
+  const [teamIds, setTeamIds] = useState<string[]>([]);
+  const [teamOptions, setTeamOptions] = useState<TeamOption[]>([]);
   const [accountKeys, setAccountKeys] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Team options for the Teams picker (the delivery teams this user can join).
+  useEffect(() => {
+    fetch('/api/teams')
+      .then((r) => (r.ok ? r.json() : { teams: [] }))
+      .then((d: { teams?: { id: string; name: string; color: string | null }[] }) => {
+        setTeamOptions((d.teams ?? []).map((t) => ({ id: t.id, name: t.name, color: t.color })));
+      })
+      .catch(() => setTeamOptions([]));
+  }, []);
 
   useEffect(() => {
     fetch(`/api/users/${userId}`)
@@ -95,14 +103,14 @@ function UserDetailContent() {
         setEmail(data.email);
         setAvatarUrl(data.avatarUrl ?? null);
         setRole(data.role);
-        setDepartment(data.department ?? '');
+        setTeamIds(data.teamIds ?? []);
         setAccountKeys(data.accountKeys || []);
         userSnapshotRef.current = {
           name: data.name,
           title: data.title ?? '',
           email: data.email,
           role: data.role,
-          department: data.department ?? '',
+          teamIds: JSON.stringify(data.teamIds ?? []),
           accountKeys: JSON.stringify(data.accountKeys || []),
         };
       })
@@ -116,13 +124,14 @@ function UserDetailContent() {
     const snap = userSnapshotRef.current;
     if (!snap) return false;
     const current: Record<string, string> = {
-      name, title, email, role, department,
+      name, title, email, role,
+      teamIds: JSON.stringify(teamIds),
       accountKeys: JSON.stringify(accountKeys),
     };
     // Password is additive — any non-empty password counts as a change
     if (password.length > 0) return true;
     return Object.keys(snap).some(k => snap[k] !== current[k]);
-  }, [name, title, email, role, department, accountKeys, password]);
+  }, [name, title, email, role, teamIds, accountKeys, password]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -133,7 +142,7 @@ function UserDetailContent() {
         title,
         email,
         role,
-        department: department || null,
+        teamIds,
         accountKeys,
       };
       if (password) body.password = password;
@@ -152,7 +161,7 @@ function UserDetailContent() {
       setTitle(updated.title ?? '');
       setEmail(updated.email);
       setRole(updated.role);
-      setDepartment(updated.department ?? '');
+      setTeamIds(updated.teamIds ?? []);
       setAccountKeys(updated.accountKeys || []);
       setPassword('');
       userSnapshotRef.current = {
@@ -160,7 +169,7 @@ function UserDetailContent() {
         title: updated.title ?? '',
         email: updated.email,
         role: updated.role,
-        department: updated.department ?? '',
+        teamIds: JSON.stringify(updated.teamIds ?? []),
         accountKeys: JSON.stringify(updated.accountKeys || []),
       };
       if (session?.user.id === userId) {
@@ -420,17 +429,25 @@ function UserDetailContent() {
               />
             </div>
             <div>
-              <label className={labelClass}>Department</label>
-              <select
-                value={department}
-                onChange={e => setDepartment(e.target.value)}
-                className={inputClass}
-              >
-                <option value="">— No department —</option>
-                {DEPARTMENTS.map(d => (
-                  <option key={d} value={d}>{d}</option>
-                ))}
-              </select>
+              <label className={labelClass}>Teams</label>
+              <MultiSelect
+                value={teamIds}
+                onChange={setTeamIds}
+                options={teamOptions.map((t) => ({
+                  value: t.id,
+                  label: t.name,
+                  icon: (
+                    <span
+                      className="h-2.5 w-2.5 flex-shrink-0 rounded-full"
+                      style={{ backgroundColor: t.color || 'var(--primary)' }}
+                    />
+                  ),
+                }))}
+                placeholder="Add to a team…"
+              />
+              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                Delivery teams this person is on. Tickets routed to a team reach its members.
+              </p>
             </div>
             <div>
               <label className={labelClass}>Email</label>

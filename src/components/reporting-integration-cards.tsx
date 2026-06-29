@@ -47,7 +47,7 @@ const PROVIDERS: ReportingProvider[] = [
   {
     value: 'stackadapt',
     label: 'StackAdapt',
-    blurb: 'OTT / CTV reporting — link this dealer’s advertiser.',
+    blurb: 'OTT / CTV reporting — link this account’s advertiser.',
     logo: 'https://loomi-media.sfo3.digitaloceanspaces.com/media/_admin/5edb0c5d9209454294c9f7e5516fbb16/StackAdapt_Logo_StackAdapt_Logo+Wordmark_500px.jpg',
     connectedKey: 'stackadaptAdvertiserId',
     fields: [

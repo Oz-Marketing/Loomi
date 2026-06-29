@@ -12,8 +12,8 @@ import { zonedTodayIso } from '@/lib/timezone';
 import {
   computeAccountPace,
   computeBudgetBurnSamples,
-} from '@/app/tools/meta/_lib/pacer-calc';
-import type { PacerAd } from '@/app/tools/meta/_lib/types';
+} from '@/lib/ad-pacer/pacer-calc';
+import type { PacerAd } from '@/lib/ad-pacer/types';
 import { createNotification } from '@/lib/notifications/service';
 import type { NotificationType } from '@/lib/notifications/types';
 import {

@@ -1029,6 +1029,14 @@ export async function syncPeriodFromMeta(
       if (Number.isFinite(dollars)) data.pacerDailyBudget = dollars.toFixed(2);
     }
 
+    // Persist the ad set's lifetime budget (the settlement baseline) when Meta
+    // reports one. Unlike daily_budget this is safe to store on its own field —
+    // it never touches `allocation` (the planned per-month slice).
+    if (adSet.lifetime_budget != null) {
+      const dollars = Number(adSet.lifetime_budget) / 100;
+      if (Number.isFinite(dollars)) data.metaLifetimeBudget = dollars.toFixed(2);
+    }
+
     ops.push(prisma.metaAdsPacerAd.update({ where: { id: ad.id }, data }));
     results.push({
       adId: ad.id,
@@ -1338,6 +1346,8 @@ export async function importAdSets(
       metaEffectiveStatus: adSet.effective_status ?? adSet.status ?? null,
       pacerActual: spend.toFixed(2),
       pacerRunSpend: runSpend != null ? runSpend.toFixed(2) : null,
+      // Settlement baseline (the spend cap), safe to seed — unlike allocation.
+      metaLifetimeBudget: lifetimeBudget != null ? lifetimeBudget.toFixed(2) : null,
       pacerSyncedAt: syncedAt,
       pacerDailyBudget:
         budgetType !== 'Lifetime' && dailyBudget != null

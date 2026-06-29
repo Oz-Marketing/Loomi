@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
-import { canAccessPacer, isValidPeriod } from '@/lib/meta-ads-pacer';
+import { adPlatformWhere, canAccessPacer, isValidPeriod } from '@/lib/meta-ads-pacer';
+
+/** ?platform=google → Google's notes; anything else → Meta's (incl. legacy null). */
+function reqPlatform(req: NextRequest): 'meta' | 'google' {
+  return req.nextUrl.searchParams.get('platform') === 'google' ? 'google' : 'meta';
+}
 
 /**
  * Account-level chat log for the Meta Ads Pacer. List + create notes tied to
@@ -23,7 +28,11 @@ export async function GET(
 
   const period = req.nextUrl.searchParams.get('period');
   const notes = await prisma.metaAdsPacerAccountNote.findMany({
-    where: { accountKey, ...(period && isValidPeriod(period) ? { period } : {}) },
+    where: {
+      accountKey,
+      ...adPlatformWhere(reqPlatform(req)),
+      ...(period && isValidPeriod(period) ? { period } : {}),
+    },
     orderBy: { createdAt: 'asc' },
   });
   return NextResponse.json({ notes });
@@ -65,6 +74,7 @@ export async function POST(
     data: {
       accountKey,
       period,
+      platform: reqPlatform(req) === 'google' ? 'google' : null,
       text,
       authorUserId: session!.user.id,
     },

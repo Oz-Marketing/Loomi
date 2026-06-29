@@ -12,9 +12,11 @@ import { writeAudit } from '@/lib/meta-ads-audit';
 
 interface ResolveBody {
   adId?: string;
-  action?: 'apply_full_run' | 'split' | 'clear';
+  action?: 'apply_full_run' | 'split' | 'clear' | 'link';
   month?: string;
   splitMap?: Record<string, number>;
+  /** For action 'link': the prior-month ad this instance continues. */
+  linkedPrevAdId?: string;
 }
 
 /**
@@ -56,9 +58,14 @@ export async function POST(
   if (!adId) {
     return NextResponse.json({ error: 'adId is required' }, { status: 400 });
   }
-  if (action !== 'apply_full_run' && action !== 'split' && action !== 'clear') {
+  if (
+    action !== 'apply_full_run' &&
+    action !== 'split' &&
+    action !== 'clear' &&
+    action !== 'link'
+  ) {
     return NextResponse.json(
-      { error: "action must be 'apply_full_run', 'split', or 'clear'" },
+      { error: "action must be 'apply_full_run', 'split', 'clear', or 'link'" },
       { status: 400 },
     );
   }
@@ -112,10 +119,52 @@ export async function POST(
       data: { lifetimeMonthSplit: JSON.stringify(clean), fullRunAppliedToMonth: null },
     });
     summary = `Set a planned split across ${Object.keys(clean).length} month(s) for "${ad.name}"`;
+  } else if (action === 'link') {
+    // Link this month-instance to the prior-month ad it continues, forming one
+    // logical split run that settles once at flight end. Linking IS the split
+    // mark for a manual run, so seed lifetimeMonthSplit ("{}" = marked, no
+    // planned figures) when absent and clear any bill-this-month resolution
+    // (split and bill are mutually exclusive).
+    const prevId = typeof body?.linkedPrevAdId === 'string' ? body.linkedPrevAdId : '';
+    if (!prevId) {
+      return NextResponse.json(
+        { error: 'linkedPrevAdId is required to link a run' },
+        { status: 400 },
+      );
+    }
+    const prev = await prisma.metaAdsPacerAd.findFirst({
+      where: { id: prevId, planId: plan.id },
+      select: { id: true, period: true },
+    });
+    if (!prev) {
+      return NextResponse.json(
+        { error: 'The linked ad was not found in this account.' },
+        { status: 404 },
+      );
+    }
+    if (prev.id === ad.id || prev.period >= period) {
+      return NextResponse.json(
+        { error: 'Link to an ad from an earlier month.' },
+        { status: 400 },
+      );
+    }
+    const existing = await prisma.metaAdsPacerAd.findUnique({
+      where: { id: ad.id },
+      select: { lifetimeMonthSplit: true },
+    });
+    await prisma.metaAdsPacerAd.update({
+      where: { id: ad.id },
+      data: {
+        linkedPrevAdId: prev.id,
+        lifetimeMonthSplit: existing?.lifetimeMonthSplit ?? '{}',
+        fullRunAppliedToMonth: null,
+      },
+    });
+    summary = `Linked "${ad.name}" to its prior-month run (settles at flight end)`;
   } else {
     await prisma.metaAdsPacerAd.update({
       where: { id: ad.id },
-      data: { fullRunAppliedToMonth: null, lifetimeMonthSplit: null },
+      data: { fullRunAppliedToMonth: null, lifetimeMonthSplit: null, linkedPrevAdId: null },
     });
     summary = `Cleared the cross-month resolution for "${ad.name}"`;
   }

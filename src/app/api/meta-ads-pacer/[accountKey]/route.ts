@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import {
+  adPlatformWhere,
   canAccessPacer,
   fetchPeriodPlan,
   getOrCreatePlan,
@@ -61,6 +62,15 @@ interface IncomingAd {
   metaObjectType?: string | null;
   // Per-ad alert mute (Change 9) — toggled from the pacer row.
   alertsMuted?: boolean;
+  // Ad platform — set once on create ('google' from the Google tool; null/Meta
+  // otherwise). Preserved on update.
+  platform?: string | null;
+  // Google line: the channel-type rollup tag (Search/Display/Video/Shopping/PMax).
+  googleChannelType?: string | null;
+  // Google campaign link — set once on create (from §8 import). Like the
+  // sync-managed Google fields, it's preserved on update so autosave can't
+  // clobber the link a sync depends on.
+  googleCampaignId?: string | null;
 }
 
 interface IncomingPeriodPayload {
@@ -96,6 +106,10 @@ export async function GET(
   }
 
   const userId = session.user?.id ?? null;
+  // Which platform's lines this surface shows (Meta tool default; the Google
+  // tool passes ?platform=google). Keeps the two pacers separate over the
+  // shared plan.
+  const platform = req.nextUrl.searchParams.get('platform') === 'google' ? 'google' : 'meta';
   // Status sync (Change 11): auto-complete ads whose flight has ended before
   // building the view. Skipped on frozen months (they're read-only).
   const planForReconcile = await getOrCreatePlan(accountKey);
@@ -105,7 +119,7 @@ export async function GET(
 
   // Live-vs-frozen: closed months serve their immutable snapshot (and freeze
   // lazily on first view); live months serve current data.
-  const view = await getPeriodPlanView(accountKey, period, userId);
+  const view = await getPeriodPlanView(accountKey, period, userId, platform);
   // Prior month's over/under for the carryover prompt — only on editable
   // months (a frozen month can't take a carryover; skip to avoid freezing
   // the month-before as a side effect of browsing history).
@@ -135,6 +149,10 @@ export async function PUT(
     );
   }
 
+  // Scope the returned view to the caller's platform (Meta default; Google tool
+  // passes ?platform=google) so autosave responses stay platform-separated.
+  const postPlatform = req.nextUrl.searchParams.get('platform') === 'google' ? 'google' : 'meta';
+
   const plan = await getOrCreatePlan(accountKey);
 
   // A frozen (closed, not reopened) month is read-only — reject the save so
@@ -156,7 +174,7 @@ export async function PUT(
   // diff tracked fields for the automatic audit log (Change 10), including
   // ads that are about to be deleted.
   const existingAds = await prisma.metaAdsPacerAd.findMany({
-    where: { planId: plan.id, period },
+    where: { planId: plan.id, period, ...adPlatformWhere(postPlatform) },
     select: {
       id: true,
       name: true,
@@ -180,7 +198,12 @@ export async function PUT(
   const existingById = new Map(existingAds.map((a) => [a.id, a]));
   const existingBudget = await prisma.metaAdsPacerPeriodBudget.findUnique({
     where: { planId_period: { planId: plan.id, period } },
-    select: { baseBudgetGoal: true, addedBudgetGoal: true },
+    select: {
+      baseBudgetGoal: true,
+      addedBudgetGoal: true,
+      googleBaseBudgetGoal: true,
+      googleAddedBudgetGoal: true,
+    },
   });
   const accountDealer =
     (await prisma.account.findUnique({
@@ -188,29 +211,38 @@ export async function PUT(
       select: { dealer: true },
     }))?.dealer ?? accountKey;
 
-  await prisma.$transaction(async (tx) => {
-    // Period budget — upsert
-    await tx.metaAdsPacerPeriodBudget.upsert({
-      where: { planId_period: { planId: plan.id, period } },
-      create: {
-        planId: plan.id,
-        period,
-        baseBudgetGoal: nullable(body.baseBudgetGoal),
-        addedBudgetGoal: nullable(body.addedBudgetGoal),
-      },
-      update: {
-        baseBudgetGoal: nullable(body.baseBudgetGoal),
-        addedBudgetGoal: nullable(body.addedBudgetGoal),
-      },
-    });
+  // The account budget goals live on a single per-plan+period row SHARED across
+  // platforms, so only touch the fields the caller actually sent — a Google
+  // autosave (which omits them) must never null Meta's budget, and vice-versa.
+  // Per-platform budget columns: the Google tool writes the google* pair, Meta
+  // the original pair.
+  const baseCol = postPlatform === 'google' ? 'googleBaseBudgetGoal' : 'baseBudgetGoal';
+  const addedCol = postPlatform === 'google' ? 'googleAddedBudgetGoal' : 'addedBudgetGoal';
+  const budgetData: Record<string, string | null> = {};
+  if ('baseBudgetGoal' in body) budgetData[baseCol] = nullable(body.baseBudgetGoal);
+  if ('addedBudgetGoal' in body) budgetData[addedCol] = nullable(body.addedBudgetGoal);
 
-    // Reconcile only ads in THIS period — others are left alone.
+  await prisma.$transaction(async (tx) => {
+    // Period budget — upsert only when the caller manages budget goals.
+    if (Object.keys(budgetData).length > 0) {
+      await tx.metaAdsPacerPeriodBudget.upsert({
+        where: { planId_period: { planId: plan.id, period } },
+        create: { planId: plan.id, period, ...budgetData },
+        update: budgetData,
+      });
+    }
+
+    // Reconcile only ads in THIS period + platform — the other platform's rows
+    // (and other periods) are left untouched, so a Google save never deletes
+    // Meta lines and vice-versa.
     if (incomingIds.length > 0) {
       await tx.metaAdsPacerAd.deleteMany({
-        where: { planId: plan.id, period, NOT: { id: { in: incomingIds } } },
+        where: { planId: plan.id, period, ...adPlatformWhere(postPlatform), NOT: { id: { in: incomingIds } } },
       });
     } else {
-      await tx.metaAdsPacerAd.deleteMany({ where: { planId: plan.id, period } });
+      await tx.metaAdsPacerAd.deleteMany({
+        where: { planId: plan.id, period, ...adPlatformWhere(postPlatform) },
+      });
     }
 
     for (let i = 0; i < incomingAds.length; i++) {
@@ -250,18 +282,25 @@ export async function PUT(
         digitalDetails: nullable(ad.digitalDetails),
         metaObjectId: nullable(ad.metaObjectId),
         metaObjectType: nullable(ad.metaObjectType),
+        googleChannelType: nullable(ad.googleChannelType),
         alertsMuted: ad.alertsMuted === true,
       };
 
+      // platform is set once on create (Google tool sends 'google'; Meta/legacy
+      // = null) and preserved on update so a save never re-tags an existing row.
+      const createPlatform = ad.platform === 'google' ? 'google' : null;
+      // googleCampaignId is create-only (like platform) — preserved on update so
+      // autosave never wipes the link a Google sync matches on.
+      const createGoogleCampaignId = nullable(ad.googleCampaignId);
       if (ad.id) {
         await tx.metaAdsPacerAd.upsert({
           where: { id: ad.id },
-          create: { id: ad.id, planId: plan.id, ...data },
+          create: { id: ad.id, planId: plan.id, platform: createPlatform, googleCampaignId: createGoogleCampaignId, ...data },
           update: data,
         });
       } else {
         await tx.metaAdsPacerAd.create({
-          data: { planId: plan.id, ...data },
+          data: { planId: plan.id, platform: createPlatform, googleCampaignId: createGoogleCampaignId, ...data },
         });
       }
     }
@@ -350,11 +389,21 @@ export async function PUT(
     const authorUserId = session.user?.id ?? null;
     const groupId = newAuditGroupId();
     const entries: AuditInput[] = [];
-    const base = { accountKey, planId: plan.id, period, groupId, authorUserId };
+    const base = {
+      accountKey,
+      planId: plan.id,
+      period,
+      platform: postPlatform === 'google' ? 'google' : null,
+      groupId,
+      authorUserId,
+    };
 
+    // Per-platform budget goals: the caller always sends base/addedBudgetGoal in
+    // the body, but they land in the google* column for the Google tool. Diff the
+    // column the caller actually wrote so the change log is platform-correct.
     const goalDiffs: Array<[string, string, string | null, string | null]> = [
-      ['baseBudgetGoal', 'Base budget goal', existingBudget?.baseBudgetGoal ?? null, nullable(body.baseBudgetGoal)],
-      ['addedBudgetGoal', 'Added budget goal', existingBudget?.addedBudgetGoal ?? null, nullable(body.addedBudgetGoal)],
+      [baseCol, 'Base budget goal', existingBudget?.[baseCol] ?? null, nullable(body.baseBudgetGoal)],
+      [addedCol, 'Added budget goal', existingBudget?.[addedCol] ?? null, nullable(body.addedBudgetGoal)],
     ];
     for (const [field, label, from, to] of goalDiffs) {
       if (from !== to) {
@@ -394,6 +443,6 @@ export async function PUT(
     await writeAudit(entries);
   }
 
-  const payload = await fetchPeriodPlan(plan.id, period);
+  const payload = await fetchPeriodPlan(plan.id, period, postPlatform);
   return NextResponse.json({ accountKey, period, ...payload });
 }

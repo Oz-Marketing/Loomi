@@ -13,7 +13,7 @@ import { purgeOldAuditEntries } from '@/lib/meta-ads-audit';
 import {
   accountMarginSetting,
   effectiveSpendTarget,
-} from '@/app/tools/meta/_lib/markup';
+} from '@/lib/ad-pacer/markup';
 import { getGlobalDefaultMarkup } from '@/lib/services/markup';
 
 export type { NotificationType };

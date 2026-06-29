@@ -43,6 +43,8 @@ import {
   SpendDonut,
   DemographicsChart,
 } from './shared';
+import { ExportMenu } from './export-menu';
+import type { ReportDoc } from '@/lib/reporting/report-doc';
 
 interface Metrics {
   impressions: number;
@@ -143,17 +145,97 @@ export function MetaReport({
     );
   }
 
+  const sections: ReportDoc['sections'] = [
+    {
+      title: 'Campaigns',
+      columns: [
+        { header: 'Campaign', type: 'text' },
+        { header: 'Spend', type: 'currency' },
+        { header: 'Impr.', type: 'integer' },
+        { header: 'Clicks', type: 'integer' },
+        { header: 'CTR', type: 'percent' },
+        { header: 'Conv.', type: 'integer' },
+      ],
+      rows: [...data.campaigns]
+        .sort((a, b) => b.spend - a.spend)
+        .map((c) => [c.name, c.spend, c.impressions, c.clicks, c.ctr, c.conversions]),
+    },
+  ];
+  if (data.devices.length) {
+    sections.push({
+      title: 'Devices',
+      columns: [
+        { header: 'Device', type: 'text' },
+        { header: 'Impr.', type: 'integer' },
+        { header: 'Clicks', type: 'integer' },
+        { header: 'CTR', type: 'percent' },
+        { header: 'Spend', type: 'currency' },
+      ],
+      rows: data.devices.map((d) => [d.device, d.impressions, d.clicks, d.ctr, d.spend]),
+    });
+  }
+  if (data.daily.length) {
+    sections.push({
+      title: 'Daily',
+      columns: [
+        { header: 'Date', type: 'text' },
+        { header: 'Impr.', type: 'integer' },
+        { header: 'Clicks', type: 'integer' },
+        { header: 'Spend', type: 'currency' },
+        { header: 'Conv.', type: 'integer' },
+      ],
+      rows: data.daily.map((d) => [d.date, d.impressions, d.clicks, d.spend, d.conversions]),
+    });
+  }
+  if (data.demographics.length) {
+    sections.push({
+      title: 'Demographics',
+      columns: [
+        { header: 'Age', type: 'text' },
+        { header: 'Gender', type: 'text' },
+        { header: 'Impr.', type: 'integer' },
+        { header: 'Clicks', type: 'integer' },
+        { header: 'Spend', type: 'currency' },
+      ],
+      rows: data.demographics.map((d) => [d.age, d.gender, d.impressions, d.clicks, d.spend]),
+    });
+  }
+  const doc: ReportDoc = {
+    title: `Meta Ads — ${data.dealer}`,
+    subtitle: `${prettyDate(data.startDate)} – ${prettyDate(data.endDate)}`,
+    meta: [
+      { label: 'Account', value: data.dealer },
+      { label: 'Range', value: `${prettyDate(data.startDate)} → ${prettyDate(data.endDate)}` },
+      ...(data.compare ? [{ label: 'Compared to', value: data.compare.label }] : []),
+    ],
+    kpis: [
+      { label: 'Spend', value: usd(m.spend), secondary: `${usd(m.cpm)} CPM` },
+      { label: 'Impressions', value: num(m.impressions) },
+      { label: 'Clicks', value: num(m.clicks) },
+      { label: 'CTR', value: pctText(m.ctr) },
+      { label: 'CPC', value: usd(m.cpc) },
+      { label: 'Conversions', value: num(m.conversions), secondary: m.conversions > 0 ? `${usd(m.cost_per_conversion)} / conv` : undefined },
+      { label: 'Offline leads', value: num(m.offline_leads) },
+      { label: 'Offline purchases', value: num(m.offline_purchases) },
+      { label: 'Offline revenue', value: usd0(m.offline_purchase_value) },
+    ],
+    sections,
+  };
+
   return (
     <div className="space-y-8">
-      <p className="text-xs text-[var(--muted-foreground)]">
-        <span className="font-medium text-[var(--foreground)]">{prettyDate(data.startDate)}</span> →{' '}
-        <span className="font-medium text-[var(--foreground)]">{prettyDate(data.endDate)}</span>
-        {data.compare && (
-          <>
-            {' '}· vs. <span className="font-medium text-[var(--foreground)]">{data.compare.label}</span>
-          </>
-        )}
-      </p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-[var(--muted-foreground)]">
+          <span className="font-medium text-[var(--foreground)]">{prettyDate(data.startDate)}</span> →{' '}
+          <span className="font-medium text-[var(--foreground)]">{prettyDate(data.endDate)}</span>
+          {data.compare && (
+            <>
+              {' '}· vs. <span className="font-medium text-[var(--foreground)]">{data.compare.label}</span>
+            </>
+          )}
+        </p>
+        <ExportMenu doc={doc} filenameBase={`meta-${data.dealer}-${data.startDate}-${data.endDate}`} />
+      </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <Kpi icon={CurrencyDollarIcon} label="Spend" value={usd(m.spend)} secondary={`${usd(m.cpm)} CPM`} tone="primary" delta={pctDelta(m.spend, cmp?.spend)} />

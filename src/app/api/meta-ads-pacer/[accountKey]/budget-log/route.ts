@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
-import { canAccessPacer } from '@/lib/meta-ads-pacer';
+import { adPlatformWhere, canAccessPacer } from '@/lib/meta-ads-pacer';
 
 const PERIOD_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+/** ?platform=google → Google's budget log; else Meta's (incl. legacy null). */
+function reqPlatform(req: NextRequest): 'meta' | 'google' {
+  return req.nextUrl.searchParams.get('platform') === 'google' ? 'google' : 'meta';
+}
 
 /**
  * Budget log — point-in-time snapshots of the pacer's actual-spend +
@@ -33,6 +38,7 @@ export async function GET(
   const entries = await prisma.metaAdsPacerBudgetLog.findMany({
     where: {
       accountKey,
+      ...adPlatformWhere(reqPlatform(req)),
       ...(periodParam ? { period: periodParam } : {}),
     },
     orderBy: { createdAt: 'desc' },
@@ -107,6 +113,7 @@ export async function POST(
     data: {
       accountKey,
       period: body.period,
+      platform: reqPlatform(req) === 'google' ? 'google' : null,
       adsSnapshot: JSON.stringify(body.adsSnapshot),
       note: optString(body.note),
       authorUserId: session!.user.id,

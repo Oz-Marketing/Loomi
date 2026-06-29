@@ -47,6 +47,8 @@ import {
   SpendBar,
   SpendDonut,
 } from './shared';
+import { ExportMenu } from './export-menu';
+import type { ReportDoc } from '@/lib/reporting/report-doc';
 
 interface Metrics {
   impressions: number;
@@ -199,17 +201,132 @@ export function GoogleReport({
     );
   }
 
+  const perfCols: ReportDoc['sections'][number]['columns'] = [
+    { header: 'Impr.', type: 'integer' },
+    { header: 'Clicks', type: 'integer' },
+    { header: 'CTR', type: 'percent' },
+    { header: 'Cost', type: 'currency' },
+    { header: 'Conv.', type: 'integer' },
+  ];
+  const sections: ReportDoc['sections'] = [
+    {
+      title: 'Campaigns',
+      columns: [
+        { header: 'Campaign', type: 'text' },
+        { header: 'Spend', type: 'currency' },
+        { header: 'Impr.', type: 'integer' },
+        { header: 'Clicks', type: 'integer' },
+        { header: 'CTR', type: 'percent' },
+        { header: 'Conv.', type: 'integer' },
+      ],
+      rows: [...data.campaigns]
+        .sort((a, b) => b.cost - a.cost)
+        .map((c) => [c.name, c.cost, c.impressions, c.clicks, c.ctr, c.conversions]),
+    },
+  ];
+  if (data.searchTerms.length) {
+    sections.push({
+      title: 'Search terms',
+      columns: [{ header: 'Search term', type: 'text' }, ...perfCols],
+      rows: data.searchTerms.map((s) => [s.term, s.impressions, s.clicks, s.ctr, s.cost, s.conversions]),
+    });
+  }
+  if (data.keywords.length) {
+    sections.push({
+      title: 'Keywords',
+      columns: [
+        { header: 'Keyword', type: 'text' },
+        { header: 'Match', type: 'text' },
+        { header: 'QS', type: 'integer', total: 'none' },
+        ...perfCols,
+      ],
+      rows: data.keywords.map((k) => [k.keyword, k.match_type, k.quality_score ?? '', k.impressions, k.clicks, k.ctr, k.cost, k.conversions]),
+    });
+  }
+  if (data.locations.length) {
+    sections.push({
+      title: 'Locations',
+      columns: [{ header: 'City', type: 'text' }, { header: 'Region', type: 'text' }, ...perfCols],
+      rows: data.locations.map((l) => [l.city, l.region, l.impressions, l.clicks, l.ctr, l.cost, l.conversions]),
+    });
+  }
+  if (data.auctionInsights.length) {
+    sections.push({
+      title: 'Auction insights',
+      columns: [
+        { header: 'Campaign', type: 'text' },
+        { header: 'Impr. share', type: 'percent' },
+        { header: 'Top IS', type: 'percent' },
+        { header: 'Abs top IS', type: 'percent' },
+        { header: 'Lost (budget)', type: 'percent' },
+        { header: 'Lost (rank)', type: 'percent' },
+      ],
+      rows: data.auctionInsights.map((a) => [
+        a.campaign_name,
+        a.impression_share ?? '',
+        a.top_impression_share ?? '',
+        a.abs_top_impression_share ?? '',
+        a.budget_lost_is ?? '',
+        a.rank_lost_is ?? '',
+      ]),
+    });
+  }
+  if (data.devices.length) {
+    sections.push({
+      title: 'Devices',
+      columns: [{ header: 'Device', type: 'text' }, ...perfCols],
+      rows: data.devices.map((d) => [d.device, d.impressions, d.clicks, d.ctr, d.cost, d.conversions]),
+    });
+  }
+  if (data.daily.length) {
+    sections.push({
+      title: 'Daily',
+      columns: [
+        { header: 'Date', type: 'text' },
+        { header: 'Impr.', type: 'integer' },
+        { header: 'Clicks', type: 'integer' },
+        { header: 'Cost', type: 'currency' },
+        { header: 'Conv.', type: 'integer' },
+      ],
+      rows: data.daily.map((d) => [d.date, d.impressions, d.clicks, d.cost, d.conversions]),
+    });
+  }
+  const doc: ReportDoc = {
+    title: `Google Ads — ${data.dealer}`,
+    subtitle: `${prettyDate(data.startDate)} – ${prettyDate(data.endDate)}`,
+    meta: [
+      { label: 'Account', value: data.dealer },
+      { label: 'Range', value: `${prettyDate(data.startDate)} → ${prettyDate(data.endDate)}` },
+      ...(data.compare ? [{ label: 'Compared to', value: data.compare.label }] : []),
+    ],
+    kpis: [
+      { label: 'Spend', value: usd(m.cost) },
+      { label: 'Impressions', value: num(m.impressions) },
+      { label: 'Clicks', value: num(m.clicks) },
+      { label: 'CTR', value: pctText(m.ctr) },
+      { label: 'Avg CPC', value: usd(m.avg_cpc) },
+      { label: 'Conversions', value: num(m.conversions), secondary: m.conversions > 0 ? `${usd(m.cost_per_conversion)} / conv` : undefined },
+      { label: 'Offline leads', value: num(m.offline_leads) },
+      { label: 'Offline purchases', value: num(m.offline_purchases) },
+      { label: 'Offline revenue', value: usd0(m.offline_purchase_value) },
+    ],
+    sections,
+  };
+
   return (
     <div className="space-y-8">
-      <p className="text-xs text-[var(--muted-foreground)]">
-        <span className="font-medium text-[var(--foreground)]">{prettyDate(data.startDate)}</span> →{' '}
-        <span className="font-medium text-[var(--foreground)]">{prettyDate(data.endDate)}</span>
-        {data.compare && (
-          <>
-            {' '}· vs. <span className="font-medium text-[var(--foreground)]">{data.compare.label}</span>
-          </>
-        )}
-      </p>
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs text-[var(--muted-foreground)]">
+          <span className="font-medium text-[var(--foreground)]">{prettyDate(data.startDate)}</span> →{' '}
+          <span className="font-medium text-[var(--foreground)]">{prettyDate(data.endDate)}</span>
+          {data.compare && (
+            <>
+              {' '}· vs. <span className="font-medium text-[var(--foreground)]">{data.compare.label}</span>
+            </>
+          )}
+        </p>
+        <ExportMenu doc={doc} filenameBase={`google-${data.dealer}-${data.startDate}-${data.endDate}`} />
+      </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
         <Kpi icon={CurrencyDollarIcon} label="Spend" value={usd(m.cost)} tone="primary" delta={pctDelta(m.cost, cmp?.cost)} />

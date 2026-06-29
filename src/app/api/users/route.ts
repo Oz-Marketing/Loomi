@@ -6,6 +6,7 @@ import bcryptjs from 'bcryptjs';
 import crypto from 'crypto';
 import { issueAndSendUserInvite } from '@/lib/users/invitations';
 import { sendUserDeletedEmail } from '@/lib/users/deleted-email';
+import { setUserTeams, getUserTeamIds } from '@/lib/services/teams';
 
 function parseAccountKeys(raw: string): string[] {
   try {
@@ -202,7 +203,7 @@ export async function PUT(req: NextRequest) {
   const { error, session } = await requireRole(...ELEVATED_ROLES);
   if (error) return error;
 
-  const { id, name, title, email, role, department, accountKeys, password } = await req.json();
+  const { id, name, title, email, role, department, accountKeys, password, teamIds } = await req.json();
 
   if (!id) {
     return NextResponse.json({ error: 'Missing user id' }, { status: 400 });
@@ -244,7 +245,12 @@ export async function PUT(req: NextRequest) {
     },
   });
 
-  return NextResponse.json(withAccountKeys(user));
+  if (Array.isArray(teamIds)) {
+    await setUserTeams(id, teamIds.map(String));
+  }
+  const userTeamIds = await getUserTeamIds(id);
+
+  return NextResponse.json({ ...withAccountKeys(user), teamIds: userTeamIds });
 }
 
 export async function DELETE(req: NextRequest) {

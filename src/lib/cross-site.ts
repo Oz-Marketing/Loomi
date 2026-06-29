@@ -99,6 +99,12 @@ export function getAppUrl(path: string = ''): string | null {
   if (typeof window === 'undefined') return null;
   const { protocol, host } = window.location;
   const p = path === '' ? '' : path.startsWith('/') ? path : `/${path}`;
+  // Prefer the server-published app host (set from APP_SURFACE_HOST by the root
+  // layout). It's authoritative where the sibling-subdomain convention doesn't
+  // hold — staging's `staging.loomilm.com` ↔ `app-staging.loomilm.com` — where
+  // the prefix-swap fallback below returns null (a dead Projects link).
+  const explicit = (window as unknown as { __LOOMI_APP_HOST__?: string }).__LOOMI_APP_HOST__;
+  if (typeof explicit === 'string' && explicit) return `${protocol}//${explicit}${p}`;
   for (const prefix of ['studio.', 'reporting.']) {
     if (host.startsWith(prefix)) {
       return `${protocol}//app.${host.slice(prefix.length)}${p}`;
@@ -116,6 +122,10 @@ export function getCurrentSurface(): 'studio' | 'reporting' | 'app' | null {
   if (typeof window === 'undefined') return null;
   const host = window.location.host;
   if (host.startsWith('reporting.')) return 'reporting';
+  // Match the server-published app host first — staging's `app-staging.*` does
+  // NOT start with `app.`, so the prefix check below would misread it as studio.
+  const appHost = (window as unknown as { __LOOMI_APP_HOST__?: string }).__LOOMI_APP_HOST__;
+  if (appHost && host.toLowerCase() === appHost.toLowerCase()) return 'app';
   if (host.startsWith('app.')) return 'app';
   return 'studio';
 }

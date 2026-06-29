@@ -12,10 +12,11 @@ import {
   CheckIcon,
   XMarkIcon,
   InformationCircleIcon,
-  TableCellsIcon,
+  ClipboardDocumentListIcon,
   AdjustmentsHorizontalIcon,
-  ScaleIcon,
 } from '@heroicons/react/24/outline';
+import { InvestmentIcon } from '@/components/icons/investment';
+import { ReconciliationPanel } from '@/app/app/tools/meta/_components/ReconciliationViews';
 import { useSession } from 'next-auth/react';
 import { useAccount } from '@/contexts/account-context';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -37,7 +38,6 @@ import {
   Tooltip,
   AdEditorModal,
   Field,
-  SummaryPanel,
   ComparePanel,
   StatusBattery,
 } from '@/app/app/tools/_shared';
@@ -149,10 +149,13 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const { confirm } = useLoomiDialog();
   const { data: session } = useSession();
   const currentUserId = session?.user?.id ?? null;
-  // Two-level tab model mirroring Meta: a top-level Plan / Pace switch, plus
-  // sub-tabs under Pace (Summary · Pacer · Over/Under Spend).
-  const [view, setView] = useState<'plan' | 'pace'>(mode === 'planner' ? 'plan' : 'pace');
-  const [paceTab, setPaceTab] = useState<'pacer' | 'summary' | 'overunder'>('pacer');
+  // One flat tab bar mirroring Meta: Planner · Pacing · Reconciliation.
+  // `reconView` toggles the Reconciliation tab between the year settlement and
+  // the per-ad Over/Under view.
+  const [tab, setTab] = useState<'planner' | 'pacing' | 'reconcile'>(
+    mode === 'planner' ? 'planner' : 'pacing',
+  );
+  const [reconView, setReconView] = useState<'recon' | 'compare'>('recon');
   const [period, setPeriod] = useState(currentPeriod);
   const [editing, setEditing] = useState<PacerAd | 'new' | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -463,16 +466,10 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   if (!accountKey) {
     return (
       <div className="pt-6">
-        <Header
-          mode={view}
-          onMode={setView}
-          paceTab={paceTab}
-          onPaceTab={setPaceTab}
-          accountKey={null}
-        />
+        <Header tab={tab} onTab={setTab} accountKey={null} />
         <div className="glass-section-card mt-4 rounded-xl p-6 text-sm text-[var(--muted-foreground)]">
-          Select a sub-account from the switcher to {view === 'plan' ? 'plan' : 'pace'} its Google
-          campaigns.
+          Select a sub-account from the switcher to plan, pace, and reconcile its
+          Google campaigns.
         </div>
       </div>
     );
@@ -482,10 +479,8 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     <PacerReadOnlyContext.Provider value={frozen}>
     <div className="flex h-full flex-col pb-2">
       <Header
-        mode={view}
-        onMode={setView}
-        paceTab={paceTab}
-        onPaceTab={setPaceTab}
+        tab={tab}
+        onTab={setTab}
         accountKey={accountKey}
         period={period}
         onShiftPeriod={(d) => setPeriod((p) => shiftPeriod(p, d))}
@@ -524,7 +519,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         </div>
       )}
 
-      {plan && (view === 'plan' || (view === 'pace' && paceTab === 'pacer')) && (
+      {plan && (tab === 'planner' || tab === 'pacing') && (
         <div className="mt-5">
           <TotalAllocationHeader plan={plan} />
           <div className="mt-4 flex flex-wrap items-start gap-4">
@@ -549,7 +544,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
       )}
 
       {/* Action row above the table (mirrors Meta's Ad Plan header + CTAs). */}
-      {(view === 'plan' || (view === 'pace' && paceTab === 'pacer')) && (
+      {(tab === 'planner' || tab === 'pacing') && (
       <div className="mt-8 mb-3 flex flex-wrap items-center justify-between gap-3">
         <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
           Campaigns · {periodLabel(period)}{' '}
@@ -598,21 +593,45 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
       </div>
       )}
 
-      {view === 'pace' && paceTab === 'summary' ? (
-        plan ? (
-          <SummaryPanel plan={plan} />
-        ) : null
-      ) : view === 'pace' && paceTab === 'overunder' ? (
-        accountKey ? (
-          <ComparePanel accountKey={accountKey} period={period} platform="google" />
-        ) : null
+      {tab === 'reconcile' ? (
+        // Reconciliation tab — year settlement + the per-ad Over/Under view,
+        // toggled (mirrors Meta). Both scoped to Google's own ledger.
+        <div>
+          <div className="mb-5 inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
+            {(
+              [
+                ['recon', 'Reconciliation'],
+                ['compare', 'Over / Under'],
+              ] as const
+            ).map(([v, label]) => (
+              <button
+                key={v}
+                type="button"
+                onClick={() => setReconView(v)}
+                aria-pressed={reconView === v}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                  reconView === v
+                    ? 'bg-[var(--primary)] text-white'
+                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {reconView === 'compare' ? (
+            <ComparePanel accountKey={accountKey} period={period} platform="google" />
+          ) : (
+            <ReconciliationPanel accountKey={accountKey} platform="google" />
+          )}
+        </div>
       ) : !isLoading && ads.length === 0 ? (
         <div className="rounded-xl border border-dashed border-[var(--border)] px-6 py-12 text-center text-sm text-[var(--muted-foreground)]">
           No Google campaigns for {periodLabel(period)} yet.
           {!frozen && ' Add one, or sync from Google.'}
         </div>
-      ) : view === 'pace' ? (
-        // Pace view — stacked PacerRow cards (mirrors Meta's Spend Pacing).
+      ) : tab === 'pacing' ? (
+        // Pacing tab — stacked PacerRow cards (mirrors Meta's Spend Pacing).
         <div className="mt-1">
           {ads.map((ad, i) => (
             <PacerRow
@@ -721,66 +740,37 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
 }
 
 function Header({
-  mode,
-  onMode,
-  paceTab,
-  onPaceTab,
+  tab,
+  onTab,
   accountKey,
   period,
   onShiftPeriod,
 }: {
-  mode: 'plan' | 'pace';
-  onMode: (m: 'plan' | 'pace') => void;
-  paceTab: 'pacer' | 'summary' | 'overunder';
-  onPaceTab: (t: 'pacer' | 'summary' | 'overunder') => void;
+  tab: 'planner' | 'pacing' | 'reconcile';
+  onTab: (t: 'planner' | 'pacing' | 'reconcile') => void;
   accountKey: string | null;
   period?: string;
   onShiftPeriod?: (delta: number) => void;
 }) {
+  const subtitle =
+    tab === 'planner'
+      ? 'Plan & allocate your monthly Google ad budgets'
+      : tab === 'pacing'
+        ? 'Track spend pacing across the active period'
+        : 'Settle monthly over/under and reconcile the year';
   return (
-    <div className={`page-sticky-header ${mode === 'pace' ? 'mb-8' : 'mb-6'}`}>
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
-        {/* Left: title */}
+    <div className="page-sticky-header mb-8">
+      <div className="flex items-center justify-between gap-4">
+        {/* Left: tool name (sub-account identity sits in the scope row below). */}
         <div className="flex min-w-0 items-center gap-3">
           <GoogleAdsBrandIcon className="h-8 w-8 flex-shrink-0" />
           <div className="min-w-0">
             <h2 className="truncate text-2xl font-bold text-[var(--foreground)]">Google Ads</h2>
-            <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">
-              {mode === 'plan'
-                ? 'Plan & allocate your monthly Google ad budgets'
-                : 'Track spend pacing across the active period'}
-            </p>
+            <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">{subtitle}</p>
           </div>
         </div>
-
-        {/* Center: Plan / Pace switch */}
-        <div className="flex justify-center">
-          <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
-            {(
-              [
-                ['plan', 'Plan'],
-                ['pace', 'Pace'],
-              ] as const
-            ).map(([m, label]) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => onMode(m)}
-                aria-pressed={mode === m}
-                className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                  mode === m
-                    ? 'bg-[var(--primary)] text-white'
-                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
         {/* Right: month nav */}
-        <div className="flex items-center justify-end gap-3">
+        <div className="flex items-center gap-3">
           {period && onShiftPeriod && (
             <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
               <button
@@ -807,54 +797,36 @@ function Header({
         </div>
       </div>
 
-      {/* Pace sub-tabs — Summary · Pacer · Over/Under Spend, pinned inside the
-          sticky header so they don't scroll away (mirrors Meta). Google has no
-          Reconciliation, so Plan mode shows no sub-tab row. */}
-      {mode === 'pace' && accountKey && (
+      {/* Flat tab bar — Planner · Pacing · Reconciliation (mirrors Meta). Only
+          with an account selected (every tab needs one). */}
+      {accountKey && (
         <div className="mt-4 flex items-center gap-1 border-b border-[var(--border)]">
-          <button
-            type="button"
-            onClick={() => onPaceTab('summary')}
-            className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
-              paceTab === 'summary'
-                ? 'border-[var(--primary)] text-[var(--primary)]'
-                : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-            }`}
-          >
-            <TableCellsIcon className="h-3.5 w-3.5" />
-            Summary
-          </button>
-          <button
-            type="button"
-            onClick={() => onPaceTab('pacer')}
-            className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
-              paceTab === 'pacer'
-                ? 'border-[var(--primary)] text-[var(--primary)]'
-                : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-            }`}
-          >
-            <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
-            Pacer
-          </button>
-          <button
-            type="button"
-            onClick={() => onPaceTab('overunder')}
-            className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
-              paceTab === 'overunder'
-                ? 'border-[var(--primary)] text-[var(--primary)]'
-                : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-            }`}
-          >
-            <ScaleIcon className="h-3.5 w-3.5" />
-            Over/Under Spend
-          </button>
+          {(
+            [
+              ['planner', 'Planner', ClipboardDocumentListIcon],
+              ['pacing', 'Pacing', AdjustmentsHorizontalIcon],
+              ['reconcile', 'Reconciliation', InvestmentIcon],
+            ] as const
+          ).map(([t, label, Icon]) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => onTab(t)}
+              className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                tab === t
+                  ? 'border-[var(--primary)] text-[var(--primary)]'
+                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          ))}
         </div>
       )}
     </div>
   );
 }
-
-
 
 type DiscoveredGoogleCampaign = {
   id: string;

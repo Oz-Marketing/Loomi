@@ -8,7 +8,6 @@ import {
 } from 'react';
 import {
   AdjustmentsHorizontalIcon,
-  TableCellsIcon,
   ClipboardDocumentListIcon,
   ExclamationTriangleIcon,
   ClockIcon,
@@ -91,7 +90,6 @@ import { ImportFromMetaModal } from './ImportFromMetaModal';
 import { AdPlannerPanel } from './AdPlannerPanel';
 import { MetaAdsPacerFilterSidebar } from './FilterSidebar';
 import { type CopyFieldOptions } from './CopyPlanModal';
-import { SummaryPanel } from '@/app/app/tools/_shared';
 import { BudgetPacerPanel, PacerSpendTotals, type AccountPacing } from './BudgetPacerPanel';
 
 // ─── Constants ─────────────────────────────────────────────────────────────
@@ -145,6 +143,8 @@ type PacerInnerTab = 'pacer' | 'summary' | 'compare';
 // Planner page sub-tabs: the planner itself + the Reconciliation view
 // (moved here from the Pacer page).
 type PlannerInnerTab = 'planner' | 'reconcile';
+// The one flat tab bar (replaces the old Plan/Pace toggle + nested sub-tabs).
+type ToolTab = 'planner' | 'pacing' | 'reconcile';
 
 export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }) {
   const { accountKey, accounts, setAccount } = useAccount();
@@ -167,13 +167,33 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
   const urlPacerTab = searchParams.get('pacerTab');
   const urlPlannerTab = searchParams.get('plannerTab');
   const urlView = searchParams.get('view');
+  const urlTab = searchParams.get('tab');
+  const urlReconView = searchParams.get('reconView');
 
-  // Planner + Pacer are one consolidated page now; `mode` is switchable state
-  // (seeded from ?view= or the route default) and mirrors back to the URL via
-  // the sync effect below, so the Plan/Pace toggle is bookmarkable.
-  const [mode, setMode] = useState<MetaToolMode>(
-    urlView === 'pacer' ? 'pacer' : urlView === 'planner' ? 'planner' : initialMode,
+  // One flat tab bar now: Planner · Pacing · Reconciliation. `tab` is the single
+  // source of truth (seeded from ?tab=, falling back to the legacy ?view=/?…Tab=
+  // params and the route default); `reconView` switches the Reconciliation tab
+  // between the year settlement table and the within-month Over/Under view.
+  const [tab, setTab] = useState<ToolTab>(
+    urlTab === 'pacing' || urlTab === 'planner' || urlTab === 'reconcile'
+      ? (urlTab as ToolTab)
+      : urlPlannerTab === 'reconcile'
+        ? 'reconcile'
+        : urlView === 'pacer' || (urlView == null && initialMode === 'pacer')
+          ? 'pacing'
+          : 'planner',
   );
+  const [reconView, setReconView] = useState<'recon' | 'compare'>(
+    urlReconView === 'compare' || urlPacerTab === 'compare' ? 'compare' : 'recon',
+  );
+  // Derived legacy view flags — peripheral logic (effects, scope row, pacer
+  // actions, carryover banner) still reads these; the tab bar + content switch
+  // read `tab`/`reconView` directly. `pacerTab` is pinned to 'pacer' since the
+  // former Summary/Over-Under pacer sub-tabs are gone (Summary removed,
+  // Over/Under folded into the Reconciliation tab).
+  const mode: MetaToolMode = tab === 'pacing' ? 'pacer' : 'planner';
+  const plannerTab: PlannerInnerTab = tab === 'reconcile' ? 'reconcile' : 'planner';
+  const pacerTab: PacerInnerTab = 'pacer';
 
   const [users, setUsers] = useState<DirectoryUser[]>([]);
   const [period, setPeriod] = useState<string>(
@@ -217,34 +237,26 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
         : [],
     [plan],
   );
-  const [pacerTab, setPacerTab] = useState<PacerInnerTab>(
-    urlPacerTab === 'summary'
-      ? 'summary'
-      : urlPacerTab === 'compare'
-        ? 'compare'
-        : 'pacer',
-  );
-  const [plannerTab, setPlannerTab] = useState<PlannerInnerTab>(
-    urlPlannerTab === 'reconcile' ? 'reconcile' : 'planner',
-  );
-
   // Mirror state changes back into the URL (replace, not push, so the
-  // back button stays useful for actual navigation).
+  // back button stays useful for actual navigation). One `tab` param now,
+  // plus `reconView` only while the Reconciliation tab is showing Over/Under.
   useEffect(() => {
     const next = new URLSearchParams(searchParams.toString());
     next.set('period', period);
-    next.set('view', mode);
-    if (mode === 'pacer') next.set('pacerTab', pacerTab);
-    else next.delete('pacerTab');
-    if (mode === 'planner') next.set('plannerTab', plannerTab);
-    else next.delete('plannerTab');
+    next.set('tab', tab);
+    // Drop the legacy params so old bookmarks don't linger in the bar.
+    next.delete('view');
+    next.delete('pacerTab');
+    next.delete('plannerTab');
+    if (tab === 'reconcile' && reconView === 'compare') next.set('reconView', 'compare');
+    else next.delete('reconView');
     const qs = next.toString();
     const url = qs ? `${pathname}?${qs}` : pathname;
     router.replace(url, { scroll: false });
     // Intentionally exclude `searchParams` so external param changes don't
     // re-trigger this loop (we read from it once on mount).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period, pacerTab, plannerTab, mode, pathname, router]);
+  }, [period, tab, reconView, pathname, router]);
   const [filters, setFilters] = useState<PlanFilters>(EMPTY_FILTERS);
   const [filterSidebarOpen, setFilterSidebarOpen] = useState(false);
   // Lifted overview list — fetched once per period when there's no
@@ -1171,7 +1183,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
       </div>
     ) : null;
 
-  const hasTabs = mode === 'pacer' || (mode === 'planner' && !!activeKey);
+  const hasTabs = !!activeKey;
 
   // Carryover prompt (Change 7) — fold last month's settled over/under into
   // this month's spend target, opt-in, per bucket. Never touches the client
@@ -1329,7 +1341,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
           sticky element so the tabs don't scroll away. */}
       <div
         className={`page-sticky-header pad-on-scroll ${hasTabs ? 'has-tabs ' : ''}${
-          mode === 'pacer' ? 'mb-8' : 'mb-6'
+          hasTabs ? 'mb-8' : 'mb-6'
         }`}
       >
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-4">
@@ -1339,34 +1351,18 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
             <div className="min-w-0">
               <h2 className="text-2xl font-bold">Meta Ads</h2>
               <p className="text-[var(--muted-foreground)] text-sm mt-0.5">
-                {mode === 'planner'
+                {tab === 'planner'
                   ? 'Plan and allocate your monthly Meta ad budgets'
-                  : 'Track spend pacing across the active period'}
+                  : tab === 'pacing'
+                    ? 'Track spend pacing across the active period'
+                    : 'Settle monthly over/under and reconcile the year'}
               </p>
             </div>
           </div>
 
-          {/* Center: Plan / Pace mode switch — consolidates the former Ad
-              Planner + Ad Pacer pages. Each mode keeps its own sub-tabs. */}
-          <div className="flex justify-center">
-            <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
-              {(['planner', 'pacer'] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => setMode(m)}
-                  aria-pressed={mode === m}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                    mode === m
-                      ? 'bg-[var(--primary)] text-white'
-                      : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                  }`}
-                >
-                  {m === 'planner' ? 'Plan' : 'Pace'}
-                </button>
-              ))}
-            </div>
-          </div>
+          {/* Center: intentionally empty — the Plan/Pace toggle was removed in
+              favor of the single flat tab bar below. */}
+          <div aria-hidden />
 
           {/* Right: notes + month + filters */}
           <div className="flex items-center justify-end gap-3 flex-wrap">
@@ -1403,81 +1399,32 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
           </div>
         </div>
 
-      {/* Sub-tabs — pinned inside the sticky header so they don't scroll away. */}
-      {mode === 'pacer' && (
+      {/* One flat tab bar — Planner · Pacing · Reconciliation — pinned inside
+          the sticky header so it doesn't scroll away. Only shown with an account
+          selected (every tab needs one; the all-accounts overview has no tabs). */}
+      {activeKey && (
         <div className="mt-4 flex items-center gap-1 border-b border-[var(--border)]">
-          {activeKey && (
-            <>
-              <button
-                type="button"
-                onClick={() => setPacerTab('summary')}
-                className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                  pacerTab === 'summary'
-                    ? 'border-[var(--primary)] text-[var(--primary)]'
-                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-              >
-                <TableCellsIcon className="w-3.5 h-3.5" />
-                Summary
-              </button>
-              <button
-                type="button"
-                onClick={() => setPacerTab('pacer')}
-                className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                  pacerTab === 'pacer'
-                    ? 'border-[var(--primary)] text-[var(--primary)]'
-                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-              >
-                <AdjustmentsHorizontalIcon className="w-3.5 h-3.5" />
-                Pacer
-              </button>
-            </>
-          )}
-          <button
-            type="button"
-            onClick={() => setPacerTab('compare')}
-            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              pacerTab === 'compare'
-                ? 'border-[var(--primary)] text-[var(--primary)]'
-                : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-            }`}
-          >
-            <ScaleIcon className="w-3.5 h-3.5" />
-            Over/Under Spend
-          </button>
-        </div>
-      )}
-
-      {/* Planner sub-tabs — Planner + Reconciliation, mirroring the Pacer
-          page's tab row. Only shown when an account is selected, since the
-          Reconciliation view needs an account. */}
-      {mode === 'planner' && activeKey && (
-        <div className="mt-4 flex items-center gap-1 border-b border-[var(--border)]">
-          <button
-            type="button"
-            onClick={() => setPlannerTab('planner')}
-            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              plannerTab === 'planner'
-                ? 'border-[var(--primary)] text-[var(--primary)]'
-                : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-            }`}
-          >
-            <ClipboardDocumentListIcon className="w-3.5 h-3.5" />
-            Planner
-          </button>
-          <button
-            type="button"
-            onClick={() => setPlannerTab('reconcile')}
-            className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-              plannerTab === 'reconcile'
-                ? 'border-[var(--primary)] text-[var(--primary)]'
-                : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-            }`}
-          >
-            <InvestmentIcon className="w-3.5 h-3.5" />
-            Reconciliation
-          </button>
+          {(
+            [
+              ['planner', 'Planner', ClipboardDocumentListIcon],
+              ['pacing', 'Pacing', AdjustmentsHorizontalIcon],
+              ['reconcile', 'Reconciliation', InvestmentIcon],
+            ] as const
+          ).map(([t, label, Icon]) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setTab(t)}
+              className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                tab === t
+                  ? 'border-[var(--primary)] text-[var(--primary)]'
+                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {label}
+            </button>
+          ))}
         </div>
       )}
       </div>
@@ -1649,7 +1596,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
           )}
 
           {!activeKey ? (
-            mode === 'pacer' && pacerTab === 'compare' ? (
+            tab === 'reconcile' && reconView === 'compare' ? (
               <div className="glass-section-card rounded-xl px-7 py-7">
                 <ComparePanel accountKey={null} period={period} />
               </div>
@@ -1685,39 +1632,32 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
               </p>
             </div>
           ) : !plan ? null : (() => {
-            // Ad Planner + Pacer's Summary tab render flush (no outer card)
-            // so the inner table reads as the page-level content. Pacer's
-            // Pacer + Over/Under Spend tabs keep the glass-section-card
-            // chrome since their content benefits from the visual frame.
-            const flat =
-              (mode === 'planner' && plannerTab === 'planner') ||
-              (mode === 'pacer' && (pacerTab === 'summary' || pacerTab === 'pacer'));
+            // Planner + Pacing render flush (no outer card) so the table/cards
+            // read as page-level content; Reconciliation keeps the
+            // glass-section-card chrome since its content benefits from the frame.
+            const flat = tab === 'planner' || tab === 'pacing';
             const wrapperClass = flat
               ? ''
               : 'glass-section-card rounded-xl px-7 py-7';
             const inner =
-              mode === 'planner' ? (
-                plannerTab === 'reconcile' ? (
-                  <ReconciliationPanel accountKey={activeKey} />
-                ) : (
-                  <AdPlannerPanel
-                    plan={plan}
-                    period={period}
-                    users={users}
-                    filters={filters}
-                    onFiltersChange={setFilters}
-                    currentUserId={currentUserId}
-                    periodSummaries={periodSummaries}
-                    onChange={setPlan}
-                    onCopyFrom={handleCopyFrom}
-                    onImport={plan?.frozen ? undefined : () => setImportOpen(true)}
-                    onModalOpenChange={setEditorOpen}
-                    onAddActivity={onAddActivity}
-                    onEditActivity={onEditActivity}
-                    onDeleteActivity={onDeleteActivity}
-                  />
-                )
-              ) : pacerTab === 'pacer' ? (
+              tab === 'planner' ? (
+                <AdPlannerPanel
+                  plan={plan}
+                  period={period}
+                  users={users}
+                  filters={filters}
+                  onFiltersChange={setFilters}
+                  currentUserId={currentUserId}
+                  periodSummaries={periodSummaries}
+                  onChange={setPlan}
+                  onCopyFrom={handleCopyFrom}
+                  onImport={plan?.frozen ? undefined : () => setImportOpen(true)}
+                  onModalOpenChange={setEditorOpen}
+                  onAddActivity={onAddActivity}
+                  onEditActivity={onEditActivity}
+                  onDeleteActivity={onDeleteActivity}
+                />
+              ) : tab === 'pacing' ? (
                 <BudgetPacerPanel
                   plan={plan}
                   filters={filters}
@@ -1727,10 +1667,38 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
                   accountKey={activeKey}
                   headerActions={pacerActions}
                 />
-              ) : pacerTab === 'compare' ? (
-                <ComparePanel accountKey={activeKey} period={period} />
               ) : (
-                <SummaryPanel plan={plan} />
+                // Reconciliation tab — a segmented toggle folds in the former
+                // Over/Under page (within-month per-ad) beside the year table.
+                <div className="space-y-5">
+                  <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
+                    {(
+                      [
+                        ['recon', 'Reconciliation'],
+                        ['compare', 'Over / Under'],
+                      ] as const
+                    ).map(([v, label]) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => setReconView(v)}
+                        aria-pressed={reconView === v}
+                        className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
+                          reconView === v
+                            ? 'bg-[var(--primary)] text-white'
+                            : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {reconView === 'compare' ? (
+                    <ComparePanel accountKey={activeKey} period={period} />
+                  ) : (
+                    <ReconciliationPanel accountKey={activeKey} />
+                  )}
+                </div>
               );
             return flat ? inner : <div className={wrapperClass}>{inner}</div>;
           })()}

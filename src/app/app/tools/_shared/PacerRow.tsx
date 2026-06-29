@@ -478,7 +478,17 @@ export function PacerRow({
                 : 'grid grid-cols-1 md:grid-cols-[minmax(0,150px)_minmax(0,150px)_minmax(0,max-content)] gap-4'
             }
           >
-        <Field label="Actual Spend">
+        <Field
+          label={
+            // Prompt 3: when the full run is billed in one month, this input is
+            // just THIS month's delivery slice (the full run shows in the
+            // cross-month banner + the over/under). Relabel so it's never
+            // mistaken for the figure variance is computed against.
+            ad.fullRunAppliedToMonth
+              ? `${fmtPeriodLong(ad.period).split(' ')[0]} delivery`
+              : 'Actual Spend'
+          }
+        >
           {syncedFromMeta ? (
             // Meta owns the spend once synced — plain read-only value. The card's
             // "from Meta" badge labels the source, so no per-field tag here.

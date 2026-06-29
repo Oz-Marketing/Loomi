@@ -973,6 +973,9 @@ export interface ReconAdVariance {
   /** billedActual − target — the ad's over/under contribution. */
   contribution: number;
   klass: 'real' | 'billed-cross-month' | 'lifetime-in-progress';
+  /** false = a cross-month lifetime run deferred to a future month; true =
+   *  settles at this month's close (incl. a single-month lifetime ad). */
+  settlesThisMonth: boolean;
 }
 
 export interface ReconciliationMonth {
@@ -1180,6 +1183,7 @@ export async function getYearReconciliation(
       billedActual: v.billedActual,
       contribution: v.contribution,
       klass: v.klass,
+      settlesThisMonth: v.settlesThisMonth,
     });
     adVarByPeriod.set(a.period, list);
     if (isLifetimeInProgress(a, reconNowMs, tz)) {

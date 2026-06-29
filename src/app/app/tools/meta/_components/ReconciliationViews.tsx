@@ -65,6 +65,7 @@ interface ReconMonth {
     billedActual: number;
     contribution: number;
     klass: 'real' | 'billed-cross-month' | 'lifetime-in-progress';
+    settlesThisMonth?: boolean;
   }[];
 }
 interface CarryoverApplication {
@@ -677,14 +678,20 @@ export function ReconciliationPanel({ accountKey }: { accountKey: string }) {
                                       )}
                                       {av.klass === 'lifetime-in-progress' && (
                                         <Tooltip
-                                          label="Lifetime ad still running — its spend is held out of the over/under until the run completes."
+                                          label={
+                                            av.settlesThisMonth === false
+                                              ? 'Cross-month lifetime run — its variance settles in a future month at flight completion.'
+                                              : "Lifetime ad still running — not paceable (Meta controls delivery). It settles at this month's close, not a future month."
+                                          }
                                           className="flex-shrink-0"
                                         >
                                         <span
                                           className="text-[9px] font-semibold"
                                           style={{ color: COLORS.lifetime }}
                                         >
-                                          lifetime · books on completion
+                                          {av.settlesThisMonth === false
+                                            ? 'lifetime · settles on completion'
+                                            : 'lifetime · settles at month end'}
                                         </span>
                                         </Tooltip>
                                       )}

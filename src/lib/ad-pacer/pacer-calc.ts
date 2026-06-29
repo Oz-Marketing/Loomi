@@ -342,6 +342,39 @@ export interface AdVariance {
   /** billedActual − effectiveTarget — this ad's over/under contribution. */
   contribution: number;
   klass: VarianceClass;
+  /** Where this ad's variance settles. true = at THIS month's close (a normal
+   *  ad, a billed-this-month ad, or a single-month lifetime ad whose flight ends
+   *  in the month). false = DEFERRED to a future month (a cross-month lifetime
+   *  run whose flight extends past the month — Prompt 2: only these are "settles
+   *  later"; a single-month lifetime ad is never deferred). */
+  settlesThisMonth: boolean;
+}
+
+/**
+ * For a lifetime ad: does its run settle at THIS month's close (its flight ends
+ * within the pacing month) vs deferred to a future month (its flight extends
+ * past it — a cross-month run)? Prompt 2: a single-month lifetime ad settles at
+ * month-end like everything else and is never deferred; only a cross-month run
+ * leaves the month. An open-ended run (no end date) is treated as settling this
+ * month rather than deferring indefinitely. Non-lifetime ads aren't asked this.
+ */
+export function lifetimeSettlesThisMonth(
+  ad: AdScheduleLike,
+  asMonth: string,
+): boolean {
+  // Resolve the run's real end the same way clampToMonth does — including its
+  // stale-metaEndDate guard: a Meta end BEFORE this month is stale (a recurring
+  // ad set still carrying a prior run's stop date), so defer to the planner's
+  // flightEnd (the forward intent). Without this, a genuine cross-month run with
+  // a stale Meta end would be misread as "ends this month". Compare the UNCLAMPED
+  // end month (clampToMonth's effectiveEnd is capped at month-end, which would
+  // hide the "extends past the month" signal we need here).
+  const bounds = monthBoundsIso(asMonth);
+  const metaEndStale =
+    bounds != null && ad.metaEndDate != null && ad.metaEndDate < bounds.start;
+  const rawEnd = metaEndStale ? ad.flightEnd : ad.metaEndDate ?? ad.flightEnd;
+  const endMonth = rawEnd?.slice(0, 7) ?? null;
+  return endMonth == null ? true : endMonth <= asMonth;
 }
 
 /**
@@ -365,7 +398,15 @@ export function classifyAdVariance(
 ): AdVariance {
   const inMonthSpend = num(ad.pacerActual) ?? 0;
   if (isLifetimeInProgress(ad, nowMs, timeZone)) {
-    return { inMonthSpend, billedActual: 0, contribution: 0, klass: 'lifetime-in-progress' };
+    return {
+      inMonthSpend,
+      billedActual: 0,
+      contribution: 0,
+      klass: 'lifetime-in-progress',
+      // Only a cross-month run (flight past this month) is deferred; a
+      // single-month lifetime ad settles at this month's close (Prompt 2).
+      settlesThisMonth: lifetimeSettlesThisMonth(ad, asMonth),
+    };
   }
   const billedActual = effectiveActual(ad, asMonth);
   const contribution = billedActual - effectiveTarget(ad, asMonth);
@@ -373,7 +414,7 @@ export function classifyAdVariance(
     ad.fullRunAppliedToMonth != null && Math.abs(billedActual - inMonthSpend) >= 0.005
       ? 'billed-cross-month'
       : 'real';
-  return { inMonthSpend, billedActual, contribution, klass };
+  return { inMonthSpend, billedActual, contribution, klass, settlesThisMonth: true };
 }
 
 export interface MonthVarianceBreakdown {
@@ -389,6 +430,10 @@ export interface MonthVarianceBreakdown {
   heldOutLifetime: number;
   crossMonthCount: number;
   heldOutCount: number;
+  /** Of the held-out lifetime ads, how many are DEFERRED to a future month (a
+   *  cross-month run). heldOutCount − this = lifetime ads settling at THIS
+   *  month's close. Lets the UI label the two in-progress states distinctly. */
+  heldOutDeferredCount: number;
   /** Per-ad results in input order — the caller maps back to its ad list. */
   perAd: AdVariance[];
 }
@@ -411,6 +456,7 @@ export function decomposeMonthVariance(
   let heldOutLifetime = 0;
   let crossMonthCount = 0;
   let heldOutCount = 0;
+  let heldOutDeferredCount = 0;
   const perAd: AdVariance[] = [];
   for (const ad of ads) {
     const v = classifyAdVariance(ad, asMonth, nowMs, timeZone);
@@ -420,6 +466,7 @@ export function decomposeMonthVariance(
     if (v.klass === 'lifetime-in-progress') {
       heldOutLifetime += v.inMonthSpend;
       heldOutCount += 1;
+      if (!v.settlesThisMonth) heldOutDeferredCount += 1;
     } else if (v.klass === 'billed-cross-month') {
       billedElsewhere += v.billedActual - v.inMonthSpend;
       crossMonthCount += 1;
@@ -432,6 +479,7 @@ export function decomposeMonthVariance(
     heldOutLifetime,
     crossMonthCount,
     heldOutCount,
+    heldOutDeferredCount,
     perAd,
   };
 }

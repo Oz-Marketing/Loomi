@@ -363,6 +363,68 @@ describe('classifyAdVariance / decomposeMonthVariance (cross-month split)', () =
     expect(v.billedActual).toBe(0);
     expect(v.contribution).toBe(0);
     expect(v.inMonthSpend).toBeCloseTo(180);
+    // Flight ends this month → settles at month-close, NOT deferred (Prompt 2).
+    expect(v.settlesThisMonth).toBe(true);
+  });
+
+  it('a single-month ad settles this month; a cross-month lifetime run is deferred', () => {
+    const single = classifyAdVariance(mk({ allocation: '100', pacerActual: '120' }), PERIOD, NOW, TZ);
+    expect(single.settlesThisMonth).toBe(true);
+    // Lifetime run whose flight extends into a later month → deferred (settles
+    // in the final month at flight completion), so settlesThisMonth is false.
+    const crossMonth = classifyAdVariance(
+      mk({
+        budgetType: 'Lifetime',
+        adStatus: 'Live',
+        flightEnd: '2026-07-20',
+        allocation: '500',
+        pacerActual: '180',
+      }),
+      PERIOD,
+      NOW,
+      TZ,
+    );
+    expect(crossMonth.klass).toBe('lifetime-in-progress');
+    expect(crossMonth.settlesThisMonth).toBe(false);
+  });
+
+  it('a stale metaEndDate (prior run) does not mask a cross-month lifetime run', () => {
+    // Genuine cross-month run (planner flightEnd in July) but the ad set still
+    // carries a prior run's stop date in May — the stale-end guard must defer to
+    // flightEnd, so the run is still recognized as deferred (settles later).
+    const v = classifyAdVariance(
+      mk({
+        budgetType: 'Lifetime',
+        adStatus: 'Live',
+        flightEnd: '2026-07-15',
+        metaEndDate: '2026-05-20', // stale — before the pacing month
+        allocation: '500',
+        pacerActual: '180',
+      }),
+      PERIOD,
+      NOW,
+      TZ,
+    );
+    expect(v.klass).toBe('lifetime-in-progress');
+    expect(v.settlesThisMonth).toBe(false);
+  });
+
+  it('an open-ended lifetime run (no end date) settles this month, not deferred', () => {
+    const v = classifyAdVariance(
+      mk({
+        budgetType: 'Lifetime',
+        adStatus: 'Live',
+        flightEnd: null,
+        metaEndDate: null,
+        allocation: '500',
+        pacerActual: '180',
+      }),
+      PERIOD,
+      NOW,
+      TZ,
+    );
+    expect(v.klass).toBe('lifetime-in-progress');
+    expect(v.settlesThisMonth).toBe(true);
   });
 
   it('a COMPLETED lifetime ad is real — its single variance books', () => {
@@ -395,6 +457,7 @@ describe('classifyAdVariance / decomposeMonthVariance (cross-month split)', () =
     expect(d.heldOutLifetime).toBeCloseTo(180);
     expect(d.crossMonthCount).toBe(1);
     expect(d.heldOutCount).toBe(1);
+    expect(d.heldOutDeferredCount).toBe(0); // its flight ends this month
     expect(d.perAd).toHaveLength(3);
   });
 });

@@ -44,6 +44,7 @@ interface MonthAd {
     billedActual: number;
     contribution: number;
     klass: 'real' | 'billed-cross-month' | 'lifetime-in-progress';
+    settlesThisMonth?: boolean;
   };
 }
 
@@ -151,6 +152,7 @@ function OverUnderMonthView({
                   billedActual: number;
                   contribution: number;
                   klass: 'real' | 'billed-cross-month' | 'lifetime-in-progress';
+                  settlesThisMonth?: boolean;
                 };
               }) => {
                 const eff = { ...a, period: a.period ?? period };
@@ -241,6 +243,11 @@ function OverUnderMonthView({
   //    without a separate subtraction.
   const allAds = data?.ads ?? [];
   const inProgressLifetime = allAds.filter((a) => a.lifetimeInProgress);
+  // Of those, the cross-month runs deferred to a future month (vs single-month
+  // lifetime ads that settle at this month's close — Prompt 2).
+  const deferredLifetimeCount = inProgressLifetime.filter(
+    (a) => a.variance?.settlesThisMonth === false,
+  ).length;
   const ipLifeAlloc = inProgressLifetime.reduce((s, a) => s + a.allocation, 0);
   const totalInMonth = allAds.reduce((s, a) => s + a.actual, 0);
   const overUnderActual = allAds.reduce(
@@ -337,14 +344,25 @@ function OverUnderMonthView({
                               {ad.allocation > 0 ? fmt(ad.allocation) : '—'}
                             </span>
                             {ad.lifetimeInProgress && (
-                              <Tooltip label="Lifetime ad still running — excluded from the over/under until its run completes (still counted in total spend).">
-                              <span
-                                className="ml-1 font-semibold"
-                                style={{ color: COLORS.lifetime }}
-                              >
-                                · lifetime · in progress
-                              </span>
-                              </Tooltip>
+                              ad.variance?.settlesThisMonth === false ? (
+                                <Tooltip label="Cross-month lifetime run — its variance settles in a future month at flight completion (excluded here, still counted in total spend).">
+                                <span
+                                  className="ml-1 font-semibold"
+                                  style={{ color: COLORS.lifetime }}
+                                >
+                                  · lifetime · settles on completion
+                                </span>
+                                </Tooltip>
+                              ) : (
+                                <Tooltip label="Lifetime ad — not paceable (Meta controls delivery). It settles at this month's close, not a future month.">
+                                <span
+                                  className="ml-1 font-semibold"
+                                  style={{ color: COLORS.lifetime }}
+                                >
+                                  · lifetime · settles at month end
+                                </span>
+                                </Tooltip>
+                              )
                             )}
                             {ad.fullRunAppliedToMonth && (
                               <Tooltip label="Full run counted in this month — the over/under compares the full run to the full target.">
@@ -490,7 +508,12 @@ function OverUnderMonthView({
                 >
                   Excludes {inProgressLifetime.length} lifetime ad
                   {inProgressLifetime.length === 1 ? '' : 's'} in progress ·{' '}
-                  {fmt(heldOutLifetime)} spent · settles on completion
+                  {fmt(heldOutLifetime)} spent ·{' '}
+                  {deferredLifetimeCount === inProgressLifetime.length
+                    ? 'settles on completion'
+                    : deferredLifetimeCount === 0
+                      ? 'settles at month end'
+                      : `${deferredLifetimeCount} settle on completion, the rest at month end`}
                 </div>
                 </Tooltip>
               )}

@@ -837,47 +837,110 @@ export function PacerRow({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
         {isLifetime ? (
           // Lifetime ads: Meta distributes the budget across the flight however
-          // it wants, so there's nothing to pace day-to-day (Prompt 1/2). Show
-          // run-level reconciliation only — spent-to-date vs the lifetime cap +
-          // an actual-vs-budget status — never daily projection / rec-daily.
-          (() => {
-            const lifetimeBudget = num(ad.metaLifetimeBudget) ?? calc.budget;
-            const spentToDate = num(ad.pacerRunSpend) ?? calc.spent;
-            const ratio = lifetimeBudget > 0 ? spentToDate / lifetimeBudget : null;
-            const over = ratio != null && ratio > 1;
-            return (
-              <>
-                <MetricBox
-                  label="Spent to date"
-                  value={fmt(spentToDate)}
-                  sub={
-                    ratio != null
-                      ? `${(ratio * 100).toFixed(0)}% of lifetime budget`
-                      : 'set a lifetime budget'
-                  }
-                />
-                <MetricBox
-                  label="Lifetime budget"
-                  value={lifetimeBudget > 0 ? fmt(lifetimeBudget) : '—'}
-                  sub="Meta spend cap"
-                />
-                <MetricBox
-                  label="Status"
-                  value={
-                    ratio == null
-                      ? '—'
-                      : over
-                        ? `Over by ${fmt(spentToDate - lifetimeBudget)}`
-                        : `${fmt(lifetimeBudget - spentToDate)} left`
-                  }
-                  sub="Meta controls delivery"
-                  color={
-                    ratio == null ? undefined : over ? COLORS.error : COLORS.success
-                  }
-                />
-              </>
-            );
-          })()
+          // it wants, so there's nothing to pace day-to-day. Two scopes, switched
+          // by the Cross-month toggle so a multi-month run doesn't drown out the
+          // month a rep is actually looking at:
+          //   • OFF (default): THIS month only — spend vs the month's allocation,
+          //     matching the card header. What's wanted the vast majority of the
+          //     time.
+          //   • ON: the all-time RUN vs Meta's lifetime cap (the settlement view).
+          //     The cap is only meaningful when Meta actually reports a lifetime
+          //     budget on the ad set — never fall back to the month allocation
+          //     (that mixed scopes: full-run spend vs one month's target → a bogus
+          //     "264% / over by $X").
+          showCrossMonth ? (
+            (() => {
+              const lifetimeBudget = num(ad.metaLifetimeBudget);
+              const spentToDate = num(ad.pacerRunSpend) ?? calc.spent;
+              const ratio =
+                lifetimeBudget != null && lifetimeBudget > 0
+                  ? spentToDate / lifetimeBudget
+                  : null;
+              const over = ratio != null && ratio > 1;
+              return (
+                <>
+                  <MetricBox
+                    label="Spent to date"
+                    value={fmt(spentToDate)}
+                    sub={
+                      ratio != null
+                        ? `${(ratio * 100).toFixed(0)}% of lifetime budget`
+                        : 'all-time, every month'
+                    }
+                  />
+                  <MetricBox
+                    label="Lifetime budget"
+                    value={
+                      lifetimeBudget != null && lifetimeBudget > 0
+                        ? fmt(lifetimeBudget)
+                        : '—'
+                    }
+                    sub={
+                      lifetimeBudget != null && lifetimeBudget > 0
+                        ? 'Meta spend cap'
+                        : 'not synced from Meta'
+                    }
+                  />
+                  <MetricBox
+                    label="Status"
+                    value={
+                      ratio == null
+                        ? '—'
+                        : over
+                          ? `Over by ${fmt(spentToDate - (lifetimeBudget ?? 0))}`
+                          : `${fmt((lifetimeBudget ?? 0) - spentToDate)} left`
+                    }
+                    sub={ratio == null ? 'needs a synced lifetime cap' : 'Meta controls delivery'}
+                    color={
+                      ratio == null ? undefined : over ? COLORS.error : COLORS.success
+                    }
+                  />
+                </>
+              );
+            })()
+          ) : (
+            (() => {
+              // Current-month scope — same numbers the card header shows
+              // (effectiveActual / effectiveTarget), so header and grid agree.
+              const periodLabel = fmtPeriodLong(ad.period).split(' ')[0];
+              const monthSpent = calc.spent;
+              const monthBudget = calc.budget;
+              const ratio = monthBudget > 0 ? monthSpent / monthBudget : null;
+              const over = ratio != null && ratio > 1;
+              return (
+                <>
+                  <MetricBox
+                    label="Spent this month"
+                    value={fmt(monthSpent)}
+                    sub={
+                      ratio != null
+                        ? `${(ratio * 100).toFixed(0)}% of ${periodLabel} target`
+                        : 'no target set'
+                    }
+                  />
+                  <MetricBox
+                    label={`${periodLabel} target`}
+                    value={monthBudget > 0 ? fmt(monthBudget) : '—'}
+                    sub="this month's allocation"
+                  />
+                  <MetricBox
+                    label="Status"
+                    value={
+                      monthBudget <= 0
+                        ? '—'
+                        : over
+                          ? `Over by ${fmt(monthSpent - monthBudget)}`
+                          : `${fmt(monthBudget - monthSpent)} left`
+                    }
+                    sub={monthBudget <= 0 ? 'set a target' : `vs ${periodLabel} target`}
+                    color={
+                      monthBudget <= 0 ? undefined : over ? COLORS.error : COLORS.success
+                    }
+                  />
+                </>
+              );
+            })()
+          )
         ) : (
           <MetricBox
             label="Projected Spend"

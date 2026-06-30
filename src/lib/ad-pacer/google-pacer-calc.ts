@@ -5,8 +5,14 @@
 // pacer-calc — this file only adds what's Google-specific, and is unit-tested
 // against mock data so it's correct before the live API is ever connected.
 
+import { num } from './helpers';
 import type { PacerAd } from './types';
-import { buildAdCalc, isEligibleForLivePacing, isLifetimeInProgress } from './pacer-calc';
+import {
+  buildAdCalc,
+  buildPacerCalc,
+  isEligibleForLivePacing,
+  isLifetimeInProgress,
+} from './pacer-calc';
 
 export type GoogleChannelGroup =
   | 'Search'
@@ -14,6 +20,7 @@ export type GoogleChannelGroup =
   | 'Video'
   | 'Shopping'
   | 'PMax'
+  | 'Demand Gen'
   | 'Other';
 
 /** One campaign as pulled from the Google Ads API, before mapping to a card. */
@@ -27,13 +34,24 @@ export interface ImportedGoogleCampaign {
   budgetResourceName: string | null;
   startDate: string | null;
   endDate: string | null;
+  // §2 sharing/period. referenceCount > 1 = genuinely shared (the pacing unit
+  // becomes the budget). period = "DAILY" | "CUSTOM_PERIOD" (Daily/Total label).
+  budgetReferenceCount: number | null;
+  budgetExplicitlyShared: boolean | null;
+  budgetPeriod: string | null;
+  // §5 delivery signals (opposite remedies). budgetConstrained = the campaign
+  // spends its full cap and has headroom (raise budget); adsDisapproved = an ad
+  // can't serve (fix the ads, never raise the budget).
+  primaryStatus: string | null;
+  budgetConstrained: boolean;
+  adsDisapproved: boolean;
 }
 
 /**
  * Map Google's advertising_channel_type enum to the display rollup group.
- * PERFORMANCE_MAX is its OWN group and is never decomposed into Search/Video
- * (§8 — it spends across surfaces the API won't cleanly split). Unknown/!rare
- * types fall to "Other" rather than guessing.
+ * PERFORMANCE_MAX and DEMAND_GEN are each their OWN group and never decomposed
+ * into Search/Video (§8 — they spend across surfaces the API won't cleanly
+ * split). Unknown/rare types fall to "Other" rather than guessing.
  */
 export function mapChannelGroup(channelType: string | null | undefined): GoogleChannelGroup {
   switch ((channelType ?? '').toUpperCase()) {
@@ -47,9 +65,34 @@ export function mapChannelGroup(channelType: string | null | undefined): GoogleC
       return 'Shopping';
     case 'PERFORMANCE_MAX':
       return 'PMax';
+    case 'DEMAND_GEN':
+      return 'Demand Gen';
     default:
       return 'Other';
   }
+}
+
+/**
+ * §2 pacing-type label. Google has two budget shapes: an average DAILY budget
+ * (amount_micros) and a campaign TOTAL budget over a flight (CUSTOM_PERIOD,
+ * total_amount_micros). On the Google page we say "Total" where Meta says
+ * "Lifetime" — same underlying branch (budgetType 'Lifetime'), Google wording.
+ * Prefer the platform `period` when present; fall back to the budget type.
+ */
+export function googlePacingTypeLabel(
+  budgetPeriod: string | null | undefined,
+  budgetType: 'Daily' | 'Lifetime' | null | undefined,
+): 'Daily' | 'Total' {
+  if ((budgetPeriod ?? '').toUpperCase() === 'CUSTOM_PERIOD') return 'Total';
+  if ((budgetPeriod ?? '').toUpperCase() === 'DAILY') return 'Daily';
+  return budgetType === 'Lifetime' ? 'Total' : 'Daily';
+}
+
+/** §2 — a budget is genuinely SHARED only when more than one campaign points at
+ *  it (reference_count > 1), NOT merely when it's marked shareable. Keying the
+ *  badge off this avoids labeling a shareable-but-single budget as shared. */
+export function isSharedBudget(referenceCount: number | null | undefined): boolean {
+  return (referenceCount ?? 0) > 1;
 }
 
 /**
@@ -169,6 +212,159 @@ export function accountDailyRollup(
     dailyNeeded,
     monthlyCeiling: dailySet * DAYS_PER_MONTH,
     eligibleCount,
+  };
+}
+
+// ── §9 mid-month ceiling reproration ──
+
+/** One daily-rate boundary within a month: `dailyRate` ($) takes effect on
+ *  `date` (YYYY-MM-DD) and runs until the next boundary (or month end). */
+export interface BudgetRateSegment {
+  date: string;
+  dailyRate: number;
+}
+
+/**
+ * §9 — the monthly ceiling for a Google daily budget, honoring mid-month rate
+ * changes. A constant daily rate r gives r × 30.4 (Google averages a daily
+ * budget across the ~30.4-day month). When the rate changed mid-month, the
+ * ceiling is the calendar-day-weighted average rate × 30.4 — i.e. each rate
+ * contributes in proportion to the days it was actually in effect that month.
+ * For a clean (no-change) month this reduces exactly to currentDaily × 30.4.
+ *
+ * `segments` must be sorted ascending by date and cover the month: the first
+ * entry's rate is the rate in effect at monthStart (clamp its date to
+ * monthStart). Dates outside [monthStart, monthEnd] are clamped. Falls back to
+ * currentDaily × 30.4 when there are no usable segments.
+ */
+export function computeProratedCeiling(
+  segments: BudgetRateSegment[],
+  currentDaily: number,
+  monthStartIso: string,
+  monthEndIso: string,
+): number {
+  const startMs = Date.parse(`${monthStartIso}T00:00:00Z`);
+  const endMs = Date.parse(`${monthEndIso}T00:00:00Z`);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs < startMs) {
+    return currentDaily * DAYS_PER_MONTH;
+  }
+  const daysInMonth = Math.round((endMs - startMs) / 86_400_000) + 1;
+  const clean = segments
+    .map((s) => ({ ms: Date.parse(`${s.date}T00:00:00Z`), rate: s.dailyRate }))
+    .filter((s) => Number.isFinite(s.ms))
+    .sort((a, b) => a.ms - b.ms);
+  if (clean.length === 0) return currentDaily * DAYS_PER_MONTH;
+
+  let weighted = 0;
+  for (let i = 0; i < clean.length; i++) {
+    const segStart = Math.max(clean[i].ms, startMs);
+    const segEndExclusive = i + 1 < clean.length ? clean[i + 1].ms : endMs + 86_400_000;
+    const segEnd = Math.min(segEndExclusive, endMs + 86_400_000);
+    if (segEnd <= segStart) continue;
+    const days = Math.round((segEnd - segStart) / 86_400_000);
+    weighted += clean[i].rate * days;
+  }
+  const weightedAvg = daysInMonth > 0 ? weighted / daysInMonth : currentDaily;
+  return weightedAvg * DAYS_PER_MONTH;
+}
+
+// ── §5 per-campaign Google pacing card ──
+
+export type GooglePacingStatus = 'on-track' | 'under' | 'over' | 'no-data';
+
+export interface GooglePacingCard {
+  /** Daily (avg daily budget) vs Total (campaign total over a flight). */
+  pacingType: 'Daily' | 'Total';
+  channelGroup: GoogleChannelGroup;
+  shared: boolean;
+  sharedCount: number | null;
+  /** Planned monthly allocation ($) — the source of truth, stays monthly. */
+  target: number;
+  /** Served spend this month ($) — labeled "served", never "billed" (§7). */
+  actual: number;
+  /** Current average daily rate ($). */
+  dailyBudget: number;
+  /** Fractional days left in the pacing window. */
+  daysRemaining: number;
+  /** §5 the real cap on a daily campaign: daily × 30.4, reprorated (§9). */
+  monthlyCeiling: number;
+  /** §5 target rate so its 30.4 ceiling clears the allocation: target / 30.4. */
+  recommendedDaily: number;
+  /** Month-end projection of served spend. */
+  projected: number;
+  status: GooglePacingStatus;
+  /** §5 BUDGET_CONSTRAINED — at cap with headroom (raise budget). */
+  budgetLimited: boolean;
+  /** §5 an ad is disapproved — fix the ads, never raise the budget. */
+  disapproved: boolean;
+  /** True when the current rate's ceiling can't clear the allocation (raise it). */
+  ceilingShortOfTarget: boolean;
+}
+
+const ONTRACK_FLOOR = 0.9; // §5 wide band — absorbs Google's 2× daily swings
+
+/**
+ * §5 — the four-metric Google pacing card for one campaign line: monthly
+ * ceiling, days remaining, projected, and the recommended daily rate, plus a
+ * pace-adjusted status. The on-track band is deliberately WIDE: a campaign can
+ * spend up to 2× its daily rate on a busy day, so the status keys off the
+ * MONTHLY projection — short of target → under; projected above the ceiling →
+ * over (running hot) — never a single high day. Budget-limited and disapproved
+ * are surfaced separately because they need opposite fixes (raise budget vs fix
+ * ads). Total-budget campaigns pace to their own end date, so variance is near
+ * zero by design — an under there signals an interruption, not a pacing miss.
+ */
+export function buildGooglePacingCard(
+  ad: PacerAd,
+  nowMs: number,
+  timeZone: string,
+): GooglePacingCard {
+  const calc = buildPacerCalc(ad, nowMs, timeZone);
+  const pacingType = googlePacingTypeLabel(ad.googleBudgetPeriod, ad.budgetType);
+  const target = calc.budget;
+  const actual = calc.spent;
+  const dailyBudget = calc.dailyBudget;
+  // Ceiling: prefer the server-reprorated value (§9); else current daily × 30.4.
+  const ceiling = num(ad.googleProratedCeiling) ?? dailyBudget * DAYS_PER_MONTH;
+  const recommendedDaily = target > 0 ? target / DAYS_PER_MONTH : 0;
+  const ceilingShortOfTarget = pacingType === 'Daily' && ceiling > 0 && ceiling < target;
+
+  const budgetLimited = !!ad.googleBudgetConstrained;
+  const disapproved = !!ad.googleAdsDisapproved;
+
+  let status: GooglePacingStatus;
+  if (target <= 0) {
+    status = 'no-data';
+  } else if (pacingType === 'Total') {
+    // §5/§6: Google paces a total budget to its end date and won't exceed it,
+    // so variance is near zero by design. Only a real shortfall (interruption)
+    // shows as under; otherwise on-track. Never "over".
+    status = calc.projected < target * ONTRACK_FLOOR ? 'under' : 'on-track';
+  } else {
+    // Daily: alert on the monthly projection, not a single 2× day.
+    if (calc.projected > ceiling && ceiling > 0) status = 'over';
+    else if (calc.projected < target * ONTRACK_FLOOR) status = 'under';
+    else status = 'on-track';
+  }
+
+  return {
+    pacingType,
+    channelGroup: mapChannelGroup(ad.googleChannelType),
+    shared: isSharedBudget(ad.googleBudgetReferenceCount),
+    sharedCount: isSharedBudget(ad.googleBudgetReferenceCount)
+      ? ad.googleBudgetReferenceCount ?? null
+      : null,
+    target,
+    actual,
+    dailyBudget,
+    daysRemaining: calc.daysLeft,
+    monthlyCeiling: ceiling,
+    recommendedDaily,
+    projected: calc.projected,
+    status,
+    budgetLimited,
+    disapproved,
+    ceilingShortOfTarget,
   };
 }
 

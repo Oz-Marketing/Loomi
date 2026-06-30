@@ -2,12 +2,38 @@ import { describe, it, expect } from 'vitest';
 import {
   mapChannelGroup,
   mapGoogleBudgetType,
+  googlePacingTypeLabel,
+  isSharedBudget,
+  computeProratedCeiling,
+  buildGooglePacingCard,
   groupByChannel,
   accountDailyRollup,
   reconcileImport,
   type ImportedGoogleCampaign,
 } from './google-pacer-calc';
 import type { PacerAd } from './types';
+
+// ImportedGoogleCampaign factory with the §2/§5 fields defaulted.
+function imp(overrides: Partial<ImportedGoogleCampaign>): ImportedGoogleCampaign {
+  return {
+    id: 'C',
+    name: 'Campaign',
+    status: 'ENABLED',
+    channelType: 'SEARCH',
+    dailyBudget: 50,
+    totalBudget: null,
+    budgetResourceName: 'b1',
+    startDate: '2026-06-01',
+    endDate: null,
+    budgetReferenceCount: 1,
+    budgetExplicitlyShared: false,
+    budgetPeriod: 'DAILY',
+    primaryStatus: 'ELIGIBLE',
+    budgetConstrained: false,
+    adsDisapproved: false,
+    ...overrides,
+  };
+}
 
 const NOW = Date.UTC(2026, 5, 15, 18, 0, 0); // 2026-06-15 12:00 MDT
 const TZ = 'America/Denver';
@@ -45,11 +71,13 @@ describe('mapChannelGroup (§8 — PMax its own group)', () => {
     expect(mapChannelGroup('SHOPPING')).toBe('Shopping');
     expect(mapChannelGroup('PERFORMANCE_MAX')).toBe('PMax');
   });
-  it('keeps PMax its own group (never decomposed) and is case-insensitive', () => {
+  it('keeps PMax + Demand Gen their own groups (never decomposed), case-insensitive', () => {
     expect(mapChannelGroup('performance_max')).toBe('PMax');
+    expect(mapChannelGroup('DEMAND_GEN')).toBe('Demand Gen');
+    expect(mapChannelGroup('demand_gen')).toBe('Demand Gen');
   });
   it('falls unknown/empty to Other rather than guessing', () => {
-    expect(mapChannelGroup('DEMAND_GEN')).toBe('Other');
+    expect(mapChannelGroup('UNKNOWN_TYPE')).toBe('Other');
     expect(mapChannelGroup('')).toBe('Other');
     expect(mapChannelGroup(null)).toBe('Other');
   });
@@ -140,28 +168,14 @@ describe('accountDailyRollup (§8 daily set vs needed)', () => {
 
 describe('reconcileImport (adds / removes / changes, never overwrites)', () => {
   const imported: ImportedGoogleCampaign[] = [
-    {
-      id: 'C1',
-      name: 'Search Brand',
-      status: 'ENABLED',
-      channelType: 'SEARCH',
-      dailyBudget: 50,
-      totalBudget: null,
-      budgetResourceName: 'b1',
-      startDate: '2026-06-01',
-      endDate: null,
-    },
-    {
+    imp({ id: 'C1', name: 'Search Brand', channelType: 'SEARCH', dailyBudget: 50, budgetResourceName: 'b1' }),
+    imp({
       id: 'C2',
       name: 'PMax Renamed',
-      status: 'ENABLED',
       channelType: 'PERFORMANCE_MAX',
       dailyBudget: 100,
-      totalBudget: null,
       budgetResourceName: 'b2',
-      startDate: '2026-06-01',
-      endDate: null,
-    },
+    }),
   ];
 
   it('flags a new campaign as an add', () => {
@@ -191,5 +205,103 @@ describe('reconcileImport (adds / removes / changes, never overwrites)', () => {
     const diff = reconcileImport(imported, existing);
     expect(diff.removes).toHaveLength(0); // the Meta line is not a Google card
     expect(diff.adds).toHaveLength(2);
+  });
+});
+
+describe('googlePacingTypeLabel (§2 Daily/Total)', () => {
+  it('prefers the platform period when present', () => {
+    expect(googlePacingTypeLabel('CUSTOM_PERIOD', 'Daily')).toBe('Total');
+    expect(googlePacingTypeLabel('DAILY', 'Lifetime')).toBe('Daily');
+  });
+  it('falls back to the budget type when period is absent', () => {
+    expect(googlePacingTypeLabel(null, 'Lifetime')).toBe('Total');
+    expect(googlePacingTypeLabel(undefined, 'Daily')).toBe('Daily');
+  });
+});
+
+describe('isSharedBudget (§2 — keys off reference_count > 1)', () => {
+  it('only flags genuinely-shared budgets', () => {
+    expect(isSharedBudget(1)).toBe(false); // shareable-but-single is NOT shared
+    expect(isSharedBudget(2)).toBe(true);
+    expect(isSharedBudget(0)).toBe(false);
+    expect(isSharedBudget(null)).toBe(false);
+  });
+});
+
+describe('computeProratedCeiling (§9)', () => {
+  it('constant rate → daily × 30.4', () => {
+    expect(computeProratedCeiling([], 50, '2026-06-01', '2026-06-30')).toBeCloseTo(50 * 30.4);
+  });
+  it('reprorates a mid-month change by calendar-day weight', () => {
+    // $50/day for the first 15 days, $100/day for the last 15 → avg $75 → ×30.4.
+    const ceiling = computeProratedCeiling(
+      [
+        { date: '2026-06-01', dailyRate: 50 },
+        { date: '2026-06-16', dailyRate: 100 },
+      ],
+      100,
+      '2026-06-01',
+      '2026-06-30',
+    );
+    expect(ceiling).toBeCloseTo(75 * 30.4);
+  });
+});
+
+describe('buildGooglePacingCard (§5 ceiling card + status)', () => {
+  it('on-track daily campaign: ceiling = daily × 30.4, rec = target / 30.4', () => {
+    const card = buildGooglePacingCard(gAd({}), NOW, TZ);
+    expect(card.pacingType).toBe('Daily');
+    expect(card.shared).toBe(false);
+    expect(card.monthlyCeiling).toBeCloseTo(50 * 30.4);
+    expect(card.recommendedDaily).toBeCloseTo(1000 / 30.4);
+    expect(card.status).toBe('on-track');
+  });
+
+  it('prefers the server-reprorated ceiling and flags over when projection exceeds it', () => {
+    const card = buildGooglePacingCard(gAd({ googleProratedCeiling: '500' }), NOW, TZ);
+    expect(card.monthlyCeiling).toBeCloseTo(500);
+    expect(card.status).toBe('over');
+  });
+
+  it('disapproved underspender → under + disapproved flag (fix ads, not budget)', () => {
+    const card = buildGooglePacingCard(
+      gAd({ pacerActual: '100', pacerDailyBudget: '10', googleAdsDisapproved: true }),
+      NOW,
+      TZ,
+    );
+    expect(card.status).toBe('under');
+    expect(card.disapproved).toBe(true);
+  });
+
+  it('budget-limited: ceiling under target → ceilingShortOfTarget + budgetLimited', () => {
+    const card = buildGooglePacingCard(
+      gAd({ pacerDailyBudget: '20', googleBudgetConstrained: true }),
+      NOW,
+      TZ,
+    );
+    expect(card.ceilingShortOfTarget).toBe(true); // 20 × 30.4 = 608 < 1000 target
+    expect(card.budgetLimited).toBe(true);
+  });
+
+  it('shared budget surfaces the group size', () => {
+    const card = buildGooglePacingCard(gAd({ googleBudgetReferenceCount: 3 }), NOW, TZ);
+    expect(card.shared).toBe(true);
+    expect(card.sharedCount).toBe(3);
+  });
+
+  it('total-budget campaign never reads "over" (paces to its own end date)', () => {
+    const onTrack = buildGooglePacingCard(
+      gAd({ budgetType: 'Lifetime', googleBudgetPeriod: 'CUSTOM_PERIOD', pacerActual: '950', pacerDailyBudget: null }),
+      NOW,
+      TZ,
+    );
+    expect(onTrack.pacingType).toBe('Total');
+    expect(onTrack.status).toBe('on-track');
+    const interrupted = buildGooglePacingCard(
+      gAd({ budgetType: 'Lifetime', googleBudgetPeriod: 'CUSTOM_PERIOD', pacerActual: '100', pacerDailyBudget: null }),
+      NOW,
+      TZ,
+    );
+    expect(interrupted.status).toBe('under');
   });
 });

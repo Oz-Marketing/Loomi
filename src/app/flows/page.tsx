@@ -404,6 +404,19 @@ function FlowsPageBody({
     if (nextName === null) return;
     const trimmed = nextName.trim();
     if (!trimmed || trimmed === flow.name) return;
+    // Quick client-side guard against duplicate names in the same account
+    // (case-insensitive) so the user gets immediate feedback. The server
+    // enforces this authoritatively too.
+    const clash = allRows.some(
+      (r) =>
+        r.id !== flow.id &&
+        (r.accountKey ?? null) === (flow.accountKey ?? null) &&
+        r.name.trim().toLowerCase() === trimmed.toLowerCase(),
+    );
+    if (clash) {
+      toast.error(`A flow named "${trimmed}" already exists in this account.`);
+      return;
+    }
     const res = await fetch(`/api/flows/${flow.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

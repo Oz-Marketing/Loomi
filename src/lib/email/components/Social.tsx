@@ -17,50 +17,82 @@ export interface SocialProps {
   variant?: 'color' | 'mono-light' | 'mono-dark';
 }
 
-const DEFAULT_ICONS: Record<SocialProps['variant'] & string, Record<string, string>> = {
-  color: {
-    facebook: 'https://cdn-icons-png.flaticon.com/512/124/124010.png',
-    instagram: 'https://cdn-icons-png.flaticon.com/512/2111/2111463.png',
-    twitter: 'https://cdn-icons-png.flaticon.com/512/733/733579.png',
-    youtube: 'https://cdn-icons-png.flaticon.com/512/1384/1384060.png',
-    linkedin: 'https://cdn-icons-png.flaticon.com/512/174/174857.png',
-    tiktok: 'https://cdn-icons-png.flaticon.com/512/3046/3046121.png',
-  },
-  'mono-light': {
-    facebook: 'https://cdn-icons-png.flaticon.com/512/733/733547.png',
-    instagram: 'https://cdn-icons-png.flaticon.com/512/733/733558.png',
-    twitter: 'https://cdn-icons-png.flaticon.com/512/733/733579.png',
-    youtube: 'https://cdn-icons-png.flaticon.com/512/733/733646.png',
-    linkedin: 'https://cdn-icons-png.flaticon.com/512/733/733561.png',
-    tiktok: 'https://cdn-icons-png.flaticon.com/512/3046/3046121.png',
-  },
-  'mono-dark': {
-    facebook: 'https://cdn-icons-png.flaticon.com/512/0/747.png',
-    instagram: 'https://cdn-icons-png.flaticon.com/512/87/87390.png',
-    twitter: 'https://cdn-icons-png.flaticon.com/512/733/733579.png',
-    youtube: 'https://cdn-icons-png.flaticon.com/512/2111/2111748.png',
-    linkedin: 'https://cdn-icons-png.flaticon.com/512/174/174857.png',
-    tiktok: 'https://cdn-icons-png.flaticon.com/512/3046/3046121.png',
-  },
+// Map our platform keys to Icons8 icon slugs.
+const ICON_SLUGS: Record<string, string> = {
+  facebook: 'facebook-new',
+  instagram: 'instagram-new',
+  twitter: 'twitterx',
+  x: 'twitterx',
+  youtube: 'youtube-play',
+  linkedin: 'linkedin',
+  tiktok: 'tiktok',
 };
 
-export const SocialBlock: React.FC<SocialProps> = ({
-  links = [],
-  iconSize = 28,
-  spacing = 8,
-  align = 'center',
-  variant = 'color',
-}) => {
-  if (!links.length) return null;
+/**
+ * Build an email-safe PNG icon URL from Icons8's static CDN. The colour is
+ * baked into the URL, so each variant is genuinely distinct:
+ *   - color      → full-colour brand icon
+ *   - mono-light → solid white glyph
+ *   - mono-dark  → solid black glyph
+ * (The previous hand-picked flaticon IDs reused the same colour icon across
+ * variants for twitter/tiktok/linkedin, so those never switched to B/W.)
+ */
+function iconUrl(platform: string, variant: NonNullable<SocialProps['variant']>): string {
+  const slug = ICON_SLUGS[platform.toLowerCase()] ?? ICON_SLUGS.facebook;
+  if (variant === 'mono-light') return `https://img.icons8.com/ios-filled/96/FFFFFF/${slug}.png`;
+  if (variant === 'mono-dark') return `https://img.icons8.com/ios-filled/96/000000/${slug}.png`;
+  return `https://img.icons8.com/color/96/${slug}.png`;
+}
 
-  const iconMap = DEFAULT_ICONS[variant] || DEFAULT_ICONS.color;
+/**
+ * Resolve the link list from either the flat `link{n}-platform` /
+ * `link{n}-url` props the editor panel writes, or a `links[]` array.
+ *
+ * Flat props win when present: the V2 properties panel edits the block via
+ * the flat schema (component-schemas.ts) even though a freshly-created block
+ * is seeded with a `links[]` array, so preferring flat keeps the canvas in
+ * sync with what the user is actually editing. Entries without a URL are
+ * dropped so empty seed rows don't render stray icons. Keeping this inside
+ * the component means every render path — live canvas, compiled email,
+ * anywhere BLOCK_COMPONENTS is used — behaves identically.
+ */
+function resolveLinks(props: SocialProps & Record<string, unknown>): SocialLink[] {
+  const flat: SocialLink[] = [];
+  for (let n = 1; n <= 6; n++) {
+    const url = props[`link${n}-url`];
+    if (typeof url !== 'string' || !url.trim()) continue;
+    const platform = props[`link${n}-platform`];
+    flat.push({
+      platform: typeof platform === 'string' && platform ? platform : 'facebook',
+      url: url.trim(),
+    });
+  }
+  if (flat.length) return flat;
+
+  if (Array.isArray(props.links)) {
+    return props.links.filter(
+      (l): l is SocialLink => Boolean(l && typeof l.url === 'string' && l.url.trim()),
+    );
+  }
+  return [];
+}
+
+export const SocialBlock: React.FC<SocialProps & Record<string, unknown>> = (props) => {
+  const {
+    iconSize = 28,
+    spacing = 8,
+    align = 'center',
+    variant = 'color',
+  } = props;
+  const links = resolveLinks(props);
+  if (!links.length) return null;
 
   return (
     <Section style={{ textAlign: align }}>
       <Row>
         <Column align={align}>
           {links.map((link, i) => {
-            const icon = link.iconUrl || iconMap[link.platform.toLowerCase()] || iconMap.facebook;
+            const icon = link.iconUrl || iconUrl(link.platform, variant);
             return (
               <Link
                 key={i}

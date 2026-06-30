@@ -154,6 +154,21 @@ export function ContactsTable({
 
   // Sort
   const sorted = [...contacts].sort((a, b) => {
+    // Date-added sorts chronologically; missing/invalid dates always sort
+    // last regardless of direction so blanks don't bubble to the top.
+    if (sortKey === 'dateAdded') {
+      const aTime = a.dateAdded ? new Date(a.dateAdded).getTime() : NaN;
+      const bTime = b.dateAdded ? new Date(b.dateAdded).getTime() : NaN;
+      const aMissing = Number.isNaN(aTime);
+      const bMissing = Number.isNaN(bTime);
+      if (aMissing || bMissing) {
+        if (aMissing && bMissing) return 0;
+        return aMissing ? 1 : -1;
+      }
+      const cmp = aTime - bTime;
+      return sortDir === 'asc' ? cmp : -cmp;
+    }
+
     let aVal = '';
     let bVal = '';
     switch (sortKey) {
@@ -164,10 +179,6 @@ export function ContactsTable({
       case 'email':
         aVal = (a.email || '').toLowerCase();
         bVal = (b.email || '').toLowerCase();
-        break;
-      case 'dateAdded':
-        aVal = a.dateAdded || '';
-        bVal = b.dateAdded || '';
         break;
       case '_dealer':
         aVal = (a._dealer || '').toLowerCase();

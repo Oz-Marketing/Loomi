@@ -51,6 +51,33 @@ interface ListTarget {
   accountKey: string;
 }
 
+const CANONICAL_FIELD_SET: ReadonlySet<string> = new Set(CONTACT_FIELDS);
+
+/**
+ * Validate the column→field mapping client-side, mirroring the server's
+ * parseMapping rules. Surfaces a readable, per-column message before we
+ * submit instead of letting the API reject the payload with an opaque 400.
+ * Returns an error string naming the offending column, or null when valid.
+ */
+function validateMapping(mapping: Mapping): string | null {
+  for (const [header, target] of Object.entries(mapping)) {
+    if (typeof target !== 'string' || !target) {
+      return `Column "${header}" has no field selected — pick a field or choose "Ignore".`;
+    }
+    if (target === IGNORE_FIELD) continue;
+    if (target.startsWith('custom:')) {
+      if (!target.slice('custom:'.length).trim()) {
+        return `Column "${header}" is mapped to a custom field with no name.`;
+      }
+      continue;
+    }
+    if (!CANONICAL_FIELD_SET.has(target)) {
+      return `Column "${header}" is mapped to an unknown field "${target}".`;
+    }
+  }
+  return null;
+}
+
 // User-friendly labels for the canonical fields dropdown.
 const FIELD_LABELS: Record<ContactField, string> = {
   email: 'Email',
@@ -236,6 +263,11 @@ export default function ContactsImportPage() {
 
   async function runDryRun() {
     if (!file || !selectedAccountKey || !parsed) return;
+    const mappingError = validateMapping(mapping);
+    if (mappingError) {
+      toast.error(mappingError);
+      return;
+    }
     setDryRunning(true);
     try {
       const form = new FormData();
@@ -261,6 +293,11 @@ export default function ContactsImportPage() {
 
   async function commitImport() {
     if (!file || !selectedAccountKey || !parsed) return;
+    const mappingError = validateMapping(mapping);
+    if (mappingError) {
+      toast.error(mappingError);
+      return;
+    }
     setCommitting(true);
     try {
       const form = new FormData();

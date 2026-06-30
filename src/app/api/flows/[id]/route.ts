@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { forbidTemplateMutation } from '@/lib/flows/route-guards';
 import {
   archiveFlow,
+  flowNameTaken,
   getFlow,
   updateFlow,
   type FlowSettings,
@@ -53,7 +54,25 @@ export async function PATCH(
     description?: string | null;
     settings?: FlowSettings;
   } = {};
-  if (typeof body?.name === 'string') data.name = body.name;
+  if (typeof body?.name === 'string') {
+    const trimmed = body.name.trim();
+    if (!trimmed) {
+      return NextResponse.json({ error: 'name cannot be empty' }, { status: 400 });
+    }
+    if (
+      await flowNameTaken({
+        name: trimmed,
+        accountKey: existing.accountKey,
+        excludeId: id,
+      })
+    ) {
+      return NextResponse.json(
+        { error: `A flow named "${trimmed}" already exists in this account.` },
+        { status: 409 },
+      );
+    }
+    data.name = trimmed;
+  }
   if (body?.description === null || typeof body?.description === 'string') {
     data.description = body.description;
   }

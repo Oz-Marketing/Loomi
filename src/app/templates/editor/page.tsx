@@ -8211,7 +8211,25 @@ export default function TemplateEditorPage() {
     let content = "";
     if (format === "compiled") {
       if (!previewHtml) return;
+      // Re-render with pretty:true so the copied HTML is indented rather
+      // than the single minified line used for the live iframe preview.
       content = previewHtml;
+      try {
+        const res = await fetch("/api/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            html: code,
+            project: "core",
+            previewValues: previewVariableMap,
+            pretty: true,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data.html) content = data.html;
+      } catch {
+        // Network/parse failure → fall back to the minified preview HTML.
+      }
     } else if (format === "source") {
       if (!code) return;
       content = code;

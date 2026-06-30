@@ -66,7 +66,7 @@ export function ContactsToolbar({
             type="text"
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Search name, email, phone, vehicle, tag..."
+            placeholder="Search name, email, phone, source..."
             className="w-full pl-9 pr-3 py-2 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] focus:outline-none focus:border-[var(--primary)]"
           />
         </div>

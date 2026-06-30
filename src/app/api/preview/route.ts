@@ -38,11 +38,11 @@ function applyPreviewValues(
  * Legacy Maizzle <x-base> templates are no longer supported; they fall through
  * to the HTML pass-through path and render unmodified (raw markup visible).
  */
-async function compileToHtml(content: string): Promise<string> {
+async function compileToHtml(content: string, opts: { pretty?: boolean } = {}): Promise<string> {
   if (isV2Template(content)) {
     const tpl = parseV2Template(content);
     if (!tpl) throw new Error('Invalid v2 template JSON');
-    return renderEmailTemplate(tpl);
+    return renderEmailTemplate(tpl, { pretty: opts.pretty ?? false });
   }
   return content;
 }
@@ -54,12 +54,12 @@ export async function POST(req: NextRequest) {
   if (error) return error;
 
   try {
-    const { html, previewValues } = await req.json();
+    const { html, previewValues, pretty } = await req.json();
     if (!html) {
       return NextResponse.json({ error: 'No HTML provided' }, { status: 400 });
     }
 
-    const rendered = await compileToHtml(html);
+    const rendered = await compileToHtml(html, { pretty: pretty === true });
     const resolved = applyPreviewValues(
       rendered,
       previewValues && typeof previewValues === 'object'

@@ -461,6 +461,37 @@ export async function getFlow(
   };
 }
 
+/**
+ * Returns true when another flow in the same account already uses `name`
+ * (trimmed, case-insensitive). Archived flows are ignored so a name freed
+ * up by archiving can be reused. `excludeId` skips the flow being renamed
+ * so re-saving an unchanged name doesn't collide with itself.
+ */
+export async function flowNameTaken(opts: {
+  name: string;
+  accountKey: string | null;
+  excludeId?: string;
+}): Promise<boolean> {
+  const name = opts.name.trim();
+  if (!name) return false;
+  // Normalise the account scope to null for the "global" group. Callers may
+  // pass a serialized flow whose accountKey is '' (getFlow renders null as an
+  // empty string), and `'' ?? null` would stay '' — which never matches the
+  // NULL rows the DB actually stores, silently skipping the uniqueness check.
+  const accountKey =
+    typeof opts.accountKey === 'string' && opts.accountKey.trim() ? opts.accountKey : null;
+  const existing = await prisma.loomiFlow.findFirst({
+    where: {
+      accountKey,
+      name: { equals: name, mode: 'insensitive' },
+      status: { not: 'archived' },
+      ...(opts.excludeId ? { id: { not: opts.excludeId } } : {}),
+    },
+    select: { id: true },
+  });
+  return Boolean(existing);
+}
+
 export async function createFlow(data: {
   name: string;
   description?: string;

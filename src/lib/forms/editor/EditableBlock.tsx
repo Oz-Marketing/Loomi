@@ -52,7 +52,13 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
   const wrapperStyle: React.CSSProperties = {
     position: 'relative',
     transform: CSS.Transform.toString(transform),
-    transition,
+    // Merge dnd-kit's transform transition with our outline/opacity ones in
+    // the single `transition` shorthand. Mixing the shorthand with the
+    // longhand transitionProperty/transitionDuration warns in React (and can
+    // cause one to clobber the other on rerender), so keep it all shorthand.
+    transition: [transition, 'outline-color 120ms', 'opacity 120ms']
+      .filter(Boolean)
+      .join(', '),
     cursor: 'grab',
     opacity: isDragging ? 0.4 : 1,
     // Outline (not inset boxShadow) so the selection ring sits on top of section/grid backgrounds.
@@ -62,8 +68,6 @@ export function EditableBlock({ block, children }: EditableBlockProps) {
         ? '1px solid var(--primary)'
         : 'none',
     outlineOffset: isSelected || showHover ? '-2px' : 0,
-    transitionProperty: 'outline-color, opacity',
-    transitionDuration: '120ms',
   };
 
   return (

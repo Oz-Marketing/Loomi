@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import {
   createFlow,
+  flowNameTaken,
   listFlows,
   type FlowStatusFilter,
 } from '@/lib/services/loomi-flows';
@@ -90,6 +91,13 @@ export async function POST(req: NextRequest) {
   const scoped = clientAccountKeysFromSession(session!);
   if (accountKey && scoped && !scoped.includes(accountKey)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  if (await flowNameTaken({ name, accountKey })) {
+    return NextResponse.json(
+      { error: `A flow named "${name}" already exists in this account.` },
+      { status: 409 },
+    );
   }
 
   const flow = await createFlow({

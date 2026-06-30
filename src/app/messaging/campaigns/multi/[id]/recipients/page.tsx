@@ -378,11 +378,18 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
   const effectiveSmsSelection = splitAudiences ? smsSelection : emailSelection;
   const smsListId = effectiveSmsSelection.kind === 'list' ? effectiveSmsSelection.id : null;
 
+  // Track list IDs we've already kicked off a fetch for, so each list is
+  // fetched exactly once. Using a ref (rather than the state Maps/Sets) keeps
+  // this out of the effect deps — including listMembersById/loadingListIds
+  // there caused the effect to re-run on every fetch and spin forever.
+  const fetchedListIdsRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     const candidates = [emailListId, smsListId].filter((x): x is string => Boolean(x));
-    const needed = candidates.filter((listId) => !listMembersById.has(listId) && !loadingListIds.has(listId));
+    const needed = candidates.filter((listId) => !fetchedListIdsRef.current.has(listId));
     if (needed.length === 0) return;
 
+    for (const listId of needed) fetchedListIdsRef.current.add(listId);
     setLoadingListIds((prev) => {
       const next = new Set(prev);
       for (const listId of needed) next.add(listId);
@@ -426,7 +433,7 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     return () => {
       cancelled = true;
     };
-  }, [emailListId, smsListId, listMembersById, loadingListIds]);
+  }, [emailListId, smsListId]);
 
   const emailListMembers = emailListId ? listMembersById.get(emailListId) ?? null : null;
   const smsListMembers = smsListId ? listMembersById.get(smsListId) ?? null : null;

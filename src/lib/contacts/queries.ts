@@ -143,6 +143,7 @@ export function searchClause(query: string): Prisma.ContactWhereInput | null {
       { fullName: { contains: trimmed, mode: 'insensitive' } },
       { email: { contains: trimmed, mode: 'insensitive' } },
       { phone: { contains: trimmed.replace(/\D/g, '') || trimmed } },
+      { source: { contains: trimmed, mode: 'insensitive' } },
     ],
   };
 }

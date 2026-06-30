@@ -21,14 +21,14 @@ import * as React from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import {
-  AdjustmentsHorizontalIcon,
   ArchiveBoxArrowDownIcon,
-  ChartBarIcon,
   ExclamationTriangleIcon,
-  GlobeAltIcon,
 } from '@heroicons/react/24/outline';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import type { LandingPageDetail } from '@/lib/services/landing-pages';
+
+const SETTINGS_TABS = ['Basics', 'SEO', 'Tracking'] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number];
 
 export interface LandingPageSettingsProps {
   page: LandingPageDetail;
@@ -56,6 +56,7 @@ export function LandingPageSettings({ page, onUpdated }: LandingPageSettingsProp
     customHeadHtml: page.customHeadHtml ?? '',
     customBodyEndHtml: page.customBodyEndHtml ?? '',
   });
+  const [activeTab, setActiveTab] = React.useState<SettingsTab>('Basics');
   const [saving, setSaving] = React.useState<string | null>(null);
   const [deleting, setDeleting] = React.useState(false);
   const [savingAsTemplate, setSavingAsTemplate] = React.useState(false);
@@ -174,23 +175,33 @@ export function LandingPageSettings({ page, onUpdated }: LandingPageSettingsProp
 
   return (
     <div className="space-y-4">
-      {/* Top row — Basics + SEO are roughly the same height, so they
-          sit side-by-side on wide screens. Stacks on smaller widths. */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* Tab bar */}
+      <div className="flex gap-1 rounded-xl bg-[var(--muted)] p-1">
+        {SETTINGS_TABS.map((tab) => (
+          <button
+            key={tab}
+            type="button"
+            onClick={() => setActiveTab(tab)}
+            className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+              activeTab === tab
+                ? 'bg-[var(--card)] text-[var(--foreground)] shadow-sm'
+                : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+            }`}
+          >
+            {tab === 'SEO' ? 'SEO & Sharing' : tab === 'Tracking' ? 'Tracking & Analytics' : tab}
+          </button>
+        ))}
+      </div>
+
       {/* Basics */}
-      <SettingsCard
-        icon={<AdjustmentsHorizontalIcon className="w-4 h-4" />}
-        title="Basics"
-      >
-        <div className="space-y-4">
+      {activeTab === 'Basics' && (
+        <section className="glass-card rounded-2xl p-5 space-y-4">
           <Field label="Name">
             <input
               value={draft.name}
               onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
               onBlur={() => {
-                if (draft.name.trim() && draft.name !== page.name) {
-                  void patch('name', draft.name);
-                }
+                if (draft.name.trim() && draft.name !== page.name) void patch('name', draft.name);
               }}
               className={inputClass}
             />
@@ -200,9 +211,7 @@ export function LandingPageSettings({ page, onUpdated }: LandingPageSettingsProp
               value={draft.slug}
               onChange={(e) => setDraft((d) => ({ ...d, slug: e.target.value }))}
               onBlur={() => {
-                if (draft.slug.trim() && draft.slug !== page.slug) {
-                  void patch('slug', draft.slug);
-                }
+                if (draft.slug.trim() && draft.slug !== page.slug) void patch('slug', draft.slug);
               }}
               className={inputClass}
             />
@@ -210,96 +219,74 @@ export function LandingPageSettings({ page, onUpdated }: LandingPageSettingsProp
               {page.publicUrl}
             </p>
           </Field>
-          {/* Status toggle removed — the publish switch in the page
-              header is the canonical control; duplicating it here was
-              redundant and risked the two getting out of sync. */}
-        </div>
-      </SettingsCard>
+          <div className="border-t border-[var(--border)] pt-4">
+            <p className="text-xs text-[var(--muted-foreground)] mb-3">
+              Snapshot this page&apos;s content + settings so you can spin up new pages from it later.
+              Saved templates appear in the New Landing Page modal.
+            </p>
+            <button
+              type="button"
+              onClick={() => void saveAsTemplate()}
+              disabled={savingAsTemplate}
+              className="inline-flex items-center gap-1.5 px-3 h-9 text-sm rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:bg-[var(--muted)] disabled:opacity-50 transition-colors"
+            >
+              <ArchiveBoxArrowDownIcon className="w-4 h-4" />
+              {savingAsTemplate ? 'Saving…' : 'Save as template'}
+            </button>
+          </div>
+        </section>
+      )}
 
-      {/* SEO */}
-      <SettingsCard
-        icon={<GlobeAltIcon className="w-4 h-4" />}
-        title="SEO & sharing"
-      >
-        <div className="space-y-4">
-          <Field
-            label="Page title"
-            hint="Appears in the browser tab and on search-engine results."
-          >
+      {/* SEO & Sharing */}
+      {activeTab === 'SEO' && (
+        <section className="glass-card rounded-2xl p-5 space-y-4">
+          <Field label="Page title" hint="Appears in the browser tab and on search-engine results.">
             <input
               value={draft.seoTitle}
               onChange={(e) => setDraft((d) => ({ ...d, seoTitle: e.target.value }))}
               onBlur={() => {
-                if (draft.seoTitle !== (page.seoTitle ?? '')) {
-                  void patch('seoTitle', draft.seoTitle);
-                }
+                if (draft.seoTitle !== (page.seoTitle ?? '')) void patch('seoTitle', draft.seoTitle);
               }}
               placeholder="Falls back to the first heading on the page"
               className={inputClass}
             />
           </Field>
-          <Field
-            label="Meta description"
-            hint="The blurb shown under the title in search results and link previews."
-          >
+          <Field label="Meta description" hint="The blurb shown under the title in search results and link previews.">
             <textarea
               rows={2}
               value={draft.seoDescription}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, seoDescription: e.target.value }))
-              }
+              onChange={(e) => setDraft((d) => ({ ...d, seoDescription: e.target.value }))}
               onBlur={() => {
-                if (draft.seoDescription !== (page.seoDescription ?? '')) {
-                  void patch('seoDescription', draft.seoDescription);
-                }
+                if (draft.seoDescription !== (page.seoDescription ?? '')) void patch('seoDescription', draft.seoDescription);
               }}
               className={inputClass}
             />
           </Field>
-          <Field
-            label="Social share image (OG)"
-            hint="1200×630 image used by Slack, Twitter, iMessage previews."
-          >
+          <Field label="Social share image (OG)" hint="1200×630 image used by Slack, Twitter, iMessage previews.">
             <input
               type="url"
               value={draft.ogImageUrl}
               onChange={(e) => setDraft((d) => ({ ...d, ogImageUrl: e.target.value }))}
               onBlur={() => {
-                if (draft.ogImageUrl !== (page.ogImageUrl ?? '')) {
-                  void patch('ogImageUrl', draft.ogImageUrl);
-                }
+                if (draft.ogImageUrl !== (page.ogImageUrl ?? '')) void patch('ogImageUrl', draft.ogImageUrl);
               }}
               placeholder="https://…/og.png"
               className={inputClass}
             />
           </Field>
-          <Field
-            label="Browser tab icon (favicon)"
-            hint="Small icon shown in the browser tab. Square PNG/ICO, 32×32 or 64×64. Leave blank to use the default."
-          >
+          <Field label="Browser tab icon (favicon)" hint="Square PNG/ICO, 32×32 or 64×64. Leave blank to use the default.">
             <input
               type="url"
               value={draft.faviconUrl}
               onChange={(e) => setDraft((d) => ({ ...d, faviconUrl: e.target.value }))}
               onBlur={() => {
-                if (draft.faviconUrl !== (page.faviconUrl ?? '')) {
-                  void patch('faviconUrl', draft.faviconUrl);
-                }
+                if (draft.faviconUrl !== (page.faviconUrl ?? '')) void patch('faviconUrl', draft.faviconUrl);
               }}
               placeholder="https://…/favicon.png"
               className={inputClass}
             />
           </Field>
-          {/* Search visibility — flips the noindex flag, which the
-              public route translates to `<meta robots="noindex,
-              nofollow">` AND excludes the page from /lp-sitemap.xml.
-              Most pages should stay searchable; this is for drafts,
-              internal-only campaigns, or pages we want to keep out of
-              Google. Patches on toggle, no blur needed. */}
-          <Field
-            label="Hide from search engines"
-            hint="When on, this page won't be indexed by Google and won't appear in /lp-sitemap.xml."
-          >
+          <Field label="Hide from search engines" hint="When on, this page won't be indexed by Google and won't appear in /lp-sitemap.xml.">
             <label className="inline-flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
@@ -307,9 +294,7 @@ export function LandingPageSettings({ page, onUpdated }: LandingPageSettingsProp
                 onChange={(e) => {
                   const next = e.target.checked;
                   setDraft((d) => ({ ...d, noindex: next }));
-                  if (next !== page.noindex) {
-                    void patch('noindex', next);
-                  }
+                  if (next !== page.noindex) void patch('noindex', next);
                 }}
                 className="w-4 h-4 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
               />
@@ -318,41 +303,27 @@ export function LandingPageSettings({ page, onUpdated }: LandingPageSettingsProp
               </span>
             </label>
           </Field>
-        </div>
-      </SettingsCard>
-      </div>{/* /top row grid */}
+        </section>
+      )}
 
-      {/* Tracking & analytics — full width since it's denser */}
-      <SettingsCard
-        icon={<ChartBarIcon className="w-4 h-4" />}
-        title="Tracking & analytics"
-        subtitle={
-          <>
+      {/* Tracking & Analytics */}
+      {activeTab === 'Tracking' && (
+        <section className="glass-card rounded-2xl p-5 space-y-3">
+          <p className="text-xs text-[var(--muted-foreground)]">
             Pixel snippets render server-side using each vendor&rsquo;s standard install code.
             Page views, scroll, CTA clicks, and form submissions are already captured by Loomi
             analytics — these fields are for additional vendor pixels.
-          </>
-        }
-      >
-        <div className="space-y-3">
+          </p>
           <Field
             label="Meta Pixel ID"
-            hint={
-              <>
-                Find this in Meta Events Manager. Numeric, usually 15–16 digits.{' '}
-                <code className="font-mono">fbq(&apos;init&apos;, &lt;id&gt;)</code>{' '}
-                fires automatically on page view.
-              </>
-            }
+            hint={<>Find this in Meta Events Manager. Numeric, usually 15–16 digits. <code className="font-mono">fbq(&apos;init&apos;, &lt;id&gt;)</code> fires automatically on page view.</>}
           >
             <input
               type="text"
               value={draft.metaPixelId}
               onChange={(e) => setDraft((d) => ({ ...d, metaPixelId: e.target.value }))}
               onBlur={() => {
-                if (draft.metaPixelId !== (page.metaPixelId ?? '')) {
-                  void patch('metaPixelId', draft.metaPixelId);
-                }
+                if (draft.metaPixelId !== (page.metaPixelId ?? '')) void patch('metaPixelId', draft.metaPixelId);
               }}
               placeholder="123456789012345"
               className={`${inputClass} font-mono`}
@@ -361,23 +332,14 @@ export function LandingPageSettings({ page, onUpdated }: LandingPageSettingsProp
           </Field>
           <Field
             label="GA4 Measurement ID"
-            hint={
-              <>
-                From Google Analytics &gt; Admin &gt; Data Streams. Format:{' '}
-                <code className="font-mono">G-XXXXXXXXXX</code>.
-              </>
-            }
+            hint={<>From Google Analytics &gt; Admin &gt; Data Streams. Format: <code className="font-mono">G-XXXXXXXXXX</code>.</>}
           >
             <input
               type="text"
               value={draft.ga4MeasurementId}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, ga4MeasurementId: e.target.value }))
-              }
+              onChange={(e) => setDraft((d) => ({ ...d, ga4MeasurementId: e.target.value }))}
               onBlur={() => {
-                if (draft.ga4MeasurementId !== (page.ga4MeasurementId ?? '')) {
-                  void patch('ga4MeasurementId', draft.ga4MeasurementId);
-                }
+                if (draft.ga4MeasurementId !== (page.ga4MeasurementId ?? '')) void patch('ga4MeasurementId', draft.ga4MeasurementId);
               }}
               placeholder="G-XXXXXXXXXX"
               className={`${inputClass} font-mono`}
@@ -385,50 +347,33 @@ export function LandingPageSettings({ page, onUpdated }: LandingPageSettingsProp
           </Field>
           <Field
             label="Google Tag Manager Container ID"
-            hint={
-              <>
-                From GTM &gt; Admin &gt; Container Settings. Format:{' '}
-                <code className="font-mono">GTM-XXXXXX</code>. Once set, any tag you
-                configure inside GTM (additional pixels, conversions, etc.) loads here too.
-              </>
-            }
+            hint={<>From GTM &gt; Admin &gt; Container Settings. Format: <code className="font-mono">GTM-XXXXXX</code>. Once set, any tag you configure inside GTM loads here too.</>}
           >
             <input
               type="text"
               value={draft.gtmContainerId}
               onChange={(e) => setDraft((d) => ({ ...d, gtmContainerId: e.target.value }))}
               onBlur={() => {
-                if (draft.gtmContainerId !== (page.gtmContainerId ?? '')) {
-                  void patch('gtmContainerId', draft.gtmContainerId);
-                }
+                if (draft.gtmContainerId !== (page.gtmContainerId ?? '')) void patch('gtmContainerId', draft.gtmContainerId);
               }}
               placeholder="GTM-XXXXXX"
               className={`${inputClass} font-mono`}
             />
           </Field>
-
           <details className="rounded-lg border border-[var(--border)] px-3 py-2">
             <summary className="cursor-pointer text-xs font-semibold text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
               Advanced: custom HTML / scripts
             </summary>
             <div className="mt-3 space-y-3">
               <Field
-                label={
-                  <>
-                    Custom <code className="font-mono text-[11px]">&lt;head&gt;</code> HTML
-                  </>
-                }
+                label={<>Custom <code className="font-mono text-[11px]">&lt;head&gt;</code> HTML</>}
                 hint="Pasted verbatim into the page's head. For tracking pixels not covered above (TikTok, LinkedIn, etc.) or custom font links."
               >
                 <textarea
                   value={draft.customHeadHtml}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, customHeadHtml: e.target.value }))
-                  }
+                  onChange={(e) => setDraft((d) => ({ ...d, customHeadHtml: e.target.value }))}
                   onBlur={() => {
-                    if (draft.customHeadHtml !== (page.customHeadHtml ?? '')) {
-                      void patch('customHeadHtml', draft.customHeadHtml);
-                    }
+                    if (draft.customHeadHtml !== (page.customHeadHtml ?? '')) void patch('customHeadHtml', draft.customHeadHtml);
                   }}
                   placeholder={'<script>\n  // your tracking code here\n</script>'}
                   rows={6}
@@ -437,22 +382,14 @@ export function LandingPageSettings({ page, onUpdated }: LandingPageSettingsProp
                 />
               </Field>
               <Field
-                label={
-                  <>
-                    Custom pre-<code className="font-mono text-[11px]">&lt;/body&gt;</code> HTML
-                  </>
-                }
+                label={<>Custom pre-<code className="font-mono text-[11px]">&lt;/body&gt;</code> HTML</>}
                 hint="Pasted right before the closing body tag. For scripts that need to run late (chat widgets, slow trackers)."
               >
                 <textarea
                   value={draft.customBodyEndHtml}
-                  onChange={(e) =>
-                    setDraft((d) => ({ ...d, customBodyEndHtml: e.target.value }))
-                  }
+                  onChange={(e) => setDraft((d) => ({ ...d, customBodyEndHtml: e.target.value }))}
                   onBlur={() => {
-                    if (draft.customBodyEndHtml !== (page.customBodyEndHtml ?? '')) {
-                      void patch('customBodyEndHtml', draft.customBodyEndHtml);
-                    }
+                    if (draft.customBodyEndHtml !== (page.customBodyEndHtml ?? '')) void patch('customBodyEndHtml', draft.customBodyEndHtml);
                   }}
                   placeholder={'<script src="https://example.com/widget.js" defer></script>'}
                   rows={4}
@@ -461,42 +398,14 @@ export function LandingPageSettings({ page, onUpdated }: LandingPageSettingsProp
                 />
               </Field>
               <p className="text-[10px] text-[var(--muted-foreground)] leading-relaxed">
-                Each field is capped at 10KB. We don&apos;t sanitize — these inject as
-                written. Bad markup can break the page; test in a draft first.
+                Each field is capped at 10KB. We don&apos;t sanitize — these inject as written. Bad markup can break the page; test in a draft first.
               </p>
             </div>
           </details>
-        </div>
-      </SettingsCard>
+        </section>
+      )}
 
-      {/* Save as template — snapshot the current schema so it shows
-          up as a starting point in the New Landing Page modal. Each
-          save creates a new template; users delete from the modal's
-          per-tile menu. Editing this LP after saving doesn't
-          propagate (templates are independent snapshots). */}
-      <SettingsCard
-        icon={<ArchiveBoxArrowDownIcon className="w-4 h-4" />}
-        title="Save as template"
-        subtitle="Snapshot this page's content + settings so you can spin up new pages from it later. Saved templates appear in the New Landing Page modal."
-      >
-        <button
-          type="button"
-          onClick={() => void saveAsTemplate()}
-          disabled={savingAsTemplate}
-          className="inline-flex items-center gap-1.5 px-3 h-9 text-sm rounded-lg border border-[var(--border)] hover:border-[var(--primary)] hover:bg-[var(--muted)] disabled:opacity-50 transition-colors"
-        >
-          <ArchiveBoxArrowDownIcon className="w-4 h-4" />
-          {savingAsTemplate ? 'Saving…' : 'Save as template'}
-        </button>
-      </SettingsCard>
-
-      {/* Danger zone — uses the rose palette tuned for dark mode.
-          Light-mode legibility comes from CSS overrides in globals.css
-          (see the [data-theme='light'] .text-rose-* block) which
-          retargets these utility classes to higher-contrast values
-          without needing per-component dark:/light: modifiers (the
-          project doesn't use Tailwind's dark: prefix — it uses
-          data-theme attribute selectors instead). */}
+      {/* Danger zone — always visible */}
       <section className="rounded-2xl p-5 border border-rose-500/30 bg-rose-500/5">
         <div className="flex items-start gap-2 mb-3">
           <ExclamationTriangleIcon className="mt-0.5 w-5 h-5 text-rose-400 flex-shrink-0" />
@@ -527,40 +436,6 @@ export function LandingPageSettings({ page, onUpdated }: LandingPageSettingsProp
 }
 
 // ── Local subcomponents ────────────────────────────────────────────
-
-/**
- * Glass-card wrapper around a settings section. Mirrors the panel
- * shape used on the LP analytics view so the two tabs feel like
- * the same surface — same rounded-2xl, same icon + heading layout.
- */
-function SettingsCard({
-  icon,
-  title,
-  subtitle,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  subtitle?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="glass-card rounded-2xl p-5 h-full">
-      <div className="flex items-start gap-2 mb-4">
-        <span className="text-[var(--muted-foreground)] mt-0.5">{icon}</span>
-        <div>
-          <h3 className="text-sm font-semibold leading-tight">{title}</h3>
-          {subtitle && (
-            <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5 leading-relaxed">
-              {subtitle}
-            </p>
-          )}
-        </div>
-      </div>
-      {children}
-    </section>
-  );
-}
 
 function Field({
   label,

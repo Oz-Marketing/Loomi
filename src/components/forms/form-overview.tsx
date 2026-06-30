@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import useSWR from 'swr';
 import { toast } from 'sonner';
@@ -10,12 +11,14 @@ import {
   CheckCircleIcon,
   ClipboardIcon,
   ClockIcon,
+  CodeBracketIcon,
   Cog6ToothIcon,
   DocumentTextIcon,
   InboxStackIcon,
   PencilSquareIcon,
   Squares2X2Icon,
   EyeIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { useFormDetail } from '@/components/forms/form-detail-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
@@ -49,6 +52,7 @@ export function FormOverview() {
   const subHref = useSubaccountHref();
   const [publishing, setPublishing] = React.useState(false);
   const [activeTab, setActiveTab] = React.useState<DetailTab>('overview');
+  const [embedOpen, setEmbedOpen] = React.useState(false);
 
   // Refetch fresh form data on every mount. Necessary because the
   // FormDetailProvider stays mounted across overview ↔ builder
@@ -166,9 +170,17 @@ export function FormOverview() {
                 title="Open live form in new tab"
               >
                 <ArrowTopRightOnSquareIcon className="w-4 h-4" />
-                Live
+                Preview
               </a>
             )}
+            <button
+              type="button"
+              onClick={() => setEmbedOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
+            >
+              <CodeBracketIcon className="w-4 h-4" />
+              Embed
+            </button>
             <Link
               href={subHref(`/websites/forms/${form.id}/edit`)}
               className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90"
@@ -207,6 +219,8 @@ export function FormOverview() {
       {activeTab === 'overview' && <OverviewBody />}
       {activeTab === 'submissions' && <SubmissionsBody />}
       {activeTab === 'settings' && <FormSettingsForm />}
+
+      {embedOpen && <EmbedPopup onClose={() => setEmbedOpen(false)} />}
     </div>
   );
 }
@@ -220,10 +234,7 @@ export function FormOverview() {
 function OverviewBody() {
   const { form, setForm } = useFormDetail();
   const subHref = useSubaccountHref();
-  const [copiedKey, setCopiedKey] = React.useState<string | null>(null);
 
-  // Just for the stat cards — the Submissions tab's table does its own
-  // fetch with pagination, independent of this summary query.
   const { data: submissionsPayload } = useSWR<{
     submissions: FormSubmissionRow[];
     total: number;
@@ -243,17 +254,6 @@ function OverviewBody() {
 
   const published = form.status === 'published';
 
-  const copyText = async (key: string, text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey(null), 1400);
-    } catch {
-      /* clipboard blocked — silent */
-    }
-  };
-
-  // setForm is used by child components in the future; suppress for now.
   void setForm;
 
   return (
@@ -301,106 +301,33 @@ function OverviewBody() {
         />
       </div>
 
-      {/* Two-column body — preview + embed */}
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,420px)] gap-5">
-        {/* The whole preview card routes into the builder on click.
-            The inner FormRenderer is pointer-events:none so users
-            can't accidentally interact with form fields here — the
-            edit hint pill in the corner is the visible affordance. */}
-        <Link
-          href={subHref(`/websites/forms/${form.id}/edit`)}
-          aria-label="Edit form in builder"
-          className="glass-card group relative rounded-2xl overflow-hidden block transition-shadow hover:shadow-lg hover:border-[var(--primary)]/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]/40"
-        >
-          <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
-            <div>
-              <h3 className="font-semibold">Preview</h3>
-              <p className="text-xs text-[var(--muted-foreground)]">
-                Click anywhere on the preview to edit the form.
-              </p>
-            </div>
-            <span
-              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity"
-              aria-hidden="true"
-            >
-              <PencilSquareIcon className="w-3.5 h-3.5" />
-              Edit
-            </span>
+      {/* Full-width preview card */}
+      <Link
+        href={subHref(`/websites/forms/${form.id}/edit`)}
+        aria-label="Edit form in builder"
+        className="glass-card group relative rounded-2xl overflow-hidden block transition-shadow hover:shadow-lg hover:border-[var(--primary)]/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--primary)]/40"
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--border)] px-4 py-3">
+          <div>
+            <h3 className="font-semibold">Preview</h3>
+            <p className="text-xs text-[var(--muted-foreground)]">
+              Click anywhere on the preview to edit the form.
+            </p>
           </div>
-          <div
-            className="max-h-[680px] overflow-y-auto bg-[var(--muted)]/30"
-            // Same renderer the public page uses, so this matches /f/<slug>.
+          <span
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100 transition-opacity"
+            aria-hidden="true"
           >
-            <div className="loomi-form-preview pointer-events-none">
-              <FormRenderer template={form.schema} />
-            </div>
+            <PencilSquareIcon className="w-3.5 h-3.5" />
+            Edit
+          </span>
+        </div>
+        <div className="max-h-[680px] overflow-y-auto bg-[var(--muted)]/30">
+          <div className="loomi-form-preview pointer-events-none">
+            <FormRenderer template={form.schema} />
           </div>
-        </Link>
-
-        <section className="glass-card rounded-2xl p-4 h-fit">
-          <div className="flex items-center justify-between gap-3 mb-2">
-            <div className="flex items-center gap-1.5">
-              <h3 className="font-semibold">Embed</h3>
-              <HelpTip title="How to embed this form">
-                <p>
-                  Copy the snippet below and paste it into your site&rsquo;s
-                  HTML wherever you want the form to appear.
-                </p>
-                <ol>
-                  <li>
-                    Click the copy icon to grab the{' '}
-                    <code>&lt;script&gt;</code> tag.
-                  </li>
-                  <li>
-                    In your page editor, add an HTML / embed block and paste
-                    the snippet. Most builders (Webflow, WordPress, Wix,
-                    Framer, plain HTML) accept script tags directly.
-                  </li>
-                  <li>
-                    Publish the page. The form renders inline and auto-resizes
-                    to fit its content.
-                  </li>
-                </ol>
-                <p>
-                  Need a different format?{' '}
-                  <strong>More options</strong> includes an{' '}
-                  <code>&lt;iframe&gt;</code> fallback (for hosts that strip
-                  scripts) and a direct shareable link.
-                </p>
-                <p>
-                  The form must be <strong>Published</strong> for visitors to
-                  submit — draft forms return a 404 on the public URL.
-                </p>
-              </HelpTip>
-            </div>
-          </div>
-          <p className="text-xs text-[var(--muted-foreground)] mb-3">
-            Paste this script tag where you want the form to appear.
-          </p>
-          <div className="relative">
-            <textarea
-              readOnly
-              value={form.embedSnippets.script}
-              rows={3}
-              onFocus={(e) => e.currentTarget.select()}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 pr-12 font-mono text-xs text-[var(--muted-foreground)] resize-none"
-            />
-            <button
-              type="button"
-              onClick={() => void copyText('script', form.embedSnippets.script)}
-              className="absolute top-2 right-2 inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-              title="Copy"
-              aria-label="Copy script embed"
-            >
-              {copiedKey === 'script' ? (
-                <CheckCircleIcon className="w-4 h-4 text-emerald-400" />
-              ) : (
-                <ClipboardIcon className="w-4 h-4" />
-              )}
-            </button>
-          </div>
-        </section>
-      </div>
+        </div>
+      </Link>
     </>
   );
 }
@@ -416,6 +343,150 @@ function SubmissionsBody() {
     <section>
       <SubmissionsTable formId={form.id} schema={form.schema} />
     </section>
+  );
+}
+
+// ── Embed popup ──────────────────────────────────────────────────
+
+function EmbedPopup({ onClose }: { onClose: () => void }) {
+  const { form } = useFormDetail();
+  const [copied, setCopied] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const copyText = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(key);
+      setTimeout(() => setCopied(null), 1400);
+    } catch { /* clipboard blocked */ }
+  };
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 px-4"
+      onClick={onClose}
+    >
+      <div
+        className="glass-modal w-full max-w-lg flex flex-col max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Embed form"
+      >
+        <header className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
+          <div className="flex items-center gap-2">
+            <CodeBracketIcon className="w-5 h-5 text-[var(--primary)]" />
+            <div>
+              <h3 className="text-lg font-semibold">Embed</h3>
+              <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
+                Pick a snippet and paste it into your site&apos;s HTML.
+              </p>
+            </div>
+            <HelpTip title="How to embed this form">
+              <p>Pick the snippet that fits your page, then paste it into your site&rsquo;s HTML.</p>
+              <ol>
+                <li><strong>Script tag</strong> (recommended) — auto-resizes to fit the form&rsquo;s content.</li>
+                <li><strong>Iframe</strong> — fixed height. Use when the host page strips <code>&lt;script&gt;</code> tags.</li>
+                <li><strong>Direct link</strong> — share the hosted form URL anywhere.</li>
+              </ol>
+              <p>The form must be <strong>Published</strong> for visitors to submit.</p>
+            </HelpTip>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+          >
+            <XMarkIcon className="w-5 h-5" />
+          </button>
+        </header>
+
+        <div className="px-6 py-5 space-y-5">
+          {/* Script tag */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm font-semibold">Script tag</span>
+                <span className="rounded-full bg-[var(--primary)]/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-[var(--primary)]">
+                  Recommended
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => void copyText('script', form.embedSnippets.script)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs hover:border-[var(--primary)]"
+              >
+                {copied === 'script' ? <CheckCircleIcon className="w-3.5 h-3.5 text-emerald-400" /> : <ClipboardIcon className="w-3.5 h-3.5" />}
+                {copied === 'script' ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={form.embedSnippets.script}
+              rows={3}
+              onFocus={(e) => e.currentTarget.select()}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 font-mono text-xs text-[var(--muted-foreground)] resize-none"
+            />
+            <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">Auto-resizes to fit your form&apos;s content. Best on most sites.</p>
+          </div>
+
+          {/* Iframe */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold">Iframe (fixed height)</span>
+              <button
+                type="button"
+                onClick={() => void copyText('iframe', form.embedSnippets.iframe)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs hover:border-[var(--primary)]"
+              >
+                {copied === 'iframe' ? <CheckCircleIcon className="w-3.5 h-3.5 text-emerald-400" /> : <ClipboardIcon className="w-3.5 h-3.5" />}
+                {copied === 'iframe' ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={form.embedSnippets.iframe}
+              rows={3}
+              onFocus={(e) => e.currentTarget.select()}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 font-mono text-xs text-[var(--muted-foreground)] resize-none"
+            />
+            <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">
+              Use when the host page strips script tags. Edit <code className="mx-1 rounded bg-[var(--muted)] px-1 py-0.5">height</code> if needed.
+            </p>
+          </div>
+
+          {/* Direct link */}
+          <div className="border-t border-[var(--border)] pt-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold">Direct link</span>
+              <button
+                type="button"
+                onClick={() => void copyText('url', form.embedSnippets.publicUrl)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs hover:border-[var(--primary)]"
+              >
+                {copied === 'url' ? <CheckCircleIcon className="w-3.5 h-3.5 text-emerald-400" /> : <ClipboardIcon className="w-3.5 h-3.5" />}
+                {copied === 'url' ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <a
+              href={form.embedSnippets.publicUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block break-all text-xs font-mono text-[var(--primary)] hover:underline"
+            >
+              {form.embedSnippets.publicUrl}
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

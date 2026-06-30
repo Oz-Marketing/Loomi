@@ -2,6 +2,7 @@
 
 import * as React from 'react';
 import { use } from 'react';
+import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
@@ -14,6 +15,7 @@ import {
   CheckCircleIcon,
   ClipboardIcon,
   ClockIcon,
+  CodeBracketIcon,
   Cog6ToothIcon,
   DocumentDuplicateIcon,
   DocumentTextIcon,
@@ -21,13 +23,13 @@ import {
   PencilSquareIcon,
   RectangleStackIcon,
   Squares2X2Icon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { AdminOnly } from '@/components/route-guard';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { LandingPagePreviewThumbnail } from '@/components/landing-pages/landing-page-preview-thumbnail';
 import { LandingPageAnalytics } from '@/components/landing-pages/landing-page-analytics';
 import { LandingPageSettings } from '@/components/landing-pages/landing-page-settings';
-import { HelpTip } from '@/components/ui/help-tip';
 import type { LandingPageDetail } from '@/lib/services/landing-pages';
 
 type DetailTab = 'overview' | 'analytics' | 'settings';
@@ -76,10 +78,10 @@ export default function LandingPageOverviewPage({
   }, [id]);
 
   const [publishing, setPublishing] = React.useState(false);
-  const [copiedKey, setCopiedKey] = React.useState<string | null>(null);
   const [duplicating, setDuplicating] = React.useState(false);
   const [savingAsTemplate, setSavingAsTemplate] = React.useState(false);
   const [activeTab, setActiveTab] = React.useState<DetailTab>('overview');
+  const [embedOpen, setEmbedOpen] = React.useState(false);
 
   const page = data?.page;
 
@@ -102,16 +104,6 @@ export default function LandingPageOverviewPage({
       toast.success(next === 'published' ? 'Page published.' : 'Page moved to draft.');
     } finally {
       setPublishing(false);
-    }
-  }
-
-  async function copy(key: string, text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopiedKey(key);
-      setTimeout(() => setCopiedKey(null), 1400);
-    } catch {
-      /* clipboard blocked — silent */
     }
   }
 
@@ -223,18 +215,34 @@ export default function LandingPageOverviewPage({
           </div>
 
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            {published && (
-              <a
-                href={`/lp/${page.slug}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
-                title="Open live page in new tab"
-              >
-                <ArrowTopRightOnSquareIcon className="w-4 h-4" />
-                Live
-              </a>
-            )}
+            <div className="flex items-center gap-2 mr-1">
+              <span className="text-xs text-[var(--muted-foreground)]">
+                {published ? 'Published' : 'Draft'}
+              </span>
+              <PublishSwitch
+                active={published}
+                updating={publishing}
+                onToggle={() => void togglePublish()}
+              />
+            </div>
+            <a
+              href={`/lp/${page.slug}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={published ? 'Open live page in new tab' : 'Open preview (draft — returns 404 until published)'}
+              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
+            >
+              <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+              Preview
+            </a>
+            <button
+              type="button"
+              onClick={() => setEmbedOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
+            >
+              <CodeBracketIcon className="w-4 h-4" />
+              Embed
+            </button>
             <HeaderActionsMenu
               onDuplicate={() => void duplicate()}
               onSaveAsTemplate={() => void saveAsTemplate()}
@@ -251,43 +259,28 @@ export default function LandingPageOverviewPage({
           </div>
         </div>
 
-        {/* Tab bar — Overview / Analytics / Settings on the left,
-            Draft/Publish toggle on the right. Sharing the row keeps
-            the publish state visually anchored to the page-level
-            actions instead of floating up by the title. */}
-        <div className="flex items-center justify-between gap-3 border-b border-[var(--border)]">
-          <div className="flex items-center gap-1">
-            {TABS.map((tab) => {
-              const Icon = tab.icon;
-              const active = activeTab === tab.key;
-              return (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => setActiveTab(tab.key)}
-                  aria-pressed={active}
-                  className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                    active
-                      ? 'border-[var(--primary)] text-[var(--foreground)]'
-                      : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                  }`}
-                >
-                  <Icon className="w-4 h-4" />
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-          <div className="flex items-center gap-2 pb-1">
-            <span className="text-xs text-[var(--muted-foreground)]">
-              {published ? 'Published' : 'Draft'}
-            </span>
-            <PublishSwitch
-              active={published}
-              updating={publishing}
-              onToggle={() => void togglePublish()}
-            />
-          </div>
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 border-b border-[var(--border)]">
+          {TABS.map((tab) => {
+            const Icon = tab.icon;
+            const active = activeTab === tab.key;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                aria-pressed={active}
+                className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  active
+                    ? 'border-[var(--primary)] text-[var(--foreground)]'
+                    : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
 
         {activeTab === 'analytics' ? (
@@ -298,12 +291,14 @@ export default function LandingPageOverviewPage({
             onUpdated={(next) => void mutate({ page: next }, { revalidate: false })}
           />
         ) : (
-          <OverviewBody
+          <OverviewBody page={page} published={published} />
+        )}
+
+        {embedOpen && (
+          <LandingPageEmbedPopup
             page={page}
             iframeSnippet={iframeSnippet}
-            published={published}
-            copiedKey={copiedKey}
-            onCopy={copy}
+            onClose={() => setEmbedOpen(false)}
           />
         )}
       </div>
@@ -317,150 +312,171 @@ export default function LandingPageOverviewPage({
 // in the parent JSX. State (publishing, copy feedback) still lives in
 // the page component — the body takes everything it needs as props.
 
-interface OverviewBodyProps {
-  page: LandingPageDetail;
-  iframeSnippet: string;
-  published: boolean;
-  copiedKey: string | null;
-  onCopy: (key: string, text: string) => void;
-}
-
-function OverviewBody({ page, iframeSnippet, published, copiedKey, onCopy }: OverviewBodyProps) {
+function OverviewBody({ page, published }: { page: LandingPageDetail; published: boolean }) {
   const subHref = useSubaccountHref();
   return (
     <>
-      {/* Stat cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          <StatCard
-            label="Status"
-            value={published ? 'Published' : 'Draft'}
-            Icon={published ? CheckCircleIcon : DocumentTextIcon}
-            bgColor={published ? 'bg-emerald-500/15' : 'bg-zinc-500/15'}
-            iconColor={published ? 'text-emerald-300' : 'text-zinc-300'}
-            sub={page.publishedAt ? `since ${formatDate(page.publishedAt)}` : undefined}
-          />
-          <StatCard
-            label="Last updated"
-            value={formatDate(page.updatedAt)}
-            Icon={ClockIcon}
-            bgColor="bg-violet-500/15"
-            iconColor="text-violet-300"
-          />
-          <StatCard
-            label="Public URL"
-            value={`/lp/${page.slug}`}
-            Icon={ArrowTopRightOnSquareIcon}
-            bgColor="bg-amber-500/15"
-            iconColor="text-amber-300"
-            mono
-          />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <StatCard
+          label="Status"
+          value={published ? 'Published' : 'Draft'}
+          Icon={published ? CheckCircleIcon : DocumentTextIcon}
+          bgColor={published ? 'bg-emerald-500/15' : 'bg-zinc-500/15'}
+          iconColor={published ? 'text-emerald-300' : 'text-zinc-300'}
+          sub={page.publishedAt ? `since ${formatDate(page.publishedAt)}` : undefined}
+        />
+        <StatCard
+          label="Last updated"
+          value={formatDate(page.updatedAt)}
+          Icon={ClockIcon}
+          bgColor="bg-violet-500/15"
+          iconColor="text-violet-300"
+        />
+        <StatCard
+          label="Public URL"
+          value={`/lp/${page.slug}`}
+          Icon={ArrowTopRightOnSquareIcon}
+          bgColor="bg-amber-500/15"
+          iconColor="text-amber-300"
+          mono
+        />
+      </div>
+
+      <Link
+        href={subHref(`/websites/landing-pages/${page.id}/edit`)}
+        className="glass-card group rounded-2xl overflow-hidden hover:border-[var(--primary)]/40 transition-colors block"
+      >
+        <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold">Preview</h3>
+            <span className="text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider">
+              Click to edit
+            </span>
+          </div>
+          <PencilSquareIcon className="w-4 h-4 text-[var(--muted-foreground)] group-hover:text-[var(--primary)]" />
         </div>
-
-        {/* Body: preview + share */}
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-5">
-          {/* Preview card — clickable; routes into the builder. */}
-          <Link
-            href={subHref(`/websites/landing-pages/${page.id}/edit`)}
-            className="glass-card group rounded-2xl overflow-hidden hover:border-[var(--primary)]/40 transition-colors block"
-          >
-            <div className="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <h3 className="font-semibold">Preview</h3>
-                <span className="text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider">
-                  Click to edit
-                </span>
-              </div>
-              <PencilSquareIcon className="w-4 h-4 text-[var(--muted-foreground)] group-hover:text-[var(--primary)]" />
-            </div>
-            <div className="loomi-lp-preview pointer-events-none">
-              <LandingPagePreviewThumbnail template={page.schema} height={520} />
-            </div>
-          </Link>
-
-          {/* Share / embed section */}
-          <section className="glass-card rounded-2xl p-4 h-fit space-y-5">
-            <div>
-              <div className="flex items-center gap-1.5">
-                <h3 className="font-semibold">Share</h3>
-                <HelpTip title="Sharing this landing page">
-                  <p>
-                    A published landing page lives at a stable URL — share it
-                    anywhere a link works (email, SMS, socials, etc.).
-                  </p>
-                  <p>
-                    To embed the page <em>inside</em> another site (e.g. a
-                    WordPress page), copy the iframe snippet below and paste
-                    it into an HTML / embed block.
-                  </p>
-                  <p>
-                    The page must be <strong>Published</strong> for visitors
-                    to load it.
-                  </p>
-                </HelpTip>
-              </div>
-              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-                Direct link.
-              </p>
-              <div className="mt-2 flex items-center gap-2">
-                <a
-                  href={`/lp/${page.slug}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-1 truncate text-xs font-mono text-[var(--primary)] hover:underline"
-                >
-                  {page.publicUrl}
-                </a>
-                <button
-                  type="button"
-                  onClick={() => onCopy('url', page.publicUrl)}
-                  className="inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-                  aria-label="Copy URL"
-                >
-                  {copiedKey === 'url' ? (
-                    <CheckCircleIcon className="w-4 h-4 text-emerald-400" />
-                  ) : (
-                    <ClipboardIcon className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
-            </div>
-
-            <CustomDomainLinks
-              page={page}
-              copiedKey={copiedKey}
-              onCopy={onCopy}
-            />
-
-            <div className="border-t border-[var(--border)] pt-4">
-              <h4 className="text-xs font-semibold mb-1">Embed (iframe)</h4>
-              <p className="text-[11px] text-[var(--muted-foreground)] mb-2">
-                Use when you want the page to render inside another site.
-              </p>
-              <div className="relative">
-                <textarea
-                  readOnly
-                  value={iframeSnippet}
-                  rows={3}
-                  onFocus={(e) => e.currentTarget.select()}
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 pr-12 font-mono text-[11px] text-[var(--muted-foreground)] resize-none"
-                />
-                <button
-                  type="button"
-                  onClick={() => onCopy('iframe', iframeSnippet)}
-                  className="absolute top-2 right-2 inline-flex items-center justify-center w-7 h-7 rounded-md text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-                  aria-label="Copy iframe"
-                >
-                  {copiedKey === 'iframe' ? (
-                    <CheckCircleIcon className="w-4 h-4 text-emerald-400" />
-                  ) : (
-                    <ClipboardIcon className="w-4 h-4" />
-                  )}
-                </button>
-              </div>
-            </div>
-          </section>
+        <div className="loomi-lp-preview pointer-events-none">
+          <LandingPagePreviewThumbnail template={page.schema} height={520} />
         </div>
+      </Link>
     </>
+  );
+}
+
+// ── Embed popup ──────────────────────────────────────────────────
+
+function LandingPageEmbedPopup({
+  page,
+  iframeSnippet,
+  onClose,
+}: {
+  page: LandingPageDetail;
+  iframeSnippet: string;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const copyText = async (key: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(key);
+      setTimeout(() => setCopied(null), 1400);
+    } catch { /* clipboard blocked */ }
+  };
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 px-4"
+      onClick={onClose}
+    >
+      <div
+        className="glass-modal w-full max-w-lg flex flex-col max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Embed landing page"
+      >
+        <header className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)] flex-shrink-0">
+          <div className="flex items-center gap-2">
+            <CodeBracketIcon className="w-5 h-5 text-[var(--primary)]" />
+            <div>
+              <h3 className="text-lg font-semibold">Embed</h3>
+              <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
+                Share or embed this landing page.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+          >
+            <XMarkIcon className="w-5 h-5" />
+          </button>
+        </header>
+
+        <div className="px-6 py-5 space-y-5">
+          {/* Direct link */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold">Direct link</span>
+              <button
+                type="button"
+                onClick={() => void copyText('url', page.publicUrl)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs hover:border-[var(--primary)]"
+              >
+                {copied === 'url' ? <CheckCircleIcon className="w-3.5 h-3.5 text-emerald-400" /> : <ClipboardIcon className="w-3.5 h-3.5" />}
+                {copied === 'url' ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <a
+              href={page.publicUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block break-all text-xs font-mono text-[var(--primary)] hover:underline"
+            >
+              {page.publicUrl}
+            </a>
+          </div>
+
+          {/* Custom domain links */}
+          <CustomDomainLinks page={page} copiedKey={copied} onCopy={copyText} />
+
+          {/* Iframe */}
+          <div className="border-t border-[var(--border)] pt-4">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-semibold">Iframe embed</span>
+              <button
+                type="button"
+                onClick={() => void copyText('iframe', iframeSnippet)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs hover:border-[var(--primary)]"
+              >
+                {copied === 'iframe' ? <CheckCircleIcon className="w-3.5 h-3.5 text-emerald-400" /> : <ClipboardIcon className="w-3.5 h-3.5" />}
+                {copied === 'iframe' ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+            <textarea
+              readOnly
+              value={iframeSnippet}
+              rows={3}
+              onFocus={(e) => e.currentTarget.select()}
+              className="w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 font-mono text-xs text-[var(--muted-foreground)] resize-none"
+            />
+            <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">
+              Use when you want the page to render inside another site.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 

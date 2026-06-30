@@ -42,11 +42,13 @@ export default async function PublicFormPage({ params, searchParams }: PageProps
   const turnstileSiteKey = getTurnstileSiteKey();
 
   return (
-    <FormPublic
-      slug={form.slug}
-      template={form.schema}
-      embed={embed}
-      turnstileSiteKey={turnstileSiteKey}
-    />
+    <div className='m-auto'>
+      <FormPublic    
+        slug={form.slug}
+        template={form.schema}
+        embed={embed}
+        turnstileSiteKey={turnstileSiteKey}
+      />
+    </div>
   );
 }

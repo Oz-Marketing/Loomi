@@ -374,13 +374,13 @@ export function LandingPageBuilderPage({ id }: { id: string }) {
 
         {/* RIGHT — open live · settings cog · publish */}
         <div className="flex items-center justify-end gap-2 min-w-0">
-          {published && page && (
+          {page && (
             <a
               href={`/lp/${page.slug}`}
               target="_blank"
               rel="noopener noreferrer"
-              title="Open live page"
-              className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--muted)] hover:bg-[var(--accent)] text-[var(--foreground)] transition-colors"
+              title={published ? 'Open live page' : 'Open live page (draft — returns 404 until published)'}
+              className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--muted)] hover:bg-[var(--accent)] transition-colors text-[var(--foreground)]"
             >
               <ArrowTopRightOnSquareIcon className="w-4 h-4" />
             </a>

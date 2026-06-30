@@ -1820,6 +1820,38 @@ model MetaAdsPacerAd {
   // so the §8 "daily set" account roll-up dedupes on this (distinct budgets, not
   // per-campaign rows) to avoid overstating the run-rate.
   googleBudgetResourceName String?
+  // §2 — Google budget shape, synced from campaign_budget. `referenceCount` is
+  // the count of enabled/paused campaigns pointing at this budget; > 1 = a
+  // genuinely SHARED budget (the pacing unit becomes the budget, not the
+  // campaign) and drives the shared badge. `explicitlyShared` is the shareable
+  // FLAG (a budget can be shareable yet feed one campaign) — kept only for
+  // completeness; the badge keys off referenceCount, never this. `budgetPeriod`
+  // is the platform pacing axis: "DAILY" (average daily, amount_micros) or
+  // "CUSTOM_PERIOD" (campaign total budget, total_amount_micros) — write-once on
+  // Google's side and the source of the Daily/Total label (it maps to the
+  // Daily/Lifetime branch the engine already keys off).
+  googleBudgetReferenceCount   Int?
+  googleBudgetExplicitlyShared Boolean?
+  googleBudgetPeriod           String? // "DAILY" | "CUSTOM_PERIOD"
+  // §5 delivery signals, synced from Google. These look alike (both under
+  // target) but need OPPOSITE fixes, so they're tracked separately:
+  //  • googleBudgetConstrained — campaign.primary_status_reasons contains
+  //    BUDGET_CONSTRAINED: spends its full cap every day, has headroom, point it
+  //    at unallocated pool budget (raise budget).
+  //  • googleAdsDisapproved — at least one ad_group_ad.policy_summary
+  //    .approval_status is DISAPPROVED: budget is sized right but ads can't
+  //    serve (fix the ads, never raise the budget).
+  // googlePrimaryStatus keeps the raw campaign.primary_status for display.
+  googlePrimaryStatus   String?
+  googleBudgetConstrained Boolean @default(false)
+  googleAdsDisapproved    Boolean @default(false)
+  // §9 — monthly ceiling ($), server-computed at sync time. A Google daily
+  // budget's real cap is daily_rate × 30.4, BUT modifying the daily budget
+  // mid-month reprorates the ceiling around the change date, so it can't be
+  // recomputed from the current rate alone. When change_event shows a mid-month
+  // budget change this holds the segment-summed ceiling; otherwise it's just
+  // current daily × 30.4. Null until first sync / for total-budget campaigns.
+  googleProratedCeiling String?
   // Per-ad alert mute (Change 9): when true, the pacing-family scanners
   // (underspend/overpace, went-dark, flight-ending) skip this ad so a
   // known-acceptable case stops pinging. Workflow alerts are unaffected.

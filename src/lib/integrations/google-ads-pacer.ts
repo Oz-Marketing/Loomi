@@ -20,6 +20,9 @@ import {
   reconcileImport,
   mapChannelGroup,
   mapGoogleBudgetType,
+  computeProratedCeiling,
+  isSharedBudget,
+  type BudgetRateSegment,
   type ImportDiff,
 } from '@/lib/ad-pacer/google-pacer-calc';
 import type { PacerAd } from '@/lib/ad-pacer/types';
@@ -50,25 +53,66 @@ export type { ImportedGoogleCampaign };
 // the whole sync. Flight dates aren't essential to a spend sync (the planner sets
 // them, and channel/status/budget/spend all still import), so we omit them rather
 // than couple the sync to a churning field set.
+//
+// §2/§5 additions: campaign.primary_status(_reasons) (the BUDGET_CONSTRAINED
+// signal), and campaign_budget.reference_count / explicitly_shared / period (the
+// shared badge + Daily/Total label). All are core, long-stable v24 fields.
 const IMPORT_QUERY = `SELECT campaign.id, campaign.name, campaign.status,
        campaign.advertising_channel_type,
+       campaign.primary_status, campaign.primary_status_reasons,
        campaign_budget.amount_micros, campaign_budget.total_amount_micros,
-       campaign_budget.resource_name
+       campaign_budget.resource_name, campaign_budget.reference_count,
+       campaign_budget.explicitly_shared, campaign_budget.period
 FROM campaign
 WHERE campaign.status != 'REMOVED'`;
+
+/**
+ * Campaign ids with at least one DISAPPROVED ad (§5). Disapproval lives at the
+ * ad level (ad_group_ad.policy_summary.approval_status), not the campaign, so we
+ * roll it up to a per-campaign flag. Best-effort: returns an empty set if the
+ * read fails, so a policy-query hiccup never breaks the budget/spend sync.
+ */
+export async function fetchDisapprovedCampaignIds(
+  cfg: GoogleAdsConfig,
+  customerId: string,
+): Promise<Set<string>> {
+  try {
+    const rows = await gaql(
+      cfg,
+      customerId,
+      `SELECT campaign.id, ad_group_ad.policy_summary.approval_status
+       FROM ad_group_ad
+       WHERE ad_group_ad.policy_summary.approval_status = 'DISAPPROVED'
+         AND campaign.status != 'REMOVED' AND ad_group.status != 'REMOVED'`,
+    );
+    const ids = new Set<string>();
+    for (const r of rows) {
+      const id = r.campaign?.id;
+      if (id) ids.add(id);
+    }
+    return ids;
+  } catch {
+    return new Set<string>();
+  }
+}
 
 /**
  * Pull every campaign in an account in one query (§8 auto-import). Daily-budget
  * campaigns carry amount_micros; total/lifetime campaigns carry
  * total_amount_micros — we surface both so the caller maps budget type without
  * a second round-trip. budgetResourceName lets the daily roll-up dedupe shared
- * budgets (multiple campaigns can point at one budget).
+ * budgets (multiple campaigns can point at one budget). Also folds in the §2
+ * sharing/period fields and the §5 delivery signals (budget-limited from
+ * primary_status_reasons, disapproved from a per-campaign ad-level roll-up).
  */
 export async function importGoogleCampaigns(
   cfg: GoogleAdsConfig,
   customerId: string,
 ): Promise<ImportedGoogleCampaign[]> {
-  const rows = await gaql(cfg, customerId, IMPORT_QUERY);
+  const [rows, disapproved] = await Promise.all([
+    gaql(cfg, customerId, IMPORT_QUERY),
+    fetchDisapprovedCampaignIds(cfg, customerId),
+  ]);
   const out: ImportedGoogleCampaign[] = [];
   for (const r of rows) {
     const id = r.campaign?.id;
@@ -76,6 +120,8 @@ export async function importGoogleCampaigns(
     const totalMicros = r.campaignBudget?.totalAmountMicros;
     const dailyMicros = r.campaignBudget?.amountMicros;
     const hasTotal = totalMicros != null && Number(totalMicros) > 0;
+    const reasons = r.campaign?.primaryStatusReasons ?? [];
+    const refCount = r.campaignBudget?.referenceCount;
     out.push({
       id,
       name: r.campaign?.name ?? '',
@@ -86,6 +132,12 @@ export async function importGoogleCampaigns(
       budgetResourceName: r.campaignBudget?.resourceName ?? null,
       startDate: r.campaign?.startDate || null,
       endDate: r.campaign?.endDate || null,
+      budgetReferenceCount: refCount != null ? Number(refCount) : null,
+      budgetExplicitlyShared: r.campaignBudget?.explicitlyShared ?? null,
+      budgetPeriod: r.campaignBudget?.period ?? null,
+      primaryStatus: r.campaign?.primaryStatus ?? null,
+      budgetConstrained: reasons.includes('BUDGET_CONSTRAINED'),
+      adsDisapproved: disapproved.has(id),
     });
   }
   return out;
@@ -120,13 +172,82 @@ export async function fetchCampaignSpend(
   return spend;
 }
 
+/**
+ * §9 — daily-budget change history within [sinceIso, untilIso], keyed by budget
+ * resource name, as rate segments for `computeProratedCeiling`. Each amount
+ * change becomes a {date, dailyRate} boundary; the segment array is seeded at
+ * the month start with the rate in effect then (the earliest change's OLD
+ * amount), so the prorated ceiling reflects the whole month. Best-effort:
+ * change_event has a limited retention window and strict query rules, so a
+ * failure just returns an empty map and the ceiling falls back to daily × 30.4.
+ */
+export async function fetchBudgetRateSegments(
+  cfg: GoogleAdsConfig,
+  customerId: string,
+  sinceIso: string,
+  untilIso: string,
+): Promise<Map<string, BudgetRateSegment[]>> {
+  const byBudget = new Map<string, BudgetRateSegment[]>();
+  try {
+    const rows = await gaql(
+      cfg,
+      customerId,
+      `SELECT change_event.change_date_time, change_event.changed_fields,
+              change_event.old_resource, change_event.new_resource,
+              change_event.change_resource_type
+       FROM change_event
+       WHERE change_event.change_date_time >= '${sinceIso}'
+         AND change_event.change_date_time <= '${untilIso} 23:59:59'
+         AND change_event.change_resource_type = 'CAMPAIGN_BUDGET'
+       ORDER BY change_event.change_date_time ASC
+       LIMIT 1000`,
+    );
+    // Collect raw changes per budget (date, old rate, new rate), in order.
+    const raw = new Map<string, { date: string; oldRate: number; newRate: number }[]>();
+    for (const r of rows) {
+      const ce = r.changeEvent;
+      const resourceName =
+        ce?.newResource?.campaignBudget?.resourceName ??
+        ce?.oldResource?.campaignBudget?.resourceName;
+      const newMicros = ce?.newResource?.campaignBudget?.amountMicros;
+      const oldMicros = ce?.oldResource?.campaignBudget?.amountMicros;
+      // Only amount changes matter for the ceiling; skip if no new amount.
+      if (!resourceName || newMicros == null) continue;
+      const date = (ce?.changeDateTime ?? '').slice(0, 10);
+      if (!date) continue;
+      const list = raw.get(resourceName) ?? [];
+      list.push({
+        date,
+        oldRate: oldMicros != null ? microsToUnits(oldMicros) : microsToUnits(newMicros),
+        newRate: microsToUnits(newMicros),
+      });
+      raw.set(resourceName, list);
+    }
+    // Build month-spanning segments: seed at month start with the first
+    // change's OLD rate, then one boundary per change at its date/new rate.
+    for (const [resourceName, changes] of raw) {
+      if (changes.length === 0) continue;
+      const segments: BudgetRateSegment[] = [{ date: sinceIso, dailyRate: changes[0].oldRate }];
+      for (const c of changes) segments.push({ date: c.date, dailyRate: c.newRate });
+      byBudget.set(resourceName, segments);
+    }
+  } catch {
+    // best-effort — empty map means the ceiling uses current daily × 30.4
+  }
+  return byBudget;
+}
+
 // ── Orchestration (server): links the GAQL reads to the pacer DB rows ──
 
-function periodWindow(period: string, todayIso: string): { since: string; until: string } {
+function monthEndIso(period: string): string {
   const [y, m] = period.split('-').map(Number);
-  const since = `${period}-01`;
   const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
-  const monthEnd = `${period}-${String(lastDay).padStart(2, '0')}`;
+  return `${period}-${String(lastDay).padStart(2, '0')}`;
+}
+
+function periodWindow(period: string, todayIso: string): { since: string; until: string } {
+  const since = `${period}-01`;
+  const monthEnd = monthEndIso(period);
   const until = todayIso < monthEnd ? todayIso : monthEnd;
   return { since, until };
 }
@@ -173,12 +294,18 @@ export async function syncPeriodFromGoogle(
     select: { id: true, name: true, googleCampaignId: true },
   });
   const { since, until } = periodWindow(period, todayIso);
+  // Full last day of the month — the ceiling is a month-end cap, so it spans the
+  // whole month, not just the elapsed-to-`until` window.
+  const monthEnd = monthEndIso(period);
 
-  const [campaigns, periodSpend, runSpend] = await Promise.all([
+  const [campaigns, periodSpend, runSpend, rateSegments] = await Promise.all([
     importGoogleCampaigns(cfg, customerId),
     fetchCampaignSpend(cfg, customerId, since, until),
     fetchCampaignSpend(cfg, customerId, RUN_SPEND_SINCE, until).catch(
       () => new Map<string, number>(),
+    ),
+    fetchBudgetRateSegments(cfg, customerId, since, monthEnd).catch(
+      () => new Map<string, BudgetRateSegment[]>(),
     ),
   ]);
   const byId = new Map(campaigns.map((c) => [c.id, c]));
@@ -200,16 +327,36 @@ export async function syncPeriodFromGoogle(
       continue;
     }
     const spend = periodSpend.get(camp.id) ?? 0;
+    // §9 ceiling: daily campaigns only (a total budget has no daily-rate cap).
+    // Reprorated across mid-month rate changes; falls back to daily × 30.4.
+    const ceiling =
+      camp.dailyBudget != null
+        ? computeProratedCeiling(
+            (camp.budgetResourceName && rateSegments.get(camp.budgetResourceName)) || [],
+            camp.dailyBudget,
+            since,
+            monthEnd,
+          )
+        : null;
     ops.push(
       prisma.metaAdsPacerAd.update({
         where: { id: ad.id },
         data: {
           googleCampaignId: camp.id,
           googleEffectiveStatus: camp.status,
-          googleChannelType: camp.channelType,
+          // Store the display rollup group (Search/Display/…), consistent with
+          // the importer; mapChannelGroup also normalizes the raw enum.
+          googleChannelType: mapChannelGroup(camp.channelType),
           googleBudgetResourceName: camp.budgetResourceName,
           googleStartDate: camp.startDate,
           googleEndDate: camp.endDate,
+          googleBudgetReferenceCount: camp.budgetReferenceCount,
+          googleBudgetExplicitlyShared: camp.budgetExplicitlyShared,
+          googleBudgetPeriod: camp.budgetPeriod,
+          googlePrimaryStatus: camp.primaryStatus,
+          googleBudgetConstrained: camp.budgetConstrained,
+          googleAdsDisapproved: camp.adsDisapproved,
+          googleProratedCeiling: ceiling != null ? ceiling.toFixed(2) : null,
           pacerActual: spend.toFixed(2),
           pacerRunSpend: (runSpend.get(camp.id) ?? 0).toFixed(2),
           ...(camp.dailyBudget != null
@@ -297,6 +444,12 @@ export interface DiscoveredGoogleCampaign {
   alreadyLinked: boolean;
   /** The planner status this campaign would map to on import. */
   suggestedStatus: string;
+  /** §2 genuinely shared (reference_count > 1) + the group size. */
+  shared: boolean;
+  sharedCount: number | null;
+  /** §5 delivery signals (opposite remedies — raise budget vs fix ads). */
+  budgetConstrained: boolean;
+  adsDisapproved: boolean;
 }
 
 export interface DiscoverGoogleResult {
@@ -354,6 +507,10 @@ export async function discoverGoogleCampaigns(
     periodSpend: periodSpend.get(c.id) ?? 0,
     alreadyLinked: linkedIds.has(c.id),
     suggestedStatus: googleStatusToAdStatus(c.status),
+    shared: isSharedBudget(c.budgetReferenceCount),
+    sharedCount: isSharedBudget(c.budgetReferenceCount) ? c.budgetReferenceCount : null,
+    budgetConstrained: c.budgetConstrained,
+    adsDisapproved: c.adsDisapproved,
   }));
 
   return { ok: true, customerId, since, until, campaigns: out };
@@ -434,6 +591,10 @@ export async function importGoogleCampaignsAsRows(
     const budgetType = mapGoogleBudgetType(c.dailyBudget, c.totalBudget);
     const status = googleStatusToAdStatus(c.status);
     const spend = periodSpend.get(c.id) ?? 0;
+    // §9 ceiling on import: daily only, daily × 30.4 (a freshly-imported row has
+    // no allocation yet; sync reprorates it against change history next run).
+    const ceiling =
+      c.dailyBudget != null ? Number((c.dailyBudget * 30.4).toFixed(2)) : null;
     const adId = randomUUID();
     creates.push({
       id: adId,
@@ -453,6 +614,13 @@ export async function importGoogleCampaignsAsRows(
       googleChannelType: mapChannelGroup(c.channelType),
       googleEffectiveStatus: c.status,
       googleBudgetResourceName: c.budgetResourceName,
+      googleBudgetReferenceCount: c.budgetReferenceCount,
+      googleBudgetExplicitlyShared: c.budgetExplicitlyShared,
+      googleBudgetPeriod: c.budgetPeriod,
+      googlePrimaryStatus: c.primaryStatus,
+      googleBudgetConstrained: c.budgetConstrained,
+      googleAdsDisapproved: c.adsDisapproved,
+      googleProratedCeiling: ceiling != null ? ceiling.toFixed(2) : null,
       pacerActual: spend.toFixed(2),
       pacerDailyBudget:
         budgetType !== 'Lifetime' && c.dailyBudget != null ? c.dailyBudget.toFixed(2) : null,

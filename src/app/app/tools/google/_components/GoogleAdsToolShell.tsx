@@ -26,8 +26,9 @@ import { UserPicker, type UserPickerUser } from '@/components/user-picker';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { toast } from '@/lib/toast';
 import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
+import { buildGooglePacingCard } from '@/lib/ad-pacer/google-pacer-calc';
 import type { PacerAd, PacerPlan, DirectoryUser } from '@/lib/ad-pacer/types';
-import { makeAd, fmtDate } from '@/lib/ad-pacer/helpers';
+import { makeAd, fmt, fmtDate } from '@/lib/ad-pacer/helpers';
 import { COLORS as SHARED_COLORS } from '@/lib/ad-pacer/constants';
 import {
   PacerReadOnlyContext,
@@ -43,7 +44,7 @@ import {
 } from '@/app/app/tools/_shared';
 
 // ── Reference data ──
-const CHANNELS = ['Search', 'Display', 'Video', 'Shopping', 'PMax'] as const;
+const CHANNELS = ['Search', 'Display', 'Video', 'Shopping', 'PMax', 'Demand Gen'] as const;
 
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -619,6 +620,15 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               </button>
             ))}
           </div>
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3.5 py-2.5 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+            <InformationCircleIcon className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--primary)]" />
+            <span>
+              Actuals are <span className="font-medium text-[var(--foreground)]">served</span> cost
+              (metrics.cost_micros), not billed. Every daily campaign bills continuously, so its
+              spend settles in-month — nothing is deferred to month-end. Should-have-spent is just
+              client budget × margin.
+            </span>
+          </div>
           {reconView === 'compare' ? (
             <ComparePanel accountKey={accountKey} period={period} platform="google" />
           ) : (
@@ -631,8 +641,18 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           {!frozen && ' Add one, or sync from Google.'}
         </div>
       ) : tab === 'pacing' ? (
-        // Pacing tab — stacked PacerRow cards (mirrors Meta's Spend Pacing).
+        // Pacing tab — pace-adjusted account header + the "averages, not caps"
+        // note, then stacked PacerRow cards (mirrors Meta's Spend Pacing).
         <div className="mt-1">
+          <GooglePacingHeader ads={ads} timeZone={tz} period={period} />
+          <div className="mb-3 flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3.5 py-2.5 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+            <InformationCircleIcon className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--primary)]" />
+            <span>
+              Google daily budgets are averages, not caps. Actual daily spend can run up to 2× the
+              rate on a busy day, so single-day swings aren&apos;t overspend — the real cap is the
+              monthly ceiling (daily rate × 30.4).
+            </span>
+          </div>
           {ads.map((ad, i) => (
             <PacerRow
               key={ad.id}
@@ -739,6 +759,96 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   );
 }
 
+/**
+ * §5 pace-adjusted account header for the Pacing tab. The headline percent is a
+ * roll-up of per-campaign month-end PROJECTIONS over target — not raw
+ * percent-spent (which reads misleadingly low mid-month) — so 100% = on track to
+ * hit the number. Shows the served actual + target dollars (the receipts) and
+ * days elapsed alongside, exactly like the Meta header.
+ */
+function GooglePacingHeader({
+  ads,
+  timeZone,
+  period,
+}: {
+  ads: PacerAd[];
+  timeZone: string;
+  period: string;
+}) {
+  const roll = useMemo(() => {
+    const now = Date.now();
+    let target = 0;
+    let actual = 0;
+    let projected = 0;
+    let count = 0;
+    for (const ad of ads) {
+      if (ad.platform !== 'google') continue;
+      const card = buildGooglePacingCard(ad, now, timeZone);
+      if (card.target <= 0) continue;
+      target += card.target;
+      actual += card.actual;
+      projected += card.projected;
+      count += 1;
+    }
+    return { target, actual, projected, count };
+  }, [ads, timeZone]);
+
+  // Days elapsed / in month for the "day X/Y" caption (informational).
+  const [py, pm] = period.split('-').map(Number);
+  const daysInMonth = new Date(py, pm, 0).getDate();
+  const now = new Date();
+  const isCurrent = now.getFullYear() === py && now.getMonth() + 1 === pm;
+  const isPast = new Date(py, pm - 1, 1) < new Date(now.getFullYear(), now.getMonth(), 1);
+  const daysElapsed = isCurrent ? Math.min(now.getDate(), daysInMonth) : isPast ? daysInMonth : 0;
+
+  if (roll.count === 0 || roll.target <= 0) return null;
+
+  // Pace-adjusted: projected month-end ÷ target. 100% = on track.
+  const pacePct = Math.round((roll.projected / roll.target) * 100);
+  const barColor =
+    pacePct >= 95 && pacePct <= 110
+      ? SHARED_COLORS.success
+      : pacePct < 95
+        ? SHARED_COLORS.lifetime
+        : SHARED_COLORS.warn;
+
+  return (
+    <div className="mb-3 flex flex-wrap items-start justify-between gap-4 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+      <div className="flex items-end gap-6">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+            Target spend
+          </div>
+          <div className="mt-1 text-lg font-bold tabular-nums">{fmt(roll.target)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+            Actual (served)
+          </div>
+          <div className="mt-1 text-lg font-bold tabular-nums" style={{ color: SHARED_COLORS.daily }}>
+            {fmt(roll.actual)}
+          </div>
+        </div>
+      </div>
+      <div className="text-right">
+        <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+          Projected pace
+        </div>
+        <div className="mt-1 text-lg font-bold tabular-nums">{pacePct}% of target</div>
+        <div className="text-[10px] text-[var(--muted-foreground)]">
+          day {daysElapsed}/{daysInMonth} · {roll.count} campaign{roll.count === 1 ? '' : 's'}
+        </div>
+        <div className="ml-auto mt-1.5 h-1 w-40 overflow-hidden rounded-full bg-[var(--muted)]">
+          <div
+            className="h-full rounded-full"
+            style={{ width: `${Math.min(100, pacePct)}%`, background: barColor }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Header({
   tab,
   onTab,
@@ -841,6 +951,10 @@ type DiscoveredGoogleCampaign = {
   periodSpend: number;
   alreadyLinked: boolean;
   suggestedStatus: string;
+  shared: boolean;
+  sharedCount: number | null;
+  budgetConstrained: boolean;
+  adsDisapproved: boolean;
 };
 
 /**
@@ -1091,6 +1205,22 @@ function ImportFromGoogleModal({
                             </span>
                           ) : (
                             <AdStatusPill status={c.suggestedStatus} />
+                          )}
+                          {c.shared && (
+                            <span
+                              className="whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+                              style={{ background: 'rgba(125,184,232,0.16)', color: '#7db8e8' }}
+                            >
+                              Shared{c.sharedCount ? ` ×${c.sharedCount}` : ''}
+                            </span>
+                          )}
+                          {c.adsDisapproved && (
+                            <span
+                              className="whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+                              style={{ background: 'rgba(248,113,113,0.16)', color: '#f87171' }}
+                            >
+                              Disapproved
+                            </span>
                           )}
                         </div>
                         <div className="mt-0.5 truncate text-xs text-[var(--muted-foreground)]">

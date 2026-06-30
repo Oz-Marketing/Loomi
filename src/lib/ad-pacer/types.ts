@@ -105,6 +105,21 @@ export interface PacerAd {
   googleStartDate?: string | null;
   googleEndDate?: string | null;
   googleBudgetResourceName?: string | null;
+  // §2 budget shape: referenceCount > 1 = genuinely SHARED (drives the badge +
+  // budget-as-pacing-unit grouping); explicitlyShared = the shareable flag only.
+  // budgetPeriod = "DAILY" | "CUSTOM_PERIOD" (the Daily/Total label source).
+  googleBudgetReferenceCount?: number | null;
+  googleBudgetExplicitlyShared?: boolean | null;
+  googleBudgetPeriod?: string | null;
+  // §5 delivery signals (opposite remedies — see schema). googleBudgetConstrained
+  // = BUDGET_CONSTRAINED (raise budget); googleAdsDisapproved = an ad is
+  // disapproved (fix the ads). googlePrimaryStatus = raw campaign.primary_status.
+  googlePrimaryStatus?: string | null;
+  googleBudgetConstrained?: boolean | null;
+  googleAdsDisapproved?: boolean | null;
+  // §9 monthly ceiling ($) — server-computed, reprorated across mid-month budget
+  // changes (change_event); falls back to current daily × 30.4. Null for total.
+  googleProratedCeiling?: string | null;
   // Per-ad alert mute (Change 9): silences pacing-family alerts for this ad.
   alertsMuted: boolean;
   designNotes: DesignNote[];

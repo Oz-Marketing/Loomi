@@ -30,6 +30,12 @@ import {
 } from '@/lib/ad-pacer/helpers';
 import { fmtPeriodLong } from '@/lib/ad-pacer/period';
 import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
+import { buildGooglePacingCard } from '@/lib/ad-pacer/google-pacer-calc';
+import {
+  GooglePacingBadges,
+  GoogleDailyMetricBoxes,
+  GooglePacingInsight,
+} from './google-pacer-card';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { usePacerReadOnly } from './pacer-read-only';
 import { Tooltip } from './Tooltip';
@@ -147,6 +153,14 @@ export function PacerRow({
   const calc = useMemo(
     () => buildPacerCalc(ad, Date.now(), timeZone),
     [ad, timeZone],
+  );
+  // §5 Google branch — the per-campaign ceiling card (monthly ceiling, rec daily
+  // RATE, budget-limited vs disapproved). Only built for Google lines; Meta lines
+  // render the existing remaining-budget framing untouched.
+  const isGoogle = ad.platform === 'google';
+  const gCard = useMemo(
+    () => (isGoogle ? buildGooglePacingCard(ad, Date.now(), timeZone) : null),
+    [isGoogle, ad, timeZone],
   );
   // The date being paced TO — the Meta/planned end clamped to the pacing
   // month (Change 4). Drives the "until …" labels and the completed banner.
@@ -393,16 +407,21 @@ export function PacerRow({
             <div className="flex items-center gap-2 text-[10px]">
               {/* Budget type — Daily (blue) vs Lifetime (purple), matching the
                   table-view tag — so the daily-rate vs fixed-total distinction
-                  is explicit, not just implied by the "/day" vs "total" suffix. */}
-              <span
-                className="font-bold uppercase tracking-wider px-2 py-0.5 rounded"
-                style={{
-                  background: budgetTypeTint(ad.budgetType),
-                  color: typeColor,
-                }}
-              >
-                {ad.budgetType}
-              </span>
+                  is explicit, not just implied by the "/day" vs "total" suffix.
+                  Google lines show Daily/Total + the shared/delivery badges. */}
+              {isGoogle && gCard ? (
+                <GooglePacingBadges card={gCard} />
+              ) : (
+                <span
+                  className="font-bold uppercase tracking-wider px-2 py-0.5 rounded"
+                  style={{
+                    background: budgetTypeTint(ad.budgetType),
+                    color: typeColor,
+                  }}
+                >
+                  {ad.budgetType}
+                </span>
+              )}
               <span
                 className="font-bold uppercase tracking-wider px-2 py-0.5 rounded"
                 style={{
@@ -958,7 +977,13 @@ export function PacerRow({
             }
           />
         )}
-        {!isLifetime && (
+        {!isLifetime && (isGoogle && gCard ? (
+          <GoogleDailyMetricBoxes
+            card={gCard}
+            hasDates={calc.hasDates && !calc.endsBeforeToday}
+            effectiveEnd={effectiveEnd}
+          />
+        ) : (
         <>
         <MetricBox
           label="Days Remaining"
@@ -1027,7 +1052,7 @@ export function PacerRow({
           color={recColor}
         />
         </>
-        )}
+        ))}
       </div>
         </>
       )}
@@ -1041,6 +1066,11 @@ export function PacerRow({
             (() => {
         if (calc.budget <= 0) return null;
         if (!calc.hasDates) return null;
+        // §5 Google insight owns all cases (budget-limited / disapproved / over
+        // ceiling / short of target / on-track) — opposite remedies, wide band.
+        if (isGoogle && gCard) {
+          return <GooglePacingInsight card={gCard} effectiveEnd={effectiveEnd} />;
+        }
         if (calc.spent >= calc.budget) {
           return (
             <p

@@ -256,7 +256,8 @@ interface GoogleMetrics {
 }
 interface GoogleRow {
   // §8 pacer import also reads advertisingChannelType + start/end dates and the
-  // budget's total_amount_micros + resource_name (shared-budget dedup).
+  // budget's total_amount_micros + resource_name (shared-budget dedup). §5 adds
+  // primaryStatus/primaryStatusReasons (budget-limited signal).
   campaign?: {
     id?: string;
     name?: string;
@@ -264,8 +265,31 @@ interface GoogleRow {
     advertisingChannelType?: string;
     startDate?: string;
     endDate?: string;
+    primaryStatus?: string;
+    primaryStatusReasons?: string[];
+    resourceName?: string;
   };
-  campaignBudget?: { amountMicros?: string; totalAmountMicros?: string; resourceName?: string };
+  // §2 sharing/period: referenceCount (>1 = genuinely shared), explicitlyShared
+  // (the shareable flag), period (DAILY | CUSTOM_PERIOD). int64 → string.
+  campaignBudget?: {
+    amountMicros?: string;
+    totalAmountMicros?: string;
+    resourceName?: string;
+    referenceCount?: string;
+    explicitlyShared?: boolean;
+    period?: string;
+  };
+  // §5 ad-level disapproval — rolled up to a per-campaign "has disapproved ads".
+  adGroupAd?: { policySummary?: { approvalStatus?: string } };
+  // §9 budget-change history for mid-month ceiling reproration.
+  changeEvent?: {
+    changeDateTime?: string;
+    campaign?: string;
+    changeResourceType?: string;
+    changedFields?: string;
+    oldResource?: { campaignBudget?: { amountMicros?: string; resourceName?: string } };
+    newResource?: { campaignBudget?: { amountMicros?: string; resourceName?: string } };
+  };
   adGroup?: { id?: string; name?: string; status?: string; type?: string };
   adGroupCriterion?: {
     keyword?: { text?: string; matchType?: string };

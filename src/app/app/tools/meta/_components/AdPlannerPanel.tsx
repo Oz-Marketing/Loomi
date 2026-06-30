@@ -450,7 +450,7 @@ export function AdPlannerPanel({
                   {/* Updates icon column — no header, just kept aligned */}
                   <th className="w-10 px-2 py-2"></th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Status
+                    Task Status
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Due Date
@@ -601,7 +601,7 @@ export function AdPlannerPanel({
             },
             {
               id: 'ad-status',
-              label: 'Ad Status',
+              label: 'Task Status',
               icon: <ClockIcon className="h-4 w-4" />,
               onClick: () => setBulkField('adStatus'),
             },

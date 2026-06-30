@@ -790,8 +790,13 @@ export function accessibleAccountKeys(
  * Build the admin overview payload for a single period across many accounts.
  * One row per account: dealer name + period budgets + ads (with notes/log).
  */
-export async function fetchOverview(accountKeys: string[], period: string) {
+export async function fetchOverview(
+  accountKeys: string[],
+  period: string,
+  platform: PacerPlatform = 'meta',
+) {
   if (accountKeys.length === 0) return [];
+  const isGoogle = platform === 'google';
 
   const [accounts, plans, globalDefaultMarkup] = await Promise.all([
     prisma.account.findMany({
@@ -816,7 +821,7 @@ export async function fetchOverview(accountKeys: string[], period: string) {
       : Promise.resolve([]),
     planIds.length > 0
       ? prisma.metaAdsPacerAd.findMany({
-          where: { planId: { in: planIds }, period, ...adPlatformWhere('meta') },
+          where: { planId: { in: planIds }, period, ...adPlatformWhere(platform) },
           orderBy: { position: 'asc' },
           include: {
             designNotes: { orderBy: { createdAt: 'asc' } },
@@ -824,11 +829,11 @@ export async function fetchOverview(accountKeys: string[], period: string) {
           },
         })
       : Promise.resolve([]),
-    // Aggregate account-level note counts (scoped to this month) in one
-    // round-trip so the overview can render the chat badges without N fetches.
+    // Aggregate account-level note counts (scoped to this month + platform) in
+    // one round-trip so the overview can render the chat badges without N fetches.
     prisma.metaAdsPacerAccountNote.groupBy({
       by: ['accountKey'],
-      where: { accountKey: { in: accountKeys }, period },
+      where: { accountKey: { in: accountKeys }, period, ...adPlatformWhere(platform) },
       _count: { _all: true },
     }),
   ]);
@@ -854,14 +859,15 @@ export async function fetchOverview(accountKeys: string[], period: string) {
         dealer: acct.dealer,
         // §0.1: resolved per-account factor for the overview gross-up display.
         markup: accountMarginSetting(acct.markup, globalDefaultMarkup),
-        baseBudgetGoal: budget?.baseBudgetGoal ?? null,
-        addedBudgetGoal: budget?.addedBudgetGoal ?? null,
+        // Per-platform budget columns: Google reads its own goal/carryover pair.
+        baseBudgetGoal: (isGoogle ? budget?.googleBaseBudgetGoal : budget?.baseBudgetGoal) ?? null,
+        addedBudgetGoal: (isGoogle ? budget?.googleAddedBudgetGoal : budget?.addedBudgetGoal) ?? null,
         // Carryover folded into each source's spend target (target = goal ×
         // markup + carryover), so the overview's remaining-budget footer can
         // reconcile against the same target the planner uses instead of the
         // raw client budget.
-        baseCarryover: budget?.baseCarryover ?? null,
-        addedCarryover: budget?.addedCarryover ?? null,
+        baseCarryover: (isGoogle ? budget?.googleBaseCarryover : budget?.baseCarryover) ?? null,
+        addedCarryover: (isGoogle ? budget?.googleAddedCarryover : budget?.addedCarryover) ?? null,
         notesCount: noteCountByKey.get(acct.key) ?? 0,
         ads: acctAds.map((ad) => ({
           ...ad,
@@ -1531,11 +1537,11 @@ export async function getCurrentPacerPeriod(accountKey: string): Promise<string>
 }
 
 /** Lists periods that have at least one ad or one budget row. */
-export async function listPeriods(planId: string) {
+export async function listPeriods(planId: string, platform?: PacerPlatform) {
   const [adGroups, budgets] = await Promise.all([
     prisma.metaAdsPacerAd.groupBy({
       by: ['period'],
-      where: { planId, period: { not: '' } },
+      where: { planId, period: { not: '' }, ...adPlatformWhere(platform) },
       _count: { _all: true },
     }),
     prisma.metaAdsPacerPeriodBudget.findMany({

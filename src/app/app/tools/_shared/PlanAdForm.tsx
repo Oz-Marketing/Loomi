@@ -34,6 +34,7 @@ import { flightDatePresets, TODAY_PRESET } from '@/lib/ad-pacer/period';
 import { Field, DollarInput, inputClass, readonlyClass } from './inputs';
 import { ApprovalPill } from './pills';
 import { StatusSelect } from './StatusSelect';
+import { AdStatusBadge } from './AdStatusBadge';
 import { BudgetTypeToggle, BudgetSourceToggle } from './toggles';
 import { CollapsibleSection } from './CollapsibleSection';
 import { UserPicker } from './UserPicker';
@@ -164,37 +165,36 @@ export function PlanAdForm({
                 </select>
               </Field>
             )}
-            {isMeta && (
-              <Field label="Recurring?">
-                <select
-                  value={ad.recurring}
-                  onChange={(e) => onUpdate({ ...ad, recurring: e.target.value })}
-                  className={inputClass}
-                >
-                  {RECURRING_OPTS.map((o) => (
-                    <option key={o} value={o}>
-                      {o}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            )}
-            {isMeta && (
-              <Field label="Co-op?">
-                <select
-                  value={ad.coop}
-                  onChange={(e) => onUpdate({ ...ad, coop: e.target.value })}
-                  className={inputClass}
-                >
-                  {COOP_OPTS.map((o) => (
-                    <option key={o} value={o}>
-                      {o}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            )}
-            <Field label="Ad Status">
+            {/* Recurring + Co-op are optional nice-to-haves on both platforms. */}
+            <Field label="Recurring?">
+              <select
+                value={ad.recurring}
+                onChange={(e) => onUpdate({ ...ad, recurring: e.target.value })}
+                className={inputClass}
+              >
+                {RECURRING_OPTS.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Co-op?">
+              <select
+                value={ad.coop}
+                onChange={(e) => onUpdate({ ...ad, coop: e.target.value })}
+                className={inputClass}
+              >
+                {COOP_OPTS.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            {/* The team's planning lifecycle (editable). Renamed Task Status to
+                distinguish it from the read-only platform Ad Status beside it. */}
+            <Field label="Task Status">
               <StatusSelect
                 value={ad.adStatus}
                 options={AD_STATUSES}
@@ -215,8 +215,15 @@ export function PlanAdForm({
                         : ad.dateCompleted,
                   });
                 }}
-                ariaLabel="Ad status"
+                ariaLabel="Task status"
               />
+            </Field>
+            {/* Read-only platform Ad Status — the campaign's real delivery state
+                synced from Meta/Google. Display-only; never edited here. */}
+            <Field label="Ad Status (from platform)">
+              <div className="flex h-9 items-center">
+                <AdStatusBadge ad={ad} />
+              </div>
             </Field>
           </div>
 
@@ -399,8 +406,9 @@ export function PlanAdForm({
             </div>
           )}
 
-          {/* Creative & Design + Approvals — Meta creative-workflow only. */}
-          {isMeta && (
+          {/* Creative & Design + Approvals — optional nice-to-haves on both
+              platforms. Google campaigns have no creative workflow of their own,
+              but reps may still want to track design/approvals against a line. */}
           <>
           <CollapsibleSection
             icon={<PaintBrushIcon className="w-3 h-3" />}
@@ -552,7 +560,6 @@ export function PlanAdForm({
           </div>
           </CollapsibleSection>
           </>
-          )}
 
     </div>
   );

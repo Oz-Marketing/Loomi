@@ -16,7 +16,12 @@ import {
   AdjustmentsHorizontalIcon,
 } from '@heroicons/react/24/outline';
 import { InvestmentIcon } from '@/components/icons/investment';
-import { ReconciliationPanel } from '@/app/app/tools/meta/_components/ReconciliationViews';
+import {
+  ReconciliationPanel,
+  OverviewView,
+  type OverviewAccount,
+} from '@/app/app/tools/meta/_components/ReconciliationViews';
+import { EMPTY_FILTERS } from '@/lib/ad-pacer/filters';
 import { useSession } from 'next-auth/react';
 import { useAccount } from '@/contexts/account-context';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -27,13 +32,16 @@ import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { toast } from '@/lib/toast';
 import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
 import { buildGooglePacingCard } from '@/lib/ad-pacer/google-pacer-calc';
-import type { PacerAd, PacerPlan, DirectoryUser } from '@/lib/ad-pacer/types';
+import type { PacerAd, PacerPlan, DirectoryUser, PeriodSummary } from '@/lib/ad-pacer/types';
+import { CopyPlanModal, type CopyFieldOptions } from '@/app/app/tools/meta/_components/CopyPlanModal';
 import { makeAd, fmt, fmtDate } from '@/lib/ad-pacer/helpers';
 import { COLORS as SHARED_COLORS } from '@/lib/ad-pacer/constants';
 import {
   PacerReadOnlyContext,
   BudgetPanel,
   TotalAllocationHeader,
+  AddPlanButton,
+  AccountNotesButton,
   AdSummaryRow,
   PacerRow,
   Tooltip,
@@ -42,6 +50,7 @@ import {
   ComparePanel,
   StatusBattery,
 } from '@/app/app/tools/_shared';
+import { AccountNotesDrawer } from '@/app/app/tools/meta/_components/AccountNotesDrawer';
 
 // ── Reference data ──
 const CHANNELS = ['Search', 'Display', 'Video', 'Shopping', 'PMax', 'Demand Gen'] as const;
@@ -146,7 +155,7 @@ function GoogleLinkBadge({ ad }: { ad: PacerAd }) {
 }
 
 export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
-  const { accountKey, accountData } = useAccount();
+  const { accountKey, accountData, setAccount } = useAccount();
   const { confirm } = useLoomiDialog();
   const { data: session } = useSession();
   const currentUserId = session?.user?.id ?? null;
@@ -161,6 +170,14 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const [editing, setEditing] = useState<PacerAd | 'new' | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
+  const [showCopyModal, setShowCopyModal] = useState(false);
+  const [search, setSearch] = useState('');
+  // Which account's notes drawer is open (null = closed). Carries an accountKey
+  // so an admin can open notes for any card, not just the selected account.
+  const [notesTarget, setNotesTarget] = useState<{ accountKey: string; label: string } | null>(
+    null,
+  );
+  const [notesCount, setNotesCount] = useState<number | null>(null);
   // Pace-view per-card expand state (mirrors Meta's BudgetPacerPanel).
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const toggleExpanded = (id: string) =>
@@ -176,6 +193,29 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     : null;
   const { data, isLoading, mutate } = useSWR<PacerPlan>(swrKey, fetcher, { revalidateOnFocus: false });
   const ads = useMemo<PacerAd[]>(() => data?.ads ?? [], [data]);
+  // Search filter for the rendered rows (planner table + pacing cards).
+  const visibleAds = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return q ? ads.filter((a) => (a.name ?? '').toLowerCase().includes(q)) : ads;
+  }, [ads, search]);
+  // Period list (Google-scoped) for the "copy from another month" modal.
+  const { data: periodsData } = useSWR<{ periods: PeriodSummary[] }>(
+    accountKey
+      ? `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}/periods?platform=google`
+      : null,
+    fetcher,
+  );
+  const periods = useMemo<PeriodSummary[]>(() => periodsData?.periods ?? [], [periodsData]);
+  const otherPeriodsWithAds = periods.some((p) => p.period !== period && p.adCount > 0);
+
+  // Admin all-accounts overview — only fetched when no sub-account is selected.
+  const { data: overviewData, error: overviewError } = useSWR<{ accounts: OverviewAccount[] }>(
+    !accountKey
+      ? `/api/meta-ads-pacer/overview?period=${period}&platform=google`
+      : null,
+    fetcher,
+    { revalidateOnFocus: false },
+  );
   const tz = data?.timeZone ?? 'America/Denver';
   const frozen = !!data?.frozen;
 
@@ -464,14 +504,51 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     }
   }
 
+  // Copy a prior month's Google plan into this period (platform-scoped server-
+  // side so it never pulls in Meta lines). Mirrors Meta's handleCopyFrom.
+  async function handleCopyFrom(from: string, adIds: string[], fields: CopyFieldOptions) {
+    if (!accountKey) return;
+    const res = await fetch(
+      `/api/meta-ads-pacer/${encodeURIComponent(accountKey)}/copy-from?platform=google`,
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ from, to: period, adIds, fields }),
+      },
+    );
+    const body = await readJsonSafe(res);
+    if (!res.ok) throw new Error((body?.error as string) || `Copy failed (${res.status})`);
+    mutate(body as unknown as PacerPlan, { revalidate: false });
+    setShowCopyModal(false);
+    toast.success('Plan copied from another month');
+  }
+
   if (!accountKey) {
+    // Admin mode — mirror Meta: an all-accounts overview (every account the user
+    // can access, regardless of whether it has Google data yet) with a comment
+    // icon + Open per card, rather than forcing an account selection.
     return (
       <div className="pt-6">
-        <Header tab={tab} onTab={setTab} accountKey={null} />
-        <div className="glass-section-card mt-4 rounded-xl p-6 text-sm text-[var(--muted-foreground)]">
-          Select a sub-account from the switcher to plan, pace, and reconcile its
-          Google campaigns.
-        </div>
+        <Header
+          tab={tab}
+          onTab={setTab}
+          accountKey={null}
+          period={period}
+          onShiftPeriod={(d) => setPeriod((p) => shiftPeriod(p, d))}
+        />
+        {/* Reuse Meta's expandable overview for exact parity — each account row
+            expands to its ad drill-down; notes + Open are wired per row. Every
+            accessible account shows regardless of whether it has Google data. */}
+        <OverviewView
+          period={period}
+          filters={EMPTY_FILTERS}
+          currentUserId={currentUserId}
+          onOpenAccount={(key) => setAccount({ mode: 'account', accountKey: key })}
+          users={directoryUsers}
+          accounts={overviewData?.accounts ?? null}
+          loadError={overviewError ? 'Failed to load accounts' : null}
+          platform="google"
+        />
       </div>
     );
   }
@@ -502,6 +579,17 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
             {accountData?.dealer ?? accountKey}
           </span>
           {plan && plan.ads.length > 0 && <StatusBattery ads={plan.ads} />}
+        </div>
+        {/* Account comments for the selected period (mirrors Meta) — opens the
+            notes drawer; the badge shows this month's comment count. */}
+        <div className="ml-auto flex-shrink-0">
+          <AccountNotesButton
+            count={notesCount}
+            onClick={() =>
+              setNotesTarget({ accountKey, label: accountData?.dealer ?? accountKey })
+            }
+            ariaLabel="Account notes for this month"
+          />
         </div>
       </div>
 
@@ -552,6 +640,28 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           <span className="font-normal text-[var(--muted-foreground)]">({ads.length})</span>
         </span>
         <div className="flex items-center gap-2">
+          {/* Search ads (mirrors Meta) */}
+          <div className="relative">
+            <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search ads…"
+              aria-label="Search ads by name"
+              className="w-44 rounded-lg border border-[var(--border)] bg-[var(--card)] py-1.5 pl-8 pr-7 text-xs text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)] focus:outline-none"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                aria-label="Clear search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+              >
+                <XMarkIcon className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
           {connected && (
             <button
               type="button"
@@ -564,31 +674,18 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               <ArrowPathIcon className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
             </button>
           )}
-          {connected && (
-            <button
-              type="button"
-              onClick={() => setImportOpen(true)}
-              disabled={frozen}
-              title={
-                frozen
-                  ? 'This month is frozen — reopen it to import'
-                  : 'Bring existing Google campaigns into this month as rows'
-              }
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <GoogleAdsBrandIcon className="h-3.5 w-3.5" />
-              Import campaigns
-            </button>
-          )}
+          {/* Add Plan dropdown (mirrors Meta): create from scratch, copy from a
+              prior month, or import from Google (import shown only when linked). */}
           {!frozen && (
-            <button
-              type="button"
-              onClick={() => setEditing('new')}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-[var(--primary)]/90"
-            >
-              <PlusIcon className="h-3.5 w-3.5" />
-              Add campaign
-            </button>
+            <AddPlanButton
+              onCreateNew={() => setEditing('new')}
+              onOpenCopy={() => setShowCopyModal(true)}
+              onImport={connected ? () => setImportOpen(true) : undefined}
+              importIcon={<GoogleAdsBrandIcon className="h-4 w-4" />}
+              importLabel="Import from Google"
+              importHint="Bring existing Google campaigns in as rows"
+              hasOtherPeriods={otherPeriodsWithAds}
+            />
           )}
         </div>
       </div>
@@ -653,7 +750,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               monthly ceiling (daily rate × 30.4).
             </span>
           </div>
-          {ads.map((ad, i) => (
+          {visibleAds.map((ad, i) => (
             <PacerRow
               key={ad.id}
               ad={ad}
@@ -684,7 +781,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
             <thead className="sticky top-0 z-10">
               <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
                 <th className="w-9 pl-3 pr-1 py-2" />
-                {['Ad', '', 'Status', 'Due Date', 'Budget', 'Allocation', 'Flight Dates'].map((h, i) => (
+                {['Ad', '', 'Task Status', 'Due Date', 'Budget', 'Allocation', 'Flight Dates'].map((h, i) => (
                   <th
                     key={i}
                     className={`text-left px-3 py-2 text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)] ${h === '' ? 'w-10 px-2' : ''}`}
@@ -696,7 +793,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               </tr>
             </thead>
             <tbody>
-              {ads.map((ad, i) => (
+              {visibleAds.map((ad, i) => (
                 <AdSummaryRow
                   key={ad.id}
                   ad={ad}
@@ -752,6 +849,34 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           users={users}
           onClose={() => setImportOpen(false)}
           onImported={handleImported}
+        />
+      )}
+
+      {showCopyModal && accountKey && (
+        <CopyPlanModal
+          accountKey={accountKey}
+          targetPeriod={period}
+          periods={periods}
+          platform="google"
+          onClose={() => setShowCopyModal(false)}
+          onCopy={handleCopyFrom}
+        />
+      )}
+
+      {notesTarget && (
+        <AccountNotesDrawer
+          accountKey={notesTarget.accountKey}
+          accountLabel={notesTarget.label}
+          period={period}
+          users={directoryUsers}
+          currentUserId={currentUserId}
+          platform="google"
+          onClose={() => setNotesTarget(null)}
+          // Only reflect the count back into the page-title badge when the open
+          // drawer is for the currently-selected account.
+          onCountChange={(c) => {
+            if (notesTarget.accountKey === accountKey) setNotesCount(c);
+          }}
         />
       )}
     </div>

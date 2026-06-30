@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import {
+  adPlatformWhere,
   canAccessPacer,
   getOrCreatePlan,
   getPeriodPlanView,
@@ -47,6 +48,11 @@ export async function POST(
   if (!canAccessPacer(session, accountKey)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
+
+  // Platform-scoped: a Google copy must only read/write Google lines (and vice
+  // versa) so it never duplicates the other channel's ads into this period.
+  const platform = req.nextUrl.searchParams.get('platform') === 'google' ? 'google' : 'meta';
+  const createPlatform = platform === 'google' ? 'google' : null;
 
   const body = (await req.json()) as CopyFromBody;
   const from = typeof body.from === 'string' ? body.from : '';
@@ -94,15 +100,16 @@ export async function POST(
       where: {
         planId: plan.id,
         period: from,
+        ...adPlatformWhere(platform),
         ...(adIds && adIds.length > 0 ? { id: { in: adIds } } : {}),
       },
       orderBy: { position: 'asc' },
     });
     if (sourceAds.length === 0) return;
 
-    // Append to any existing ads in the target period
+    // Append to any existing ads in the target period (same platform).
     const existing = await tx.metaAdsPacerAd.count({
-      where: { planId: plan.id, period: to },
+      where: { planId: plan.id, period: to, ...adPlatformWhere(platform) },
     });
 
     for (let i = 0; i < sourceAds.length; i++) {
@@ -112,6 +119,11 @@ export async function POST(
           planId: plan.id,
           position: existing + i,
           period: to,
+          // Preserve the platform tag; for Google also carry the channel-type
+          // label (planning identity). The live campaign LINK is intentionally
+          // NOT copied (like Meta's metaObjectId) — the new month re-syncs.
+          platform: createPlatform,
+          googleChannelType: src.googleChannelType,
           // Identity — always copied.
           name: src.name,
           actionNeeded: src.actionNeeded,
@@ -148,6 +160,6 @@ export async function POST(
     }
   });
 
-  const view = await getPeriodPlanView(accountKey, to, session.user?.id ?? null);
+  const view = await getPeriodPlanView(accountKey, to, session.user?.id ?? null, platform);
   return NextResponse.json({ accountKey, period: to, ...view });
 }

@@ -53,6 +53,7 @@ export function CopyPlanModal({
   periods,
   onClose,
   onCopy,
+  platform = 'meta',
 }: {
   accountKey: string;
   targetPeriod: string;
@@ -63,6 +64,9 @@ export function CopyPlanModal({
     adIds: string[],
     fields: CopyFieldOptions,
   ) => Promise<void>;
+  // Which platform's lines the source-period preview loads. Defaults to Meta so
+  // existing callers are unchanged; the Google tool passes 'google'.
+  platform?: 'meta' | 'google';
 }) {
   const sources = useMemo(
     () => periods.filter((p) => p.period !== targetPeriod && p.adCount > 0),
@@ -86,7 +90,9 @@ export function CopyPlanModal({
     setAds(null);
     setLoadError(null);
     setSelected(new Set());
-    fetch(`/api/meta-ads-pacer/${accountKey}?period=${sourcePeriod}`)
+    fetch(
+      `/api/meta-ads-pacer/${accountKey}?period=${sourcePeriod}${platform === 'google' ? '&platform=google' : ''}`,
+    )
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<{ ads: CopySourceAd[] }>;

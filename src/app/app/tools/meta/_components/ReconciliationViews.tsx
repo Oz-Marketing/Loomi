@@ -750,6 +750,7 @@ function OverviewAccountRow({
   filters,
   currentUserId,
   users,
+  platform = 'meta',
 }: {
   account: OverviewAccount;
   period: string;
@@ -759,6 +760,8 @@ function OverviewAccountRow({
   filters: PlanFilters;
   currentUserId: string | null;
   users: DirectoryUser[];
+  // Scopes the per-account notes drawer to the caller's platform ledger.
+  platform?: 'meta' | 'google';
 }) {
   const [notesOpen, setNotesOpen] = useState(false);
   const [notesCount, setNotesCount] = useState<number>(account.notesCount);
@@ -1039,6 +1042,7 @@ function OverviewAccountRow({
           period={period}
           users={users}
           currentUserId={currentUserId}
+          platform={platform}
           onClose={() => setNotesOpen(false)}
           onCountChange={setNotesCount}
         />
@@ -1055,6 +1059,7 @@ export function OverviewView({
   users,
   accounts,
   loadError,
+  platform = 'meta',
 }: {
   period: string;
   filters: PlanFilters;
@@ -1065,6 +1070,9 @@ export function OverviewView({
   // share the same ads — see MetaAdsPlannerTool for the fetch.
   accounts: OverviewAccount[] | null;
   loadError: string | null;
+  // Scopes each row's notes drawer to the caller's platform (Google reuses this
+  // whole overview for its admin drill-down).
+  platform?: 'meta' | 'google';
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -1134,6 +1142,7 @@ export function OverviewView({
           filters={filters}
           currentUserId={currentUserId}
           users={users}
+          platform={platform}
         />
       ))}
     </div>

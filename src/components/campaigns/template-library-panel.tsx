@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowPathIcon,
   CheckCircleIcon,
+  ChevronDownIcon,
   DocumentTextIcon,
   MagnifyingGlassIcon,
+  PlusIcon,
 } from '@heroicons/react/24/outline';
 
 export interface TemplateLibraryItem {
@@ -19,8 +21,6 @@ export interface TemplateLibraryItem {
   updatedAt: string;
 }
 
-type SortKey = 'updated' | 'name';
-
 function formatUpdated(value?: string): string {
   if (!value) return '';
   const date = new Date(value);
@@ -30,19 +30,24 @@ function formatUpdated(value?: string): string {
 
 interface TemplateLibraryPanelProps {
   onSelect: (design: string) => void;
+  /**
+   * When provided, renders a "Create New" button that spins up a fresh
+   * template scoped to the current sub-account and drops the user straight
+   * into the editor. The mode arg picks the builder (drag-and-drop vs HTML).
+   */
+  onCreateNew?: (mode: 'visual' | 'code') => void;
 }
 
 /**
  * Embedded template picker used by the Message step (both standalone-email
  * and multi-channel Email tab). Fetches /api/templates, renders cards with
- * iframe thumbnails, includes search + sort. Calls onSelect with the
- * design slug when the user clicks a card.
+ * iframe thumbnails, includes search. Calls onSelect with the design slug
+ * when the user clicks a card; calls onCreateNew when the user creates one.
  */
-export function TemplateLibraryPanel({ onSelect }: TemplateLibraryPanelProps) {
+export function TemplateLibraryPanel({ onSelect, onCreateNew }: TemplateLibraryPanelProps) {
   const [templates, setTemplates] = useState<TemplateLibraryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [sort, setSort] = useState<SortKey>('updated');
 
   useEffect(() => {
     let cancelled = false;
@@ -74,23 +79,19 @@ export function TemplateLibraryPanel({ onSelect }: TemplateLibraryPanelProps) {
             t.category?.toLowerCase().includes(query),
         )
       : templates;
-    return [...filtered].sort((a, b) => {
-      if (sort === 'name') return (a.name || a.design).localeCompare(b.name || b.design);
-      return (b.updatedAt || '').localeCompare(a.updatedAt || '');
-    });
-  }, [templates, search, sort]);
+    return [...filtered].sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  }, [templates, search]);
 
   return (
     <div className="glass-section-card rounded-2xl border border-[var(--border)] overflow-hidden">    
       <div className="flex items-center justify-between gap-3 p-4 border-b border-[var(--border)] flex-wrap">
-        <div className='flex items-center gap-3'>
-            <p className="text-base font-semibold">Templates</p>
-            <div className='inline-flex items-center gap-2 h-10 px-4 text-sm font-medium rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-white hover:bg-[var(--primary)] transition-colors mt-3 cursor-pointer'>
-              <a href="/templates" target="_blank">Add</a>
-            </div>
+        <div className="flex items-center gap-3">
+          <p className="text-base font-semibold">Templates</p>
+          <div className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 text-white hover:bg-[var(--primary)] transition-colors cursor-pointer">
+            <a href="/templates" target="_blank">Add</a>
+          </div>
         </div>
-
-        <div className="flex items-center gap-2 flex-1 min-w-[260px] max-w-[460px]">
+        <div className="flex items-center gap-2 flex-1 min-w-[260px] max-w-[520px]">
           <div className="relative flex-1">
             <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] pointer-events-none" />
             <input
@@ -100,14 +101,7 @@ export function TemplateLibraryPanel({ onSelect }: TemplateLibraryPanelProps) {
               className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] pl-9 pr-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
             />
           </div>
-          <select
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortKey)}
-            className="rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--primary)] focus:ring-2 focus:ring-[var(--primary)]/20"
-          >
-            <option value="updated">Recently updated</option>
-            <option value="name">Name (A–Z)</option>
-          </select>
+          {onCreateNew && <CreateNewMenu onCreate={onCreateNew} />}
         </div>
       </div>
       <div className="p-5">
@@ -131,6 +125,61 @@ export function TemplateLibraryPanel({ onSelect }: TemplateLibraryPanelProps) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * "Create New" split button. Opens a small menu so the user picks the
+ * builder (Drag & Drop vs HTML) before being dropped into the editor.
+ */
+function CreateNewMenu({ onCreate }: { onCreate: (mode: 'visual' | 'code') => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClickOutside(event: MouseEvent) {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  const pick = (mode: 'visual' | 'code') => {
+    setOpen(false);
+    onCreate(mode);
+  };
+
+  return (
+    <div className="relative shrink-0" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)]/90 px-3 py-2 text-sm font-medium text-white hover:bg-[var(--primary)] transition-colors whitespace-nowrap"
+      >
+        <PlusIcon className="w-4 h-4" />
+        Create New
+        <ChevronDownIcon className="w-3.5 h-3.5 opacity-80" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-30 w-44 glass-dropdown overflow-hidden">
+          <button
+            type="button"
+            onClick={() => pick('visual')}
+            className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+          >
+            Drag &amp; Drop
+          </button>
+          <button
+            type="button"
+            onClick={() => pick('code')}
+            className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+          >
+            HTML editor
+          </button>
+        </div>
+      )}
     </div>
   );
 }

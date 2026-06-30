@@ -66,6 +66,10 @@ interface ResendSettings {
 interface CampaignMetadata {
   utm?: Partial<UtmSettings>;
   resend?: Partial<ResendSettings>;
+  /** Slug of the template this campaign was built from, recorded when a
+   *  template is applied. Used to re-sync the preview with the latest
+   *  template content on load. */
+  templateSlug?: string;
 }
 
 function slugify(value: string): string {
@@ -105,6 +109,22 @@ function parseMetadata(raw: string): CampaignMetadata {
   } catch {
     return {};
   }
+}
+
+/**
+ * Compile a template's raw source (v2 JSON for drag-and-drop, raw HTML for
+ * HTML-mode) into email-ready HTML via /api/preview. Mirrors the Message
+ * step so the Schedule preview reflects the same content the editor saved.
+ */
+async function compileTemplate(raw: string): Promise<string> {
+  const res = await fetch('/api/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ html: raw, previewValues: {} }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.html) throw new Error(data?.error || 'Failed to compile template');
+  return String(data.html);
 }
 
 // Split-input date/time. We keep them as separate strings (YYYY-MM-DD,
@@ -225,23 +245,65 @@ export default function ScheduleStepPage({ params }: PageProps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/campaigns/email/${encodeURIComponent(id)}`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Failed to load campaign'))))
-      .then((data: { campaign?: DraftCampaign }) => {
+    (async () => {
+      try {
+        const res = await fetch(`/api/campaigns/email/${encodeURIComponent(id)}`);
+        if (!res.ok) throw new Error('Failed to load campaign');
+        const data: { campaign?: DraftCampaign } = await res.json();
         if (cancelled) return;
         if (!data.campaign) {
           toast.error('Campaign not found');
           router.push('/messaging/campaigns');
           return;
         }
-        setDraft(data.campaign);
-      })
-      .catch((err: Error) => {
-        if (!cancelled) toast.error(err.message);
-      })
-      .finally(() => {
+        let campaign = data.campaign;
+
+        // Re-sync the preview from the template's latest content. The editor
+        // saves edits to the template record (not the campaign), so arriving
+        // here straight from the editor's Schedule button would otherwise show
+        // the stale snapshot until the user bounced back through the Message
+        // step. Recompile the latest raw and persist it if it drifted — same
+        // best-effort sync the Message step performs.
+        const templateSlug = parseMetadata(campaign.metadata).templateSlug || '';
+        if (templateSlug) {
+          try {
+            const rawRes = await fetch(
+              `/api/templates?design=${encodeURIComponent(templateSlug)}&format=raw`,
+            );
+            const rawData = await rawRes.json().catch(() => ({}));
+            const latestRaw = String(rawData?.raw || '');
+            if (rawRes.ok && latestRaw) {
+              const compiled = await compileTemplate(latestRaw);
+              if (!cancelled && compiled !== campaign.htmlContent) {
+                const patchRes = await fetch(
+                  `/api/campaigns/email/${encodeURIComponent(id)}`,
+                  {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ htmlContent: compiled }),
+                  },
+                );
+                const patchData = await patchRes.json().catch(() => ({}));
+                campaign =
+                  patchRes.ok && patchData?.campaign
+                    ? (patchData.campaign as DraftCampaign)
+                    : { ...campaign, htmlContent: compiled };
+              }
+            }
+          } catch {
+            // Best-effort sync; fall back to the stored snapshot.
+          }
+        }
+
+        if (!cancelled) setDraft(campaign);
+      } catch (err) {
+        if (!cancelled) {
+          toast.error(err instanceof Error ? err.message : 'Failed to load campaign');
+        }
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };

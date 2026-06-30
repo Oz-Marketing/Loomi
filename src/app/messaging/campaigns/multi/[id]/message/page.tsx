@@ -246,6 +246,61 @@ export default function MultiMessageStepPage({ params }: PageProps) {
     }
   }
 
+  // "Create New" from the picker: create a blank template scoped to this
+  // campaign's sub-account (accountKey → never global), attach it to the
+  // email draft, then open the editor with multi=1 so navigation flows
+  // back into the multi-channel builder. Mirrors applyTemplate.
+  async function handleCreateNew(mode: 'visual' | 'code') {
+    if (!emailDraft) return;
+    if (!accountKey) {
+      toast.error('This campaign has no sub-account, so a template can’t be created here.');
+      return;
+    }
+    setApplying(true);
+    try {
+      const createRes = await fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ design: 'Untitled Template', mode, accountKey }),
+      });
+      const createData = await createRes.json().catch(() => ({}));
+      if (!createRes.ok || !createData?.design) {
+        throw new Error(createData?.error || 'Failed to create template');
+      }
+      const slug = String(createData.design);
+
+      const rawRes = await fetch(`/api/templates?design=${encodeURIComponent(slug)}&format=raw`);
+      const rawData = await rawRes.json().catch(() => ({}));
+      const raw = String(rawData?.raw || '');
+      const compiled = raw ? await compileTemplate(raw) : '';
+      // Preserve existing multi-channel metadata while recording the slug.
+      let existingMeta: Record<string, unknown> = {};
+      try {
+        existingMeta = JSON.parse(emailDraft.metadata || '{}') as Record<string, unknown>;
+      } catch {
+        existingMeta = {};
+      }
+      const meta = JSON.stringify({ ...existingMeta, templateSlug: slug });
+      const updated = await patchEmail({
+        subject: subject || emailDraft.name,
+        htmlContent: compiled,
+        sourceType: 'template-library',
+        metadata: meta,
+      });
+      if (updated) {
+        setEmailDraft(updated);
+        setSubject(updated.subject);
+      }
+      const builderSuffix = mode === 'code' ? '&builder=html' : '';
+      router.push(
+        `/templates/editor?design=${encodeURIComponent(slug)}&campaignId=${encodeURIComponent(id)}&accountKey=${encodeURIComponent(accountKey)}&multi=1${builderSuffix}`,
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to create template');
+      setApplying(false);
+    }
+  }
+
   async function handleChangeTemplate() {
     if (!emailDraft) return;
     if (!confirm('Clear the current template and pick a different one?')) return;
@@ -465,7 +520,7 @@ export default function MultiMessageStepPage({ params }: PageProps) {
                 onChangeTemplate={handleChangeTemplate}
               />
             ) : (
-              <TemplateLibraryPanel onSelect={setPreviewDesign} />
+              <TemplateLibraryPanel onSelect={setPreviewDesign} onCreateNew={handleCreateNew} />
             )}
           </div>
         )}

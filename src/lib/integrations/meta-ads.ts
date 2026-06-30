@@ -944,6 +944,14 @@ export async function syncPeriodFromMeta(
   const runSpendMap = future
     ? new Map<string, number>()
     : await fetchAdSetRunSpend(cfg, adAccountId).catch(() => new Map<string, number>());
+  // Spend SO FAR TODAY per ad set (account-TZ today), for the pacer card's
+  // whole-day "do-nothing" projection. Best-effort: a failure → empty map, so
+  // the projection simply doesn't subtract today's already-spent slice.
+  const todaySpendMap = future
+    ? new Map<string, number>()
+    : await fetchAdSetSpend(cfg, adAccountId, todayIso, todayIso).catch(
+        () => new Map<string, number>(),
+      );
 
   // Cache the ad account's timezone for the Pacer's time-left math, and use it
   // to bucket Meta's start_time / end_time into account-TZ calendar dates
@@ -1004,6 +1012,8 @@ export async function syncPeriodFromMeta(
       metaObjectId: adSet.id,
       metaEffectiveStatus: adSet.effective_status ?? adSet.status ?? null,
       pacerActual: spend.toFixed(2),
+      // Spend so far today (account-TZ) — feeds the card's whole-day projection.
+      pacerTodaySpend: (todaySpendMap.get(adSet.id) ?? 0).toFixed(2),
       // Full-run total (all-time) — informational; null if the run-spend pull
       // failed or returned nothing for this ad set.
       pacerRunSpend: runSpend != null ? runSpend.toFixed(2) : null,

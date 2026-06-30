@@ -1744,6 +1744,12 @@ model MetaAdsPacerAd {
   allocation            String?
   pacerActual           String?
   pacerDailyBudget      String?
+  // Spend SO FAR TODAY through the last sync (Meta insights, time_range
+  // {today,today} in the ad-account TZ), in dollars. Server-managed by the Meta
+  // sync — never derived from the input field. Used only by the Meta pacer
+  // card's "do-nothing" projection, which counts today as a FULL budget-day and
+  // subtracts this back out to avoid double-counting today's already-spent part.
+  pacerTodaySpend       String?
   // Full-run actual spend across the linked ad set's entire flight (Meta
   // date_preset=maximum), not just the current pacing month. Informational —
   // surfaced for multi-month ads so the full date-range spend is visible; never

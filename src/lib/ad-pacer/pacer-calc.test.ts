@@ -9,6 +9,8 @@ import {
   decomposeMonthVariance,
   clampToMonth,
   computeSplitRunSettlement,
+  doNothingProjected,
+  wholeDaysRemainingInclusive,
 } from './pacer-calc';
 import type { PacerAd } from './types';
 
@@ -550,5 +552,39 @@ describe('computeSplitRunSettlement (cross-month split runs)', () => {
     const r = computeSplitRunSettlement(ads, NOW, TZ);
     expect(r.memberIds.size).toBe(2);
     expect(r.settlementByPeriod.get('2026-05')).toBeCloseTo(100 - 80);
+  });
+});
+
+describe('doNothingProjected (Meta whole-day projection)', () => {
+  it('counts today as a full budget-day — spec example → 323.81', () => {
+    // NOW = 2026-06-15; flight ends today → whole_days_remaining_incl_today = 1.
+    const ad = mk({
+      pacerActual: '310.55',
+      pacerTodaySpend: '4.51',
+      pacerDailyBudget: '17.77',
+      flightEnd: '2026-06-15',
+    });
+    // 310.55 − 4.51 + 17.77 × 1 = 323.81 (old prorated formula gave 320.40).
+    expect(doNothingProjected(ad, NOW, TZ)).toBeCloseTo(323.81, 2);
+  });
+
+  it('adds a full daily budget for every whole day incl. today', () => {
+    const ad = mk({
+      pacerActual: '310.55',
+      pacerTodaySpend: '4.51',
+      pacerDailyBudget: '17.77',
+      flightEnd: '2026-06-17', // today + 2 → 3 whole days
+    });
+    expect(wholeDaysRemainingInclusive(ad, NOW, TZ)).toBe(3);
+    expect(doNothingProjected(ad, NOW, TZ)).toBeCloseTo(310.55 - 4.51 + 17.77 * 3, 2);
+  });
+
+  it('returns cumulative for lifetime ads and for flights already ended', () => {
+    expect(
+      doNothingProjected(mk({ budgetType: 'Lifetime', pacerActual: '100' }), NOW, TZ),
+    ).toBeCloseTo(100);
+    const ended = mk({ pacerActual: '200', pacerTodaySpend: '5', flightEnd: '2026-06-10' });
+    expect(wholeDaysRemainingInclusive(ended, NOW, TZ)).toBe(0);
+    expect(doNothingProjected(ended, NOW, TZ)).toBeCloseTo(200); // no day to add, no today to subtract
   });
 });

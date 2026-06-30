@@ -29,7 +29,11 @@ import {
   fmtDaysBasisPhrase,
 } from '@/lib/ad-pacer/helpers';
 import { fmtPeriodLong } from '@/lib/ad-pacer/period';
-import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
+import {
+  buildPacerCalc,
+  doNothingProjected,
+  wholeDaysRemainingInclusive,
+} from '@/lib/ad-pacer/pacer-calc';
 import { buildGooglePacingCard } from '@/lib/ad-pacer/google-pacer-calc';
 import {
   GooglePacingBadges,
@@ -163,6 +167,23 @@ export function PacerRow({
     () => (isGoogle ? buildGooglePacingCard(ad, Date.now(), timeZone) : null),
     [isGoogle, ad, timeZone],
   );
+  // Meta-only "do-nothing" projection: counts today as a FULL budget-day (vs
+  // calc.projected, which prorates today). Recomputes as the daily-budget input
+  // changes (live preview) since it reads ad.pacerDailyBudget. Google keeps its
+  // own projection (calc.projected, via the Google card).
+  const metaProjected = useMemo(
+    () => doNothingProjected(ad, Date.now(), timeZone),
+    [ad, timeZone],
+  );
+  // Whole budget-days from today through flight end (incl. today) — the
+  // multiplier behind the Meta projection, shown in the box's subline.
+  const wholeDaysRemaining = useMemo(
+    () => wholeDaysRemainingInclusive(ad, Date.now(), timeZone),
+    [ad, timeZone],
+  );
+  // The forecast shown in the Projected Spend box — Meta uses the whole-day
+  // projection; Google keeps the prorated calc.projected its card is built on.
+  const projectedSpend = isGoogle ? calc.projected : metaProjected;
   // The date being paced TO — the Meta/planned end clamped to the pacing
   // month (Change 4). Drives the "until …" labels and the completed banner.
   const effectiveEnd = calc.effectiveEnd;
@@ -977,7 +998,7 @@ export function PacerRow({
             label="Projected Spend"
             value={
               calc.hasDates && !calc.endsBeforeToday
-                ? fmt(calc.projected)
+                ? fmt(projectedSpend)
                 : '—'
             }
             sub={
@@ -985,7 +1006,12 @@ export function PacerRow({
                 ? 'set today + end dates'
                 : calc.endsBeforeToday
                   ? 'end is before today'
-                  : `spend + ${fmt(calc.dailyBudget)}/d × ${fmtDaysNum(calc.daysLeft)}d`
+                  : isGoogle
+                    ? `spend + ${fmt(calc.dailyBudget)}/d × ${fmtDaysNum(calc.daysLeft)}d`
+                    : // Meta: today counts as a full budget-day (do-nothing aim).
+                      `${fmt(calc.dailyBudget)}/day × ${wholeDaysRemaining} day${
+                        wholeDaysRemaining === 1 ? '' : 's'
+                      } (today full)`
             }
           />
         )}
@@ -1106,9 +1132,10 @@ export function PacerRow({
             </p>
           );
         }
+        // Meta: compare the whole-day "do-nothing" projection against target.
         const overspendThreshold = calc.budget * 1.05;
         const underspendThreshold = calc.budget * 0.95;
-        if (calc.projected > overspendThreshold) {
+        if (metaProjected > overspendThreshold) {
           return (
             <p
               className="m-0 text-[11px] leading-relaxed"
@@ -1116,20 +1143,20 @@ export function PacerRow({
             >
               At your current rate of {fmt(calc.dailyBudget)}/day you&apos;re
               projected to overspend by{' '}
-              {fmt(calc.projected - calc.budget)} by{' '}
+              {fmt(metaProjected - calc.budget)} by{' '}
               {fmtDate(effectiveEnd)}. Lower the daily budget to{' '}
               {fmt(calc.recDaily)} to stay on target.
             </p>
           );
         }
-        if (calc.projected < underspendThreshold) {
+        if (metaProjected < underspendThreshold) {
           return (
             <p
               className="m-0 text-[11px] leading-relaxed"
               style={{ color: COLORS.lifetime }}
             >
               At your current rate you&apos;ll underspend by{' '}
-              {fmt(calc.budget - calc.projected)} — bumping the daily budget
+              {fmt(calc.budget - metaProjected)} — bumping the daily budget
               to {fmt(calc.recDaily)} will use the full target by{' '}
               {fmtDate(effectiveEnd)}.
             </p>

@@ -14,6 +14,7 @@ import {
   InformationCircleIcon,
   ClipboardDocumentListIcon,
   AdjustmentsHorizontalIcon,
+  FunnelIcon,
 } from '@heroicons/react/24/outline';
 import { InvestmentIcon } from '@/components/icons/investment';
 import {
@@ -21,7 +22,13 @@ import {
   OverviewView,
   type OverviewAccount,
 } from '@/app/app/tools/meta/_components/ReconciliationViews';
-import { EMPTY_FILTERS } from '@/lib/ad-pacer/filters';
+import {
+  EMPTY_FILTERS,
+  applyFilters,
+  activeFilterCount,
+  type PlanFilters,
+} from '@/lib/ad-pacer/filters';
+import { MetaAdsPacerFilterSidebar } from '@/app/app/tools/meta/_components/FilterSidebar';
 import { useSession } from 'next-auth/react';
 import { useAccount } from '@/contexts/account-context';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -172,6 +179,8 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const [importOpen, setImportOpen] = useState(false);
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [search, setSearch] = useState('');
+  const [filters, setFilters] = useState<PlanFilters>(EMPTY_FILTERS);
+  const [filterSidebarOpen, setFilterSidebarOpen] = useState(false);
   // Which account's notes drawer is open (null = closed). Carries an accountKey
   // so an admin can open notes for any card, not just the selected account.
   const [notesTarget, setNotesTarget] = useState<{ accountKey: string; label: string } | null>(
@@ -193,11 +202,13 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     : null;
   const { data, isLoading, mutate } = useSWR<PacerPlan>(swrKey, fetcher, { revalidateOnFocus: false });
   const ads = useMemo<PacerAd[]>(() => data?.ads ?? [], [data]);
-  // Search filter for the rendered rows (planner table + pacing cards).
+  // Rendered rows = sidebar filters (mirrors Meta's applyFilters) + the search
+  // box, applied to the planner table + pacing cards.
   const visibleAds = useMemo(() => {
+    const filtered = applyFilters(ads, filters, currentUserId);
     const q = search.trim().toLowerCase();
-    return q ? ads.filter((a) => (a.name ?? '').toLowerCase().includes(q)) : ads;
-  }, [ads, search]);
+    return q ? filtered.filter((a) => (a.name ?? '').toLowerCase().includes(q)) : filtered;
+  }, [ads, filters, currentUserId, search]);
   // Period list (Google-scoped) for the "copy from another month" modal.
   const { data: periodsData } = useSWR<{ periods: PeriodSummary[] }>(
     accountKey
@@ -535,19 +546,31 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           accountKey={null}
           period={period}
           onShiftPeriod={(d) => setPeriod((p) => shiftPeriod(p, d))}
+          filtersActive={activeFilterCount(filters)}
+          filtersOpen={filterSidebarOpen}
+          onToggleFilters={() => setFilterSidebarOpen((o) => !o)}
         />
         {/* Reuse Meta's expandable overview for exact parity — each account row
             expands to its ad drill-down; notes + Open are wired per row. Every
             accessible account shows regardless of whether it has Google data. */}
         <OverviewView
           period={period}
-          filters={EMPTY_FILTERS}
+          filters={filters}
           currentUserId={currentUserId}
           onOpenAccount={(key) => setAccount({ mode: 'account', accountKey: key })}
           users={directoryUsers}
           accounts={overviewData?.accounts ?? null}
           loadError={overviewError ? 'Failed to load accounts' : null}
           platform="google"
+        />
+        <MetaAdsPacerFilterSidebar
+          open={filterSidebarOpen}
+          onClose={() => setFilterSidebarOpen(false)}
+          filters={filters}
+          onChange={setFilters}
+          users={directoryUsers}
+          ads={(overviewData?.accounts ?? []).flatMap((a) => a.ads)}
+          currentUserId={currentUserId}
         />
       </div>
     );
@@ -562,6 +585,16 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         accountKey={accountKey}
         period={period}
         onShiftPeriod={(d) => setPeriod((p) => shiftPeriod(p, d))}
+        notesCount={notesCount}
+        onOpenNotes={() =>
+          setNotesTarget({ accountKey, label: accountData?.dealer ?? accountKey })
+        }
+        filtersActive={activeFilterCount(filters)}
+        filtersOpen={filterSidebarOpen}
+        // Filters apply to the ad list — planner & pacing only, not reconcile.
+        onToggleFilters={
+          tab === 'reconcile' ? undefined : () => setFilterSidebarOpen((o) => !o)
+        }
       />
 
       {/* Scope row — sub-account avatar + name + status battery, mirroring
@@ -579,17 +612,6 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
             {accountData?.dealer ?? accountKey}
           </span>
           {plan && plan.ads.length > 0 && <StatusBattery ads={plan.ads} />}
-        </div>
-        {/* Account comments for the selected period (mirrors Meta) — opens the
-            notes drawer; the badge shows this month's comment count. */}
-        <div className="ml-auto flex-shrink-0">
-          <AccountNotesButton
-            count={notesCount}
-            onClick={() =>
-              setNotesTarget({ accountKey, label: accountData?.dealer ?? accountKey })
-            }
-            ariaLabel="Account notes for this month"
-          />
         </div>
       </div>
 
@@ -879,6 +901,16 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           }}
         />
       )}
+
+      <MetaAdsPacerFilterSidebar
+        open={filterSidebarOpen}
+        onClose={() => setFilterSidebarOpen(false)}
+        filters={filters}
+        onChange={setFilters}
+        users={directoryUsers}
+        ads={ads}
+        currentUserId={currentUserId}
+      />
     </div>
     </PacerReadOnlyContext.Provider>
   );
@@ -980,12 +1012,24 @@ function Header({
   accountKey,
   period,
   onShiftPeriod,
+  notesCount,
+  onOpenNotes,
+  filtersActive = 0,
+  filtersOpen = false,
+  onToggleFilters,
 }: {
   tab: 'planner' | 'pacing' | 'reconcile';
   onTab: (t: 'planner' | 'pacing' | 'reconcile') => void;
   accountKey: string | null;
   period?: string;
   onShiftPeriod?: (delta: number) => void;
+  // Notes icon sits to the LEFT of the period selector (subaccount view only,
+  // mirroring Meta). Filters sits to the RIGHT.
+  notesCount?: number | null;
+  onOpenNotes?: () => void;
+  filtersActive?: number;
+  filtersOpen?: boolean;
+  onToggleFilters?: () => void;
 }) {
   const subtitle =
     tab === 'planner'
@@ -1004,8 +1048,16 @@ function Header({
             <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">{subtitle}</p>
           </div>
         </div>
-        {/* Right: month nav */}
-        <div className="flex items-center gap-3">
+        {/* Right: notes · month selector · filters (mirrors Meta). */}
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          {/* Account notes — left of the selector, subaccount view only. */}
+          {accountKey && onOpenNotes && (
+            <AccountNotesButton
+              count={notesCount ?? null}
+              onClick={onOpenNotes}
+              ariaLabel="Account notes for this month"
+            />
+          )}
           {period && onShiftPeriod && (
             <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
               <button
@@ -1028,6 +1080,31 @@ function Header({
                 <ChevronRightIcon className="h-4 w-4" />
               </button>
             </div>
+          )}
+          {/* Filters — right of the selector. */}
+          {onToggleFilters && (
+            <button
+              type="button"
+              onClick={onToggleFilters}
+              aria-pressed={filtersOpen}
+              aria-expanded={filtersOpen}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                filtersOpen
+                  ? 'border-[var(--primary)] bg-[var(--primary)]/12 text-[var(--primary)]'
+                  : 'border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] hover:bg-[var(--muted)]'
+              }`}
+            >
+              <FunnelIcon className="h-3.5 w-3.5" />
+              Filters
+              {filtersActive > 0 && (
+                <span
+                  className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 text-[10px] font-bold"
+                  style={{ background: 'var(--primary)', color: 'white' }}
+                >
+                  {filtersActive}
+                </span>
+              )}
+            </button>
           )}
         </div>
       </div>

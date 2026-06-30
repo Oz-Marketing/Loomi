@@ -22,14 +22,15 @@ Loomi is **industry-agnostic by design** (avoid hardcoding terms like "dealer" �
 
 ## Surfaces (host-based routing)
 
-One Next.js app serves four host classes (routed by an edge proxy in `src/proxy.ts`):
+One Next.js app serves several host classes (routed by an edge proxy in `src/proxy.ts`):
 
+- **Marketing** (`loomilm.com` apex + `www.`; dev `marketing.localhost:3000`) — the public, unauthenticated marketing site. Currently a single full-screen hero teaser (`src/app/marketing/`). The proxy rewrites the apex to `/marketing`, and the root layout detects the marketing host (`isMarketingHost` → `surface === 'marketing'`) and renders it **bare + server-side** (no app providers), locked to the dark theme — the app's `ThemeProvider` returns `null` until client hydration, so providers-wrapped pages don't server-render (fine for the auth'd app, bad for SEO). SEO is wired up: `metadata`/OpenGraph/Twitter/canonical (`src/app/marketing/layout.tsx` + `src/lib/marketing/seo.ts`), JSON-LD on the page, a host-aware `/sitemap.xml`, and a marketing branch in `/robots.txt`. Sign-in CTAs link to `/login?callbackUrl=<app-origin>` so login lands on the **App** surface (the root admin), not Studio — the login page honors a same-site `callbackUrl` (`resolveSafeCallbackUrl`).
 - **Studio** (`studio.loomilm.com`) — the main marketing workspace: Dashboard, Campaigns, Templates, Audiences, Emails & SMS, Website (Forms + Landing Pages), Flows, Ad Generator, Media.
 - **App** (`app.loomilm.com`) — internal delivery surface: **Projects** (project management) and the **Ad Pacing / Planner** tools.
 - **Reporting** (`reporting.loomilm.com`) — client-facing analytics dashboards.
 - **Public** — client custom domains and the anonymous routes `/lp/[slug]` (landing pages) and `/f/[slug]` (forms).
 
-A shared cross-subdomain cookie (`loomi-active-account`) keeps the active-account context in sync across surfaces.
+A shared cross-subdomain cookie (`loomi-active-account`) keeps the active-account context in sync across surfaces. The session cookie is scoped to `.loomilm.com` in prod, so logging in on one subdomain carries to the others (this is why marketing→App login works in prod; in local dev cookies don't span `*.localhost`, so the App redirect won't carry the session there).
 
 ---
 

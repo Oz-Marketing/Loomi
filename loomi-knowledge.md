@@ -2,60 +2,92 @@
 
 This file is the source of truth for Loomi Studio AI assistants. Update this file to change what the AI knows.
 
+> **Maintenance:** Keep this file current. Whenever a change adds, removes, or
+> meaningfully alters a Loomi feature, surface, integration, or data model,
+> update the relevant section here in the same change.
+
 ---
 
 ## Platform Overview
 
-Loomi Studio is an internal email production platform built by Oz Marketing. Teams use it to design, manage, and deploy branded email and SMS campaigns across dealership and business accounts.
+Loomi Studio is Oz Marketing's all-in-one, multi-tenant **marketing operations platform**. From one workspace, agency teams and their clients run client marketing end-to-end: audiences/CRM, native email + SMS campaigns, marketing automation (flows), web lead-capture (forms + landing pages), paid-ads budget pacing and reconciliation (Meta + Google), on-brand ad creative generation, client reporting, and the internal project management that ties delivery together.
 
-The platform is built with Next.js 14 and uses [react-email](https://react.email/) (`@react-email/components` + `@react-email/render`) for template rendering. Email sends go out through SendGrid; SMS sends through Twilio. Contacts, lists, templates, and campaign state are stored locally in Postgres — no third-party ESP integration is involved.
+Loomi is **native everywhere** — it does not sit on top of a third-party ESP, ad tool, or CRM as a thin UI. Contacts, templates, campaigns, sends, engagement events, ad-spend data, and analytics all live in Loomi's own PostgreSQL database. SendGrid (email), Twilio (SMS), and the Meta/Google ad APIs are used as transports/data sources only — Loomi owns the data and the logic, which is what lets it stitch every channel together under one account model.
+
+Loomi is **industry-agnostic by design** (avoid hardcoding terms like "dealer" — use "account"; Industry is a per-account setting). Automotive and Powersports are the most built-out verticals via OEM/brand awareness, but the platform serves any local business.
+
+**Stack:** Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS, Prisma + PostgreSQL. AI features are powered by the Anthropic Claude API. Background work runs on a pg-boss worker. Built and rendered with [react-email](https://react.email/) for email templates.
 
 ---
 
-## Navigation And Pages
+## Surfaces (host-based routing)
 
-- **Dashboard** (`/`) - Stats, activity, and account-aware analytics.
-- **Templates** (`/templates`) - Browse OEM templates and open the visual/code editor.
-- **Sections** (`/components`) - _Legacy Maizzle component management page; deprecated in v2 and now returns empty results. The visual editor's block library lives in code at `src/lib/email/components/`._
-- **Emails** (`/emails`) - Account email instances (draft, active, archived), organized by folders.
-- **Accounts** (`/accounts`) - Manage account records, branding, and integrations.
-- **Settings** (`/settings`) - Accounts, users, integrations, custom values, knowledge, appearance.
-- **Users** (`/users`, `/users/[id]`, `/users/new`) - User management for developer/admin permissions.
+One Next.js app serves four host classes (routed by an edge proxy in `src/proxy.ts`):
 
-### Settings Tabs
+- **Studio** (`studio.loomilm.com`) — the main marketing workspace: Dashboard, Campaigns, Templates, Audiences, Emails & SMS, Website (Forms + Landing Pages), Flows, Ad Generator, Media.
+- **App** (`app.loomilm.com`) — internal delivery surface: **Projects** (project management) and the **Ad Pacing / Planner** tools.
+- **Reporting** (`reporting.loomilm.com`) — client-facing analytics dashboards.
+- **Public** — client custom domains and the anonymous routes `/lp/[slug]` (landing pages) and `/f/[slug]` (forms).
 
-- **Accounts** - Account list and detail management.
-- **Custom Values** - Account-level fields used by template variable replacement.
-- **Users** - User CRUD and access assignment.
-- **Knowledge** - This knowledge base editor.
-- **Appearance** - Theme options.
+A shared cross-subdomain cookie (`loomi-active-account`) keeps the active-account context in sync across surfaces.
+
+---
+
+## Sectors / Features
+
+### Audiences & CRM
+Native contact database (not ESP-synced). Full CRUD with extensible per-account **custom fields** (blueprint inheritance by industry), tags, vehicle data, and materialized engagement flags. Admins get a cross-account deduped view (merge by email/phone). Contact hygiene normalizes phones to E.164 and filters disposable emails. **Smart Lists / Segments** are nested AND/OR filter definitions evaluated across text/number/date/tag/boolean/select fields; saved filters become named **Audiences** that feed campaigns and flows.
+
+### Email & SMS Campaigns
+- **Email** sends through **SendGrid** (direct v3 API) with auto-injected CAN-SPAM unsubscribe footers, RFC 8058 one-click unsubscribe, and open/click tracking. Engagement events return via webhook (`POST /api/webhooks/sendgrid/events`) into `EmailEvent` and drive suppression lists.
+- **SMS/MMS** sends through **Twilio** with A2P 10DLC messaging-service support. Status callbacks land at `POST /api/webhooks/twilio/status`; inbound replies (incl. STOP) at `POST /api/webhooks/twilio/inbound`.
+- Sends run per-recipient (a single failure doesn't poison the batch) on a pg-boss worker that polls for due campaigns every minute. Aggregate analytics are derived directly from the event tables — no separate stats store.
+
+### Email Production (template builder)
+The visual drag-and-drop editor produces **v2 JSON** templates compiled to email-safe HTML via react-email. There is also a raw-HTML **code mode** (Monaco). Templates can be global library assets (`accountKey = null`) or account-owned, with publish/draft states and version snapshots. See the detailed **Template Builder Architecture** and **Component Catalog** sections below — that detail is functional guidance for the AI assistant.
+
+### Flows (marketing automation)
+Visual journey builder (nodes + branches). Triggers (list, audience, manual, form submission, tag added, birthday, date reminder) enroll contacts; the worker advances each enrollment tick-by-tick through node types (email, SMS, tag/field updates, waits, conditions, splits, webhooks, CRM push, create task). Respects timezone-aware quiet hours, goals, re-entry policy, and max duration. Flows can be published as global templates and deployed as per-account instances with sync-from-parent.
+
+### Campaigns (AI Campaign Builder)
+A multi-channel container orchestrating the above. Workflow: **Plan → Generate → Review.** The user describes a campaign in plain language; Claude returns a structured plan (audience suggestion, email/SMS specs, clarifying questions). On generate, assets stream in (SSE) and land as editable **drafts** — the builder never auto-sends. Phase 2 adds landing pages + forms; Phase 3 will add flows.
+
+### Web & Lead Capture
+- **Forms** — block-based builder. Submissions upsert a Contact, can enroll into a flow, forward to a CRM (ADF email for Tekion/VinSolutions, or HubSpot API), and capture UTM/LP attribution. Embeddable via auto-resizing iframe script or hosted at `/f/[slug]`. Spam defense via Cloudflare Turnstile + honeypots.
+- **Landing Pages** — block-based or raw-HTML mode, with marketing components (hero, features, testimonials, FAQ, embedded forms), responsive mobile overrides, SEO metadata, and pixel/GA4/GTM injection. Served at `/lp/[slug]` or on verified **custom domains** (DNS TXT + optional Cloudflare-for-SaaS SSL). Anonymous event tracking (views, CTA clicks, scroll depth, submits) with privacy-preserving hashed IPs.
+- **Iris** — an AI chat assistant inside the landing-page editor that conversationally builds/edits pages as structured JSON, grounded in the account's brand.
+
+### Ad Pacing & Reconciliation
+A paid-media spend-management system across **Meta** and **Google Ads**, organized as three views:
+- **Planner** — intended budget allocation, flight dates, team assignments per ad.
+- **Pacer** — live spend vs. plan (recommended daily budget, projected spend, account-wide pace %), synced from the ad platforms.
+- **Reconciliation** — monthly over/under settlement vs. the *client* budget, with a carryover ledger that cascades variance across months, markup/margin resolved in exactly one place (per-account override or agency default), and cross-month "lifetime" run settlement (a run settles once, on its final month). An alert engine runs daily on the worker, syncing fresh spend and firing threshold notifications routed to each ad's owner/designer/rep. All changes auto-log to a 365-day audit trail.
+
+### Ad Generator
+Template-driven visual ad builder (in active build). Designers author data-driven templates (render function: data + size → HTML); reps fill a guided form and export pixel-perfect multi-size PNGs via headless Chromium (Puppeteer). AI copy generation (Claude) writes platform-constrained Meta/Google headlines & descriptions (copy only — never prices or legal text). Integrates EVOX (vehicle imagery) and MarketCheck (OEM incentives), with an OEM compliance rule engine for disclaimers and logo placement. Gated by the `AD_GENERATOR_ENABLED` flag.
+
+### Reporting
+Client-facing dashboards on their own subdomain — engagement, contacts, reputation, ads, and account profile views (some rollups in progress).
+
+### Projects (internal delivery management)
+A project-management surface on the App host. **Initiatives** (account-scoped bodies of work) wrap **Tasks** (typed tickets — design, dev, email, ads, video, print, etc.) routed to **Teams** (departments). Views: Initiatives, Tasks (Kanban board + spreadsheet table), My Work, Calendar. Multi-account ticket intake with shared-vs-unique creative fanout, comment threads with mentions, audit trail, assignment/due-soon notifications, and daily digests.
 
 ---
 
 ## Roles And Permissions
 
-### Developer
-- Full system access.
-- Can manage users and all accounts.
-- Can switch between admin mode and account views.
+- **Developer / Super Admin** — full system access; manage all users and accounts; impersonation.
+- **Admin** — manage templates, emails, flows, and assigned accounts; cannot manage users.
+- **Client** — account-scoped access to their own account; build/ops tools hidden; redirected from top-level admin pages to their sub-account.
 
-### Admin
-- Can manage templates, emails, and assigned accounts.
-- Cannot manage users.
-
-### Client
-- Limited account-scoped access.
-- No user management or global admin controls.
-
-### Account Switcher
-Developers and admins can switch between admin view and assigned account views. Client-role users are restricted to assigned account scope.
+Developers and admins can switch between admin mode and assigned account views via the account switcher. Access is enforced by `getAccountScope(session)` (null = full access; otherwise an array of account keys).
 
 ---
 
 ## Template Builder Architecture
 
 ### Overview
-The template editor is the core tool for creating and editing email templates. It has two modes:
+The template editor is the core tool for creating and editing email templates. Two modes:
 
 - **Visual mode (Drag & Drop)** — Block-based editing. Templates are stored as **v2 JSON** with a top-level `settings` object and an ordered array of `blocks`. Containers (`section`, `columns`) hold child blocks via a `children` array. Each block has a stable `id`, a `type`, and a `props` object (typed values: numbers, strings, booleans, nested objects).
 - **Code mode** — Raw email-safe HTML editing with a Monaco code editor. Pure HTML only — the legacy Maizzle `<x-base>` / `<x-core.*>` scaffold has been removed.
@@ -256,10 +288,13 @@ logo → image (product/service photo) → section (intro text + quoted text blo
 ## Account Management
 
 Each account can store:
-- Dealer/business identity fields (name, address, phone, website, timezone)
-- Branding (logos, colors, fonts)
-- Custom values for template substitution
-- Per-account Twilio credentials (for SMS sends)
+- Business identity fields (name, address, phone, website, timezone; industry/category; OEM/brand affiliations)
+- Branding (logos light/dark/white, colors, fonts, favicon)
+- Custom values for template substitution and extensible contact custom fields
+- Per-account send credentials: SendGrid API key + from domain (email); Twilio creds + messaging-service SID (SMS) — all AES-256-GCM encrypted at rest
+- Ad-platform identifiers (Meta ad-account ID, Google Ads customer ID, StackAdapt advertiser ID) and per-account markup/margin overrides
+- CRM destinations (Tekion / VinSolutions via ADF, or HubSpot)
+- Custom domains for landing pages/forms
 
 ---
 
@@ -267,7 +302,7 @@ Each account can store:
 
 Loomi sends campaigns natively — no third-party ESP is involved on either the send or the analytics path.
 
-- **Email sends:** routed through SendGrid. Engagement events (delivered / open / click / bounce / spam-report / unsubscribe) come back via the SendGrid Event Webhook at `POST /api/webhooks/sendgrid/events` and are persisted as `EmailCampaignEvent` rows keyed to the `EmailCampaignRecipient`.
+- **Email sends:** routed through SendGrid. Engagement events (delivered / open / click / bounce / spam-report / unsubscribe) come back via the SendGrid Event Webhook at `POST /api/webhooks/sendgrid/events` and are persisted as `EmailEvent` rows keyed to the recipient.
 - **SMS sends:** routed through Twilio. Status callbacks land at `POST /api/webhooks/twilio/status`; inbound replies (including STOP) at `POST /api/webhooks/twilio/inbound`.
 - Aggregate campaign analytics (sent / opened / clicked counts) are derived directly from the event tables — no separate stats store.
 
@@ -285,13 +320,39 @@ The variable catalog is resolved per-recipient at send time.
 
 ---
 
+## Background Jobs
+
+A pg-boss worker (separate PM2 process; see `ecosystem.config.js`) handles:
+- **Campaign sends** (`loomi.process-due-campaigns`) — every minute
+- **Flow enrollment execution** (`loomi.process-flow-enrollments`) — every minute
+- **Flow trigger polling** (`loomi.process-flow-triggers`) — every 5 minutes
+- **Ad-spend sync + pacing alert scan** — daily
+- **CRM lead delivery** — event-driven (form submission / flow push-to-CRM)
+- **Archive retention sweep** (`loomi.purge-archived`) — daily
+
+---
+
+## Integrations
+
+- **Email/SMS:** SendGrid, Twilio (+ SMTP fallback)
+- **Ad platforms:** Meta Ads, Google Ads, StackAdapt
+- **CRM:** Tekion / VinSolutions (ADF email), HubSpot (API)
+- **Creative data:** EVOX (vehicle imagery), MarketCheck (OEM incentives), Google Places
+- **Cloud:** AWS S3 / DigitalOcean Spaces (media), Cloudflare (custom-domain SSL via Cloudflare-for-SaaS)
+- **Analytics:** GA4, Meta Pixel, GTM (injected on landing pages)
+- **AI:** Anthropic Claude API (campaign planning, email/SMS/flow/LP generation, ad copy, copy suggestions)
+
+Third-party credentials are encrypted at rest via `src/lib/crypto/encryption.ts` using `TOKEN_ENCRYPTION_SECRET` (legacy `ESP_TOKEN_SECRET` accepted as fallback).
+
+---
+
 ## Common Questions
 
 ### How do I create an email?
 Open the template editor from Templates, choose visual or code mode, drag blocks onto the canvas (visual) or write email-safe HTML (code), then save the template. From a campaign you can attach the saved template and schedule it.
 
 ### How do I add a new account?
-Create the account in Accounts, then fill in business/branding data and (for SMS) Twilio credentials in Settings.
+Create the account in Settings → Accounts, then fill in business/branding data and (for sending) SendGrid/Twilio credentials.
 
 ### How do I use the AI assistant in the template editor?
 Click the sparkle button in the bottom-right corner or press Cmd/Ctrl+Shift+A. Ask Loomi to build a full email, edit component props, write subject lines, or improve copy. Loomi can generate complete emails using your account's branding, logos, and business details. In code mode, it can write custom branded HTML beyond the visual component catalog.
@@ -300,14 +361,14 @@ Click the sparkle button in the bottom-right corner or press Cmd/Ctrl+Shift+A. A
 
 ## Technical Notes
 
-- **Framework:** Next.js 14 (App Router)
+- **Framework:** Next.js 16 (App Router), React 19
 - **Styling:** Tailwind CSS + CSS variables
 - **Database:** PostgreSQL via Prisma
-- **Auth:** NextAuth credentials flow
-- **Rendering:** react-email (`@react-email/components` + `@react-email/render`) for email template compilation
-- **AI:** Anthropic Claude API integration
+- **Auth:** NextAuth credentials flow with cross-subdomain JWT sessions; token-based invite onboarding; staff impersonation
+- **Rendering:** react-email (`@react-email/components` + `@react-email/render`) for email template compilation; Puppeteer/headless Chromium for ad-creative PNG export and preview screenshots
 - **Sending:** SendGrid (email) and Twilio (SMS) as the send transports; all campaign state, events, and analytics live in Postgres
-- **Secrets:** `src/lib/crypto/encryption.ts` encrypts Twilio + SendGrid credentials at rest using `TOKEN_ENCRYPTION_SECRET` (legacy `ESP_TOKEN_SECRET` still accepted as a fallback during env migration)
+- **Background work:** pg-boss worker (separate process) for sends, flow execution, ad sync/alerts, CRM delivery, and retention
+- **Secrets:** `src/lib/crypto/encryption.ts` encrypts third-party credentials at rest using `TOKEN_ENCRYPTION_SECRET`
 
 ---
 

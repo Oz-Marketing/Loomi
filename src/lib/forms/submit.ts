@@ -116,6 +116,9 @@ export async function submitForm(args: {
     phone: identifiers.phone,
     firstName: identifiers.firstName,
     lastName: identifiers.lastName,
+    // Per-form lead source. Blank/unset falls back to `Loomi - {form name}`
+    // so every form is distinguishable in lead reporting by default.
+    source: form.leadSource?.trim() || `Loomi - ${form.name}`,
   });
 
   // Attach to the configured list. Idempotent — composite PK on
@@ -194,15 +197,16 @@ async function upsertContactFromSubmission(args: {
   phone: string | null;
   firstName: string | null;
   lastName: string | null;
+  source: string;
 }): Promise<string | null> {
-  const { accountKey, email, phone, firstName, lastName } = args;
+  const { accountKey, email, phone, firstName, lastName, source } = args;
 
   // No identifier → no Contact link. Submission still gets stored
   // anonymously by the caller.
   if (!email && !phone) return null;
 
   const writeFields: Record<string, unknown> = {
-    source: 'form',
+    source,
   };
   if (firstName) writeFields.firstName = firstName;
   if (lastName) writeFields.lastName = lastName;

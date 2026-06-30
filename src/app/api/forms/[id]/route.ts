@@ -44,6 +44,7 @@ export async function PATCH(
       schema: body?.schema,
       redirectUrl: body?.redirectUrl,
       successMessage: body?.successMessage,
+      leadSource: body?.leadSource,
       listId: body?.listId,
       forwardToCrm: body?.forwardToCrm,
     });

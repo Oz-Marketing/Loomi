@@ -32,6 +32,7 @@ export function FormSettingsForm() {
     status: form.status,
     redirectUrl: form.redirectUrl,
     successMessage: form.successMessage,
+    leadSource: form.leadSource,
     listId: form.listId,
     forwardToCrm: form.forwardToCrm,
   });
@@ -48,6 +49,7 @@ export function FormSettingsForm() {
       status: form.status,
       redirectUrl: form.redirectUrl,
       successMessage: form.successMessage,
+      leadSource: form.leadSource,
       listId: form.listId,
       forwardToCrm: form.forwardToCrm,
     });
@@ -80,6 +82,7 @@ export function FormSettingsForm() {
         status: form.status,
         redirectUrl: form.redirectUrl,
         successMessage: form.successMessage,
+        leadSource: form.leadSource,
         listId: form.listId,
         forwardToCrm: form.forwardToCrm,
       });
@@ -215,6 +218,23 @@ export function FormSettingsForm() {
                   rows={3}
                   className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]"
                 />
+              </label>
+
+              <label className="block">
+                <span className="text-sm font-medium">Lead source</span>
+                <input
+                  value={draft.leadSource}
+                  onChange={(e) => setDraft((d) => ({ ...d, leadSource: e.target.value }))}
+                  onBlur={() => {
+                    if (draft.leadSource !== form.leadSource) void patch('leadSource', draft.leadSource);
+                  }}
+                  placeholder={`Loomi - ${form.name}`}
+                  className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]"
+                />
+                <span className="mt-1 block text-xs text-[var(--muted-foreground)]">
+                  Stamped on each lead&apos;s source. Leave blank to use{' '}
+                  <span className="font-mono">Loomi - {form.name}</span>.
+                </span>
               </label>
 
               <label className="block">

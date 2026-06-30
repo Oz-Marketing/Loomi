@@ -767,6 +767,11 @@ model Form {
   // here. Otherwise we show `successMessage` inline.
   redirectUrl     String?
   successMessage  String?
+  // Lead source stamped onto Contact.source for every submission to this
+  // form. Free-text, overridable per form. When blank we fall back to
+  // `Loomi - {form name}` at submit time (see lib/forms/submit.ts) so each
+  // form is distinguishable in lead reporting without manual entry.
+  leadSource      String?
   // Optional ContactList to attach upserted contacts to on submit.
   // Uses the same no-overwrite semantics as importContacts(listId).
   listId          String?

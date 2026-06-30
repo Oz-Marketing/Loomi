@@ -57,6 +57,9 @@ export interface FormDetail extends FormSummary {
   schema: FormTemplate;
   redirectUrl: string;
   successMessage: string;
+  /** Per-form lead source stamped onto Contact.source on submit. Empty
+   *  string when unset — submissions then fall back to `Loomi - {name}`. */
+  leadSource: string;
   /** Recommended embed snippet (script tag with auto-resizing iframe). */
   embedSnippet: string;
   /** All embed variants — UI shows both with their own copy buttons. */
@@ -153,6 +156,7 @@ function toDetail(row: {
   schema: Prisma.JsonValue;
   redirectUrl: string | null;
   successMessage: string | null;
+  leadSource: string | null;
   listId: string | null;
   forwardToCrm: boolean;
   submissionCount: number;
@@ -168,6 +172,7 @@ function toDetail(row: {
     schema: parsed,
     redirectUrl: row.redirectUrl ?? '',
     successMessage: row.successMessage ?? DEFAULT_SUCCESS_MESSAGE,
+    leadSource: row.leadSource ?? '',
     embedSnippet: snippets.script,
     embedSnippets: snippets,
   };
@@ -395,6 +400,7 @@ export async function updateForm(
     schema?: unknown;
     redirectUrl?: unknown;
     successMessage?: unknown;
+    leadSource?: unknown;
     listId?: unknown;
     forwardToCrm?: unknown;
   },
@@ -466,6 +472,15 @@ export async function updateForm(
         ? patch.successMessage.trim()
         : '';
     data.successMessage = value || DEFAULT_SUCCESS_MESSAGE;
+  }
+
+  if (patch.leadSource !== undefined) {
+    if (patch.leadSource !== null && typeof patch.leadSource !== 'string') {
+      throw new FormServiceError('leadSource must be a string or null');
+    }
+    const value = typeof patch.leadSource === 'string' ? patch.leadSource.trim() : '';
+    // Blank clears the override → submissions fall back to `Loomi - {name}`.
+    data.leadSource = value || null;
   }
 
   if (patch.listId !== undefined) {

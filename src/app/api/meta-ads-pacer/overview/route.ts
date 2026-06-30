@@ -53,6 +53,7 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const overview = await fetchOverview(allowed, period);
+  const platform = req.nextUrl.searchParams.get('platform') === 'google' ? 'google' : 'meta';
+  const overview = await fetchOverview(allowed, period, platform);
   return NextResponse.json({ period, accounts: overview });
 }

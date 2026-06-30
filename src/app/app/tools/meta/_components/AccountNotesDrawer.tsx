@@ -31,6 +31,7 @@ export function AccountNotesDrawer({
   currentUserId,
   onClose,
   onCountChange,
+  platform = 'meta',
 }: {
   accountKey: string;
   accountLabel: string;
@@ -41,7 +42,11 @@ export function AccountNotesDrawer({
   currentUserId: string | null;
   onClose: () => void;
   onCountChange?: (count: number) => void;
+  // Notes are kept separate per platform (the /notes API reads ?platform).
+  // Defaults to Meta so existing callers are unchanged.
+  platform?: 'meta' | 'google';
 }) {
+  const platformQs = platform === 'google' ? '?platform=google' : '';
   const [notes, setNotes] = useState<AccountNote[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState('');
@@ -57,7 +62,11 @@ export function AccountNotesDrawer({
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/meta-ads-pacer/${accountKey}/notes?period=${period}`)
+    fetch(
+      `/api/meta-ads-pacer/${accountKey}/notes?period=${period}${
+        platform === 'google' ? '&platform=google' : ''
+      }`,
+    )
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json() as Promise<{ notes: AccountNote[] }>;
@@ -75,7 +84,7 @@ export function AccountNotesDrawer({
     return () => {
       cancelled = true;
     };
-  }, [accountKey, period, onCountChange]);
+  }, [accountKey, period, platform, onCountChange]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -90,7 +99,7 @@ export function AccountNotesDrawer({
     if (!trimmed || posting) return;
     setPosting(true);
     try {
-      const res = await fetch(`/api/meta-ads-pacer/${accountKey}/notes`, {
+      const res = await fetch(`/api/meta-ads-pacer/${accountKey}/notes${platformQs}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: trimmed, period }),

@@ -36,6 +36,7 @@ import {
   BudgetPanel,
   TotalAllocationHeader,
   AddPlanButton,
+  AccountNotesButton,
   AdSummaryRow,
   PacerRow,
   Tooltip,
@@ -44,6 +45,7 @@ import {
   ComparePanel,
   StatusBattery,
 } from '@/app/app/tools/_shared';
+import { AccountNotesDrawer } from '@/app/app/tools/meta/_components/AccountNotesDrawer';
 
 // ── Reference data ──
 const CHANNELS = ['Search', 'Display', 'Video', 'Shopping', 'PMax', 'Demand Gen'] as const;
@@ -148,7 +150,7 @@ function GoogleLinkBadge({ ad }: { ad: PacerAd }) {
 }
 
 export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
-  const { accountKey, accountData } = useAccount();
+  const { accountKey, accountData, setAccount } = useAccount();
   const { confirm } = useLoomiDialog();
   const { data: session } = useSession();
   const currentUserId = session?.user?.id ?? null;
@@ -165,6 +167,12 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const [importOpen, setImportOpen] = useState(false);
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [search, setSearch] = useState('');
+  // Which account's notes drawer is open (null = closed). Carries an accountKey
+  // so an admin can open notes for any card, not just the selected account.
+  const [notesTarget, setNotesTarget] = useState<{ accountKey: string; label: string } | null>(
+    null,
+  );
+  const [notesCount, setNotesCount] = useState<number | null>(null);
   // Pace-view per-card expand state (mirrors Meta's BudgetPacerPanel).
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const toggleExpanded = (id: string) =>
@@ -502,13 +510,34 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   }
 
   if (!accountKey) {
+    // Admin mode — mirror Meta: an all-accounts overview (every account the user
+    // can access, regardless of whether it has Google data yet) with a comment
+    // icon + Open per card, rather than forcing an account selection.
     return (
       <div className="pt-6">
-        <Header tab={tab} onTab={setTab} accountKey={null} />
-        <div className="glass-section-card mt-4 rounded-xl p-6 text-sm text-[var(--muted-foreground)]">
-          Select a sub-account from the switcher to plan, pace, and reconcile its
-          Google campaigns.
-        </div>
+        <Header
+          tab={tab}
+          onTab={setTab}
+          accountKey={null}
+          period={period}
+          onShiftPeriod={(d) => setPeriod((p) => shiftPeriod(p, d))}
+        />
+        <GoogleAdminOverview
+          period={period}
+          onOpenAccount={(key) => setAccount({ mode: 'account', accountKey: key })}
+          onOpenNotes={(key, label) => setNotesTarget({ accountKey: key, label })}
+        />
+        {notesTarget && (
+          <AccountNotesDrawer
+            accountKey={notesTarget.accountKey}
+            accountLabel={notesTarget.label}
+            period={period}
+            users={directoryUsers}
+            currentUserId={currentUserId}
+            platform="google"
+            onClose={() => setNotesTarget(null)}
+          />
+        )}
       </div>
     );
   }
@@ -539,6 +568,17 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
             {accountData?.dealer ?? accountKey}
           </span>
           {plan && plan.ads.length > 0 && <StatusBattery ads={plan.ads} />}
+        </div>
+        {/* Account comments for the selected period (mirrors Meta) — opens the
+            notes drawer; the badge shows this month's comment count. */}
+        <div className="ml-auto flex-shrink-0">
+          <AccountNotesButton
+            count={notesCount}
+            onClick={() =>
+              setNotesTarget({ accountKey, label: accountData?.dealer ?? accountKey })
+            }
+            ariaLabel="Account notes for this month"
+          />
         </div>
       </div>
 
@@ -811,6 +851,23 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           onCopy={handleCopyFrom}
         />
       )}
+
+      {notesTarget && (
+        <AccountNotesDrawer
+          accountKey={notesTarget.accountKey}
+          accountLabel={notesTarget.label}
+          period={period}
+          users={directoryUsers}
+          currentUserId={currentUserId}
+          platform="google"
+          onClose={() => setNotesTarget(null)}
+          // Only reflect the count back into the page-title badge when the open
+          // drawer is for the currently-selected account.
+          onCountChange={(c) => {
+            if (notesTarget.accountKey === accountKey) setNotesCount(c);
+          }}
+        />
+      )}
     </div>
     </PacerReadOnlyContext.Provider>
   );
@@ -902,6 +959,92 @@ function GooglePacingHeader({
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+type GoogleOverviewAccount = {
+  accountKey: string;
+  dealer: string;
+  notesCount: number;
+  ads: PacerAd[];
+};
+
+/**
+ * Admin all-accounts overview (mirrors Meta). Lists EVERY account the user can
+ * access for the period — regardless of whether it has Google data yet — each as
+ * a card with a comment icon (per-account note count) and an Open action that
+ * switches the account context into that sub-account.
+ */
+function GoogleAdminOverview({
+  period,
+  onOpenAccount,
+  onOpenNotes,
+}: {
+  period: string;
+  onOpenAccount: (accountKey: string) => void;
+  onOpenNotes: (accountKey: string, label: string) => void;
+}) {
+  const { data, isLoading } = useSWR<{ accounts: GoogleOverviewAccount[] }>(
+    `/api/meta-ads-pacer/overview?period=${period}&platform=google`,
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+  const accounts = data?.accounts ?? [];
+
+  return (
+    <div className="mt-4">
+      <div className="mb-3 flex items-center justify-between">
+        <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
+          All accounts · {periodLabel(period)}{' '}
+          <span className="font-normal text-[var(--muted-foreground)]">({accounts.length})</span>
+        </span>
+      </div>
+      {isLoading ? (
+        <div className="glass-section-card rounded-xl p-6 text-sm text-[var(--muted-foreground)]">
+          Loading accounts…
+        </div>
+      ) : accounts.length === 0 ? (
+        <div className="glass-section-card rounded-xl p-6 text-sm text-[var(--muted-foreground)]">
+          No accessible accounts.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {accounts.map((a) => {
+            const liveCount = a.ads.filter((ad) => ad.adStatus === 'Live').length;
+            return (
+              <div
+                key={a.accountKey}
+                className="glass-section-card flex flex-col gap-3 rounded-xl p-4"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-[var(--foreground)]">
+                      {a.dealer}
+                    </div>
+                    <div className="text-[11px] text-[var(--muted-foreground)]">
+                      {a.ads.length} campaign{a.ads.length === 1 ? '' : 's'}
+                      {a.ads.length > 0 ? ` · ${liveCount} live` : ''}
+                    </div>
+                  </div>
+                  <AccountNotesButton
+                    count={a.notesCount}
+                    onClick={() => onOpenNotes(a.accountKey, a.dealer)}
+                    ariaLabel={`Notes for ${a.dealer}`}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onOpenAccount(a.accountKey)}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                >
+                  Open
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

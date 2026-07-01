@@ -308,11 +308,11 @@ function getBlockDefaults(type: BlockType): Record<string, unknown> {
     case 'logo':
       return { width: 140, align: 'center' };
     case 'social':
+      // Links are edited as flat link{n}-platform / link{n}-url props via the
+      // properties panel (component-schemas) and resolved by SocialBlock, so we
+      // don't seed a links[] array here — doing so previously shadowed the
+      // panel's edits and rendered phantom empty icons.
       return {
-        links: [
-          { platform: 'facebook', url: '' },
-          { platform: 'instagram', url: '' },
-        ],
         iconSize: 28,
         spacing: 8,
         align: 'center',

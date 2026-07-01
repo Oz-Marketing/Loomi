@@ -281,12 +281,9 @@ export const SOCIAL_SCHEMA: BlockSchema = {
   label: 'Social Links',
   icon: 'share',
   description: 'Row of social media icons.',
+  // Links are edited as flat link{n}-* props (component-schemas) and resolved
+  // by SocialBlock, so no links[] seed here.
   defaults: {
-    links: [
-      { platform: 'facebook', url: '' },
-      { platform: 'instagram', url: '' },
-      { platform: 'youtube', url: '' },
-    ],
     iconSize: 28,
     spacing: 8,
     align: 'center',

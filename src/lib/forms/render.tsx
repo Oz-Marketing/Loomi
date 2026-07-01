@@ -84,9 +84,19 @@ function RenderedBlock({ block }: { block: Block }) {
     );
   }
 
+  // Hidden fields must be invisible on the live form. The FieldHidden
+  // component is an editor-only chip (for discoverability while editing);
+  // here we emit a real <input type="hidden"> so the passthrough value
+  // (e.g. source) still rides along in the FormData submission.
+  if (block.type === 'field_hidden') {
+    const name = String(block.props.name ?? '').trim();
+    if (!name) return null;
+    return <input type="hidden" name={name} defaultValue={String(block.props.value ?? '')} />;
+  }
+
   // Field blocks: surface the error inline directly under the input.
-  // Hidden fields render no error UI (they're not user-visible).
-  if (block.type.startsWith('field_') && fieldError && block.type !== 'field_hidden') {
+  // (Hidden fields already returned above, so they never reach here.)
+  if (block.type.startsWith('field_') && fieldError) {
     return (
       <>
         <Component {...block.props} />

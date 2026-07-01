@@ -137,8 +137,6 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const [definition, setDefinition] = useState<FilterDefinition>(initialDef);
   const [saving, setSaving] = useState(false);
 
-  const [nameError, setNameError] = useState('');
-
   // ── Contacts for live preview ──────────────────────────────
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [contactsLoading, setContactsLoading] = useState(true);

@@ -154,7 +154,6 @@ export function FormDetailHeader() {
               {form.name || 'Untitled form'}
             </h2>
           )}
-          {/* <p className="text-xs text-[var(--muted-foreground)] truncate">/f/{form.slug}</p> */}
         </div>
       </div>
 

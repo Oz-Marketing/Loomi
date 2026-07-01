@@ -4,8 +4,6 @@ import {
   ArrowUturnLeftIcon,
   ArrowUturnRightIcon,
   ArrowsPointingOutIcon,
-  CloudArrowUpIcon,
-  CloudIcon,
   MagnifyingGlassMinusIcon,
   MagnifyingGlassPlusIcon,
   Squares2X2Icon,
@@ -109,23 +107,12 @@ export function BuilderActionBar({
         <Squares2X2Icon className="w-5 h-5" />
       </BarButton>
 
-      {/* Save — explicit flush, alongside the 3s autosave debounce.
-          Icon swaps to the "uploading cloud" with a pulse while
-          saving; tinted amber when there are unsaved edits so the
-          state reads at a glance. */}
-      <BarButton
-        title={dirty ? 'Save now (unsaved changes)' : 'All changes saved'}
-        onClick={onSave}
+      <BarSaveButton
+        dirty={dirty}
+        saving={saving}
         disabled={busy || saving || isActive}
-      >
-        {saving ? (
-          <CloudArrowUpIcon className="w-5 h-5 animate-pulse text-[var(--primary)]" />
-        ) : dirty ? (
-          <CloudArrowUpIcon className="w-5 h-5 text-amber-400" />
-        ) : (
-          <CloudIcon className="w-5 h-5" />
-        )}
-      </BarButton>
+        onClick={onSave}
+      />
 
       <BarDivider />
 
@@ -174,6 +161,56 @@ function BarButton({
 
 function BarDivider() {
   return <span className="w-px h-6 bg-[var(--border)] mx-1" />;
+}
+
+function FloppyDiskIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      aria-hidden="true"
+    >
+      <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+      <polyline points="17 21 17 13 7 13 7 21" />
+      <polyline points="7 3 7 8 15 8" />
+    </svg>
+  );
+}
+
+function BarSaveButton({
+  dirty,
+  saving,
+  disabled,
+  onClick,
+}: {
+  dirty: boolean;
+  saving: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={dirty ? 'Save now (unsaved changes)' : 'All changes saved'}
+      aria-label="Save"
+      className={`inline-flex items-center gap-1.5 px-3 h-9 rounded-md text-sm font-medium transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed hover:bg-[var(--muted)] ${
+        dirty ? 'text-amber-400' : 'text-[var(--foreground)]'
+      }`}
+    >
+      <FloppyDiskIcon
+        className={`w-4 h-4 flex-shrink-0 ${saving ? 'animate-pulse text-[var(--primary)]' : ''}`}
+      />
+      <span>{saving ? 'Saving…' : 'Save'}</span>
+    </button>
+  );
 }
 
 // Compact Draft↔Publish toggle for the action bar. Same shape as the

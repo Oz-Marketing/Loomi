@@ -14,9 +14,8 @@ export default function PublicFormLayout({
   return (
     <>
       <style
-  
         // eslint-disable-next-line react/no-danger
-        dangerouslySetInnerHTML={{          
+        dangerouslySetInnerHTML={{
           __html: `
             @media (max-width: 500px) {
               .loomi-form-root .loomi-form-stack {

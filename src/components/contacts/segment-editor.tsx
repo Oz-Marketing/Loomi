@@ -260,9 +260,6 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
     updateDef((prev) => ({ ...prev, logic: prev.logic === 'AND' ? 'OR' : 'AND' }));
   }
 
-  // ── Error Handling ─────────────────────────────────────────
-
-
   // ── Save ───────────────────────────────────────────────────
   async function handleSave() {
     const trimmedName = name.trim();
@@ -776,11 +773,16 @@ function LoomiSelect({
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);
     }
+    function handleScroll() {
+      setOpen(false);
+    }
     document.addEventListener('mousedown', handleMouseDown);
     document.addEventListener('keydown', handleKey);
+    document.addEventListener('scroll', handleScroll, true);
     return () => {
       document.removeEventListener('mousedown', handleMouseDown);
       document.removeEventListener('keydown', handleKey);
+      document.removeEventListener('scroll', handleScroll, true);
     };
   }, [open]);
 

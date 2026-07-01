@@ -1380,7 +1380,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
   const inspectorNode = selectedNode ?? lingeringInspectorNode;
 
   // ── Save / publish / pause / duplicate / archive ──
-  async function saveGraph() {
+  async function saveGraph(showToast = false) {
     if (!detail) return;
     setSaving(true);
     try {
@@ -1424,6 +1424,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
       }
       serverToLocalIdRef.current = reverse;
       setDirty(false);
+      if (showToast) toast.success('Saved');
       // Refresh the per-node stats overlay (chips on email/condition
       // nodes). Stats are attached via a separate useEffect that
       // merges them into `node.data.stats`.
@@ -1576,7 +1577,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
       >
           {/* Floating title group, top-left. Back arrow + editable
               title only; status + save state live elsewhere. */}
-          <FloatingTitleGroup flow={detail} onRename={renameFlow} />
+          <FloatingTitleGroup flow={detail} onRename={renameFlow} saving={saving} dirty={dirty} />
 
           {/* Floating settings cog, top-right. Mirrors the title
               group chrome on the opposite corner. Click → opens the
@@ -1687,7 +1688,7 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
             canUndo={canUndo}
             canRedo={canRedo}
             onAutoFormat={handleAutoFormat}
-            onSave={() => void saveGraph()}
+            onSave={() => void saveGraph(true)}
             saving={saving}
             dirty={dirty}
             isActive={detail.status === 'active'}
@@ -1786,9 +1787,13 @@ function FlowBuilderInner({ flowId }: { flowId: string }) {
 function FloatingTitleGroup({
   flow,
   onRename,
+  saving,
+  dirty,
 }: {
   flow: FlowApiDetail;
   onRename: (name: string) => void;
+  saving: boolean;
+  dirty: boolean;
 }) {
   const [name, setName] = useState(flow.name);
   useEffect(() => setName(flow.name), [flow.name]);
@@ -1813,6 +1818,19 @@ function FloatingTitleGroup({
         }}
         className="text-base font-semibold bg-transparent border border-transparent hover:border-[var(--border)] focus:border-[var(--primary)] rounded-md px-2 py-1.5 outline-none min-w-[200px] max-w-[360px]"
       />
+      {/* Save state indicator — sits immediately right of the name */}
+      <span className="flex items-center gap-1 text-xs font-medium select-none whitespace-nowrap pr-1">
+        {saving ? (
+          <span className="text-[var(--muted-foreground)] animate-pulse">Saving…</span>
+        ) : dirty ? (
+          <>
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" />
+            <span className="text-amber-400">Unsaved</span>
+          </>
+        ) : (
+          <span className="text-emerald-400">Saved</span>
+        )}
+      </span>
     </header>
   );
 }

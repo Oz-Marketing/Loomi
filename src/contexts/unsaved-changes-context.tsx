@@ -308,16 +308,16 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
             <div className="mt-6 flex items-center justify-end gap-2">
               <button
                 type="button"
-                onClick={handleStay}
+                onClick={handleLeave}
                 className="px-3.5 py-2 rounded-lg border border-[var(--border)] bg-[var(--input)] text-sm font-medium text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
               >
-                Stay
+                Leave without saving
               </button>
               <PrimaryButton
                 type="button"
-                onClick={handleLeave}
+                onClick={handleStay}                
               >
-                Leave without saving
+                Stay
               </PrimaryButton>
             </div>
           </div>

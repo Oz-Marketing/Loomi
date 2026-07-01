@@ -130,7 +130,6 @@ export function makeAd(position: number, period: string): PacerAd {
     allocation: null,
     pacerActual: null,
     pacerDailyBudget: null,
-    pacerTodaySpend: null,
     pacerTodayDate: null,
     pacerEndDate: null,
     creativeLink: null,

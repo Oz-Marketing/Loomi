@@ -319,63 +319,6 @@ export function effectiveTarget(ad: EffectiveMoneyLike, asMonth?: string): numbe
   return num(ad.allocation) ?? 0;
 }
 
-/** Whole calendar days from `fromIso` through `toIso` INCLUSIVE (date-only,
- *  account-TZ strings). Today→today = 1; returns 0 if `to` precedes `from`. */
-function wholeDaysInclusive(fromIso: string, toIso: string): number {
-  const from = Date.parse(`${fromIso}T00:00:00Z`);
-  const to = Date.parse(`${toIso}T00:00:00Z`);
-  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return 0;
-  return Math.round((to - from) / 86_400_000) + 1;
-}
-
-/**
- * The "do-nothing" projected spend for the Meta pacer card — where the flight
- * lands if the daily budget is left as-is. Unlike the generic `projected` in
- * buildPacerCalc (which prorates today by the fraction of day remaining), this
- * counts TODAY as a FULL budget-day: a budget that isn't being changed paces
- * toward its whole daily amount over the day, not a prorated slice.
- *
- *   projected = cumulative − today_spend + daily_budget × whole_days_remaining_incl_today
- *
- * The − today_spend term avoids double-counting: a full daily_budget is added
- * for today, but the part already spent today already sits in `cumulative`, so
- * subtract it back out. `cumulative` and `today_spend` come from synced data
- * only — never the input field; only `daily_budget` differs between the saved
- * card (ad.pacerDailyBudget) and the live preview (the typed value, which the
- * caller writes into ad.pacerDailyBudget before re-rendering).
- *
- * A forecast/aim, not a guarantee. Meta daily ads only; returns the cumulative
- * spend for lifetime ads, no-end flights, or flights already past their end.
- */
-export function doNothingProjected(
-  ad: PacerAd,
-  nowMs: number,
-  timeZone: string,
-): number {
-  const cumulative = effectiveActual(ad);
-  const wholeDays = wholeDaysRemainingInclusive(ad, nowMs, timeZone);
-  if (wholeDays <= 0) return cumulative; // lifetime, no end, or flight over
-  const todaySpend = num(ad.pacerTodaySpend) ?? 0;
-  const dailyBudget = num(ad.pacerDailyBudget) ?? 0;
-  return cumulative - todaySpend + dailyBudget * wholeDays;
-}
-
-/** Whole budget-days from today through the flight end (account TZ), inclusive
- *  — the multiplier in `doNothingProjected` and the day count shown on the
- *  card. 0 for lifetime ads, no-end flights, or flights already past end. */
-export function wholeDaysRemainingInclusive(
-  ad: PacerAd,
-  nowMs: number,
-  timeZone: string,
-): number {
-  if (ad.budgetType === 'Lifetime') return 0;
-  const { effectiveEnd } = clampToMonth(ad);
-  if (!effectiveEnd) return 0;
-  const todayIso = zonedTodayIso(nowMs, timeZone);
-  if (effectiveEnd < todayIso) return 0;
-  return wholeDaysInclusive(todayIso, effectiveEnd);
-}
-
 /** Why an ad's over/under may differ from what actually spent THIS month. No
  *  auto-detection — the cross-month treatment is the user's manual choice
  *  (fullRunAppliedToMonth), or the §3 lifetime mechanic. */

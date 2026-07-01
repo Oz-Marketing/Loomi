@@ -64,9 +64,6 @@ export interface PacerAd {
   allocation: string | null;
   pacerActual: string | null;
   pacerDailyBudget: string | null;
-  /** Spend so far today through last sync (Meta, account TZ). Server-managed;
-   *  feeds the Meta card's whole-day "do-nothing" projection. */
-  pacerTodaySpend: string | null;
   pacerTodayDate: string | null;
   pacerEndDate: string | null;
   creativeLink: string | null;

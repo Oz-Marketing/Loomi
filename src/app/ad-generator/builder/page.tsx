@@ -2615,8 +2615,13 @@ export default function AdBuilderPage() {
             className="relative flex flex-1 flex-col gap-4 overflow-auto bg-[var(--muted)]/30 p-3 [align-items:safe_center] [background-image:radial-gradient(var(--canvas-dot)_1px,transparent_1.5px)] [background-position:center] [background-size:18px_18px] [justify-content:safe_center] sm:p-6"
             style={{ userSelect: 'none' }}
             onPointerDown={(e) => {
-              // Clicking the empty area around the artboard clears the selection.
-              if (e.target === e.currentTarget) clearSelection();
+              // Clicking the empty canvas around the artboard clears the
+              // selection AND dismisses the background panel — so a click off
+              // the artboard fully unfocuses (no lingering settings panel).
+              if (e.target === e.currentTarget) {
+                clearSelection();
+                setBgPanelHidden(true);
+              }
             }}
           >
               <div ref={frameRef} className="relative rounded-md shadow-[0_12px_48px_-8px_rgba(0,0,0,0.28),0_2px_8px_rgba(0,0,0,0.12)] ring-1 ring-black/10" style={{ width: frameW, height: frameH }}>
@@ -3373,7 +3378,7 @@ function SelectionPanel({
   return (
     <div
       style={{ top: topPx, maxHeight: `calc(100vh - ${topPx + 16}px)` }}
-      className={`fixed z-40 flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[372px]' : 'right-6'}`}
+      className={`fixed z-[70] flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[372px]' : 'right-6'}`}
     >
       <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
@@ -3929,7 +3934,7 @@ function BackgroundPanel({
   return (
     <div
       style={{ top: topPx, maxHeight: `calc(100vh - ${topPx + 16}px)` }}
-      className={`fixed z-40 flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[372px]' : 'right-6'}`}
+      className={`fixed z-[70] flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[372px]' : 'right-6'}`}
     >
       <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2">

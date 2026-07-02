@@ -27,7 +27,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       doc = null;
     }
     return NextResponse.json({
-      template: { id: row.id, name: row.name, description: row.description, status: row.status, doc },
+      template: { id: row.id, name: row.name, description: row.description, status: row.status, accountKey: row.accountKey, doc },
     });
   } catch (err) {
     console.warn('[api/ad-generator/templates-doc/[id]] GET failed:', err);
@@ -42,7 +42,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const session = await getAuthSession();
 
   const { id } = await params;
-  let body: { name?: string; description?: string; doc?: unknown; status?: string; isActive?: boolean };
+  let body: { name?: string; description?: string; doc?: unknown; status?: string; isActive?: boolean; accountKey?: string | null };
   try {
     body = await req.json();
   } catch {
@@ -54,6 +54,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if ('description' in body) data.description = body.description?.trim() || null;
   if (typeof body.status === 'string') data.status = body.status === 'published' ? 'published' : 'draft';
   if (typeof body.isActive === 'boolean') data.isActive = body.isActive;
+  // Scope: a string re-scopes to that account, null/'' back to global.
+  if ('accountKey' in body) data.accountKey = typeof body.accountKey === 'string' && body.accountKey.trim() ? body.accountKey.trim() : null;
   if (body.doc && typeof body.doc === 'object' && Array.isArray((body.doc as { sizes?: unknown }).sizes)) {
     const u = session?.user as { name?: string | null; email?: string | null; image?: string | null } | undefined;
     data.doc = JSON.stringify(body.doc);

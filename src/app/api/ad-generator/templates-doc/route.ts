@@ -5,9 +5,11 @@
  * PUBLISHED ones to offer alongside the code-defined templates. The doc column
  * stores `JSON.stringify(TemplateDoc)`; reads parse it back to an object.
  *
- * - GET            → published + active templates (for the generator picker)
+ * - GET            → published + active templates (for the generator picker):
+ *                    global ones (accountKey null) +, with ?accountKey=, that
+ *                    account's own (dealer-branded plates etc.)
  * - GET ?all=1     → every template incl. drafts (admin; the builder's Load)
- * - POST           → create (admin)
+ * - POST           → create (admin); optional accountKey scopes it to one account
  *
  * Resilient: if the table isn't migrated in this environment, list endpoints
  * return [] so the generator simply falls back to code templates.
@@ -27,6 +29,7 @@ type Row = {
   doc: string;
   status: string;
   isActive: boolean;
+  accountKey: string | null;
   updatedAt: Date;
   createdByName: string | null;
   createdByEmail: string | null;
@@ -51,6 +54,7 @@ function shape(r: Row) {
     description: r.description,
     status: r.status,
     isActive: r.isActive,
+    accountKey: r.accountKey,
     updatedAt: r.updatedAt,
     createdByName: r.createdByName,
     createdByEmail: r.createdByEmail,
@@ -79,8 +83,14 @@ export async function GET(req: NextRequest) {
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
+    // Global templates + the active account's own (when the caller passes one).
+    const accountKey = req.nextUrl.searchParams.get('accountKey')?.trim();
     const rows = (await prisma.adTemplateDoc.findMany({
-      where: { status: 'published', isActive: true },
+      where: {
+        status: 'published',
+        isActive: true,
+        OR: [{ accountKey: null }, ...(accountKey ? [{ accountKey }] : [])],
+      },
       orderBy: { name: 'asc' },
     })) as Row[];
     // Only return rows whose doc parses to a usable shape.
@@ -97,7 +107,7 @@ export async function POST(req: NextRequest) {
   if (error) return error;
   const session = await getAuthSession();
 
-  let body: { name?: string; description?: string; doc?: unknown; status?: string };
+  let body: { name?: string; description?: string; doc?: unknown; status?: string; accountKey?: string | null };
   try {
     body = await req.json();
   } catch {
@@ -119,6 +129,7 @@ export async function POST(req: NextRequest) {
         description: body.description?.trim() || null,
         doc: JSON.stringify(doc),
         status,
+        accountKey: typeof body.accountKey === 'string' && body.accountKey.trim() ? body.accountKey.trim() : null,
         createdBy: u?.email ?? null,
         createdByName: u?.name ?? null,
         createdByEmail: u?.email ?? null,

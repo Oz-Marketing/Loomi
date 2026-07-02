@@ -2070,6 +2070,9 @@ model AdTemplateDoc {
   doc         String   @db.Text // JSON-serialized TemplateDoc (fields + elements + per-size layouts)
   status      String   @default("draft") // draft | published
   isActive    Boolean  @default(true)
+  // null = global (offered to every account the industry filter allows);
+  // set = only that account sees it in the picker (dealer-branded plates etc.).
+  accountKey  String?
   createdBy   String? // user id / email who last saved it
   // Last-saver display info (for the template card author, like email cards).
   createdByName  String?
@@ -2079,6 +2082,7 @@ model AdTemplateDoc {
   updatedAt   DateTime @updatedAt
 
   @@index([status, isActive])
+  @@index([accountKey])
 }
 
 // ─────────────────────────────────────────────────────

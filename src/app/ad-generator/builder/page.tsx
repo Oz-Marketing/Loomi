@@ -201,6 +201,8 @@ type SavedTemplate = {
   name: string;
   description: string | null;
   status: string;
+  /** null = global; an account key = only that account sees it in the picker. */
+  accountKey?: string | null;
   updatedAt: string;
   doc: TemplateDoc | null;
 };
@@ -380,6 +382,9 @@ export default function AdBuilderPage() {
   const [adData, setAdData] = useState<AdData | null>(null);
   const [templateName, setTemplateName] = useState(vehicleOfferDoc.name);
   const [status, setStatus] = useState<'draft' | 'published'>('draft');
+  // Scope: null = global (every account the industry filter allows); an
+  // account key = only that account's picker offers it (dealer-branded plates).
+  const [scopeAccount, setScopeAccount] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [loadOpen, setLoadOpen] = useState(false);
   const [savedList, setSavedList] = useState<SavedTemplate[]>([]);
@@ -1221,7 +1226,7 @@ export default function AdBuilderPage() {
     }
     setSaving(true);
     try {
-      const payload = { name, doc: { ...doc, name }, status };
+      const payload = { name, doc: { ...doc, name }, status, accountKey: scopeAccount };
       const useId = templateId && !asNew;
       const res = await fetch(useId ? `/api/ad-generator/templates-doc/${templateId}` : '/api/ad-generator/templates-doc', {
         method: useId ? 'PATCH' : 'POST',
@@ -1267,6 +1272,7 @@ export default function AdBuilderPage() {
     setTemplateId(t.id);
     setTemplateName(t.name);
     setStatus(st);
+    setScopeAccount(t.accountKey ?? null);
     setSizeId(loaded.sizes[0]?.id ?? '');
     clearSelection();
     setLoadOpen(false);
@@ -1302,6 +1308,7 @@ export default function AdBuilderPage() {
     setTemplateId(null);
     setTemplateName('Untitled template');
     setStatus('draft');
+    setScopeAccount(null);
     setSizeId('square');
     clearSelection();
     savedRef.current = '';
@@ -1351,9 +1358,9 @@ export default function AdBuilderPage() {
         }
         const res = await fetch(`/api/ad-generator/templates-doc/${tid}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = (await res.json()) as { template?: { id: string; name: string; description: string | null; status: string; doc: TemplateDoc | null } };
+        const json = (await res.json()) as { template?: { id: string; name: string; description: string | null; status: string; accountKey?: string | null; doc: TemplateDoc | null } };
         const t = json.template;
-        if (t?.doc) loadTemplate({ id: t.id, name: t.name, description: t.description, status: t.status, updatedAt: '', doc: t.doc });
+        if (t?.doc) loadTemplate({ id: t.id, name: t.name, description: t.description, status: t.status, accountKey: t.accountKey ?? null, updatedAt: '', doc: t.doc });
         else toast.error('That template could not be opened');
       } catch {
         toast.error('Could not open that');
@@ -1914,6 +1921,29 @@ export default function AdBuilderPage() {
                     {s}
                   </button>
                 ))}
+              </div>
+              {/* Scope — who sees this template in the picker: everyone (industry-
+                  filtered) or only the active account (dealer-branded plates). */}
+              <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5" title="Which accounts get this template in their picker">
+                <button
+                  onClick={() => setScopeAccount(null)}
+                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                    scopeAccount === null ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                  }`}
+                >
+                  Global
+                </button>
+                {(accountKey || scopeAccount) && (
+                  <button
+                    onClick={() => accountKey && setScopeAccount(accountKey)}
+                    title={scopeAccount && scopeAccount !== accountKey ? `Scoped to "${scopeAccount}" — switch to that account to re-scope` : undefined}
+                    className={`max-w-36 truncate rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      scopeAccount !== null ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    {scopeAccount && scopeAccount !== accountKey ? scopeAccount : (accountData?.dealer ?? 'This account')}
+                  </button>
+                )}
               </div>
               {templateId && (
                 <button

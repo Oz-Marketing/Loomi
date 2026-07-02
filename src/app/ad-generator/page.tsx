@@ -67,7 +67,8 @@ export default function AdGeneratorListPage() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/ad-generator/templates-doc')
+    // Global templates + this account's own (dealer-branded plates etc.).
+    fetch(`/api/ad-generator/templates-doc${accountKey ? `?accountKey=${encodeURIComponent(accountKey)}` : ''}`)
       .then((r) => (r.ok ? r.json() : { templates: [] }))
       .then((d: { templates?: { id: string; doc: TemplateDoc | null }[] }) => {
         if (cancelled) return;
@@ -79,7 +80,7 @@ export default function AdGeneratorListPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [accountKey]);
   // Resolution list (incl. retired templates) — for rendering existing ads.
   const templates = useMemo(() => [...ALL_TEMPLATES, ...dbTemplates], [dbTemplates]);
   // Picker list — only OFFERED templates, scoped to this account's industry

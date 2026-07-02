@@ -10,7 +10,13 @@
  */
 
 const BASE = process.env.MARKETCHECK_BASE_URL ?? 'https://mc-api.marketcheck.com/v2';
-const TIMEOUT_MS = 15000;
+const PAGE_SIZE = 10; // MarketCheck caps incentive results at 10/page regardless of `rows`
+const MAX_PAGES = 8;
+const REQUEST_TIMEOUT_MS = 10000;
+const DEADLINE_MS = 20000; // total budget across pages + fallbacks; the API route allows 30s
+const CACHE_TTL_HIT_MS = 24 * 60 * 60 * 1000; // OEM programs are stable day-to-day
+const CACHE_TTL_MISS_MS = 60 * 60 * 1000; // retry empty results sooner
+const CACHE_MAX = 200;
 
 function apiKey(): string {
   return process.env.MARKETCHECK_API_KEY ?? '';
@@ -184,27 +190,65 @@ function transform(item: Record<string, any>): MarketCheckIncentive | null {
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-/** Fetch OEM incentives for a vehicle. Empty array on any failure / not configured. */
-export async function getIncentives(make: string, model: string, year: number, zip?: string, radius = 75): Promise<MarketCheckIncentive[]> {
-  const key = apiKey();
-  if (!key || !make) return [];
-  const params = new URLSearchParams({ api_key: key, make, rows: '50', start: '0' });
-  if (model) params.set('model', model);
-  if (year) params.set('year', String(year));
-  if (zip) {
-    params.set('zip', zip);
-    params.set('radius', String(radius));
+export interface IncentiveResult {
+  incentives: MarketCheckIncentive[];
+  /** Model year the results are actually for — may be `year - 1` when the new year has no programs yet. */
+  usedYear: number;
+  /** True when the zip-scoped search was empty and we broadened to a national search. */
+  usedNational: boolean;
+}
+
+// 24h in-process cache (pm2 runs one Next process, so this is effective in prod).
+// Empty results get a shorter TTL so a dealer isn't stuck an entire day once
+// MarketCheck publishes programs. Map iterates in insertion order → cheap FIFO cap.
+const cache = new Map<string, { at: number; result: IncentiveResult }>();
+
+function cacheGet(key: string): IncentiveResult | null {
+  const hit = cache.get(key);
+  if (!hit) return null;
+  const ttl = hit.result.incentives.length > 0 ? CACHE_TTL_HIT_MS : CACHE_TTL_MISS_MS;
+  if (Date.now() - hit.at > ttl) {
+    cache.delete(key);
+    return null;
   }
-  try {
-    const res = await fetch(`${BASE}/search/car/incentive/oem?${params.toString()}`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
+  return hit.result;
+}
+
+function cacheSet(key: string, result: IncentiveResult) {
+  if (cache.size >= CACHE_MAX) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, { at: Date.now(), result });
+}
+
+/**
+ * One search pass for an exact (make, model, year, zip) combo, paginated —
+ * MarketCheck returns at most 10 incentives per page no matter what `rows`
+ * asks for, so a single request silently drops lease/APR programs.
+ */
+async function searchOnce(key: string, make: string, model: string, year: number, zip: string | undefined, radius: number, deadline: number): Promise<MarketCheckIncentive[]> {
+  const out: MarketCheckIncentive[] = [];
+  const seen = new Set<string>();
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const remaining = deadline - Date.now();
+    if (remaining < 1500) break; // out of budget — return what we have
+    const params = new URLSearchParams({ api_key: key, make, rows: String(PAGE_SIZE), start: String(page * PAGE_SIZE) });
+    if (model) params.set('model', model);
+    if (year) params.set('year', String(year));
+    if (zip) {
+      params.set('zip', zip);
+      params.set('radius', String(radius));
+    }
+    const res = await fetch(`${BASE}/search/car/incentive/oem?${params.toString()}`, {
+      signal: AbortSignal.timeout(Math.min(REQUEST_TIMEOUT_MS, remaining)),
+    });
     if (!res.ok) {
       console.warn(`[marketcheck] incentives → HTTP ${res.status}`);
-      return [];
+      break;
     }
     const json = await res.json();
     const items = extractItems(json);
-    const out: MarketCheckIncentive[] = [];
-    const seen = new Set<string>();
     for (const it of items) {
       const t = transform(it);
       if (!t) continue;
@@ -213,9 +257,51 @@ export async function getIncentives(make: string, model: string, year: number, z
       if (dedup) seen.add(dedup);
       out.push(t);
     }
-    return out;
+    if (items.length < PAGE_SIZE) break; // last page
+  }
+  return out;
+}
+
+/**
+ * Fetch OEM incentives for a vehicle. Empty list on any failure / not configured.
+ *
+ * Ported fallbacks from Oz Dealer Tools (its feed behavior, observed in prod):
+ *   1. zip-scoped search returns 0 → retry nationally (regional feeds are patchy)
+ *   2. the requested model year has no programs yet (common early in a model
+ *      year) → retry with year − 1
+ * The result says which combination actually produced data so the UI can tell
+ * the designer (`usedYear`, `usedNational`).
+ */
+export async function getIncentives(make: string, model: string, year: number, zip?: string, radius = 75): Promise<IncentiveResult> {
+  const empty: IncentiveResult = { incentives: [], usedYear: year, usedNational: false };
+  const key = apiKey();
+  if (!key || !make) return empty;
+
+  const cacheKey = [make, model, year, zip ?? '', radius].join('|').toLowerCase();
+  const cached = cacheGet(cacheKey);
+  if (cached) return cached;
+
+  // Attempt order: exact → national → last year → last year national.
+  const attempts: { year: number; zip?: string }[] = [{ year, zip }];
+  if (zip) attempts.push({ year });
+  if (year) attempts.push({ year: year - 1, zip });
+  if (year && zip) attempts.push({ year: year - 1 });
+
+  const deadline = Date.now() + DEADLINE_MS;
+  try {
+    for (const attempt of attempts) {
+      const incentives = await searchOnce(key, make, model, attempt.year, attempt.zip, radius, deadline);
+      if (incentives.length > 0) {
+        const result: IncentiveResult = { incentives, usedYear: attempt.year, usedNational: Boolean(zip && !attempt.zip) };
+        cacheSet(cacheKey, result);
+        return result;
+      }
+      if (deadline - Date.now() < 1500) break; // no budget left for more fallbacks
+    }
+    cacheSet(cacheKey, empty);
+    return empty;
   } catch (err) {
     console.warn('[marketcheck] incentives failed:', err);
-    return [];
+    return empty; // don't cache transport failures
   }
 }

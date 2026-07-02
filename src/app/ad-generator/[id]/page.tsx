@@ -401,6 +401,7 @@ export default function AdGeneratorPage() {
           {showAutomotiveTools && (
             <OemIncentivesPanel
               defaultMake={oemMake}
+              defaultZip={accountData?.postalCode}
               dual={template.fields.some((f) => f.key.startsWith('o2_'))}
               onApply={(patch) => setData((d) => ({ ...d, ...patch }))}
             />
@@ -603,14 +604,21 @@ const TONES = [
  * entry below still works; this is just a faster, accurate source. Renders a
  * "not configured" hint when MARKETCHECK_API_KEY is unset.
  */
-function OemIncentivesPanel({ defaultMake, dual, onApply }: { defaultMake?: string; dual?: boolean; onApply: (patch: Record<string, string>) => void }) {
+function OemIncentivesPanel({ defaultMake, defaultZip, dual, onApply }: { defaultMake?: string; defaultZip?: string; dual?: boolean; onApply: (patch: Record<string, string>) => void }) {
   const [year, setYear] = useState(String(EVOX_CURRENT_YEAR));
   const [make, setMake] = useState(defaultMake || '');
   const [model, setModel] = useState('');
-  const [zip, setZip] = useState('');
+  // Seed from the account profile's postal code — the designer can still change it.
+  const [zip, setZip] = useState(defaultZip ?? '');
+  // Account data loads async; fill the ZIP once it arrives unless already typed.
+  useEffect(() => {
+    if (defaultZip) setZip((z) => z || defaultZip);
+  }, [defaultZip]);
   const [busy, setBusy] = useState(false);
   const [incentives, setIncentives] = useState<MarketCheckIncentive[] | null>(null);
   const [notConfigured, setNotConfigured] = useState(false);
+  // When the feed fell back (previous model year / national search), tell the designer.
+  const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   // For dual-offer templates, which offer "Apply" fills ('' = Offer 1, 'o2_' = Offer 2).
   const [target, setTarget] = useState<'' | 'o2_'>('');
 
@@ -625,6 +633,7 @@ function OemIncentivesPanel({ defaultMake, dual, onApply }: { defaultMake?: stri
     setBusy(true);
     setIncentives(null);
     setNotConfigured(false);
+    setFallbackNote(null);
     try {
       const res = await fetch('/api/ad-generator/marketcheck/incentives', {
         method: 'POST',
@@ -639,6 +648,10 @@ function OemIncentivesPanel({ defaultMake, dual, onApply }: { defaultMake?: stri
       }
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setIncentives(json.incentives ?? []);
+      const notes: string[] = [];
+      if (json.usedYear && json.usedYear !== Number(year)) notes.push(`no ${year} programs yet — showing ${json.usedYear}`);
+      if (json.usedNational) notes.push('none near that ZIP — showing national programs');
+      setFallbackNote(notes.length ? notes.join('; ') : null);
     } catch (err) {
       toast.error(`MarketCheck lookup failed: ${err instanceof Error ? err.message : 'unknown error'}`);
       setIncentives([]);
@@ -737,6 +750,9 @@ function OemIncentivesPanel({ defaultMake, dual, onApply }: { defaultMake?: stri
       )}
       {incentives && incentives.length === 0 && !notConfigured && (
         <p className="mt-3 text-center text-xs text-[var(--muted-foreground)]">No incentives found for that vehicle.</p>
+      )}
+      {fallbackNote && incentives && incentives.length > 0 && (
+        <p className="mt-3 text-center text-[11px] text-[var(--muted-foreground)]">{fallbackNote}</p>
       )}
       {incentives && incentives.length > 0 && (
         <div className="mt-3 max-h-72 space-y-2 overflow-y-auto">

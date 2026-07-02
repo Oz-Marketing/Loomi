@@ -35,8 +35,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const incentives = await getIncentives(make, model, year, zip || undefined);
-    return NextResponse.json({ configured: true, incentives });
+    const { incentives, usedYear, usedNational } = await getIncentives(make, model, year, zip || undefined);
+    return NextResponse.json({ configured: true, incentives, usedYear, usedNational });
   } catch (err) {
     console.error('[api/ad-generator/marketcheck/incentives] failed:', err);
     return NextResponse.json({ configured: true, incentives: [], error: 'MarketCheck lookup failed' });

@@ -11,42 +11,15 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession } from '@/lib/api-auth';
-import { prisma } from '@/lib/prisma';
-import { downloadFromS3, s3KeyFromPublicUrl } from '@/lib/s3';
 import { resolveTemplate } from '@/lib/ad-generator/resolve-template';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { renderAd } from '@/lib/ad-generator/render';
-import { fontFaceRule, parseCustomFonts, type FontFace } from '@/lib/ad-generator/fonts';
+import { embedAccountFontCss } from '@/lib/ad-generator/render-fonts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
-
-const FONT_MIME: Record<string, string> = {
-  woff2: 'font/woff2',
-  woff: 'font/woff',
-  ttf: 'font/ttf',
-  otf: 'font/otf',
-};
-
-/** Embed each face as a base64 data URI so the render never depends on CORS. */
-async function embeddedFontFaceCss(faces: FontFace[]): Promise<string> {
-  const rules: string[] = [];
-  for (const f of faces) {
-    const k = s3KeyFromPublicUrl(f.url);
-    if (!k) continue;
-    try {
-      const buf = await downloadFromS3(k);
-      const ext = f.url.split('?')[0].split('.').pop()?.toLowerCase() || 'woff2';
-      const mime = FONT_MIME[ext] || 'font/woff2';
-      rules.push(fontFaceRule(f, `url("data:${mime};base64,${buf.toString('base64')}")`));
-    } catch {
-      // Skip a font we can't fetch; the template falls back to the system stack.
-    }
-  }
-  return rules.join('\n');
-}
 
 export async function POST(req: NextRequest) {
   const session = await getAuthSession();
@@ -70,18 +43,8 @@ export async function POST(req: NextRequest) {
   const size = template.sizes.find((s) => s.id === body.sizeId);
   if (!size) return NextResponse.json({ error: 'Unknown size' }, { status: 400 });
 
-  const data = { ...(body.data ?? {}) };
-
   // Re-build the font @font-face with base64-embedded files (preview sends URL-based).
-  const family = data.fontFamily;
-  if (body.accountKey && family) {
-    const account = await prisma.account.findUnique({
-      where: { key: body.accountKey },
-      select: { customFonts: true },
-    });
-    const faces = parseCustomFonts(account?.customFonts).filter((f) => f.family === family);
-    data.fontFaceCss = await embeddedFontFaceCss(faces);
-  }
+  const data = await embedAccountFontCss(body.accountKey, { ...(body.data ?? {}) });
 
   const html = template.render({ ...template.defaults, ...data }, size);
 

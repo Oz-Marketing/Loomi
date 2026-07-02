@@ -8,9 +8,11 @@
  * Branding (dealer name, logo variant, brand color) is pulled from the ACTIVE
  * account's settings via useAccount() — never re-entered by hand.
  *
- * Reimagined replacement for the legacy Oz offer builder. Phase 1: code-defined
- * templates + on-demand render/download. Next: save creatives (a Campaign
- * channel), AI copy, and EVOX vehicle imagery.
+ * Reimagined replacement for the legacy Oz offer builder. Ads persist as
+ * AdCreative rows (autosaved, with a frozen doc snapshot); AI copy, EVOX
+ * vehicle imagery, MarketCheck incentives, and OEM compliance are wired in.
+ * Export: per-size PNG or a single ZIP of every size. Still reserved:
+ * campaignId (future multi-channel Campaign link).
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -18,8 +20,9 @@ import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon, Squares2X2Icon, TruckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowLeftIcon, ArrowPathIcon, CheckIcon, CloudIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon, Squares2X2Icon, TruckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowLeftIcon, ArrowPathIcon, CheckIcon, CloudIcon, PhotoIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { MediaPickerModal } from '@/components/media-picker-modal';
 import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import { isVehicleIndustry } from '@/lib/ad-generator/industry';
@@ -315,10 +318,37 @@ export default function AdGeneratorPage() {
     }
   }
 
+  // One ZIP for every size — browsers block the N sequential downloads the old
+  // per-size loop fired, and the server renders all sizes in one Chromium session.
   async function downloadAll() {
-    for (const s of template.sizes) {
-      // eslint-disable-next-line no-await-in-loop
-      await download(s.id);
+    setBusy('all');
+    try {
+      const res = await fetch('/api/ad-generator/render-zip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          templateId: template.id,
+          accountKey,
+          data: renderData,
+          name: creativeName.trim() || undefined,
+          ...(docSnapshot ? { doc: docSnapshot } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const msg = (await res.json().catch(() => null))?.error || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${creativeName.trim() || template.id}-all-sizes.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error(`Couldn't render: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -401,6 +431,7 @@ export default function AdGeneratorPage() {
           {showAutomotiveTools && (
             <OemIncentivesPanel
               defaultMake={oemMake}
+              defaultZip={accountData?.postalCode}
               dual={template.fields.some((f) => f.key.startsWith('o2_'))}
               onApply={(patch) => setData((d) => ({ ...d, ...patch }))}
             />
@@ -567,7 +598,7 @@ export default function AdGeneratorPage() {
                 title={missing.length > 0 ? 'Fill the required fields before exporting' : undefined}
                 className="w-full rounded-lg border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {busy ? 'Rendering…' : `Download all ${template.sizes.length} sizes`}
+                {busy === 'all' ? 'Rendering ZIP…' : busy ? 'Rendering…' : `Download all ${template.sizes.length} sizes (ZIP)`}
               </button>
             </div>
           </div>
@@ -603,14 +634,21 @@ const TONES = [
  * entry below still works; this is just a faster, accurate source. Renders a
  * "not configured" hint when MARKETCHECK_API_KEY is unset.
  */
-function OemIncentivesPanel({ defaultMake, dual, onApply }: { defaultMake?: string; dual?: boolean; onApply: (patch: Record<string, string>) => void }) {
+function OemIncentivesPanel({ defaultMake, defaultZip, dual, onApply }: { defaultMake?: string; defaultZip?: string; dual?: boolean; onApply: (patch: Record<string, string>) => void }) {
   const [year, setYear] = useState(String(EVOX_CURRENT_YEAR));
   const [make, setMake] = useState(defaultMake || '');
   const [model, setModel] = useState('');
-  const [zip, setZip] = useState('');
+  // Seed from the account profile's postal code — the designer can still change it.
+  const [zip, setZip] = useState(defaultZip ?? '');
+  // Account data loads async; fill the ZIP once it arrives unless already typed.
+  useEffect(() => {
+    if (defaultZip) setZip((z) => z || defaultZip);
+  }, [defaultZip]);
   const [busy, setBusy] = useState(false);
   const [incentives, setIncentives] = useState<MarketCheckIncentive[] | null>(null);
   const [notConfigured, setNotConfigured] = useState(false);
+  // When the feed fell back (previous model year / national search), tell the designer.
+  const [fallbackNote, setFallbackNote] = useState<string | null>(null);
   // For dual-offer templates, which offer "Apply" fills ('' = Offer 1, 'o2_' = Offer 2).
   const [target, setTarget] = useState<'' | 'o2_'>('');
 
@@ -625,6 +663,7 @@ function OemIncentivesPanel({ defaultMake, dual, onApply }: { defaultMake?: stri
     setBusy(true);
     setIncentives(null);
     setNotConfigured(false);
+    setFallbackNote(null);
     try {
       const res = await fetch('/api/ad-generator/marketcheck/incentives', {
         method: 'POST',
@@ -639,6 +678,10 @@ function OemIncentivesPanel({ defaultMake, dual, onApply }: { defaultMake?: stri
       }
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       setIncentives(json.incentives ?? []);
+      const notes: string[] = [];
+      if (json.usedYear && json.usedYear !== Number(year)) notes.push(`no ${year} programs yet — showing ${json.usedYear}`);
+      if (json.usedNational) notes.push('none near that ZIP — showing national programs');
+      setFallbackNote(notes.length ? notes.join('; ') : null);
     } catch (err) {
       toast.error(`MarketCheck lookup failed: ${err instanceof Error ? err.message : 'unknown error'}`);
       setIncentives([]);
@@ -737,6 +780,9 @@ function OemIncentivesPanel({ defaultMake, dual, onApply }: { defaultMake?: stri
       )}
       {incentives && incentives.length === 0 && !notConfigured && (
         <p className="mt-3 text-center text-xs text-[var(--muted-foreground)]">No incentives found for that vehicle.</p>
+      )}
+      {fallbackNote && incentives && incentives.length > 0 && (
+        <p className="mt-3 text-center text-[11px] text-[var(--muted-foreground)]">{fallbackNote}</p>
       )}
       {incentives && incentives.length > 0 && (
         <div className="mt-3 max-h-72 space-y-2 overflow-y-auto">
@@ -1100,12 +1146,16 @@ function Field({ field, value, onChange, allowVehiclePicker }: { field: FieldSpe
 }
 
 /**
- * Image field with a URL input + a "Pick a vehicle" button that opens the EVOX
- * picker. Picking a vehicle/color re-hosts the transparent PNG on our S3 and
- * drops the stable URL into the field.
+ * Image field with a URL input, a media-library picker (browse/upload the
+ * account's library — where template backgrounds live), and, for automotive
+ * templates, a "Vehicle" button that opens the EVOX picker. Picking a
+ * vehicle/color re-hosts the transparent PNG on our S3 and drops the stable
+ * URL into the field.
  */
 function ImageField({ field, value, onChange, allowVehiclePicker }: { field: FieldSpec; value: string; onChange: (v: string) => void; allowVehiclePicker?: boolean }) {
+  const { accountKey } = useAccount();
   const [open, setOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   return (
     <div>
       <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
@@ -1120,6 +1170,15 @@ function ImageField({ field, value, onChange, allowVehiclePicker }: { field: Fie
           onChange={(e) => onChange(e.target.value)}
           className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
         />
+        <button
+          type="button"
+          onClick={() => setLibraryOpen(true)}
+          title="Pick from the media library"
+          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+        >
+          <PhotoIcon className="h-4 w-4" />
+          Library
+        </button>
         {/* EVOX vehicle photography — automotive vehicle offers only. */}
         {allowVehiclePicker && (
           <button
@@ -1135,6 +1194,16 @@ function ImageField({ field, value, onChange, allowVehiclePicker }: { field: Fie
       {value && (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={value} alt="" className="mt-2 h-20 rounded-md border border-[var(--border)] bg-[var(--muted)]/40 object-contain p-1" />
+      )}
+      {libraryOpen && (
+        <MediaPickerModal
+          accountKey={accountKey || undefined}
+          onSelect={(url) => {
+            onChange(url);
+            setLibraryOpen(false);
+          }}
+          onClose={() => setLibraryOpen(false)}
+        />
       )}
       {open && <EvoxPickerModal onClose={() => setOpen(false)} onPick={(url) => { onChange(url); setOpen(false); }} />}
     </div>

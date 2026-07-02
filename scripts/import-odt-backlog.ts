@@ -70,10 +70,36 @@ interface Manifest {
   }[];
 }
 
-/** ODT org name → Loomi account key, for names that don't match Account.dealer. */
+/**
+ * ODT org name → Loomi account key, for orgs whose ODT name doesn't normalize
+ * to any Account.dealer (ODT drops "of", pluralizes "Trailers", reorders
+ * CJDR makes, etc.). Confirmed 1:1 by name + zip against the Loomi prod account
+ * list (2026-07-01). `null` = intentionally skipped.
+ */
 const ORG_OVERRIDES: Record<string, string | null> = {
-  // 'Oz Marketing' campaigns are internal tests — skip explicitly.
+  // Internal test data — never import.
   'Oz Marketing': null,
+  // Renamed on Loomi (ODT name → Loomi key). Verified by name + zip.
+  'Young Ford Ogden': 'youngFordOfOgden',
+  'Young Ford Morgan': 'youngFordOfMorgan',
+  'Young Ford of Brigham City': 'youngFordOfBrigham',
+  'Young Chrysler Jeep Dodge Ram Fiat Idaho': 'youngChryslerDodgeJeepRamOfBurley', // Burley, ID (83318)
+  'Young Chrysler Jeep Dodge Ram Layton': 'youngChryslerDodgeJeepRamOfLayton',
+  'Young Chrysler Jeep Dodge Ram Morgan': 'youngChryslerDodgeJeepRamOfMorgan',
+  'Genesis of Ogden': 'genesisOgden',
+  'Young Mazda Missoula': 'youngMazdaOfMissoula',
+  'Young Mazda Ogden': 'youngMazdaOfOgden',
+  'Young Powersports Burley': 'youngPowersportsOfBurley',
+  'Young Powersports Layton': 'youngPowersportsLayton',
+  'Young Powersports Logan': 'youngPowersportsOfLogan',
+  'Young Powersports Missoula': 'youngPowersportsOfMissoula',
+  'Young Powersports Morgan': 'youngPowersportsOfMorgan',
+  'Young Powersports Ogden': 'youngPowersportsOfOgden',
+  'Young Truck and Trailers Kaysville': 'youngTruckAndTrailerOfKaysville',
+  'Young Truck and Trailers Logan': 'youngTruckAndTrailerOfLogan',
+  'Young Commercial': 'youngCommercialFleet',
+  // Genuinely not in Loomi yet (no account) — left unmatched on purpose:
+  //   Young Powersports Centerville, Xtreme Accessories, Young Nissan Riverdale
 };
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -107,13 +133,19 @@ async function main() {
   // ── org → account mapping ──
   const accounts = await prisma.account.findMany({ select: { key: true, dealer: true } });
   const byNorm = new Map(accounts.map((a) => [norm(a.dealer), a.key]));
+  const validKeys = new Set(accounts.map((a) => a.key));
   const mapping = new Map<number, string | null>();
   for (const org of manifest.organizations) {
-    if (org.name in ORG_OVERRIDES) {
-      mapping.set(org.id, ORG_OVERRIDES[org.name]);
-      continue;
+    let key: string | null;
+    if (org.name in ORG_OVERRIDES) key = ORG_OVERRIDES[org.name];
+    else key = byNorm.get(norm(org.name)) ?? null;
+    // Guard: an override pointing at a nonexistent account would FK-fail mid
+    // import. Warn and skip rather than abort the run partway through.
+    if (key && !validKeys.has(key)) {
+      console.warn(`  ! override for "${org.name}" → "${key}" has no matching account — skipping`);
+      key = null;
     }
-    mapping.set(org.id, byNorm.get(norm(org.name)) ?? null);
+    mapping.set(org.id, key);
   }
   console.log('── org → account mapping ──');
   for (const org of manifest.organizations) {
@@ -127,12 +159,13 @@ async function main() {
   for (const c of manifest.campaigns) {
     const dir = join(creativesDir, String(c.id));
     if (!existsSync(dir)) continue; // drafts often have no exports
+    const images = readdirSync(dir).filter((f) => /\.(png|jpe?g|webp)$/i.test(f));
     const accountKey = mapping.get(c.orgId);
     if (!accountKey) {
-      summary.creativesSkippedUnmatched += readdirSync(dir).length;
+      summary.creativesSkippedUnmatched += images.length; // count images, matching the import loop
       continue;
     }
-    for (const file of readdirSync(dir).filter((f) => /\.(png|jpe?g|webp)$/i.test(f))) {
+    for (const file of images) {
       const filename = `${slug(c.name)}-${file}`;
       const s3Key = buildS3Key(accountKey, `odt-c${c.id}`, filename);
       const exists = await prisma.mediaAsset.findUnique({ where: { s3Key } });

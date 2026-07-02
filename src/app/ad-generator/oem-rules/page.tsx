@@ -20,13 +20,25 @@ import { FIELD_LABELS } from '@/lib/ad-generator/compliance';
 const EDITABLE_TYPES = OFFER_TYPES.filter((t) => t.value !== 'custom');
 // Fields an OEM might additionally require (the baseline numbers are always
 // required and handled in code, so they're not listed here).
+// Every field an OEM rule may require, beyond the code baseline. Superset of
+// what the ODT-ported rules use — keep in sync with FIELD_LABELS so each chip
+// gets a human label.
 const REQUIREABLE_FIELDS = [
   'vin',
   'stockNumber',
+  'vehicleName',
   'msrp',
-  'financialInstitution',
+  'monthlyPayment',
+  'leaseTerm',
   'dueAtSigning',
+  'securityDeposit',
+  'aprRate',
+  'aprTerm',
+  'financialInstitution',
+  'costPerThousand',
+  'discountAmount',
   'discountSource',
+  'salePrice',
   'disclaimer',
   'expiration',
 ];

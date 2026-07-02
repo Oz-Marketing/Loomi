@@ -81,10 +81,15 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     // Designer-set opacity (0–100). Undefined / 100 = fully opaque.
     const opacity = el.opacity != null && el.opacity < 100 ? `opacity:${clamp01(el.opacity / 100)};` : '';
     if (!url) {
-      // Empty slot placeholder so the builder canvas shows where it goes. Honor a
-      // set corner radius so the rounding is visible before an image is chosen.
-      const phRadius = el.radius != null ? el.radius : minEdge * 0.06;
-      return `<div${idAttr} style="${dim}${opacity}${pos}display:flex;align-items:center;justify-content:center;border:2px dashed #cbd5e1;border-radius:${phRadius}px;color:#cbd5e1;font-size:${minEdge * 0.14}px;font-family:${brandStack};">${el.type === 'logo' ? 'Logo' : 'Image'}</div>`;
+      // Empty image slot: nothing on export (an empty slot shouldn't leave a
+      // dashed box in the finished ad — same as empty text). In the builder it's
+      // a subtle placeholder so the designer sees where the image goes. Cap the
+      // corner radius + label size so a full-bleed slot doesn't render a giant
+      // rounded dashed border + oversized "Image" text across the whole artboard.
+      if (!ctx.preview) return '';
+      const phRadius = el.radius != null ? el.radius : Math.min(minEdge * 0.06, 16);
+      const phFont = Math.min(minEdge * 0.14, 40);
+      return `<div${idAttr} style="${dim}${opacity}${pos}display:flex;align-items:center;justify-content:center;border:1.5px dashed #cbd5e1;border-radius:${phRadius}px;color:#94a3b8;font-size:${phFont}px;font-family:${brandStack};">${el.type === 'logo' ? 'Logo' : 'Image'}</div>`;
     }
     const fit = el.fit ?? 'contain';
     // A cover image can carry a per-size focal point (object-position) so one

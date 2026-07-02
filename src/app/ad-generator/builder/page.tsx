@@ -2616,7 +2616,7 @@ export default function AdBuilderPage() {
 
           <div
             ref={canvasRef}
-            className="relative flex flex-1 flex-col gap-4 overflow-auto bg-[var(--muted)]/30 p-3 [align-items:safe_center] [background-image:radial-gradient(var(--canvas-dot)_1px,transparent_1.5px)] [background-position:center] [background-size:18px_18px] [justify-content:safe_center] sm:p-6"
+            className="relative flex flex-1 flex-col gap-4 overflow-auto bg-[var(--muted)]/30 p-3 [align-items:safe_center] [background-image:radial-gradient(var(--adgen-canvas-dot)_1px,transparent_1.5px)] [background-position:center] [background-size:18px_18px] [justify-content:safe_center] sm:p-6"
             style={{ userSelect: 'none' }}
             onPointerDown={(e) => {
               // Clicking the empty canvas around the artboard clears the

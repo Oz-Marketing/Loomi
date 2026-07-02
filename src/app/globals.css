@@ -21,6 +21,9 @@
      dotted background reads as "subtle grid" rather than competing
      with node chrome. */
   --canvas-dot: rgba(255, 255, 255, 0.08);
+  /* Ad-generator artboard canvas dots — softer than the flow builder's so they
+     read as a faint texture, not a competing grid (dark mode: dim white). */
+  --adgen-canvas-dot: rgba(255, 255, 255, 0.05);
   --card-foreground: #fafafa;
   --border: rgba(255, 255, 255, 0.1);
   --input: rgba(255, 255, 255, 0.07);
@@ -109,6 +112,9 @@
      #d1d5db blended in; #9ca3af is the same as zinc-400 ish — visible
      without being loud. */
   --canvas-dot: #9ca3af;
+  /* Light mode: soft, low-contrast dark dots (the shared --canvas-dot #9ca3af
+     reads too dark on the light artboard canvas). */
+  --adgen-canvas-dot: rgba(15, 23, 42, 0.07);
   --card-foreground: #09090b;
   --border: rgba(0, 0, 0, 0.09);
   --input: rgba(0, 0, 0, 0.05);

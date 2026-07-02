@@ -58,8 +58,9 @@ describe('renderDoc', () => {
     expect(renderDoc(doc, { price: '$1', brandColor: '#ff0000' }, SIZE)).toContain('color:#ff0000');
   });
 
-  it('shows a placeholder when an image slot is empty, an <img> when filled', () => {
-    expect(renderDoc(doc, {}, SIZE)).toContain('Image');
+  it('shows an image placeholder only in preview; <img> when filled; nothing on empty export', () => {
+    expect(renderDoc(doc, {}, SIZE)).not.toContain('Image'); // export omits an empty slot
+    expect(renderDoc(doc, {}, SIZE, { preview: true })).toContain('Image'); // builder shows the placeholder
     expect(renderDoc(doc, { vehicleImageUrl: 'https://x/c.png' }, SIZE)).toContain('<img src="https://x/c.png"');
   });
 

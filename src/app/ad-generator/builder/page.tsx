@@ -1879,12 +1879,31 @@ export default function AdBuilderPage() {
         e.preventDefault();
         if (e.shiftKey) ungroupSelected();
         else groupSelected();
+      } else if (key === ']' || key === '[') {
+        // Bring forward (⌘]) / send back (⌘[) — z-order within the current size.
+        // Functional setDoc so consecutive presses read fresh z, not a stale closure.
+        if (selectedIds.length !== 1) return;
+        e.preventDefault();
+        const id = selectedIds[0];
+        setDoc((prev) => {
+          const lay = prev.layouts[size.id] ?? {};
+          const b = lay[id];
+          if (!b) return prev;
+          const zs = Object.values(lay).map((x) => x.z ?? 0);
+          const nz = key === ']' ? Math.max(...zs) + 1 : Math.min(...zs) - 1;
+          return { ...prev, layouts: { ...prev.layouts, [size.id]: { ...lay, [id]: { ...b, z: nz } } } };
+        });
+      } else if (key === 'd') {
+        // Duplicate (⌘D) the single selected element.
+        if (selectedIds.length !== 1) return;
+        e.preventDefault();
+        duplicateElement(selectedIds[0]);
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [undo, redo, selectedIds, doc.elements, doc.groups]);
+  }, [undo, redo, selectedIds, doc.elements, doc.groups, size.id, duplicateElement]);
 
   // Autosave — debounced PATCH once there's a target (a saved template, or the
   // ad in ad mode). New/unsaved templates require an explicit Save first.
@@ -1938,7 +1957,7 @@ export default function AdBuilderPage() {
 
       {/* Editor header bar — an empty rail-width slot keeps the row below aligned
           with the canvas column; the title centers over the canvas. */}
-      <header className="flex flex-shrink-0 items-center gap-4 border-b border-[var(--border)] pb-3">
+      <header className="flex flex-shrink-0 items-center gap-4 pb-3">
         <div className="w-12 flex-shrink-0" aria-hidden="true" />
 
         {/* main row — spans the canvas: back at the left edge, title centered, actions right */}
@@ -3084,9 +3103,9 @@ export default function AdBuilderPage() {
                   )}
                   {single && (
                     <>
-                      <Item onClick={bringForward}>Bring forward</Item>
-                      <Item onClick={sendBack}>Send back</Item>
-                      <Item onClick={() => duplicateElement(single.id)}>Duplicate</Item>
+                      <Item onClick={bringForward} kbd="⌘]">Bring forward</Item>
+                      <Item onClick={sendBack} kbd="⌘[">Send back</Item>
+                      <Item onClick={() => duplicateElement(single.id)} kbd="⌘D">Duplicate</Item>
                       <Item onClick={() => toggleLock(single.id)}>{single.locked ? 'Unlock' : 'Lock'}</Item>
                       <Item onClick={() => toggleHidden(single.id)}>{selectedBox?.hidden ? 'Show in this size' : 'Hide in this size'}</Item>
                       <Item
@@ -4081,8 +4100,11 @@ function ShortcutsModal({ onClose }: { onClose: () => void }) {
         [`${mod} Z`, 'Undo'],
         [`${mod} ⇧ Z`, 'Redo'],
         ['Delete', 'Remove selected'],
+        [`${mod} D`, 'Duplicate'],
         [`${mod} G`, 'Group selection'],
         [`${mod} ⇧ G`, 'Ungroup'],
+        [`${mod} ]`, 'Bring forward'],
+        [`${mod} [`, 'Send back'],
       ],
     },
     {

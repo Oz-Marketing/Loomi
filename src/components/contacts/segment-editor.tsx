@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -736,7 +737,9 @@ function LoomiSelect({
   placeholder = 'Select…',
 }: LoomiSelectProps) {
   const [open, setOpen] = useState(false);
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
   const ref = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   const allOptions = useMemo(() => {
     if (options) return options;
@@ -745,6 +748,20 @@ function LoomiSelect({
   }, [options, groups]);
 
   const selected = allOptions.find((o) => o.value === value);
+
+  function openDropdown() {
+    if (buttonRef.current) {
+      const rect = buttonRef.current.getBoundingClientRect();
+      setDropdownStyle({
+        position: 'fixed',
+        top: rect.bottom + 4,
+        left: rect.left,
+        width: rect.width,
+        zIndex: 9999,
+      });
+    }
+    setOpen(true);
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -756,11 +773,19 @@ function LoomiSelect({
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'Escape') setOpen(false);
     }
+    function handleScroll(e: Event) {
+      // Ignore scrolls originating inside the dropdown's own option list —
+      // only an outside/page scroll should dismiss it.
+      if (ref.current && ref.current.contains(e.target as Node)) return;
+      setOpen(false);
+    }
     document.addEventListener('mousedown', handleMouseDown);
     document.addEventListener('keydown', handleKey);
+    document.addEventListener('scroll', handleScroll, true);
     return () => {
       document.removeEventListener('mousedown', handleMouseDown);
       document.removeEventListener('keydown', handleKey);
+      document.removeEventListener('scroll', handleScroll, true);
     };
   }, [open]);
 
@@ -769,33 +794,13 @@ function LoomiSelect({
     setOpen(false);
   }
 
-  return (
-    <div ref={ref} className={`relative ${className}`}>
-      <button
-        type="button"
-        onClick={() => setOpen((prev) => !prev)}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        className={`w-full flex items-center justify-between gap-2 pl-3 pr-2 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
-          open
-            ? 'border-[var(--primary)]'
-            : 'border-[var(--border)] hover:border-[var(--primary)]/60'
-        }`}
-      >
-        <span className={`truncate text-left ${selected ? '' : 'text-[var(--muted-foreground)]'}`}>
-          {selected?.label ?? placeholder}
-        </span>
-        <ChevronDownIcon
-          className={`w-3.5 h-3.5 text-[var(--muted-foreground)] flex-shrink-0 transition-transform ${
-            open ? 'rotate-180' : ''
-          }`}
-        />
-      </button>
-
-      {open && (
+  const dropdown = open
+    ? createPortal(
         <div
+          ref={ref}
           role="listbox"
-          className="absolute left-0 right-0 top-full mt-1 z-50 max-h-72 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-xl py-1"
+          style={dropdownStyle}
+          className="max-h-72 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-xl py-1"
         >
           {groups
             ? groups.map((group) => (
@@ -821,8 +826,36 @@ function LoomiSelect({
                   onSelect={() => pick(option.value)}
                 />
               ))}
-        </div>
-      )}
+        </div>,
+        document.body,
+      )
+    : null;
+
+  return (
+    <div className={className}>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={() => (open ? setOpen(false) : openDropdown())}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        className={`w-full flex items-center justify-between gap-2 pl-3 pr-2 h-9 text-sm rounded-lg border bg-transparent focus:outline-none transition-colors ${
+          open
+            ? 'border-[var(--primary)]'
+            : 'border-[var(--border)] hover:border-[var(--primary)]/60'
+        }`}
+      >
+        <span className={`truncate text-left ${selected ? '' : 'text-[var(--muted-foreground)]'}`}>
+          {selected?.label ?? placeholder}
+        </span>
+        <ChevronDownIcon
+          className={`w-3.5 h-3.5 text-[var(--muted-foreground)] flex-shrink-0 transition-transform ${
+            open ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+
+      {dropdown}
     </div>
   );
 }

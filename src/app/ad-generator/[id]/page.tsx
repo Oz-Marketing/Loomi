@@ -315,10 +315,37 @@ export default function AdGeneratorPage() {
     }
   }
 
+  // One ZIP for every size — browsers block the N sequential downloads the old
+  // per-size loop fired, and the server renders all sizes in one Chromium session.
   async function downloadAll() {
-    for (const s of template.sizes) {
-      // eslint-disable-next-line no-await-in-loop
-      await download(s.id);
+    setBusy('all');
+    try {
+      const res = await fetch('/api/ad-generator/render-zip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          templateId: template.id,
+          accountKey,
+          data: renderData,
+          name: creativeName.trim() || undefined,
+          ...(docSnapshot ? { doc: docSnapshot } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const msg = (await res.json().catch(() => null))?.error || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${creativeName.trim() || template.id}-all-sizes.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error(`Couldn't render: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -568,7 +595,7 @@ export default function AdGeneratorPage() {
                 title={missing.length > 0 ? 'Fill the required fields before exporting' : undefined}
                 className="w-full rounded-lg border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {busy ? 'Rendering…' : `Download all ${template.sizes.length} sizes`}
+                {busy === 'all' ? 'Rendering ZIP…' : busy ? 'Rendering…' : `Download all ${template.sizes.length} sizes (ZIP)`}
               </button>
             </div>
           </div>

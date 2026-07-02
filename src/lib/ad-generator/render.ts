@@ -16,18 +16,33 @@ export async function renderAd(params: {
   /** Pixel density multiplier (2 = retina). */
   scale?: number;
 }): Promise<Buffer> {
-  const { html, width, height, scale = 2 } = params;
-  if (!html.trim()) throw new Error('Template HTML is empty');
+  const [png] = await renderAdBatch([params]);
+  return png;
+}
+
+/**
+ * Render several ads (e.g. every size of one creative) reusing a single
+ * browser — launching Chromium dominates single-render latency, so a batch
+ * amortizes it. Renders sequentially on one page; order matches the input.
+ */
+export async function renderAdBatch(
+  items: { html: string; width: number; height: number; scale?: number }[],
+): Promise<Buffer[]> {
+  if (items.some((it) => !it.html.trim())) throw new Error('Template HTML is empty');
 
   const browser = await launchBrowser();
   try {
     const page = await browser.newPage();
-    await page.setViewport({ width, height, deviceScaleFactor: scale });
-    await page.setContent(html, { waitUntil: ['networkidle0', 'domcontentloaded'], timeout: 20000 });
-    // Let webfonts settle so text metrics match the preview.
-    await page.evaluate('document.fonts && document.fonts.ready').catch(() => {});
-    const buf = await page.screenshot({ type: 'png', clip: { x: 0, y: 0, width, height } });
-    return Buffer.from(buf);
+    const out: Buffer[] = [];
+    for (const { html, width, height, scale = 2 } of items) {
+      await page.setViewport({ width, height, deviceScaleFactor: scale });
+      await page.setContent(html, { waitUntil: ['networkidle0', 'domcontentloaded'], timeout: 20000 });
+      // Let webfonts settle so text metrics match the preview.
+      await page.evaluate('document.fonts && document.fonts.ready').catch(() => {});
+      const buf = await page.screenshot({ type: 'png', clip: { x: 0, y: 0, width, height } });
+      out.push(Buffer.from(buf));
+    }
+    return out;
   } finally {
     await browser.close().catch(() => {});
   }

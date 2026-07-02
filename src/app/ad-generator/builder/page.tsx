@@ -1,13 +1,15 @@
 'use client';
 
 /**
- * Ad Template Builder — Phase 3 (drag, resize, element CRUD).
+ * Ad Template Builder — the visual TemplateDoc editor.
  *
  * Designers lay out a TemplateDoc visually. The canvas renders the doc with the
  * SAME `renderDoc` the export pipeline uses (WYSIWYG by construction), scaled to
  * fit. An overlay draws each element's box: drag to move, resize via 8 handles,
- * nudge with arrow keys, delete/duplicate, add new elements. Style + binding
- * editing land in Phases 4–5; saving in Phase 7 (edits are in-memory for now).
+ * nudge with arrow keys, delete/duplicate, add new elements. The selection
+ * panel edits content, position/size, and styles (font/alignment/color/etc.);
+ * the fields sidebar manages form fields + bindings; save persists to the
+ * AdTemplateDoc table as draft/published (or, in ad mode, to that ad's own doc).
  *
  * To keep dragging smooth, the overlay box moves live while the iframe (the
  * real render) updates once on release — a wireframe drag.

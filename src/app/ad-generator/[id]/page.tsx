@@ -8,9 +8,11 @@
  * Branding (dealer name, logo variant, brand color) is pulled from the ACTIVE
  * account's settings via useAccount() — never re-entered by hand.
  *
- * Reimagined replacement for the legacy Oz offer builder. Phase 1: code-defined
- * templates + on-demand render/download. Next: save creatives (a Campaign
- * channel), AI copy, and EVOX vehicle imagery.
+ * Reimagined replacement for the legacy Oz offer builder. Ads persist as
+ * AdCreative rows (autosaved, with a frozen doc snapshot); AI copy, EVOX
+ * vehicle imagery, MarketCheck incentives, and OEM compliance are wired in.
+ * Export: per-size PNG or a single ZIP of every size. Still reserved:
+ * campaignId (future multi-channel Campaign link).
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -18,8 +20,9 @@ import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon, Squares2X2Icon, TruckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowLeftIcon, ArrowPathIcon, CheckIcon, CloudIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon, Squares2X2Icon, TruckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowLeftIcon, ArrowPathIcon, CheckIcon, CloudIcon, PhotoIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { MediaPickerModal } from '@/components/media-picker-modal';
 import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import { isVehicleIndustry } from '@/lib/ad-generator/industry';
@@ -1143,12 +1146,16 @@ function Field({ field, value, onChange, allowVehiclePicker }: { field: FieldSpe
 }
 
 /**
- * Image field with a URL input + a "Pick a vehicle" button that opens the EVOX
- * picker. Picking a vehicle/color re-hosts the transparent PNG on our S3 and
- * drops the stable URL into the field.
+ * Image field with a URL input, a media-library picker (browse/upload the
+ * account's library — where template backgrounds live), and, for automotive
+ * templates, a "Vehicle" button that opens the EVOX picker. Picking a
+ * vehicle/color re-hosts the transparent PNG on our S3 and drops the stable
+ * URL into the field.
  */
 function ImageField({ field, value, onChange, allowVehiclePicker }: { field: FieldSpec; value: string; onChange: (v: string) => void; allowVehiclePicker?: boolean }) {
+  const { accountKey } = useAccount();
   const [open, setOpen] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
   return (
     <div>
       <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
@@ -1163,6 +1170,15 @@ function ImageField({ field, value, onChange, allowVehiclePicker }: { field: Fie
           onChange={(e) => onChange(e.target.value)}
           className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
         />
+        <button
+          type="button"
+          onClick={() => setLibraryOpen(true)}
+          title="Pick from the media library"
+          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+        >
+          <PhotoIcon className="h-4 w-4" />
+          Library
+        </button>
         {/* EVOX vehicle photography — automotive vehicle offers only. */}
         {allowVehiclePicker && (
           <button
@@ -1178,6 +1194,16 @@ function ImageField({ field, value, onChange, allowVehiclePicker }: { field: Fie
       {value && (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={value} alt="" className="mt-2 h-20 rounded-md border border-[var(--border)] bg-[var(--muted)]/40 object-contain p-1" />
+      )}
+      {libraryOpen && (
+        <MediaPickerModal
+          accountKey={accountKey || undefined}
+          onSelect={(url) => {
+            onChange(url);
+            setLibraryOpen(false);
+          }}
+          onClose={() => setLibraryOpen(false)}
+        />
       )}
       {open && <EvoxPickerModal onClose={() => setOpen(false)} onPick={(url) => { onChange(url); setOpen(false); }} />}
     </div>

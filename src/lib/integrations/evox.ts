@@ -14,6 +14,7 @@
  * the forgiving GET YMM endpoint directly (with a curated make list in the UI).
  */
 import { uploadToS3, buildS3Key, s3PublicUrl, isS3Configured } from '@/lib/s3';
+import { prisma } from '@/lib/prisma';
 
 const BASE = 'https://api.evoximages.com/api/v1';
 const PID = Number(process.env.EVOX_PRODUCT_ID ?? 27);
@@ -182,7 +183,40 @@ export async function importEvoxImage(url: string, accountKey: string | null, hi
 
   if (!isS3Configured()) return url; // no bucket → fall back to the EVOX URL
   const safeHint = hint.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'vehicle';
-  const key = buildS3Key(accountKey, `evox-${Date.now()}`, `${safeHint}.png`);
+  // Deterministic key (per account + vehicle/color) so re-picking the same
+  // vehicle reuses one object + library entry instead of piling up dupes.
+  const key = buildS3Key(accountKey, `evox-${safeHint}`, `${safeHint}.png`);
   await uploadToS3(key, buf, 'image/png');
-  return s3PublicUrl(key);
+  const publicUrl = s3PublicUrl(key);
+
+  // Persist a library entry so the picked vehicle is browsable + reusable in
+  // the media library, not just a loose URL. Best-effort: never fail the pick.
+  try {
+    const dims = pngDimensions(buf);
+    await prisma.mediaAsset.upsert({
+      where: { s3Key: key },
+      create: {
+        accountKey,
+        s3Key: key,
+        filename: `${safeHint}.png`,
+        mimeType: 'image/png',
+        size: buf.length,
+        width: dims?.width ?? null,
+        height: dims?.height ?? null,
+        category: 'ad-creative',
+        tags: JSON.stringify(['evox']),
+        altText: hint.replace(/-/g, ' ').trim() || null,
+      },
+      update: { size: buf.length },
+    });
+  } catch (err) {
+    console.warn('[evox] library entry not saved (image still returned):', err);
+  }
+  return publicUrl;
+}
+
+/** PNG pixel size from the IHDR chunk; null for non-PNG. */
+function pngDimensions(buf: Buffer): { width: number; height: number } | null {
+  if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return null;
+  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
 }

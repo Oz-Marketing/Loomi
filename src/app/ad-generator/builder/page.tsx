@@ -359,11 +359,15 @@ export default function AdBuilderPage() {
   // several elements in a row still works.
   useEffect(() => {
     if (!leftPanel) return;
-    const onDown = (e: MouseEvent) => {
+    // Listen on pointerdown, not mousedown: the artboard's element handlers call
+    // preventDefault() on pointerdown, which suppresses the follow-up mousedown —
+    // so a mousedown listener never fired when clicking on the canvas. pointerdown
+    // still bubbles to the document regardless.
+    const onDown = (e: PointerEvent) => {
       if (railRef.current && !railRef.current.contains(e.target as Node)) setLeftPanel(null);
     };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
   }, [leftPanel]);
   // The on-canvas "add element" popover (top-left of the artboard).
   const [addSizeOpen, setAddSizeOpen] = useState(false);

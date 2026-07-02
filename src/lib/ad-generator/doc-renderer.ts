@@ -151,8 +151,11 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
   // background IMAGE is a normal full-bleed image element/layer now — not a
   // doc-level field — so it flows through renderElement like everything else.
   const bg = doc.background;
+  const gStops = bg?.gradientStops;
+  const s0 = clamp01((gStops?.[0] ?? 0) / 100) * 100;
+  const s1 = clamp01((gStops?.[1] ?? 100) / 100) * 100;
   const bgCss = bg?.gradient
-    ? `linear-gradient(${bg.gradientAngle ?? 135}deg, ${esc(bg.gradient[0])} 0%, ${esc(bg.gradient[1])} 100%)`
+    ? `linear-gradient(${bg.gradientAngle ?? 135}deg, ${esc(bg.gradient[0])} ${s0}%, ${esc(bg.gradient[1])} ${s1}%)`
     : bg?.color
       ? esc(bg.color)
       : '#ffffff';

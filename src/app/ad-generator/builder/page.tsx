@@ -63,6 +63,7 @@ import { renderDoc } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
+import { singleOfferDoc, dualOfferDoc } from '@/lib/ad-generator/templates/offer-docs';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type LayerNode } from '@/lib/ad-generator/layer-tree';
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon } from '@/components/ad-generator/builder-icons';
@@ -352,6 +353,18 @@ export default function AdBuilderPage() {
   // Left rail: which panel (Elements / Layers / Industries / Sizes) is open as a
   // flyout. null = collapsed to just the icons.
   const [leftPanel, setLeftPanel] = useState<'insert' | 'layers' | 'industries' | 'sizes' | null>(null);
+  const railRef = useRef<HTMLElement>(null);
+  // Close the left flyout (Insert / Layers / …) when clicking anywhere outside
+  // the rail + flyout — e.g. on the canvas. Tile clicks stay inside, so adding
+  // several elements in a row still works.
+  useEffect(() => {
+    if (!leftPanel) return;
+    const onDown = (e: MouseEvent) => {
+      if (railRef.current && !railRef.current.contains(e.target as Node)) setLeftPanel(null);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [leftPanel]);
   // The on-canvas "add element" popover (top-left of the artboard).
   const [addSizeOpen, setAddSizeOpen] = useState(false);
   const [customName, setCustomName] = useState('');
@@ -411,6 +424,19 @@ export default function AdBuilderPage() {
     ],
     [customFonts],
   );
+
+  // The account's logo variants — offered in the selection panel so a designer
+  // can swap which logo a Logo element shows without leaving the canvas.
+  const brandLogos = useMemo<{ key: string; label: string; url: string }[]>(() => {
+    const l = accountData?.logos;
+    if (!l) return [];
+    return [
+      l.light && { key: 'light', label: 'Light', url: l.light },
+      l.dark && { key: 'dark', label: 'Dark', url: l.dark },
+      l.white && { key: 'white', label: 'White', url: l.white },
+      l.black && { key: 'black', label: 'Black', url: l.black },
+    ].filter((v): v is { key: string; label: string; url: string } => Boolean(v));
+  }, [accountData?.logos]);
 
   const previewData = useMemo(
     () =>
@@ -1173,6 +1199,30 @@ export default function AdBuilderPage() {
   function setBackground(patch: Partial<DocBackground>) {
     setDoc((prev) => ({ ...prev, background: { ...(prev.background ?? {}), ...patch } }));
   }
+  // Drag an on-canvas gradient handle to set the angle. CSS gradient angle:
+  // 0deg = up, clockwise; direction vector = (sinθ, -cosθ). The 'end' handle
+  // points toward the end color; 'start' is opposite (+180°). Live-updates the
+  // doc so the iframe re-renders the gradient as you drag.
+  function startGradientAngleDrag(e: React.PointerEvent, which: 'start' | 'end') {
+    e.preventDefault();
+    e.stopPropagation();
+    const move = (ev: PointerEvent) => {
+      const r = frameRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const dx = ev.clientX - (r.left + r.width / 2);
+      const dy = ev.clientY - (r.top + r.height / 2);
+      if (dx === 0 && dy === 0) return;
+      let deg = (Math.atan2(dx, -dy) * 180) / Math.PI;
+      if (which === 'start') deg += 180;
+      setBackground({ gradientAngle: ((Math.round(deg) % 360) + 360) % 360 });
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
   // The Margins toggle (on shows the guide + controls; seeds a default if unset).
   function toggleMargins() {
     setShowSafe((v) => {
@@ -1336,8 +1386,16 @@ export default function AdBuilderPage() {
           if (!c) throw new Error('not found');
           let d = c.doc;
           if (!d) {
-            // No snapshot yet (e.g. a code-template ad) — resolve the source doc.
-            if (c.templateId === vehicleOfferDoc.id) d = structuredClone(vehicleOfferDoc);
+            // No snapshot yet — resolve the source doc. Code offer templates
+            // (single/dual/vehicle) live in the registry; everything else is a
+            // saved TemplateDoc. Without this, offer-template ads couldn't be
+            // opened in the builder at all (so they never autosaved either).
+            const codeDocs: Record<string, TemplateDoc> = {
+              [vehicleOfferDoc.id]: vehicleOfferDoc,
+              [singleOfferDoc.id]: singleOfferDoc,
+              [dualOfferDoc.id]: dualOfferDoc,
+            };
+            if (codeDocs[c.templateId]) d = structuredClone(codeDocs[c.templateId]);
             else {
               const tr = await fetch(`/api/ad-generator/templates-doc/${c.templateId}`);
               if (tr.ok) d = (((await tr.json()) as { template?: { doc: TemplateDoc | null } }).template?.doc) ?? null;
@@ -1980,13 +2038,13 @@ export default function AdBuilderPage() {
       {/* Body — tools sidebar + canvas */}
       <div className="flex min-h-0 flex-1 gap-4">
         {/* Left sidebar — tools */}
-        <aside className="relative flex flex-shrink-0">
+        <aside ref={railRef} className="relative flex flex-shrink-0">
           {/* Icon rail — click an icon to open that panel as a flyout to the right */}
           <div className="flex w-12 flex-col items-center gap-1.5 pt-1">
             {/* Insert — opens the Elements flyout (Text / Image / Button / Shape).
                 Lives in the rail alongside Layers / Sizes so adding never collides
                 with an open panel. */}
-            <RailButton label="Insert" Icon={PlusIcon} active={leftPanel === 'insert'} onClick={() => setLeftPanel((p) => (p === 'insert' ? null : 'insert'))} />
+            <RailButton label="Insert" Icon={PlusIcon} primary active={leftPanel === 'insert'} onClick={() => setLeftPanel((p) => (p === 'insert' ? null : 'insert'))} />
             <RailButton label="Layers" Icon={LayersIcon} active={leftPanel === 'layers'} onClick={() => setLeftPanel((p) => (p === 'layers' ? null : 'layers'))} />
             {!adId && <RailButton label="Industries" Icon={BuildingStorefrontIcon} active={leftPanel === 'industries'} onClick={() => setLeftPanel((p) => (p === 'industries' ? null : 'industries'))} />}
             <RailButton label="Sizes" Icon={DashboardLayoutIcon} active={leftPanel === 'sizes'} onClick={() => setLeftPanel((p) => (p === 'sizes' ? null : 'sizes'))} />
@@ -2610,6 +2668,42 @@ export default function AdBuilderPage() {
                       style={{ left: marquee.x * frameW, top: marquee.y * frameH, width: marquee.w * frameW, height: marquee.h * frameH }}
                     />
                   )}
+                  {/* Gradient angle line — shown while the Background (gradient)
+                      panel is active and nothing's selected. Drag an end handle
+                      to rotate; the handles are tinted with the two stop colors. */}
+                  {doc.background?.gradient && !selected && !bgPanelHidden && (() => {
+                    const angle = doc.background.gradientAngle ?? 135;
+                    const rad = (angle * Math.PI) / 180;
+                    const dx = Math.sin(rad);
+                    const dy = -Math.cos(rad);
+                    const cx = frameW / 2;
+                    const cy = frameH / 2;
+                    const L = 0.4 * Math.min(frameW, frameH);
+                    const ex = cx + dx * L;
+                    const ey = cy + dy * L;
+                    const sx = cx - dx * L;
+                    const sy = cy - dy * L;
+                    const [c0, c1] = doc.background.gradient!;
+                    const handle = (x: number, y: number, color: string, which: 'start' | 'end') => (
+                      <button
+                        type="button"
+                        aria-label={`Gradient ${which} — drag to rotate`}
+                        onPointerDown={(e) => startGradientAngleDrag(e, which)}
+                        className="pointer-events-auto absolute h-4 w-4 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-white shadow-md active:cursor-grabbing"
+                        style={{ left: x, top: y, backgroundColor: color }}
+                      />
+                    );
+                    return (
+                      <div className="pointer-events-none absolute inset-0 z-20">
+                        <svg className="absolute inset-0" width={frameW} height={frameH} style={{ overflow: 'visible' }}>
+                          <line x1={sx} y1={sy} x2={ex} y2={ey} stroke="white" strokeWidth={3} strokeLinecap="round" opacity={0.9} />
+                          <line x1={sx} y1={sy} x2={ex} y2={ey} stroke="#0f172a" strokeWidth={1} strokeLinecap="round" opacity={0.55} />
+                        </svg>
+                        {handle(sx, sy, c0, 'start')}
+                        {handle(ex, ey, c1, 'end')}
+                      </div>
+                    );
+                  })()}
                   {/* Background pan preview — the whole photo, with the off-canvas
                       bleed dimmed and the live frame outlined. */}
                   {bgPan && (
@@ -2856,6 +2950,7 @@ export default function AdBuilderPage() {
                   sizeW={size.width}
                   sizeH={size.height}
                   fontOptions={fontOptions}
+                  brandLogos={brandLogos}
                   content={selectionContent}
                   onContentChange={setSelectedContent}
                   accountKey={accountKey ?? undefined}
@@ -3246,6 +3341,7 @@ function SelectionPanel({
   sizeW,
   sizeH,
   fontOptions,
+  brandLogos,
   content,
   onContentChange,
   accountKey,
@@ -3260,6 +3356,7 @@ function SelectionPanel({
   sizeW: number;
   sizeH: number;
   fontOptions: FontSelectOption[];
+  brandLogos: { key: string; label: string; url: string }[];
   content: { mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly'; value: string; note?: string } | null;
   onContentChange: (value: string) => void;
   accountKey?: string;
@@ -3325,19 +3422,67 @@ function SelectionPanel({
                   )}
                 </div>
                 {content.mode === 'image-edit' ? (
-                  <button
-                    type="button"
-                    onClick={() => setPicking(true)}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                  >
-                    <ArrowUpTrayIcon className="h-4 w-4" />
-                    Choose / upload
-                  </button>
+                  <div className="flex flex-col gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setPicking(true)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                    >
+                      <ArrowUpTrayIcon className="h-4 w-4" />
+                      {content.value ? 'Replace' : 'Choose / upload'}
+                    </button>
+                    {content.value && (
+                      <button
+                        type="button"
+                        onClick={() => onContentChange('')}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-red-500/50 hover:text-red-500"
+                      >
+                        <XMarkIcon className="h-4 w-4" />
+                        Clear image
+                      </button>
+                    )}
+                  </div>
                 ) : (
                   <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">{content.note}</p>
                 )}
               </div>
             )}
+          </PanelSection>
+        )}
+
+        {/* Brand logo — swap which of the account's logo variants this Logo
+            element shows, without leaving the canvas. Picking a variant pins it;
+            "Account default" restores the brand-managed logo. */}
+        {el.type === 'logo' && brandLogos.length > 0 && (
+          <PanelSection title="Brand logo">
+            <div className="flex flex-wrap gap-2">
+              {brandLogos.map((lg) => {
+                const active = el.binding?.kind === 'static' && el.binding.value === lg.url;
+                return (
+                  <button
+                    key={lg.key}
+                    type="button"
+                    title={lg.label}
+                    onClick={() => onEl({ binding: { kind: 'static', value: lg.url } })}
+                    className={`flex h-12 w-16 items-center justify-center overflow-hidden rounded-md border bg-[var(--muted)]/40 p-1 transition-colors ${
+                      active ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]' : 'border-[var(--border)] hover:border-[var(--primary)]'
+                    }`}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={lg.url} alt={lg.label} className="max-h-full max-w-full object-contain" />
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={() => onEl({ binding: { kind: 'brand', key: 'logoUrl' } })}
+              className={`mt-2 text-[11px] font-medium transition-colors ${
+                el.binding?.kind === 'brand' ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              {el.binding?.kind === 'brand' ? '✓ Using account default' : 'Reset to account default'}
+            </button>
           </PanelSection>
         )}
 
@@ -3489,8 +3634,36 @@ function SelectionPanel({
                 />
               </label>
             </div>
-            {el.type === 'image' && el.fit === 'cover' && (
-              <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Drag the image on the canvas to reposition it — the off-canvas bleed shows while you drag (saved per size).</p>
+            {el.fit === 'cover' && (
+              <>
+                {/* Crop framing — which part of the image shows inside the box.
+                    Renderer maps these to object-position (per size). Resize the
+                    box to change the crop shape; these set what stays in frame. */}
+                <div className="mt-3 flex flex-wrap items-center gap-4">
+                  <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                    Crop&nbsp;X
+                    <MiniNum
+                      title="Horizontal framing (%) — 0 = left, 100 = right"
+                      value={Math.round((box.objectX ?? 0.5) * 100)}
+                      step={5}
+                      onChange={(v) => onBox({ objectX: Math.max(0, Math.min(100, v)) / 100 })}
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                    Crop&nbsp;Y
+                    <MiniNum
+                      title="Vertical framing (%) — 0 = top, 100 = bottom"
+                      value={Math.round((box.objectY ?? 0.5) * 100)}
+                      step={5}
+                      onChange={(v) => onBox({ objectY: Math.max(0, Math.min(100, v)) / 100 })}
+                    />
+                  </label>
+                </div>
+                <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
+                  Resize the box to set the crop shape; Crop X/Y frame which part of the image shows.
+                  {el.type === 'image' ? ' A full-bleed background can also be dragged on the canvas.' : ''}
+                </p>
+              </>
             )}
           </PanelSection>
         )}
@@ -3521,7 +3694,14 @@ function PanelSection({ title, children }: { title: string; children: React.Reac
 }
 
 /** An icon button in the left rail — opens its panel as a flyout. */
-function RailButton({ label, Icon, active, onClick }: { label: string; Icon: React.ComponentType<{ className?: string }>; active: boolean; onClick: () => void }) {
+function RailButton({ label, Icon, active, onClick, primary }: { label: string; Icon: React.ComponentType<{ className?: string }>; active: boolean; onClick: () => void; primary?: boolean }) {
+  // `primary` = the marquee action (Insert): solid brand fill so it stands out
+  // from the secondary rail buttons, regardless of open/closed state.
+  const cls = primary
+    ? 'bg-[var(--primary)] text-white shadow-sm hover:opacity-90'
+    : active
+      ? 'bg-[var(--primary)]/15 text-[var(--primary)]'
+      : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]';
   return (
     <SidebarTooltip label={label}>
       <button
@@ -3529,9 +3709,7 @@ function RailButton({ label, Icon, active, onClick }: { label: string; Icon: Rea
         onClick={onClick}
         aria-label={label}
         aria-pressed={active}
-        className={`flex h-11 w-11 items-center justify-center rounded-xl transition-colors ${
-          active ? 'bg-[var(--primary)]/15 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
-        }`}
+        className={`flex h-11 w-11 items-center justify-center rounded-xl transition-colors ${cls}`}
       >
         <Icon className="h-5 w-5" />
       </button>
@@ -3791,6 +3969,38 @@ function BackgroundPanel({
                   aria-label="Gradient angle"
                   className="range-slider"
                 />
+              </div>
+              {/* Spread — stop offsets along the gradient line. Tightening the
+                  window sharpens the color transition; widening softens it. */}
+              <div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-xs text-[var(--muted-foreground)]">Spread</span>
+                  <span className="text-[11px] tabular-nums text-[var(--muted-foreground)]">{bg.gradientStops?.[0] ?? 0}%–{bg.gradientStops?.[1] ?? 100}%</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <MiniNum
+                    title="Start stop (%)"
+                    value={bg.gradientStops?.[0] ?? 0}
+                    step={5}
+                    onChange={(v) => {
+                      const start = Math.max(0, Math.min(100, v));
+                      const end = bg.gradientStops?.[1] ?? 100;
+                      onChange({ gradientStops: [Math.min(start, end), end] });
+                    }}
+                  />
+                  <span className="text-[11px] text-[var(--muted-foreground)]">to</span>
+                  <MiniNum
+                    title="End stop (%)"
+                    value={bg.gradientStops?.[1] ?? 100}
+                    step={5}
+                    onChange={(v) => {
+                      const end = Math.max(0, Math.min(100, v));
+                      const start = bg.gradientStops?.[0] ?? 0;
+                      onChange({ gradientStops: [start, Math.max(start, end)] });
+                    }}
+                  />
+                </div>
+                <p className="mt-1.5 text-[11px] leading-snug text-[var(--muted-foreground)]">Drag the line on the artboard to set the angle.</p>
               </div>
             </div>
           ) : (

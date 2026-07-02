@@ -98,6 +98,9 @@ export interface DocBackground {
   gradient?: [string, string];
   /** Gradient direction in degrees (CSS linear-gradient angle). Defaults to 135. */
   gradientAngle?: number;
+  /** Stop offsets [start%, end%] along the gradient line (0–100). Controls the
+   *  spread / length of the color transition. Defaults to [0, 100]. */
+  gradientStops?: [number, number];
   /** Thin brand-colored bar across the top (the current Vehicle Offer look). */
   accentBar?: boolean;
 }

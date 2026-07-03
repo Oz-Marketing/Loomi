@@ -22,6 +22,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon, Squares2X2Icon, TruckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowLeftIcon, ArrowPathIcon, CheckIcon, CloudIcon, PhotoIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { MediaPickerModal } from '@/components/media-picker-modal';
 import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
@@ -67,7 +68,13 @@ const WEBSAFE_FONTS = [
 ];
 
 export default function AdGeneratorPage() {
-  const { accountKey, accountData } = useAccount();
+  const { accountKey, accountData, userRole } = useAccount();
+  // "Admins and up" get the full form; clients get a restricted subset (OEM
+  // incentives, vehicle, offer, legal — with the disclaimer read-only). Branding
+  // (logo/color/font) + background image are admin-only; clients get brand defaults.
+  const isManager = !!userRole && MANAGEMENT_ROLES.includes(userRole);
+  // AI copy help is an Iris affordance, not a permanent card.
+  const [showAi, setShowAi] = useState(false);
 
   // Published builder templates (DB) joined with the code-defined ones.
   const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
@@ -394,39 +401,32 @@ export default function AdGeneratorPage() {
             <saveInfo.Icon className={`h-3.5 w-3.5 ${saveInfo.spin ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">{saveInfo.label}</span>
           </span>
-          <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
-            {(['draft', 'ready'] as const).map((s) => (
-              <button
-                key={s}
-                onClick={() => setAdStatus(s)}
-                className={`rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
-                  adStatus === s ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                }`}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-          <Link
-            href={`/ad-generator/builder?ad=${encodeURIComponent(creativeId)}${accountKey ? `&account=${encodeURIComponent(accountKey)}` : ''}`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
-            title="Open this ad's layout in the builder"
+          <button
+            onClick={() => setShowAi((v) => !v)}
+            aria-pressed={showAi}
+            title="Iris — write ad copy with AI"
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+              showAi ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
+            }`}
           >
-            <Squares2X2Icon className="h-3.5 w-3.5" />
-            Edit design
-          </Link>
+            <SparklesIcon className="h-3.5 w-3.5" />
+            Iris
+          </button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
         {/* Form */}
         <div className="space-y-6">
-          <AiCopyPanel
-            template={template}
-            renderData={renderData}
-            dealerName={accountData?.dealer}
-            onApply={(fields) => setData((d) => ({ ...d, ...fields }))}
-          />
+          {showAi && (
+            <AiCopyPanel
+              template={template}
+              renderData={renderData}
+              dealerName={accountData?.dealer}
+              onApply={(fields) => setData((d) => ({ ...d, ...fields }))}
+              onClose={() => setShowAi(false)}
+            />
+          )}
 
           {showAutomotiveTools && (
             <OemIncentivesPanel
@@ -437,7 +437,8 @@ export default function AdGeneratorPage() {
             />
           )}
 
-          {/* Branding — from the active account */}
+          {/* Branding — admins & up only; clients inherit the account's defaults. */}
+          {isManager && (
           <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Branding</h2>
@@ -516,8 +517,13 @@ export default function AdGeneratorPage() {
               </div>
             )}
           </section>
+          )}
 
-          {groups.map(([group, fields]) => (
+          {groups
+            // Clients only see OEM Incentives (its own panel above) + Vehicle /
+            // Offer / Legal. Everything else (Copy, Background, etc.) is admin-only.
+            .filter(([group]) => isManager || ['Vehicle', 'Offer', 'Legal'].includes(group))
+            .map(([group, fields]) => (
             <section key={group} className="glass-card rounded-2xl border border-[var(--border)] p-5">
               <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{group}</h2>
               <div className="space-y-4">
@@ -529,6 +535,7 @@ export default function AdGeneratorPage() {
                       renderData={renderData}
                       value={data.disclaimer ?? ''}
                       onChange={(v) => set('disclaimer', v)}
+                      readOnly={!isManager}
                     />
                   ) : (
                     <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} allowVehiclePicker={showAutomotiveTools} />
@@ -542,18 +549,28 @@ export default function AdGeneratorPage() {
         {/* Preview + export */}
         <div className="lg:sticky lg:top-6 lg:self-start">
           <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
-            <div className="mb-4 flex flex-wrap gap-1.5">
-              {template.sizes.map((s) => (
-                <button
-                  key={s.id}
-                  onClick={() => setSizeId(s.id)}
-                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    s.id === sizeId ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)]'
-                  }`}
-                >
-                  {s.label.split(' ')[0]}
-                </button>
-              ))}
+            <div className="mb-4 flex items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-1.5">
+                {template.sizes.map((s) => (
+                  <button
+                    key={s.id}
+                    onClick={() => setSizeId(s.id)}
+                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      s.id === sizeId ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)]'
+                    }`}
+                  >
+                    {s.label.split(' ')[0]}
+                  </button>
+                ))}
+              </div>
+              <Link
+                href={`/ad-generator/builder?ad=${encodeURIComponent(creativeId)}${accountKey ? `&account=${encodeURIComponent(accountKey)}` : ''}`}
+                className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                title="Open this ad's layout in the builder"
+              >
+                <Squares2X2Icon className="h-3.5 w-3.5" />
+                Edit design
+              </Link>
             </div>
 
             <div className="flex justify-center rounded-xl bg-[var(--muted)]/40 p-4">
@@ -826,7 +843,9 @@ function AiCopyPanel({
   renderData,
   dealerName,
   onApply,
+  onClose,
 }: {
+  onClose?: () => void;
   template: AdTemplate;
   renderData: AdData;
   dealerName?: string;
@@ -863,10 +882,15 @@ function AiCopyPanel({
   if (copyFields.length === 0) return null;
 
   return (
-    <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
+    <section className="glass-card rounded-2xl border border-[var(--primary)]/40 p-5">
       <div className="mb-2 flex items-center gap-2">
         <SparklesIcon className="h-4 w-4 text-[var(--primary)]" />
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Write with AI</h2>
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Iris — write with AI</h2>
+        {onClose && (
+          <button onClick={onClose} title="Close" className="ml-auto rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+            <XMarkIcon className="h-4 w-4" />
+          </button>
+        )}
       </div>
       <p className="mb-3 text-xs text-[var(--muted-foreground)]">
         Writes the marketing copy + Meta/Google captions from your offer details. Prices, terms, and the disclaimer stay exactly as you set them.
@@ -1016,11 +1040,15 @@ function DisclaimerField({
   renderData,
   value,
   onChange,
+  readOnly = false,
 }: {
   field: FieldSpec;
   renderData: AdData;
   value: string;
   onChange: (v: string) => void;
+  /** Clients can't override the disclaimer — it still auto-fills, but shows
+   *  read-only (only admins & up can edit/override). */
+  readOnly?: boolean;
 }) {
   const offerType = renderData.offerType || 'custom';
   const [templates, setTemplates] = useState<DisclaimerTemplateOption[]>([]);
@@ -1059,6 +1087,22 @@ function DisclaimerField({
       label: `${t.name}${t.make ? ` — ${t.make}` : ' — global'}`,
     })),
   ];
+
+  // Read-only (clients): show the auto-filled disclaimer, no template picker, no
+  // editing. It still auto-fills from the offer via the effect above.
+  if (readOnly) {
+    return (
+      <div>
+        <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)]">
+          {field.label}
+          <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-normal text-[var(--muted-foreground)]">Managed by your team</span>
+        </label>
+        <div className="w-full whitespace-pre-wrap rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2 text-xs leading-snug text-[var(--muted-foreground)]">
+          {value || '—'}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">

@@ -20,7 +20,7 @@ import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownTrayIcon, SparklesIcon, ClipboardDocumentIcon, ExclamationTriangleIcon, Squares2X2Icon, TruckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowLeftIcon, ArrowPathIcon, CheckIcon, CloudIcon, PhotoIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, ExclamationTriangleIcon, Squares2X2Icon, TruckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowLeftIcon, ArrowRightIcon, ArrowPathIcon, CheckIcon, CloudIcon, PhotoIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { MediaPickerModal } from '@/components/media-picker-modal';
@@ -31,7 +31,6 @@ import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { isFieldVisible, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
-import type { AdCopyVariation } from '@/lib/ad-generator/copy-types';
 import { composeDisclaimer } from '@/lib/ad-generator/disclaimer';
 import { missingRequired, type OemOfferRule } from '@/lib/ad-generator/compliance';
 import type { EvoxVehicle, EvoxColor } from '@/lib/integrations/evox';
@@ -73,8 +72,6 @@ export default function AdGeneratorPage() {
   // incentives, vehicle, offer, legal — with the disclaimer read-only). Branding
   // (logo/color/font) + background image are admin-only; clients get brand defaults.
   const isManager = !!userRole && MANAGEMENT_ROLES.includes(userRole);
-  // AI copy help is an Iris affordance, not a permanent card.
-  const [showAi, setShowAi] = useState(false);
 
   // Published builder templates (DB) joined with the code-defined ones.
   const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
@@ -223,6 +220,39 @@ export default function AdGeneratorPage() {
   const size = useMemo(() => template.sizes.find((s) => s.id === sizeId) ?? template.sizes[0], [template, sizeId]);
   const renderData = useMemo(() => ({ ...data, ...brandingData }), [data, brandingData]);
 
+  // Which of the template's sizes this ad includes (multi-select, persisted in
+  // data._sizes; defaults to all). The preview pages through these; the ZIP
+  // export renders only these.
+  const selectedSizeIds = useMemo(() => {
+    const raw = typeof data._sizes === 'string' ? data._sizes : '';
+    const ids = raw ? raw.split(',').filter(Boolean).filter((id) => template.sizes.some((s) => s.id === id)) : [];
+    return ids.length ? ids : template.sizes.map((s) => s.id);
+  }, [data._sizes, template]);
+  const toggleSize = (id: string) => {
+    const cur = new Set(selectedSizeIds);
+    let added = false;
+    if (cur.has(id)) {
+      if (cur.size > 1) cur.delete(id); // keep at least one size
+    } else {
+      cur.add(id);
+      added = true;
+    }
+    // Persist in template order.
+    const next = template.sizes.filter((s) => cur.has(s.id)).map((s) => s.id);
+    setData((d) => ({ ...d, _sizes: next.join(',') }));
+    if (added) setSizeId(id); // view a newly-included size
+    else if (!cur.has(sizeId)) setSizeId(next[0]); // removed the viewed one
+  };
+  // Keep the previewed size within the included set.
+  useEffect(() => {
+    if (!selectedSizeIds.includes(sizeId)) setSizeId(selectedSizeIds[0]);
+  }, [selectedSizeIds, sizeId]);
+  const sizeIndex = Math.max(0, selectedSizeIds.indexOf(sizeId));
+  const stepSize = (dir: -1 | 1) => {
+    const n = selectedSizeIds.length;
+    setSizeId(selectedSizeIds[(sizeIndex + dir + n) % n]);
+  };
+
   // Industry-aware tooling. The ad generator supports any industry/ad type via
   // data-driven templates; the automotive-only helpers (OEM incentive lookup,
   // EVOX vehicle picker) appear only for an Automotive account on a vehicle-
@@ -335,6 +365,7 @@ export default function AdGeneratorPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           templateId: template.id,
+          sizeIds: selectedSizeIds,
           accountKey,
           data: renderData,
           name: creativeName.trim() || undefined,
@@ -401,32 +432,12 @@ export default function AdGeneratorPage() {
             <saveInfo.Icon className={`h-3.5 w-3.5 ${saveInfo.spin ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">{saveInfo.label}</span>
           </span>
-          <button
-            onClick={() => setShowAi((v) => !v)}
-            aria-pressed={showAi}
-            title="Iris — write ad copy with AI"
-            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
-              showAi ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
-            }`}
-          >
-            <SparklesIcon className="h-3.5 w-3.5" />
-            Iris
-          </button>
         </div>
       </div>
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
         {/* Form */}
         <div className="space-y-6">
-          {showAi && (
-            <AiCopyPanel
-              template={template}
-              renderData={renderData}
-              dealerName={accountData?.dealer}
-              onApply={(fields) => setData((d) => ({ ...d, ...fields }))}
-              onClose={() => setShowAi(false)}
-            />
-          )}
 
           {showAutomotiveTools && (
             <OemIncentivesPanel
@@ -549,20 +560,8 @@ export default function AdGeneratorPage() {
         {/* Preview + export */}
         <div className="lg:sticky lg:top-6 lg:self-start">
           <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
-            <div className="mb-4 flex items-center justify-between gap-2">
-              <div className="flex flex-wrap gap-1.5">
-                {template.sizes.map((s) => (
-                  <button
-                    key={s.id}
-                    onClick={() => setSizeId(s.id)}
-                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                      s.id === sizeId ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)]'
-                    }`}
-                  >
-                    {s.label.split(' ')[0]}
-                  </button>
-                ))}
-              </div>
+            <div className="mb-3 flex items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Sizes for this ad</span>
               <Link
                 href={`/ad-generator/builder?ad=${encodeURIComponent(creativeId)}${accountKey ? `&account=${encodeURIComponent(accountKey)}` : ''}`}
                 className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
@@ -571,6 +570,28 @@ export default function AdGeneratorPage() {
                 <Squares2X2Icon className="h-3.5 w-3.5" />
                 Edit design
               </Link>
+            </div>
+
+            {/* Multi-select: which sizes this ad includes (toggle in/out). The
+                currently-previewed size gets a ring. */}
+            <div className="mb-4 flex flex-wrap gap-1.5">
+              {template.sizes.map((s) => {
+                const included = selectedSizeIds.includes(s.id);
+                const viewing = s.id === sizeId;
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => toggleSize(s.id)}
+                    title={included ? `${s.label} — included (click to remove)` : `${s.label} — click to include`}
+                    className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      included ? 'bg-[var(--primary)]/15 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)]'
+                    } ${viewing ? 'ring-1 ring-[var(--primary)]' : ''}`}
+                  >
+                    {included && <CheckIcon className="h-3 w-3" />}
+                    {s.label.split(' ')[0]}
+                  </button>
+                );
+              })}
             </div>
 
             <div className="flex justify-center rounded-xl bg-[var(--muted)]/40 p-4">
@@ -586,9 +607,31 @@ export default function AdGeneratorPage() {
               </div>
             </div>
 
-            <p className="mt-2 text-center text-[11px] text-[var(--muted-foreground)]">
-              {size.width}×{size.height}px
-            </p>
+            {/* Page through the included sizes. */}
+            <div className="mt-2 flex items-center justify-center gap-3">
+              <button
+                onClick={() => stepSize(-1)}
+                disabled={selectedSizeIds.length < 2}
+                title="Previous size"
+                aria-label="Previous size"
+                className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-30 disabled:hover:bg-transparent"
+              >
+                <ArrowLeftIcon className="h-4 w-4" />
+              </button>
+              <span className="text-[11px] text-[var(--muted-foreground)]">
+                <span className="font-medium text-[var(--foreground)]">{size.label.split(' ')[0]}</span> · {size.width}×{size.height}px
+                {selectedSizeIds.length > 1 && <span className="ml-1 tabular-nums opacity-70">({sizeIndex + 1}/{selectedSizeIds.length})</span>}
+              </span>
+              <button
+                onClick={() => stepSize(1)}
+                disabled={selectedSizeIds.length < 2}
+                title="Next size"
+                aria-label="Next size"
+                className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-30 disabled:hover:bg-transparent"
+              >
+                <ArrowRightIcon className="h-4 w-4" />
+              </button>
+            </div>
 
             <div className="mt-4 space-y-2">
               {missing.length > 0 && (
@@ -615,7 +658,7 @@ export default function AdGeneratorPage() {
                 title={missing.length > 0 ? 'Fill the required fields before exporting' : undefined}
                 className="w-full rounded-lg border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {busy === 'all' ? 'Rendering ZIP…' : busy ? 'Rendering…' : `Download all ${template.sizes.length} sizes (ZIP)`}
+                {busy === 'all' ? 'Rendering ZIP…' : busy ? 'Rendering…' : `Download all ${selectedSizeIds.length} size${selectedSizeIds.length !== 1 ? 's' : ''} (ZIP)`}
               </button>
             </div>
           </div>
@@ -636,15 +679,6 @@ const EVOX_MAKES = [
   'Porsche', 'Ram', 'Rivian', 'Subaru', 'Tesla', 'Toyota', 'Volkswagen', 'Volvo',
 ];
 
-const TONES = [
-  { value: '', label: 'On-brand (default)' },
-  { value: 'bold', label: 'Bold' },
-  { value: 'friendly', label: 'Friendly' },
-  { value: 'urgent', label: 'Urgent' },
-  { value: 'luxury', label: 'Luxury' },
-];
-
-/**
 /**
  * OEM Incentives (MarketCheck) — look up the live lease / APR / cash programs
  * for a vehicle and apply one to auto-fill the structured offer fields. Manual
@@ -832,192 +866,6 @@ function OemIncentivesPanel({ defaultMake, defaultZip, dual, onApply }: { defaul
   );
 }
 
-/**
- * "Write with AI" — generates marketing copy for the template's `copy` fields
- * plus Meta/Google captions. Renders nothing if the template declares no copy
- * fields, so it lights up automatically for any (incl. future data-driven)
- * template that marks fields as copy.
- */
-function AiCopyPanel({
-  template,
-  renderData,
-  dealerName,
-  onApply,
-  onClose,
-}: {
-  onClose?: () => void;
-  template: AdTemplate;
-  renderData: AdData;
-  dealerName?: string;
-  onApply: (fields: Record<string, string>) => void;
-}) {
-  const copyFields = useMemo(() => template.fields.filter((f) => f.copy), [template]);
-  const [brief, setBrief] = useState('');
-  const [tone, setTone] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [variations, setVariations] = useState<AdCopyVariation[] | null>(null);
-
-  async function generate() {
-    setBusy(true);
-    try {
-      const res = await fetch('/api/ad-generator/copy', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ templateId: template.id, data: renderData, dealerName, tone, brief }),
-      });
-      if (!res.ok) {
-        const msg = (await res.json().catch(() => null))?.error || `HTTP ${res.status}`;
-        throw new Error(msg);
-      }
-      const json = (await res.json()) as { variations: AdCopyVariation[] };
-      setVariations(json.variations);
-      if (!json.variations.length) toast.error('No copy came back — try again.');
-    } catch (err) {
-      toast.error(`Couldn't write copy: ${err instanceof Error ? err.message : 'unknown error'}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (copyFields.length === 0) return null;
-
-  return (
-    <section className="glass-card rounded-2xl border border-[var(--primary)]/40 p-5">
-      <div className="mb-2 flex items-center gap-2">
-        <SparklesIcon className="h-4 w-4 text-[var(--primary)]" />
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Iris — write with AI</h2>
-        {onClose && (
-          <button onClick={onClose} title="Close" className="ml-auto rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
-            <XMarkIcon className="h-4 w-4" />
-          </button>
-        )}
-      </div>
-      <p className="mb-3 text-xs text-[var(--muted-foreground)]">
-        Writes the marketing copy + Meta/Google captions from your offer details. Prices, terms, and the disclaimer stay exactly as you set them.
-      </p>
-      <textarea
-        value={brief}
-        onChange={(e) => setBrief(e.target.value)}
-        rows={2}
-        placeholder="Optional brief — e.g. “year-end clearance, emphasize the low payment”"
-        className="mb-2 w-full resize-none rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]"
-      />
-      <div className="flex items-center gap-2">
-        <FontSelect
-          value={tone}
-          onChange={setTone}
-          options={TONES}
-          previewFont={false}
-          className="w-44 flex-shrink-0"
-        />
-        <button
-          onClick={generate}
-          disabled={busy}
-          className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-        >
-          <SparklesIcon className="h-4 w-4" />
-          {busy ? 'Writing…' : variations ? 'Regenerate' : 'Write with AI'}
-        </button>
-      </div>
-
-      {variations && variations.length > 0 && (
-        <div className="mt-4 space-y-3">
-          {variations.map((v, i) => (
-            <AiVariationCard
-              key={i}
-              index={i}
-              variation={v}
-              copyFields={copyFields}
-              onApply={() => {
-                onApply(v.fields);
-                toast.success(`Applied option ${i + 1}`);
-              }}
-            />
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function AiVariationCard({
-  index,
-  variation,
-  copyFields,
-  onApply,
-}: {
-  index: number;
-  variation: AdCopyVariation;
-  copyFields: FieldSpec[];
-  onApply: () => void;
-}) {
-  return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Option {index + 1}</span>
-        <button
-          onClick={onApply}
-          className="rounded-md bg-[var(--primary)]/10 px-2 py-1 text-[11px] font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/20"
-        >
-          Apply to ad
-        </button>
-      </div>
-      <div className="space-y-1">
-        {copyFields.map((f) => (
-          <div key={f.key} className="flex gap-2 text-xs">
-            <span className="w-20 flex-shrink-0 text-[var(--muted-foreground)]">{f.label}</span>
-            <span className="font-medium text-[var(--foreground)]">{variation.fields[f.key] || '—'}</span>
-          </div>
-        ))}
-      </div>
-      <div className="mt-3 grid grid-cols-1 gap-3 border-t border-[var(--border)] pt-2 sm:grid-cols-2">
-        <CaptionBlock
-          label="Meta"
-          lines={[
-            ['Primary', variation.meta.primaryText],
-            ['Headline', variation.meta.headline],
-            ['Desc', variation.meta.description],
-          ]}
-        />
-        <CaptionBlock
-          label="Google"
-          lines={[
-            ...variation.google.headlines.map((h, i) => [`H${i + 1}`, h] as [string, string]),
-            ...variation.google.descriptions.map((d, i) => [`D${i + 1}`, d] as [string, string]),
-          ]}
-        />
-      </div>
-    </div>
-  );
-}
-
-function CaptionBlock({ label, lines }: { label: string; lines: [string, string][] }) {
-  const visible = lines.filter(([, v]) => v);
-  if (!visible.length) return null;
-  return (
-    <div>
-      <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{label}</div>
-      <div className="space-y-0.5">
-        {visible.map(([k, v], i) => (
-          <button
-            key={i}
-            type="button"
-            title="Click to copy"
-            onClick={() => {
-              navigator.clipboard?.writeText(v);
-              toast.success('Copied');
-            }}
-            className="group flex w-full items-start gap-1.5 rounded px-1 py-0.5 text-left text-[11px] text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/50"
-          >
-            <span className="w-10 flex-shrink-0 text-[var(--muted-foreground)]">{k}</span>
-            <span className="flex-1 break-words">{v}</span>
-            <ClipboardDocumentIcon className="h-3 w-3 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-60" />
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 type DisclaimerTemplateOption = {
   id: string;

@@ -183,6 +183,13 @@ const WEBSAFE_FONTS = [
   'Courier New',
   'Lucida Console',
 ];
+// Computed offer LABEL fields (`_offerLabel`, `_o2_offerLabel`) map to a
+// free-text override field the offer engine honors — so double-clicking the
+// rendered label edits the override (writes here) instead of the derived value.
+const OFFER_LABEL_OVERRIDE: Record<string, string> = {
+  _offerLabel: 'offerLabel',
+  _o2_offerLabel: 'o2_offerLabel',
+};
 const WEIGHT_OPTIONS: FontSelectOption[] = [
   { value: '300', label: 'Light' },
   { value: '400', label: 'Regular' },
@@ -1031,11 +1038,18 @@ export default function AdBuilderPage() {
 
   // ── inline text editing (double-click a text element) ──
   // Editable when the element binds to a STATIC literal or a plain FIELD.
-  // Brand-bound and computed (`_offer*`) text is derived, so it's read-only here.
+  // Computed `_offer*` text is derived from the offer inputs so it's read-only —
+  // EXCEPT the offer LABEL, which has a free-text override field (`offerLabel` /
+  // `o2_offerLabel`); editing that label inline writes the override (see
+  // enrichOfferFields). Brand-bound text stays read-only.
   const textEditTarget = useCallback((el: DocElement | null | undefined): 'static' | 'field' | null => {
     if (!el || el.type !== 'text' || el.locked || !el.binding) return null;
     if (el.binding.kind === 'static') return 'static';
-    if (el.binding.kind === 'field' && !el.binding.key.startsWith('_')) return 'field';
+    if (el.binding.kind === 'field') {
+      const key = el.binding.key;
+      if (!key.startsWith('_')) return 'field';
+      if (key in OFFER_LABEL_OVERRIDE) return 'field'; // editable via its override field
+    }
     return null;
   }, []);
 
@@ -1061,7 +1075,9 @@ export default function AdBuilderPage() {
       if (b?.kind === 'static') {
         setElement(cur.id, { binding: { kind: 'static', value: cur.value } });
       } else if (b?.kind === 'field') {
-        const key = b.key;
+        // Offer-label bindings write their free-text override field, not the
+        // derived `_offer*` key (which enrichOfferFields would recompute).
+        const key = OFFER_LABEL_OVERRIDE[b.key] ?? b.key;
         setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: cur.value } }));
       }
       return null;
@@ -3076,6 +3092,14 @@ export default function AdBuilderPage() {
                           if (textEditTarget(el)) {
                             e.stopPropagation();
                             startTextEdit(el.id);
+                            return;
+                          }
+                          // Computed offer text (e.g. the price/terms, `_offer*`) is
+                          // derived from the offer inputs — tell the user where to edit
+                          // it rather than silently doing nothing on double-click.
+                          if (el.type === 'text' && el.binding?.kind === 'field' && el.binding.key.startsWith('_')) {
+                            e.stopPropagation();
+                            toast('This text is generated from the offer fields — edit those in the Fields panel.');
                             return;
                           }
                           // Otherwise drill into a group: select just this member.

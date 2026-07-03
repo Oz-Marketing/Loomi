@@ -14,7 +14,7 @@ describe('migrateDocBackground', () => {
   it('converts a solid canvas color into a full-bleed background element', () => {
     const { doc, changed } = migrateDocBackground(base({ color: '#199fdb' }));
     expect(changed).toBe(true);
-    const el = doc.elements.find((e) => e.type === 'background');
+    const el = doc.elements.find((e) => e.id === 'background-migrated');
     expect(el?.fill).toBe('#199fdb');
     expect(doc.layouts.square[el!.id]).toMatchObject({ x: 0, y: 0, w: 1, h: 1 });
     expect(doc.background).toBeUndefined();
@@ -22,27 +22,27 @@ describe('migrateDocBackground', () => {
 
   it('converts a legacy two-stop gradient into the element gradientFill', () => {
     const { doc } = migrateDocBackground(base({ gradient: ['#fff', '#000'], gradientAngle: 90, gradientStops: [10, 80] }));
-    const el = doc.elements.find((e) => e.type === 'background')!;
+    const el = doc.elements.find((e) => e.id === 'background-migrated')!;
     expect(el.gradientFill).toEqual({ type: 'linear', angle: 90, stops: [{ color: '#fff', pos: 10 }, { color: '#000', pos: 80 }] });
   });
 
   it('carries a new gradientFill straight onto the element', () => {
     const gf = { type: 'radial' as const, stops: [{ color: '#111', pos: 0 }, { color: '#222', pos: 100 }] };
     const { doc } = migrateDocBackground(base({ gradientFill: gf }));
-    expect(doc.elements.find((e) => e.type === 'background')!.gradientFill).toEqual(gf);
+    expect(doc.elements.find((e) => e.id === 'background-migrated')!.gradientFill).toEqual(gf);
   });
 
   it('preserves accentBar on doc.background but drops the fill', () => {
     const { doc } = migrateDocBackground(base({ color: '#123456', accentBar: true }));
     expect(doc.background).toEqual({ accentBar: true });
-    expect(doc.elements.find((e) => e.type === 'background')!.fill).toBe('#123456');
+    expect(doc.elements.find((e) => e.id === 'background-migrated')!.fill).toBe('#123456');
   });
 
   it('is idempotent — a doc that already has a background element is unchanged', () => {
     const once = migrateDocBackground(base({ color: '#199fdb' })).doc;
     const twice = migrateDocBackground(once);
     expect(twice.changed).toBe(false);
-    expect(twice.doc.elements.filter((e) => e.type === 'background')).toHaveLength(1);
+    expect(twice.doc.elements.filter((e) => e.id === 'background-migrated')).toHaveLength(1);
   });
 
   it('leaves a doc without a background fill unchanged', () => {

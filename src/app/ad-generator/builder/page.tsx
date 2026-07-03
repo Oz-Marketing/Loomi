@@ -1130,23 +1130,20 @@ export default function AdBuilderPage() {
     setSelectedIds([id]);
   }, []);
 
-  // Add the unified full-bleed Background element: one element (base fill +
-  // optional texture + optional fade) pinned behind everything on every size.
-  // This is the single way to set a background — it replaces both the old
-  // full-bleed background image and the doc-level canvas fill. The designer
-  // styles fill / texture / fade from its inspector, and it reflows per size.
-  const addBackground = useCallback(() => {
-    const id = `background-${rid()}`;
+  // Make the selected element a background: full-bleed (0,0,1,1) on every size +
+  // sent behind everything. A background is just a full-bleed Image (photo /
+  // texture) or Shape (solid / gradient) — this is the one-click convenience so
+  // there's no separate "background" concept to manage.
+  const fillArtboardAndSendBack = useCallback((elId: string) => {
     setDoc((prev) => {
       const layouts = { ...prev.layouts };
       for (const s of prev.sizes) {
         const cur = layouts[s.id] ?? {};
         const minZ = Object.values(cur).reduce((m, b) => Math.min(m, b.z ?? 0), 0);
-        layouts[s.id] = { ...cur, [id]: { x: 0, y: 0, w: 1, h: 1, z: minZ - 1 } };
+        layouts[s.id] = { ...cur, [elId]: { ...(cur[elId] ?? {}), x: 0, y: 0, w: 1, h: 1, z: minZ - 1 } };
       }
-      return { ...prev, elements: [...prev.elements, makeDefaultElement(id, 'background')], layouts };
-    });
-    setSelectedIds([id]);
+      return { ...prev, layouts };
+    }, `fillback:${elId}`);
   }, []);
 
   // Patch the selected element's style.
@@ -2215,10 +2212,9 @@ export default function AdBuilderPage() {
     { label: 'Image', Icon: PhotoIcon, onAdd: () => addElement('image') },
     { label: 'Button', Icon: ButtonElementIcon, onAdd: addButton },
     { label: 'Shape', Icon: ShapeElementIcon, onAdd: () => addElement('shape') },
-    // Background — the single full-bleed background element (base fill + optional
-    // texture + optional fade), styled from its inspector. One entry point for
-    // every kind of background.
-    { label: 'Background', Icon: SwatchIcon, onAdd: addBackground },
+    // No separate "Background": a background is a full-bleed Image (photo/texture)
+    // or Shape (solid/gradient) — use those + the "Fill artboard & send to back"
+    // action on the element's inspector.
   ];
 
   const saveInfo =
@@ -3229,6 +3225,7 @@ export default function AdBuilderPage() {
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch }, `box:${selected.id}:${Object.keys(patch).sort().join(',')}`)}
                   onClose={clearSelection}
+                  onFillArtboard={() => fillArtboardAndSendBack(selected.id)}
                   shifted={fieldsOpen}
                   cropping={cropId === selected.id}
                   onToggleCrop={() => {
@@ -3630,6 +3627,7 @@ function SelectionPanel({
   onEl,
   onBox,
   onClose,
+  onFillArtboard,
   shifted,
   cropping,
   onToggleCrop,
@@ -3646,6 +3644,9 @@ function SelectionPanel({
   onEl: (patch: Partial<DocElement>) => void;
   onBox: (patch: Partial<DocLayoutBox>) => void;
   onClose: () => void;
+  /** Make this element a full-bleed background (fill artboard + send to back on
+   *  every size). Shown for Image + Shape. */
+  onFillArtboard: () => void;
   shifted: boolean;
   cropping: boolean;
   onToggleCrop: () => void;
@@ -3968,6 +3969,7 @@ function SelectionPanel({
           const SHAPES = ['rect', 'ellipse', 'triangle', 'diamond', 'star'] as const;
           return (
           <PanelSection title="Shape">
+            <FillArtboardButton onClick={onFillArtboard} />
             {/* Silhouette picker — each swatch previews its own clip-path. */}
             <div className="mb-3 flex items-center gap-1">
               {SHAPES.map((k) => (
@@ -4010,6 +4012,7 @@ function SelectionPanel({
 
         {(el.type === 'image' || el.type === 'logo') && (
           <PanelSection title="Image">
+            {el.type === 'image' && <FillArtboardButton onClick={onFillArtboard} />}
             <div className="flex items-center gap-1">
               <BarBtn title="Fit (contain)" active={(el.fit ?? 'contain') === 'contain'} onClick={() => onEl({ fit: 'contain' })}>
                 <ArrowsPointingInIcon className="h-4 w-4" />
@@ -4134,6 +4137,22 @@ function SelectionPanel({
 }
 
 /** A labeled group of controls in the selection panel. */
+/** "Fill artboard & send to back" — turns an Image/Shape into a full-bleed
+ *  background layer on every size (the convenience that replaced the dedicated
+ *  Background element). */
+function FillArtboardButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Resize to fill the artboard on every size and move behind everything"
+      className="mb-3 inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+    >
+      <SwatchIcon className="h-3.5 w-3.5" /> Fill artboard &amp; send to back
+    </button>
+  );
+}
+
 function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="py-3">

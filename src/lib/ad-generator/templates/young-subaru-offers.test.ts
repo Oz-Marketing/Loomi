@@ -25,17 +25,19 @@ describe('Young Subaru offer templates', () => {
         }
       });
 
-      it('renders the native Background element (base fill + white fade), not a doc-level canvas fill', () => {
+      it('builds the background from plain layers (fill Shape + white fade Shape), not a doc-level canvas fill or a background element', () => {
         const html = render(doc, 'fb');
         expect(doc.background).toBeUndefined(); // no legacy canvas fill
-        expect(html).toContain('background:#199fdb'); // Background element base fill layer
-        expect(html).toContain('linear-gradient('); // the white fade overlay
+        expect(doc.elements.some((e) => e.type === 'background')).toBe(false); // no dedicated background element
+        expect(html).toContain('background:#199fdb'); // base fill Shape layer
+        expect(html).toContain('linear-gradient('); // the white fade Shape
         expect(html).toContain('#ffffff'); // fade stop
       });
 
-      it('has a Young|Subaru logo element and an empty texture slot on the Background', () => {
-        const bg = doc.elements.find((e) => e.type === 'background')!;
-        expect(bg.binding).toEqual({ kind: 'static', value: '' }); // empty texture slot
+      it('has a Young|Subaru logo element and an empty texture-slot Image', () => {
+        const tex = doc.elements.find((e) => e.id === 'bgTexture')!;
+        expect(tex.type).toBe('image');
+        expect(tex.binding).toEqual({ kind: 'static', value: '' }); // empty texture slot
         expect(doc.elements.some((e) => e.type === 'logo')).toBe(true);
       });
 
@@ -48,9 +50,11 @@ describe('Young Subaru offer templates', () => {
         }
       });
 
-      it('lays out the background full-bleed on every size', () => {
+      it('lays out the background layers full-bleed on every size', () => {
         for (const size of doc.sizes) {
-          expect(doc.layouts[size.id].bg).toMatchObject({ x: 0, y: 0, w: 1, h: 1 });
+          for (const layer of ['bgFill', 'bgTexture', 'bgFade']) {
+            expect(doc.layouts[size.id][layer]).toMatchObject({ x: 0, y: 0, w: 1, h: 1 });
+          }
         }
       });
     });

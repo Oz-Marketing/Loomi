@@ -2,8 +2,9 @@ import type { TemplateDoc, DocElement } from './doc-types';
 
 /**
  * Retire a doc's legacy doc-level `doc.background` fill by converting it into a
- * full-bleed unified `background` element — so the one way to set a background
- * is the Background element, and the old canvas-fill path can be dropped.
+ * full-bleed `shape` element (solid or gradient) at the back — so the one way to
+ * set a background is a plain Image/Shape layer, and the old canvas-fill path
+ * can be dropped.
  *
  * - Solid `color` → the element's `fill`.
  * - `gradientFill` (new) or the legacy `gradient`/`gradientAngle`/`gradientStops`
@@ -21,13 +22,11 @@ import type { TemplateDoc, DocElement } from './doc-types';
 export function migrateDocBackground(doc: TemplateDoc): { doc: TemplateDoc; changed: boolean } {
   const bg = doc.background;
   const hasFill = !!(bg && (bg.color || bg.gradient || bg.gradientFill));
-  const alreadyHasBgElement = doc.elements.some((e) => e.type === 'background');
-  if (!hasFill || alreadyHasBgElement) return { doc, changed: false };
+  const id = 'background-migrated';
+  const alreadyMigrated = doc.elements.some((e) => e.id === id);
+  if (!hasFill || alreadyMigrated) return { doc, changed: false };
 
-  const baseId = 'background-migrated';
-  const id = doc.elements.some((e) => e.id === baseId) ? `${baseId}-${doc.elements.length}` : baseId;
-
-  const el: DocElement = { id, type: 'background', name: 'Background' };
+  const el: DocElement = { id, type: 'shape', name: 'Background' };
   if (bg!.gradientFill) {
     el.gradientFill = bg!.gradientFill;
   } else if (bg!.gradient) {

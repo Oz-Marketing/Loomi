@@ -20,7 +20,8 @@ import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownTrayIcon, ExclamationTriangleIcon, Squares2X2Icon, TruckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowLeftIcon, ArrowRightIcon, ArrowPathIcon, CheckIcon, CloudIcon, PhotoIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, ExclamationTriangleIcon, Squares2X2Icon, TruckIcon, XMarkIcon, MagnifyingGlassIcon, ArrowLeftIcon, ArrowRightIcon, ArrowPathIcon, CheckIcon, CloudIcon, PhotoIcon, BookmarkSquareIcon } from '@heroicons/react/24/outline';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { useAccount } from '@/contexts/account-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { MediaPickerModal } from '@/components/media-picker-modal';
@@ -72,6 +73,8 @@ export default function AdGeneratorPage() {
   // incentives, vehicle, offer, legal — with the disclaimer read-only). Branding
   // (logo/color/font) + background image are admin-only; clients get brand defaults.
   const isManager = !!userRole && MANAGEMENT_ROLES.includes(userRole);
+  const { prompt } = useLoomiDialog();
+  const [savingTemplate, setSavingTemplate] = useState(false);
 
   // Published builder templates (DB) joined with the code-defined ones.
   const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
@@ -432,6 +435,41 @@ export default function AdGeneratorPage() {
     }
   }
 
+  // Promote this ad's design into the reusable template library. Uses the ad's
+  // frozen doc snapshot (the design, not the filled-in values); always creates a
+  // fresh AdTemplateDoc scoped to the active account.
+  async function saveAsTemplate() {
+    if (!docSnapshot) {
+      toast.error('Open “Edit design” once so this ad has a saved design, then try again.');
+      return;
+    }
+    const name = (
+      await prompt({
+        title: 'Save as template',
+        message: 'Save this ad’s design as a reusable template. It will appear in the template picker for new ads.',
+        defaultValue: `${creativeName.trim() || 'Untitled ad'} template`,
+        placeholder: 'Template name',
+        confirmLabel: 'Save template',
+        required: true,
+      })
+    )?.trim();
+    if (!name) return;
+    setSavingTemplate(true);
+    try {
+      const res = await fetch('/api/ad-generator/templates-doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, doc: { ...docSnapshot, name }, status: 'draft', accountKey: accountKey ?? null }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      toast.success('Saved as a new template');
+    } catch (err) {
+      toast.error(`Couldn't save template: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setSavingTemplate(false);
+    }
+  }
+
   const scale = Math.min(PREVIEW_W / size.width, PREVIEW_H / size.height);
 
   const saveInfo =
@@ -474,6 +512,17 @@ export default function AdGeneratorPage() {
             <saveInfo.Icon className={`h-3.5 w-3.5 ${saveInfo.spin ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">{saveInfo.label}</span>
           </span>
+          {isManager && (
+            <button
+              onClick={saveAsTemplate}
+              disabled={savingTemplate}
+              title="Save this ad’s design as a reusable template"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-50"
+            >
+              <BookmarkSquareIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">{savingTemplate ? 'Saving…' : 'Save as template'}</span>
+            </button>
+          )}
         </div>
       </div>
 

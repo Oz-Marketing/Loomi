@@ -101,9 +101,6 @@ const adGeneratorNav: NavItem = {
   label: 'Ad Generator',
   icon: SparklesIcon,
   absolute: true,
-  // Shown as a non-clickable "Soon" teaser — the route itself stays reachable
-  // by direct URL where the AD_GENERATOR_ENABLED flag is on (e.g. staging).
-  comingSoon: true,
 };
 // Media library — re-added below Ad Generator.
 const mediaNav: NavItem = { href: '/media', label: 'Media', icon: PhotoIcon };

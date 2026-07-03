@@ -23,6 +23,9 @@ import {
   Squares2X2Icon,
   ListBulletIcon,
   ArrowDownTrayIcon,
+  DocumentDuplicateIcon,
+  ArchiveBoxIcon,
+  ArrowUturnLeftIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { safeJson } from '@/lib/safe-json';
@@ -53,6 +56,9 @@ interface MediaFile {
   updatedAt?: string;
   source?: 'esp' | 's3';
   category?: string;
+  folderId?: string | null;
+  /** Set when the asset is soft-archived (hidden from the default view). */
+  archivedAt?: string | null;
 }
 
 interface MediaFolder {
@@ -1057,6 +1063,8 @@ export default function MediaPage() {
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);
+  // Archived view: when on, the library shows ONLY archived assets (restore surface).
+  const [showArchived, setShowArchived] = useState(false);
 
   // Move modal
   const [showMoveModal, setShowMoveModal] = useState(false);
@@ -1319,6 +1327,7 @@ export default function MediaPage() {
       if (cursor) params.set('cursor', cursor);
       // Scope to the current folder ("root" = the account's top level).
       params.set('folder', currentFolderId ?? 'root');
+      if (showArchived) params.set('archived', 'true');
       params.set('limit', '50');
 
       const res = await fetch(`/api/media?${params.toString()}`);
@@ -1344,7 +1353,7 @@ export default function MediaPage() {
 
     setLoading(false);
     setLoadingMore(false);
-  }, [effectiveAccountKey, currentFolderId]);
+  }, [effectiveAccountKey, currentFolderId, showArchived]);
 
   // Folders for the current scope — the flat list is fetched, then filtered to
   // the current folder's direct children (the API returns the whole tree).
@@ -1873,6 +1882,50 @@ export default function MediaPage() {
 
     setDeleting(false);
     clearSelection();
+  };
+
+  // ── Bulk Archive / Restore ──
+  // Soft-archive hides assets from the default library without deleting the
+  // files; restore brings them back. Either way the affected rows leave the
+  // current view (archived items leave the default view; restored items leave
+  // the Archived view), so we optimistically drop them from the list.
+  const handleBulkArchive = async (archived: boolean) => {
+    if (selectedIds.size === 0) return;
+    setDeleting(true);
+    let ok = 0;
+    for (const id of selectedIds) {
+      try {
+        const res = await fetch(`/api/media/${encodeURIComponent(id)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ archived }),
+        });
+        if (res.ok) ok++;
+      } catch { /* skip */ }
+    }
+    if (ok > 0) {
+      setFiles(prev => prev.filter(f => !selectedIds.has(f.id)));
+      toast.success(`${archived ? 'Archived' : 'Restored'} ${ok} file${ok > 1 ? 's' : ''}`);
+    }
+    setDeleting(false);
+    clearSelection();
+  };
+
+  // ── Bulk Duplicate ──
+  const handleBulkDuplicate = async () => {
+    if (selectedIds.size === 0) return;
+    setDeleting(true);
+    let ok = 0;
+    for (const id of selectedIds) {
+      try {
+        const res = await fetch(`/api/media/${encodeURIComponent(id)}/duplicate`, { method: 'POST' });
+        if (res.ok) ok++;
+      } catch { /* skip */ }
+    }
+    if (ok > 0) toast.success(`Duplicated ${ok} file${ok > 1 ? 's' : ''}`);
+    setDeleting(false);
+    clearSelection();
+    loadMedia(); // surface the new copies in the current folder
   };
 
   // ── Bulk Delete Admin S3 Files ──
@@ -2474,8 +2527,9 @@ export default function MediaPage() {
                     placeholder="Search files..."
                   />
                 </div>
-                {/* Select mode toggle */}
-                {capabilities?.canMove && filtered.length > 0 && (
+                {/* Select mode toggle — available whenever there are files to act
+                    on (move / duplicate / archive / delete all use selection). */}
+                {filtered.length > 0 && (
                   <button
                     onClick={() => { setSelectMode(prev => !prev); setSelectedIds(new Set()); }}
                     className={`inline-flex items-center gap-2 h-10 px-3 text-sm rounded-lg border transition-colors ${
@@ -2488,6 +2542,20 @@ export default function MediaPage() {
                     {selectMode ? 'Cancel' : 'Select'}
                   </button>
                 )}
+                {/* Archived view toggle — flips the library to show only archived
+                    assets (a restore surface). Exits select mode on switch. */}
+                <button
+                  onClick={() => { setShowArchived(v => !v); setSelectMode(false); setSelectedIds(new Set()); }}
+                  title={showArchived ? 'Back to library' : 'View archived files'}
+                  className={`inline-flex items-center gap-2 h-10 px-3 text-sm rounded-lg border transition-colors ${
+                    showArchived
+                      ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+                      : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]'
+                  }`}
+                >
+                  <ArchiveBoxIcon className="w-3.5 h-3.5" />
+                  {showArchived ? 'Archived' : 'Archive'}
+                </button>
                 {/* View mode toggle */}
                 <div className="flex items-center rounded-lg border border-[var(--border)] overflow-hidden">
                   <button
@@ -2751,13 +2819,40 @@ export default function MediaPage() {
               },
               disabled: filtered.length === 0,
             },
-            {
-              id: 'move',
-              label: 'Move',
-              icon: <FolderArrowDownIcon className="h-4 w-4" />,
-              onClick: handleBulkMove,
-              disabled: !capabilities?.canMove || selectedIds.size === 0,
-            },
+            // Archived view offers Restore; the normal view offers the full set.
+            ...(showArchived
+              ? [
+                  {
+                    id: 'restore',
+                    label: 'Restore',
+                    icon: <ArrowUturnLeftIcon className="h-4 w-4" />,
+                    onClick: () => handleBulkArchive(false),
+                    disabled: selectedIds.size === 0 || deleting,
+                  },
+                ]
+              : [
+                  {
+                    id: 'move',
+                    label: 'Move',
+                    icon: <FolderArrowDownIcon className="h-4 w-4" />,
+                    onClick: handleBulkMove,
+                    disabled: !capabilities?.canMove || selectedIds.size === 0,
+                  },
+                  {
+                    id: 'duplicate',
+                    label: 'Duplicate',
+                    icon: <DocumentDuplicateIcon className="h-4 w-4" />,
+                    onClick: handleBulkDuplicate,
+                    disabled: selectedIds.size === 0 || deleting,
+                  },
+                  {
+                    id: 'archive',
+                    label: 'Archive',
+                    icon: <ArchiveBoxIcon className="h-4 w-4" />,
+                    onClick: () => handleBulkArchive(true),
+                    disabled: selectedIds.size === 0 || deleting,
+                  },
+                ]),
             {
               id: 'delete',
               label: 'Delete',

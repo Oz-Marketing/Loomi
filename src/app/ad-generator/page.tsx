@@ -15,8 +15,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon } from '@heroicons/react/24/outline';
+import { SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon, PaintBrushIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { ListToolbar } from '@/components/list-toolbar';
 import type { StatusFilterValue } from '@/components/status-filter';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
@@ -39,7 +40,8 @@ type Creative = {
 };
 
 export default function AdGeneratorListPage() {
-  const { accountKey, accountData } = useAccount();
+  const { accountKey, accountData, userRole } = useAccount();
+  const isManager = !!userRole && MANAGEMENT_ROLES.includes(userRole);
   const router = useRouter();
   const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
   const [creatives, setCreatives] = useState<Creative[] | null>(null);
@@ -223,15 +225,37 @@ export default function AdGeneratorListPage() {
                 <Cog6ToothIcon className="w-4 h-4" />
               </button>
               {cogOpen && (
-                <div className="absolute right-0 top-full mt-1 z-30 w-48 glass-dropdown">
-                  <Link
-                    href={`/ad-generator/sizes${accountKey ? `?account=${encodeURIComponent(accountKey)}` : ''}`}
-                    onClick={() => setCogOpen(false)}
-                    className="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                  >
-                    <RectangleGroupIcon className="w-4 h-4" />
-                    Ad Sizes
-                  </Link>
+                <div className="absolute right-0 top-full mt-1 z-30 w-56 glass-dropdown">
+                  {(() => {
+                    const acct = accountKey ? `?account=${encodeURIComponent(accountKey)}` : '';
+                    const itemCls =
+                      'flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors';
+                    return (
+                      <>
+                        <Link href={`/ad-generator/sizes${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
+                          <RectangleGroupIcon className="w-4 h-4" />
+                          Ad Sizes
+                        </Link>
+                        {isManager && (
+                          <>
+                            <Link href={`/ad-generator/templates${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
+                              <DocumentTextIcon className="w-4 h-4" />
+                              Disclaimer templates
+                            </Link>
+                            <Link href={`/ad-generator/oem-rules${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
+                              <ShieldCheckIcon className="w-4 h-4" />
+                              OEM compliance rules
+                            </Link>
+                            <div className="my-1 h-px bg-[var(--border)]" />
+                            <Link href={`/ad-generator/builder${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
+                              <PaintBrushIcon className="w-4 h-4" />
+                              Template builder
+                            </Link>
+                          </>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
               )}
             </div>

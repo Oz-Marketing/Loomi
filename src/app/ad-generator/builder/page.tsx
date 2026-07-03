@@ -58,8 +58,10 @@ import {
   Cog6ToothIcon,
   PaintBrushIcon,
   RocketLaunchIcon,
+  BookmarkSquareIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
@@ -373,6 +375,7 @@ function makeDefaultElement(id: string, type: DocElementType): DocElement {
 
 export default function AdBuilderPage() {
   const { accountData, accountKey } = useAccount();
+  const { prompt } = useLoomiDialog();
 
   // A brand-new template starts on an empty artboard (no starter layout). The
   // vehicle-offer doc is still a registered code template (opened via ?ad / ?
@@ -1041,6 +1044,85 @@ export default function AdBuilderPage() {
     });
   }, [doc.elements, setElement]);
 
+  // In-place text editing: turn the ACTUAL rendered node inside the iframe into a
+  // contenteditable so the caret sits in the real text (WYSIWYG), rather than a
+  // floating textarea. Runs once per edit session (keyed on the element id);
+  // keystrokes sync back into `editingText.value`, and Enter / blur commit while
+  // Escape cancels (the iframe re-renders from the doc, discarding the edit).
+  useEffect(() => {
+    if (!editingText) return;
+    const idoc = iframeRef.current?.contentDocument;
+    const iwin = iframeRef.current?.contentWindow;
+    if (!idoc || !iwin) return;
+    const node = idoc.querySelector(`[data-el-id="${editingText.id}"]`) as HTMLElement | null;
+    if (!node) return;
+
+    const el = doc.elements.find((e) => e.id === editingText.id);
+    const color =
+      el?.color === 'brand'
+        ? typeof previewData.brandColor === 'string'
+          ? previewData.brandColor
+          : '#111827'
+        : el?.color || '#111827';
+
+    // Seed the node with the real value (not the dimmed placeholder label) and
+    // make it editable in place.
+    const prevOutline = node.style.outline;
+    const prevOffset = node.style.outlineOffset;
+    const prevCursor = node.style.cursor;
+    node.textContent = editingText.value;
+    node.style.color = color;
+    node.style.caretColor = color;
+    node.style.outline = '2px solid #6366f1';
+    node.style.outlineOffset = '1px';
+    node.style.cursor = 'text';
+    node.setAttribute('contenteditable', 'true');
+    node.spellcheck = false;
+
+    node.focus();
+    // Select all so the starting (often placeholder) text is easy to replace.
+    try {
+      const range = idoc.createRange();
+      range.selectNodeContents(node);
+      const sel = iwin.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    } catch {
+      /* selection is best-effort */
+    }
+
+    const onInput = () => {
+      const value = node.textContent ?? '';
+      setEditingText((cur) => (cur ? { ...cur, value } : cur));
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        node.blur(); // triggers commit
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setEditingText(null); // cancel
+      }
+    };
+    const onBlur = () => commitTextEdit();
+
+    node.addEventListener('input', onInput);
+    node.addEventListener('keydown', onKeyDown);
+    node.addEventListener('blur', onBlur);
+
+    return () => {
+      node.removeEventListener('input', onInput);
+      node.removeEventListener('keydown', onKeyDown);
+      node.removeEventListener('blur', onBlur);
+      node.removeAttribute('contenteditable');
+      node.style.outline = prevOutline;
+      node.style.outlineOffset = prevOffset;
+      node.style.cursor = prevCursor;
+    };
+    // Keyed on id only: value changes must NOT re-run this (would reset the caret).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingText?.id]);
+
   const deleteElement = useCallback((id: string) => {
     setDoc((prev) => {
       const layouts: typeof prev.layouts = {};
@@ -1555,6 +1637,38 @@ export default function AdBuilderPage() {
     } catch (err) {
       setSaveStatus('error');
       toast.error(`Couldn't save: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Save the current design as a NEW reusable template (from either an ad or an
+  // existing template). Always creates a fresh AdTemplateDoc so the source is
+  // never overwritten. Scoped to the active account (null → global for admins).
+  async function saveAsTemplate() {
+    const suggested = adId ? `${templateName.trim() || 'Untitled ad'} template` : `${templateName.trim() || 'Untitled template'} copy`;
+    const name = (
+      await prompt({
+        title: 'Save as template',
+        message: 'Save this design as a reusable template. It will appear in the template picker for new ads.',
+        defaultValue: suggested,
+        placeholder: 'Template name',
+        confirmLabel: 'Save template',
+        required: true,
+      })
+    )?.trim();
+    if (!name) return;
+    setSaving(true);
+    try {
+      const res = await fetch('/api/ad-generator/templates-doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, doc: { ...doc, name }, status: 'draft', accountKey: accountKey ?? null }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      toast.success('Saved as a new template');
+    } catch (err) {
+      toast.error(`Couldn't save template: ${err instanceof Error ? err.message : 'unknown error'}`);
     } finally {
       setSaving(false);
     }
@@ -2393,6 +2507,21 @@ export default function AdBuilderPage() {
             </div>
           )}
 
+          {/* Save the current design as a reusable template. In ad mode this is
+              the only way to promote an ad's design into the template library;
+              in template mode "Save as new" (in the cog) covers the same need. */}
+          {adId && (
+            <button
+              onClick={saveAsTemplate}
+              disabled={saving}
+              title="Save this design as a reusable template"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-50"
+            >
+              <BookmarkSquareIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">Save as template</span>
+            </button>
+          )}
+
           {/* Autosave status — sits right next to Save */}
           {templateId || adId ? (
             <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${saveInfo.cls}`}>
@@ -2793,14 +2922,20 @@ export default function AdBuilderPage() {
                       border: 0,
                       transform: `scale(${scale})`,
                       transformOrigin: 'top left',
-                      pointerEvents: 'none',
+                      // Normally inert (the overlay handles interaction), but while
+                      // editing text we let clicks reach the real node so the caret
+                      // lands in the actual rendered text.
+                      pointerEvents: editingText ? 'auto' : 'none',
                     }}
                   />
                 </div>
 
-                {/* Interaction overlay — drag empty backdrop to marquee-select. */}
+                {/* Interaction overlay — drag empty backdrop to marquee-select.
+                    Disabled during in-place text editing so clicks pass through to
+                    the contenteditable node in the iframe. */}
                 <div
                   className="absolute inset-0"
+                  style={{ pointerEvents: editingText ? 'none' : undefined }}
                   onPointerDown={(e) => {
                     if ((spaceHeld || e.button === 1) && canPan) {
                       startPan(e);
@@ -2909,6 +3044,7 @@ export default function AdBuilderPage() {
                     return (
                       <div
                         key={el.id}
+                        data-overlay-el-id={el.id}
                         onPointerDown={(e) => onBoxPointerDown(e, el.id)}
                         onContextMenu={(e) => openCanvasMenu(e, el.id)}
                         onDoubleClick={(e) => {
@@ -2971,52 +3107,9 @@ export default function AdBuilderPage() {
                     );
                   })}
 
-                  {/* Inline text editor — double-click a text element to edit it. */}
-                  {editingText &&
-                    layout[editingText.id] &&
-                    (() => {
-                      const el = doc.elements.find((e) => e.id === editingText.id);
-                      if (!el) return null;
-                      const eb = layout[editingText.id];
-                      const color =
-                        el.color === 'brand'
-                          ? typeof previewData.brandColor === 'string'
-                            ? previewData.brandColor
-                            : '#111827'
-                          : el.color || '#111827';
-                      return (
-                        <textarea
-                          autoFocus
-                          value={editingText.value}
-                          onChange={(e) => setEditingText({ id: editingText.id, value: e.target.value })}
-                          onBlur={commitTextEdit}
-                          onPointerDown={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault();
-                              commitTextEdit();
-                            } else if (e.key === 'Escape') {
-                              e.preventDefault();
-                              setEditingText(null);
-                            }
-                          }}
-                          className="absolute z-[60] resize-none overflow-hidden rounded-[2px] bg-[var(--card)] p-0.5 shadow-[0_0_0_2px_var(--primary)] outline-none"
-                          style={{
-                            left: eb.x * frameW,
-                            top: eb.y * frameH,
-                            width: eb.w * frameW,
-                            height: eb.h * frameH,
-                            color,
-                            fontSize: (eb.fontSize ?? 16) * scale,
-                            fontWeight: el.fontWeight,
-                            lineHeight: el.lineHeight ?? 1.1,
-                            letterSpacing: el.letterSpacing ? el.letterSpacing * scale : undefined,
-                            textTransform: el.uppercase ? 'uppercase' : undefined,
-                            textAlign: el.align ?? 'left',
-                          }}
-                        />
-                      );
-                    })()}
+                  {/* In-place text editing happens directly on the rendered node
+                      inside the iframe (see the editingText effect) so the caret
+                      sits in the real text — no floating textarea overlay. */}
 
                   {/* Group bounding box + resize handles (scale the whole selection) */}
                   {groupBox && (

@@ -58,13 +58,16 @@ import {
   Cog6ToothIcon,
   PaintBrushIcon,
   RocketLaunchIcon,
+  BookmarkSquareIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
+import { GOOGLE_FONTS, googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { singleOfferDoc, dualOfferDoc } from '@/lib/ad-generator/templates/offer-docs';
 import { blankTemplateDoc } from '@/lib/ad-generator/doc-template';
@@ -180,6 +183,13 @@ const WEBSAFE_FONTS = [
   'Courier New',
   'Lucida Console',
 ];
+// Computed offer LABEL fields (`_offerLabel`, `_o2_offerLabel`) map to a
+// free-text override field the offer engine honors — so double-clicking the
+// rendered label edits the override (writes here) instead of the derived value.
+const OFFER_LABEL_OVERRIDE: Record<string, string> = {
+  _offerLabel: 'offerLabel',
+  _o2_offerLabel: 'o2_offerLabel',
+};
 const WEIGHT_OPTIONS: FontSelectOption[] = [
   { value: '300', label: 'Light' },
   { value: '400', label: 'Regular' },
@@ -373,6 +383,7 @@ function makeDefaultElement(id: string, type: DocElementType): DocElement {
 
 export default function AdBuilderPage() {
   const { accountData, accountKey } = useAccount();
+  const { prompt } = useLoomiDialog();
 
   // A brand-new template starts on an empty artboard (no starter layout). The
   // vehicle-offer doc is still a registered code template (opened via ?ad / ?
@@ -528,11 +539,31 @@ export default function AdBuilderPage() {
   const fontOptions = useMemo<FontSelectOption[]>(
     () => [
       { value: '', label: 'Brand default' },
-      ...[...new Set(customFonts.map((f) => f.family))].map((fam) => ({ value: fam, label: fam })),
-      ...WEBSAFE_FONTS.map((fam) => ({ value: fam, label: fam })),
+      ...[...new Set(customFonts.map((f) => f.family))].map((fam) => ({ value: fam, label: fam, group: 'Uploaded' })),
+      ...GOOGLE_FONTS.map((f) => ({ value: f.family, label: f.family, group: f.category })),
+      ...WEBSAFE_FONTS.map((fam) => ({ value: fam, label: fam, group: 'System' })),
     ],
     [customFonts],
   );
+
+  // Load the curated Google Fonts (weight 400) in the PARENT document so each
+  // option in the font dropdown previews in its own face. Only the CSS loads up
+  // front; a family's file is fetched lazily when its option first renders.
+  useEffect(() => {
+    const families = GOOGLE_FONTS.map((f) => f.family);
+    const links: HTMLLinkElement[] = [];
+    for (let i = 0; i < families.length; i += 24) {
+      const href = googleFontsCssUrl(families.slice(i, i + 24), [400]);
+      if (!href) continue;
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = href;
+      link.dataset.adgenFontPreview = '1';
+      document.head.appendChild(link);
+      links.push(link);
+    }
+    return () => links.forEach((l) => l.remove());
+  }, []);
 
   // The account's logo variants — offered in the selection panel so a designer
   // can swap which logo a Logo element shows without leaving the canvas.
@@ -547,19 +578,22 @@ export default function AdBuilderPage() {
     ].filter((v): v is { key: string; label: string; url: string } => Boolean(v));
   }, [accountData?.logos]);
 
-  const previewData = useMemo(
-    () =>
-      enrichOfferFields({
-        ...vehicleOfferPreviewData,
-        ...doc.defaults, // designer-set default / preview values for fields
-        ...(adData ?? {}), // ad mode: the ad's real content
-        ...(effectiveFontCss ? { fontFaceCss: effectiveFontCss } : {}),
-        ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
-        ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
-        ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
-      }),
-    [accountData, effectiveFontCss, doc.defaults, adData],
-  );
+  const previewData = useMemo(() => {
+    const base = enrichOfferFields({
+      ...vehicleOfferPreviewData,
+      ...doc.defaults, // designer-set default / preview values for fields
+      ...(adData ?? {}), // ad mode: the ad's real content
+      ...(effectiveFontCss ? { fontFaceCss: effectiveFontCss } : {}),
+      ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
+      ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
+      ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
+    });
+    // Load only the Google families this doc actually uses into the canvas iframe.
+    const googleUrl = googleFontsCssUrl(
+      usedGoogleFontFamilies(doc.elements, typeof base.fontFamily === 'string' ? base.fontFamily : undefined),
+    );
+    return googleUrl ? { ...base, googleFontsUrl: googleUrl } : base;
+  }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData]);
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
 
@@ -1004,11 +1038,18 @@ export default function AdBuilderPage() {
 
   // ── inline text editing (double-click a text element) ──
   // Editable when the element binds to a STATIC literal or a plain FIELD.
-  // Brand-bound and computed (`_offer*`) text is derived, so it's read-only here.
+  // Computed `_offer*` text is derived from the offer inputs so it's read-only —
+  // EXCEPT the offer LABEL, which has a free-text override field (`offerLabel` /
+  // `o2_offerLabel`); editing that label inline writes the override (see
+  // enrichOfferFields). Brand-bound text stays read-only.
   const textEditTarget = useCallback((el: DocElement | null | undefined): 'static' | 'field' | null => {
     if (!el || el.type !== 'text' || el.locked || !el.binding) return null;
     if (el.binding.kind === 'static') return 'static';
-    if (el.binding.kind === 'field' && !el.binding.key.startsWith('_')) return 'field';
+    if (el.binding.kind === 'field') {
+      const key = el.binding.key;
+      if (!key.startsWith('_')) return 'field';
+      if (key in OFFER_LABEL_OVERRIDE) return 'field'; // editable via its override field
+    }
     return null;
   }, []);
 
@@ -1034,12 +1075,93 @@ export default function AdBuilderPage() {
       if (b?.kind === 'static') {
         setElement(cur.id, { binding: { kind: 'static', value: cur.value } });
       } else if (b?.kind === 'field') {
-        const key = b.key;
+        // Offer-label bindings write their free-text override field, not the
+        // derived `_offer*` key (which enrichOfferFields would recompute).
+        const key = OFFER_LABEL_OVERRIDE[b.key] ?? b.key;
         setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: cur.value } }));
       }
       return null;
     });
   }, [doc.elements, setElement]);
+
+  // In-place text editing: turn the ACTUAL rendered node inside the iframe into a
+  // contenteditable so the caret sits in the real text (WYSIWYG), rather than a
+  // floating textarea. Runs once per edit session (keyed on the element id);
+  // keystrokes sync back into `editingText.value`, and Enter / blur commit while
+  // Escape cancels (the iframe re-renders from the doc, discarding the edit).
+  useEffect(() => {
+    if (!editingText) return;
+    const idoc = iframeRef.current?.contentDocument;
+    const iwin = iframeRef.current?.contentWindow;
+    if (!idoc || !iwin) return;
+    const node = idoc.querySelector(`[data-el-id="${editingText.id}"]`) as HTMLElement | null;
+    if (!node) return;
+
+    const el = doc.elements.find((e) => e.id === editingText.id);
+    const color =
+      el?.color === 'brand'
+        ? typeof previewData.brandColor === 'string'
+          ? previewData.brandColor
+          : '#111827'
+        : el?.color || '#111827';
+
+    // Seed the node with the real value (not the dimmed placeholder label) and
+    // make it editable in place.
+    const prevOutline = node.style.outline;
+    const prevOffset = node.style.outlineOffset;
+    const prevCursor = node.style.cursor;
+    node.textContent = editingText.value;
+    node.style.color = color;
+    node.style.caretColor = color;
+    node.style.outline = '2px solid #6366f1';
+    node.style.outlineOffset = '1px';
+    node.style.cursor = 'text';
+    node.setAttribute('contenteditable', 'true');
+    node.spellcheck = false;
+
+    node.focus();
+    // Select all so the starting (often placeholder) text is easy to replace.
+    try {
+      const range = idoc.createRange();
+      range.selectNodeContents(node);
+      const sel = iwin.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(range);
+    } catch {
+      /* selection is best-effort */
+    }
+
+    const onInput = () => {
+      const value = node.textContent ?? '';
+      setEditingText((cur) => (cur ? { ...cur, value } : cur));
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        node.blur(); // triggers commit
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setEditingText(null); // cancel
+      }
+    };
+    const onBlur = () => commitTextEdit();
+
+    node.addEventListener('input', onInput);
+    node.addEventListener('keydown', onKeyDown);
+    node.addEventListener('blur', onBlur);
+
+    return () => {
+      node.removeEventListener('input', onInput);
+      node.removeEventListener('keydown', onKeyDown);
+      node.removeEventListener('blur', onBlur);
+      node.removeAttribute('contenteditable');
+      node.style.outline = prevOutline;
+      node.style.outlineOffset = prevOffset;
+      node.style.cursor = prevCursor;
+    };
+    // Keyed on id only: value changes must NOT re-run this (would reset the caret).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editingText?.id]);
 
   const deleteElement = useCallback((id: string) => {
     setDoc((prev) => {
@@ -1555,6 +1677,38 @@ export default function AdBuilderPage() {
     } catch (err) {
       setSaveStatus('error');
       toast.error(`Couldn't save: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Save the current design as a NEW reusable template (from either an ad or an
+  // existing template). Always creates a fresh AdTemplateDoc so the source is
+  // never overwritten. Scoped to the active account (null → global for admins).
+  async function saveAsTemplate() {
+    const suggested = adId ? `${templateName.trim() || 'Untitled ad'} template` : `${templateName.trim() || 'Untitled template'} copy`;
+    const name = (
+      await prompt({
+        title: 'Save as template',
+        message: 'Save this design as a reusable template. It will appear in the template picker for new ads.',
+        defaultValue: suggested,
+        placeholder: 'Template name',
+        confirmLabel: 'Save template',
+        required: true,
+      })
+    )?.trim();
+    if (!name) return;
+    setSaving(true);
+    try {
+      const res = await fetch('/api/ad-generator/templates-doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, doc: { ...doc, name }, status: 'draft', accountKey: accountKey ?? null }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      toast.success('Saved as a new template');
+    } catch (err) {
+      toast.error(`Couldn't save template: ${err instanceof Error ? err.message : 'unknown error'}`);
     } finally {
       setSaving(false);
     }
@@ -2393,6 +2547,21 @@ export default function AdBuilderPage() {
             </div>
           )}
 
+          {/* Save the current design as a reusable template. In ad mode this is
+              the only way to promote an ad's design into the template library;
+              in template mode "Save as new" (in the cog) covers the same need. */}
+          {adId && (
+            <button
+              onClick={saveAsTemplate}
+              disabled={saving}
+              title="Save this design as a reusable template"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-50"
+            >
+              <BookmarkSquareIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">Save as template</span>
+            </button>
+          )}
+
           {/* Autosave status — sits right next to Save */}
           {templateId || adId ? (
             <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${saveInfo.cls}`}>
@@ -2793,14 +2962,20 @@ export default function AdBuilderPage() {
                       border: 0,
                       transform: `scale(${scale})`,
                       transformOrigin: 'top left',
-                      pointerEvents: 'none',
+                      // Normally inert (the overlay handles interaction), but while
+                      // editing text we let clicks reach the real node so the caret
+                      // lands in the actual rendered text.
+                      pointerEvents: editingText ? 'auto' : 'none',
                     }}
                   />
                 </div>
 
-                {/* Interaction overlay — drag empty backdrop to marquee-select. */}
+                {/* Interaction overlay — drag empty backdrop to marquee-select.
+                    Disabled during in-place text editing so clicks pass through to
+                    the contenteditable node in the iframe. */}
                 <div
                   className="absolute inset-0"
+                  style={{ pointerEvents: editingText ? 'none' : undefined }}
                   onPointerDown={(e) => {
                     if ((spaceHeld || e.button === 1) && canPan) {
                       startPan(e);
@@ -2909,6 +3084,7 @@ export default function AdBuilderPage() {
                     return (
                       <div
                         key={el.id}
+                        data-overlay-el-id={el.id}
                         onPointerDown={(e) => onBoxPointerDown(e, el.id)}
                         onContextMenu={(e) => openCanvasMenu(e, el.id)}
                         onDoubleClick={(e) => {
@@ -2916,6 +3092,14 @@ export default function AdBuilderPage() {
                           if (textEditTarget(el)) {
                             e.stopPropagation();
                             startTextEdit(el.id);
+                            return;
+                          }
+                          // Computed offer text (e.g. the price/terms, `_offer*`) is
+                          // derived from the offer inputs — tell the user where to edit
+                          // it rather than silently doing nothing on double-click.
+                          if (el.type === 'text' && el.binding?.kind === 'field' && el.binding.key.startsWith('_')) {
+                            e.stopPropagation();
+                            toast('This text is generated from the offer fields — edit those in the Fields panel.');
                             return;
                           }
                           // Otherwise drill into a group: select just this member.
@@ -2971,52 +3155,9 @@ export default function AdBuilderPage() {
                     );
                   })}
 
-                  {/* Inline text editor — double-click a text element to edit it. */}
-                  {editingText &&
-                    layout[editingText.id] &&
-                    (() => {
-                      const el = doc.elements.find((e) => e.id === editingText.id);
-                      if (!el) return null;
-                      const eb = layout[editingText.id];
-                      const color =
-                        el.color === 'brand'
-                          ? typeof previewData.brandColor === 'string'
-                            ? previewData.brandColor
-                            : '#111827'
-                          : el.color || '#111827';
-                      return (
-                        <textarea
-                          autoFocus
-                          value={editingText.value}
-                          onChange={(e) => setEditingText({ id: editingText.id, value: e.target.value })}
-                          onBlur={commitTextEdit}
-                          onPointerDown={(e) => e.stopPropagation()}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault();
-                              commitTextEdit();
-                            } else if (e.key === 'Escape') {
-                              e.preventDefault();
-                              setEditingText(null);
-                            }
-                          }}
-                          className="absolute z-[60] resize-none overflow-hidden rounded-[2px] bg-[var(--card)] p-0.5 shadow-[0_0_0_2px_var(--primary)] outline-none"
-                          style={{
-                            left: eb.x * frameW,
-                            top: eb.y * frameH,
-                            width: eb.w * frameW,
-                            height: eb.h * frameH,
-                            color,
-                            fontSize: (eb.fontSize ?? 16) * scale,
-                            fontWeight: el.fontWeight,
-                            lineHeight: el.lineHeight ?? 1.1,
-                            letterSpacing: el.letterSpacing ? el.letterSpacing * scale : undefined,
-                            textTransform: el.uppercase ? 'uppercase' : undefined,
-                            textAlign: el.align ?? 'left',
-                          }}
-                        />
-                      );
-                    })()}
+                  {/* In-place text editing happens directly on the rendered node
+                      inside the iframe (see the editingText effect) so the caret
+                      sits in the real text — no floating textarea overlay. */}
 
                   {/* Group bounding box + resize handles (scale the whole selection) */}
                   {groupBox && (

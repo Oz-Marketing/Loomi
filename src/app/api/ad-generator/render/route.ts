@@ -15,7 +15,8 @@ import { resolveTemplate } from '@/lib/ad-generator/resolve-template';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { renderAd } from '@/lib/ad-generator/render';
-import { embedAccountFontCss } from '@/lib/ad-generator/render-fonts';
+import { embedAccountFontCss, googleFontFaceCss } from '@/lib/ad-generator/render-fonts';
+import { usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,6 +46,15 @@ export async function POST(req: NextRequest) {
 
   // Re-build the font @font-face with base64-embedded files (preview sends URL-based).
   const data = await embedAccountFontCss(body.accountKey, { ...(body.data ?? {}) });
+
+  // Embed any curated Google fonts the design uses (editor loads them by URL; the
+  // export inlines them so a one-shot screenshot never races the network).
+  const usedGoogle = usedGoogleFontFamilies(
+    Array.isArray(snapshot?.elements) ? snapshot!.elements : [],
+    typeof data.fontFamily === 'string' ? data.fontFamily : undefined,
+  );
+  const googleCss = await googleFontFaceCss(usedGoogle);
+  if (googleCss) data.fontFaceCss = `${data.fontFaceCss ?? ''}\n${googleCss}`;
 
   const html = template.render({ ...template.defaults, ...data }, size);
 

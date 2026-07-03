@@ -282,7 +282,12 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     value = esc(bindingLabel(el.binding));
     placeholder = true;
   }
-  const family = el.fontFamily ? `"${esc(el.fontFamily)}", ${brandStack}` : brandStack;
+  // Quote family names with SINGLE quotes: this whole style string is injected
+  // into a double-quoted HTML `style="…"` attribute, so a double-quoted family
+  // ("Verdana") would close the attribute early and drop the font (and every
+  // declaration after it). cssSafeFamily strips any quotes/semicolons from the
+  // name so it's safe inside the single-quoted CSS string and the HTML attribute.
+  const family = el.fontFamily ? `'${cssSafeFamily(el.fontFamily)}', ${brandStack}` : brandStack;
   const color = placeholder ? '#cbd5e1' : resolveColor(el.color, brand, '#0f172a');
   const items = el.align === 'center' ? 'center' : el.align === 'right' ? 'flex-end' : 'flex-start';
   const bg = !placeholder && el.bg ? `background:${esc(resolveColor(el.bg, brand, brand))};` : '';
@@ -309,7 +314,15 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
 
   const fontFamily = cssSafeFamily(data.fontFamily ?? '');
   const fontFaceCss = data.fontFaceCss ?? '';
-  const brandStack = `${fontFamily ? `"${fontFamily}", ` : ''}-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif`;
+  // Google Fonts stylesheet (CSS2 API URL) for the live editor — gstatic serves
+  // with permissive CORS so it loads fine in the srcdoc iframe. Exports don't use
+  // this: they base64-embed the used families instead (no one-shot network race).
+  const googleFontsUrl = typeof data.googleFontsUrl === 'string' ? data.googleFontsUrl : '';
+  const googleLink =
+    googleFontsUrl && /^https:\/\/fonts\.googleapis\.com\//.test(googleFontsUrl)
+      ? `<link rel="stylesheet" href="${googleFontsUrl.replace(/"/g, '')}" />`
+      : '';
+  const brandStack = `${fontFamily ? `'${fontFamily}', ` : ''}-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif`;
   const ctx: RenderCtx = { width, height, brand, brandStack, preview: opts?.preview ?? false };
 
   const layout = doc.layouts[size.id] ?? {};
@@ -343,6 +356,7 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
   return `<!doctype html>
 <html>
 <head><meta charset="utf-8" />
+${googleLink}
 <style>
   ${fontFaceCss}
   * { margin:0; padding:0; box-sizing:border-box; }

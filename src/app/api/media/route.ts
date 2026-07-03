@@ -65,6 +65,9 @@ export async function GET(req: NextRequest) {
   // consumers). "root" = only the scope's root (folderId null). Any other value
   // = that folder's direct assets.
   const folderParam = req.nextUrl.searchParams.get('folder');
+  // Archive scoping: default view hides archived assets; `archived=true` shows
+  // ONLY the archived ones (the "Archived" view / restore surface).
+  const archivedParam = req.nextUrl.searchParams.get('archived') === 'true';
 
   // Access check
   if (accountKey === null) {
@@ -84,6 +87,7 @@ export async function GET(req: NextRequest) {
     ...(category ? { category } : {}),
     ...(search ? { filename: { contains: search } } : {}),
     ...(folderParam === null ? {} : { folderId: folderParam === 'root' ? { equals: null as string | null } : folderParam }),
+    archivedAt: archivedParam ? { not: null } : { equals: null as Date | null },
   };
 
   if (countOnly) {
@@ -113,6 +117,7 @@ export async function GET(req: NextRequest) {
     altText: a.altText,
     category: a.category,
     folderId: a.folderId,
+    archivedAt: a.archivedAt ? a.archivedAt.toISOString() : null,
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
     source: 's3' as const,

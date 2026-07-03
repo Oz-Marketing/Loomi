@@ -33,6 +33,26 @@ describe('renderDoc', () => {
     expect(renderDoc(doc, { price: '$299/mo' }, SIZE)).toContain('$299/mo');
   });
 
+  it('quotes font families with single quotes so they never break the style="" attribute', () => {
+    const fontDoc: TemplateDoc = {
+      id: 'f',
+      name: 'F',
+      sizes: [SIZE],
+      fields: [],
+      elements: [{ id: 'price', type: 'text', binding: { kind: 'static', value: 'Hi' }, fontFamily: 'Verdana' }],
+      layouts: { square: { price: { x: 0.1, y: 0.5, w: 0.8, h: 0.1, fontSize: 64, z: 1 } } },
+      defaults: {},
+    };
+    // Doc-level font too — this is what was breaking every element's font-family.
+    const html = renderDoc(fontDoc, { fontFamily: 'Genesis Sans Head' }, SIZE);
+    // A double-quoted family inside style="…" would close the attribute early.
+    expect(html).not.toContain('font-family:"');
+    // The chosen family is present (single-quoted) AND the declaration survives to
+    // the following font-size (i.e. the attribute wasn't truncated).
+    expect(html).toContain("font-family:'Verdana', 'Genesis Sans Head'");
+    expect(html).toMatch(/font-family:'Verdana'[^"]*font-size:64px/);
+  });
+
   it('applies a per-size focal point (object-position) to a cover image element', () => {
     const bgDoc: TemplateDoc = {
       id: 'bg',

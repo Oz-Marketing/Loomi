@@ -1555,6 +1555,7 @@ model MediaAsset {
   folderId     String? // null = the account's root; else a MediaFolder in the same scope
   folder       MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
   uploadedBy   String? // User ID
+  archivedAt   DateTime? // soft-archive: hidden from the default library view, restorable
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -1562,6 +1563,7 @@ model MediaAsset {
   @@index([accountKey, createdAt])
   @@index([accountKey, category])
   @@index([accountKey, folderId])
+  @@index([accountKey, archivedAt])
 }
 
 // A user-created folder for organizing media within a scope (an account, or the

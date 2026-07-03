@@ -40,7 +40,14 @@ export async function PATCH(
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
 
-  const data: { filename?: string; altText?: string | null; folderId?: string | null } = {};
+  const data: { filename?: string; altText?: string | null; folderId?: string | null; archivedAt?: Date | null } = {};
+
+  if (body.archived !== undefined) {
+    if (typeof body.archived !== 'boolean') {
+      return NextResponse.json({ error: 'archived must be a boolean' }, { status: 400 });
+    }
+    data.archivedAt = body.archived ? new Date() : null;
+  }
 
   if (body.name !== undefined) {
     if (typeof body.name !== 'string' || !body.name.trim()) {
@@ -102,6 +109,7 @@ export async function PATCH(
       altText: updated.altText,
       category: updated.category,
       folderId: updated.folderId,
+      archivedAt: updated.archivedAt ? updated.archivedAt.toISOString() : null,
       createdAt: updated.createdAt.toISOString(),
       updatedAt: updated.updatedAt.toISOString(),
       source: 's3' as const,

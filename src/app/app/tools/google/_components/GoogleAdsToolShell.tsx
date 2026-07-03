@@ -798,9 +798,10 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         </div>
       ) : (
         // Plan view — Meta-style table of AdSummaryRow.
-        <div className="-mx-6 overflow-x-auto px-6 md:-mx-8 md:px-8">
-          <table className="w-full min-w-[900px]">
-            <thead className="sticky top-0 z-10">
+        <div className="glass-table">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px]">
+              <thead className="sticky top-0 z-10">
               <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
                 <th className="w-9 pl-3 pr-1 py-2" />
                 {['Ad', '', 'Task Status', 'Due Date', 'Budget', 'Allocation', 'Flight Dates'].map((h, i) => (
@@ -830,6 +831,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 

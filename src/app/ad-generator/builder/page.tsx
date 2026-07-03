@@ -1126,6 +1126,47 @@ export default function AdBuilderPage() {
     setSelectedIds([id]);
   }, []);
 
+  // Scaffold a composed background as a named "Background" group: a base fill,
+  // a texture slot (pick from the texture library), and a white→transparent fade
+  // on top — full-bleed on every size, pinned behind everything. This is the
+  // in-app equivalent of building a branded background (Subaru-style) in
+  // Illustrator: the designer then styles each layer and it reflows per size.
+  const addBackgroundComposition = useCallback(() => {
+    const grpId = `grp-${rid()}`;
+    const fillId = `shape-${rid()}`;
+    const texId = `image-${rid()}`;
+    const fadeId = `shape-${rid()}`;
+    setDoc((prev) => {
+      const brandColor = (typeof prev.defaults.brandColor === 'string' && prev.defaults.brandColor) || '#199fdb';
+      const layouts = { ...prev.layouts };
+      for (const s of prev.sizes) {
+        const cur = layouts[s.id] ?? {};
+        const minZ = Object.values(cur).reduce((m, b) => Math.min(m, b.z ?? 0), 0);
+        layouts[s.id] = {
+          ...cur,
+          [fillId]: { x: 0, y: 0, w: 1, h: 1, z: minZ - 3 },
+          [texId]: { x: 0, y: 0, w: 1, h: 1, z: minZ - 2 },
+          [fadeId]: { x: 0, y: 0, w: 1, h: 1, z: minZ - 1 },
+        };
+      }
+      const els: DocElement[] = [
+        { id: fillId, type: 'shape', name: 'Base fill', groupId: grpId, fill: brandColor },
+        { id: texId, type: 'image', name: 'Texture', groupId: grpId, binding: { kind: 'static', value: '' }, fit: 'cover', opacity: 40 },
+        {
+          id: fadeId,
+          type: 'shape',
+          name: 'Fade',
+          groupId: grpId,
+          gradientFill: { type: 'linear', angle: 180, stops: [{ color: '#ffffff', pos: 0 }, { color: '#ffffff', pos: 100, opacity: 0 }] },
+        },
+      ];
+      const groups = [...(prev.groups ?? []), { id: grpId, name: 'Background' }];
+      return { ...prev, elements: [...prev.elements, ...els], groups, layouts };
+    });
+    // Select the texture slot so the designer's next click picks a texture.
+    setSelectedIds([texId]);
+  }, []);
+
   // Patch the selected element's style.
   // Panel edits coalesce per (element, property set): holding a stepper or
   // dragging a color/slider is one undo step, while editing a different property
@@ -2235,6 +2276,9 @@ export default function AdBuilderPage() {
     // Background — a full-bleed photo behind everything (moved here from the
     // right-side Background panel so all "add" actions live in one place).
     { label: 'Background', Icon: SwatchIcon, onAdd: addBackgroundImage },
+    // Background set — a composed, grouped background (base fill + texture + fade)
+    // the designer styles in-app instead of importing per-size art.
+    { label: 'Background set', Icon: Squares2X2Icon, onAdd: addBackgroundComposition },
   ];
 
   const saveInfo =

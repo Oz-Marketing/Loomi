@@ -28,6 +28,7 @@ function checkAccess(
  * Body (all optional, at least one required):
  *   - name: string — display filename
  *   - altText: string | null — accessible alt text; pass null/'' to clear
+ *   - folderId: string | null — move to a folder ('root'/null = the scope root)
  */
 export async function PATCH(
   req: NextRequest,
@@ -39,7 +40,7 @@ export async function PATCH(
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
 
-  const data: { filename?: string; altText?: string | null } = {};
+  const data: { filename?: string; altText?: string | null; folderId?: string | null } = {};
 
   if (body.name !== undefined) {
     if (typeof body.name !== 'string' || !body.name.trim()) {
@@ -61,7 +62,7 @@ export async function PATCH(
     }
   }
 
-  if (Object.keys(data).length === 0) {
+  if (Object.keys(data).length === 0 && body.folderId === undefined) {
     return NextResponse.json({ error: 'No editable fields provided' }, { status: 400 });
   }
 
@@ -72,6 +73,18 @@ export async function PATCH(
 
   if (!checkAccess(session!, asset.accountKey)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+  }
+
+  // Move to a folder — the target must be in the SAME scope as the asset.
+  if (body.folderId !== undefined) {
+    const target = body.folderId && body.folderId !== 'root' ? String(body.folderId) : null;
+    if (target) {
+      const folder = await prisma.mediaFolder.findUnique({ where: { id: target }, select: { accountKey: true } });
+      if (!folder || (folder.accountKey ?? null) !== (asset.accountKey ?? null)) {
+        return NextResponse.json({ error: 'Folder not found in this scope' }, { status: 400 });
+      }
+    }
+    data.folderId = target;
   }
 
   const updated = await prisma.mediaAsset.update({ where: { id }, data });
@@ -88,6 +101,7 @@ export async function PATCH(
       thumbnailUrl: updated.thumbnailKey ? s3PublicUrl(updated.thumbnailKey) : undefined,
       altText: updated.altText,
       category: updated.category,
+      folderId: updated.folderId,
       createdAt: updated.createdAt.toISOString(),
       updatedAt: updated.updatedAt.toISOString(),
       source: 's3' as const,

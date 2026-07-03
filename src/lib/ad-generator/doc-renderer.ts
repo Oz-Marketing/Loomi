@@ -1,5 +1,5 @@
 import type { AdData, AdSize } from './types';
-import type { TemplateDoc, DocElement, DocLayoutBox, Binding } from './doc-types';
+import type { TemplateDoc, DocElement, DocLayoutBox, Binding, GradientFill } from './doc-types';
 import { cssSafeFamily } from './fonts';
 
 /**
@@ -38,6 +38,100 @@ function resolveColor(c: string | undefined, brand: string, fallback: string): s
 
 function clamp01(n: number): number {
   return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0;
+}
+
+/** Parse a hex color (`#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa`) → channels + alpha
+ *  (0..1). Returns null for non-hex input (e.g. an unresolved `'brand'` token). */
+function hexToRgba(hex: string): { r: number; g: number; b: number; a: number } | null {
+  let h = hex.trim().replace(/^#/, '');
+  if (h.length === 3 || h.length === 4) h = h.split('').map((c) => c + c).join('');
+  if (h.length === 6) h += 'ff';
+  if (h.length !== 8 || /[^0-9a-fA-F]/.test(h)) return null;
+  const int = parseInt(h, 16);
+  return { r: (int >>> 24) & 255, g: (int >>> 16) & 255, b: (int >>> 8) & 255, a: (int & 255) / 255 };
+}
+
+/** Apply a stop opacity (0–100) to an already brand-resolved color, folding it
+ *  into any alpha the hex already carries. Returns the original color untouched
+ *  when it ends up fully opaque, so plain solid stops stay as clean hex. */
+function applyAlpha(color: string, opacityPct?: number): string {
+  const pct = opacityPct == null ? 100 : Math.min(100, Math.max(0, opacityPct));
+  const rgba = hexToRgba(color);
+  if (!rgba) return color;
+  const a = rgba.a * (pct / 100);
+  if (a >= 1) return color;
+  return `rgba(${rgba.r},${rgba.g},${rgba.b},${Number(a.toFixed(3))})`;
+}
+
+/** Normalized gradient — the single shape the renderer builds CSS from,
+ *  regardless of whether the source used the new `gradientFill` or the legacy
+ *  two-stop fields. */
+interface NormGradient {
+  type: 'linear' | 'radial';
+  angle: number;
+  radialShape: 'circle' | 'ellipse';
+  center: [number, number];
+  stops: { color: string; pos: number; opacity?: number }[];
+}
+
+/** Read a gradient from either the new `gradientFill` or the deprecated
+ *  `gradient`/`gradientAngle`/`gradientStops` triple (so existing templates keep
+ *  rendering). Returns null when the source has no gradient. */
+function normalizeGradient(
+  src:
+    | {
+        gradientFill?: GradientFill;
+        gradient?: [string, string];
+        gradientAngle?: number;
+        gradientStops?: [number, number];
+      }
+    | undefined,
+): NormGradient | null {
+  if (!src) return null;
+  const gf = src.gradientFill;
+  if (gf && Array.isArray(gf.stops) && gf.stops.length >= 2) {
+    return {
+      type: gf.type === 'radial' ? 'radial' : 'linear',
+      angle: gf.angle ?? 135,
+      radialShape: gf.radialShape === 'circle' ? 'circle' : 'ellipse',
+      center: gf.center ?? [50, 50],
+      stops: gf.stops.map((s) => ({ color: s.color, pos: s.pos, opacity: s.opacity })),
+    };
+  }
+  if (src.gradient) {
+    const gs = src.gradientStops;
+    return {
+      type: 'linear',
+      angle: src.gradientAngle ?? 135,
+      radialShape: 'ellipse',
+      center: [50, 50],
+      stops: [
+        { color: src.gradient[0], pos: gs?.[0] ?? 0 },
+        { color: src.gradient[1], pos: gs?.[1] ?? 100 },
+      ],
+    };
+  }
+  return null;
+}
+
+/** Build a CSS gradient string from a normalized gradient. Colors are
+ *  brand-resolved, alpha-folded, and escaped. */
+function buildGradientCss(g: NormGradient, brand: string): string {
+  const stops = [...g.stops]
+    // CSS clamps a stop whose position trails the previous one — sort ascending
+    // so a multi-stop editor that leaves stops out of order still renders right.
+    .sort((a, b) => (a.pos ?? 0) - (b.pos ?? 0))
+    .map((s) => {
+      const col = esc(applyAlpha(resolveColor(s.color, brand, brand), s.opacity));
+      return `${col} ${clamp01((s.pos ?? 0) / 100) * 100}%`;
+    })
+    .join(', ');
+  if (g.type === 'radial') {
+    const cx = clamp01((g.center[0] ?? 50) / 100) * 100;
+    const cy = clamp01((g.center[1] ?? 50) / 100) * 100;
+    return `radial-gradient(${g.radialShape} at ${cx}% ${cy}%, ${stops})`;
+  }
+  return `linear-gradient(${g.angle}deg, ${stops})`;
 }
 
 
@@ -82,23 +176,51 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   // In the builder, a hidden element is dimmed/blurred (still visible so it can
   // be re-shown) rather than removed; on export it's omitted entirely.
   const dim = ctx.preview && box.hidden ? 'opacity:0.35;filter:blur(1.5px);' : '';
+  // Element-level compositing: opacity (any type) + blend mode. When dimmed in
+  // preview, the dim opacity wins so "hidden" stays legible; blend still applies.
+  const opacityFx = el.opacity != null && el.opacity < 100 ? `opacity:${clamp01(el.opacity / 100)};` : '';
+  const blendFx = el.blendMode && el.blendMode !== 'normal' ? `mix-blend-mode:${esc(el.blendMode)};` : '';
+  const fx = (dim ? '' : opacityFx) + blendFx;
   const pos =
     `position:absolute;` +
     `left:${box.x * width}px;top:${box.y * height}px;` +
     `width:${box.w * width}px;height:${box.h * height}px;`;
 
+  if (el.type === 'background') {
+    // Unified full-bleed background: composite base fill → texture → fade overlay
+    // inside one element. Replaces the old doc-level canvas fill + bg image.
+    const layers: string[] = [];
+    // 1. Base fill (solid or gradient).
+    const baseGrad = normalizeGradient(el);
+    const baseBg = baseGrad ? buildGradientCss(baseGrad, brand) : el.fill ? esc(resolveColor(el.fill, brand, brand)) : '';
+    if (baseBg) layers.push(`<div style="position:absolute;inset:0;background:${baseBg};"></div>`);
+    // 2. Texture image (cover / contain / tile), with its own opacity.
+    const texUrl = esc(resolveBinding(el.binding, data));
+    if (texUrl) {
+      const texOp = el.bgImageOpacity != null && el.bgImageOpacity < 100 ? `opacity:${clamp01(el.bgImageOpacity / 100)};` : '';
+      if ((el.fit ?? 'cover') === 'tile') {
+        const tilePct = Math.max(2, clamp01(el.tileScale ?? 0.25) * 100);
+        layers.push(`<div style="position:absolute;inset:0;${texOp}background-image:url(${texUrl});background-repeat:repeat;background-size:${tilePct}% auto;"></div>`);
+      } else {
+        const objPos = box.objectX != null || box.objectY != null ? `${clamp01(box.objectX ?? 0.5) * 100}% ${clamp01(box.objectY ?? 0.5) * 100}%` : 'center';
+        layers.push(`<div style="position:absolute;inset:0;overflow:hidden;${texOp}"><img src="${texUrl}" alt="" style="width:100%;height:100%;object-fit:${el.fit ?? 'cover'};object-position:${objPos};" /></div>`);
+      }
+    }
+    // 3. Fade / overlay gradient on top.
+    if (el.overlay) {
+      const ov = normalizeGradient({ gradientFill: el.overlay });
+      if (ov) layers.push(`<div style="position:absolute;inset:0;background:${buildGradientCss(ov, brand)};"></div>`);
+    }
+    const radius = el.radius ? `border-radius:${el.radius}px;` : '';
+    return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${radius}">${layers.join('')}</div>`;
+  }
+
   if (el.type === 'shape') {
     const kind = el.shapeKind ?? 'rect';
-    // Gradient fill mirrors the canvas background; else a solid fill.
-    let bg: string;
-    if (el.gradient) {
-      const gs = el.gradientStops;
-      const gs0 = clamp01((gs?.[0] ?? 0) / 100) * 100;
-      const gs1 = clamp01((gs?.[1] ?? 100) / 100) * 100;
-      bg = `linear-gradient(${el.gradientAngle ?? 135}deg, ${esc(resolveColor(el.gradient[0], brand, brand))} ${gs0}%, ${esc(resolveColor(el.gradient[1], brand, brand))} ${gs1}%)`;
-    } else {
-      bg = esc(resolveColor(el.fill, brand, brand));
-    }
+    // Gradient fill (multi-stop, linear/radial, per-stop alpha) mirrors the
+    // canvas background; else a solid fill. Reads legacy fields for old templates.
+    const grad = normalizeGradient(el);
+    const bg = grad ? buildGradientCss(grad, brand) : esc(resolveColor(el.fill, brand, brand));
     // rect → rounded corners; ellipse → 50% radius; triangle/diamond/star → a
     // CSS clip-path silhouette on the filled box.
     const clip = SHAPE_CLIP[kind];
@@ -107,14 +229,12 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
       : kind === 'ellipse'
         ? 'border-radius:50%;'
         : `border-radius:${el.radius ?? 0}px;`;
-    return `<div${idAttr} style="${dim}${pos}background:${bg};${shapeStyle}"></div>`;
+    return `<div${idAttr} style="${dim}${fx}${pos}background:${bg};${shapeStyle}"></div>`;
   }
 
   if (el.type === 'image' || el.type === 'logo') {
     const url = esc(resolveBinding(el.binding, data));
     const minEdge = Math.min(box.w * width, box.h * height);
-    // Designer-set opacity (0–100). Undefined / 100 = fully opaque.
-    const opacity = el.opacity != null && el.opacity < 100 ? `opacity:${clamp01(el.opacity / 100)};` : '';
     if (!url) {
       // Empty image slot: nothing on export (an empty slot shouldn't leave a
       // dashed box in the finished ad — same as empty text). In the builder it's
@@ -124,9 +244,16 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
       if (!ctx.preview) return '';
       const phRadius = el.radius != null ? el.radius : Math.min(minEdge * 0.06, 16);
       const phFont = Math.min(minEdge * 0.14, 40);
-      return `<div${idAttr} style="${dim}${opacity}${pos}display:flex;align-items:center;justify-content:center;border:1.5px dashed #cbd5e1;border-radius:${phRadius}px;color:#94a3b8;font-size:${phFont}px;font-family:${brandStack};">${el.type === 'logo' ? 'Logo' : 'Image'}</div>`;
+      return `<div${idAttr} style="${dim}${fx}${pos}display:flex;align-items:center;justify-content:center;border:1.5px dashed #cbd5e1;border-radius:${phRadius}px;color:#94a3b8;font-size:${phFont}px;font-family:${brandStack};">${el.type === 'logo' ? 'Logo' : 'Image'}</div>`;
     }
     const fit = el.fit ?? 'contain';
+    // Tile fill: repeat the image to fill the box (seamless textures/patterns).
+    // Tile width is a fraction of the box width so density is size-independent.
+    if (fit === 'tile') {
+      const tilePct = Math.max(2, clamp01(el.tileScale ?? 0.25) * 100);
+      const tileRadius = el.radius ? `border-radius:${el.radius}px;` : '';
+      return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${tileRadius}background-image:url(${url});background-repeat:repeat;background-size:${tilePct}% auto;"></div>`;
+    }
     // A cover image can carry a per-size focal point (object-position) so one
     // background frames correctly across aspect ratios; else sensible defaults.
     const objectPos =
@@ -144,7 +271,7 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
       cropScale > 1
         ? `transform:scale(${cropScale});transform-origin:${clamp01(box.objectX ?? 0.5) * 100}% ${clamp01(box.objectY ?? 0.5) * 100}%;`
         : '';
-    return `<div${idAttr} style="${dim}${opacity}${pos}overflow:hidden;${radius}"><img src="${url}" alt="" style="width:100%;height:100%;object-fit:${fit};object-position:${objectPos};${zoom}" /></div>`;
+    return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${radius}"><img src="${url}" alt="" style="width:100%;height:100%;object-fit:${fit};object-position:${objectPos};${zoom}" /></div>`;
   }
 
   // text
@@ -172,7 +299,7 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     padding +
     radius +
     'overflow:hidden;';
-  return `<div${idAttr} style="${dim}${styles}">${value}</div>`;
+  return `<div${idAttr} style="${dim}${fx}${styles}">${value}</div>`;
 }
 
 /** Render a TemplateDoc + data at a given size into a full HTML document. */
@@ -203,11 +330,9 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
   // background IMAGE is a normal full-bleed image element/layer now — not a
   // doc-level field — so it flows through renderElement like everything else.
   const bg = doc.background;
-  const gStops = bg?.gradientStops;
-  const s0 = clamp01((gStops?.[0] ?? 0) / 100) * 100;
-  const s1 = clamp01((gStops?.[1] ?? 100) / 100) * 100;
-  const bgCss = bg?.gradient
-    ? `linear-gradient(${bg.gradientAngle ?? 135}deg, ${esc(bg.gradient[0])} ${s0}%, ${esc(bg.gradient[1])} ${s1}%)`
+  const bgGrad = normalizeGradient(bg);
+  const bgCss = bgGrad
+    ? buildGradientCss(bgGrad, brand)
     : bg?.color
       ? esc(bg.color)
       : '#ffffff';

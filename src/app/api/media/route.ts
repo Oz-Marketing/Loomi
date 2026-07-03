@@ -61,6 +61,10 @@ export async function GET(req: NextRequest) {
   const category = req.nextUrl.searchParams.get('category') || undefined;
   const search = req.nextUrl.searchParams.get('search') || undefined;
   const countOnly = req.nextUrl.searchParams.get('countOnly') === 'true';
+  // Folder scoping: absent = every asset (flat, back-compat for non-folder
+  // consumers). "root" = only the scope's root (folderId null). Any other value
+  // = that folder's direct assets.
+  const folderParam = req.nextUrl.searchParams.get('folder');
 
   // Access check
   if (accountKey === null) {
@@ -79,6 +83,7 @@ export async function GET(req: NextRequest) {
     accountKey: accountKey === null ? { equals: null as string | null } : accountKey,
     ...(category ? { category } : {}),
     ...(search ? { filename: { contains: search } } : {}),
+    ...(folderParam === null ? {} : { folderId: folderParam === 'root' ? { equals: null as string | null } : folderParam }),
   };
 
   if (countOnly) {
@@ -107,6 +112,7 @@ export async function GET(req: NextRequest) {
     thumbnailUrl: a.thumbnailKey ? s3PublicUrl(a.thumbnailKey) : undefined,
     altText: a.altText,
     category: a.category,
+    folderId: a.folderId,
     createdAt: a.createdAt.toISOString(),
     updatedAt: a.updatedAt.toISOString(),
     source: 's3' as const,
@@ -144,6 +150,8 @@ export async function POST(req: NextRequest) {
   const accountKey = (formData.get('accountKey') as string | null) || null;
   const file = formData.get('file') as File | null;
   const category = (formData.get('category') as string | null) || 'general';
+  const folderIdRaw = (formData.get('folderId') as string | null) || null;
+  const folderId = folderIdRaw && folderIdRaw !== 'root' ? folderIdRaw : null;
   // Optional accessible alt text — caller (e.g. media library uploader)
   // can set it now, or it can be added later via PATCH.
   const altTextRaw = formData.get('altText');
@@ -173,6 +181,14 @@ export async function POST(req: NextRequest) {
     if (!canAccessAccount(session!, accountKey)) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
+  }
+
+  // A folder, if given, must exist in the SAME scope as the upload — else drop it
+  // to root rather than leaking an asset into another account's folder.
+  let validFolderId: string | null = null;
+  if (folderId) {
+    const folder = await prisma.mediaFolder.findUnique({ where: { id: folderId }, select: { accountKey: true } });
+    if (folder && (folder.accountKey ?? null) === accountKey) validFolderId = folderId;
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
@@ -212,6 +228,7 @@ export async function POST(req: NextRequest) {
         thumbnailKey,
         altText,
         category,
+        folderId: validFolderId,
         uploadedBy: session!.user.id,
       },
     });
@@ -229,6 +246,7 @@ export async function POST(req: NextRequest) {
           thumbnailUrl: asset.thumbnailKey ? s3PublicUrl(asset.thumbnailKey) : undefined,
           altText: asset.altText,
           category: asset.category,
+          folderId: asset.folderId,
           createdAt: asset.createdAt.toISOString(),
           source: 's3' as const,
         },

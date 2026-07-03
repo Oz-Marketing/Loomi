@@ -108,9 +108,9 @@ const S3_CAPABILITIES: MediaCapabilities = {
   canUpload: true,
   canDelete: true,
   canRename: true,
-  canMove: false,
-  canCreateFolders: false,
-  canNavigateFolders: false,
+  canMove: true,
+  canCreateFolders: true,
+  canNavigateFolders: true,
 };
 
 function CropIcon({ className }: { className?: string }) {
@@ -1317,10 +1317,8 @@ export default function MediaPage() {
         accountKey: effectiveAccountKey,
       });
       if (cursor) params.set('cursor', cursor);
-      // S3 media is flat; the legacy parentId scoping is a no-op here
-      // but we forward it so the API can ignore/honor it without
-      // changing the call surface.
-      if (currentFolderId) params.set('parentId', currentFolderId);
+      // Scope to the current folder ("root" = the account's top level).
+      params.set('folder', currentFolderId ?? 'root');
       params.set('limit', '50');
 
       const res = await fetch(`/api/media?${params.toString()}`);
@@ -1333,7 +1331,6 @@ export default function MediaPage() {
           setFiles(prev => [...prev, ...incoming]);
         } else {
           setFiles(incoming);
-          setFolders(data.folders || []);
         }
         setNextCursor(data.nextCursor || undefined);
         setProvider('s3');
@@ -1349,9 +1346,29 @@ export default function MediaPage() {
     setLoadingMore(false);
   }, [effectiveAccountKey, currentFolderId]);
 
+  // Folders for the current scope — the flat list is fetched, then filtered to
+  // the current folder's direct children (the API returns the whole tree).
+  const loadFolders = useCallback(async () => {
+    if (!effectiveAccountKey) {
+      setFolders([]);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/media/folders?accountKey=${encodeURIComponent(effectiveAccountKey)}`);
+      const data = await res.json();
+      if (res.ok) {
+        const all: MediaFolder[] = data.folders || [];
+        setFolders(all.filter((f) => (f.parentId ?? undefined) === currentFolderId));
+      }
+    } catch {
+      /* folders are best-effort */
+    }
+  }, [effectiveAccountKey, currentFolderId]);
+
   useEffect(() => {
     if (effectiveAccountKey) {
       loadMedia();
+      loadFolders();
     } else {
       setFiles([]);
       setFolders([]);
@@ -1361,7 +1378,7 @@ export default function MediaPage() {
       setCurrentFolderId(undefined);
       setFolderPath([{ id: undefined, name: 'Root' }]);
     }
-  }, [effectiveAccountKey, loadMedia]);
+  }, [effectiveAccountKey, loadMedia, loadFolders]);
 
   // ── Upload ──
 
@@ -1403,6 +1420,7 @@ export default function MediaPage() {
       formData.append('file', file);
       formData.append('category', 'general');
       if (effectiveAccountKey) formData.append('accountKey', effectiveAccountKey);
+      if (currentFolderId) formData.append('folderId', currentFolderId);
 
       try {
         const res = await fetch('/api/media', { method: 'POST', body: formData });
@@ -1698,6 +1716,7 @@ export default function MediaPage() {
       formData.append('file', croppedFile);
       formData.append('category', 'general');
       if (effectiveAccountKey) formData.append('accountKey', effectiveAccountKey);
+      if (currentFolderId) formData.append('folderId', currentFolderId);
 
       const res = await fetch('/api/media', { method: 'POST', body: formData });
       const { ok, data, error } = await safeJson<{ file: MediaFile }>(res);
@@ -1749,13 +1768,11 @@ export default function MediaPage() {
     if (!effectiveAccountKey) return;
     setMoveLoading(true);
     try {
-      const params = new URLSearchParams({ accountKey: effectiveAccountKey });
-      if (parentId) params.set('parentId', parentId);
-      params.set('limit', '200');
-      const res = await fetch(`/api/media?${params.toString()}`);
+      const res = await fetch(`/api/media/folders?accountKey=${encodeURIComponent(effectiveAccountKey)}`);
       const data = await res.json();
       if (res.ok) {
-        setMoveFolders(data.folders || []);
+        const all: MediaFolder[] = data.folders || [];
+        setMoveFolders(all.filter((f) => (f.parentId ?? undefined) === parentId));
       }
     } catch {
       toast.error('Failed to load folders');
@@ -1779,15 +1796,19 @@ export default function MediaPage() {
 
     for (const item of moveItems) {
       try {
-        const res = await fetch(`/api/media/${encodeURIComponent(item.id)}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            accountKey: effectiveAccountKey,
-            targetFolderId: targetFolderId || null,
-            name: item.name,
-          }),
-        });
+        // Files move via /api/media/[id] (folderId); folders move via
+        // /api/media/folders/[id] (parentId).
+        const res = item.type === 'folder'
+          ? await fetch(`/api/media/folders/${encodeURIComponent(item.id)}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ parentId: targetFolderId ?? 'root' }),
+            })
+          : await fetch(`/api/media/${encodeURIComponent(item.id)}`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ folderId: targetFolderId ?? 'root' }),
+            });
         const { ok, data, error } = await safeJson<{ error?: string }>(res);
         if (ok) {
           successCount++;
@@ -1802,6 +1823,7 @@ export default function MediaPage() {
     if (successCount > 0) {
       toast.success(`Moved ${successCount} item${successCount > 1 ? 's' : ''}`);
       loadMedia(); // Refresh current view
+      loadFolders();
     }
 
     setMoving(false);
@@ -1893,16 +1915,16 @@ export default function MediaPage() {
     setDeletingFolder(true);
 
     try {
-      const res = await fetch(
-        `/api/media/${encodeURIComponent(deleteFolderItem.id)}?accountKey=${encodeURIComponent(effectiveAccountKey)}`,
-        { method: 'DELETE' },
-      );
+      const res = await fetch(`/api/media/folders/${encodeURIComponent(deleteFolderItem.id)}`, { method: 'DELETE' });
       const data = await res.json();
 
       if (res.ok) {
         setFolders(prev => prev.filter(f => f.id !== deleteFolderItem.id));
         toast.success(`Folder "${deleteFolderItem.name}" deleted`);
         setDeleteFolderItem(null);
+        // Its contents re-parented into the current folder — refresh.
+        loadMedia();
+        loadFolders();
       } else {
         toast.error(data.error || 'Failed to delete folder');
       }
@@ -1929,14 +1951,10 @@ export default function MediaPage() {
     setRenamingFolder(true);
 
     try {
-      const res = await fetch(`/api/media/${encodeURIComponent(renameFolderItem.id)}`, {
-        method: 'PUT',
+      const res = await fetch(`/api/media/folders/${encodeURIComponent(renameFolderItem.id)}`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accountKey: effectiveAccountKey,
-          targetFolderId: renameFolderItem.parentId ?? null,
-          name: nextName,
-        }),
+        body: JSON.stringify({ name: nextName }),
       });
       const { ok, data, error } = await safeJson<{ error?: string }>(res);
 
@@ -1993,11 +2011,17 @@ export default function MediaPage() {
     if (dragData.type === 'folder' && dragData.id === targetFolderId) return;
 
     try {
-      const res = await fetch(`/api/media/${encodeURIComponent(dragData.id)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountKey: effectiveAccountKey, targetFolderId, name: dragData.name }),
-      });
+      const res = dragData.type === 'folder'
+        ? await fetch(`/api/media/folders/${encodeURIComponent(dragData.id)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ parentId: targetFolderId }),
+          })
+        : await fetch(`/api/media/${encodeURIComponent(dragData.id)}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folderId: targetFolderId }),
+          });
       const { ok, data, error } = await safeJson<{ error?: string }>(res);
 
       if (ok) {

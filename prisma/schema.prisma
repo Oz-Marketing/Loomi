@@ -199,6 +199,7 @@ model Account {
   accountDomains           AccountDomain[]
   snippets                 AccountSnippet[]
   mediaAssets              MediaAsset[]
+  mediaFolders             MediaFolder[]
   metaAdsPacerPlan         MetaAdsPacerPlan?
   metaAdsPacerAccountNotes MetaAdsPacerAccountNote[]
   metaAdsPacerBudgetLogs   MetaAdsPacerBudgetLog[]
@@ -1549,8 +1550,10 @@ model MediaAsset {
   height       Int? // image-only
   thumbnailKey String? // "media/_admin/{id}/thumb.webp"
   altText      String? // accessible alt text for images — used as the default alt= when inserting <img> from the picker, editable across the media library
-  category     String? // "brand" | "ad-creative" | "oem" | "general"
+  category     String? // "brand" | "ad-creative" | "oem" | "general" | "texture"
   tags         String? // JSON string[] for future DAM filtering
+  folderId     String? // null = the account's root; else a MediaFolder in the same scope
+  folder       MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
   uploadedBy   String? // User ID
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -1558,6 +1561,27 @@ model MediaAsset {
   @@unique([s3Key])
   @@index([accountKey, createdAt])
   @@index([accountKey, category])
+  @@index([accountKey, folderId])
+}
+
+// A user-created folder for organizing media within a scope (an account, or the
+// admin library when accountKey is null). Nests via parentId; the breadcrumb is
+// the parent chain. Deleting a folder re-parents its assets/subfolders to its
+// own parent (see the folders API) — it never deletes media.
+model MediaFolder {
+  id         String        @id @default(cuid())
+  accountKey String? // null = admin-level, mirrors MediaAsset scoping
+  account    Account?      @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  name       String
+  parentId   String? // null = root
+  parent     MediaFolder?  @relation("MediaFolderTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children   MediaFolder[] @relation("MediaFolderTree")
+  assets     MediaAsset[]
+  createdBy  String?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@index([accountKey, parentId])
 }
 
 // ─────────────────────────────────────────────────────

@@ -77,6 +77,65 @@ describe('renderDoc', () => {
     expect(html).not.toContain('transform:scale');
   });
 
+  it('renders a tiled (repeating) image fill with a size-independent tile width', () => {
+    const tDoc: TemplateDoc = {
+      id: 't',
+      name: 'T',
+      sizes: [SIZE],
+      fields: [],
+      elements: [{ id: 'tex', type: 'image', binding: { kind: 'field', key: 'img' }, fit: 'tile', tileScale: 0.2 }],
+      layouts: { square: { tex: { x: 0, y: 0, w: 1, h: 1 } } },
+      defaults: {},
+    };
+    const html = renderDoc(tDoc, { img: 'https://x/tex.png' }, SIZE);
+    expect(html).toContain('background-image:url(https://x/tex.png)');
+    expect(html).toContain('background-repeat:repeat');
+    expect(html).toContain('background-size:20% auto');
+    expect(html).not.toContain('<img'); // tile renders as a CSS background, not an <img>
+  });
+
+  it('composites a unified background element: base fill + texture + fade overlay', () => {
+    const bgDoc: TemplateDoc = {
+      id: 'b',
+      name: 'B',
+      sizes: [SIZE],
+      fields: [],
+      elements: [
+        {
+          id: 'bg',
+          type: 'background',
+          binding: { kind: 'field', key: 'tex' },
+          fit: 'cover',
+          fill: '#199fdb',
+          overlay: { type: 'linear', angle: 180, stops: [{ color: '#ffffff', pos: 0 }, { color: '#ffffff', pos: 100, opacity: 0 }] },
+        },
+      ],
+      layouts: { square: { bg: { x: 0, y: 0, w: 1, h: 1 } } },
+      defaults: {},
+    };
+    const html = renderDoc(bgDoc, { tex: 'https://x/topo.png' }, SIZE);
+    expect(html).toContain('background:#199fdb'); // base fill layer
+    expect(html).toContain('<img src="https://x/topo.png"'); // texture layer (cover)
+    expect(html).toContain('object-fit:cover');
+    expect(html).toContain('linear-gradient(180deg, #ffffff 0%, rgba(255,255,255,0) 100%)'); // fade overlay
+  });
+
+  it('renders a background element with a tiled texture and no fill/overlay', () => {
+    const bgDoc: TemplateDoc = {
+      id: 'b',
+      name: 'B',
+      sizes: [SIZE],
+      fields: [],
+      elements: [{ id: 'bg', type: 'background', binding: { kind: 'field', key: 'tex' }, fit: 'tile', tileScale: 0.15, bgImageOpacity: 50 }],
+      layouts: { square: { bg: { x: 0, y: 0, w: 1, h: 1 } } },
+      defaults: {},
+    };
+    const html = renderDoc(bgDoc, { tex: 'https://x/grain.png' }, SIZE);
+    expect(html).toContain('background-image:url(https://x/grain.png)');
+    expect(html).toContain('background-size:15% auto');
+    expect(html).toContain('opacity:0.5'); // texture-layer opacity
+  });
+
   it('positions elements from fractional boxes (× size)', () => {
     const html = renderDoc(doc, { price: '$299/mo' }, SIZE);
     expect(html).toContain('left:100px;top:500px;');
@@ -149,6 +208,100 @@ describe('renderDoc', () => {
       layouts: { square: { g: { x: 0, y: 0, w: 1, h: 1 } } },
     };
     expect(renderDoc(gDoc, {}, SIZE)).toContain('linear-gradient(90deg, #111111 10%, #222222 80%)');
+  });
+
+  it('renders a multi-stop gradientFill with per-stop opacity (rgba)', () => {
+    const gDoc: TemplateDoc = {
+      ...doc,
+      elements: [
+        {
+          id: 'g',
+          type: 'shape',
+          gradientFill: {
+            type: 'linear',
+            angle: 180,
+            stops: [
+              { color: '#ffffff', pos: 0, opacity: 100 },
+              { color: '#ff0000', pos: 50 },
+              { color: '#ffffff', pos: 100, opacity: 0 },
+            ],
+          },
+        },
+      ],
+      layouts: { square: { g: { x: 0, y: 0, w: 1, h: 1 } } },
+    };
+    const html = renderDoc(gDoc, {}, SIZE);
+    expect(html).toContain('linear-gradient(180deg, #ffffff 0%, #ff0000 50%, rgba(255,255,255,0) 100%)');
+  });
+
+  it('renders a radial gradientFill', () => {
+    const gDoc: TemplateDoc = {
+      ...doc,
+      elements: [
+        {
+          id: 'g',
+          type: 'shape',
+          gradientFill: { type: 'radial', radialShape: 'circle', center: [25, 75], stops: [{ color: '#000000', pos: 0 }, { color: '#ffffff', pos: 100 }] },
+        },
+      ],
+      layouts: { square: { g: { x: 0, y: 0, w: 1, h: 1 } } },
+    };
+    expect(renderDoc(gDoc, {}, SIZE)).toContain('radial-gradient(circle at 25% 75%, #000000 0%, #ffffff 100%)');
+  });
+
+  it('sorts out-of-order gradient stops so CSS renders them correctly', () => {
+    const gDoc: TemplateDoc = {
+      ...doc,
+      elements: [
+        {
+          id: 'g',
+          type: 'shape',
+          gradientFill: { type: 'linear', angle: 90, stops: [{ color: '#222222', pos: 80 }, { color: '#111111', pos: 10 }] },
+        },
+      ],
+      layouts: { square: { g: { x: 0, y: 0, w: 1, h: 1 } } },
+    };
+    expect(renderDoc(gDoc, {}, SIZE)).toContain('linear-gradient(90deg, #111111 10%, #222222 80%)');
+  });
+
+  it('prefers gradientFill over the legacy gradient fields when both are set', () => {
+    const gDoc: TemplateDoc = {
+      ...doc,
+      elements: [
+        {
+          id: 'g',
+          type: 'shape',
+          gradient: ['#111111', '#222222'],
+          gradientFill: { type: 'linear', angle: 45, stops: [{ color: '#aaaaaa', pos: 0 }, { color: '#bbbbbb', pos: 100 }] },
+        },
+      ],
+      layouts: { square: { g: { x: 0, y: 0, w: 1, h: 1 } } },
+    };
+    const html = renderDoc(gDoc, {}, SIZE);
+    expect(html).toContain('linear-gradient(45deg, #aaaaaa 0%, #bbbbbb 100%)');
+    expect(html).not.toContain('#111111');
+  });
+
+  it('applies element opacity and blend mode to a shape', () => {
+    const bDoc: TemplateDoc = {
+      ...doc,
+      elements: [{ id: 's', type: 'shape', fill: '#ff0000', opacity: 40, blendMode: 'multiply' }],
+      layouts: { square: { s: { x: 0, y: 0, w: 1, h: 1 } } },
+    };
+    const html = renderDoc(bDoc, {}, SIZE);
+    expect(html).toContain('opacity:0.4;');
+    expect(html).toContain('mix-blend-mode:multiply;');
+  });
+
+  it('resolves the brand token inside a gradientFill stop', () => {
+    const gDoc: TemplateDoc = {
+      ...doc,
+      elements: [
+        { id: 'g', type: 'shape', gradientFill: { type: 'linear', stops: [{ color: 'brand', pos: 0 }, { color: '#000000', pos: 100 }] } },
+      ],
+      layouts: { square: { g: { x: 0, y: 0, w: 1, h: 1 } } },
+    };
+    expect(renderDoc(gDoc, { brandColor: '#abcdef' }, SIZE)).toContain('#abcdef 0%');
   });
 
   it('escapes user values', () => {

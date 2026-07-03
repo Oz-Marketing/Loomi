@@ -109,7 +109,13 @@ export interface DocElement {
   padding?: number;
   align?: 'left' | 'center' | 'right';
   // ── image / logo ──
-  fit?: 'contain' | 'cover';
+  /** `contain` fits inside the box, `cover` fills + crops, `tile` repeats the
+   *  image to fill (for seamless textures/patterns). */
+  fit?: 'contain' | 'cover' | 'tile';
+  /** For `fit:'tile'` — tile width as a fraction of the element box width (0..1);
+   *  height auto-preserves aspect, and it repeats to fill. Resolution-independent
+   *  so tile density stays constant across sizes. Default 0.25 (four across). */
+  tileScale?: number;
   // ── all element types ──
   /** Element opacity, 0–100 (percent). Undefined = fully opaque. Applies to any
    *  element (images/logos for watermarks, shapes/text for overlays); rendered

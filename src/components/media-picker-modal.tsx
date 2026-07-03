@@ -9,6 +9,7 @@ import {
   ArrowUpTrayIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
+import { MEDIA_CATEGORIES } from '@/lib/media-categories';
 
 // ── Types ──
 //
@@ -30,6 +31,9 @@ interface MediaFile {
    *  picker UI itself doesn't render it, since email-template blocks
    *  carry their own alt prop. */
   altText?: string | null;
+  /** Library category (general/brand/texture/ad-creative/oem) — surfaced so the
+   *  picker can filter and callers can read where an asset lives. */
+  category?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -48,11 +52,19 @@ export interface MediaPickerModalProps {
   onSelect: (url: string, file?: MediaFile) => void;
   onClose: () => void;
   fullScreen?: boolean;
+  /** Show a category filter bar (All / General / Brand / Textures / …) that
+   *  refetches by category. Opt-in so existing pickers are unchanged. */
+  showCategories?: boolean;
+  /** Initial active category filter (a `MediaCategory` value). Undefined = All. */
+  category?: string;
+  /** Category to tag uploads with. Defaults to the active filter, then General.
+   *  Lets a picker opened on the Textures tab build the texture library. */
+  uploadCategory?: string;
 }
 
 // ── Component ──
 
-export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = false }: MediaPickerModalProps) {
+export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = false, showCategories = false, category, uploadCategory }: MediaPickerModalProps) {
   const [mounted, setMounted] = useState(false);
   const [files, setFiles] = useState<MediaFile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,6 +73,8 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
   const [loadingMore, setLoadingMore] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  // Active category filter (undefined = All). Only meaningful when showCategories.
+  const [activeCategory, setActiveCategory] = useState<string | undefined>(category);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ── Fetch media ──
@@ -73,6 +87,7 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
       const params = new URLSearchParams({ limit: '50' });
       if (accountKey) params.set('accountKey', accountKey);
       if (cursor) params.set('cursor', cursor);
+      if (showCategories && activeCategory) params.set('category', activeCategory);
       const res = await fetch(`/api/media?${params.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -87,7 +102,7 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [accountKey]);
+  }, [accountKey, showCategories, activeCategory]);
 
   useEffect(() => {
     loadMedia();
@@ -103,11 +118,10 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
       for (const file of Array.from(fileList)) {
         const formData = new FormData();
         formData.append('file', file);
-        if (accountKey) {
-          formData.append('accountKey', accountKey);
-        } else {
-          formData.append('category', 'general');
-        }
+        if (accountKey) formData.append('accountKey', accountKey);
+        // Tag the upload: explicit uploadCategory wins, else the active filter,
+        // else General — so uploading on the Textures tab builds the texture set.
+        formData.append('category', uploadCategory || activeCategory || 'general');
         const res = await fetch('/api/media', { method: 'POST', body: formData });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -126,7 +140,7 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
     } finally {
       setUploading(false);
     }
-  }, [accountKey]);
+  }, [accountKey, uploadCategory, activeCategory]);
 
   // ── Drag & drop ──
 
@@ -199,6 +213,31 @@ export function MediaPickerModal({ accountKey, onSelect, onClose, fullScreen = f
             <XMarkIcon className="w-5 h-5" />
           </button>
         </div>
+
+        {/* ── Category filter ── (opt-in; refetches by category server-side) */}
+        {showCategories && (
+          <div className="flex flex-wrap items-center gap-1.5 px-5 pt-3">
+            <button
+              onClick={() => setActiveCategory(undefined)}
+              className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                !activeCategory ? 'bg-[var(--primary)] text-white' : 'bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              All
+            </button>
+            {MEDIA_CATEGORIES.map((c) => (
+              <button
+                key={c.value}
+                onClick={() => setActiveCategory(c.value)}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  activeCategory === c.value ? 'bg-[var(--primary)] text-white' : 'bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                {c.label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* ── Upload zone ── */}
         <div

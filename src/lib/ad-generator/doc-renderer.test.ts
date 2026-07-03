@@ -77,6 +77,23 @@ describe('renderDoc', () => {
     expect(html).not.toContain('transform:scale');
   });
 
+  it('renders a tiled (repeating) image fill with a size-independent tile width', () => {
+    const tDoc: TemplateDoc = {
+      id: 't',
+      name: 'T',
+      sizes: [SIZE],
+      fields: [],
+      elements: [{ id: 'tex', type: 'image', binding: { kind: 'field', key: 'img' }, fit: 'tile', tileScale: 0.2 }],
+      layouts: { square: { tex: { x: 0, y: 0, w: 1, h: 1 } } },
+      defaults: {},
+    };
+    const html = renderDoc(tDoc, { img: 'https://x/tex.png' }, SIZE);
+    expect(html).toContain('background-image:url(https://x/tex.png)');
+    expect(html).toContain('background-repeat:repeat');
+    expect(html).toContain('background-size:20% auto');
+    expect(html).not.toContain('<img'); // tile renders as a CSS background, not an <img>
+  });
+
   it('positions elements from fractional boxes (× size)', () => {
     const html = renderDoc(doc, { price: '$299/mo' }, SIZE);
     expect(html).toContain('left:100px;top:500px;');

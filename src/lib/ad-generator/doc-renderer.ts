@@ -218,6 +218,13 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
       return `<div${idAttr} style="${dim}${fx}${pos}display:flex;align-items:center;justify-content:center;border:1.5px dashed #cbd5e1;border-radius:${phRadius}px;color:#94a3b8;font-size:${phFont}px;font-family:${brandStack};">${el.type === 'logo' ? 'Logo' : 'Image'}</div>`;
     }
     const fit = el.fit ?? 'contain';
+    // Tile fill: repeat the image to fill the box (seamless textures/patterns).
+    // Tile width is a fraction of the box width so density is size-independent.
+    if (fit === 'tile') {
+      const tilePct = Math.max(2, clamp01(el.tileScale ?? 0.25) * 100);
+      const tileRadius = el.radius ? `border-radius:${el.radius}px;` : '';
+      return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${tileRadius}background-image:url(${url});background-repeat:repeat;background-size:${tilePct}% auto;"></div>`;
+    }
     // A cover image can carry a per-size focal point (object-position) so one
     // background frames correctly across aspect ratios; else sensible defaults.
     const objectPos =

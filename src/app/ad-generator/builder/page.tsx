@@ -3995,6 +3995,13 @@ function SelectionPanel({
               <BarBtn title="Fill (cover)" active={el.fit === 'cover'} onClick={() => onEl({ fit: 'cover' })}>
                 <ArrowsPointingOutIcon className="h-4 w-4" />
               </BarBtn>
+              <BarBtn title="Tile (repeat texture)" active={el.fit === 'tile'} onClick={() => onEl({ fit: 'tile' })}>
+                <span className="grid grid-cols-2 gap-[1.5px]">
+                  {[0, 1, 2, 3].map((i) => (
+                    <span key={i} className="h-1.5 w-1.5 rounded-[1px] bg-current" />
+                  ))}
+                </span>
+              </BarBtn>
               {/* Crop — flips to Fill (cover) if needed, then lets the designer
                   drag the image on the canvas + zoom in. Toggles crop mode. */}
               <button
@@ -4017,6 +4024,21 @@ function SelectionPanel({
                 Radius
                 <MiniNum title="Corner radius (px)" value={el.radius ?? 0} onChange={(v) => onEl({ radius: v > 0 ? Math.round(v) : undefined })} />
               </label>
+              {el.fit === 'tile' && (
+                <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                  Tile size
+                  <MiniNum
+                    title="Tile size (% of width)"
+                    value={Math.round((el.tileScale ?? 0.25) * 100)}
+                    step={5}
+                    onChange={(v) => {
+                      const n = Math.max(2, Math.min(100, Math.round(v)));
+                      onEl({ tileScale: Number((n / 100).toFixed(3)) });
+                    }}
+                  />
+                  <span className="text-[11px]">%</span>
+                </label>
+              )}
             </div>
             {/* Opacity + blend — lets an image tint/knock back a layer below it. */}
             <CompositeControls el={el} onEl={onEl} />
@@ -4075,6 +4097,7 @@ function SelectionPanel({
       {picking && (
         <MediaPickerModal
           accountKey={accountKey}
+          showCategories
           onSelect={(url) => {
             onContentChange(url);
             setPicking(false);
@@ -4157,8 +4180,15 @@ function DetachedVisual({
   if (el.type === 'image' || el.type === 'logo') {
     const url = resolveUrl(el);
     return url ? (
+      el.fit === 'tile' ? (
+      <span
+        className="pointer-events-none absolute inset-0"
+        style={{ backgroundImage: `url(${url})`, backgroundRepeat: 'repeat', backgroundSize: `${Math.max(2, (el.tileScale ?? 0.25) * 100)}% auto`, borderRadius: el.radius ?? 0 }}
+      />
+      ) : (
       // eslint-disable-next-line @next/next/no-img-element
       <img src={url} alt="" draggable={false} className="pointer-events-none absolute inset-0 h-full w-full" style={{ objectFit: el.fit === 'cover' ? 'cover' : 'contain', borderRadius: el.radius ?? 0 }} />
+      )
     ) : (
       <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-[var(--muted)] text-[10px] text-[var(--muted-foreground)]">{el.type === 'logo' ? 'Logo' : 'Image'}</span>
     );

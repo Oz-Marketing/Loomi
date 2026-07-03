@@ -500,7 +500,31 @@ export default function AdBuilderPage() {
   // Account custom fonts: drive both the dropdown and the @font-face the canvas
   // needs so a chosen family actually renders.
   const customFonts = useMemo(() => accountData?.customFonts ?? [], [accountData?.customFonts]);
+  // URL-based @font-face (instant, but the preview iframe can silently drop these
+  // cross-origin fonts to CORS). We fetch a base64-embedded version below and
+  // prefer it once loaded, so a chosen brand font actually renders in the editor
+  // (WYSIWYG with the export, which embeds the same way).
   const fontFaceCss = useMemo(() => buildFontFaceCssFromUrls(customFonts), [customFonts]);
+  const [embeddedFontCss, setEmbeddedFontCss] = useState('');
+  useEffect(() => {
+    if (!accountKey || customFonts.length === 0) {
+      setEmbeddedFontCss('');
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/ad-generator/fonts?accountKey=${encodeURIComponent(accountKey)}`)
+      .then((r) => (r.ok ? r.json() : { css: '' }))
+      .then((j: { css?: string }) => {
+        if (!cancelled) setEmbeddedFontCss(j.css ?? '');
+      })
+      .catch(() => {
+        if (!cancelled) setEmbeddedFontCss('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey, customFonts.length]);
+  const effectiveFontCss = embeddedFontCss || fontFaceCss;
   const fontOptions = useMemo<FontSelectOption[]>(
     () => [
       { value: '', label: 'Brand default' },
@@ -529,12 +553,12 @@ export default function AdBuilderPage() {
         ...vehicleOfferPreviewData,
         ...doc.defaults, // designer-set default / preview values for fields
         ...(adData ?? {}), // ad mode: the ad's real content
-        ...(fontFaceCss ? { fontFaceCss } : {}),
+        ...(effectiveFontCss ? { fontFaceCss: effectiveFontCss } : {}),
         ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
         ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
         ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
       }),
-    [accountData, fontFaceCss, doc.defaults, adData],
+    [accountData, effectiveFontCss, doc.defaults, adData],
   );
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
@@ -2203,7 +2227,7 @@ export default function AdBuilderPage() {
 
   return (
     <div className="flex h-full flex-col">
-      {fontFaceCss && <style dangerouslySetInnerHTML={{ __html: fontFaceCss }} />}
+      {effectiveFontCss && <style dangerouslySetInnerHTML={{ __html: effectiveFontCss }} />}
 
       {/* Editor header — responsive: Back (far left), centered name, actions right.
           Items shrink rather than overflow on narrow widths. */}

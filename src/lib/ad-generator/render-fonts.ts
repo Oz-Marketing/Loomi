@@ -35,18 +35,21 @@ export async function embeddedFontFaceCss(faces: FontFace[]): Promise<string> {
 }
 
 /**
- * If the render data selects a custom font and an account is given, replace
- * `data.fontFaceCss` with the base64-embedded version. Mutates + returns data.
+ * Replace `data.fontFaceCss` with the base64-embedded @font-face for ALL of the
+ * account's custom fonts, so the render matches the editor regardless of whether
+ * a font is chosen at the doc level (`data.fontFamily`) or per element
+ * (`el.fontFamily`). Embedding every account face (not just the doc-level one)
+ * is what keeps per-element brand fonts from silently dropping on export.
+ * Mutates + returns data. Leaves `data.fontFaceCss` untouched when the account
+ * has no custom fonts (or none could be fetched).
  */
 export async function embedAccountFontCss(accountKey: string | undefined, data: Record<string, string>): Promise<Record<string, string>> {
-  const family = data.fontFamily;
-  if (accountKey && family) {
-    const account = await prisma.account.findUnique({
-      where: { key: accountKey },
-      select: { customFonts: true },
-    });
-    const faces = parseCustomFonts(account?.customFonts).filter((f) => f.family === family);
-    data.fontFaceCss = await embeddedFontFaceCss(faces);
-  }
+  if (!accountKey) return data;
+  const account = await prisma.account.findUnique({
+    where: { key: accountKey },
+    select: { customFonts: true },
+  });
+  const faces = parseCustomFonts(account?.customFonts);
+  if (faces.length) data.fontFaceCss = await embeddedFontFaceCss(faces);
   return data;
 }

@@ -48,6 +48,23 @@ function bindingLabel(b: Binding | undefined): string {
   return b.key; // field key or brand key
 }
 
+/** A box entirely outside the artboard (0..1) is "detached" — omitted from the
+ *  rendered ad (the builder keeps it as a canvas-only parking spot). */
+function isBoxDetached(b: { x: number; y: number; w: number; h: number }): boolean {
+  return b.x + b.w <= 0 || b.x >= 1 || b.y + b.h <= 0 || b.y >= 1;
+}
+
+/** CSS clip-path silhouettes for non-rectangular shapes (rect/ellipse use
+ *  border-radius instead, so they're absent here). Shared by the export
+ *  renderer and the builder's shape picker so both stay in sync. */
+export const SHAPE_CLIP: Record<string, string | undefined> = {
+  rect: undefined,
+  ellipse: undefined,
+  triangle: 'polygon(50% 0%, 100% 100%, 0% 100%)',
+  diamond: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
+  star: 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)',
+};
+
 interface RenderCtx {
   width: number;
   height: number;
@@ -71,8 +88,26 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     `width:${box.w * width}px;height:${box.h * height}px;`;
 
   if (el.type === 'shape') {
-    const fill = resolveColor(el.fill, brand, brand);
-    return `<div${idAttr} style="${dim}${pos}background:${esc(fill)};border-radius:${el.radius ?? 0}px;"></div>`;
+    const kind = el.shapeKind ?? 'rect';
+    // Gradient fill mirrors the canvas background; else a solid fill.
+    let bg: string;
+    if (el.gradient) {
+      const gs = el.gradientStops;
+      const gs0 = clamp01((gs?.[0] ?? 0) / 100) * 100;
+      const gs1 = clamp01((gs?.[1] ?? 100) / 100) * 100;
+      bg = `linear-gradient(${el.gradientAngle ?? 135}deg, ${esc(resolveColor(el.gradient[0], brand, brand))} ${gs0}%, ${esc(resolveColor(el.gradient[1], brand, brand))} ${gs1}%)`;
+    } else {
+      bg = esc(resolveColor(el.fill, brand, brand));
+    }
+    // rect → rounded corners; ellipse → 50% radius; triangle/diamond/star → a
+    // CSS clip-path silhouette on the filled box.
+    const clip = SHAPE_CLIP[kind];
+    const shapeStyle = clip
+      ? `clip-path:${clip};`
+      : kind === 'ellipse'
+        ? 'border-radius:50%;'
+        : `border-radius:${el.radius ?? 0}px;`;
+    return `<div${idAttr} style="${dim}${pos}background:${bg};${shapeStyle}"></div>`;
   }
 
   if (el.type === 'image' || el.type === 'logo') {
@@ -102,7 +137,14 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
           : 'center';
     // Corner radius rounds the image — the wrapper clips it via overflow:hidden.
     const radius = el.radius ? `border-radius:${el.radius}px;` : '';
-    return `<div${idAttr} style="${dim}${opacity}${pos}overflow:hidden;${radius}"><img src="${url}" alt="" style="width:100%;height:100%;object-fit:${fit};object-position:${objectPos};" /></div>`;
+    // Crop zoom — a cover image can be scaled up past its cover fit, pivoting on
+    // the focal point so the designer's crop stays framed. The wrapper clips it.
+    const cropScale = fit === 'cover' && box.objectScale && box.objectScale > 1 ? box.objectScale : 1;
+    const zoom =
+      cropScale > 1
+        ? `transform:scale(${cropScale});transform-origin:${clamp01(box.objectX ?? 0.5) * 100}% ${clamp01(box.objectY ?? 0.5) * 100}%;`
+        : '';
+    return `<div${idAttr} style="${dim}${opacity}${pos}overflow:hidden;${radius}"><img src="${url}" alt="" style="width:100%;height:100%;object-fit:${fit};object-position:${objectPos};${zoom}" /></div>`;
   }
 
   // text
@@ -146,8 +188,13 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
   const layout = doc.layouts[size.id] ?? {};
   const body = doc.elements
     .map((el) => ({ el, box: layout[el.id] }))
-    // Keep hidden elements in PREVIEW (dimmed); drop them on export.
-    .filter((x): x is { el: DocElement; box: DocLayoutBox } => Boolean(x.box) && (ctx.preview || !x.box!.hidden))
+    // Keep hidden elements in PREVIEW (dimmed); drop them on export. Elements
+    // dragged fully off the artboard are "detached" (a canvas-only parking spot
+    // in the builder) — never part of the rendered ad, so drop them here too.
+    .filter(
+      (x): x is { el: DocElement; box: DocLayoutBox } =>
+        Boolean(x.box) && (ctx.preview || !x.box!.hidden) && !isBoxDetached(x.box!),
+    )
     .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0))
     .map(({ el, box }) => renderElement(el, box, data, ctx))
     .join('\n');

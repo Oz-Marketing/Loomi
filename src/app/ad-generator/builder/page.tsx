@@ -55,18 +55,24 @@ import {
   MagnifyingGlassPlusIcon,
   MagnifyingGlassMinusIcon,
   SwatchIcon,
+  Cog6ToothIcon,
+  PaintBrushIcon,
+  RocketLaunchIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
-import { renderDoc } from '@/lib/ad-generator/doc-renderer';
+import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { singleOfferDoc, dualOfferDoc } from '@/lib/ad-generator/templates/offer-docs';
+import { blankTemplateDoc } from '@/lib/ad-generator/doc-template';
+import { DatePicker, type DateRange } from '@/components/ui/date-picker';
+import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type LayerNode } from '@/lib/ad-generator/layer-tree';
-import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon } from '@/components/ad-generator/builder-icons';
+import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon, CropIcon } from '@/components/ad-generator/builder-icons';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, DocBackground } from '@/lib/ad-generator/doc-types';
@@ -93,33 +99,45 @@ function useElementSize<T extends HTMLElement>() {
 }
 
 const HISTORY_LIMIT = 60;
-const COALESCE_MS = 450; // merge rapid edits (typing, nudging) into one undo step
+const COALESCE_MS = 450; // window in which same-key edits (typing, a slider drag) merge
 
 type Hist = { past: TemplateDoc[]; present: TemplateDoc; future: TemplateDoc[] };
 
 /**
- * Undo/redo history over the doc. `setDoc` is a drop-in for useState's setter
- * (value or updater); rapid successive edits within COALESCE_MS collapse into a
- * single undo step. `reset` replaces the doc and clears history (load / new).
+ * Undo/redo history over the doc. `setDoc(updater, coalesceKey?)` is a drop-in
+ * for useState's setter.
+ *
+ * Coalescing is KEY-BASED, not purely time-based: a change with NO key always
+ * starts a fresh undo step, so every discrete action (group, delete, resize,
+ * media swap, reorder, …) is its own step. A change WITH a key only merges into
+ * the previous step when that step had the same key AND landed within
+ * COALESCE_MS — so holding a number stepper or typing into one field collapses
+ * to a single step, while switching fields or tools does not. This is what makes
+ * undo "account for every change" instead of swallowing an action that happened
+ * to follow another within a fixed time window.
  */
 function useDocHistory(init: () => TemplateDoc) {
   const [hist, setHist] = useState<Hist>(() => ({ past: [], present: init(), future: [] }));
   const lastTs = useRef(0);
+  const lastKey = useRef<string | null>(null);
 
-  const setDoc = useCallback((updater: TemplateDoc | ((d: TemplateDoc) => TemplateDoc)) => {
+  const setDoc = useCallback((updater: TemplateDoc | ((d: TemplateDoc) => TemplateDoc), coalesceKey?: string) => {
     setHist((h) => {
       const next = typeof updater === 'function' ? (updater as (d: TemplateDoc) => TemplateDoc)(h.present) : updater;
-      if (next === h.present) return h;
+      if (next === h.present) return h; // no-op change → don't record a step
       const now = Date.now();
-      const coalesce = h.past.length > 0 && now - lastTs.current < COALESCE_MS;
+      const coalesce = coalesceKey != null && coalesceKey === lastKey.current && h.past.length > 0 && now - lastTs.current < COALESCE_MS;
       lastTs.current = now;
+      lastKey.current = coalesceKey ?? null;
       const past = coalesce ? h.past : [...h.past, h.present].slice(-HISTORY_LIMIT);
       return { past, present: next, future: [] };
     });
   }, []);
 
+  // After any undo/redo, break coalescing so the next edit is always its own step.
   const undo = useCallback(() => {
     lastTs.current = 0;
+    lastKey.current = null;
     setHist((h) => {
       if (!h.past.length) return h;
       const prev = h.past[h.past.length - 1];
@@ -129,6 +147,7 @@ function useDocHistory(init: () => TemplateDoc) {
 
   const redo = useCallback(() => {
     lastTs.current = 0;
+    lastKey.current = null;
     setHist((h) => {
       if (!h.future.length) return h;
       const nxt = h.future[0];
@@ -138,6 +157,7 @@ function useDocHistory(init: () => TemplateDoc) {
 
   const reset = useCallback((doc: TemplateDoc) => {
     lastTs.current = 0;
+    lastKey.current = null;
     setHist({ past: [], present: doc, future: [] });
   }, []);
 
@@ -297,11 +317,26 @@ function computeBox(handle: Handle, start: DocLayoutBox, dxF: number, dyF: numbe
     if (handle === 'n' || handle === 'nw' || handle === 'ne') y -= MIN_FRAC - h;
     h = MIN_FRAC;
   }
-  x = clamp(x, 0, 1 - w);
-  y = clamp(y, 0, 1 - h);
-  w = clamp(w, MIN_FRAC, 1 - x);
-  h = clamp(h, MIN_FRAC, 1 - y);
+  // Elements may bleed past the artboard (clipped on export) and be dragged fully
+  // off it (then they detach — see isDetached). BLEED bounds how far past each
+  // edge you can push, so a detached element parks just beside the artboard.
+  const BLEED = 0.5;
+  if (handle === 'move') {
+    x = clamp(x, -w - BLEED, 1 + BLEED);
+    y = clamp(y, -h - BLEED, 1 + BLEED);
+  } else {
+    x = clamp(x, -BLEED, 1 + BLEED - MIN_FRAC);
+    y = clamp(y, -BLEED, 1 + BLEED - MIN_FRAC);
+    w = clamp(w, MIN_FRAC, 1 + BLEED - x);
+    h = clamp(h, MIN_FRAC, 1 + BLEED - y);
+  }
   return { ...rest, x, y, w, h };
+}
+
+/** A box is "detached" when it sits entirely outside the artboard — it's then a
+ *  canvas-only parking spot (omitted from the ad/export) until dragged back in. */
+function isDetached(b: { x: number; y: number; w: number; h: number }): boolean {
+  return b.x + b.w <= 0 || b.x >= 1 || b.y + b.h <= 0 || b.y >= 1;
 }
 
 function makeDefaultElement(id: string, type: DocElementType): DocElement {
@@ -324,7 +359,10 @@ function makeDefaultElement(id: string, type: DocElementType): DocElement {
 export default function AdBuilderPage() {
   const { accountData, accountKey } = useAccount();
 
-  const { doc, setDoc, undo, redo, canUndo, canRedo, reset: resetHistory } = useDocHistory(() => structuredClone(vehicleOfferDoc));
+  // A brand-new template starts on an empty artboard (no starter layout). The
+  // vehicle-offer doc is still a registered code template (opened via ?ad / ?
+  // template), just not the blank-canvas default.
+  const { doc, setDoc, undo, redo, canUndo, canRedo, reset: resetHistory } = useDocHistory(() => blankTemplateDoc('tmpl-blank', 'Untitled template'));
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // Marquee (drag-to-select) rectangle in canvas fractions, while dragging the backdrop.
@@ -359,9 +397,6 @@ export default function AdBuilderPage() {
   zoomRef.current = zoom;
   const panRef = useRef(pan);
   panRef.current = pan;
-  // The background panel shows on deselect; dismissing it sets this until the
-  // toolbar's "Background" button reopens it.
-  const [bgPanelHidden, setBgPanelHidden] = useState(false);
   const [showSafe, setShowSafe] = useState(false);
   const [dragBox, setDragBox] = useState<DocLayoutBox | null>(null);
   // Figma-style alignment guides shown while dragging (fractions, or null).
@@ -370,7 +405,7 @@ export default function AdBuilderPage() {
   const [fieldsOpen, setFieldsOpen] = useState(false);
   // Left rail: which panel (Elements / Layers / Industries / Sizes) is open as a
   // flyout. null = collapsed to just the icons.
-  const [leftPanel, setLeftPanel] = useState<'insert' | 'layers' | 'industries' | 'sizes' | null>(null);
+  const [leftPanel, setLeftPanel] = useState<'insert' | 'layers' | null>(null);
   const railRef = useRef<HTMLElement>(null);
   // Close the left flyout (Insert / Layers / …) when clicking anywhere outside
   // the rail + flyout — e.g. on the canvas. Tile clicks stay inside, so adding
@@ -389,6 +424,23 @@ export default function AdBuilderPage() {
   }, [leftPanel]);
   // The on-canvas "add element" popover (top-left of the artboard).
   const [addSizeOpen, setAddSizeOpen] = useState(false);
+  // Sizes popover on the canvas action bar (replaces the old left-rail Sizes panel).
+  const [sizesOpen, setSizesOpen] = useState(false);
+  // Template settings popover in the header cog (Industries + Save as new).
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Publish popover — Draft / live-now / scheduled window.
+  const [publishOpen, setPublishOpen] = useState(false);
+  const publishRef = useRef<HTMLDivElement>(null);
+  // Deploy-to-subaccounts modal.
+  const [deployOpen, setDeployOpen] = useState(false);
+  // The canvas (Background) settings panel is shown only when the canvas itself
+  // is focused — clicking the empty artboard selects "the canvas". It never
+  // appears just because no element is selected (so it stays hidden on load).
+  const [bgSelected, setBgSelected] = useState(false);
+  // Where the Back button returns to. Entry points pass `?from=<path>` so you
+  // exit to wherever you came from (e.g. /templates vs /ad-generator); absent →
+  // the sensible default below.
+  const [fromHref, setFromHref] = useState<string | null>(null);
   const [customName, setCustomName] = useState('');
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
@@ -415,15 +467,12 @@ export default function AdBuilderPage() {
   // AdCreative.doc) rather than a shared template — Save writes back to the ad.
   const [adId, setAdId] = useState<string | null>(null);
   const [adData, setAdData] = useState<AdData | null>(null);
-  const [templateName, setTemplateName] = useState(vehicleOfferDoc.name);
+  const [templateName, setTemplateName] = useState('Untitled template');
   const [status, setStatus] = useState<'draft' | 'published'>('draft');
   // Scope: null = global (every account the industry filter allows); an
   // account key = only that account's picker offers it (dealer-branded plates).
   const [scopeAccount, setScopeAccount] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [loadOpen, setLoadOpen] = useState(false);
-  const [savedList, setSavedList] = useState<SavedTemplate[]>([]);
-  const [loadingList, setLoadingList] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   // Serialized snapshot of what's persisted — autosave fires only when the live
   // doc/name/status diverge from this.
@@ -577,8 +626,8 @@ export default function AdBuilderPage() {
         const p = panRef.current;
         setZoom(z2);
         setPan({ x: p.x * r + dx * (1 - r), y: p.y * r + dy * (1 - r) });
-      } else {
-        // Two-finger scroll / wheel pans the canvas.
+      } else if (canPanRef.current) {
+        // Two-finger scroll / wheel pans the canvas (only once it has content).
         const p = panRef.current;
         setPan({ x: p.x - e.deltaX, y: p.y - e.deltaY });
       }
@@ -591,6 +640,7 @@ export default function AdBuilderPage() {
   // Space-held path and middle-mouse; window listeners so it keeps tracking
   // outside the pane. Entry points bail into this before select/marquee.
   function startPan(e: React.PointerEvent) {
+    if (!canPanRef.current) return; // nothing to pan on an empty artboard
     e.preventDefault();
     e.stopPropagation();
     const sx = e.clientX;
@@ -616,6 +666,15 @@ export default function AdBuilderPage() {
         .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0)),
     [doc.elements, layout],
   );
+
+  // Panning is disabled on a fresh/empty artboard — there's nothing to pan to,
+  // and it kept the onboarding card from feeling anchored. Re-enabled the moment
+  // a first element is placed. A ref mirrors it for the (stable) wheel listener.
+  const canPan = placed.length > 0;
+  const canPanRef = useRef(canPan);
+  useEffect(() => {
+    canPanRef.current = canPan;
+  }, [canPan]);
 
   const lockedIds = useMemo(() => new Set(doc.elements.filter((e) => e.locked).map((e) => e.id)), [doc.elements]);
 
@@ -682,6 +741,11 @@ export default function AdBuilderPage() {
   // preview (the full image, with its off-canvas "bleed" shown while dragging).
   const [bgNatural, setBgNatural] = useState<{ w: number; h: number } | null>(null);
   const [bgPan, setBgPan] = useState<{ url: string; coverW: number; coverH: number; overflowX: number; overflowY: number; objectX: number; objectY: number } | null>(null);
+  // Interactive image crop: the id of the image element currently in crop mode
+  // (drag it on the canvas to reposition; the panel exposes zoom + reset) and
+  // the natural pixel size of its source, needed to map drag → object-position.
+  const [cropId, setCropId] = useState<string | null>(null);
+  const [cropNatural, setCropNatural] = useState<{ w: number; h: number } | null>(null);
   // FLIP: gently slide Layers rows to their new spots when the drop order
   // actually changes during a drag. Transforms are cleared before measuring, so
   // an in-flight animation never pollutes the next measurement (no jitter).
@@ -735,6 +799,51 @@ export default function AdBuilderPage() {
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
   const selected = selectedId ? doc.elements.find((e) => e.id === selectedId) ?? null : null;
   const selectedBox = selectedId ? layout[selectedId] : undefined;
+  // Crop mode is tied to a single selected image; drop it the moment the
+  // selection changes (or clears) so we never crop something that isn't focused.
+  useEffect(() => {
+    if (cropId && cropId !== selectedId) setCropId(null);
+  }, [cropId, selectedId]);
+
+  // Selecting an element takes focus away from the canvas → hide its panel.
+  useEffect(() => {
+    if (selectedIds.length) setBgSelected(false);
+  }, [selectedIds]);
+
+  // Read the `from` entry path once on mount (only same-origin absolute paths,
+  // so it can't be used as an open-redirect).
+  useEffect(() => {
+    const raw = new URLSearchParams(window.location.search).get('from');
+    if (raw && raw.startsWith('/') && !raw.startsWith('//')) setFromHref(raw);
+  }, []);
+
+  // Close the publish popover on an outside click — but NOT when the click is
+  // inside the DatePicker calendar (it renders in a body portal, so it's outside
+  // publishRef even though it belongs to this popover).
+  useEffect(() => {
+    if (!publishOpen) return;
+    const onDown = (e: PointerEvent) => {
+      const target = e.target as Node;
+      if (publishRef.current?.contains(target)) return;
+      if (target instanceof Element && target.closest('[data-datepicker-popover]')) return;
+      setPublishOpen(false);
+    };
+    window.addEventListener('pointerdown', onDown);
+    return () => window.removeEventListener('pointerdown', onDown);
+  }, [publishOpen]);
+
+  // Escape closes the canvas panel when it's the focused thing (the element-
+  // selection Escape handler below only runs while an element is selected).
+  useEffect(() => {
+    if (!bgSelected) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (document.activeElement?.tagName ?? '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (e.key === 'Escape') setBgSelected(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [bgSelected]);
 
   // What the selection panel's "Content" section shows for the selected element.
   // It surfaces the element's value directly (text to type, image to pick) instead
@@ -761,11 +870,13 @@ export default function AdBuilderPage() {
       if (!selected) return;
       const b = selected.binding;
       const id = selected.id;
+      // Typing into the content field merges into one step per element; a media
+      // swap (discrete) naturally lands outside the window, so it stays separate.
       if (b?.kind === 'static') {
-        setDoc((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === id ? { ...e, binding: { kind: 'static', value: v } } : e)) }));
+        setDoc((prev) => ({ ...prev, elements: prev.elements.map((e) => (e.id === id ? { ...e, binding: { kind: 'static', value: v } } : e)) }), `content:${id}`);
       } else if (b?.kind === 'field') {
         const key = b.key;
-        setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: v } }));
+        setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: v } }), `content:${id}:${key}`);
       }
     },
     [selected, setDoc],
@@ -821,33 +932,49 @@ export default function AdBuilderPage() {
     };
   }, [bgImageId, doc.elements, resolveBindingUrl]);
 
-  // Top of the artboard (viewport y) — the selection panel pins to it so it lines
-  // up with the top of the ad, with natural spacing below the header.
-  const [canvasTop, setCanvasTop] = useState(96);
+  // Load the crop target's natural pixel size so a drag maps 1:1 to the visible
+  // window (same math as the background pan, but scoped to the element's box).
   useEffect(() => {
-    const measure = () => {
-      const t = (frameRef.current ?? canvasRef.current)?.getBoundingClientRect().top;
-      if (t != null) setCanvasTop(Math.max(8, Math.round(t)));
+    if (!cropId) {
+      setCropNatural(null);
+      return;
+    }
+    const url = resolveBindingUrl(doc.elements.find((e) => e.id === cropId));
+    if (!url) {
+      setCropNatural(null);
+      return;
+    }
+    let alive = true;
+    const img = new Image();
+    img.onload = () => alive && setCropNatural({ w: img.naturalWidth || 1, h: img.naturalHeight || 1 });
+    img.src = url;
+    return () => {
+      alive = false;
     };
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
-    // re-measure when the panel opens or the artboard moves/scales
-  }, [selectedId, canvasRef, canvasSize.width, canvasSize.height, size.id]);
+  }, [cropId, doc.elements, resolveBindingUrl]);
 
   // ── doc mutations (all functional so they don't capture stale state) ──
-  const setBox = useCallback((sid: string, elId: string, box: DocLayoutBox) => {
-    setDoc((prev) => ({
-      ...prev,
-      layouts: { ...prev.layouts, [sid]: { ...prev.layouts[sid], [elId]: box } },
-    }));
+  // `coalesceKey` (optional): repeated calls with the same key inside the coalesce
+  // window merge into one undo step (holding a stepper, dragging a slider). Omit
+  // it for discrete actions (a drag/resize commit) so each is its own step.
+  const setBox = useCallback((sid: string, elId: string, box: DocLayoutBox, coalesceKey?: string) => {
+    setDoc(
+      (prev) => ({
+        ...prev,
+        layouts: { ...prev.layouts, [sid]: { ...prev.layouts[sid], [elId]: box } },
+      }),
+      coalesceKey,
+    );
   }, []);
 
-  const setElement = useCallback((id: string, patch: Partial<DocElement>) => {
-    setDoc((prev) => ({
-      ...prev,
-      elements: prev.elements.map((e) => (e.id === id ? { ...e, ...patch } : e)),
-    }));
+  const setElement = useCallback((id: string, patch: Partial<DocElement>, coalesceKey?: string) => {
+    setDoc(
+      (prev) => ({
+        ...prev,
+        elements: prev.elements.map((e) => (e.id === id ? { ...e, ...patch } : e)),
+      }),
+      coalesceKey,
+    );
   }, []);
 
   // ── inline text editing (double-click a text element) ──
@@ -999,8 +1126,11 @@ export default function AdBuilderPage() {
   }, []);
 
   // Patch the selected element's style.
+  // Panel edits coalesce per (element, property set): holding a stepper or
+  // dragging a color/slider is one undo step, while editing a different property
+  // starts a new one. Discrete callers use setElement directly (no key).
   const updEl = (patch: Partial<DocElement>) => {
-    if (selected) setElement(selected.id, patch);
+    if (selected) setElement(selected.id, patch, `el:${selected.id}:${Object.keys(patch).sort().join(',')}`);
   };
 
   // Z-order within the current size (z lives per-size on the box).
@@ -1020,7 +1150,7 @@ export default function AdBuilderPage() {
     setDoc((prev) => ({ ...prev, fields: [...prev.fields, { key: `field_${rid()}`, label: 'New field', type: 'text' }] }));
   };
   const updateFieldAt = (i: number, patch: Partial<FieldSpec>) => {
-    setDoc((prev) => ({ ...prev, fields: prev.fields.map((f, idx) => (idx === i ? { ...f, ...patch } : f)) }));
+    setDoc((prev) => ({ ...prev, fields: prev.fields.map((f, idx) => (idx === i ? { ...f, ...patch } : f)) }), `field:${i}:${Object.keys(patch).sort().join(',')}`);
   };
   // Renaming a field key cascades to every binding that references it (and its default).
   const renameFieldKeyAt = (i: number, newKey: string) => {
@@ -1037,7 +1167,7 @@ export default function AdBuilderPage() {
         delete defaults[old];
       }
       return { ...prev, fields, elements, defaults };
-    });
+    }, `fieldkey:${i}`);
   };
   const deleteFieldAt = (i: number) => {
     setDoc((prev) => {
@@ -1058,7 +1188,7 @@ export default function AdBuilderPage() {
       const key = prev.fields[i]?.key;
       if (!key) return prev;
       return { ...prev, defaults: { ...prev.defaults, [key]: val } };
-    });
+    }, `default:${i}`);
   };
 
   // ── per-size operations ──
@@ -1331,9 +1461,15 @@ export default function AdBuilderPage() {
       return { ...prev, safeArea: { ...cur, ...patch } };
     });
   }
+  // Publish schedule (lives in the doc JSON). Undefined = live indefinitely.
+  function setSchedule(next: { start?: string | null; end?: string | null } | undefined) {
+    setDoc((prev) => ({ ...prev, schedule: next }));
+  }
   // Edit the artboard background (shown in the inspector when nothing is selected).
   function setBackground(patch: Partial<DocBackground>) {
-    setDoc((prev) => ({ ...prev, background: { ...(prev.background ?? {}), ...patch } }));
+    // Coalesce per changed property so a color-picker or angle/spread drag is a
+    // single undo step; toggling fill type or accent is its own step.
+    setDoc((prev) => ({ ...prev, background: { ...(prev.background ?? {}), ...patch } }), `bg:${Object.keys(patch).sort().join(',')}`);
   }
   // Drag an on-canvas gradient handle to set the angle. CSS gradient angle:
   // 0deg = up, clockwise; direction vector = (sinθ, -cosθ). The 'end' handle
@@ -1433,20 +1569,6 @@ export default function AdBuilderPage() {
     }
   }
 
-  async function openLoad() {
-    setLoadOpen(true);
-    setLoadingList(true);
-    try {
-      const res = await fetch('/api/ad-generator/templates-doc?all=1');
-      const json = res.ok ? ((await res.json()) as { templates?: SavedTemplate[] }) : { templates: [] };
-      setSavedList(json.templates ?? []);
-    } catch {
-      setSavedList([]);
-    } finally {
-      setLoadingList(false);
-    }
-  }
-
   function loadTemplate(t: SavedTemplate) {
     if (!t.doc) {
       toast.error('That template could not be read');
@@ -1461,44 +1583,8 @@ export default function AdBuilderPage() {
     setScopeAccount(t.accountKey ?? null);
     setSizeId(loaded.sizes[0]?.id ?? '');
     clearSelection();
-    setLoadOpen(false);
     savedRef.current = serializeDoc(loaded, t.name, st);
     setSaveStatus('saved');
-    toast.success(`Loaded "${t.name}"`);
-  }
-
-  async function deleteSaved(id: string) {
-    try {
-      const res = await fetch(`/api/ad-generator/templates-doc/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setSavedList((list) => list.filter((t) => t.id !== id));
-      if (templateId === id) setTemplateId(null);
-      toast.success('Deleted');
-    } catch (err) {
-      toast.error(`Couldn't delete: ${err instanceof Error ? err.message : 'unknown error'}`);
-    }
-  }
-
-  function newBlank() {
-    const id = `tmpl-${rid()}`;
-    resetHistory({
-      id,
-      name: 'Untitled template',
-      sizes: [{ id: 'square', label: 'Square 1080×1080', width: 1080, height: 1080 }],
-      fields: [],
-      background: { color: '#ffffff' },
-      elements: [],
-      layouts: { square: {} },
-      defaults: {},
-    });
-    setTemplateId(null);
-    setTemplateName('Untitled template');
-    setStatus('draft');
-    setScopeAccount(null);
-    setSizeId('square');
-    clearSelection();
-    savedRef.current = '';
-    setSaveStatus('idle');
   }
 
   // Deep-link: `/ad-generator/builder?template=<id>` opens an existing template
@@ -1554,8 +1640,20 @@ export default function AdBuilderPage() {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const json = (await res.json()) as { template?: { id: string; name: string; description: string | null; status: string; accountKey?: string | null; doc: TemplateDoc | null } };
         const t = json.template;
-        if (t?.doc) loadTemplate({ id: t.id, name: t.name, description: t.description, status: t.status, accountKey: t.accountKey ?? null, updatedAt: '', doc: t.doc });
-        else toast.error('That template could not be opened');
+        if (!t?.doc) {
+          toast.error('That template could not be opened');
+          return;
+        }
+        // `copy=1` → "start from" this template: load its design but as a NEW,
+        // unsaved draft (clear the id so the first save creates a fresh template
+        // instead of overwriting the source).
+        const copy = params.get('copy') === '1';
+        loadTemplate({ id: t.id, name: copy ? `${t.name} copy` : t.name, description: t.description, status: copy ? 'draft' : t.status, accountKey: t.accountKey ?? null, updatedAt: '', doc: t.doc });
+        if (copy) {
+          setTemplateId(null);
+          savedRef.current = '';
+          setSaveStatus('idle');
+        }
       } catch {
         toast.error('Could not open that');
       }
@@ -1569,7 +1667,8 @@ export default function AdBuilderPage() {
     | { kind: 'group'; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; items: { elId: string; start: DocLayoutBox }[]; bounds: { left: number; cx: number; right: number; top: number; cy: number; bottom: number }; minDx: number; maxDx: number; minDy: number; maxDy: number; targetsX: number[]; targetsY: number[]; live: Record<string, DocLayoutBox> }
     | { kind: 'groupresize'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; bounds: { left: number; top: number; right: number; bottom: number }; items: { elId: string; start: DocLayoutBox; isText: boolean }[]; live: Record<string, DocLayoutBox> }
     | { kind: 'marquee'; left: number; top: number; fw: number; fh: number; startXF: number; startYF: number; rect: { x: number; y: number; w: number; h: number } }
-    | { kind: 'bgpan'; sx: number; sy: number; sizeId: string; elId: string; startObjX: number; startObjY: number; overflowX: number; overflowY: number; url: string; coverW: number; coverH: number; dragging: boolean; live: { objectX: number; objectY: number } };
+    | { kind: 'bgpan'; sx: number; sy: number; sizeId: string; elId: string; startObjX: number; startObjY: number; overflowX: number; overflowY: number; url: string; coverW: number; coverH: number; dragging: boolean; live: { objectX: number; objectY: number } }
+    | { kind: 'croppan'; sx: number; sy: number; sizeId: string; elId: string; startObjX: number; startObjY: number; overflowX: number; overflowY: number; dragging: boolean; live: { objectX: number; objectY: number } };
   const dragRef = useRef<DragState | null>(null);
 
   const onMoveRef = useRef<(e: PointerEvent) => void>(() => {});
@@ -1631,6 +1730,24 @@ export default function AdBuilderPage() {
       const oy = d.overflowY > 0 ? clamp(d.startObjY - dyPx / d.overflowY, 0, 1) : d.startObjY;
       d.live = { objectX: ox, objectY: oy };
       setBgPan({ url: d.url, coverW: d.coverW, coverH: d.coverH, overflowX: d.overflowX, overflowY: d.overflowY, objectX: ox, objectY: oy });
+      return;
+    }
+    if (d.kind === 'croppan') {
+      const dxPx = e.clientX - d.sx;
+      const dyPx = e.clientY - d.sy;
+      if (!d.dragging && Math.abs(dxPx) < 3 && Math.abs(dyPx) < 3) return;
+      d.dragging = true;
+      // Same 1:1 pan as the background, but the window is the element's own box:
+      // dragging the image reveals the opposite side, so object-position tracks
+      // the cursor. Nudge the live iframe node so it moves without a re-render.
+      const ox = d.overflowX > 0 ? clamp(d.startObjX - dxPx / d.overflowX, 0, 1) : d.startObjX;
+      const oy = d.overflowY > 0 ? clamp(d.startObjY - dyPx / d.overflowY, 0, 1) : d.startObjY;
+      d.live = { objectX: ox, objectY: oy };
+      const node = iframeRef.current?.contentDocument?.querySelector(`[data-el-id="${d.elId}"] img`) as HTMLElement | null;
+      if (node) {
+        node.style.objectPosition = `${ox * 100}% ${oy * 100}%`;
+        node.style.transformOrigin = `${ox * 100}% ${oy * 100}%`;
+      }
       return;
     }
     const dxF = (e.clientX - d.sx) / d.fw;
@@ -1713,8 +1830,12 @@ export default function AdBuilderPage() {
           .filter((p) => !p.box.hidden && !p.el.locked && p.box.x < r.x + r.w && p.box.x + p.box.w > r.x && p.box.y < r.y + r.h && p.box.y + p.box.h > r.y)
           .map((p) => p.el.id);
         setSelectedIds(hit);
+      } else {
+        // A plain click on the empty artboard (no drag) focuses the canvas →
+        // opens the Background panel; the click already cleared any selection.
+        setBgSelected(true);
       }
-    } else if (d?.kind === 'bgpan' && d.dragging) {
+    } else if ((d?.kind === 'bgpan' || d?.kind === 'croppan') && d.dragging) {
       const { elId, sizeId, live } = d;
       setDoc((prev) => {
         const lay = prev.layouts[sizeId] ?? {};
@@ -1851,12 +1972,37 @@ export default function AdBuilderPage() {
     listen();
   }
 
+  // Crop-mode drag: reposition the image inside its own box. The cover fit fills
+  // the box, extra `objectScale` zoom scales it further, and the leftover overflow
+  // in each axis is what a drag can pan across (mapped 1:1 to the cursor).
+  function startCropPan(e: React.PointerEvent, elId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const box = layout[elId];
+    if (!box || !cropNatural) return;
+    const boxW = box.w * frameW;
+    const boxH = box.h * frameH;
+    const coverScale = Math.max(boxW / cropNatural.w, boxH / cropNatural.h) * Math.max(1, box.objectScale ?? 1);
+    const overflowX = Math.max(0, cropNatural.w * coverScale - boxW);
+    const overflowY = Math.max(0, cropNatural.h * coverScale - boxH);
+    const startObjX = box.objectX ?? 0.5;
+    const startObjY = box.objectY ?? 0.5;
+    dragRef.current = { kind: 'croppan', sx: e.clientX, sy: e.clientY, sizeId: size.id, elId, startObjX, startObjY, overflowX, overflowY, dragging: false, live: { objectX: startObjX, objectY: startObjY } };
+    listen();
+  }
+
   // Element pointerdown: Shift toggles selection; otherwise select (or keep a
   // multi-selection) and start a single / group drag.
   function onBoxPointerDown(e: React.PointerEvent, elId: string) {
     // Space-held / middle-mouse pans the canvas even when starting over an element.
     if (spaceHeld || e.button === 1) {
       startPan(e);
+      return;
+    }
+    // Crop mode owns the pointer for its target: drag repositions the image
+    // inside the crop window instead of moving/selecting the element.
+    if (cropId === elId) {
+      startCropPan(e, elId);
       return;
     }
     e.preventDefault();
@@ -2077,6 +2223,9 @@ export default function AdBuilderPage() {
     { label: 'Image', Icon: PhotoIcon, onAdd: () => addElement('image') },
     { label: 'Button', Icon: ButtonElementIcon, onAdd: addButton },
     { label: 'Shape', Icon: ShapeElementIcon, onAdd: () => addElement('shape') },
+    // Background — a full-bleed photo behind everything (moved here from the
+    // right-side Background panel so all "add" actions live in one place).
+    { label: 'Background', Icon: SwatchIcon, onAdd: addBackgroundImage },
   ];
 
   const saveInfo =
@@ -2092,97 +2241,177 @@ export default function AdBuilderPage() {
     <div className="flex h-full flex-col">
       {fontFaceCss && <style dangerouslySetInnerHTML={{ __html: fontFaceCss }} />}
 
-      {/* Editor header bar — an empty rail-width slot keeps the row below aligned
-          with the canvas column; the title centers over the canvas. */}
-      <header className="flex flex-shrink-0 items-center gap-4 pb-3">
-        <div className="w-12 flex-shrink-0" aria-hidden="true" />
+      {/* Editor header — responsive: Back (far left), centered name, actions right.
+          Items shrink rather than overflow on narrow widths. */}
+      <header className="flex flex-shrink-0 items-center gap-2 pb-3">
+        <Link
+          href={fromHref ?? (adId ? `/ad-generator/${adId}` : '/ad-generator')}
+          className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+          title="Back"
+        >
+          <ArrowLeftIcon className="h-5 w-5" />
+          Back
+        </Link>
 
-        {/* main row — spans the canvas: back at the left edge, title centered, actions right */}
-        <div className="relative flex flex-1 items-center gap-2">
-          <Link
-            href={adId ? `/ad-generator/${adId}` : '/ad-generator'}
-            className="inline-flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-            title={adId ? 'Back to the ad' : 'Back to the Generator'}
-            aria-label={adId ? 'Back to the ad' : 'Back to the Generator'}
-          >
-            <ArrowLeftIcon className="h-5 w-5" />
-          </Link>
+        <input
+          value={templateName}
+          onChange={(e) => setTemplateName(e.target.value)}
+          placeholder={adId ? 'Untitled ad' : 'Untitled template'}
+          title={adId ? 'Ad name' : 'Template name'}
+          className="w-full max-w-[16rem] min-w-0 rounded-lg border border-transparent bg-transparent px-2 py-1 text-base font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
+        />
 
-          <input
-            value={templateName}
-            onChange={(e) => setTemplateName(e.target.value)}
-            placeholder={adId ? 'Untitled ad' : 'Untitled template'}
-            title={adId ? 'Ad name' : 'Template name'}
-            className="absolute left-1/2 top-1/2 w-[min(20rem,42%)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-transparent bg-transparent px-2 py-1 text-center text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
-          />
+        <div className="ml-auto" />
 
-          {/* Right actions */}
-          <div className="ml-auto flex items-center gap-2">
-          {/* Template-management controls — hidden when editing a single ad. */}
-          {!adId && (
-            <>
-              <button onClick={openLoad} className="rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
-                Open
+
+        {/* Right actions */}
+        <div className="flex flex-shrink-0 items-center gap-2">
+          {/* Publish — a popover: Draft, live indefinitely, or a scheduled window
+              (only visible in the template library during the window). */}
+          {!adId && (() => {
+            const sched = doc.schedule;
+            // "Scheduled" mode is tracked by the schedule object existing (even
+            // with no dates yet) — so picking it doesn't force a default date.
+            const scheduled = status === 'published' && sched !== undefined;
+            const mode: 'draft' | 'live' | 'scheduled' = status !== 'published' ? 'draft' : scheduled ? 'scheduled' : 'live';
+            const range: DateRange = { start: sched?.start ?? null, end: sched?.end ?? null };
+            const dot = mode === 'draft' ? 'bg-[var(--muted-foreground)]' : mode === 'scheduled' ? 'bg-amber-500' : 'bg-emerald-500';
+            const labelText = mode === 'draft' ? 'Draft' : mode === 'scheduled' ? 'Scheduled' : 'Live';
+            const Opt = ({ id, title, desc }: { id: 'draft' | 'live' | 'scheduled'; title: string; desc: string }) => (
+              <button
+                type="button"
+                onClick={() => {
+                  if (id === 'draft') setStatus('draft');
+                  else if (id === 'live') {
+                    setStatus('published');
+                    setSchedule(undefined);
+                  } else {
+                    setStatus('published');
+                    if (!sched) setSchedule({ start: null, end: null });
+                  }
+                }}
+                className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-[var(--muted)] ${mode === id ? 'bg-[var(--muted)]' : ''}`}
+              >
+                <span className={`mt-0.5 h-2 w-2 flex-shrink-0 rounded-full ${mode === id ? 'bg-[var(--primary)]' : 'border border-[var(--muted-foreground)]/50'}`} />
+                <span className="min-w-0">
+                  <span className="block text-xs font-medium text-[var(--foreground)]">{title}</span>
+                  <span className="block text-[10px] leading-snug text-[var(--muted-foreground)]">{desc}</span>
+                </span>
               </button>
-              <button onClick={newBlank} className="rounded-lg px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
-                New
-              </button>
-              <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
-                {(['draft', 'published'] as const).map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setStatus(s)}
-                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium capitalize transition-colors ${
-                      status === s ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                    }`}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-              {/* Scope — who sees this template in the picker: everyone (industry-
-                  filtered) or only the active account (dealer-branded plates). */}
-              <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5" title="Which accounts get this template in their picker">
+            );
+            return (
+              <div className="relative" ref={publishRef}>
                 <button
-                  onClick={() => setScopeAccount(null)}
-                  className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                    scopeAccount === null ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                  }`}
+                  type="button"
+                  onClick={() => setPublishOpen((v) => !v)}
+                  aria-expanded={publishOpen}
+                  title="Publish settings"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2 py-1 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
                 >
-                  Global
+                  <span className={`h-2 w-2 rounded-full ${dot}`} />
+                  {labelText}
+                  <ChevronDownIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
                 </button>
-                {(accountKey || scopeAccount) && (
-                  <button
-                    onClick={() => accountKey && setScopeAccount(accountKey)}
-                    title={scopeAccount && scopeAccount !== accountKey ? `Scoped to "${scopeAccount}" — switch to that account to re-scope` : undefined}
-                    className={`max-w-36 truncate rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                      scopeAccount !== null ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                    }`}
-                  >
-                    {scopeAccount && scopeAccount !== accountKey ? scopeAccount : (accountData?.dealer ?? 'This account')}
-                  </button>
+                {publishOpen && (
+                  <div className="absolute right-0 top-full z-[80] mt-1.5 w-64 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-2xl backdrop-blur-2xl">
+                    <Opt id="draft" title="Draft" desc="Hidden from the template library." />
+                    <Opt id="live" title="Publish — live now" desc="Available indefinitely." />
+                    <Opt id="scheduled" title="Publish — scheduled" desc="Available only during the window below." />
+                    {mode === 'scheduled' && (
+                      <div className="mt-1 border-t border-[var(--border)] px-1 pt-2">
+                        <DatePicker
+                          mode="range"
+                          value={range}
+                          onChange={(v) => setSchedule({ start: v.start, end: v.end })}
+                          placeholder="Pick a date range"
+                          minWidth="100%"
+                        />
+                        <p className="mt-1.5 text-[10px] leading-snug text-[var(--muted-foreground)]">Leave the end open to run until you unpublish.</p>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
-              {templateId && (
-                <button
-                  onClick={() => save(true)}
-                  disabled={saving}
-                  className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:opacity-50"
-                >
-                  Save as new
-                </button>
+            );
+          })()}
+          {/* Template settings cog — Industries (who the template is offered to)
+              + Save as new. Template mode only. */}
+          {!adId && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setSettingsOpen((v) => !v)}
+                title="Template settings"
+                aria-label="Template settings"
+                aria-pressed={settingsOpen}
+                className={`inline-flex h-9 w-9 items-center justify-center rounded-lg transition-colors ${settingsOpen ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--foreground)] hover:bg-[var(--muted)]'}`}
+              >
+                <Cog6ToothIcon className="h-5 w-5" />
+              </button>
+              {settingsOpen && (
+                <>
+                  <div className="fixed inset-0 z-[90]" onClick={() => setSettingsOpen(false)} />
+                  <div className="absolute right-0 top-11 z-[100] w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl">
+                    <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Industries</h3>
+                    <p className="mb-3 text-[11px] leading-snug text-[var(--muted-foreground)]">
+                      Which accounts can use this template. None selected → only vehicle-offer accounts (Automotive, Powersports).
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {allIndustries.map((name) => {
+                        const on = (doc.industries ?? []).includes(name);
+                        return (
+                          <button
+                            key={name}
+                            onClick={() => toggleIndustry(name)}
+                            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                              on
+                                ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+                                : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
+                            }`}
+                          >
+                            {name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+                      <button
+                        onClick={() => {
+                          setDeployOpen(true);
+                          setSettingsOpen(false);
+                        }}
+                        className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                      >
+                        <RocketLaunchIcon className="h-4 w-4" />
+                        Deploy to subaccounts
+                      </button>
+                      {templateId && (
+                        <button
+                          onClick={() => {
+                            save(true);
+                            setSettingsOpen(false);
+                          }}
+                          disabled={saving}
+                          className="w-full rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-50"
+                        >
+                          Save as new
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </>
               )}
-            </>
+            </div>
           )}
 
           {/* Autosave status — sits right next to Save */}
           {templateId || adId ? (
             <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${saveInfo.cls}`}>
               <saveInfo.Icon className={`h-3.5 w-3.5 ${saveInfo.spin ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">{saveInfo.label}</span>
+              <span className="hidden md:inline">{saveInfo.label}</span>
             </span>
           ) : (
-            <span className="hidden text-[11px] text-[var(--muted-foreground)] sm:inline">Unsaved</span>
+            <span className="hidden text-[11px] text-[var(--muted-foreground)] md:inline">Unsaved</span>
           )}
           <button
             onClick={() => save(false)}
@@ -2191,7 +2420,6 @@ export default function AdBuilderPage() {
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
-          </div>
         </div>
       </header>
 
@@ -2199,22 +2427,60 @@ export default function AdBuilderPage() {
       <div className="flex min-h-0 flex-1 gap-4">
         {/* Left sidebar — tools */}
         <aside ref={railRef} className="relative flex flex-shrink-0">
-          {/* Icon rail — click an icon to open that panel as a flyout to the right */}
-          <div className="flex w-12 flex-col items-center gap-1.5 pt-1">
-            {/* Insert — opens the Elements flyout (Text / Image / Button / Shape).
-                Lives in the rail alongside Layers / Sizes so adding never collides
-                with an open panel. */}
+          {/* Icon rail — click an icon to open that panel as a flyout to the right.
+              Nudged down so it sits beside the canvas body rather than the toolbar. */}
+          <div className="flex w-12 flex-col items-center gap-0.5 pt-14">
+            {/* Insert — opens the Elements flyout (Text / Image / Button / Shape /
+                Background). Lives in the rail alongside Layers so adding never
+                collides with an open panel. Sizes are managed on the canvas
+                action bar (bottom); view guides (outlines / margins) live here. */}
             <RailButton label="Insert" Icon={PlusIcon} primary active={leftPanel === 'insert'} onClick={() => setLeftPanel((p) => (p === 'insert' ? null : 'insert'))} />
             <RailButton label="Layers" Icon={LayersIcon} active={leftPanel === 'layers'} onClick={() => setLeftPanel((p) => (p === 'layers' ? null : 'layers'))} />
-            {!adId && <RailButton label="Industries" Icon={BuildingStorefrontIcon} active={leftPanel === 'industries'} onClick={() => setLeftPanel((p) => (p === 'industries' ? null : 'industries'))} />}
-            <RailButton label="Sizes" Icon={DashboardLayoutIcon} active={leftPanel === 'sizes'} onClick={() => setLeftPanel((p) => (p === 'sizes' ? null : 'sizes'))} />
+            <div className="my-0.5 h-px w-6 bg-[var(--border)]" />
+            {/* View guides — element outlines + safe-area margins (moved off the
+                canvas header so all the view controls sit on the rail). */}
+            <RailButton label="Outlines" Icon={OutlinesIcon} active={showOutlines} onClick={() => setShowOutlines((v) => !v)} activeClassName="text-blue-500" />
+            {/* Margins — click toggles the guide; the size/unit popup shows on
+                hover ONLY while active (the `pl-2` keeps a hover bridge to it).
+                The tooltip is suppressed only while active, so it can't cover the
+                popup — when inactive, hovering shows the normal tooltip. */}
+            <div className="group relative">
+              <RailButton label="Margins" Icon={MarginsIcon} active={showSafe} onClick={toggleMargins} activeClassName="text-green-500" noTooltip={showSafe} />
+              <div className={`pointer-events-none absolute left-full top-0 z-40 pl-2 opacity-0 transition-opacity ${showSafe ? 'group-hover:pointer-events-auto group-hover:opacity-100' : ''}`}>
+                <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-md backdrop-blur-2xl">
+                  <input
+                    type="number"
+                    value={doc.safeArea?.value ?? 5}
+                    onChange={(e) => setMargin({ value: Math.max(0, Number(e.target.value)) })}
+                    title="Margin size"
+                    className="w-12 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                  />
+                  <select
+                    value={doc.safeArea?.unit ?? 'percent'}
+                    onChange={(e) => setMargin({ unit: e.target.value as MarginUnit })}
+                    title="Unit"
+                    className="rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                  >
+                    {MARGIN_UNITS.map((u) => (
+                      <option key={u.value} value={u.value}>
+                        {u.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
           </div>
 
           {leftPanel && (
-            <div className="absolute inset-y-0 left-full z-30 ml-2 flex w-[320px] flex-col gap-4 overflow-y-auto pb-1 pr-1">
+            // pointer-events-none so the empty space below the (shorter) card
+            // doesn't swallow clicks — otherwise clicking below an open panel
+            // lands "inside" the rail and never triggers the outside-close. The
+            // cards re-enable pointer events.
+            <div className="pointer-events-none absolute inset-y-0 left-full z-30 ml-2 flex w-[320px] flex-col gap-4 overflow-y-auto pb-1 pr-1">
           {/* Insert — element palette. Click a tile to drop it on the canvas. */}
           {leftPanel === 'insert' && (
-          <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
+          <section className="glass-card pointer-events-auto rounded-2xl border border-[var(--border)] p-4">
             <h2 className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
               <PlusIcon className="h-3.5 w-3.5" />
               Insert
@@ -2227,7 +2493,7 @@ export default function AdBuilderPage() {
           {/* Layers — the stack of placed elements (top of the list = front).
               Double-click to rename · lock icon to lock · drag to reorder (z). */}
           {leftPanel === 'layers' && (
-          <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
+          <section className="glass-card pointer-events-auto rounded-2xl border border-[var(--border)] p-4">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
                 <LayersIcon className="h-3.5 w-3.5" />
@@ -2344,11 +2610,11 @@ export default function AdBuilderPage() {
                             setRenameDraft(elName(el));
                             setRenamingLayer(el.id);
                           }}
-                          className={`flex flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left ${isSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
+                          className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left ${isSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
                           title="Double-click to rename"
                         >
                           <Icon className="h-4 w-4 flex-shrink-0 opacity-70" />
-                          <span className="flex-1 truncate text-xs font-medium">{elName(el)}</span>
+                          <span className="min-w-0 flex-1 truncate text-xs font-medium">{elName(el)}</span>
                         </button>
                       )}
                       <button
@@ -2413,11 +2679,11 @@ export default function AdBuilderPage() {
                               setRenameDraft(gname);
                               setRenamingLayer(gid);
                             }}
-                            className={`flex flex-1 items-center gap-2 rounded-lg px-1 py-2 text-left ${allSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
+                            className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-2 text-left ${allSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
                             title="Click to select group · double-click to rename"
                           >
                             <RectangleStackIcon className="h-4 w-4 flex-shrink-0 opacity-70" />
-                            <span className="flex-1 truncate text-xs font-semibold">{gname}</span>
+                            <span className="min-w-0 flex-1 truncate text-xs font-semibold">{gname}</span>
                             <span className="text-[10px] text-[var(--muted-foreground)]">{leaves.length}</span>
                           </button>
                         )}
@@ -2448,192 +2714,6 @@ export default function AdBuilderPage() {
           </section>
           )}
 
-          {/* Industries — which accounts this template is offered to. Ad mode
-              edits one ad, not a template, so this only shows in template mode. */}
-          {leftPanel === 'industries' && !adId && (
-            <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
-              <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Industries</h2>
-              <p className="mb-3 text-[11px] text-[var(--muted-foreground)]">
-                Which accounts can use this template. None selected → only vehicle-offer accounts (Automotive, Powersports).
-              </p>
-              <div className="flex flex-wrap gap-1.5">
-                {allIndustries.map((name) => {
-                  const on = (doc.industries ?? []).includes(name);
-                  return (
-                    <button
-                      key={name}
-                      onClick={() => toggleIndustry(name)}
-                      className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                        on
-                          ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
-                          : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
-                      }`}
-                    >
-                      {name}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          )}
-
-          {/* Sizes — each has its own independent layout */}
-          {leftPanel === 'sizes' && (
-          <section className="glass-card rounded-2xl border border-[var(--border)] p-4">
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                <DashboardLayoutIcon className="h-3.5 w-3.5" />
-                Sizes
-              </h2>
-              <div className="flex items-center gap-1.5">
-                <Link
-                  href="/ad-generator/sizes"
-                  className="text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--primary)]"
-                >
-                  Library
-                </Link>
-                <button
-                  onClick={() => setAddSizeOpen((v) => !v)}
-                  className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
-                >
-                  <PlusIcon className="h-3 w-3" />
-                  Add
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-1">
-              {doc.sizes.map((s) => {
-                const count = Object.keys(doc.layouts[s.id] ?? {}).length;
-                const active = s.id === sizeId;
-                return (
-                  <div
-                    key={s.id}
-                    className={`flex items-center gap-1 rounded-lg pr-1 transition-colors ${active ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'}`}
-                  >
-                    <button onClick={() => setSizeId(s.id)} className="flex flex-1 items-center justify-between gap-2 px-2.5 py-2 text-left">
-                      <span className={`truncate text-xs font-medium ${active ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>{s.label}</span>
-                      <span className="flex-shrink-0 text-[10px] text-[var(--muted-foreground)]">
-                        {s.width}×{s.height} · {count}
-                      </span>
-                    </button>
-                    {doc.sizes.length > 1 && (
-                      <button
-                        onClick={() => removeSize(s.id)}
-                        title="Remove size"
-                        className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500"
-                      >
-                        <TrashIcon className="h-3.5 w-3.5" />
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {addSizeOpen && (
-              <div className="mt-2 space-y-2 rounded-lg border border-dashed border-[var(--border)] p-2">
-                {/* Standard catalog, grouped by category */}
-                {catalogByCategory().map((grp) => (
-                  <div key={grp.category}>
-                    <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{grp.label}</div>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {grp.sizes.map((p) => (
-                        <button
-                          key={p.name}
-                          onClick={() => addSize(p.name, p.width, p.height)}
-                          className="rounded-md border border-[var(--border)] px-2 py-1 text-center text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                        >
-                          {p.name}
-                          <span className="block text-[9px] text-[var(--muted-foreground)]">
-                            {p.width}×{p.height}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-
-                {/* Custom sizes from the shared library (added on top of the catalog) */}
-                {libSizes.length > 0 && (
-                  <div>
-                    <div className="mb-1 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Custom</div>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {libSizes.map((s) => (
-                        <button
-                          key={s.id}
-                          onClick={() => addSize(s.name, s.width, s.height)}
-                          className="rounded-md border border-[var(--border)] px-2 py-1 text-center text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                        >
-                          {s.name}
-                          <span className="block text-[9px] text-[var(--muted-foreground)]">
-                            {s.width}×{s.height}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Create a brand-new size — saved to the library + added here */}
-                <div className="space-y-1.5 border-t border-[var(--border)] pt-2">
-                  <input
-                    value={customName}
-                    onChange={(e) => setCustomName(e.target.value)}
-                    placeholder="New size name (e.g. Wide Banner)"
-                    className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                  />
-                  <div className="flex items-center gap-1.5">
-                    <input
-                      type="number"
-                      value={customW}
-                      onChange={(e) => setCustomW(e.target.value)}
-                      placeholder="W"
-                      className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                    />
-                    <span className="text-[var(--muted-foreground)]">×</span>
-                    <input
-                      type="number"
-                      value={customH}
-                      onChange={(e) => setCustomH(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && createLibrarySize()}
-                      placeholder="H"
-                      className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                    />
-                    <button
-                      onClick={createLibrarySize}
-                      title="Save to the size library and add it here"
-                      className="flex-shrink-0 rounded-md bg-[var(--primary)] px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90"
-                    >
-                      Create
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {doc.sizes.length > 1 && (
-              <div className="mt-3 border-t border-[var(--border)] pt-3">
-                <label className="mb-1.5 block text-[11px] text-[var(--muted-foreground)]">
-                  Copy layout into {size.label.split(' ')[0]} from
-                </label>
-                <div className="flex flex-wrap gap-1.5">
-                  {doc.sizes
-                    .filter((s) => s.id !== sizeId)
-                    .map((s) => (
-                      <button
-                        key={s.id}
-                        onClick={() => copyLayoutFrom(s.id)}
-                        className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                      >
-                        {s.label.split(' ')[0]}
-                      </button>
-                    ))}
-                </div>
-              </div>
-            )}
-          </section>
-          )}
             </div>
           )}
         </aside>
@@ -2641,87 +2721,8 @@ export default function AdBuilderPage() {
         {/* Canvas */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)]">
           <div className="relative flex flex-shrink-0 items-center justify-end gap-2 border-b border-[var(--border)] px-3 py-2">
-            {/* Zoom — fit-relative; the % click resets to fit. */}
-            <div className="mr-auto flex items-center gap-0.5">
-              <button
-                onClick={() => setZoom((z) => Math.max(0.2, +(z / 1.25).toFixed(3)))}
-                title="Zoom out"
-                aria-label="Zoom out"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-              >
-                <MagnifyingGlassMinusIcon className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => setZoom(1)}
-                title="Fit to screen"
-                aria-label="Fit to screen"
-                className="min-w-[3.25rem] rounded-lg px-1.5 py-1 text-center text-xs font-medium tabular-nums text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-              >
-                {Math.round(scale * 100)}%
-              </button>
-              <button
-                onClick={() => setZoom((z) => Math.min(5, +(z * 1.25).toFixed(3)))}
-                title="Zoom in"
-                aria-label="Zoom in"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-              >
-                <MagnifyingGlassPlusIcon className="h-4 w-4" />
-              </button>
-            </div>
-            {/* Current size name, centered */}
-            <span className="pointer-events-none absolute left-1/2 max-w-[36%] -translate-x-1/2 truncate rounded-md bg-[var(--muted)] px-2.5 py-1 text-xs font-semibold text-[var(--foreground)]">
-              {size.label}
-            </span>
-            {/* View toggles — outlines + safe-area margins */}
-            <div className="flex items-center gap-0.5">
-              <button
-                onClick={() => setShowOutlines((v) => !v)}
-                title="Toggle element outlines"
-                aria-label="Toggle element outlines"
-                aria-pressed={showOutlines}
-                className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showOutlines ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
-              >
-                <OutlinesIcon className="h-4 w-4" />
-              </button>
-              <div className="relative">
-                <button
-                  onClick={toggleMargins}
-                  title="Safe-area margins"
-                  aria-label="Safe-area margins"
-                  aria-pressed={showSafe}
-                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg transition-colors ${showSafe ? 'bg-[#14b8a6]/15 text-[#14b8a6]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
-                >
-                  <MarginsIcon className="h-4 w-4" />
-                </button>
-                {showSafe && (
-                  <div className="absolute right-0 top-9 z-50 flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-md backdrop-blur-2xl">
-                    <input
-                      type="number"
-                      value={doc.safeArea?.value ?? 5}
-                      onChange={(e) => setMargin({ value: Math.max(0, Number(e.target.value)) })}
-                      title="Margin size"
-                      className="w-12 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-center text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                    />
-                    <select
-                      value={doc.safeArea?.unit ?? 'percent'}
-                      onChange={(e) => setMargin({ unit: e.target.value as MarginUnit })}
-                      title="Unit"
-                      className="rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1 text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                    >
-                      {MARGIN_UNITS.map((u) => (
-                        <option key={u.value} value={u.value}>
-                          {u.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Divider */}
-            <div className="h-5 w-px bg-[var(--border)]" />
-
+            {/* Zoom lives on the canvas (bottom-left); outlines + margins moved to
+                the left rail; the active size is shown on the canvas action bar. */}
             {/* Undo / Redo */}
             <div className="flex items-center gap-0.5">
               <button
@@ -2744,18 +2745,6 @@ export default function AdBuilderPage() {
               </button>
             </div>
 
-            {/* Reopen the background panel after it's been dismissed. */}
-            {!selected && bgPanelHidden && (
-              <button
-                onClick={() => setBgPanelHidden(false)}
-                title="Background"
-                aria-label="Show background panel"
-                className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-              >
-                <SwatchIcon className="h-4 w-4" />
-              </button>
-            )}
-
             {/* Divider */}
             <div className="h-5 w-px bg-[var(--border)]" />
 
@@ -2773,19 +2762,20 @@ export default function AdBuilderPage() {
           <div
             ref={canvasRef}
             className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden bg-[var(--muted)]/30 [background-image:radial-gradient(var(--adgen-canvas-dot)_1px,transparent_1.5px)] [background-position:center] [background-size:18px_18px]"
-            style={{ userSelect: 'none', cursor: spaceHeld ? 'grab' : undefined }}
+            style={{ userSelect: 'none', cursor: spaceHeld && canPan ? 'grab' : undefined }}
             onPointerDown={(e) => {
-              // Space-held or middle-mouse → grab-pan the whole canvas.
-              if (spaceHeld || e.button === 1) {
+              // Space-held or middle-mouse → grab-pan the whole canvas (only once
+              // it has content; an empty artboard isn't draggable).
+              if ((spaceHeld || e.button === 1) && canPan) {
                 startPan(e);
                 return;
               }
-              // Clicking the empty canvas around the artboard clears the
-              // selection AND dismisses the background panel — so a click off
-              // the artboard fully unfocuses (no lingering settings panel).
+              // Clicking the gray area OUTSIDE the artboard fully unfocuses:
+              // clears the selection and closes the canvas panel. (Clicking the
+              // artboard itself focuses the canvas — handled by the marquee up.)
               if (e.target === e.currentTarget) {
                 clearSelection();
-                setBgPanelHidden(true);
+                setBgSelected(false);
               }
             }}
           >
@@ -2825,13 +2815,41 @@ export default function AdBuilderPage() {
                 <div
                   className="absolute inset-0"
                   onPointerDown={(e) => {
-                    if (spaceHeld || e.button === 1) {
+                    if ((spaceHeld || e.button === 1) && canPan) {
                       startPan(e);
                       return;
                     }
                     if (e.target === e.currentTarget) startMarquee(e);
                   }}
                 >
+                  {/* Empty-canvas onboarding — lives INSIDE the artboard frame so
+                      it pans/moves with the canvas (not a detached center modal).
+                      Clears the moment a first element is added. Wrapper is
+                      click-through so pan/marquee still work; only the card is
+                      interactive. */}
+                  {placed.length === 0 && !viewAll && (
+                    <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center p-6">
+                      {/* faint dashed frame hinting the design area */}
+                      <div className="pointer-events-none absolute inset-3 rounded-2xl border border-dashed border-[var(--primary)]/20" />
+                      <div className="pointer-events-auto relative w-full max-w-[22rem] overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--card-strong)]/95 shadow-2xl backdrop-blur-xl">
+                        <div className="flex flex-col items-center gap-2 bg-gradient-to-b from-[var(--primary)]/12 to-transparent px-6 pb-2 pt-6 text-center">
+                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[#a855f7] text-white shadow-lg shadow-[var(--primary)]/30">
+                            <PaintBrushIcon className="h-6 w-6" />
+                          </div>
+                          <h3 className="text-base font-bold text-[var(--foreground)]">Design your ad</h3>
+                          <p className="max-w-[16rem] text-xs leading-relaxed text-[var(--muted-foreground)]">
+                            Start with your first element — text, an image, a button, or a shape.
+                          </p>
+                        </div>
+                        <div className="px-5 pb-5 pt-3">
+                          <AdderGrid adders={adders} variant="onboarding" />
+                        </div>
+                        <div className="border-t border-[var(--border)] px-5 py-2.5 text-center text-[11px] text-[var(--muted-foreground)]">
+                          Need a different size? Open <span className="font-medium text-[var(--foreground)]">Sizes</span> from the bar below.
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   {/* Safe-area margin boundary (a builder-only guide) */}
                   {(() => {
                     const sa = showSafe ? safeAreaFractions(doc.safeArea, size.width, size.height) : null;
@@ -2859,7 +2877,7 @@ export default function AdBuilderPage() {
                   {/* Gradient angle line — shown while the Background (gradient)
                       panel is active and nothing's selected. Drag an end handle
                       to rotate; the handles are tinted with the two stop colors. */}
-                  {doc.background?.gradient && !selected && !bgPanelHidden && (() => {
+                  {doc.background?.gradient && !selected && bgSelected && (() => {
                     const angle = doc.background.gradientAngle ?? 135;
                     const rad = (angle * Math.PI) / 180;
                     const dx = Math.sin(rad);
@@ -2909,9 +2927,14 @@ export default function AdBuilderPage() {
                   {placed.map(({ el, box }) => {
                     const isSel = selectedIds.includes(el.id);
                     const isSingleSel = el.id === selectedId;
+                    const isCropping = cropId === el.id;
                     const singleDragging = dragBox != null && dragRef.current?.kind === 'single' && dragRef.current.elId === el.id;
                     const live = groupLive?.[el.id];
                     const b = singleDragging && dragBox ? dragBox : live ?? box;
+                    // Fully off the artboard → detached (a canvas-only parking
+                    // spot). The iframe clips it away, so the builder draws its
+                    // visual here in the (unclipped) overlay instead.
+                    const detached = isDetached(b);
                     const boxStyle: CSSProperties = {
                       left: b.x * frameW,
                       top: b.y * frameH,
@@ -2924,7 +2947,7 @@ export default function AdBuilderPage() {
                       // raising it would block selecting anything else. Overlays are
                       // transparent, so this never changes the ad's own stacking.
                       zIndex: isSel && !isFullBleed(el.id) ? 50 : (b.z ?? 0) + 1,
-                      cursor: el.locked ? 'default' : box.hidden ? 'pointer' : 'move',
+                      cursor: el.locked ? 'default' : isCropping ? 'grab' : box.hidden ? 'pointer' : 'move',
                       touchAction: 'none',
                     };
                     return (
@@ -2945,25 +2968,32 @@ export default function AdBuilderPage() {
                             selectOne(el.id);
                           }
                         }}
-                        title={box.hidden ? `${elName(el)} (hidden here)` : elName(el)}
+                        title={detached ? `${elName(el)} (detached — drag onto the artboard to add)` : box.hidden ? `${elName(el)} (hidden here)` : elName(el)}
                         className="group absolute"
                         style={boxStyle}
                       >
+                        {/* Detached elements are clipped out of the iframe, so
+                            render their actual content here on the canvas. */}
+                        {detached && <DetachedVisual el={el} box={b} scale={scale} previewData={previewData} resolveUrl={resolveBindingUrl} />}
                         <span
                           className={`pointer-events-none absolute inset-0 rounded-[2px] ring-inset transition-colors ${
-                            isSel
-                              ? 'ring-2 ring-[var(--primary)] bg-[var(--primary)]/10'
-                              : box.hidden
-                                ? 'ring-1 ring-dashed ring-[var(--muted-foreground)]/45 group-hover:ring-[var(--muted-foreground)]/70'
-                                : showOutlines
-                                  ? 'ring-[1.5px] ring-dashed ring-[var(--primary)]/55 group-hover:ring-[var(--primary)]/90'
-                                  : 'group-hover:ring-[1.5px] group-hover:ring-[var(--primary)]/70'
+                            isCropping
+                              ? 'ring-2 ring-[var(--primary)]'
+                              : isSel
+                                ? 'ring-2 ring-[var(--primary)] bg-[var(--primary)]/10'
+                                : detached
+                                  ? 'ring-1 ring-dashed ring-amber-500/70 group-hover:ring-amber-500'
+                                  : box.hidden
+                                    ? 'ring-1 ring-dashed ring-[var(--muted-foreground)]/45 group-hover:ring-[var(--muted-foreground)]/70'
+                                    : showOutlines
+                                      ? 'ring-[1.5px] ring-dashed ring-[var(--primary)]/55 group-hover:ring-[var(--primary)]/90'
+                                      : 'group-hover:ring-[1.5px] group-hover:ring-[var(--primary)]/70'
                           }`}
                         />
                         {isSingleSel && (
                           <>
-                            <span className="pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded bg-[var(--primary)] px-1.5 py-0.5 text-[10px] font-medium text-white">
-                              {elName(el)}
+                            <span className={`pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium text-white ${detached ? 'bg-amber-500' : 'bg-[var(--primary)]'}`}>
+                              {isCropping ? 'Crop — drag to reposition' : detached ? `${elName(el)} — detached` : elName(el)}
                             </span>
                             {RESIZE_HANDLES.map((rh) => (
                               <span
@@ -3081,29 +3111,34 @@ export default function AdBuilderPage() {
                 )}
               </div>
 
-              {/* Empty-canvas onboarding — guides a brand-new template's first
-                  element. Reactive on placed.length, so it clears the moment an
-                  element is added and returns if all are removed. The wrapper is
-                  click-through (pointer-events-none) so canvas pan/marquee still
-                  work around the card; only the card itself is interactive. */}
-              {placed.length === 0 && (
-                <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center p-4">
-                  <div className="pointer-events-auto w-full max-w-sm rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-6 text-center shadow-xl backdrop-blur-2xl">
-                    <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-[var(--primary)]/10">
-                      <Squares2X2Icon className="h-6 w-6 text-[var(--primary)]" />
-                    </div>
-                    <h3 className="text-sm font-bold text-[var(--foreground)]">Design your ad</h3>
-                    <p className="mx-auto mt-1 mb-4 max-w-xs text-xs text-[var(--muted-foreground)]">
-                      Add your first element to get started — drop in text, an image, a button, or a shape.
-                    </p>
-                    <AdderGrid adders={adders} variant="onboarding" />
-                    <p className="mt-4 text-[11px] text-[var(--muted-foreground)]">
-                      Need a different size? Open the <span className="font-medium text-[var(--foreground)]">Sizes</span> panel on the left.
-                    </p>
-                  </div>
-                </div>
-              )}
-
+              {/* Zoom — a vertical stack pinned inside the canvas, bottom-left.
+                  Fit-relative; the % click resets to fit. */}
+              <div className="absolute bottom-3 left-3 z-20 flex flex-col items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card-strong)]/80 px-1 py-1 backdrop-blur-md">
+                <button
+                  onClick={() => setZoom((z) => Math.min(5, +(z * 1.25).toFixed(3)))}
+                  title="Zoom in"
+                  aria-label="Zoom in"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                >
+                  <MagnifyingGlassPlusIcon className="h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => setZoom(1)}
+                  title="Fit to screen"
+                  aria-label="Fit to screen"
+                  className="rounded-lg px-1 py-0.5 text-center text-[11px] font-medium tabular-nums text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                >
+                  {Math.round(scale * 100)}%
+                </button>
+                <button
+                  onClick={() => setZoom((z) => Math.max(0.2, +(z / 1.25).toFixed(3)))}
+                  title="Zoom out"
+                  aria-label="Zoom out"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                >
+                  <MagnifyingGlassMinusIcon className="h-4 w-4" />
+                </button>
+              </div>
 
               {/* Size navigation — single view: arrow-paginated with a toggle into
                   multi-artboard view. Multi view: per-size checkbox chips (which
@@ -3114,7 +3149,7 @@ export default function AdBuilderPage() {
                   const idx = Math.max(0, doc.sizes.findIndex((s) => s.id === sizeId));
                   const go = (delta: number) => setSizeId(doc.sizes[(idx + delta + doc.sizes.length) % doc.sizes.length].id);
                   return (
-                    <div className="absolute bottom-3 left-1/2 z-20 flex w-max -translate-x-1/2 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--card-strong)]/80 px-1.5 py-1 backdrop-blur-md">
+                    <div className="absolute bottom-3 left-1/2 z-20 flex w-max -translate-x-1/2 items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card-strong)]/80 px-1.5 py-1 backdrop-blur-md">
                       <button
                         onClick={() => go(-1)}
                         disabled={doc.sizes.length < 2}
@@ -3124,9 +3159,16 @@ export default function AdBuilderPage() {
                       >
                         <ChevronLeftIcon className="h-4 w-4" />
                       </button>
-                      <span className="min-w-[6.5rem] text-center text-xs font-medium text-[var(--foreground)]">
+                      {/* The label opens the Sizes modal (switch / add / all-sizes). */}
+                      <button
+                        onClick={() => setSizesOpen(true)}
+                        title="Manage sizes — switch, add, remove, view all"
+                        aria-label="Manage sizes"
+                        className="inline-flex h-7 min-w-[7rem] items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                      >
+                        <DashboardLayoutIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
                         {doc.sizes[idx]?.label.split(' ')[0]} <span className="tabular-nums text-[var(--muted-foreground)]">{idx + 1}/{doc.sizes.length}</span>
-                      </span>
+                      </button>
                       <button
                         onClick={() => go(1)}
                         disabled={doc.sizes.length < 2}
@@ -3136,20 +3178,6 @@ export default function AdBuilderPage() {
                       >
                         <ChevronRightIcon className="h-4 w-4" />
                       </button>
-                      {doc.sizes.length > 1 && (
-                        <>
-                          <div className="mx-0.5 h-5 w-px bg-[var(--border)]" />
-                          <button
-                            onClick={() => setViewAll(true)}
-                            title="View all sizes together"
-                            aria-label="View all sizes together"
-                            className="inline-flex h-7 items-center gap-1.5 rounded-lg px-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-                          >
-                            <Squares2X2Icon className="h-3.5 w-3.5" />
-                            All sizes
-                          </button>
-                        </>
-                      )}
                     </div>
                   );
                 })()}
@@ -3164,6 +3192,14 @@ export default function AdBuilderPage() {
                   >
                     <ChevronLeftIcon className="h-3.5 w-3.5" />
                     Edit one
+                  </button>
+                  <button
+                    onClick={() => setSizesOpen(true)}
+                    title="Manage sizes — switch, add, remove"
+                    aria-label="Manage sizes"
+                    className="inline-flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                  >
+                    <DashboardLayoutIcon className="h-3.5 w-3.5" />
                   </button>
                   <div className="h-5 w-px flex-shrink-0 bg-[var(--border)]" />
                   <button
@@ -3231,24 +3267,32 @@ export default function AdBuilderPage() {
                   onContentChange={setSelectedContent}
                   accountKey={accountKey ?? undefined}
                   onEl={updEl}
-                  onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch })}
+                  onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch }, `box:${selected.id}:${Object.keys(patch).sort().join(',')}`)}
                   onClose={clearSelection}
                   shifted={fieldsOpen}
-                  topPx={canvasTop}
+                  cropping={cropId === selected.id}
+                  onToggleCrop={() => {
+                    if (cropId === selected.id) {
+                      setCropId(null);
+                    } else {
+                      if (selected.fit !== 'cover') updEl({ fit: 'cover' });
+                      setCropId(selected.id);
+                    }
+                  }}
                 />
               )}
 
-              {!selected && !bgPanelHidden && (
+              {!selected && bgSelected && (
                 <BackgroundPanel
                   background={doc.background}
                   onChange={setBackground}
-                  onClose={() => setBgPanelHidden(true)}
+                  onClose={() => setBgSelected(false)}
+                  shifted={fieldsOpen}
                   hasBgImage={!!bgImageId}
+                  bgThumb={(bgImageId ? resolveBindingUrl(doc.elements.find((e) => e.id === bgImageId)) : undefined) ?? undefined}
                   onAddImage={addBackgroundImage}
                   onEditImage={() => bgImageId && selectOne(bgImageId)}
                   onRemoveImage={() => bgImageId && deleteElement(bgImageId)}
-                  shifted={fieldsOpen}
-                  topPx={canvasTop}
                 />
               )}
             </div>
@@ -3268,18 +3312,46 @@ export default function AdBuilderPage() {
         />
       )}
 
-      {loadOpen && (
-        <LoadModal
-          loading={loadingList}
-          templates={savedList}
-          currentId={templateId}
-          onClose={() => setLoadOpen(false)}
-          onLoad={loadTemplate}
-          onDelete={deleteSaved}
-        />
+      {/* Sizes — a centered modal (switch / add / remove / copy layout), opened
+          from the canvas action bar. Backdrop click closes it. */}
+      {sizesOpen && (
+        <div
+          className="fixed inset-0 z-[120] flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
+          onPointerDown={(e) => {
+            if (e.target === e.currentTarget) setSizesOpen(false);
+          }}
+        >
+          <SizesManager
+            doc={doc}
+            sizeId={sizeId}
+            sizeLabel={size.label}
+            setSizeId={setSizeId}
+            removeSize={removeSize}
+            addSize={addSize}
+            createLibrarySize={createLibrarySize}
+            copyLayoutFrom={copyLayoutFrom}
+            libSizes={libSizes}
+            addSizeOpen={addSizeOpen}
+            setAddSizeOpen={setAddSizeOpen}
+            customName={customName}
+            setCustomName={setCustomName}
+            customW={customW}
+            setCustomW={setCustomW}
+            customH={customH}
+            setCustomH={setCustomH}
+            onClose={() => setSizesOpen(false)}
+            viewAll={viewAll}
+            onViewAll={() => {
+              setViewAll(true);
+              setSizesOpen(false);
+            }}
+          />
+        </div>
       )}
 
       {helpOpen && <ShortcutsModal onClose={() => setHelpOpen(false)} />}
+
+      {deployOpen && <DeployTemplateModal name={templateName} doc={doc} excludeKey={scopeAccount} onClose={() => setDeployOpen(false)} />}
 
       {/* Right-click context menu (canvas + layers) */}
       {ctxMenu && typeof document !== 'undefined' &&
@@ -3612,7 +3684,8 @@ function SelectionPanel({
   onBox,
   onClose,
   shifted,
-  topPx,
+  cropping,
+  onToggleCrop,
 }: {
   el: DocElement;
   box: DocLayoutBox;
@@ -3627,7 +3700,8 @@ function SelectionPanel({
   onBox: (patch: Partial<DocLayoutBox>) => void;
   onClose: () => void;
   shifted: boolean;
-  topPx: number;
+  cropping: boolean;
+  onToggleCrop: () => void;
 }) {
   const fontSize = box.fontSize ?? 16;
   const typeLabel = el.type === 'text' ? 'Text' : el.type === 'image' ? 'Image' : el.type === 'logo' ? 'Logo' : 'Shape';
@@ -3635,8 +3709,7 @@ function SelectionPanel({
 
   return (
     <div
-      style={{ top: topPx, maxHeight: `calc(100vh - ${topPx + 16}px)` }}
-      className={`fixed z-[70] flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[372px]' : 'right-6'}`}
+      className={`absolute bottom-4 top-4 z-[70] flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[360px]' : 'right-4'}`}
     >
       <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
@@ -3854,20 +3927,109 @@ function SelectionPanel({
           </>
         )}
 
-        {el.type === 'shape' && (
+        {el.type === 'shape' && (() => {
+          const kind = el.shapeKind ?? 'rect';
+          const grad = el.gradient;
+          const SHAPES = ['rect', 'ellipse', 'triangle', 'diamond', 'star'] as const;
+          return (
           <PanelSection title="Shape">
-            <div className="flex items-center gap-4">
+            {/* Silhouette picker — each swatch previews its own clip-path. */}
+            <div className="mb-3 flex items-center gap-1">
+              {SHAPES.map((k) => (
+                <BarBtn key={k} title={k[0].toUpperCase() + k.slice(1)} active={kind === k} onClick={() => onEl({ shapeKind: k === 'rect' ? undefined : k })}>
+                  <span
+                    className="h-3.5 w-3.5 bg-current"
+                    style={{ clipPath: SHAPE_CLIP[k], borderRadius: k === 'ellipse' ? '50%' : k === 'rect' ? '2px' : undefined }}
+                  />
+                </BarBtn>
+              ))}
+            </div>
+            {/* Fill — solid or two-stop gradient (mirrors the canvas background). */}
+            {grad ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-4">
+                  <label className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                    From
+                    <ColorSwatchInput title="Gradient start" value={grad[0]} onChange={(v) => onEl({ gradient: [v, grad[1]] })} />
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                    To
+                    <ColorSwatchInput title="Gradient end" value={grad[1]} onChange={(v) => onEl({ gradient: [grad[0], v] })} />
+                  </label>
+                </div>
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-xs text-[var(--muted-foreground)]">Angle</span>
+                    <span className="text-[11px] tabular-nums text-[var(--muted-foreground)]">{el.gradientAngle ?? 135}°</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={360}
+                    step={1}
+                    value={el.gradientAngle ?? 135}
+                    onChange={(e) => onEl({ gradientAngle: Number(e.target.value) })}
+                    aria-label="Gradient angle"
+                    className="range-slider"
+                  />
+                </div>
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-xs text-[var(--muted-foreground)]">Spread</span>
+                    <span className="text-[11px] tabular-nums text-[var(--muted-foreground)]">{el.gradientStops?.[0] ?? 0}%–{el.gradientStops?.[1] ?? 100}%</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <MiniNum
+                      title="Start stop (%)"
+                      value={el.gradientStops?.[0] ?? 0}
+                      step={5}
+                      onChange={(v) => {
+                        const start = Math.max(0, Math.min(100, v));
+                        const end = el.gradientStops?.[1] ?? 100;
+                        onEl({ gradientStops: [Math.min(start, end), end] });
+                      }}
+                    />
+                    <span className="text-[11px] text-[var(--muted-foreground)]">to</span>
+                    <MiniNum
+                      title="End stop (%)"
+                      value={el.gradientStops?.[1] ?? 100}
+                      step={5}
+                      onChange={(v) => {
+                        const end = Math.max(0, Math.min(100, v));
+                        const start = el.gradientStops?.[0] ?? 0;
+                        onEl({ gradientStops: [start, Math.max(start, end)] });
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : (
               <label className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
                 Fill
                 <ColorSwatchInput title="Fill" value={el.fill && el.fill !== 'brand' ? el.fill : '#4f46e5'} onChange={(v) => onEl({ fill: v })} />
               </label>
-              <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+            )}
+            <button
+              type="button"
+              onClick={() =>
+                grad
+                  ? onEl({ gradient: undefined })
+                  : onEl({ gradient: [el.fill && el.fill !== 'brand' ? el.fill : '#4f46e5', '#1e293b'] })
+              }
+              className="mt-2 text-[11px] font-medium text-[var(--primary)] transition-opacity hover:opacity-80"
+            >
+              {grad ? 'Use a solid color' : 'Use a gradient'}
+            </button>
+            {/* Corner radius only applies to a plain rectangle. */}
+            {kind === 'rect' && (
+              <label className="mt-3 flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
                 Radius
                 <MiniNum title="Corner radius (px)" value={el.radius ?? 0} onChange={(v) => onEl({ radius: v ? Math.round(v) : undefined })} />
               </label>
-            </div>
+            )}
           </PanelSection>
-        )}
+          );
+        })()}
 
         {(el.type === 'image' || el.type === 'logo') && (
           <PanelSection title="Image">
@@ -3878,6 +4040,22 @@ function SelectionPanel({
               <BarBtn title="Fill (cover)" active={el.fit === 'cover'} onClick={() => onEl({ fit: 'cover' })}>
                 <ArrowsPointingOutIcon className="h-4 w-4" />
               </BarBtn>
+              {/* Crop — flips to Fill (cover) if needed, then lets the designer
+                  drag the image on the canvas + zoom in. Toggles crop mode. */}
+              <button
+                type="button"
+                onClick={onToggleCrop}
+                title="Crop — drag the image on the canvas to reposition"
+                aria-pressed={cropping}
+                className={`ml-1 inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs font-medium transition-colors ${
+                  cropping
+                    ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+                    : 'border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] hover:text-[var(--primary)]'
+                }`}
+              >
+                <CropIcon className="h-4 w-4" />
+                {cropping ? 'Done' : 'Crop'}
+              </button>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-4">
               <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
@@ -3897,14 +4075,25 @@ function SelectionPanel({
                 />
               </label>
             </div>
-            {el.fit === 'cover' && (
-              <>
-                {/* Crop framing — which part of the image shows inside the box.
-                    Renderer maps these to object-position (per size). Resize the
-                    box to change the crop shape; these set what stays in frame. */}
-                <div className="mt-3 flex flex-wrap items-center gap-4">
+            {cropping && (
+              // Crop mode — the box IS the crop window. Drag the image on the
+              // canvas to reposition; zoom scales it in; X/Y are precise framing.
+              <div className="mt-3 rounded-xl border border-[var(--primary)]/40 bg-[var(--primary)]/5 p-3">
+                <div className="flex flex-wrap items-center gap-4">
                   <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-                    Crop&nbsp;X
+                    Zoom
+                    <MiniNum
+                      title="Crop zoom (%) — 100 = fit, higher crops in"
+                      value={Math.round((box.objectScale ?? 1) * 100)}
+                      step={10}
+                      onChange={(v) => {
+                        const s = Math.max(100, Math.min(400, v)) / 100;
+                        onBox({ objectScale: s > 1 ? +s.toFixed(2) : undefined });
+                      }}
+                    />
+                  </label>
+                  <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                    X
                     <MiniNum
                       title="Horizontal framing (%) — 0 = left, 100 = right"
                       value={Math.round((box.objectX ?? 0.5) * 100)}
@@ -3913,7 +4102,7 @@ function SelectionPanel({
                     />
                   </label>
                   <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-                    Crop&nbsp;Y
+                    Y
                     <MiniNum
                       title="Vertical framing (%) — 0 = top, 100 = bottom"
                       value={Math.round((box.objectY ?? 0.5) * 100)}
@@ -3922,11 +4111,17 @@ function SelectionPanel({
                     />
                   </label>
                 </div>
-                <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
-                  Resize the box to set the crop shape; Crop X/Y frame which part of the image shows.
-                  {el.type === 'image' ? ' A full-bleed background can also be dragged on the canvas.' : ''}
-                </p>
-              </>
+                <div className="mt-2.5 flex items-center justify-between gap-2">
+                  <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">Drag the image on the canvas to reposition. Resize the box to change the crop shape.</p>
+                  <button
+                    type="button"
+                    onClick={() => onBox({ objectX: undefined, objectY: undefined, objectScale: undefined })}
+                    className="flex-shrink-0 rounded-md px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                  >
+                    Reset
+                  </button>
+                </div>
+              </div>
             )}
           </PanelSection>
         )}
@@ -3957,26 +4152,89 @@ function PanelSection({ title, children }: { title: string; children: React.Reac
 }
 
 /** An icon button in the left rail — opens its panel as a flyout. */
-function RailButton({ label, Icon, active, onClick, primary }: { label: string; Icon: React.ComponentType<{ className?: string }>; active: boolean; onClick: () => void; primary?: boolean }) {
+function RailButton({ label, Icon, active, onClick, primary, activeClassName, noTooltip }: { label: string; Icon: React.ComponentType<{ className?: string }>; active: boolean; onClick: () => void; primary?: boolean; activeClassName?: string; noTooltip?: boolean }) {
   // `primary` = the marquee action (Insert): solid brand fill so it stands out
   // from the secondary rail buttons, regardless of open/closed state.
+  // `activeClassName` overrides the active style (e.g. an icon-only color for the
+  // view-guide toggles) instead of the default brand-tinted background.
+  // `noTooltip` skips the hover tooltip (e.g. Margins, which shows its own popup).
   const cls = primary
     ? 'bg-[var(--primary)] text-white shadow-sm hover:opacity-90'
     : active
-      ? 'bg-[var(--primary)]/15 text-[var(--primary)]'
+      ? activeClassName ?? 'bg-[var(--primary)]/15 text-[var(--primary)]'
       : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]';
+  const btn = (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      aria-pressed={active}
+      className={`flex h-11 w-11 items-center justify-center rounded-xl transition-colors ${cls}`}
+    >
+      <Icon className="h-5 w-5" />
+    </button>
+  );
+  return noTooltip ? btn : <SidebarTooltip label={label}>{btn}</SidebarTooltip>;
+}
+
+/** Renders a detached element's actual content in the (unclipped) canvas
+ *  overlay — the artboard iframe clips anything off-canvas, so a parked element
+ *  would otherwise be invisible. Best-effort fidelity (text / image / shape). */
+function DetachedVisual({
+  el,
+  box,
+  scale,
+  previewData,
+  resolveUrl,
+}: {
+  el: DocElement;
+  box: DocLayoutBox;
+  scale: number;
+  previewData: AdData;
+  resolveUrl: (el: DocElement | null | undefined) => string | null;
+}) {
+  const brand = typeof previewData.brandColor === 'string' ? previewData.brandColor : '#4f46e5';
+  if (el.type === 'shape') {
+    const kind = el.shapeKind ?? 'rect';
+    const fill = el.gradient
+      ? `linear-gradient(${el.gradientAngle ?? 135}deg, ${el.gradient[0]}, ${el.gradient[1]})`
+      : el.fill === 'brand'
+        ? brand
+        : el.fill || '#4f46e5';
+    return (
+      <span
+        className="pointer-events-none absolute inset-0"
+        style={{ background: fill, clipPath: SHAPE_CLIP[kind], borderRadius: kind === 'ellipse' ? '50%' : el.radius ?? 0 }}
+      />
+    );
+  }
+  if (el.type === 'image' || el.type === 'logo') {
+    const url = resolveUrl(el);
+    return url ? (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={url} alt="" draggable={false} className="pointer-events-none absolute inset-0 h-full w-full" style={{ objectFit: el.fit === 'cover' ? 'cover' : 'contain', borderRadius: el.radius ?? 0 }} />
+    ) : (
+      <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-[var(--muted)] text-[10px] text-[var(--muted-foreground)]">{el.type === 'logo' ? 'Logo' : 'Image'}</span>
+    );
+  }
+  const val = el.binding?.kind === 'static' ? el.binding.value : el.binding ? String(previewData[el.binding.key] ?? el.binding.key) : 'Text';
+  const color = el.color === 'brand' ? (typeof previewData.brandColor === 'string' ? previewData.brandColor : '#111827') : el.color || '#111827';
   return (
-    <SidebarTooltip label={label}>
-      <button
-        type="button"
-        onClick={onClick}
-        aria-label={label}
-        aria-pressed={active}
-        className={`flex h-11 w-11 items-center justify-center rounded-xl transition-colors ${cls}`}
-      >
-        <Icon className="h-5 w-5" />
-      </button>
-    </SidebarTooltip>
+    <span
+      className="pointer-events-none absolute inset-0 overflow-hidden"
+      style={{
+        color,
+        fontSize: (box.fontSize ?? 16) * scale,
+        fontWeight: el.fontWeight,
+        lineHeight: el.lineHeight ?? 1.1,
+        letterSpacing: el.letterSpacing ? el.letterSpacing * scale : undefined,
+        textTransform: el.uppercase ? 'uppercase' : undefined,
+        textAlign: el.align ?? 'left',
+        fontFamily: el.fontFamily || undefined,
+      }}
+    >
+      {val}
+    </span>
   );
 }
 
@@ -3986,8 +4244,8 @@ type Adder = { label: string; Icon: React.ComponentType<{ className?: string }>;
  *  Shared by the Insert flyout (`panel`) and the empty-canvas onboarding
  *  (`onboarding`); `variant` only tunes density. */
 function AdderGrid({ adders, variant }: { adders: Adder[]; variant: 'panel' | 'onboarding' }) {
-  const cols = variant === 'panel' ? 'grid-cols-2' : 'grid-cols-4';
-  const tile = variant === 'panel' ? 'justify-center gap-2 py-5 text-xs' : 'gap-1.5 py-3 text-[11px]';
+  const cols = variant === 'panel' ? 'grid-cols-2' : 'grid-cols-5';
+  const tile = variant === 'panel' ? 'justify-center gap-2 py-5 text-xs' : 'gap-1.5 py-2.5 text-[10px]';
   const icon = variant === 'panel' ? 'h-6 w-6' : 'h-5 w-5';
   return (
     <div className={`grid ${cols} gap-2`}>
@@ -3995,9 +4253,9 @@ function AdderGrid({ adders, variant }: { adders: Adder[]; variant: 'panel' | 'o
         <button
           key={a.label}
           onClick={a.onAdd}
-          className={`flex flex-col items-center rounded-xl border border-[var(--border)] px-2 font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)] ${tile}`}
+          className={`group flex flex-col items-center rounded-xl border border-[var(--border)] px-2 font-medium text-[var(--foreground)] transition-all hover:-translate-y-0.5 hover:border-[var(--primary)] hover:bg-[var(--primary)]/5 hover:shadow-sm ${tile}`}
         >
-          <a.Icon className={`${icon} text-[var(--muted-foreground)]`} />
+          <a.Icon className={`${icon} text-[var(--muted-foreground)] transition-colors group-hover:text-[var(--primary)]`} />
           {a.label}
         </button>
       ))}
@@ -4132,47 +4390,106 @@ function PreviewBoard({
 }
 
 /**
- * Background panel — shown in the inspector slot when nothing is selected, so
- * the artboard's fill (solid or gradient) and the brand accent bar are editable
- * without selecting an element. Mirrors the SelectionPanel's docked styling.
+ * Background (Canvas) panel — shown only when the canvas is focused (click the
+ * empty artboard). Two tabs: **Color** (solid/gradient fill + brand accent) and
+ * **Image** (a full-bleed photo, which is really a normal image element you can
+ * later select to crop/reposition). Mirrors the SelectionPanel's docked styling.
  */
 function BackgroundPanel({
   background,
   onChange,
   onClose,
+  shifted,
   hasBgImage,
+  bgThumb,
   onAddImage,
   onEditImage,
   onRemoveImage,
-  shifted,
-  topPx,
 }: {
   background?: DocBackground;
   onChange: (patch: Partial<DocBackground>) => void;
   onClose: () => void;
+  shifted: boolean;
   hasBgImage: boolean;
+  bgThumb?: string;
   onAddImage: () => void;
   onEditImage: () => void;
   onRemoveImage: () => void;
-  shifted: boolean;
-  topPx: number;
 }) {
   const bg = background ?? {};
   const grad = bg.gradient;
+  const [tab, setTab] = useState<'color' | 'image'>(hasBgImage ? 'image' : 'color');
   return (
     <div
-      style={{ top: topPx, maxHeight: `calc(100vh - ${topPx + 16}px)` }}
-      className={`fixed z-[70] flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[372px]' : 'right-6'}`}
+      className={`absolute bottom-4 top-4 z-[70] flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[360px]' : 'right-4'}`}
     >
       <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
           <span className="text-sm font-semibold text-[var(--foreground)]">Background</span>
           <span className="shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">Canvas</span>
         </div>
-        <button onClick={onClose} title="Hide background panel" aria-label="Hide background panel" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+        <button onClick={onClose} title="Close" aria-label="Close" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
           <XMarkIcon className="h-4 w-4" />
         </button>
       </div>
+      {/* Color / Image tabs — the two ways to fill the canvas. */}
+      <div className="flex items-center gap-1 border-b border-[var(--border)] p-2">
+        {(['color', 'image'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`flex-1 rounded-lg px-2 py-1.5 text-xs font-medium capitalize transition-colors ${
+              tab === t ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
+      {tab === 'image' ? (
+        <div className="flex flex-col px-3 py-0.5">
+          <PanelSection title="Image">
+            {hasBgImage ? (
+              <>
+                <div className="flex items-center gap-3">
+                  <span
+                    className="h-14 w-14 flex-shrink-0 rounded-lg border border-[var(--border)] bg-[var(--muted)] bg-cover bg-center"
+                    style={bgThumb ? { backgroundImage: `url(${bgThumb})` } : undefined}
+                  />
+                  <div className="flex flex-1 flex-col gap-1.5">
+                    <button
+                      onClick={onEditImage}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                    >
+                      <PhotoIcon className="h-4 w-4" />
+                      Replace / crop
+                    </button>
+                    <button
+                      onClick={onRemoveImage}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                      Remove
+                    </button>
+                  </div>
+                </div>
+                <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Opens the image layer — pick a new photo, then drag on the canvas or crop it.</p>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={onAddImage}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-3 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                >
+                  <PhotoIcon className="h-4 w-4" />
+                  Upload / choose image
+                </button>
+                <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">A full-bleed photo behind everything — you can reposition and crop it after adding.</p>
+              </>
+            )}
+          </PanelSection>
+        </div>
+      ) : (
       <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
         <PanelSection title="Fill">
           {grad ? (
@@ -4253,43 +4570,285 @@ function BackgroundPanel({
             {grad ? 'Use a solid color' : 'Use a gradient'}
           </button>
         </PanelSection>
-        <PanelSection title="Image">
-          {hasBgImage ? (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={onEditImage}
-                className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-              >
-                <PhotoIcon className="h-4 w-4" />
-                Replace
-              </button>
-              <button
-                onClick={onRemoveImage}
-                title="Remove background image"
-                aria-label="Remove background image"
-                className="inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500"
-              >
-                <TrashIcon className="h-4 w-4" />
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={onAddImage}
-              className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-            >
-              <PhotoIcon className="h-4 w-4" />
-              Add background image
-            </button>
-          )}
-          <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
-            A full-bleed photo behind everything. Pick/upload it in the panel that opens, then drag to reposition.
-          </p>
-        </PanelSection>
         <PanelSection title="Accent">
           <ToggleRow label="Brand accent bar" on={!!bg.accentBar} onClick={() => onChange({ accentBar: !bg.accentBar })} />
         </PanelSection>
       </div>
+      )}
     </div>
+  );
+}
+
+/** Size management — switch / add / remove / duplicate-layout across the ad's
+ *  sizes. Rendered as a popover on the canvas action bar (bottom); the catalog +
+ *  custom-size form live here so all size actions sit with the size switcher. */
+function SizesManager({
+  doc,
+  sizeId,
+  sizeLabel,
+  setSizeId,
+  removeSize,
+  addSize,
+  createLibrarySize,
+  copyLayoutFrom,
+  libSizes,
+  addSizeOpen,
+  setAddSizeOpen,
+  customName,
+  setCustomName,
+  customW,
+  setCustomW,
+  customH,
+  setCustomH,
+  onClose,
+  viewAll,
+  onViewAll,
+}: {
+  doc: TemplateDoc;
+  sizeId: string;
+  sizeLabel: string;
+  setSizeId: (id: string) => void;
+  removeSize: (id: string) => void;
+  addSize: (label: string, width: number, height: number) => void;
+  createLibrarySize: () => void;
+  copyLayoutFrom: (id: string) => void;
+  libSizes: { id: string; name: string; width: number; height: number }[];
+  addSizeOpen: boolean;
+  setAddSizeOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  customName: string;
+  setCustomName: (v: string) => void;
+  customW: string;
+  setCustomW: (v: string) => void;
+  customH: string;
+  setCustomH: (v: string) => void;
+  onClose: () => void;
+  viewAll: boolean;
+  onViewAll: () => void;
+}) {
+  // Mini canvas fill for the ratio previews — mirrors the renderer's base fill.
+  const bg = doc.background;
+  const previewFill = bg?.gradient
+    ? `linear-gradient(${bg.gradientAngle ?? 135}deg, ${bg.gradient[0]}, ${bg.gradient[1]})`
+    : bg?.color && bg.color !== 'brand'
+      ? bg.color
+      : '#ffffff';
+
+  // Multiselect for the Add catalog — accumulate picks, add them all at once.
+  const [picked, setPicked] = useState<Record<string, { name: string; width: number; height: number }>>({});
+  const pickKey = (name: string, w: number, h: number) => `${name}:${w}x${h}`;
+  const togglePick = (name: string, w: number, h: number) =>
+    setPicked((prev) => {
+      const k = pickKey(name, w, h);
+      const next = { ...prev };
+      if (next[k]) delete next[k];
+      else next[k] = { name, width: w, height: h };
+      return next;
+    });
+  const pickedCount = Object.keys(picked).length;
+  const addPicked = () => {
+    Object.values(picked).forEach((s) => addSize(s.name, s.width, s.height));
+    setPicked({});
+    setAddSizeOpen(false);
+  };
+  // A ratio-accurate swatch (long edge = `long` px) for a catalog/list entry.
+  const ratioSwatch = (w: number, h: number, long: number, extraClass = '') => {
+    const tw = w >= h ? long : Math.round((long * w) / h);
+    const th = h >= w ? long : Math.round((long * h) / w);
+    return <span className={`rounded-[2px] border border-[var(--border)] ${extraClass}`} style={{ width: tw, height: th, background: previewFill }} />;
+  };
+  // A selectable catalog/library tile (checkbox-style multiselect + ratio).
+  const catalogTile = (name: string, w: number, h: number) => {
+    const sel = !!picked[pickKey(name, w, h)];
+    return (
+      <button
+        key={`${name}:${w}x${h}`}
+        onClick={() => togglePick(name, w, h)}
+        aria-pressed={sel}
+        className={`flex items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${sel ? 'border-[var(--primary)] bg-[var(--primary)]/10' : 'border-[var(--border)] hover:border-[var(--primary)]'}`}
+      >
+        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center">{ratioSwatch(w, h, 30)}</span>
+        <span className="min-w-0 flex-1">
+          <span className={`block truncate text-xs font-medium ${sel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>{name}</span>
+          <span className="block text-[10px] tabular-nums text-[var(--muted-foreground)]">{w}×{h}</span>
+        </span>
+        <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[4px] border ${sel ? 'border-[var(--primary)] bg-[var(--primary)] text-white' : 'border-[var(--muted-foreground)]/50'}`}>
+          {sel && <CheckIcon className="h-3 w-3" strokeWidth={3} />}
+        </span>
+      </button>
+    );
+  };
+  return (
+    <section
+      onPointerDown={(e) => e.stopPropagation()}
+      className="flex max-h-[85vh] w-[640px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl"
+    >
+      <div className="mb-2 flex items-center justify-between">
+        <h2 className="flex items-center gap-1.5 text-sm font-bold text-[var(--foreground)]">
+          <DashboardLayoutIcon className="h-4 w-4" />
+          Sizes
+        </h2>
+        <div className="flex items-center gap-1.5">
+          <Link href="/ad-generator/sizes" className="text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--primary)]">
+            Library
+          </Link>
+          <button
+            onClick={() => setAddSizeOpen((v) => !v)}
+            className="flex items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+          >
+            <PlusIcon className="h-3 w-3" />
+            Add
+          </button>
+          <button onClick={onClose} title="Close" aria-label="Close" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+            <XMarkIcon className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Lay every size out together on one canvas. */}
+      {doc.sizes.length > 1 && !viewAll && (
+        <button
+          onClick={onViewAll}
+          className="mb-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+        >
+          <Squares2X2Icon className="h-4 w-4" />
+          View all sizes together
+        </button>
+      )}
+
+      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+        {doc.sizes.map((s) => {
+          const count = Object.keys(doc.layouts[s.id] ?? {}).length;
+          const active = s.id === sizeId;
+          // A ratio-accurate swatch (max 44px on the long edge) so each size is
+          // recognizable at a glance without reading the dimensions.
+          const long = 44;
+          const tw = s.width >= s.height ? long : Math.round((long * s.width) / s.height);
+          const th = s.height >= s.width ? long : Math.round((long * s.height) / s.width);
+          return (
+            <div key={s.id} className={`flex items-center gap-1 rounded-lg pr-1 transition-colors ${active ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]/60'}`}>
+              <button
+                onClick={() => {
+                  setSizeId(s.id);
+                  onClose();
+                }}
+                className="flex flex-1 items-center gap-3 px-2 py-2 text-left"
+              >
+                <span className="flex h-11 w-11 flex-shrink-0 items-center justify-center">
+                  <span
+                    className={`rounded-[3px] border shadow-sm ${active ? 'border-[var(--primary)]' : 'border-[var(--border)]'}`}
+                    style={{ width: tw, height: th, background: previewFill }}
+                  />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className={`block truncate text-xs font-medium ${active ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>{s.label}</span>
+                  <span className="block text-[10px] text-[var(--muted-foreground)]">
+                    {s.width}×{s.height} · {count} {count === 1 ? 'layer' : 'layers'}
+                  </span>
+                </span>
+              </button>
+              {doc.sizes.length > 1 && (
+                <button onClick={() => removeSize(s.id)} title="Remove size" className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500">
+                  <TrashIcon className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {addSizeOpen && (
+        <div className="mt-2 flex min-h-0 flex-col rounded-lg border border-dashed border-[var(--border)]">
+          <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-2.5">
+            <p className="text-[11px] text-[var(--muted-foreground)]">Select one or more sizes to add, then hit Add.</p>
+            {/* Standard catalog, grouped by category — multiselect w/ ratio previews */}
+            {catalogByCategory().map((grp) => (
+              <div key={grp.category}>
+                <div className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{grp.label}</div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {grp.sizes.map((p) => catalogTile(p.name, p.width, p.height))}
+                </div>
+              </div>
+            ))}
+
+            {/* Custom sizes from the shared library (added on top of the catalog) */}
+            {libSizes.length > 0 && (
+              <div>
+                <div className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Custom</div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {libSizes.map((s) => catalogTile(s.name, s.width, s.height))}
+                </div>
+              </div>
+            )}
+
+            {/* Create a brand-new size — saved to the library + added here */}
+            <div className="space-y-1.5 border-t border-[var(--border)] pt-2.5">
+              <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Custom size</div>
+              <input
+                value={customName}
+                onChange={(e) => setCustomName(e.target.value)}
+                placeholder="New size name (e.g. Wide Banner)"
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+              />
+              <div className="flex items-center gap-1.5">
+                <input
+                  type="number"
+                  value={customW}
+                  onChange={(e) => setCustomW(e.target.value)}
+                  placeholder="W"
+                  className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                />
+                <span className="text-[var(--muted-foreground)]">×</span>
+                <input
+                  type="number"
+                  value={customH}
+                  onChange={(e) => setCustomH(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && createLibrarySize()}
+                  placeholder="H"
+                  className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                />
+                <button
+                  onClick={createLibrarySize}
+                  title="Save to the size library and add it here"
+                  className="flex-shrink-0 rounded-md bg-[var(--primary)] px-2.5 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                >
+                  Create
+                </button>
+              </div>
+            </div>
+          </div>
+          {/* Add-selected footer — always visible below the scroll area. */}
+          <div className="flex items-center justify-between gap-2 border-t border-[var(--border)] p-2">
+            <span className="text-[11px] text-[var(--muted-foreground)]">{pickedCount ? `${pickedCount} selected` : 'None selected'}</span>
+            <button
+              onClick={addPicked}
+              disabled={!pickedCount}
+              className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              Add {pickedCount || ''} {pickedCount === 1 ? 'size' : 'sizes'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {doc.sizes.length > 1 && (
+        <div className="mt-3 border-t border-[var(--border)] pt-3">
+          <label className="mb-1.5 block text-[11px] text-[var(--muted-foreground)]">Copy layout into {sizeLabel.split(' ')[0]} from</label>
+          <div className="flex flex-wrap gap-1.5">
+            {doc.sizes
+              .filter((s) => s.id !== sizeId)
+              .map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => copyLayoutFrom(s.id)}
+                  className="rounded-md border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                >
+                  {s.label.split(' ')[0]}
+                </button>
+              ))}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -4364,76 +4923,3 @@ function ShortcutsModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-/** The Template Library — open or delete a saved TemplateDoc. */
-function LoadModal({
-  loading,
-  templates,
-  currentId,
-  onClose,
-  onLoad,
-  onDelete,
-}: {
-  loading: boolean;
-  templates: SavedTemplate[];
-  currentId: string | null;
-  onClose: () => void;
-  onLoad: (t: SavedTemplate) => void;
-  onDelete: (id: string) => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-16" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-5 shadow-xl backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-start justify-between">
-          <div>
-            <h2 className="text-sm font-bold text-[var(--foreground)]">Template Library</h2>
-            <p className="text-xs text-[var(--muted-foreground)]">Open a saved template to keep editing. Published ones appear in the Ad Generator.</p>
-          </div>
-          <button onClick={onClose} className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
-            <XMarkIcon className="h-5 w-5" />
-          </button>
-        </div>
-
-        {loading ? (
-          <p className="py-8 text-center text-xs text-[var(--muted-foreground)]">Loading…</p>
-        ) : templates.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-8 text-center text-xs text-[var(--muted-foreground)]">
-            No saved templates yet. Save one to start your library.
-          </p>
-        ) : (
-          <div className="space-y-2">
-            {templates.map((t) => (
-              <div
-                key={t.id}
-                className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${t.id === currentId ? 'border-[var(--primary)]' : 'border-[var(--border)]'}`}
-              >
-                <button onClick={() => onLoad(t)} className="flex flex-1 items-center gap-2 text-left" disabled={!t.doc}>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="truncate text-xs font-medium text-[var(--foreground)]">{t.name}</span>
-                      <span
-                        className={`flex-shrink-0 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
-                          t.status === 'published' ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
-                        }`}
-                      >
-                        {t.status}
-                      </span>
-                      {!t.doc && <span className="text-[10px] text-red-500">unreadable</span>}
-                    </div>
-                    {t.description && <p className="mt-0.5 truncate text-[11px] text-[var(--muted-foreground)]">{t.description}</p>}
-                  </div>
-                </button>
-                <button
-                  onClick={() => onDelete(t.id)}
-                  title="Delete"
-                  className="flex-shrink-0 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500"
-                >
-                  <TrashIcon className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}

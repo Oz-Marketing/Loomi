@@ -179,7 +179,7 @@ export default function AdGeneratorListPage() {
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      router.push(`/ad-generator/builder?ad=${encodeURIComponent(json.creative.id)}${accountKey ? `&account=${encodeURIComponent(accountKey)}` : ''}`);
+      router.push(`/ad-generator/builder?ad=${encodeURIComponent(json.creative.id)}${accountKey ? `&account=${encodeURIComponent(accountKey)}` : ''}&from=${encodeURIComponent('/ad-generator')}`);
     } catch (err) {
       toast.error(`Couldn't create: ${err instanceof Error ? err.message : 'unknown error'}`);
       setCreating(false);

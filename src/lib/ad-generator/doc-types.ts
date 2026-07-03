@@ -61,10 +61,20 @@ export interface DocElement {
    *  images/logos for watermarks & overlays; rendered on the element wrapper. */
   opacity?: number;
   // ── shape ──
-  /** Hex fill, or `'brand'`. */
+  /** Shape silhouette. Defaults to `'rect'` (a plain rectangle). `ellipse` is a
+   *  circle/oval; `triangle`/`diamond`/`star` are drawn via CSS clip-path. */
+  shapeKind?: 'rect' | 'ellipse' | 'triangle' | 'diamond' | 'star';
+  /** Hex fill, or `'brand'`. Ignored when `gradient` is set. */
   fill?: string;
-  /** Corner radius in px. Applies to shapes AND images/logos (rounds the
-   *  image, which is clipped by the wrapper's overflow:hidden). */
+  /** Two-stop linear gradient fill [from, to] for a shape — mirrors the canvas
+   *  background gradient. When set, takes precedence over `fill`. */
+  gradient?: [string, string];
+  /** Gradient direction in degrees (CSS linear-gradient angle). Defaults to 135. */
+  gradientAngle?: number;
+  /** Stop offsets [start%, end%] along the gradient line (0–100). Defaults [0,100]. */
+  gradientStops?: [number, number];
+  /** Corner radius in px. Applies to rectangle shapes AND images/logos (rounds
+   *  the image, which is clipped by the wrapper's overflow:hidden). */
   radius?: number;
 }
 
@@ -87,6 +97,10 @@ export interface DocLayoutBox {
    *  image be framed differently for square vs. story, etc. */
   objectX?: number;
   objectY?: number;
+  /** Crop zoom (>= 1) for a `fit:cover` image — scales the image up inside its
+   *  box so the designer can crop in past the plain cover fit. 1 / undefined =
+   *  no extra zoom. Origin is the focal point (objectX/objectY). */
+  objectScale?: number;
 }
 
 /** Canvas base fill. A background IMAGE is a full-bleed image element/layer
@@ -116,6 +130,11 @@ export interface TemplateDoc {
   industries?: string[];
   /** Optional ad-type label for grouping (e.g. 'Vehicle Offer', 'Event'). */
   adType?: string;
+  /** Publish schedule for a PUBLISHED template. Absent → live indefinitely. A
+   *  window (ISO yyyy-MM-dd, inclusive) restricts when it appears in the template
+   *  library: hidden before `start`, hidden after `end`. Stored in the doc JSON
+   *  (no separate column). */
+  schedule?: { start?: string | null; end?: string | null };
   sizes: AdSize[];
   /** Form fields the user fills — reuses FieldSpec (copy / maxLength /
    *  visibleWhen all carry straight over from the code-template work). */

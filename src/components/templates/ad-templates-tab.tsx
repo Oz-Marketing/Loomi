@@ -1,7 +1,7 @@
 'use client';
 
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import useSWR from 'swr';
 import { toast } from 'sonner';
@@ -15,14 +15,18 @@ import {
   DocumentDuplicateIcon,
   TrashIcon,
   XMarkIcon,
+  BuildingStorefrontIcon,
+  GlobeAltIcon,
+  RocketLaunchIcon,
 } from '@heroicons/react/24/outline';
+import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { UserAvatar } from '@/components/user-avatar';
 import PrimaryButton from '@/components/primary-button';
 import { TemplatesHeaderActionsContext } from '@/app/email/templates/email-templates-view';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
-import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
+import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
@@ -31,6 +35,7 @@ type DocTemplate = {
   name: string;
   description: string | null;
   status: string;
+  accountKey: string | null;
   updatedAt: string;
   createdByName: string | null;
   createdByEmail: string | null;
@@ -53,7 +58,11 @@ const fetcher = async (url: string) => {
  */
 export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
   const router = useRouter();
-  const { accountData } = useAccount();
+  const pathname = usePathname();
+  const { accountData, accounts } = useAccount();
+  // Human name for a template's scope: its account's dealer name, or "All
+  // accounts" for a global (unscoped) template.
+  const scopeName = (key: string | null) => (key ? accounts[key]?.dealer ?? key : null);
   const { confirm } = useLoomiDialog();
   const headerSlot = useContext(TemplatesHeaderActionsContext);
 
@@ -72,13 +81,21 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
   );
   const branding = useMemo(() => brandingFromAccount(accountData), [accountData]);
 
-  const acct = accountKey ? `&account=${encodeURIComponent(accountKey)}` : '';
-  const newAcct = accountKey ? `?account=${encodeURIComponent(accountKey)}` : '';
+  // Every builder link carries `from` (this page + the Ads tab) so Back returns
+  // to the Ads tab specifically, plus the active account. Assembled once.
+  const backTo = `${pathname}?tab=ads`;
+  const builderQuery = (extra: Record<string, string>) => {
+    const q = new URLSearchParams({ ...extra, from: backTo });
+    if (accountKey) q.set('account', accountKey);
+    return `/ad-generator/builder?${q.toString()}`;
+  };
 
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [preview, setPreview] = useState<DocTemplate | null>(null);
   const [renameFor, setRenameFor] = useState<DocTemplate | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [deployFor, setDeployFor] = useState<DocTemplate | null>(null);
+  const [newOpen, setNewOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -91,8 +108,58 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
     return () => document.removeEventListener('mousedown', onDown);
   }, [menuFor]);
 
-  const edit = (id: string) => router.push(`/ad-generator/builder?template=${encodeURIComponent(id)}${acct}`);
-  const newTemplate = () => router.push(`/ad-generator/builder${newAcct}`);
+  const edit = (id: string) => router.push(builderQuery({ template: id }));
+  const newTemplate = () => setNewOpen(true);
+
+  // Create the draft record NOW (so it shows in the Ads list even if the user
+  // bails out of the editor), then open it. From-scratch → a blank doc; from a
+  // published template → a copy of its doc.
+  const createAndOpen = async (name: string, doc: TemplateDoc) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/ad-generator/templates-doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, doc: { ...doc, name }, status: 'draft', ...(accountKey ? { accountKey } : {}) }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      await mutate();
+      setNewOpen(false);
+      router.push(builderQuery({ template: json.template.id }));
+    } catch (err) {
+      toast.error(`Couldn't create: ${err instanceof Error ? err.message : 'unknown error'}`);
+      setBusy(false);
+    }
+  };
+  const startBlank = () => void createAndOpen('Untitled template', blankTemplateDoc(`tmpl-${Date.now()}`, 'Untitled template'));
+  const startFrom = (t: DocTemplate) => t.doc && void createAndOpen(`${t.name} copy`, structuredClone(t.doc));
+
+  // A scheduled template is only "live" within its window (inclusive, local
+  // yyyy-MM-dd). No schedule → always live.
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const inScheduleWindow = (t: DocTemplate) => {
+    const s = t.doc?.schedule;
+    if (!s) return true;
+    if (s.start && todayIso < s.start) return false;
+    if (s.end && todayIso > s.end) return false;
+    return true;
+  };
+  const scheduleBadge = (t: DocTemplate): string | null => {
+    const s = t.doc?.schedule;
+    if (!s || (!s.start && !s.end)) return null;
+    if (s.start && todayIso < s.start) return 'Scheduled';
+    if (s.end && todayIso > s.end) return 'Expired';
+    return 'Scheduled';
+  };
+
+  // Only published templates that are live right now can seed a new one.
+  const publishedTemplates = useMemo(
+    () => templates.filter((t) => t.status === 'published' && t.doc && inScheduleWindow(t)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [templates, todayIso],
+  );
 
   const clone = async (t: DocTemplate) => {
     if (!t.doc) return;
@@ -168,6 +235,7 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
     { key: 'edit', label: 'Edit', icon: PencilSquareIcon, run: (t) => edit(t.id) },
     { key: 'rename', label: 'Rename', icon: PencilIcon, run: (t) => { setRenameFor(t); setRenameValue(t.name); } },
     { key: 'clone', label: 'Clone', icon: DocumentDuplicateIcon, run: (t) => void clone(t) },
+    { key: 'deploy', label: 'Deploy to subaccounts', icon: RocketLaunchIcon, run: (t) => setDeployFor(t) },
     { key: 'delete', label: 'Delete', icon: TrashIcon, run: (t) => void remove(t), danger: true },
   ];
 
@@ -255,12 +323,24 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate text-sm font-semibold text-[var(--foreground)]">{t.name}</div>
-                    <span
-                      className={`mt-0.5 inline-block rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
-                        t.status === 'published' ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
-                      }`}
-                    >
-                      {t.status}
+                    <span className="mt-0.5 flex flex-wrap items-center gap-1">
+                      <span
+                        className={`inline-block rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+                          t.status === 'published' ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
+                        }`}
+                      >
+                        {t.status}
+                      </span>
+                      {scheduleBadge(t) && (
+                        <span className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                          {scheduleBadge(t)}
+                        </span>
+                      )}
+                    </span>
+                    {/* Scope — which account sees this template (or all of them). */}
+                    <span className="mt-1 flex items-center gap-1 text-[11px] text-[var(--muted-foreground)]">
+                      {t.accountKey ? <BuildingStorefrontIcon className="h-3.5 w-3.5 flex-shrink-0" /> : <GlobeAltIcon className="h-3.5 w-3.5 flex-shrink-0" />}
+                      <span className="truncate">{scopeName(t.accountKey) ?? 'All accounts'}</span>
                     </span>
                   </div>
                 </div>
@@ -302,6 +382,72 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
                 <PencilSquareIcon className="h-4 w-4" />
                 Edit
               </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
+      {/* Deploy a template into selected subaccounts (published copies) */}
+      {deployFor?.doc && (
+        <DeployTemplateModal
+          name={deployFor.name}
+          doc={deployFor.doc}
+          excludeKey={deployFor.accountKey}
+          onClose={() => setDeployFor(null)}
+          onDeployed={() => void mutate()}
+        />
+      )}
+
+      {/* New template — start from scratch, or seed from a published template */}
+      {newOpen && typeof document !== 'undefined' && createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4" onClick={() => setNewOpen(false)}>
+          <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-5 shadow-xl backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex items-start justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-bold text-[var(--foreground)]">New template</h2>
+                <p className="text-xs text-[var(--muted-foreground)]">Start from a blank artboard, or duplicate a published template as a starting point.</p>
+              </div>
+              <button onClick={() => setNewOpen(false)} className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+                <XMarkIcon className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <button
+                onClick={startBlank}
+                disabled={busy}
+                className="mb-4 flex w-full items-center gap-3 rounded-xl border border-dashed border-[var(--border)] p-4 text-left transition-colors hover:border-[var(--primary)] hover:bg-[var(--muted)]/40 disabled:opacity-50"
+              >
+                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--primary)]/10 text-[var(--primary)]">
+                  <PlusIcon className="h-5 w-5" />
+                </span>
+                <span>
+                  <span className="block text-sm font-semibold text-[var(--foreground)]">Start from scratch</span>
+                  <span className="block text-[11px] text-[var(--muted-foreground)]">An empty artboard — add your own elements.</span>
+                </span>
+              </button>
+
+              {publishedTemplates.length > 0 && (
+                <>
+                  <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Start from a published template</div>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {publishedTemplates.map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => startFrom(t)}
+                        disabled={busy}
+                        className="glass-card group overflow-hidden rounded-xl border border-[var(--border)] text-left transition-colors hover:border-[var(--primary)] disabled:opacity-50"
+                      >
+                        <div className="overflow-hidden">
+                          <AdPreviewThumb template={t.doc ? adTemplateFromDoc(t.id, t.doc) : undefined} data={t.doc?.defaults ?? {}} branding={branding} height={120} />
+                        </div>
+                        <div className="truncate px-2.5 py-2 text-xs font-medium text-[var(--foreground)]">{t.name}</div>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>,

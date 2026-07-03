@@ -666,6 +666,7 @@ export function DatePicker(props: DatePickerProps) {
               ref={popoverRef}
               role="dialog"
               aria-label="Date picker"
+              data-datepicker-popover=""
               className="fixed z-[200] w-[320px] rounded-xl border border-[var(--border)] bg-[var(--background)] shadow-2xl p-3"
               style={{ top: popoverPos.top, left: popoverPos.left }}
             >

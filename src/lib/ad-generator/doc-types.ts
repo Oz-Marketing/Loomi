@@ -219,8 +219,10 @@ export interface TemplateDoc {
    *  (vehicle templates default to Automotive + Powersports). Drives which
    *  accounts see it in the picker. */
   industries?: string[];
-  /** Optional ad-type label for grouping (e.g. 'Vehicle Offer', 'Event'). */
-  adType?: string;
+  /** Shared template taxonomy: a single category + freeform tags, used to
+   *  organize/filter this template alongside every other kind on /templates. */
+  category?: string;
+  tags?: string[];
   /** Publish schedule for a PUBLISHED template. Absent → live indefinitely. A
    *  window (ISO yyyy-MM-dd, inclusive) restricts when it appears in the template
    *  library: hidden before `start`, hidden after `end`. Stored in the doc JSON

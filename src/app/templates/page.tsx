@@ -10,17 +10,15 @@ import {
   SparklesIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
-import { FlowIcon } from '@/components/icon-map';
 import { AD_GENERATOR_ENABLED } from '@/lib/feature-flags';
 import { EmailTemplatesPanel, TemplatesHeaderActionsContext } from '@/app/email/templates/email-templates-view';
 import { FormTemplatesTab } from '@/components/templates/form-templates-tab';
-import { FlowTemplatesTab } from '@/components/templates/flow-templates-tab';
 import { LandingPageTemplatesTab } from '@/components/templates/landing-page-templates-tab';
 import { AdTemplatesTab } from '@/components/templates/ad-templates-tab';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
-type TabId = 'email' | 'forms' | 'flows' | 'landing-pages' | 'ads';
+type TabId = 'email' | 'forms' | 'landing-pages' | 'ads';
 
 interface TabDef {
   id: TabId;
@@ -32,7 +30,6 @@ interface TabDef {
 const MANAGER_TABS: TabDef[] = [
   { id: 'email', label: 'Email', subtitle: 'Email templates for campaigns and flows.', icon: EnvelopeIcon },
   { id: 'forms', label: 'Forms', subtitle: 'Reusable form templates.', icon: DocumentTextIcon },
-  { id: 'flows', label: 'Flows', subtitle: 'Reusable flow templates you can adopt into an account.', icon: FlowIcon as IconComponent },
   { id: 'landing-pages', label: 'Landing Pages', subtitle: 'Saved landing page templates.', icon: RectangleStackIcon },
 ];
 
@@ -172,7 +169,6 @@ function TemplatesPageInner() {
           />
         )}
         {tab === 'forms' && <FormTemplatesTab accountKey={scopedAccountKey} />}
-        {tab === 'flows' && <FlowTemplatesTab />}
         {tab === 'landing-pages' && (
           <LandingPageTemplatesTab accountKey={scopedAccountKey} />
         )}

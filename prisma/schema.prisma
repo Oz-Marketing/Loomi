@@ -787,8 +787,13 @@ model Form {
   // "Save as template" clones a form's schema into a new isTemplate row.
   isTemplate      Boolean      @default(false)
   submissionCount Int          @default(0)
+  // Shared template taxonomy (Category + Tags) — used when isTemplate=true so
+  // form templates organize alongside every other kind on /templates.
+  category        String?
+  tags            String?      @db.Text // JSON string[] of tag names
   createdByUserId String?
   publishedAt     DateTime?
+  publishedByUserId String?
   createdAt       DateTime     @default(now())
   updatedAt       DateTime     @updatedAt
 
@@ -1142,6 +1147,14 @@ model AccountLandingPageTemplate {
   // Informational pointer to the LP this template was saved from.
   // Not an FK — we want the template to outlive the source LP.
   sourceLpId      String?
+  // Publish lifecycle — added so LP templates share the Draft/Published model
+  // every other template kind has (admins see both; clients see published only).
+  status          String   @default("draft") // draft | published
+  publishedAt     DateTime?
+  publishedByUserId String?
+  // Shared template taxonomy (Category + Tags).
+  category        String?
+  tags            String?  @db.Text // JSON string[] of tag names
   createdByUserId String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -2131,10 +2144,11 @@ model AdTemplateDoc {
   // null = global (offered to every account the industry filter allows);
   // set = only that account sees it in the picker (dealer-branded plates etc.).
   accountKey  String?
-  // Ad Type taxonomy — which AdType this template belongs to (e.g. Vehicle Offer,
-  // Service Offer). Drives library filtering + the form's question set. Nullable
-  // for legacy/untyped templates.
-  adTypeId    String?
+  // Shared template taxonomy (same Category + Tags model email uses): a single
+  // category string + a JSON string[] of tag names. Designers assign them so the
+  // library filters consistently across every template kind.
+  category    String?
+  tags        String?  @db.Text // JSON string[] of tag names
   createdBy   String? // user id / email who last saved it
   // Last-saver display info (for the template card author, like email cards).
   createdByName  String?
@@ -2145,35 +2159,6 @@ model AdTemplateDoc {
 
   @@index([status, isActive])
   @@index([accountKey])
-  @@index([adTypeId])
-}
-
-// ─────────────────────────────────────────────────────
-// Ad Generator — Ad Types (taxonomy + question set)
-// ─────────────────────────────────────────────────────
-//
-// An admin-configurable ad "type" scoped to an INDUSTRY (e.g. Automotive →
-// "Vehicle Offer", Construction → "Service Offer"). It carries the form question
-// set (JSON FieldSpec[]) and a `vehicleMode` (none | single | dual) that toggles
-// the built-in vehicle/EVOX/OEM/offer engine. Templates + creatives reference one
-// via adTypeId; an account only sees types matching its industry (Account.category).
-// Additive; reaches an environment via db push on deploy, queried resiliently.
-model AdType {
-  id          String   @id @default(cuid())
-  name        String // the specific type / tag, e.g. "Single Offer", "Service Offer"
-  description String?  @db.Text
-  industry    String // account-scoping — matches app-industries / Account.category
-  category    String? // folder within the industry, e.g. "Sales", "Service", "Event"
-  vehicleMode String   @default("none") // none | single | dual
-  fields      String   @db.Text @default("[]") // JSON FieldSpec[]
-  sortOrder   Int      @default(0)
-  isActive    Boolean  @default(true)
-  createdBy   String?
-  createdByName String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  @@index([industry, isActive])
 }
 
 // ─────────────────────────────────────────────────────
@@ -2212,7 +2197,6 @@ model AdCreative {
   accountKey    String
   name          String
   templateId    String // code template id or AdTemplateDoc id (the source)
-  adTypeId      String? // Ad Type taxonomy (denormalized at creation for filtering)
   // Frozen copy of the template's design at creation (JSON TemplateDoc). The ad
   // renders from THIS, so later edits to the master template don't change it —
   // each ad is an independent, subaccount-owned copy. Null for older ads /

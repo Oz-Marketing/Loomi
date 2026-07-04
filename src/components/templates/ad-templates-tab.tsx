@@ -1,6 +1,6 @@
 'use client';
 
-import { useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useContext, useMemo, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import useSWR from 'swr';
@@ -8,23 +8,22 @@ import { toast } from 'sonner';
 import {
   PlusIcon,
   SparklesIcon,
-  EllipsisVerticalIcon,
   EyeIcon,
   PencilSquareIcon,
   PencilIcon,
   DocumentDuplicateIcon,
   TrashIcon,
   XMarkIcon,
-  BuildingStorefrontIcon,
-  GlobeAltIcon,
   RocketLaunchIcon,
+  CheckCircleIcon,
+  ArrowUturnLeftIcon,
 } from '@heroicons/react/24/outline';
 import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
-import { UserAvatar } from '@/components/user-avatar';
 import PrimaryButton from '@/components/primary-button';
 import { TemplatesHeaderActionsContext } from '@/app/email/templates/email-templates-view';
+import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
@@ -36,6 +35,8 @@ type DocTemplate = {
   description: string | null;
   status: string;
   accountKey: string | null;
+  category: string | null;
+  tags: string[];
   updatedAt: string;
   createdByName: string | null;
   createdByEmail: string | null;
@@ -80,6 +81,12 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
     [data, accountData?.category],
   );
   const branding = useMemo(() => brandingFromAccount(accountData), [accountData]);
+  // Shared taxonomy vocabulary (categories + tags across every template kind).
+  const { data: taxData } = useSWR<{ categories?: string[]; tags?: string[] }>('/api/template-taxonomy', fetcher);
+  const taxonomy = useMemo(
+    () => ({ categories: taxData?.categories ?? [], tags: taxData?.tags ?? [] }),
+    [taxData],
+  );
 
   // Every builder link carries `from` (this page + the Ads tab) so Back returns
   // to the Ads tab specifically, plus the active account. Assembled once.
@@ -90,25 +97,34 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
     return `/ad-generator/builder?${q.toString()}`;
   };
 
-  const [menuFor, setMenuFor] = useState<string | null>(null);
   const [preview, setPreview] = useState<DocTemplate | null>(null);
   const [renameFor, setRenameFor] = useState<DocTemplate | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [deployFor, setDeployFor] = useState<DocTemplate | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!menuFor) return;
-    const onDown = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuFor(null);
-    };
-    document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, [menuFor]);
 
   const edit = (id: string) => router.push(builderQuery({ template: id }));
+
+  // Inline taxonomy + publish edits — PATCH the row and refresh.
+  const patchTemplate = async (id: string, body: Record<string, unknown>) => {
+    try {
+      const res = await fetch(`/api/ad-generator/templates-doc/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await mutate();
+    } catch (err) {
+      toast.error(`Couldn't save: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  };
+  const setPublished = (t: DocTemplate, published: boolean) => {
+    void patchTemplate(t.id, { status: published ? 'published' : 'draft' }).then(
+      () => toast.success(published ? 'Published' : 'Moved to draft'),
+    );
+  };
   const newTemplate = () => setNewOpen(true);
 
   // Create the draft record NOW (so it shows in the Ads list even if the user
@@ -230,13 +246,16 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
     return <div className="text-sm text-[var(--muted-foreground)]">Loading…</div>;
   }
 
-  const MENU: { key: string; label: string; icon: typeof EyeIcon; run: (t: DocTemplate) => void; danger?: boolean }[] = [
-    { key: 'view', label: 'View', icon: EyeIcon, run: (t) => setPreview(t) },
-    { key: 'edit', label: 'Edit', icon: PencilSquareIcon, run: (t) => edit(t.id) },
-    { key: 'rename', label: 'Rename', icon: PencilIcon, run: (t) => { setRenameFor(t); setRenameValue(t.name); } },
-    { key: 'clone', label: 'Clone', icon: DocumentDuplicateIcon, run: (t) => void clone(t) },
-    { key: 'deploy', label: 'Deploy to subaccounts', icon: RocketLaunchIcon, run: (t) => setDeployFor(t) },
-    { key: 'delete', label: 'Delete', icon: TrashIcon, run: (t) => void remove(t), danger: true },
+  const actionsFor = (t: DocTemplate): TemplateCardAction[] => [
+    { key: 'view', label: 'View', icon: EyeIcon, run: () => setPreview(t) },
+    { key: 'edit', label: 'Edit', icon: PencilSquareIcon, run: () => edit(t.id) },
+    { key: 'rename', label: 'Rename', icon: PencilIcon, run: () => { setRenameFor(t); setRenameValue(t.name); } },
+    { key: 'clone', label: 'Clone', icon: DocumentDuplicateIcon, run: () => void clone(t) },
+    { key: 'deploy', label: 'Deploy to subaccounts', icon: RocketLaunchIcon, run: () => setDeployFor(t) },
+    t.status === 'published'
+      ? { key: 'unpublish', label: 'Move to draft', icon: ArrowUturnLeftIcon, run: () => setPublished(t, false) }
+      : { key: 'publish', label: 'Publish', icon: CheckCircleIcon, run: () => setPublished(t, true) },
+    { key: 'delete', label: 'Delete', icon: TrashIcon, run: () => void remove(t), danger: true },
   ];
 
   return (
@@ -273,86 +292,31 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {templates.map((t) => {
           const template = t.doc ? adTemplateFromDoc(t.id, t.doc) : undefined;
+          const badge = scheduleBadge(t);
           return (
-            <div
+            <TemplateCard
               key={t.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => edit(t.id)}
-              onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && edit(t.id)}
-              className="glass-card group relative cursor-pointer rounded-2xl border border-[var(--border)] text-left transition-colors hover:border-[var(--primary)]"
-            >
-              <div className="overflow-hidden rounded-t-2xl">
-                <AdPreviewThumb template={template} data={t.doc?.defaults ?? {}} branding={branding} height={150} />
-              </div>
-
-              {/* Row menu */}
-              <div className="absolute right-2 top-2" ref={menuFor === t.id ? menuRef : undefined}>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setMenuFor((cur) => (cur === t.id ? null : t.id));
-                  }}
-                  title="Actions"
-                  className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--card-strong)]/90 text-[var(--muted-foreground)] backdrop-blur transition-colors hover:text-[var(--foreground)]"
-                >
-                  <EllipsisVerticalIcon className="h-4 w-4" />
-                </button>
-                {menuFor === t.id && (
-                  <div className="absolute right-0 top-full mt-1 z-30 w-40 glass-dropdown" onClick={(e) => e.stopPropagation()}>
-                    {MENU.map((m) => (
-                      <button
-                        key={m.key}
-                        onClick={() => {
-                          setMenuFor(null);
-                          m.run(t);
-                        }}
-                        className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--muted)] ${
-                          m.danger ? 'text-red-500' : 'text-[var(--foreground)]'
-                        }`}
-                      >
-                        <m.icon className="h-4 w-4" />
-                        {m.label}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              <div className="p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold text-[var(--foreground)]">{t.name}</div>
-                    <span className="mt-0.5 flex flex-wrap items-center gap-1">
-                      <span
-                        className={`inline-block rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
-                          t.status === 'published' ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
-                        }`}
-                      >
-                        {t.status}
-                      </span>
-                      {scheduleBadge(t) && (
-                        <span className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
-                          {scheduleBadge(t)}
-                        </span>
-                      )}
-                    </span>
-                    {/* Scope — which account sees this template (or all of them). */}
-                    <span className="mt-1 flex items-center gap-1 text-[11px] text-[var(--muted-foreground)]">
-                      {t.accountKey ? <BuildingStorefrontIcon className="h-3.5 w-3.5 flex-shrink-0" /> : <GlobeAltIcon className="h-3.5 w-3.5 flex-shrink-0" />}
-                      <span className="truncate">{scopeName(t.accountKey) ?? 'All accounts'}</span>
-                    </span>
-                  </div>
-                </div>
-                {/* Author — full name + avatar, like email template cards */}
-                <div className="mt-2 flex items-center gap-1.5 border-t border-[var(--border)] pt-2">
-                  <UserAvatar name={t.createdByName} email={t.createdByEmail} avatarUrl={t.createdByImage} size={20} />
-                  <span className="truncate text-[11px] text-[var(--muted-foreground)]">
-                    {t.createdByName || 'Someone'} · {new Date(t.updatedAt).toLocaleDateString()}
+              preview={<AdPreviewThumb template={template} data={t.doc?.defaults ?? {}} branding={branding} height={150} />}
+              name={t.name}
+              status={t.status === 'published' ? 'published' : 'draft'}
+              scope={{ label: scopeName(t.accountKey) ?? 'All accounts', kind: t.accountKey ? 'account' : 'global' }}
+              category={t.category}
+              tags={t.tags ?? []}
+              taxonomy={taxonomy}
+              author={{ name: t.createdByName, email: t.createdByEmail, avatarUrl: t.createdByImage }}
+              editable
+              badges={
+                badge && (
+                  <span className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                    {badge}
                   </span>
-                </div>
-              </div>
-            </div>
+                )
+              }
+              actions={actionsFor(t)}
+              onClick={() => edit(t.id)}
+              onCategoryChange={(c) => void patchTemplate(t.id, { category: c })}
+              onTagsChange={(tags) => void patchTemplate(t.id, { tags })}
+            />
           );
         })}
       </div>

@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
   const session = await getAuthSession();
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  let body: { accountKey?: string; name?: string; templateId?: string; adTypeId?: string; data?: Record<string, string>; status?: string; doc?: unknown };
+  let body: { accountKey?: string; name?: string; templateId?: string; data?: Record<string, string>; status?: string; doc?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -109,7 +109,6 @@ export async function POST(req: NextRequest) {
         accountKey,
         name,
         templateId,
-        adTypeId: (body.adTypeId ?? '').trim() || null,
         doc: docSnapshot,
         data: JSON.stringify(body.data ?? {}),
         status: body.status === 'ready' ? 'ready' : 'draft',

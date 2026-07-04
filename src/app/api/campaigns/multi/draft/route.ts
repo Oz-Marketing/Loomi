@@ -1,23 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import {
-  createDraftEmailCampaign,
-  updateEmailCampaignDraft,
-} from '@/lib/services/email-campaigns';
+  createDraftEmailBlast,
+  updateEmailBlastDraft,
+} from '@/lib/services/email-blasts';
 import {
-  createDraftSmsCampaign,
-  updateSmsCampaignDraft,
-} from '@/lib/services/sms-campaigns';
+  createDraftSmsBlast,
+  updateSmsBlastDraft,
+} from '@/lib/services/sms-blasts';
 
 /**
  * POST /api/campaigns/multi/draft
  *
- * Creates a linked pair of campaign drafts (one EmailCampaign + one
- * SmsCampaign) for a multi-channel send. They share an audience and
+ * Creates a linked pair of campaign drafts (one EmailBlast + one
+ * SmsBlast) for a multi-channel send. They share an audience and
  * a send time but otherwise carry their own content.
  *
- * Linkage is via metadata.linkedEmailCampaignId / linkedSmsCampaignId
- * on each side. The builder URL uses the EmailCampaign id as the
+ * Linkage is via metadata.linkedEmailBlastId / linkedSmsBlastId
+ * on each side. The builder URL uses the EmailBlast id as the
  * canonical group id.
  */
 export async function POST(req: NextRequest) {
@@ -43,13 +43,13 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const emailDraft = await createDraftEmailCampaign({
+    const emailDraft = await createDraftEmailBlast({
       name,
       accountKeys: accountKeysInput,
       createdByUserId: session!.user.id,
       createdByRole: session!.user.role,
     });
-    const smsDraft = await createDraftSmsCampaign({
+    const smsDraft = await createDraftSmsBlast({
       name,
       accountKeys: accountKeysInput,
       createdByUserId: session!.user.id,
@@ -60,19 +60,19 @@ export async function POST(req: NextRequest) {
     // find the partner campaign without an extra DB lookup.
     const emailMeta = JSON.stringify({
       multiChannel: true,
-      linkedSmsCampaignId: smsDraft.id,
+      linkedSmsBlastId: smsDraft.id,
     });
     const smsMeta = JSON.stringify({
       channel: 'SMS',
       mediaUrls: [],
       sourceMetadata: '',
       multiChannel: true,
-      linkedEmailCampaignId: emailDraft.id,
+      linkedEmailBlastId: emailDraft.id,
     });
 
     const [linkedEmail, linkedSms] = await Promise.all([
-      updateEmailCampaignDraft(emailDraft.id, { metadata: emailMeta }),
-      updateSmsCampaignDraft(smsDraft.id, { metadata: smsMeta }),
+      updateEmailBlastDraft(emailDraft.id, { metadata: emailMeta }),
+      updateSmsBlastDraft(smsDraft.id, { metadata: smsMeta }),
     ]);
 
     return NextResponse.json(

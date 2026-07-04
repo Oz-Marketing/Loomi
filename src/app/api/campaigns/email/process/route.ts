@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import {
-  getEmailCampaign,
-  processDueEmailCampaigns,
-  processEmailCampaign,
-} from '@/lib/services/email-campaigns';
+  getEmailBlast,
+  processDueEmailBlasts,
+  processEmailBlast,
+} from '@/lib/services/email-blasts';
 
 /**
  * POST /api/campaigns/email/process
@@ -22,7 +22,7 @@ export async function POST(req: NextRequest) {
   const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(10, limitRaw)) : 3;
 
   if (campaignId) {
-    const campaign = await getEmailCampaign(campaignId);
+    const campaign = await getEmailBlast(campaignId);
     if (!campaign) {
       return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
     }
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const processed = await processEmailCampaign(campaignId, { concurrency: 3 });
+    const processed = await processEmailBlast(campaignId, { concurrency: 3 });
     return NextResponse.json({ campaigns: [processed], processed: 1 });
   }
 
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
     ? (session!.user.accountKeys ?? [])
     : undefined;
 
-  const campaigns = await processDueEmailCampaigns({
+  const campaigns = await processDueEmailBlasts({
     limit,
     accountKeys,
     concurrency: 3,

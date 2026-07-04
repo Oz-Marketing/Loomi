@@ -15,7 +15,7 @@ import {
 } from '@heroicons/react/24/outline';
 import PrimaryButton from '@/components/primary-button';
 
-type EmailCampaignSourceType = 'template-library' | 'drag-drop' | 'html';
+type EmailBlastSourceType = 'template-library' | 'drag-drop' | 'html';
 
 type AudienceOption =
   | { key: 'all'; label: string; definition: null }
@@ -50,7 +50,7 @@ interface SavedAudienceRecord {
   filters: string;
 }
 
-interface EmailCampaignModalProps {
+interface EmailBlastModalProps {
   open: boolean;
   onClose: () => void;
   contacts: Contact[];
@@ -94,7 +94,7 @@ function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(value);
 }
 
-export function EmailCampaignModal({
+export function EmailBlastModal({
   open,
   onClose,
   contacts,
@@ -102,7 +102,7 @@ export function EmailCampaignModal({
   mode = 'email',
   accountKey = null,
   onRequestSmsModal,
-}: EmailCampaignModalProps) {
+}: EmailBlastModalProps) {
   // Pull the source sub-account's custom fields so saved audiences
   // that reference custom keys evaluate to the right recipient count
   // in the modal's preview. Only meaningful when a single account is
@@ -112,7 +112,7 @@ export function EmailCampaignModal({
   const { fields: filterableFields } = useFilterableFields(singleScopedAccountKey);
 
   const [step, setStep] = useState<'source' | 'compose'>('source');
-  const [sourceType, setSourceType] = useState<EmailCampaignSourceType>('template-library');
+  const [sourceType, setSourceType] = useState<EmailBlastSourceType>('template-library');
   const [campaignName, setCampaignName] = useState('');
   const [subject, setSubject] = useState('');
   const [previewText, setPreviewText] = useState('');
@@ -369,7 +369,7 @@ export function EmailCampaignModal({
   }
 
   const sourceCards: Array<{
-    key: EmailCampaignSourceType;
+    key: EmailBlastSourceType;
     title: string;
     description: string;
     icon: React.ComponentType<{ className?: string }>;

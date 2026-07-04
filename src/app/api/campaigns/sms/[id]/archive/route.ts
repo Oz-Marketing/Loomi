@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import {
-  getSmsCampaign,
-  setSmsCampaignArchived,
-} from '@/lib/services/sms-campaigns';
+  getSmsBlast,
+  setSmsBlastArchived,
+} from '@/lib/services/sms-blasts';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -15,7 +15,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
   if (error) return error;
 
   const { id } = await params;
-  const existing = await getSmsCampaign(id);
+  const existing = await getSmsBlast(id);
   if (!existing) {
     return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
   }
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
   const archived = typeof body?.archived === 'boolean' ? body.archived : true;
 
   try {
-    const updated = await setSmsCampaignArchived(id, archived);
+    const updated = await setSmsBlastArchived(id, archived);
     return NextResponse.json({ campaign: updated });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to archive campaign';

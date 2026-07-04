@@ -21,7 +21,6 @@ import {
 import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
-import PrimaryButton from '@/components/primary-button';
 import { TemplateHeaderActions } from '@/components/templates/template-header-actions';
 import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
 import { TemplateLibraryShell } from '@/components/templates/template-library-shell';

@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import {
-  createEmailCampaign,
-  listEmailCampaigns,
-  processEmailCampaign,
+  createEmailBlast,
+  listEmailBlasts,
+  processEmailBlast,
   type CampaignStatusFilter,
   type EmailRecipientInput,
-} from '@/lib/services/email-campaigns';
+} from '@/lib/services/email-blasts';
 
 function parseCampaignStatusFilter(
   value: string | null,
@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
     ? (session!.user.accountKeys ?? [])
     : undefined;
 
-  const campaigns = await listEmailCampaigns({ limit, accountKeys, statusFilter });
+  const campaigns = await listEmailBlasts({ limit, accountKeys, statusFilter });
   return NextResponse.json({ campaigns });
 }
 
@@ -108,7 +108,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const created = await createEmailCampaign({
+    const created = await createEmailBlast({
       name: typeof body?.name === 'string' ? body.name : '',
       subject,
       previewText,
@@ -128,7 +128,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ campaign: created, processed: false }, { status: 201 });
     }
 
-    const processed = await processEmailCampaign(created.id, { concurrency: 3 });
+    const processed = await processEmailBlast(created.id, { concurrency: 3 });
     return NextResponse.json({ campaign: processed, processed: true }, { status: 201 });
   } catch (err) {
     const messageText = err instanceof Error ? err.message : 'Failed to create email campaign';

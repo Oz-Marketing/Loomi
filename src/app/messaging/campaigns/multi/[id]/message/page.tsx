@@ -59,7 +59,7 @@ function parseLinkedSmsId(rawMetadata: string): string | null {
   if (!rawMetadata) return null;
   try {
     const parsed = JSON.parse(rawMetadata) as Record<string, unknown>;
-    const value = parsed?.linkedSmsCampaignId;
+    const value = parsed?.linkedSmsBlastId;
     return typeof value === 'string' ? value : null;
   } catch {
     return null;
@@ -215,7 +215,7 @@ export default function MultiMessageStepPage({ params }: PageProps) {
         if (line) newSubject = line[1].trim().replace(/^["']|["']$/g, '');
       }
       const compiled = await compileTemplate(raw);
-      // Preserve existing multi-channel metadata (multiChannel + linkedSmsCampaignId)
+      // Preserve existing multi-channel metadata (multiChannel + linkedSmsBlastId)
       // while recording the chosen templateSlug.
       let existingMeta: Record<string, unknown> = {};
       try {
@@ -329,7 +329,7 @@ export default function MultiMessageStepPage({ params }: PageProps) {
       mediaUrls: urls,
       sourceMetadata: '',
       multiChannel: true,
-      linkedEmailCampaignId: id,
+      linkedEmailBlastId: id,
     });
   }
 

@@ -64,7 +64,7 @@ import {
   normalizePhoneNumber,
 } from '@/lib/contact-hygiene';
 
-type SmsCampaignStatus =
+type SmsBlastStatus =
   | 'draft'
   | 'queued'
   | 'scheduled'
@@ -81,7 +81,7 @@ export interface SmsRecipientInput {
   fullName?: string;
 }
 
-export interface CreateSmsCampaignInput {
+export interface CreateSmsBlastInput {
   name?: string;
   message: string;
   channel?: OutboundMessageChannel;
@@ -95,11 +95,11 @@ export interface CreateSmsCampaignInput {
   metadata?: string | null;
 }
 
-export interface SmsCampaignSummary {
+export interface SmsBlastSummary {
   id: string;
   name: string;
   message: string;
-  status: SmsCampaignStatus;
+  status: SmsBlastStatus;
   scheduledFor: string;
   startedAt: string;
   completedAt: string;
@@ -119,8 +119,8 @@ export interface SmsCampaignSummary {
   error: string;
 }
 
-const PROCESSABLE_STATUSES: SmsCampaignStatus[] = ['queued', 'scheduled', 'processing'];
-const TERMINAL_STATUSES: SmsCampaignStatus[] = ['completed', 'partial', 'failed', 'canceled'];
+const PROCESSABLE_STATUSES: SmsBlastStatus[] = ['queued', 'scheduled', 'processing'];
+const TERMINAL_STATUSES: SmsBlastStatus[] = ['completed', 'partial', 'failed', 'canceled'];
 
 type ResolvedMessagingRuntime =
   | {
@@ -218,7 +218,7 @@ function normalizeMediaUrls(raw: unknown): string[] {
   return [...new Set(urls)];
 }
 
-function buildCampaignMetadata(input: CreateSmsCampaignInput): string | null {
+function buildCampaignMetadata(input: CreateSmsBlastInput): string | null {
   const payload = {
     channel: normalizeChannel(input.channel),
     mediaUrls: normalizeMediaUrls(input.mediaUrls),
@@ -265,12 +265,12 @@ function toSummary(row: {
   createdAt: Date;
   updatedAt: Date;
   error: string | null;
-}): SmsCampaignSummary {
+}): SmsBlastSummary {
   return {
     id: row.id,
     name: row.name || '',
     message: row.message,
-    status: row.status as SmsCampaignStatus,
+    status: row.status as SmsBlastStatus,
     scheduledFor: row.scheduledFor?.toISOString() || '',
     startedAt: row.startedAt?.toISOString() || '',
     completedAt: row.completedAt?.toISOString() || '',
@@ -321,15 +321,15 @@ function defaultDraftName(now: Date): string {
   })}`;
 }
 
-/** Creates an empty SmsCampaign in 'draft' status for the builder flow. */
-export async function createDraftSmsCampaign(input: {
+/** Creates an empty SmsBlast in 'draft' status for the builder flow. */
+export async function createDraftSmsBlast(input: {
   name?: string;
   accountKeys?: string[];
   createdByUserId?: string;
   createdByRole?: string;
-}): Promise<SmsCampaignSummary> {
+}): Promise<SmsBlastSummary> {
   const name = (input.name || '').trim() || defaultDraftName(new Date());
-  const created = await prisma.smsCampaign.create({
+  const created = await prisma.smsBlast.create({
     data: {
       name,
       message: '',
@@ -344,7 +344,7 @@ export async function createDraftSmsCampaign(input: {
 }
 
 /** PATCH-style update for an in-flight SMS draft. */
-export async function updateSmsCampaignDraft(
+export async function updateSmsBlastDraft(
   campaignId: string,
   patch: {
     name?: string;
@@ -355,10 +355,10 @@ export async function updateSmsCampaignDraft(
     sourceListId?: string | null;
     sourceContactIds?: string | null;
     scheduledFor?: Date | null;
-    status?: SmsCampaignStatus;
+    status?: SmsBlastStatus;
     metadata?: string | null;
   },
-): Promise<SmsCampaignSummary> {
+): Promise<SmsBlastSummary> {
   const data: Record<string, unknown> = {};
   if (patch.name !== undefined) data.name = patch.name;
   if (patch.message !== undefined) data.message = patch.message;
@@ -371,7 +371,7 @@ export async function updateSmsCampaignDraft(
   if (patch.status !== undefined) data.status = patch.status;
   if (patch.metadata !== undefined) data.metadata = patch.metadata;
 
-  const updated = await prisma.smsCampaign.update({
+  const updated = await prisma.smsBlast.update({
     where: { id: campaignId },
     data,
     select: smsCampaignSummarySelect,
@@ -385,13 +385,13 @@ const INVALID_PHONE_ERROR = 'Recipient phone is missing or blocked by hygiene po
  * Transitions an SMS draft into 'scheduled' or 'queued' and persists
  * recipient rows. The pg-boss worker picks it up once scheduledFor passes.
  */
-export async function scheduleSmsCampaignDraft(
+export async function scheduleSmsBlastDraft(
   campaignId: string,
   input: {
     recipients: SmsRecipientInput[];
     scheduledFor: Date | null;
   },
-): Promise<SmsCampaignSummary> {
+): Promise<SmsBlastSummary> {
   // Dedupe on (contactId, accountKey)
   const seen = new Set<string>();
   const recipients: SmsRecipientInput[] = [];
@@ -435,12 +435,12 @@ export async function scheduleSmsCampaignDraft(
 
   const now = Date.now();
   const isImmediate = !input.scheduledFor || input.scheduledFor.getTime() <= now;
-  const status: SmsCampaignStatus = isImmediate ? 'queued' : 'scheduled';
+  const status: SmsBlastStatus = isImmediate ? 'queued' : 'scheduled';
 
   const updated = await prisma.$transaction(async (tx) => {
-    await tx.smsCampaignRecipient.deleteMany({ where: { campaignId } });
+    await tx.smsBlastRecipient.deleteMany({ where: { campaignId } });
 
-    await tx.smsCampaignRecipient.createMany({
+    await tx.smsBlastRecipient.createMany({
       data: recipients.map((r) => {
         if (!r.phone) {
           return {
@@ -479,7 +479,7 @@ export async function scheduleSmsCampaignDraft(
 
     const accountKeys = [...new Set(recipients.map((r) => r.accountKey).filter(Boolean))];
 
-    return tx.smsCampaign.update({
+    return tx.smsBlast.update({
       where: { id: campaignId },
       data: {
         status,
@@ -497,7 +497,7 @@ export async function scheduleSmsCampaignDraft(
   return toSummary(updated);
 }
 
-export async function createSmsCampaign(input: CreateSmsCampaignInput): Promise<SmsCampaignSummary> {
+export async function createSmsBlast(input: CreateSmsBlastInput): Promise<SmsBlastSummary> {
   const message = sanitizeMessage(input.message || '');
   const channel = normalizeChannel(input.channel);
   const mediaUrls = normalizeMediaUrls(input.mediaUrls);
@@ -509,14 +509,14 @@ export async function createSmsCampaign(input: CreateSmsCampaignInput): Promise<
 
   const scheduledDate = parseDate(input.scheduledFor || undefined);
   const now = Date.now();
-  const status: SmsCampaignStatus =
+  const status: SmsBlastStatus =
     scheduledDate && scheduledDate.getTime() > now
       ? 'scheduled'
       : 'queued';
   const accountKeys = [...new Set(recipients.map((recipient) => recipient.accountKey))];
 
   const created = await prisma.$transaction(async (tx) => {
-    const campaign = await tx.smsCampaign.create({
+    const campaign = await tx.smsBlast.create({
       data: {
         name: input.name?.trim() || null,
         message,
@@ -532,7 +532,7 @@ export async function createSmsCampaign(input: CreateSmsCampaignInput): Promise<
       },
     });
 
-    await tx.smsCampaignRecipient.createMany({
+    await tx.smsBlastRecipient.createMany({
       data: recipients.map((recipient) => ({
         campaignId: campaign.id,
         contactId: recipient.contactId,
@@ -548,8 +548,8 @@ export async function createSmsCampaign(input: CreateSmsCampaignInput): Promise<
   return toSummary(created);
 }
 
-export async function getSmsCampaign(campaignId: string): Promise<SmsCampaignSummary | null> {
-  const row = await prisma.smsCampaign.findUnique({
+export async function getSmsBlast(campaignId: string): Promise<SmsBlastSummary | null> {
+  const row = await prisma.smsBlast.findUnique({
     where: { id: campaignId },
     select: smsCampaignSummarySelect,
   });
@@ -560,9 +560,9 @@ export async function getSmsCampaign(campaignId: string): Promise<SmsCampaignSum
  * Delete an SMS campaign + its recipient rows. Blocked while in-flight
  * (queued/processing) so we don't yank the row out from under the worker.
  */
-export async function deleteSmsCampaign(campaignId: string): Promise<void> {
+export async function deleteSmsBlast(campaignId: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    const row = await tx.smsCampaign.findUnique({
+    const row = await tx.smsBlast.findUnique({
       where: { id: campaignId },
       select: { status: true },
     });
@@ -570,8 +570,8 @@ export async function deleteSmsCampaign(campaignId: string): Promise<void> {
     if (row.status === 'queued' || row.status === 'processing') {
       throw new Error('Cannot delete a campaign that is currently sending.');
     }
-    await tx.smsCampaignRecipient.deleteMany({ where: { campaignId } });
-    await tx.smsCampaign.delete({ where: { id: campaignId } });
+    await tx.smsBlastRecipient.deleteMany({ where: { campaignId } });
+    await tx.smsBlast.delete({ where: { id: campaignId } });
   });
 }
 
@@ -582,11 +582,11 @@ export async function deleteSmsCampaign(campaignId: string): Promise<void> {
  * 30-day purge job + the status filter on the campaigns table.
  * In-flight campaigns (queued/processing) can't be archived.
  */
-export async function setSmsCampaignArchived(
+export async function setSmsBlastArchived(
   campaignId: string,
   archived: boolean,
-): Promise<SmsCampaignSummary> {
-  const existing = await prisma.smsCampaign.findUnique({
+): Promise<SmsBlastSummary> {
+  const existing = await prisma.smsBlast.findUnique({
     where: { id: campaignId },
     select: { status: true, metadata: true },
   });
@@ -603,7 +603,7 @@ export async function setSmsCampaignArchived(
   }
   if (archived) meta.archived = true;
   else delete meta.archived;
-  const updated = await prisma.smsCampaign.update({
+  const updated = await prisma.smsBlast.update({
     where: { id: campaignId },
     data: {
       metadata: JSON.stringify(meta),
@@ -618,10 +618,10 @@ export async function setSmsCampaignArchived(
  * Explicit restore — rejects rows that aren't currently archived so
  * the UI surfaces a clearer error than the toggle.
  */
-export async function restoreSmsCampaign(
+export async function restoreSmsBlast(
   campaignId: string,
-): Promise<SmsCampaignSummary> {
-  const existing = await prisma.smsCampaign.findUnique({
+): Promise<SmsBlastSummary> {
+  const existing = await prisma.smsBlast.findUnique({
     where: { id: campaignId },
     select: { archivedAt: true, metadata: true },
   });
@@ -631,27 +631,27 @@ export async function restoreSmsCampaign(
   if (!isArchived) {
     throw new Error('Campaign is not archived — nothing to restore.');
   }
-  return setSmsCampaignArchived(campaignId, false);
+  return setSmsBlastArchived(campaignId, false);
 }
 
 /**
  * Hard-delete archived SMS campaigns whose archivedAt is older than
  * the retention window. Daily worker job.
  */
-export async function purgeOldArchivedSmsCampaigns(
+export async function purgeOldArchivedSmsBlasts(
   retentionDays = 30,
 ): Promise<number> {
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
-  const rows = await prisma.smsCampaign.findMany({
+  const rows = await prisma.smsBlast.findMany({
     where: { archivedAt: { not: null, lt: cutoff } },
     select: { id: true },
   });
   if (rows.length === 0) return 0;
   await prisma.$transaction(async (tx) => {
-    await tx.smsCampaignRecipient.deleteMany({
+    await tx.smsBlastRecipient.deleteMany({
       where: { campaignId: { in: rows.map((r) => r.id) } },
     });
-    await tx.smsCampaign.deleteMany({
+    await tx.smsBlast.deleteMany({
       where: { id: { in: rows.map((r) => r.id) } },
     });
   });
@@ -672,11 +672,11 @@ function parseArchivedMetadata(raw: string | null | undefined): boolean {
  * Clone an SMS campaign into a new draft. Status resets, recipient rows
  * are not copied — the user re-picks an audience in the Recipients step.
  */
-export async function duplicateSmsCampaign(
+export async function duplicateSmsBlast(
   campaignId: string,
   options?: { createdByUserId?: string; createdByRole?: string },
-): Promise<SmsCampaignSummary> {
-  const source = await prisma.smsCampaign.findUnique({
+): Promise<SmsBlastSummary> {
+  const source = await prisma.smsBlast.findUnique({
     where: { id: campaignId },
     select: smsCampaignSummarySelect,
   });
@@ -684,7 +684,7 @@ export async function duplicateSmsCampaign(
     throw new Error('Source campaign not found');
   }
 
-  const created = await prisma.smsCampaign.create({
+  const created = await prisma.smsBlast.create({
     data: {
       name: source.name ? `${source.name} (Copy)` : defaultDraftName(new Date()),
       message: source.message || '',
@@ -704,20 +704,20 @@ export async function duplicateSmsCampaign(
 
 export type CampaignStatusFilter = 'all' | 'archived';
 
-export async function listSmsCampaigns(options?: {
+export async function listSmsBlasts(options?: {
   limit?: number;
   accountKeys?: string[];
   /** 'all' (default) hides archived rows. 'archived' returns only
    *  archived rows so the table can show them under the StatusFilter. */
   statusFilter?: CampaignStatusFilter;
-}): Promise<SmsCampaignSummary[]> {
+}): Promise<SmsBlastSummary[]> {
   const limit = Math.max(1, Math.min(100, options?.limit ?? 25));
   const statusFilter = options?.statusFilter ?? 'all';
   const where =
     statusFilter === 'archived'
       ? { archivedAt: { not: null } }
       : { archivedAt: null };
-  const rows = await prisma.smsCampaign.findMany({
+  const rows = await prisma.smsBlast.findMany({
     where,
     select: smsCampaignSummarySelect,
     orderBy: { createdAt: 'desc' },
@@ -741,7 +741,7 @@ export async function listSmsCampaigns(options?: {
 }
 
 async function summarizeCampaign(campaignId: string) {
-  const recipients = await prisma.smsCampaignRecipient.findMany({
+  const recipients = await prisma.smsBlastRecipient.findMany({
     where: { campaignId },
     select: { status: true, error: true },
   });
@@ -768,12 +768,12 @@ async function summarizeCampaign(campaignId: string) {
   };
 }
 
-export async function processSmsCampaign(
+export async function processSmsBlast(
   campaignId: string,
   options?: { concurrency?: number },
-): Promise<SmsCampaignSummary> {
+): Promise<SmsBlastSummary> {
   const concurrency = Math.max(1, Math.min(8, options?.concurrency ?? 4));
-  const campaign = await prisma.smsCampaign.findUnique({
+  const campaign = await prisma.smsBlast.findUnique({
     where: { id: campaignId },
     include: {
       recipients: {
@@ -784,12 +784,12 @@ export async function processSmsCampaign(
   });
 
   if (!campaign) throw new Error('SMS campaign not found');
-  if (TERMINAL_STATUSES.includes(campaign.status as SmsCampaignStatus)) {
+  if (TERMINAL_STATUSES.includes(campaign.status as SmsBlastStatus)) {
     return toSummary(campaign);
   }
   if (campaign.recipients.length === 0) {
     const counts = await summarizeCampaign(campaign.id);
-    const status: SmsCampaignStatus =
+    const status: SmsBlastStatus =
       counts.sent > 0 && counts.failed > 0
         ? 'partial'
         : counts.sent > 0
@@ -797,7 +797,7 @@ export async function processSmsCampaign(
           : counts.failed > 0
             ? 'failed'
             : 'queued';
-    const updated = await prisma.smsCampaign.update({
+    const updated = await prisma.smsBlast.update({
       where: { id: campaign.id },
       data: {
         status,
@@ -811,7 +811,7 @@ export async function processSmsCampaign(
     return toSummary(updated);
   }
 
-  await prisma.smsCampaign.update({
+  await prisma.smsBlast.update({
     where: { id: campaign.id },
     data: {
       status: 'processing',
@@ -869,7 +869,7 @@ export async function processSmsCampaign(
 
     const runtime = await resolveMessagingRuntime(accountKey);
     if (runtime.kind === 'error') {
-      await prisma.smsCampaignRecipient.update({
+      await prisma.smsBlastRecipient.update({
         where: { id },
         data: { status: 'failed', error: runtime.error },
       });
@@ -882,7 +882,7 @@ export async function processSmsCampaign(
     // but we guard anyway.
     if (runtime.kind === 'twilio') {
       if (!recipient.phone) {
-        await prisma.smsCampaignRecipient.update({
+        await prisma.smsBlastRecipient.update({
           where: { id },
           data: { status: 'failed', error: 'No phone number on file for this recipient.' },
         });
@@ -904,7 +904,7 @@ export async function processSmsCampaign(
           // Token for signature verification.
           statusCallback: buildStatusCallbackUrl(accountKey),
         });
-        await prisma.smsCampaignRecipient.update({
+        await prisma.smsBlastRecipient.update({
           where: { id },
           data: {
             status: 'sent',
@@ -920,7 +920,7 @@ export async function processSmsCampaign(
             : err instanceof Error
               ? err.message
               : 'Twilio send failed';
-        await prisma.smsCampaignRecipient.update({
+        await prisma.smsBlastRecipient.update({
           where: { id },
           data: { status: 'failed', error: errorMessage },
         });
@@ -933,7 +933,7 @@ export async function processSmsCampaign(
   await withConcurrencyLimit(tasks, concurrency);
 
   const counts = await summarizeCampaign(campaign.id);
-  const nextStatus: SmsCampaignStatus =
+  const nextStatus: SmsBlastStatus =
     counts.pending > 0
       ? 'processing'
       : counts.sent > 0 && counts.failed > 0
@@ -944,7 +944,7 @@ export async function processSmsCampaign(
             ? 'failed'
             : 'queued';
 
-  const updated = await prisma.smsCampaign.update({
+  const updated = await prisma.smsBlast.update({
     where: { id: campaign.id },
     data: {
       status: nextStatus,
@@ -959,15 +959,15 @@ export async function processSmsCampaign(
   return toSummary(updated);
 }
 
-export async function processDueSmsCampaigns(options?: {
+export async function processDueSmsBlasts(options?: {
   limit?: number;
   accountKeys?: string[];
   concurrency?: number;
-}): Promise<SmsCampaignSummary[]> {
+}): Promise<SmsBlastSummary[]> {
   const limit = Math.max(1, Math.min(20, options?.limit ?? 5));
   const now = new Date();
 
-  const rows = await prisma.smsCampaign.findMany({
+  const rows = await prisma.smsBlast.findMany({
     where: {
       status: { in: PROCESSABLE_STATUSES },
       OR: [
@@ -991,9 +991,9 @@ export async function processDueSmsCampaigns(options?: {
     })
     .slice(0, limit);
 
-  const summaries: SmsCampaignSummary[] = [];
+  const summaries: SmsBlastSummary[] = [];
   for (const row of queue) {
-    const summary = await processSmsCampaign(row.id, { concurrency: options?.concurrency });
+    const summary = await processSmsBlast(row.id, { concurrency: options?.concurrency });
     summaries.push(summary);
   }
 

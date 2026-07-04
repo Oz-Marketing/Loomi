@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
-import { createDraftSmsCampaign } from '@/lib/services/sms-campaigns';
+import { createDraftSmsBlast } from '@/lib/services/sms-blasts';
 
 /**
  * POST /api/campaigns/sms/draft
  *
- * Creates an empty SmsCampaign in 'draft' status. The campaign-builder
+ * Creates an empty SmsBlast in 'draft' status. The campaign-builder
  * flow PATCHes this row through subsequent steps. The pg-boss worker
  * ignores drafts.
  */
@@ -32,7 +32,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const campaign = await createDraftSmsCampaign({
+    const campaign = await createDraftSmsBlast({
       name,
       accountKeys: accountKeysInput,
       createdByUserId: session!.user.id,

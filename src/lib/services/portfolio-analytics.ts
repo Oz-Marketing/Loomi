@@ -7,7 +7,7 @@
 
 import { prisma } from '@/lib/prisma';
 
-// Schema note: EmailCampaign.accountKeys + SmsCampaign.accountKeys are
+// Schema note: EmailBlast.accountKeys + SmsBlast.accountKeys are
 // stored as a JSON string (not a relational column). SQL-side scoping
 // would need a LIKE on the serialized array, so we instead fetch a
 // scoped superset (status / date filters apply at SQL) and filter the
@@ -103,7 +103,7 @@ export async function getPortfolioKpis(scope: PortfolioScope): Promise<Portfolio
 
   // Email send pipeline: count from recipient rows (the canonical
   // post-202 send log). Mirrors email-analytics service behaviour.
-  const emailsSent = await prisma.emailCampaignRecipient.count({
+  const emailsSent = await prisma.emailBlastRecipient.count({
     where: {
       accountKey: { in: accountKeys },
       status: 'sent',
@@ -112,7 +112,7 @@ export async function getPortfolioKpis(scope: PortfolioScope): Promise<Portfolio
   });
 
   // SMS: same shape, status = 'sent' or 'delivered' counts as sent.
-  const smsSent = await prisma.smsCampaignRecipient.count({
+  const smsSent = await prisma.smsBlastRecipient.count({
     where: {
       accountKey: { in: accountKeys },
       status: { in: ['sent', 'delivered'] },
@@ -168,7 +168,7 @@ export async function getPortfolioKpis(scope: PortfolioScope): Promise<Portfolio
 
   // Active accounts = accounts that had at least one recipient row
   // (sent or otherwise) in the period.
-  const activeAccountsRaw = await prisma.emailCampaignRecipient.groupBy({
+  const activeAccountsRaw = await prisma.emailBlastRecipient.groupBy({
     by: ['accountKey'],
     where: {
       accountKey: { in: accountKeys },
@@ -177,7 +177,7 @@ export async function getPortfolioKpis(scope: PortfolioScope): Promise<Portfolio
     _count: { _all: true },
   });
   const activeAccountSet = new Set(activeAccountsRaw.map((r) => r.accountKey));
-  const activeSmsAccounts = await prisma.smsCampaignRecipient.groupBy({
+  const activeSmsAccounts = await prisma.smsBlastRecipient.groupBy({
     by: ['accountKey'],
     where: {
       accountKey: { in: accountKeys },
@@ -344,7 +344,7 @@ export async function getEngagedContacts(
 
   let engagedRows: Array<{ contactId: string; accountKey: string }> = [];
   if (recipientIds.length > 0) {
-    engagedRows = await prisma.emailCampaignRecipient.findMany({
+    engagedRows = await prisma.emailBlastRecipient.findMany({
       where: { id: { in: recipientIds } },
       select: { contactId: true, accountKey: true },
     });
@@ -367,7 +367,7 @@ export async function getEngagedContacts(
 
   let smsEngagedRows: Array<{ contactId: string; accountKey: string }> = [];
   if (smsRecipientIds.length > 0) {
-    smsEngagedRows = await prisma.smsCampaignRecipient.findMany({
+    smsEngagedRows = await prisma.smsBlastRecipient.findMany({
       where: { id: { in: smsRecipientIds } },
       select: { contactId: true, accountKey: true },
     });
@@ -559,8 +559,8 @@ export interface SendPipelineResult {
 export async function getSendPipeline(scope: { accountKeys: string[] | null }): Promise<SendPipelineResult> {
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-  const [emailCampaigns, smsCampaigns] = await Promise.all([
-    prisma.emailCampaign.findMany({
+  const [emailBlasts, smsBlasts] = await Promise.all([
+    prisma.emailBlast.findMany({
       where: {
         OR: [
           { status: { in: ['scheduled', 'processing', 'queued'] } },
@@ -570,7 +570,7 @@ export async function getSendPipeline(scope: { accountKeys: string[] | null }): 
       orderBy: { scheduledFor: 'asc' },
       take: 200,
     }),
-    prisma.smsCampaign.findMany({
+    prisma.smsBlast.findMany({
       where: {
         OR: [
           { status: { in: ['scheduled', 'processing', 'queued'] } },
@@ -582,7 +582,7 @@ export async function getSendPipeline(scope: { accountKeys: string[] | null }): 
     }),
   ]);
 
-  const mapEmail = (c: typeof emailCampaigns[number]): PipelineCampaign => ({
+  const mapEmail = (c: typeof emailBlasts[number]): PipelineCampaign => ({
     id: c.id,
     channel: 'email',
     name: c.name || c.subject || 'Untitled campaign',
@@ -597,7 +597,7 @@ export async function getSendPipeline(scope: { accountKeys: string[] | null }): 
     error: c.error,
     updatedAt: c.updatedAt.toISOString(),
   });
-  const mapSms = (c: typeof smsCampaigns[number]): PipelineCampaign => ({
+  const mapSms = (c: typeof smsBlasts[number]): PipelineCampaign => ({
     id: c.id,
     channel: 'sms',
     name: c.name || 'Untitled SMS',
@@ -614,8 +614,8 @@ export async function getSendPipeline(scope: { accountKeys: string[] | null }): 
   });
 
   const merged: PipelineCampaign[] = [
-    ...emailCampaigns.map(mapEmail),
-    ...smsCampaigns.map(mapSms),
+    ...emailBlasts.map(mapEmail),
+    ...smsBlasts.map(mapSms),
   ].filter((c) => accountsOverlap(c.accountKeys, scope.accountKeys));
 
   const scheduled = merged
@@ -669,7 +669,7 @@ export async function getAccountHealth(scope: PortfolioScope): Promise<AccountHe
         where: { accountKey: { in: allowedKeys } },
         _count: { _all: true },
       }),
-      prisma.emailCampaignRecipient.groupBy({
+      prisma.emailBlastRecipient.groupBy({
         by: ['accountKey'],
         where: {
           accountKey: { in: allowedKeys },
@@ -694,7 +694,7 @@ export async function getAccountHealth(scope: PortfolioScope): Promise<AccountHe
         },
         _count: { _all: true },
       }),
-      prisma.emailCampaignRecipient.groupBy({
+      prisma.emailBlastRecipient.groupBy({
         by: ['accountKey'],
         where: { accountKey: { in: allowedKeys }, status: 'sent' },
         _max: { sentAt: true },
@@ -836,7 +836,7 @@ export async function getAnomalies(scope: { accountKeys: string[] | null }): Pro
 
   // 1. Bounce rate spikes (last 7d > 5% on >= 50 sends).
   const [sentLast7d, bouncesLast7d] = await Promise.all([
-    prisma.emailCampaignRecipient.groupBy({
+    prisma.emailBlastRecipient.groupBy({
       by: ['accountKey'],
       where: { ...accountKeyWhere, status: 'sent', sentAt: { gte: sevenDaysAgo } },
       _count: { _all: true },
@@ -899,7 +899,7 @@ export async function getAnomalies(scope: { accountKeys: string[] | null }): Pro
   }
 
   // 3. Dormant accounts (have contacts but no send in 30d).
-  const lastSendByAccount = await prisma.emailCampaignRecipient.groupBy({
+  const lastSendByAccount = await prisma.emailBlastRecipient.groupBy({
     by: ['accountKey'],
     where: { ...accountKeyWhere, status: 'sent' },
     _max: { sentAt: true },
@@ -942,7 +942,7 @@ export async function getAnomalies(scope: { accountKeys: string[] | null }): Pro
   }
 
   // 4. Recent failed campaigns (in scope).
-  const failedCampaigns = await prisma.emailCampaign.findMany({
+  const failedCampaigns = await prisma.emailBlast.findMany({
     where: { status: 'failed', updatedAt: { gte: sevenDaysAgo } },
     orderBy: { updatedAt: 'desc' },
     take: 30,
@@ -1023,7 +1023,7 @@ export async function getTopCampaigns(scope: PortfolioScope, limit = 5): Promise
       }
     : {};
 
-  const campaigns = await prisma.emailCampaign.findMany({
+  const campaigns = await prisma.emailBlast.findMany({
     where,
     select: {
       id: true,
@@ -1044,7 +1044,7 @@ export async function getTopCampaigns(scope: PortfolioScope, limit = 5): Promise
   const campaignIds = filtered.map((c) => c.id);
 
   const [recipientGroups, eventGroups, uniqueOpenRows, uniqueClickRows] = await Promise.all([
-    prisma.emailCampaignRecipient.groupBy({
+    prisma.emailBlastRecipient.groupBy({
       by: ['campaignId', 'status'],
       where: { campaignId: { in: campaignIds } },
       _count: { _all: true },
@@ -1132,13 +1132,13 @@ export async function getRecentActivity(scope: { accountKeys: string[] | null },
 
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
-  const [emailCampaigns, smsCampaigns, lists] = await Promise.all([
-    prisma.emailCampaign.findMany({
+  const [emailBlasts, smsBlasts, lists] = await Promise.all([
+    prisma.emailBlast.findMany({
       where: { OR: [{ startedAt: { gte: sevenDaysAgo } }, { scheduledFor: { gte: sevenDaysAgo } }, { updatedAt: { gte: sevenDaysAgo } }] },
       orderBy: { updatedAt: 'desc' },
       take: 80,
     }),
-    prisma.smsCampaign.findMany({
+    prisma.smsBlast.findMany({
       where: { OR: [{ startedAt: { gte: sevenDaysAgo } }, { scheduledFor: { gte: sevenDaysAgo } }, { updatedAt: { gte: sevenDaysAgo } }] },
       orderBy: { updatedAt: 'desc' },
       take: 80,
@@ -1156,7 +1156,7 @@ export async function getRecentActivity(scope: { accountKeys: string[] | null },
 
   const entries: ActivityEntry[] = [];
 
-  for (const c of emailCampaigns) {
+  for (const c of emailBlasts) {
     const keys = parseAccountKeyJson(c.accountKeys);
     if (!accountsOverlap(keys, scope.accountKeys)) continue;
     const primaryKey = keys[0] || '';
@@ -1194,7 +1194,7 @@ export async function getRecentActivity(scope: { accountKeys: string[] | null },
     }
   }
 
-  for (const c of smsCampaigns) {
+  for (const c of smsBlasts) {
     const keys = parseAccountKeyJson(c.accountKeys);
     if (!accountsOverlap(keys, scope.accountKeys)) continue;
     const primaryKey = keys[0] || '';

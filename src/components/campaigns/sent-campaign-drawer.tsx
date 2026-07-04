@@ -58,7 +58,7 @@ interface EngagementRow {
   unsubscribeRate: number;
 }
 
-interface EmailCampaignDetail {
+interface EmailBlastDetail {
   id: string;
   name: string;
   subject: string;
@@ -66,7 +66,7 @@ interface EmailCampaignDetail {
   htmlContent: string;
 }
 
-interface SmsCampaignDetail {
+interface SmsBlastDetail {
   id: string;
   name: string;
   message: string;
@@ -113,8 +113,8 @@ export function SentCampaignDrawer({ open, campaign, onClose }: SentCampaignDraw
   const [engagementLoading, setEngagementLoading] = useState(false);
   const [engagementError, setEngagementError] = useState<string | null>(null);
 
-  const [emailDetail, setEmailDetail] = useState<EmailCampaignDetail | null>(null);
-  const [smsDetail, setSmsDetail] = useState<SmsCampaignDetail | null>(null);
+  const [emailDetail, setEmailDetail] = useState<EmailBlastDetail | null>(null);
+  const [smsDetail, setSmsDetail] = useState<SmsBlastDetail | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
@@ -217,7 +217,7 @@ export function SentCampaignDrawer({ open, campaign, onClose }: SentCampaignDraw
         }
         return res.json();
       })
-      .then((data: { campaign?: EmailCampaignDetail & SmsCampaignDetail }) => {
+      .then((data: { campaign?: EmailBlastDetail & SmsBlastDetail }) => {
         if (cancelled) return;
         if (!data.campaign) {
           setPreviewError('Campaign not found.');

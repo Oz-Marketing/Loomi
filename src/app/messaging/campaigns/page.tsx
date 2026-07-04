@@ -121,7 +121,7 @@ function AdminCampaignsPage() {
   const activeTab: PageTab = pathname.endsWith('/analytics') ? 'analytics' : 'list';
   const [sideRailMounted, setSideRailMounted] = useState(false);
 
-  // Loomi-native campaigns (EmailCampaign + SmsCampaign) are the only
+  // Loomi-native campaigns (EmailBlast + SmsBlast) are the only
   // source now — ESP-fetched campaigns are gone.
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(true);

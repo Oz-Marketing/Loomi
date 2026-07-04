@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
-import { getEmailCampaign } from '@/lib/services/email-campaigns';
+import { getEmailBlast } from '@/lib/services/email-blasts';
 import { renderCampaignScreenshotFromHtml } from '@/lib/email/screenshot';
 
 /**
@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'campaignId is required' }, { status: 400 });
   }
 
-  const campaign = await getEmailCampaign(campaignId);
+  const campaign = await getEmailBlast(campaignId);
   if (!campaign) {
     return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
   }

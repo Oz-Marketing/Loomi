@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
-import { createDraftEmailCampaign } from '@/lib/services/email-campaigns';
+import { createDraftEmailBlast } from '@/lib/services/email-blasts';
 
 /**
  * POST /api/campaigns/email/draft
  *
- * Creates an empty EmailCampaign in 'draft' status. The campaign-builder
+ * Creates an empty EmailBlast in 'draft' status. The campaign-builder
  * flow PATCHes this row through subsequent steps (recipients, template,
  * schedule). Drafts are ignored by the pg-boss worker.
  */
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const campaign = await createDraftEmailCampaign({
+    const campaign = await createDraftEmailBlast({
       name,
       accountKeys: accountKeysInput,
       createdByUserId: session!.user.id,

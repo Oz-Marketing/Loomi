@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import {
-  duplicateSmsCampaign,
-  getSmsCampaign,
-} from '@/lib/services/sms-campaigns';
+  duplicateSmsBlast,
+  getSmsBlast,
+} from '@/lib/services/sms-blasts';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -15,7 +15,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
   if (error) return error;
 
   const { id } = await params;
-  const existing = await getSmsCampaign(id);
+  const existing = await getSmsBlast(id);
   if (!existing) {
     return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
   }
@@ -33,7 +33,7 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
   }
 
   try {
-    const copy = await duplicateSmsCampaign(id, {
+    const copy = await duplicateSmsBlast(id, {
       createdByUserId: session!.user.id,
       createdByRole: session!.user.role,
     });

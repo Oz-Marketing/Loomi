@@ -112,7 +112,7 @@ function parseLinkedSmsId(rawMetadata: string): string | null {
   if (!rawMetadata) return null;
   try {
     const parsed = JSON.parse(rawMetadata) as Record<string, unknown>;
-    const value = parsed?.linkedSmsCampaignId;
+    const value = parsed?.linkedSmsBlastId;
     return typeof value === 'string' ? value : null;
   } catch {
     return null;

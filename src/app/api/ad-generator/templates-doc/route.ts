@@ -130,6 +130,9 @@ export async function POST(req: NextRequest) {
         doc: JSON.stringify(doc),
         status,
         accountKey: typeof body.accountKey === 'string' && body.accountKey.trim() ? body.accountKey.trim() : null,
+        // Ad Type tag — read off the doc (the builder stores the chosen type there)
+        // so the taxonomy column stays in sync for library filtering.
+        adTypeId: typeof (doc as { adType?: unknown }).adType === 'string' ? (doc as { adType: string }).adType : null,
         createdBy: u?.email ?? null,
         createdByName: u?.name ?? null,
         createdByEmail: u?.email ?? null,

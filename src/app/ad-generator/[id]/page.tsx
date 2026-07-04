@@ -510,7 +510,6 @@ export default function AdGeneratorPage() {
             title="Ad name"
             className="min-w-0 rounded-lg border border-transparent bg-transparent px-2 py-1 text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
           />
-          <span className="hidden text-xs text-[var(--muted-foreground)] md:inline">· {template.name}</span>
         </div>
         <div className="flex items-center gap-2">
           <span className={`inline-flex items-center gap-1 text-[11px] font-medium ${saveInfo.cls}`}>

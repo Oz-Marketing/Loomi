@@ -17,12 +17,14 @@ import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon, PaintBrushIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { ListToolbar } from '@/components/list-toolbar';
 import type { StatusFilterValue } from '@/components/status-filter';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
+import { adTypeFormFields, type AdType } from '@/lib/ad-generator/ad-types';
 import { catalogByCategory, aspectLabel, type CatalogSize } from '@/lib/ad-generator/ad-size-catalog';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -42,10 +44,13 @@ type Creative = {
 export default function AdGeneratorListPage() {
   const { accountKey, accountData, userRole } = useAccount();
   const isManager = !!userRole && MANAGEMENT_ROLES.includes(userRole);
+  const { confirm } = useLoomiDialog();
   const router = useRouter();
   const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
+  const [adTypes, setAdTypes] = useState<AdType[]>([]);
   const [creatives, setCreatives] = useState<Creative[] | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerType, setPickerType] = useState<string>(''); // '' = all ad types
   const [scratchOpen, setScratchOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState('');
@@ -83,6 +88,24 @@ export default function AdGeneratorListPage() {
       cancelled = true;
     };
   }, [accountKey]);
+
+  // Active ad types for this account's industry (admins with no account see all).
+  useEffect(() => {
+    let cancelled = false;
+    const industry = accountData?.category?.trim();
+    const q = industry ? `?industry=${encodeURIComponent(industry)}` : '';
+    fetch(`/api/ad-generator/ad-types${q}`)
+      .then((r) => (r.ok ? r.json() : { adTypes: [] }))
+      .then((d: { adTypes?: AdType[] }) => {
+        if (!cancelled) setAdTypes(d.adTypes ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setAdTypes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountData?.category]);
   // Resolution list (incl. retired templates) — for rendering existing ads.
   const templates = useMemo(() => [...ALL_TEMPLATES, ...dbTemplates], [dbTemplates]);
   // Picker list — only OFFERED templates, scoped to this account's industry
@@ -90,6 +113,15 @@ export default function AdGeneratorListPage() {
   const pickerTemplates = useMemo(
     () => [...AD_TEMPLATES, ...dbTemplates].filter((t) => templateInIndustry(t, accountData?.category)),
     [dbTemplates, accountData?.category],
+  );
+  // Ad types that actually tag at least one offered template — the picker's filter row.
+  const pickerTypeOptions = useMemo(
+    () => adTypes.filter((t) => pickerTemplates.some((p) => p.adType === t.id)),
+    [adTypes, pickerTemplates],
+  );
+  const filteredPicker = useMemo(
+    () => (pickerType ? pickerTemplates.filter((t) => t.adType === pickerType) : pickerTemplates),
+    [pickerTemplates, pickerType],
   );
 
   useEffect(() => {
@@ -155,7 +187,7 @@ export default function AdGeneratorListPage() {
   // From scratch: a blank ad (empty doc) at the chosen name + starting size(s),
   // opened straight in the builder's ad mode so the designer starts on an empty
   // canvas with no layers.
-  async function createBlank(name: string, sizes: CatalogSize[]) {
+  async function createBlank(name: string, sizes: CatalogSize[], adType: AdType | null) {
     if (!accountKey) {
       toast.error('Select an account first');
       return;
@@ -174,10 +206,16 @@ export default function AdGeneratorListPage() {
         };
       });
       const doc = blankTemplateDoc(`blank-${Date.now()}`, trimmed, docSizes);
+      // Ad type → seed the form's question set (+ vehicle/offer engine) so a
+      // from-scratch ad isn't a blank form. The type also tags the ad.
+      if (adType) {
+        doc.fields = adTypeFormFields(adType.vehicleMode, adType.fields);
+        doc.adType = adType.id;
+      }
       const res = await fetch('/api/ad-generator/creatives', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountKey, name: trimmed, templateId: 'blank', data: {}, doc }),
+        body: JSON.stringify({ accountKey, name: trimmed, templateId: 'blank', adTypeId: adType?.id, data: {}, doc }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
@@ -189,6 +227,14 @@ export default function AdGeneratorListPage() {
   }
 
   async function remove(id: string) {
+    const name = (creatives ?? []).find((x) => x.id === id)?.name || 'this ad';
+    const ok = await confirm({
+      title: 'Delete ad',
+      message: `Delete “${name}”? This can’t be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       const res = await fetch(`/api/ad-generator/creatives/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -238,6 +284,10 @@ export default function AdGeneratorListPage() {
                         </Link>
                         {isManager && (
                           <>
+                            <Link href={`/ad-generator/ad-types${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
+                              <Squares2X2Icon className="w-4 h-4" />
+                              Ad types
+                            </Link>
                             <Link href={`/ad-generator/templates${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
                               <DocumentTextIcon className="w-4 h-4" />
                               Disclaimer templates
@@ -426,6 +476,25 @@ export default function AdGeneratorListPage() {
                 <XMarkIcon className="h-5 w-5" />
               </button>
             </div>
+            {pickerTypeOptions.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                <button
+                  onClick={() => setPickerType('')}
+                  className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${!pickerType ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
+                >
+                  All
+                </button>
+                {pickerTypeOptions.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => setPickerType(t.id === pickerType ? '' : t.id)}
+                    className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${pickerType === t.id ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
+                  >
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+            )}
             {pickerTemplates.length === 0 ? (
               <div className="rounded-xl border border-dashed border-[var(--border)] p-8 text-center">
                 <p className="text-sm text-[var(--muted-foreground)]">No templates for this account&rsquo;s industry yet.</p>
@@ -444,7 +513,7 @@ export default function AdGeneratorListPage() {
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {pickerTemplates.map((t) => (
+                {filteredPicker.map((t) => (
                   <button
                     key={t.id}
                     disabled={creating}
@@ -468,8 +537,9 @@ export default function AdGeneratorListPage() {
       {scratchOpen && (
         <ScratchSetupModal
           creating={creating}
+          adTypes={adTypes}
           onClose={() => !creating && setScratchOpen(false)}
-          onStart={(name, sizes) => void createBlank(name, sizes)}
+          onStart={(name, sizes, adType) => void createBlank(name, sizes, adType)}
         />
       )}
     </div>
@@ -483,15 +553,19 @@ export default function AdGeneratorListPage() {
  */
 function ScratchSetupModal({
   creating,
+  adTypes,
   onClose,
   onStart,
 }: {
   creating: boolean;
+  adTypes: AdType[];
   onClose: () => void;
-  onStart: (name: string, sizes: CatalogSize[]) => void;
+  onStart: (name: string, sizes: CatalogSize[], adType: AdType | null) => void;
 }) {
   const groups = useMemo(() => catalogByCategory(), []);
   const [name, setName] = useState('Untitled ad');
+  const [adTypeId, setAdTypeId] = useState<string>('');
+  const selectedType = adTypes.find((t) => t.id === adTypeId) ?? null;
   const [selected, setSelected] = useState<CatalogSize[]>(() => [AD_SIZE_CATALOG_DEFAULT(groups)]);
   const toggle = (s: CatalogSize) =>
     setSelected((cur) => (cur.some((x) => x.name === s.name) ? cur.filter((x) => x.name !== s.name) : [...cur, s]));
@@ -519,6 +593,36 @@ function ScratchSetupModal({
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
           />
         </label>
+
+        {adTypes.length > 0 && (
+          <div className="mb-4">
+            <span className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">Ad type <span className="font-normal text-[var(--muted-foreground)]">— sets the questions you&rsquo;ll fill in</span></span>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setAdTypeId('')}
+                className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  !adTypeId ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                Blank
+              </button>
+              {adTypes.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setAdTypeId(t.id)}
+                  title={t.description ?? undefined}
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors ${
+                    adTypeId === t.id ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
+                  }`}
+                >
+                  {t.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="mb-1 flex items-baseline justify-between">
           <span className="text-xs font-medium text-[var(--foreground)]">Starting sizes</span>
@@ -572,7 +676,7 @@ function ScratchSetupModal({
             Cancel
           </button>
           <button
-            onClick={() => onStart(name, selected)}
+            onClick={() => onStart(name, selected, selectedType)}
             disabled={creating || selected.length === 0}
             className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >

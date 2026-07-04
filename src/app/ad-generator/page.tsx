@@ -17,6 +17,7 @@ import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon, PaintBrushIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { ListToolbar } from '@/components/list-toolbar';
 import type { StatusFilterValue } from '@/components/status-filter';
@@ -42,6 +43,7 @@ type Creative = {
 export default function AdGeneratorListPage() {
   const { accountKey, accountData, userRole } = useAccount();
   const isManager = !!userRole && MANAGEMENT_ROLES.includes(userRole);
+  const { confirm } = useLoomiDialog();
   const router = useRouter();
   const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
   const [creatives, setCreatives] = useState<Creative[] | null>(null);
@@ -189,6 +191,14 @@ export default function AdGeneratorListPage() {
   }
 
   async function remove(id: string) {
+    const name = (creatives ?? []).find((x) => x.id === id)?.name || 'this ad';
+    const ok = await confirm({
+      title: 'Delete ad',
+      message: `Delete “${name}”? This can’t be undone.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    });
+    if (!ok) return;
     try {
       const res = await fetch(`/api/ad-generator/creatives/${id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

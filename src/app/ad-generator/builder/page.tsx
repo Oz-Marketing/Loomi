@@ -70,7 +70,6 @@ import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { CornerBox, NumberInput } from '@/lib/email/editor/PropertyControls';
 import { GOOGLE_FONTS, googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
-import type { AdType } from '@/lib/ad-generator/ad-types';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { singleOfferDoc, dualOfferDoc } from '@/lib/ad-generator/templates/offer-docs';
 import { blankTemplateDoc } from '@/lib/ad-generator/doc-template';
@@ -889,17 +888,6 @@ export default function AdBuilderPage() {
   // apply → server-side crop → the element points at the new cropped image.
   const [cropModal, setCropModal] = useState<{ id: string; url: string; name: string } | null>(null);
   const [cropSaving, setCropSaving] = useState(false);
-  // Ad Types — to tag a template with a type (drives library filtering + the
-  // from-scratch question set). All active types; the settings popover picks one.
-  const [adTypes, setAdTypes] = useState<AdType[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/ad-generator/ad-types')
-      .then((r) => (r.ok ? r.json() : { adTypes: [] }))
-      .then((d: { adTypes?: AdType[] }) => { if (!cancelled) setAdTypes(d.adTypes ?? []); })
-      .catch(() => { if (!cancelled) setAdTypes([]); });
-    return () => { cancelled = true; };
-  }, []);
   // FLIP: gently slide Layers rows to their new spots when the drop order
   // actually changes during a drag. Transforms are cleared before measuring, so
   // an in-flight animation never pollutes the next measurement (no jitter).
@@ -2676,19 +2664,7 @@ export default function AdBuilderPage() {
                         );
                       })}
                     </div>
-                    {adTypes.length > 0 && (
-                      <div className="mt-4">
-                        <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Ad type</h3>
-                        <p className="mb-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Tag this template so it can be filtered by type in the library.</p>
-                        <FontSelect
-                          value={doc.adType ?? ''}
-                          onChange={(v) => setDoc((prev) => ({ ...prev, adType: v || undefined }))}
-                          previewFont={false}
-                          placeholder="None"
-                          options={[{ value: '', label: 'None' }, ...adTypes.map((t) => ({ value: t.id, label: `${t.industry}${t.category ? ` · ${t.category}` : ''} · ${t.name}` }))]}
-                        />
-                      </div>
-                    )}
+                    <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign a category &amp; tags on the template card in the Templates library.</p>
                     <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
                       <button
                         onClick={() => {

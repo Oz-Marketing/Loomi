@@ -14,11 +14,9 @@ import {
   XMarkIcon,
   BookOpenIcon,
   TrashIcon,
-  EllipsisVerticalIcon,
   TagIcon,
   Square2StackIcon,
   PencilIcon,
-  ArrowPathIcon,
   CursorArrowRaysIcon,
   CodeBracketIcon,
   MagnifyingGlassIcon,
@@ -30,10 +28,10 @@ import {
   FunnelIcon,
   ChevronDownIcon,
   CheckIcon,
-  FolderIcon,
   EllipsisHorizontalIcon,
 } from '@heroicons/react/24/outline';
 import { getTagColor } from '@/lib/tag-colors';
+import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
 import BulkActionDock, { type BulkActionDockItem } from '@/components/bulk-action-dock';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
@@ -456,212 +454,6 @@ function ActiveFilterChip({
   );
 }
 
-function TagChip({
-  tag,
-  removable,
-  onRemove,
-  size = 'sm',
-}: {
-  tag: string;
-  removable?: boolean;
-  onRemove?: () => void;
-  size?: 'xs' | 'sm';
-}) {
-  const color = getTagColor(tag);
-  const px = size === 'xs' ? 'px-1.5 py-px text-[10px]' : 'px-2 py-0.5 text-[11px]';
-  return (
-    <span className={`inline-flex items-center gap-1 rounded-full ${px} ${color.className}`}>
-      {tag}
-      {removable && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove?.();
-          }}
-          className="opacity-60 hover:opacity-100 transition-opacity"
-          aria-label={`Remove tag ${tag}`}
-        >
-          <XMarkIcon className="w-2.5 h-2.5" />
-        </button>
-      )}
-    </span>
-  );
-}
-
-/**
- * Popover for adding/removing tags on one or many templates.
- * Multi-target tags show a tri-state (some-have / none-have / all-have).
- */
-function TagEditorPopover({
-  allTags,
-  currentTags,
-  onToggle,
-  onCreate,
-  align = 'left',
-  popoverRef,
-}: {
-  allTags: string[];
-  /** Map of tag -> 'all' | 'some' | 'none' across the affected templates. */
-  currentTags: Record<string, 'all' | 'some' | 'none'>;
-  onToggle: (tag: string, currentState: 'all' | 'some' | 'none') => void;
-  onCreate: (tag: string) => Promise<void> | void;
-  align?: 'left' | 'right';
-  popoverRef?: React.RefObject<HTMLDivElement | null>;
-}) {
-  const [query, setQuery] = useState('');
-  const filtered = useMemo(
-    () => allTags.filter((t) => t.toLowerCase().includes(query.toLowerCase())),
-    [allTags, query],
-  );
-  const showCreate =
-    query.trim().length > 0 &&
-    !allTags.some((t) => t.toLowerCase() === query.trim().toLowerCase());
-
-  return (
-    <div
-      ref={popoverRef}
-      onClick={(e) => e.stopPropagation()}
-      className={`absolute z-40 ${align === 'right' ? 'right-0' : 'left-0'} top-full mt-1 w-56 glass-dropdown`}
-    >
-      <div className="p-2 border-b border-[var(--border)]">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={async (e) => {
-            if (e.key === 'Enter' && showCreate) {
-              await onCreate(query.trim());
-              setQuery('');
-            }
-          }}
-          placeholder="Search or create…"
-          autoFocus
-          className="w-full text-xs bg-[var(--input)] border border-[var(--border)] rounded-md px-2 py-1.5 text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]"
-        />
-      </div>
-      <div className="p-1 max-h-56 overflow-y-auto">
-        {filtered.map((tag) => {
-          const state = currentTags[tag] || 'none';
-          const color = getTagColor(tag);
-          return (
-            <button
-              key={tag}
-              onClick={() => onToggle(tag, state)}
-              className="w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md hover:bg-[var(--muted)] transition-colors text-left"
-            >
-              <span className="flex items-center gap-1 w-4 justify-center">
-                {state === 'all' && <CheckIcon className="w-3.5 h-3.5 text-[var(--primary)]" />}
-                {state === 'some' && <span className="w-2 h-0.5 bg-[var(--primary)] rounded" />}
-              </span>
-              <span className={`inline-block w-1.5 h-1.5 rounded-full ${color.className.split(' ')[0]}`} />
-              <span className="flex-1 truncate">{tag}</span>
-            </button>
-          );
-        })}
-        {filtered.length === 0 && !showCreate && (
-          <p className="px-2 py-2 text-[11px] text-[var(--muted-foreground)]">No tags match.</p>
-        )}
-        {showCreate && (
-          <button
-            onClick={async () => {
-              await onCreate(query.trim());
-              setQuery('');
-            }}
-            className="w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md hover:bg-[var(--muted)] transition-colors text-left text-[var(--primary)]"
-          >
-            <PlusIcon className="w-3.5 h-3.5" />
-            <span>Create &ldquo;{query.trim()}&rdquo;</span>
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function CategoryEditorPopover({
-  allCategories,
-  current,
-  onSelect,
-  onClear,
-  onCreate,
-  align = 'left',
-  popoverRef,
-}: {
-  allCategories: string[];
-  current: string | null | undefined;
-  onSelect: (cat: string) => void;
-  onClear: () => void;
-  onCreate: (cat: string) => void;
-  align?: 'left' | 'right';
-  popoverRef?: React.RefObject<HTMLDivElement | null>;
-}) {
-  const [query, setQuery] = useState('');
-  const normalized = query.trim().toLowerCase().replace(/\s+/g, '-');
-  const filtered = useMemo(
-    () => allCategories.filter((c) => c.toLowerCase().includes(query.toLowerCase())),
-    [allCategories, query],
-  );
-  const showCreate = normalized.length > 0 && !allCategories.includes(normalized);
-
-  return (
-    <div
-      ref={popoverRef}
-      onClick={(e) => e.stopPropagation()}
-      className={`absolute z-40 ${align === 'right' ? 'right-0' : 'left-0'} top-full mt-1 w-52 glass-dropdown`}
-    >
-      <div className="p-2 border-b border-[var(--border)]">
-        <input
-          type="text"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && showCreate) {
-              onCreate(normalized);
-            }
-          }}
-          placeholder="Search or create…"
-          autoFocus
-          className="w-full text-xs bg-[var(--input)] border border-[var(--border)] rounded-md px-2 py-1.5 text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]"
-        />
-      </div>
-      <div className="p-1 max-h-56 overflow-y-auto">
-        {current && (
-          <button
-            onClick={onClear}
-            className="w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md hover:bg-[var(--muted)] transition-colors text-left text-[var(--muted-foreground)]"
-          >
-            <XMarkIcon className="w-3.5 h-3.5" />
-            Clear category
-          </button>
-        )}
-        {filtered.map((cat) => (
-          <button
-            key={cat}
-            onClick={() => onSelect(cat)}
-            className="w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md hover:bg-[var(--muted)] transition-colors text-left"
-          >
-            <span className="w-4 flex justify-center">
-              {current === cat && <CheckIcon className="w-3.5 h-3.5 text-[var(--primary)]" />}
-            </span>
-            <span className="capitalize">{cat.replace(/-/g, ' ')}</span>
-          </button>
-        ))}
-        {filtered.length === 0 && !showCreate && (
-          <p className="px-2 py-2 text-[11px] text-[var(--muted-foreground)]">No categories match.</p>
-        )}
-        {showCreate && (
-          <button
-            onClick={() => onCreate(normalized)}
-            className="w-full flex items-center gap-2 px-2 py-1.5 text-xs rounded-md hover:bg-[var(--muted)] transition-colors text-left text-[var(--primary)]"
-          >
-            <PlusIcon className="w-3.5 h-3.5" />
-            <span>Create &ldquo;{normalized}&rdquo;</span>
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ═══════════════════════════════════════════════════════════════════
 // ── Main Page ──
@@ -962,7 +754,6 @@ function ManagementView({
   const [untaggedOnly, setUntaggedOnly] = useState(false);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [showTagModal, setShowTagModal] = useState(false);
-  const [menuOpen, setMenuOpen] = useState<string | null>(null);
   const [previewDesign, setPreviewDesign] = useState<string | null>(null);
   const [selectedDesigns, setSelectedDesigns] = useState<Set<string>>(new Set());
   const [renameDesign, setRenameDesign] = useState<string | null>(null);
@@ -974,15 +765,10 @@ function ManagementView({
   // Toolbar popover anchors
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [showOverflowMenu, setShowOverflowMenu] = useState(false);
-  // Per-card popovers for inline editing
-  const [editingTagsFor, setEditingTagsFor] = useState<string | null>(null);
-  const [editingCategoryFor, setEditingCategoryFor] = useState<string | null>(null);
   // Bulk tag modal (opens from the bulk-action dock)
   const [bulkTagModalOpen, setBulkTagModalOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
   const filterPopoverRef = useRef<HTMLDivElement>(null);
   const overflowMenuRef = useRef<HTMLDivElement>(null);
-  const cardPopoverRef = useRef<HTMLDivElement>(null);
   const isCampaignDraft = campaignDraftQuery.length > 0;
 
   const loadTemplates = async () => {
@@ -1010,15 +796,6 @@ function ManagementView({
   useEffect(() => { loadTemplates(); }, [accountKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!menuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(null);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [menuOpen]);
-
-  useEffect(() => {
     if (!showFilterMenu && !showOverflowMenu) return;
     const handler = (e: MouseEvent) => {
       const target = e.target as Node;
@@ -1028,18 +805,6 @@ function ManagementView({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [showFilterMenu, showOverflowMenu]);
-
-  useEffect(() => {
-    if (!editingTagsFor && !editingCategoryFor) return;
-    const handler = (e: MouseEvent) => {
-      if (!cardPopoverRef.current?.contains(e.target as Node)) {
-        setEditingTagsFor(null);
-        setEditingCategoryFor(null);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [editingTagsFor, editingCategoryFor]);
 
   const tplMap = useMemo(() => {
     const map: Record<string, TemplateEntry> = {};
@@ -1704,268 +1469,48 @@ function ManagementView({
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {filtered.map((t) => {
             const tags = tagData.assignments[t.design] || [];
-            const isOpen = menuOpen === t.design;
             const isSelected = selectedDesigns.has(t.design);
-            const selectionActive = selectedDesigns.size > 0;
-            const isDownloading = downloadingDesign === t.design;
             const isPublished = t.published === true;
-            const isPublishing = publishingDesign === t.design;
             const templateTypeLabel = getLibraryTemplateTypeLabel(t);
+            const actions: TemplateCardAction[] = [
+              { key: 'view', label: 'View', icon: EyeIcon, run: () => setPreviewDesign(t.design) },
+              { key: 'edit', label: 'Edit', icon: PencilIcon, run: () => router.push(buildLibraryEditorHref(t, { campaignDraft: isCampaignDraft })) },
+              { key: 'rename', label: 'Rename', icon: PencilIcon, run: () => openRenameModal(t) },
+              { key: 'download', label: 'Download PNG', icon: ArrowDownTrayIcon, run: () => void handleDownloadScreenshot(t) },
+              { key: 'clone', label: 'Clone', icon: Square2StackIcon, run: () => void cloneTemplate(t.design) },
+              ...(!scoped
+                ? [
+                    isPublished
+                      ? { key: 'unpublish', label: 'Unpublish', icon: PencilSquareIcon, run: () => void setPublishedState([t.design], false) }
+                      : { key: 'publish', label: 'Publish to Library', icon: CheckCircleIcon, run: () => void setPublishedState([t.design], true) },
+                  ]
+                : []),
+              { key: 'delete', label: 'Delete', icon: TrashIcon, run: () => void deleteTemplate(t.design), danger: true },
+            ];
             return (
-              <div
+              <TemplateCard
                 key={t.design}
-                className={`group relative glass-card rounded-xl overflow-hidden ${isOpen ? 'z-10' : ''}`}
-              >
-                {/* Selection ring overlay – renders above iframe */}
-                {isSelected && (
-                  <div className="absolute inset-0 border-3 border-[var(--primary)] rounded-xl z-20 pointer-events-none" />
-                )}
-                {/* Preview area */}
-                <div
-                  className="cursor-pointer relative"
-                  onClick={() => setPreviewDesign(t.design)}
-                >
-                  <TemplatePreview design={t.design} height={220} />
-                  {/* Selection checkbox — always visible when any card is selected,
-                      hover-revealed otherwise. Click selects without navigating. */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleToggleSelect(t.design);
-                    }}
-                    aria-label={isSelected ? 'Deselect template' : 'Select template'}
-                    className={`absolute top-2.5 left-2.5 z-20 w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${
-                      isSelected
-                        ? 'bg-[var(--primary)] border-[var(--primary)] text-white opacity-100'
-                        : `bg-black/40 border-white/80 backdrop-blur-sm text-transparent hover:bg-black/60 ${
-                            selectionActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
-                          }`
-                    }`}
-                  >
-                    <CheckIcon className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
-                {/* Info */}
-                <div className="p-3">
-                  <div className="flex items-center justify-between gap-1">
-                    <span
-                      className="text-sm font-medium truncate hover:text-[var(--primary)] transition-colors cursor-pointer"
-                      onClick={() => setPreviewDesign(t.design)}
-                    >
-                      {t.name || formatDesign(t.design)}
-                    </span>
-
-                    {/* Menu */}
-                    <div className="relative" ref={isOpen ? menuRef : undefined}>
-                        <button
-                          onClick={() => setMenuOpen(isOpen ? null : t.design)}
-                          className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                        >
-                          <EllipsisVerticalIcon className="w-4 h-4" />
-                        </button>
-                        {isOpen && (
-                          <div className="absolute right-0 top-full mt-1 z-50 w-56 glass-dropdown">
-                            <button
-                              onClick={() => { setMenuOpen(null); setPreviewDesign(t.design); }}
-                              className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2"
-                            >
-                              <EyeIcon className="w-4 h-4" />
-                              View
-                            </button>
-                            <button
-                              onClick={() => {
-                                router.push(buildLibraryEditorHref(t, { campaignDraft: isCampaignDraft }));
-                                setMenuOpen(null);
-                              }}
-                              className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2"
-                            >
-                              <PencilIcon className="w-4 h-4" />
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => { setMenuOpen(null); openRenameModal(t); }}
-                              className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2"
-                            >
-                              <PencilIcon className="w-4 h-4" />
-                              Rename
-                            </button>
-                            <button
-                              onClick={() => { setMenuOpen(null); handleDownloadScreenshot(t); }}
-                              disabled={isDownloading}
-                              className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2 disabled:opacity-60"
-                            >
-                              {isDownloading ? (
-                                <ArrowPathIcon className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <ArrowDownTrayIcon className="w-4 h-4" />
-                              )}
-                              {isDownloading ? 'Downloading...' : 'Download PNG'}
-                            </button>
-                            <button
-                              onClick={() => { cloneTemplate(t.design); setMenuOpen(null); }}
-                              className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2"
-                            >
-                              <Square2StackIcon className="w-4 h-4" />
-                              Clone
-                            </button>
-                            {!scoped && (
-                              <button
-                                onClick={() => {
-                                  setMenuOpen(null);
-                                  void setPublishedState([t.design], !isPublished);
-                                }}
-                                disabled={isPublishing}
-                                className="w-full text-left px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex items-center gap-2 disabled:opacity-60"
-                              >
-                                {isPublished ? (
-                                  <>
-                                    <PencilSquareIcon className="w-4 h-4" />
-                                    Unpublish
-                                  </>
-                                ) : (
-                                  <>
-                                    <CheckCircleIcon className="w-4 h-4" />
-                                    Publish to Library
-                                  </>
-                                )}
-                              </button>
-                            )}
-                            <button
-                              onClick={() => { deleteTemplate(t.design); setMenuOpen(null); }}
-                              className="w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors flex items-center gap-2"
-                            >
-                              <TrashIcon className="w-4 h-4" />
-                              Delete
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                  </div>
-
-                  <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
-                    <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-                      {templateTypeLabel}
-                    </span>
-                    {!scoped && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (isPublishing) return;
-                          void setPublishedState([t.design], !isPublished);
-                        }}
-                        disabled={isPublishing}
-                        title={isPublished ? 'Click to unpublish' : 'Click to publish to library'}
-                        className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors disabled:cursor-default ${
-                          isPublished
-                            ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25'
-                            : 'bg-amber-500/15 text-amber-400 hover:bg-amber-500/25'
-                        }`}
-                      >
-                        {isPublishing ? (
-                          <ArrowPathIcon className="w-3 h-3 animate-spin" />
-                        ) : isPublished ? (
-                          <CheckCircleIcon className="w-3 h-3" />
-                        ) : null}
-                        {isPublished ? 'Published' : 'Draft'}
-                      </button>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-1 mt-1.5 flex-wrap">
-                    <div className="relative">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingCategoryFor(editingCategoryFor === t.design ? null : t.design);
-                          setEditingTagsFor(null);
-                        }}
-                        className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-px rounded transition-colors ${
-                          t.category
-                            ? 'bg-[var(--muted)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                            : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]'
-                        }`}
-                        title={t.category ? 'Change category' : 'Set category'}
-                      >
-                        <FolderIcon className="w-2.5 h-2.5" />
-                        {t.category ? (
-                          <span className="capitalize">{t.category.replace(/-/g, ' ')}</span>
-                        ) : tags.length === 0 ? (
-                          <span>category</span>
-                        ) : null}
-                      </button>
-                      {editingCategoryFor === t.design && (
-                        <CategoryEditorPopover
-                          allCategories={allCategories}
-                          current={t.category}
-                          onSelect={(c) => { void setCategoryForTemplate(t.design, c); setEditingCategoryFor(null); }}
-                          onClear={() => { void setCategoryForTemplate(t.design, null); setEditingCategoryFor(null); }}
-                          onCreate={(c) => { void setCategoryForTemplate(t.design, c); setEditingCategoryFor(null); }}
-                          popoverRef={cardPopoverRef}
-                        />
-                      )}
-                    </div>
-                    {tags.map((tag) => (
-                      <TagChip
-                        key={tag}
-                        tag={tag}
-                        size="xs"
-                        removable
-                        onRemove={() => void setTagsForTemplate(t.design, tags.filter((x) => x !== tag))}
-                      />
-                    ))}
-                    <div className="relative">
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setEditingTagsFor(editingTagsFor === t.design ? null : t.design);
-                          setEditingCategoryFor(null);
-                        }}
-                        className="inline-flex items-center gap-0.5 text-[10px] px-1.5 py-px rounded text-[var(--muted-foreground)] hover:text-[var(--primary)] hover:bg-[var(--primary)]/5 transition-colors"
-                        title="Add tag"
-                      >
-                        <PlusIcon className="w-2.5 h-2.5" />
-                        {tags.length === 0 && <span>tag</span>}
-                      </button>
-                      {editingTagsFor === t.design && (
-                        <TagEditorPopover
-                          allTags={tagData.tags}
-                          currentTags={Object.fromEntries(
-                            tagData.tags.map((tag) => [tag, tags.includes(tag) ? 'all' : 'none'] as const),
-                          )}
-                          onToggle={(tag) => {
-                            const next = tags.includes(tag) ? tags.filter((x) => x !== tag) : [...tags, tag];
-                            void setTagsForTemplate(t.design, next);
-                          }}
-                          onCreate={async (tag) => {
-                            await setTagsForTemplate(t.design, [...tags, tag]);
-                          }}
-                          popoverRef={cardPopoverRef}
-                        />
-                      )}
-                    </div>
-                  </div>
-
-                  {(t.createdBy || t.updatedBy) && (
-                    <div className="flex items-center gap-1.5 mt-1.5">
-                      {(() => {
-                        const avatar = t.updatedByAvatar || t.createdByAvatar;
-                        const name = t.updatedBy || t.createdBy;
-                        const initials = name ? name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() : '';
-                        return avatar ? (
-                          <img src={avatar} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
-                        ) : (
-                          <span className="w-4 h-4 rounded-full bg-[var(--muted)] flex items-center justify-center text-[7px] font-semibold text-[var(--muted-foreground)] flex-shrink-0">{initials}</span>
-                        );
-                      })()}
-                      <span className="text-[10px] text-[var(--muted-foreground)] truncate">
-                        {t.updatedBy ? `Edited by ${t.updatedBy}` : `By ${t.createdBy}`}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
+                preview={<TemplatePreview design={t.design} height={180} />}
+                name={t.name || formatDesign(t.design)}
+                status={scoped ? undefined : isPublished ? 'published' : 'draft'}
+                badges={
+                  <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+                    {templateTypeLabel}
+                  </span>
+                }
+                category={t.category}
+                tags={tags}
+                taxonomy={{ categories: allCategories, tags: tagData.tags }}
+                author={{ name: t.updatedBy || t.createdBy, avatarUrl: t.updatedByAvatar || t.createdByAvatar }}
+                editable
+                selectable
+                selected={isSelected}
+                onToggleSelect={() => handleToggleSelect(t.design)}
+                actions={actions}
+                onClick={() => setPreviewDesign(t.design)}
+                onCategoryChange={(c) => void setCategoryForTemplate(t.design, c)}
+                onTagsChange={(next) => void setTagsForTemplate(t.design, next)}
+              />
             );
           })}
         </div>
@@ -2559,93 +2104,40 @@ function ReadOnlyView({
           {filtered.map((t) => {
             const tags = tagData.assignments[t.design] || [];
             const templateTypeLabel = getLibraryTemplateTypeLabel(t);
+            const openTemplate = () => {
+              if (isCampaignDraft) router.push(buildLibraryEditorHref(t, { campaignDraft: isCampaignDraft }));
+              else setPreviewDesign(t.design);
+            };
+            const actions: TemplateCardAction[] = showCopyAction
+              ? [
+                  {
+                    key: 'copy',
+                    label: copyingDesign === t.design
+                      ? 'Copying…'
+                      : copyTargetAccountLabel
+                        ? `Copy to ${copyTargetAccountLabel}`
+                        : 'Copy to subaccount',
+                    icon: Square2StackIcon,
+                    run: () => void copyToSubaccount(t.design),
+                  },
+                ]
+              : [];
             return (
-              <div
+              <TemplateCard
                 key={t.design}
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  if (isCampaignDraft) {
-                    router.push(buildLibraryEditorHref(t, { campaignDraft: isCampaignDraft }));
-                  } else {
-                    setPreviewDesign(t.design);
-                  }
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    if (isCampaignDraft) {
-                      router.push(buildLibraryEditorHref(t, { campaignDraft: isCampaignDraft }));
-                    } else {
-                      setPreviewDesign(t.design);
-                    }
-                  }
-                }}
-                className="glass-card rounded-xl overflow-hidden cursor-pointer hover:border-[var(--primary)]/40 transition-colors"
-              >
-                <TemplatePreview design={t.design} height={220} />
-                <div className="p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <p className="text-sm font-medium truncate">
-                      {t.name || formatDesign(t.design)}
-                    </p>
-                    {showCopyAction && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void copyToSubaccount(t.design);
-                        }}
-                        disabled={copyingDesign === t.design}
-                        title={copyTargetAccountLabel ? `Copy to ${copyTargetAccountLabel}` : 'Copy to subaccount'}
-                        className="flex-shrink-0 inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--primary)] hover:border-[var(--primary)]/40 hover:bg-[var(--primary)]/5 transition-colors disabled:opacity-60 disabled:cursor-wait"
-                      >
-                        {copyingDesign === t.design ? (
-                          <ArrowPathIcon className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <Square2StackIcon className="w-3 h-3" />
-                        )}
-                        Copy
-                      </button>
-                    )}
-                  </div>
-                  <div className="mt-1.5">
-                    <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-                      {templateTypeLabel}
-                    </span>
-                  </div>
-                  {(t.category || tags.length > 0) && (
-                    <div className="flex items-center gap-1 mt-1.5 flex-wrap">
-                      {t.category && (
-                        <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-px rounded bg-[var(--muted)] text-[var(--muted-foreground)]">
-                          <FolderIcon className="w-2.5 h-2.5" />
-                          <span className="capitalize">{t.category.replace(/-/g, ' ')}</span>
-                        </span>
-                      )}
-                      {tags.map((tag) => (
-                        <TagChip key={tag} tag={tag} size="xs" />
-                      ))}
-                    </div>
-                  )}
-                  {(t.createdBy || t.updatedBy) && (
-                    <div className="flex items-center gap-1.5 mt-1.5">
-                      {(() => {
-                        const avatar = t.updatedByAvatar || t.createdByAvatar;
-                        const name = t.updatedBy || t.createdBy;
-                        const initials = name ? name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() : '';
-                        return avatar ? (
-                          <img src={avatar} alt="" className="w-4 h-4 rounded-full object-cover flex-shrink-0" />
-                        ) : (
-                          <span className="w-4 h-4 rounded-full bg-[var(--muted)] flex items-center justify-center text-[7px] font-semibold text-[var(--muted-foreground)] flex-shrink-0">{initials}</span>
-                        );
-                      })()}
-                      <span className="text-[10px] text-[var(--muted-foreground)] truncate">
-                        {t.updatedBy ? `Edited by ${t.updatedBy}` : `By ${t.createdBy}`}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
+                preview={<TemplatePreview design={t.design} height={180} />}
+                name={t.name || formatDesign(t.design)}
+                badges={
+                  <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+                    {templateTypeLabel}
+                  </span>
+                }
+                category={t.category}
+                tags={tags}
+                isClient
+                actions={actions}
+                onClick={openTemplate}
+              />
             );
           })}
         </div>

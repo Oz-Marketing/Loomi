@@ -116,7 +116,6 @@ function makeDoc(theme: 'dark' | 'light'): TemplateDoc {
     name,
     description: `Vehicle offer on the Young Subaru ${theme} topographic plate (lockup baked in) — Social Square + KSL verticals.`,
     industries: ['Automotive'],
-    adType: 'Vehicle Offer',
     sizes: SIZES,
     fields: FIELDS,
     background: { color: theme === 'dark' ? '#1e293b' : '#199fdb' },

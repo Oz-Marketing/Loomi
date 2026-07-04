@@ -128,7 +128,6 @@ export const vehicleOffer: AdTemplate = {
   name: 'Vehicle Offer',
   description: 'Vehicle offer ad — price, terms, expiration, and disclaimer over a clean branded layout.',
   industries: ['Automotive', 'Powersports'],
-  adType: 'Vehicle Offer',
   sizes: [
     { id: 'square', label: 'Square 1:1 (1080×1080)', width: 1080, height: 1080 },
     { id: 'landscape', label: 'Landscape (1200×628)', width: 1200, height: 628 },

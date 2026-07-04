@@ -90,12 +90,25 @@ export function SurfaceShell({
             </button>
             <div className="min-w-0 flex-1">{topBar}</div>
           </div>
-          <div
-            ref={mainRef}
-            data-scrolled={scrolled ? 'true' : 'false'}
-            className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain rounded-2xl border border-[var(--border)] bg-[var(--card)] backdrop-blur-xl shadow-sm px-6 md:px-8 pb-6 md:pb-8"
-          >
-            {children}
+          {/* The frosted card look lives on a SEPARATE background layer, not on
+              the scroll container. `backdrop-filter` (backdrop-blur) creates a
+              containing block for position:fixed descendants — if it were on the
+              element holding the page content, every `fixed inset-0` modal would
+              be trapped inside this card instead of covering the viewport. Keeping
+              the blur on a sibling layer preserves the look while letting modals
+              go truly full-screen. */}
+          <div className="relative flex-1 min-h-0">
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 rounded-2xl border border-[var(--border)] bg-[var(--card)] backdrop-blur-xl shadow-sm"
+            />
+            <div
+              ref={mainRef}
+              data-scrolled={scrolled ? 'true' : 'false'}
+              className="relative h-full overflow-y-auto overflow-x-hidden overscroll-contain rounded-2xl px-6 md:px-8 pb-6 md:pb-8"
+            >
+              {children}
+            </div>
           </div>
         </div>
       </main>

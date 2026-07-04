@@ -63,6 +63,7 @@ import {
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
+import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
@@ -343,6 +344,49 @@ function computeBox(handle: Handle, start: DocLayoutBox, dxF: number, dyF: numbe
     h = clamp(h, MIN_FRAC, 1 + BLEED - y);
   }
   return { ...rest, x, y, w, h };
+}
+
+/**
+ * Constrain a resize to the element's starting aspect ratio (Shift+drag), keeping
+ * the anchor (the edge/corner opposite the dragged handle) fixed. Works in PIXEL
+ * space (w is a fraction of canvas width, h of height, so their aspect only makes
+ * sense once scaled by nw/nh). Edge handles adjust the perpendicular dimension
+ * about the box center; corner handles drive off width and derive height.
+ */
+function lockAspect(handle: Handle, start: DocLayoutBox, box: DocLayoutBox, nw: number, nh: number): DocLayoutBox {
+  if (handle === 'move') return box;
+  const aspect = (start.w * nw) / (start.h * nh); // pixel w/h of the element
+  if (!isFinite(aspect) || aspect <= 0) return box;
+
+  // Pick the driving dimension, then derive the other to preserve aspect.
+  let wpx = box.w * nw;
+  let hpx = box.h * nh;
+  if (handle === 'n' || handle === 's') {
+    wpx = hpx * aspect; // vertical edge → height drives
+  } else {
+    hpx = wpx / aspect; // corners + horizontal edges → width drives
+  }
+  const w = Math.max(MIN_FRAC, wpx / nw);
+  const h = Math.max(MIN_FRAC, hpx / nh);
+
+  // Re-anchor so the opposite edge/corner stays put.
+  const right = start.x + start.w;
+  const bottom = start.y + start.h;
+  const cx = start.x + start.w / 2;
+  const cy = start.y + start.h / 2;
+  let x = box.x;
+  let y = box.y;
+  switch (handle) {
+    case 'se': x = start.x; y = start.y; break;
+    case 'sw': x = right - w; y = start.y; break;
+    case 'ne': x = start.x; y = bottom - h; break;
+    case 'nw': x = right - w; y = bottom - h; break;
+    case 'e': x = start.x; y = cy - h / 2; break;
+    case 'w': x = right - w; y = cy - h / 2; break;
+    case 's': y = start.y; x = cx - w / 2; break;
+    case 'n': y = bottom - h; x = cx - w / 2; break;
+  }
+  return { ...box, x, y, w, h };
 }
 
 /** A box is "detached" when it sits entirely outside the artboard — it's then a
@@ -823,6 +867,10 @@ export default function AdBuilderPage() {
   // the natural pixel size of its source, needed to map drag → object-position.
   const [cropId, setCropId] = useState<string | null>(null);
   const [cropNatural, setCropNatural] = useState<{ w: number; h: number } | null>(null);
+  // Modal cropper (mirrors the media library): set boundaries on the image and
+  // apply → server-side crop → the element points at the new cropped image.
+  const [cropModal, setCropModal] = useState<{ id: string; url: string; name: string } | null>(null);
+  const [cropSaving, setCropSaving] = useState(false);
   // FLIP: gently slide Layers rows to their new spots when the drop order
   // actually changes during a drag. Transforms are cleared before measuring, so
   // an in-flight animation never pollutes the next measurement (no jitter).
@@ -1083,6 +1131,54 @@ export default function AdBuilderPage() {
       return null;
     });
   }, [doc.elements, setElement]);
+
+  // Best-practice text sizing: after a text resize, shrink the box to HUG its
+  // content so there's no leftover whitespace (industry standard — Canva/Figma).
+  // Height always hugs; width hugs too when the text is a single line (point
+  // text), while multi-line/paragraph text keeps its width and just reflows.
+  // Measured in the builder (from the live node) and stored, so the export —
+  // which renders the same stored box — stays pixel-perfect.
+  const fitTextBox = useCallback(
+    (elId: string, sizeId: string, baseBox: DocLayoutBox) => {
+      const idoc = iframeRef.current?.contentDocument;
+      const node = idoc?.querySelector(`[data-el-id="${elId}"]`) as HTMLElement | null;
+      const el = doc.elements.find((e) => e.id === elId);
+      if (!idoc || !node || el?.type !== 'text') {
+        setBox(sizeId, elId, baseBox);
+        return;
+      }
+      let bb: DOMRect;
+      let lineCount = 1;
+      try {
+        const range = idoc.createRange();
+        range.selectNodeContents(node);
+        const rects = [...range.getClientRects()];
+        bb = range.getBoundingClientRect();
+        lineCount = Math.max(1, new Set(rects.map((r) => Math.round(r.top))).size);
+      } catch {
+        setBox(sizeId, elId, baseBox);
+        return;
+      }
+      if (!bb.width || !bb.height) {
+        setBox(sizeId, elId, baseBox);
+        return;
+      }
+      const fs = baseBox.fontSize ?? 16;
+      const natH = bb.height / scale + fs * 0.24; // native px + a little breathing room
+      const newH = clamp(natH / size.height, MIN_FRAC, 1.5);
+      const patch: DocLayoutBox = { ...baseBox, h: newH };
+      patch.y = baseBox.y + baseBox.h / 2 - newH / 2; // keep vertical center
+      if (lineCount <= 1) {
+        const natW = bb.width / scale + fs * 0.2;
+        const newW = clamp(natW / size.width, MIN_FRAC, 1.5);
+        if (el.align === 'center') patch.x = baseBox.x + baseBox.w / 2 - newW / 2;
+        else if (el.align === 'right') patch.x = baseBox.x + baseBox.w - newW;
+        patch.w = newW;
+      }
+      setBox(sizeId, elId, patch);
+    },
+    [doc.elements, size.width, size.height, scale, setBox],
+  );
 
   // In-place text editing: turn the ACTUAL rendered node inside the iframe into a
   // contenteditable so the caret sits in the real text (WYSIWYG), rather than a
@@ -1898,7 +1994,9 @@ export default function AdBuilderPage() {
     const dxF = (e.clientX - d.sx) / d.fw;
     const dyF = (e.clientY - d.sy) / d.fh;
     if (d.kind === 'single') {
-      const box = computeBox(d.handle, d.start, dxF, dyF);
+      let box = computeBox(d.handle, d.start, dxF, dyF);
+      // Shift = constrain to the element's original aspect ratio (all elements).
+      if (d.handle !== 'move' && e.shiftKey) box = lockAspect(d.handle, d.start, box, d.nw, d.nh);
       let gx: number | null = null;
       let gy: number | null = null;
       if (d.handle === 'move') {
@@ -1937,7 +2035,10 @@ export default function AdBuilderPage() {
       // group resize — scale every box (and text font) about the opposite edge.
       const w0 = d.bounds.right - d.bounds.left;
       const h0 = d.bounds.bottom - d.bounds.top;
-      const rect = computeBox(d.handle, { x: d.bounds.left, y: d.bounds.top, w: w0, h: h0 }, dxF, dyF);
+      const startBounds = { x: d.bounds.left, y: d.bounds.top, w: w0, h: h0 };
+      let rect = computeBox(d.handle, startBounds, dxF, dyF);
+      // Shift = lock the group's aspect ratio too (scales everything uniformly).
+      if (d.handle !== 'move' && e.shiftKey) rect = lockAspect(d.handle, startBounds, rect, d.nw, d.nh);
       const scaleX = w0 > 0 ? rect.w / w0 : 1;
       const scaleY = h0 > 0 ? rect.h / h0 : 1;
       const live: Record<string, DocLayoutBox> = {};
@@ -1961,7 +2062,13 @@ export default function AdBuilderPage() {
   onUpRef.current = () => {
     const d = dragRef.current;
     if (d?.kind === 'single') {
-      setBox(d.sizeId, d.elId, d.live);
+      // After resizing a TEXT element, hug the box to the content (no whitespace).
+      const el = doc.elements.find((e) => e.id === d.elId);
+      if (el?.type === 'text' && d.handle !== 'move') {
+        fitTextBox(d.elId, d.sizeId, d.live);
+      } else {
+        setBox(d.sizeId, d.elId, d.live);
+      }
     } else if (d?.kind === 'group' || d?.kind === 'groupresize') {
       setDoc((prev) => {
         const lay = { ...(prev.layouts[d.sizeId] ?? {}) };
@@ -2132,6 +2239,29 @@ export default function AdBuilderPage() {
     const startObjY = box.objectY ?? 0.5;
     dragRef.current = { kind: 'croppan', sx: e.clientX, sy: e.clientY, sizeId: size.id, elId, startObjX, startObjY, overflowX, overflowY, dragging: false, live: { objectX: startObjX, objectY: startObjY } };
     listen();
+  }
+
+  // Apply the modal crop: server-side crop of the element's current image (by
+  // URL) into a new asset, then point the element at it. Mirrors the media library.
+  async function applyBuilderCrop(crop: CropRect) {
+    if (!cropModal) return;
+    setCropSaving(true);
+    try {
+      const res = await fetch('/api/media/crop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: cropModal.url, accountKey: accountKey ?? null, x: crop.x, y: crop.y, width: crop.width, height: crop.height }),
+      });
+      const j = (await res.json().catch(() => null)) as { file?: { url: string }; error?: string } | null;
+      if (!res.ok || !j?.file?.url) throw new Error(j?.error || `HTTP ${res.status}`);
+      setElement(cropModal.id, { binding: { kind: 'static', value: j.file.url } });
+      toast.success('Image cropped');
+      setCropModal(null);
+    } catch (err) {
+      toast.error(`Couldn't crop: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setCropSaving(false);
+    }
   }
 
   // Element pointerdown: Shift toggles selection; otherwise select (or keep a
@@ -3368,14 +3498,14 @@ export default function AdBuilderPage() {
                   onClose={clearSelection}
                   onFillArtboard={() => fillArtboardAndSendBack(selected.id)}
                   shifted={fieldsOpen}
-                  cropping={cropId === selected.id}
+                  cropping={cropModal?.id === selected.id}
                   onToggleCrop={() => {
-                    if (cropId === selected.id) {
-                      setCropId(null);
-                    } else {
-                      if (selected.fit !== 'cover') updEl({ fit: 'cover' });
-                      setCropId(selected.id);
+                    const url = resolveBindingUrl(selected);
+                    if (!url) {
+                      toast.error('Add an image first, then crop it');
+                      return;
                     }
+                    setCropModal({ id: selected.id, url, name: elName(selected) });
                   }}
                 />
               )}
@@ -3437,6 +3567,15 @@ export default function AdBuilderPage() {
       {helpOpen && <ShortcutsModal onClose={() => setHelpOpen(false)} />}
 
       {deployOpen && <DeployTemplateModal name={templateName} doc={doc} excludeKey={scopeAccount} onClose={() => setDeployOpen(false)} />}
+      {cropModal && (
+        <CropEditorModal
+          file={{ url: cropModal.url, name: cropModal.name }}
+          saving={cropSaving}
+          onClose={() => { if (!cropSaving) setCropModal(null); }}
+          onSave={applyBuilderCrop}
+          confirmLabel="Crop"
+        />
+      )}
 
       {/* Right-click context menu (canvas + layers) */}
       {ctxMenu && typeof document !== 'undefined' &&

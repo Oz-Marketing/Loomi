@@ -30,6 +30,7 @@ import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import { isVehicleIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
+import { googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { isFieldVisible, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
 import { composeDisclaimer } from '@/lib/ad-generator/disclaimer';
@@ -229,12 +230,12 @@ export default function AdGeneratorPage() {
       : colorSwatches.find((c) => c.key === colorKey)?.value ?? colorSwatches[0]?.value ?? undefined;
 
   const selectedFontFamily = fontKey;
-  const previewFontFaceCss = useMemo(
-    () =>
-      fontKey && customFonts.some((f) => f.family === fontKey)
-        ? embeddedFontCss || buildFontFaceCssFromUrls(customFonts.filter((f) => f.family === fontKey))
-        : '',
-    [embeddedFontCss, customFonts, fontKey],
+  // Google CSS2 <link> for every Google family the design actually uses (per
+  // element) + the doc-level pick — mirrors the builder so the preview renders
+  // real fonts. gstatic sends CORS, so the URL loads fine in the srcdoc iframe.
+  const previewGoogleFontsUrl = useMemo(
+    () => googleFontsCssUrl(usedGoogleFontFamilies(docSnapshot?.elements ?? [], selectedFontFamily || undefined)),
+    [docSnapshot, selectedFontFamily],
   );
 
   const brandingData: AdData = useMemo(
@@ -242,9 +243,13 @@ export default function AdGeneratorPage() {
       ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
       ...(logoUrl ? { logoUrl } : {}),
       ...(brandColor ? { brandColor } : {}),
-      ...(selectedFontFamily ? { fontFamily: selectedFontFamily, fontFaceCss: previewFontFaceCss } : {}),
+      // Always embed ALL account custom fonts so per-element brand fonts render
+      // (not just a doc-level pick); a chosen brand font sets `fontFamily` too.
+      ...(pageFontFaceCss ? { fontFaceCss: pageFontFaceCss } : {}),
+      ...(selectedFontFamily ? { fontFamily: selectedFontFamily } : {}),
+      ...(previewGoogleFontsUrl ? { googleFontsUrl: previewGoogleFontsUrl } : {}),
     }),
-    [accountData?.dealer, logoUrl, brandColor, selectedFontFamily, previewFontFaceCss],
+    [accountData?.dealer, logoUrl, brandColor, pageFontFaceCss, selectedFontFamily, previewGoogleFontsUrl],
   );
 
   const size = useMemo(() => template.sizes.find((s) => s.id === sizeId) ?? template.sizes[0], [template, sizeId]);

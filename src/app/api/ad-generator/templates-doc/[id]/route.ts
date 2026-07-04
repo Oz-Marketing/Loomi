@@ -42,7 +42,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const session = await getAuthSession();
 
   const { id } = await params;
-  let body: { name?: string; description?: string; doc?: unknown; status?: string; isActive?: boolean; accountKey?: string | null };
+  let body: { name?: string; description?: string; doc?: unknown; status?: string; isActive?: boolean; accountKey?: string | null; category?: string | null; tags?: string[] };
   try {
     body = await req.json();
   } catch {
@@ -56,11 +56,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (typeof body.isActive === 'boolean') data.isActive = body.isActive;
   // Scope: a string re-scopes to that account, null/'' back to global.
   if ('accountKey' in body) data.accountKey = typeof body.accountKey === 'string' && body.accountKey.trim() ? body.accountKey.trim() : null;
+  // Shared taxonomy — direct inline edits from the template card.
+  if ('category' in body) data.category = typeof body.category === 'string' && body.category.trim() ? body.category.trim() : null;
+  if ('tags' in body) data.tags = Array.isArray(body.tags) ? JSON.stringify(body.tags) : null;
   if (body.doc && typeof body.doc === 'object' && Array.isArray((body.doc as { sizes?: unknown }).sizes)) {
     const u = session?.user as { name?: string | null; email?: string | null; image?: string | null } | undefined;
     data.doc = JSON.stringify(body.doc);
-    // Keep the Ad Type tag column in sync with the doc's chosen type.
-    data.adTypeId = typeof (body.doc as { adType?: unknown }).adType === 'string' ? (body.doc as { adType: string }).adType : null;
+    // Keep the taxonomy columns in sync with the doc (the builder stores them there).
+    data.category = typeof (body.doc as { category?: unknown }).category === 'string' ? (body.doc as { category: string }).category.trim() || null : null;
+    data.tags = Array.isArray((body.doc as { tags?: unknown }).tags) ? JSON.stringify((body.doc as { tags: string[] }).tags) : null;
     data.createdBy = u?.email ?? null;
     data.createdByName = u?.name ?? null;
     data.createdByEmail = u?.email ?? null;

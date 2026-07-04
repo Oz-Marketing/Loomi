@@ -47,6 +47,8 @@ export async function PATCH(
       leadSource: body?.leadSource,
       listId: body?.listId,
       forwardToCrm: body?.forwardToCrm,
+      category: body?.category,
+      tags: body?.tags,
     });
     return NextResponse.json({ form });
   } catch (err) {

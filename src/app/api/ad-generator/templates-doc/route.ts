@@ -30,11 +30,23 @@ type Row = {
   status: string;
   isActive: boolean;
   accountKey: string | null;
+  category: string | null;
+  tags: string | null;
   updatedAt: Date;
   createdByName: string | null;
   createdByEmail: string | null;
   createdByImage: string | null;
 };
+
+function parseTags(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : [];
+  } catch {
+    return [];
+  }
+}
 
 /** Parse a stored doc; null if it's not a usable TemplateDoc shape. */
 function parseDoc(raw: string): unknown | null {
@@ -55,6 +67,8 @@ function shape(r: Row) {
     status: r.status,
     isActive: r.isActive,
     accountKey: r.accountKey,
+    category: r.category,
+    tags: parseTags(r.tags),
     updatedAt: r.updatedAt,
     createdByName: r.createdByName,
     createdByEmail: r.createdByEmail,
@@ -130,9 +144,10 @@ export async function POST(req: NextRequest) {
         doc: JSON.stringify(doc),
         status,
         accountKey: typeof body.accountKey === 'string' && body.accountKey.trim() ? body.accountKey.trim() : null,
-        // Ad Type tag — read off the doc (the builder stores the chosen type there)
-        // so the taxonomy column stays in sync for library filtering.
-        adTypeId: typeof (doc as { adType?: unknown }).adType === 'string' ? (doc as { adType: string }).adType : null,
+        // Shared taxonomy — read off the doc (the builder stores category/tags there)
+        // so the columns stay in sync for library filtering.
+        category: typeof (doc as { category?: unknown }).category === 'string' ? (doc as { category: string }).category.trim() || null : null,
+        tags: Array.isArray((doc as { tags?: unknown }).tags) ? JSON.stringify((doc as { tags: string[] }).tags) : null,
         createdBy: u?.email ?? null,
         createdByName: u?.name ?? null,
         createdByEmail: u?.email ?? null,

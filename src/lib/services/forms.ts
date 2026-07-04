@@ -33,7 +33,13 @@ export interface FormSummary {
   forwardToCrm: boolean;
   /** When true, this row is a reusable template rather than a live form. */
   isTemplate: boolean;
+  /** Shared template taxonomy (populated for template rows). */
+  category: string | null;
+  tags: string[];
   createdByUserId: string;
+  /** Resolved author display info (template card). Null until resolved. */
+  createdByName: string | null;
+  createdByImage: string | null;
   publishedAt: string;
   createdAt: string;
   updatedAt: string;
@@ -101,6 +107,36 @@ function dateToIso(value: Date | null | undefined): string {
   return value ? value.toISOString() : '';
 }
 
+function parseTagsJson(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Resolve author display info (name + avatar) for a set of summaries by user id. */
+async function attachAuthors(summaries: FormSummary[]): Promise<FormSummary[]> {
+  const ids = [...new Set(summaries.map((s) => s.createdByUserId).filter(Boolean))];
+  if (ids.length === 0) return summaries;
+  try {
+    const users = await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, avatarUrl: true } });
+    const byId = new Map(users.map((u) => [u.id, u]));
+    for (const s of summaries) {
+      const u = s.createdByUserId ? byId.get(s.createdByUserId) : undefined;
+      if (u) {
+        s.createdByName = u.name ?? null;
+        s.createdByImage = u.avatarUrl ?? null;
+      }
+    }
+  } catch {
+    /* best-effort — cards just fall back to a generated avatar */
+  }
+  return summaries;
+}
+
 function parseJsonObject(value: Prisma.JsonValue): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -117,6 +153,8 @@ function toSummary(row: {
   listId: string | null;
   forwardToCrm: boolean;
   isTemplate?: boolean;
+  category?: string | null;
+  tags?: string | null;
   createdByUserId: string | null;
   publishedAt: Date | null;
   createdAt: Date;
@@ -136,7 +174,11 @@ function toSummary(row: {
     listId: row.listId ?? '',
     forwardToCrm: row.forwardToCrm,
     isTemplate: row.isTemplate ?? false,
+    category: row.category ?? null,
+    tags: parseTagsJson(row.tags),
     createdByUserId: row.createdByUserId ?? '',
+    createdByName: null,
+    createdByImage: null,
     schema:
       row.schema !== undefined
         ? (parseFormTemplate(row.schema as unknown) ?? emptyFormTemplate())
@@ -218,7 +260,7 @@ export async function listForms(options?: {
   ]);
 
   return {
-    forms: rows.map(toSummary),
+    forms: await attachAuthors(rows.map(toSummary)),
     page,
     pageSize,
     total,
@@ -469,6 +511,8 @@ export async function updateForm(
     leadSource?: unknown;
     listId?: unknown;
     forwardToCrm?: unknown;
+    category?: unknown;
+    tags?: unknown;
   },
 ): Promise<FormDetail> {
   const existing = await prisma.form.findUnique({ where: { id } });
@@ -516,6 +560,16 @@ export async function updateForm(
       throw new FormServiceError('schema must be a v1 FormTemplate');
     }
     data.schema = patch.schema as unknown as Prisma.InputJsonValue;
+  }
+
+  // Shared template taxonomy — inline category/tags edits from the template card.
+  if (patch.category !== undefined) {
+    data.category = typeof patch.category === 'string' && patch.category.trim() ? patch.category.trim() : null;
+  }
+  if (patch.tags !== undefined) {
+    data.tags = Array.isArray(patch.tags)
+      ? JSON.stringify(patch.tags.filter((t): t is string => typeof t === 'string'))
+      : null;
   }
 
   if (patch.redirectUrl !== undefined) {

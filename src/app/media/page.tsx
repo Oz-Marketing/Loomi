@@ -1802,19 +1802,8 @@ export default function MediaPage() {
             )}
             {effectiveAccountKey && (
               <>
-                {capabilities?.canCreateFolders && (
-                  <button
-                    onClick={() => {
-                      setNewFolderName('');
-                      setShowNewFolderInput(true);
-                    }}
-                    className="inline-flex items-center gap-2 h-10 px-3 text-sm rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)] transition-colors"
-                  >
-                    <FolderPlusIcon className="w-4 h-4" />
-                    New Folder
-                  </button>
-                )}
-                {/* ⋯ overflow menu — holds the Archived view toggle. */}
+                {/* ⋯ overflow menu — holds the Archived view toggle. Sits before
+                    New Folder in the toolbar. */}
                 <div className="relative">
                   <button
                     onClick={() => setMoreMenuOpen((v) => !v)}
@@ -1831,7 +1820,7 @@ export default function MediaPage() {
                   {moreMenuOpen && (
                     <>
                       <div className="fixed inset-0 z-30" onClick={() => setMoreMenuOpen(false)} />
-                      <div className="absolute right-0 top-full mt-1 z-40 w-48 glass-dropdown">
+                      <div className="absolute left-0 top-full mt-1 z-40 w-48 glass-dropdown">
                         <button
                           onClick={() => { setShowArchived((v) => !v); setSelectedIds(new Set()); setMoreMenuOpen(false); }}
                           className="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
@@ -1843,6 +1832,18 @@ export default function MediaPage() {
                     </>
                   )}
                 </div>
+                {capabilities?.canCreateFolders && (
+                  <button
+                    onClick={() => {
+                      setNewFolderName('');
+                      setShowNewFolderInput(true);
+                    }}
+                    className="inline-flex items-center gap-2 h-10 px-3 text-sm rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)] transition-colors"
+                  >
+                    <FolderPlusIcon className="w-4 h-4" />
+                    New Folder
+                  </button>
+                )}
                 <PrimaryButton
                   onClick={() => { setStagedFiles([]); setShowUploadModal(true); }}
                   disabled={uploading}

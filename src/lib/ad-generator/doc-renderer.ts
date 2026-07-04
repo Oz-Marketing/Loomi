@@ -40,6 +40,20 @@ function clamp01(n: number): number {
   return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0;
 }
 
+/**
+ * `border-radius` declaration for an element. Emits a four-value radius when any
+ * per-corner override is set (TL TR BR BL), each falling back to the all-corners
+ * `radius` then 0; otherwise the single `radius`. Returns '' when fully square.
+ */
+function borderRadiusCss(el: DocElement): string {
+  const { radiusTL, radiusTR, radiusBR, radiusBL, radius } = el;
+  if (radiusTL != null || radiusTR != null || radiusBR != null || radiusBL != null) {
+    const c = (v?: number) => `${Math.max(0, v ?? radius ?? 0)}px`;
+    return `border-radius:${c(radiusTL)} ${c(radiusTR)} ${c(radiusBR)} ${c(radiusBL)};`;
+  }
+  return radius ? `border-radius:${radius}px;` : '';
+}
+
 /** Parse a hex color (`#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa`) → channels + alpha
  *  (0..1). Returns null for non-hex input (e.g. an unresolved `'brand'` token). */
 function hexToRgba(hex: string): { r: number; g: number; b: number; a: number } | null {
@@ -211,7 +225,7 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
       const ov = normalizeGradient({ gradientFill: el.overlay });
       if (ov) layers.push(`<div style="position:absolute;inset:0;background:${buildGradientCss(ov, brand)};"></div>`);
     }
-    const radius = el.radius ? `border-radius:${el.radius}px;` : '';
+    const radius = borderRadiusCss(el);
     return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${radius}">${layers.join('')}</div>`;
   }
 
@@ -228,7 +242,7 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
       ? `clip-path:${clip};`
       : kind === 'ellipse'
         ? 'border-radius:50%;'
-        : `border-radius:${el.radius ?? 0}px;`;
+        : borderRadiusCss(el);
     return `<div${idAttr} style="${dim}${fx}${pos}background:${bg};${shapeStyle}"></div>`;
   }
 
@@ -251,7 +265,7 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     // Tile width is a fraction of the box width so density is size-independent.
     if (fit === 'tile') {
       const tilePct = Math.max(2, clamp01(el.tileScale ?? 0.25) * 100);
-      const tileRadius = el.radius ? `border-radius:${el.radius}px;` : '';
+      const tileRadius = borderRadiusCss(el);
       return `<div${idAttr} style="${dim}${fx}${pos}overflow:hidden;${tileRadius}background-image:url(${url});background-repeat:repeat;background-size:${tilePct}% auto;"></div>`;
     }
     // A cover image can carry a per-size focal point (object-position) so one
@@ -263,7 +277,7 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
           ? 'left center'
           : 'center';
     // Corner radius rounds the image — the wrapper clips it via overflow:hidden.
-    const radius = el.radius ? `border-radius:${el.radius}px;` : '';
+    const radius = borderRadiusCss(el);
     // Crop zoom — a cover image can be scaled up past its cover fit, pivoting on
     // the focal point so the designer's crop stays framed. The wrapper clips it.
     const cropScale = fit === 'cover' && box.objectScale && box.objectScale > 1 ? box.objectScale : 1;

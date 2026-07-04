@@ -152,9 +152,18 @@ export interface DocElement {
   bgImageOpacity?: number;
   /** The background's top fade/overlay gradient (composited over the texture). */
   overlay?: GradientFill;
-  /** Corner radius in px. Applies to rectangle shapes AND images/logos (rounds
-   *  the image, which is clipped by the wrapper's overflow:hidden). */
+  /** Corner radius in px (all four corners). Applies to rectangle shapes AND
+   *  images/logos (rounds the image, which is clipped by the wrapper's
+   *  overflow:hidden). Kept for back-compat + as the fallback for any per-corner
+   *  value left unset. */
   radius?: number;
+  /** Per-corner radius overrides (px). When any is set the renderer emits a
+   *  four-value `border-radius` (top-left, top-right, bottom-right, bottom-left),
+   *  falling back to `radius` (then 0) for corners left undefined. */
+  radiusTL?: number;
+  radiusTR?: number;
+  radiusBR?: number;
+  radiusBL?: number;
 }
 
 /**

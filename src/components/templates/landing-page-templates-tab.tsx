@@ -15,6 +15,9 @@ import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { LandingPagePreviewThumbnail } from '@/components/landing-pages/landing-page-preview-thumbnail';
 import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
+import { TemplateLibraryShell } from '@/components/templates/template-library-shell';
+import { TemplateFilterRail } from '@/components/templates/template-filter-rail';
+import { useTemplateFilters } from '@/components/templates/use-template-filters';
 import type { LpTemplateSummary } from '@/lib/services/lp-templates';
 
 const fetcher = async (url: string) => {
@@ -48,6 +51,15 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
     [taxData],
   );
 
+  // Hooks must run unconditionally (before the early returns below).
+  const templates = useMemo(() => data?.templates ?? [], [data]);
+  const { filters, setFilters, facets, filtered, active, reset } = useTemplateFilters(templates, {
+    getName: (t) => t.name || 'Untitled template',
+    getCategory: (t) => t.category,
+    getTags: (t) => t.tags,
+    getStatus: (t) => (t.status === 'published' ? 'published' : 'draft'),
+  });
+
   if (!accountKey) {
     return (
       <div className="glass-card rounded-2xl px-6 py-14 text-center">
@@ -70,8 +82,6 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
       </div>
     );
   }
-
-  const templates = data?.templates ?? [];
 
   const useTemplate = async (tpl: LpTemplateSummary) => {
     if (creatingId) return;
@@ -160,24 +170,46 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
   ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-      {templates.map((tpl) => (
-        <TemplateCard
-          key={tpl.id}
-          preview={<LandingPagePreviewThumbnail template={tpl.schema} height={160} />}
-          name={tpl.name || 'Untitled template'}
-          status={tpl.status}
-          category={tpl.category}
-          tags={tpl.tags}
-          taxonomy={taxonomy}
-          author={{ name: tpl.createdByName, avatarUrl: tpl.createdByImage }}
-          editable
-          actions={actionsFor(tpl)}
-          onClick={() => void useTemplate(tpl)}
-          onCategoryChange={(c) => void patchTemplate(tpl.id, { category: c })}
-          onTagsChange={(tags) => void patchTemplate(tpl.id, { tags })}
+    <TemplateLibraryShell
+      search={filters.search}
+      onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
+      resultCount={filtered.length}
+      rail={
+        <TemplateFilterRail
+          filters={filters}
+          setFilters={setFilters}
+          facets={facets}
+          active={active}
+          reset={reset}
+          showStatus
         />
-      ))}
-    </div>
+      }
+    >
+      {filtered.length === 0 ? (
+        <div className="glass-card rounded-2xl p-10 text-center text-sm text-[var(--muted-foreground)]">
+          No templates match your filters.
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filtered.map((tpl) => (
+            <TemplateCard
+              key={tpl.id}
+              preview={<LandingPagePreviewThumbnail template={tpl.schema} height={160} />}
+              name={tpl.name || 'Untitled template'}
+              status={tpl.status}
+              category={tpl.category}
+              tags={tpl.tags}
+              taxonomy={taxonomy}
+              author={{ name: tpl.createdByName, avatarUrl: tpl.createdByImage }}
+              editable
+              actions={actionsFor(tpl)}
+              onClick={() => void useTemplate(tpl)}
+              onCategoryChange={(c) => void patchTemplate(tpl.id, { category: c })}
+              onTagsChange={(tags) => void patchTemplate(tpl.id, { tags })}
+            />
+          ))}
+        </div>
+      )}
+    </TemplateLibraryShell>
   );
 }

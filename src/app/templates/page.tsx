@@ -78,20 +78,12 @@ function TemplatesPageInner() {
   // menu portal in here (e.g. the Email tab's Create Template + Manage
   // tags, via ManagementView → TemplatesHeaderActionsContext).
   const [actionsSlot, setActionsSlot] = useState<HTMLElement | null>(null);
-  // Email-tab "Template Library" toggle + a key bump to refresh the
-  // management view after a library copy. Lifted here so the toggle can
-  // live in the sticky header alongside the CTA.
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  const [emailRefreshKey, setEmailRefreshKey] = useState(0);
 
   const scopedAccountKey =
     account.mode === 'account' && accountKey ? accountKey : undefined;
   const accountLabel = accountData?.dealer ?? accountKey ?? undefined;
 
   const activeDef = tabs.find((t) => t.id === tab) ?? tabs[0];
-  // The library toggle only makes sense inside a sub-account, where "your
-  // templates" and the shared system library are distinct.
-  const showLibraryToggle = tab === 'email' && Boolean(scopedAccountKey);
 
   return (
     <TemplatesHeaderActionsContext.Provider value={actionsSlot}>
@@ -107,23 +99,8 @@ function TemplatesPageInner() {
                 </p>
               </div>
             </div>
-            {/* Right-aligned actions: the Library toggle (Email + sub-account)
-                plus a slot the active tab portals its CTA + overflow into. */}
+            {/* Right-aligned action slot the active tab portals its CTA + overflow into. */}
             <div className="flex items-center gap-2 flex-shrink-0">
-              {showLibraryToggle && (
-                <button
-                  type="button"
-                  onClick={() => setLibraryOpen((v) => !v)}
-                  className={`inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors ${
-                    libraryOpen
-                      ? 'border-[var(--primary)]/40 text-[var(--primary)] bg-[var(--primary)]/5'
-                      : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]'
-                  }`}
-                >
-                  <BookOpenIcon className="w-4 h-4" />
-                  {libraryOpen ? 'Back to your templates' : 'Browse System Templates'}
-                </button>
-              )}
               <div ref={setActionsSlot} className="flex items-center gap-2" />
             </div>
           </div>
@@ -160,12 +137,6 @@ function TemplatesPageInner() {
             accountLabel={accountLabel}
             canManage={canManage}
             isClient={isClient}
-            libraryOpen={libraryOpen}
-            refreshKey={emailRefreshKey}
-            onCopyComplete={() => {
-              setEmailRefreshKey((n) => n + 1);
-              setLibraryOpen(false);
-            }}
           />
         )}
         {tab === 'forms' && <FormTemplatesTab accountKey={scopedAccountKey} />}

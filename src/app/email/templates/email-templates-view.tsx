@@ -11,6 +11,7 @@ import {
   PlusIcon,
   XMarkIcon,
   BookOpenIcon,
+  EnvelopeIcon,
   TrashIcon,
   TagIcon,
   Square2StackIcon,
@@ -28,7 +29,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { getTagColor } from '@/lib/tag-colors';
 import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
-import { TemplateLibraryShell } from '@/components/templates/template-library-shell';
+import { TemplateLibraryShell, TemplateEmptyState } from '@/components/templates/template-library-shell';
 import { TemplateFilterRail, type FilterRailExtraSection } from '@/components/templates/template-filter-rail';
 import { useTemplateFilters } from '@/components/templates/use-template-filters';
 import BulkActionDock, { type BulkActionDockItem } from '@/components/bulk-action-dock';
@@ -363,7 +364,7 @@ function EmbeddedHeaderActions({
       </div>
       <PrimaryButton onClick={onCreate}>
         <PlusIcon className="w-4 h-4" />
-        Create Template
+        New Email Template
       </PrimaryButton>
     </>,
     slot,
@@ -980,7 +981,16 @@ function ManagementView({
         </div>
       )}
 
-      {/* Template grid with shared left filter rail + search */}
+      {/* No templates → shared empty card (no rail), matching the other tabs. */}
+      {templates.length === 0 ? (
+        <TemplateEmptyState
+          icon={EnvelopeIcon}
+          title="No email templates yet"
+          subtitle="Create a reusable email layout — your team starts each campaign from one of these."
+          actionLabel="New Email Template"
+          onAction={() => setShowCreateChoice(true)}
+        />
+      ) : (
       <TemplateLibraryShell
         search={filters.search}
         onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
@@ -1063,6 +1073,7 @@ function ManagementView({
         </div>
       )}
       </TemplateLibraryShell>
+      )}
 
       {/* Modals */}
       {showTagModal && (

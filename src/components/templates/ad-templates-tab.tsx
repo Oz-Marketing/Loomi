@@ -24,7 +24,7 @@ import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import PrimaryButton from '@/components/primary-button';
 import { TemplateHeaderActions } from '@/components/templates/template-header-actions';
 import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
-import { TemplateLibraryShell } from '@/components/templates/template-library-shell';
+import { TemplateLibraryShell, TemplateEmptyState } from '@/components/templates/template-library-shell';
 import { TemplateFilterRail } from '@/components/templates/template-filter-rail';
 import { useTemplateFilters } from '@/components/templates/use-template-filters';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
@@ -272,28 +272,20 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
   return (
     <>
       {/* Create + ⋯ Manage tags in the page header (portaled), shared by all tabs. */}
-      <TemplateHeaderActions onCreate={newTemplate} createLabel="New template" onTagsSaved={() => void mutate()} />
+      <TemplateHeaderActions onCreate={newTemplate} createLabel="New Ad Template" onTagsSaved={() => void mutate()} />
 
       {templates.length === 0 ? (
-        <div className="glass-card rounded-2xl p-12 text-center flex flex-col items-center">
-          <div className="w-16 h-16 rounded-2xl bg-[var(--muted)] flex items-center justify-center mb-4">
-            <SparklesIcon className="w-8 h-8 text-[var(--muted-foreground)]" />
-          </div>
-          <h2 className="text-lg font-semibold mb-1">No ad templates yet</h2>
-          <p className="text-sm text-[var(--muted-foreground)] max-w-md mb-6">
-            {accountKey
+        <TemplateEmptyState
+          icon={SparklesIcon}
+          title="No ad templates yet"
+          subtitle={
+            accountKey
               ? 'No templates for this account yet — an admin can push templates to it from the system library.'
-              : 'Design a reusable layout in the Template Builder — your team starts each ad from one of these.'}
-          </p>
-          <button
-            type="button"
-            onClick={newTemplate}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
-          >
-            <PlusIcon className="w-4 h-4" />
-            New template
-          </button>
-        </div>
+              : 'Design a reusable layout in the Template Builder — your team starts each ad from one of these.'
+          }
+          actionLabel="New Ad Template"
+          onAction={newTemplate}
+        />
       ) : (
         <TemplateLibraryShell
           search={filters.search}

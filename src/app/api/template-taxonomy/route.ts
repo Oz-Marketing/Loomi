@@ -42,7 +42,7 @@ export async function GET() {
     safe(() => prisma.template.findMany({ where: { category: { not: null } }, select: { category: true }, distinct: ['category'] }), [] as { category: string | null }[]),
     safe(() => prisma.adTemplateDoc.findMany({ select: { category: true, tags: true } }), [] as { category: string | null; tags: string | null }[]),
     safe(() => prisma.form.findMany({ where: { isTemplate: true }, select: { category: true, tags: true } }), [] as { category: string | null; tags: string | null }[]),
-    safe(() => prisma.accountLandingPageTemplate.findMany({ select: { category: true, tags: true } }), [] as { category: string | null; tags: string | null }[]),
+    safe(() => prisma.landingPage.findMany({ where: { isTemplate: true }, select: { category: true, tags: true } }), [] as { category: string | null; tags: string | null }[]),
     safe(() => prisma.templateTag.findMany({ select: { name: true } }), [] as { name: string }[]),
   ]);
 

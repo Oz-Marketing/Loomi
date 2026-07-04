@@ -7,6 +7,7 @@ import { toast } from 'sonner';
 import {
   RectangleStackIcon,
   ArrowRightIcon,
+  PencilSquareIcon,
   CheckCircleIcon,
   ArrowUturnLeftIcon,
   TrashIcon,
@@ -15,7 +16,11 @@ import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { LandingPagePreviewThumbnail } from '@/components/landing-pages/landing-page-preview-thumbnail';
 import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
-import type { LpTemplateSummary } from '@/lib/services/lp-templates';
+import { TemplateLibraryShell } from '@/components/templates/template-library-shell';
+import { TemplateFilterRail } from '@/components/templates/template-filter-rail';
+import { TemplateHeaderActions } from '@/components/templates/template-header-actions';
+import { useTemplateFilters } from '@/components/templates/use-template-filters';
+import type { LandingPageSummary } from '@/lib/services/landing-pages';
 
 const fetcher = async (url: string) => {
   const res = await fetch(url);
@@ -24,22 +29,21 @@ const fetcher = async (url: string) => {
 };
 
 /**
- * Landing Pages tab of the unified /templates page. LP "templates" are
- * account-scoped saved schemas; a card click creates a new landing page from the
- * template and opens the LP editor. Uses the shared TemplateCard (status,
- * category/tags, author) like every other kind.
- *
- * LP templates are account-scoped, so this tab only has data inside a
- * sub-account; in pure admin mode it shows an info state.
+ * Landing Pages tab of the unified /templates page. LP templates are now
+ * `LandingPage` rows with `isTemplate=true` — edited in place by the existing LP
+ * builder (like Forms). Admin (no account) manages the system library; a
+ * sub-account sees only its own. "Use template" spins up a live LP from the
+ * template's schema.
  */
 export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string }) {
   const router = useRouter();
   const subHref = useSubaccountHref();
   const { confirm } = useLoomiDialog();
-  const [creatingId, setCreatingId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [usingId, setUsingId] = useState<string | null>(null);
 
-  const { data, isLoading, error, mutate } = useSWR<{ templates: LpTemplateSummary[] }>(
-    accountKey ? `/api/account-lp-templates?accountKey=${encodeURIComponent(accountKey)}` : null,
+  const { data, isLoading, error, mutate } = useSWR<{ pages: LandingPageSummary[] }>(
+    `/api/landing-pages?isTemplate=true${accountKey ? `&accountKey=${encodeURIComponent(accountKey)}` : ''}`,
     fetcher,
   );
   const { data: taxData } = useSWR<{ categories?: string[]; tags?: string[] }>('/api/template-taxonomy', fetcher);
@@ -48,56 +52,65 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
     [taxData],
   );
 
-  if (!accountKey) {
-    return (
-      <div className="glass-card rounded-2xl px-6 py-14 text-center">
-        <div className="w-14 h-14 rounded-2xl bg-[var(--muted)] flex items-center justify-center mx-auto mb-4">
-          <RectangleStackIcon className="w-7 h-7 text-[var(--muted-foreground)]" />
-        </div>
-        <h3 className="text-lg font-semibold">Select a sub-account</h3>
-        <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Landing page templates are saved per sub-account. Switch into one to
-          view and use its templates.
-        </p>
-      </div>
-    );
-  }
+  const templates = useMemo(() => data?.pages ?? [], [data]);
+  const { filters, setFilters, facets, filtered, active, reset } = useTemplateFilters(templates, {
+    getName: (t) => t.name || 'Untitled template',
+    getCategory: (t) => t.category,
+    getTags: (t) => t.tags,
+    getStatus: (t) => (t.status === 'published' ? 'published' : 'draft'),
+  });
 
-  if (error) {
-    return (
-      <div className="glass-card rounded-2xl p-6 text-sm text-rose-300">
-        Landing page templates could not be loaded.
-      </div>
-    );
-  }
+  const editTemplate = (t: LandingPageSummary) => router.push(subHref(`/websites/landing-pages/${t.id}/edit`));
 
-  const templates = data?.templates ?? [];
-
-  const useTemplate = async (tpl: LpTemplateSummary) => {
-    if (creatingId) return;
-    setCreatingId(tpl.id);
+  // Create a blank LP template + open the existing LP builder (Email/Ads/Forms
+  // parity). Admin → a system-library template; sub-account → its own.
+  const handleCreate = async () => {
+    if (creating) return;
+    setCreating(true);
     try {
       const res = await fetch('/api/landing-pages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountKey, name: tpl.name, templateId: `account:${tpl.id}` }),
+        body: JSON.stringify({ name: 'Untitled template', isTemplate: true, templateId: 'blank', ...(accountKey ? { accountKey } : {}) }),
       });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok || !payload?.page?.id) {
-        toast.error(payload.error || 'Could not create from template.');
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      router.push(subHref(`/websites/landing-pages/${json.page.id}/edit`));
+    } catch (err) {
+      toast.error(`Couldn't create: ${err instanceof Error ? err.message : 'unknown error'}`);
+      setCreating(false);
+    }
+  };
+
+  // Spin up a live landing page from this template's schema, then open it.
+  const useTemplate = async (t: LandingPageSummary) => {
+    if (usingId || !accountKey) {
+      if (!accountKey) toast.error('Switch into a sub-account to use a template.');
+      return;
+    }
+    setUsingId(t.id);
+    try {
+      const res = await fetch('/api/landing-pages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountKey, name: t.name, templateId: `page:${t.id}` }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json?.page?.id) {
+        toast.error(json.error || 'Could not create from template.');
         return;
       }
-      router.push(subHref(`/websites/landing-pages/${payload.page.id}/edit`));
+      router.push(subHref(`/websites/landing-pages/${json.page.id}/edit`));
     } catch {
       toast.error('Could not create from template.');
     } finally {
-      setCreatingId(null);
+      setUsingId(null);
     }
   };
 
   const patchTemplate = async (id: string, body: Record<string, unknown>) => {
     try {
-      const res = await fetch(`/api/account-lp-templates/${id}`, {
+      const res = await fetch(`/api/landing-pages/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -109,16 +122,16 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
     }
   };
 
-  const removeTemplate = async (tpl: LpTemplateSummary) => {
+  const removeTemplate = async (t: LandingPageSummary) => {
     const ok = await confirm({
       title: 'Delete template?',
-      message: `"${tpl.name || 'Untitled template'}" will be permanently removed. Pages already created from it keep their own copy.`,
+      message: `"${t.name || 'Untitled template'}" will be permanently removed. Pages already created from it keep their own copy.`,
       confirmLabel: 'Delete',
       destructive: true,
     });
     if (!ok) return;
     try {
-      const res = await fetch(`/api/account-lp-templates/${tpl.id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/landing-pages/${t.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       toast.success('Template deleted');
       await mutate();
@@ -127,57 +140,103 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
     }
   };
 
+  const header = <TemplateHeaderActions onCreate={handleCreate} onTagsSaved={() => void mutate()} />;
+
+  if (error) {
+    return (
+      <>
+        {header}
+        <div className="glass-card rounded-2xl p-6 text-sm text-rose-300">Landing page templates could not be loaded.</div>
+      </>
+    );
+  }
+
   if (isLoading) {
     return (
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <div key={i} className="glass-card rounded-xl h-72 animate-pulse bg-[var(--muted)]/30" />
-        ))}
-      </div>
+      <>
+        {header}
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="glass-card rounded-xl h-72 animate-pulse bg-[var(--muted)]/30" />
+          ))}
+        </div>
+      </>
     );
   }
 
   if (templates.length === 0) {
     return (
-      <div className="glass-card rounded-2xl px-6 py-14 text-center">
-        <div className="w-14 h-14 rounded-2xl bg-[var(--muted)] flex items-center justify-center mx-auto mb-4">
-          <RectangleStackIcon className="w-7 h-7 text-[var(--muted-foreground)]" />
+      <>
+        {header}
+        <div className="glass-card rounded-2xl px-6 py-14 text-center">
+          <div className="w-14 h-14 rounded-2xl bg-[var(--muted)] flex items-center justify-center mx-auto mb-4">
+            <RectangleStackIcon className="w-7 h-7 text-[var(--muted-foreground)]" />
+          </div>
+          <h3 className="text-lg font-semibold">No landing page templates yet</h3>
+          <p className="text-sm text-[var(--muted-foreground)] mt-1">
+            Create a template above (it opens in the landing page editor), or open a landing page and choose “Save as template”.
+          </p>
         </div>
-        <h3 className="text-lg font-semibold">No landing page templates yet</h3>
-        <p className="text-sm text-[var(--muted-foreground)] mt-1">
-          Open a landing page and choose “Save as template” to reuse its design here.
-        </p>
-      </div>
+      </>
     );
   }
 
-  const actionsFor = (tpl: LpTemplateSummary): TemplateCardAction[] => [
-    { key: 'use', label: creatingId === tpl.id ? 'Creating…' : 'Use template', icon: ArrowRightIcon, run: () => void useTemplate(tpl) },
-    tpl.status === 'published'
-      ? { key: 'unpublish', label: 'Move to draft', icon: ArrowUturnLeftIcon, run: () => void patchTemplate(tpl.id, { status: 'draft' }) }
-      : { key: 'publish', label: 'Publish', icon: CheckCircleIcon, run: () => void patchTemplate(tpl.id, { status: 'published' }) },
-    { key: 'delete', label: 'Delete', icon: TrashIcon, run: () => void removeTemplate(tpl), danger: true },
+  const actionsFor = (t: LandingPageSummary): TemplateCardAction[] => [
+    { key: 'edit', label: 'Edit template', icon: PencilSquareIcon, run: () => editTemplate(t) },
+    ...(accountKey
+      ? [{ key: 'use', label: usingId === t.id ? 'Creating…' : 'Use template', icon: ArrowRightIcon, run: () => void useTemplate(t) }]
+      : []),
+    t.status === 'published'
+      ? { key: 'unpublish', label: 'Move to draft', icon: ArrowUturnLeftIcon, run: () => void patchTemplate(t.id, { status: 'draft' }) }
+      : { key: 'publish', label: 'Publish', icon: CheckCircleIcon, run: () => void patchTemplate(t.id, { status: 'published' }) },
+    { key: 'delete', label: 'Delete', icon: TrashIcon, run: () => void removeTemplate(t), danger: true },
   ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-      {templates.map((tpl) => (
-        <TemplateCard
-          key={tpl.id}
-          preview={<LandingPagePreviewThumbnail template={tpl.schema} height={160} />}
-          name={tpl.name || 'Untitled template'}
-          status={tpl.status}
-          category={tpl.category}
-          tags={tpl.tags}
-          taxonomy={taxonomy}
-          author={{ name: tpl.createdByName, avatarUrl: tpl.createdByImage }}
-          editable
-          actions={actionsFor(tpl)}
-          onClick={() => void useTemplate(tpl)}
-          onCategoryChange={(c) => void patchTemplate(tpl.id, { category: c })}
-          onTagsChange={(tags) => void patchTemplate(tpl.id, { tags })}
-        />
-      ))}
-    </div>
+    <>
+      {header}
+      <TemplateLibraryShell
+        search={filters.search}
+        onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
+        resultCount={filtered.length}
+        rail={
+          <TemplateFilterRail
+            filters={filters}
+            setFilters={setFilters}
+            facets={facets}
+            active={active}
+            reset={reset}
+            showStatus
+          />
+        }
+      >
+        {filtered.length === 0 ? (
+          <div className="glass-card rounded-2xl p-10 text-center text-sm text-[var(--muted-foreground)]">
+            No templates match your filters.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filtered.map((t) => (
+              <TemplateCard
+                key={t.id}
+                preview={<LandingPagePreviewThumbnail template={t.schema} height={160} />}
+                name={t.name || 'Untitled template'}
+                status={t.status === 'published' ? 'published' : 'draft'}
+                scope={!accountKey ? { label: 'All accounts', kind: 'global' } : undefined}
+                category={t.category}
+                tags={t.tags}
+                taxonomy={taxonomy}
+                author={{ name: t.createdByName, avatarUrl: t.createdByImage }}
+                editable
+                actions={actionsFor(t)}
+                onClick={() => editTemplate(t)}
+                onCategoryChange={(c) => void patchTemplate(t.id, { category: c })}
+                onTagsChange={(tags) => void patchTemplate(t.id, { tags })}
+              />
+            ))}
+          </div>
+        )}
+      </TemplateLibraryShell>
+    </>
   );
 }

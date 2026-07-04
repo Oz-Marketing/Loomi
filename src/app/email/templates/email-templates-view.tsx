@@ -1,13 +1,11 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, useMemo, useRef } from 'react';
+import { useContext, useEffect, useState, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
-
-// Slot for header-area actions on the embedded templates view (when
-// the parent owns the page title + tabs). ManagementView portals its
-// Create Template + overflow menu into here so the affordances sit
-// in the page header rather than below the tabs.
-export const TemplatesHeaderActionsContext = createContext<HTMLElement | null>(null);
+// The header-actions slot context now lives in the shared header module; re-export
+// so existing importers of it from this view keep working.
+import { TemplatesHeaderActionsContext } from '@/components/templates/template-header-actions';
+export { TemplatesHeaderActionsContext };
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   PlusIcon,
@@ -19,19 +17,20 @@ import {
   PencilIcon,
   CursorArrowRaysIcon,
   CodeBracketIcon,
-  MagnifyingGlassIcon,
   EyeIcon,
   PencilSquareIcon,
   CheckCircleIcon,
   ArrowDownTrayIcon,
   ArrowTopRightOnSquareIcon,
-  FunnelIcon,
   ChevronDownIcon,
   CheckIcon,
   EllipsisHorizontalIcon,
 } from '@heroicons/react/24/outline';
 import { getTagColor } from '@/lib/tag-colors';
 import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
+import { TemplateLibraryShell } from '@/components/templates/template-library-shell';
+import { TemplateFilterRail, type FilterRailExtraSection } from '@/components/templates/template-filter-rail';
+import { useTemplateFilters } from '@/components/templates/use-template-filters';
 import BulkActionDock, { type BulkActionDockItem } from '@/components/bulk-action-dock';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
@@ -62,9 +61,6 @@ interface TemplateEntry {
 }
 
 type TypeFilter = 'all' | 'visual' | 'code';
-type TagMatchMode = 'any' | 'all';
-
-type PublishFilter = 'all' | 'published' | 'draft';
 
 interface TagData {
   tags: string[];
@@ -172,286 +168,6 @@ function openLibraryPreviewInNewTab(design: string): void {
   } catch {
     // Ignore browser restrictions around opener.
   }
-}
-
-// ═══════════════════════════════════════════════════════════════════
-// ── Filter UI primitives ──
-// ═══════════════════════════════════════════════════════════════════
-
-interface SegmentedOption<V extends string> {
-  value: V;
-  label: string;
-  count?: number;
-}
-
-function SegmentedPicker<V extends string>({
-  value,
-  onChange,
-  options,
-}: {
-  value: V;
-  onChange: (v: V) => void;
-  options: SegmentedOption<V>[];
-}) {
-  return (
-    <div className="flex items-center gap-0.5 p-0.5 rounded-lg border border-[var(--border)] bg-[var(--muted)]/40">
-      {options.map((opt) => (
-        <button
-          key={opt.value}
-          onClick={() => onChange(opt.value)}
-          className={`text-xs px-2.5 py-1 rounded-md transition-colors whitespace-nowrap ${
-            value === opt.value
-              ? 'bg-[var(--card)] text-[var(--foreground)] shadow-sm'
-              : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-          }`}
-        >
-          {opt.label}
-          {typeof opt.count === 'number' && (
-            <span className="tabular-nums text-[10px] opacity-70 ml-1">{opt.count}</span>
-          )}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function FilterDropdown({
-  label,
-  icon,
-  open,
-  onOpenChange,
-  popoverRef,
-  badgeCount,
-  width = 200,
-  children,
-}: {
-  label: string;
-  icon?: React.ReactNode;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  popoverRef?: React.RefObject<HTMLDivElement | null>;
-  badgeCount?: number;
-  width?: number;
-  children: React.ReactNode;
-}) {
-  const hasSelection = (badgeCount ?? 0) > 0;
-  return (
-    <div className="relative" ref={popoverRef}>
-      <button
-        onClick={() => onOpenChange(!open)}
-        className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-          hasSelection
-            ? 'border-[var(--primary)]/40 text-[var(--primary)] bg-[var(--primary)]/5'
-            : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]'
-        }`}
-      >
-        {icon}
-        {label}
-        {hasSelection && (
-          <span className="tabular-nums text-[10px] bg-[var(--primary)]/15 text-[var(--primary)] rounded-full px-1.5">
-            {badgeCount}
-          </span>
-        )}
-        <ChevronDownIcon className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && (
-        <div
-          className="absolute top-full left-0 mt-1 z-30 glass-dropdown"
-          style={{ width }}
-        >
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
- * Body of the unified Filter ▾ popover. Holds Type segmented, Category list,
- * and Tags list (with Untagged + Match-any/all). Shared by both the management
- * and read-only library views.
- */
-function FilterMenuContent({
-  typeFilter,
-  setTypeFilter,
-  allCategories,
-  selectedCategories,
-  setSelectedCategories,
-  tags,
-  assignments,
-  selectedTags,
-  setSelectedTags,
-  tagMatchMode,
-  setTagMatchMode,
-  untaggedOnly,
-  setUntaggedOnly,
-  toggleSetMember,
-}: {
-  typeFilter: TypeFilter;
-  setTypeFilter: (v: TypeFilter) => void;
-  allCategories: string[];
-  selectedCategories: Set<string>;
-  setSelectedCategories: (next: Set<string>) => void;
-  tags: string[];
-  assignments: Record<string, string[]>;
-  selectedTags: Set<string>;
-  setSelectedTags: (next: Set<string>) => void;
-  tagMatchMode: TagMatchMode;
-  setTagMatchMode: (m: TagMatchMode) => void;
-  untaggedOnly?: boolean;
-  setUntaggedOnly?: (v: boolean) => void;
-  toggleSetMember: <T extends string>(set: Set<T>, value: T) => Set<T>;
-}) {
-  return (
-    <div className="py-1.5">
-      {/* Type */}
-      <div className="px-2.5 pt-1.5 pb-1">
-        <p className="text-[10px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">Type</p>
-        <div className="flex items-center gap-0.5 p-0.5 rounded-md border border-[var(--border)] bg-[var(--muted)]/40">
-          {(
-            [
-              { value: 'all' as TypeFilter, label: 'Any' },
-              { value: 'visual' as TypeFilter, label: 'Drag & Drop' },
-              { value: 'code' as TypeFilter, label: 'HTML' },
-            ]
-          ).map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => setTypeFilter(opt.value)}
-              className={`flex-1 text-[11px] px-2 py-0.5 rounded transition-colors ${
-                typeFilter === opt.value
-                  ? 'bg-[var(--card)] text-[var(--foreground)] shadow-sm'
-                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Category */}
-      {allCategories.length > 0 && (
-        <div className="px-2.5 pt-3 pb-1">
-          <p className="text-[10px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">Category</p>
-          <div className="max-h-44 overflow-y-auto -mx-1 px-1">
-            {allCategories.map((cat) => {
-              const active = selectedCategories.has(cat);
-              return (
-                <button
-                  key={cat}
-                  onClick={() => setSelectedCategories(toggleSetMember(selectedCategories, cat))}
-                  className={`w-full flex items-center justify-between gap-2 px-2 py-1 text-xs rounded-md transition-colors ${
-                    active ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
-                  }`}
-                >
-                  <span className="capitalize truncate">{cat.replace(/-/g, ' ')}</span>
-                  {active && <CheckIcon className="w-3.5 h-3.5 flex-shrink-0" />}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Tags */}
-      {tags.length > 0 && (
-        <div className="px-2.5 pt-3 pb-2">
-          <div className="flex items-center justify-between mb-1.5">
-            <p className="text-[10px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">Tags</p>
-            {!untaggedOnly && selectedTags.size > 1 && (
-              <div className="flex items-center gap-0.5 p-0.5 rounded border border-[var(--border)] bg-[var(--muted)]/40">
-                {(['any', 'all'] as TagMatchMode[]).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setTagMatchMode(m)}
-                    className={`text-[10px] px-1.5 py-px rounded transition-colors ${
-                      tagMatchMode === m ? 'bg-[var(--card)] text-[var(--foreground)]' : 'text-[var(--muted-foreground)]'
-                    }`}
-                  >
-                    {m === 'any' ? 'Any' : 'All'}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-          {setUntaggedOnly && (
-            <button
-              onClick={() => { setUntaggedOnly(!untaggedOnly); if (!untaggedOnly) setSelectedTags(new Set()); }}
-              className={`w-full flex items-center justify-between gap-2 px-2 py-1 text-xs rounded-md transition-colors mb-0.5 ${
-                untaggedOnly ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              <span className="italic">Untagged only</span>
-              {untaggedOnly && <CheckIcon className="w-3.5 h-3.5 flex-shrink-0" />}
-            </button>
-          )}
-          <div className="max-h-44 overflow-y-auto -mx-1 px-1">
-            {tags.map((tag) => {
-              const active = selectedTags.has(tag);
-              const color = getTagColor(tag);
-              const count = Object.values(assignments).filter((ts) => ts.includes(tag)).length;
-              return (
-                <button
-                  key={tag}
-                  disabled={untaggedOnly}
-                  onClick={() => setSelectedTags(toggleSetMember(selectedTags, tag))}
-                  className={`w-full flex items-center justify-between gap-2 px-2 py-1 text-xs rounded-md transition-colors ${
-                    active ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]'
-                  } ${untaggedOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
-                >
-                  <span className="flex items-center gap-2 min-w-0">
-                    <span className={`inline-block w-1.5 h-1.5 rounded-full ${color.className.split(' ')[0]}`} />
-                    <span className="truncate">{tag}</span>
-                  </span>
-                  <span className="flex items-center gap-1.5 text-[var(--muted-foreground)]">
-                    <span className="tabular-nums text-[10px]">{count}</span>
-                    {active && <CheckIcon className="w-3.5 h-3.5 text-[var(--primary)]" />}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {allCategories.length === 0 && tags.length === 0 && (
-        <p className="px-3 py-3 text-[11px] text-[var(--muted-foreground)] italic text-center">
-          No categories or tags yet. Add them inline from a template card.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function ActiveFilterChip({
-  label,
-  prefix,
-  colorClass,
-  onRemove,
-}: {
-  label: string;
-  prefix?: string;
-  colorClass?: string;
-  onRemove: () => void;
-}) {
-  return (
-    <span
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] ${
-        colorClass ?? 'bg-[var(--muted)] text-[var(--foreground)]'
-      }`}
-    >
-      {prefix && <span className="opacity-60">{prefix}</span>}
-      <span className="capitalize truncate max-w-[160px]">{label}</span>
-      <button
-        onClick={onRemove}
-        className="opacity-60 hover:opacity-100 transition-opacity"
-        aria-label={`Remove filter ${label}`}
-      >
-        <XMarkIcon className="w-3 h-3" />
-      </button>
-    </span>
-  );
 }
 
 
@@ -660,51 +376,29 @@ function EmbeddedHeaderActions({
 
 /**
  * Header-less email-templates surface for the Email tab of the unified
- * /templates page. Renders the management view (this account's own
- * templates) by default; when `libraryOpen` is set the parent swaps in the
- * read-only shared library (with copy-to-subaccount).
- *
- * The parent (unified shell) owns the sticky header — the "Browse Template
- * Library" toggle and the embedded ManagementView's Create + overflow
- * buttons both live up there. ManagementView portals its buttons into the
- * shell's TemplatesHeaderActionsContext slot, so this component renders just
- * the active view. Keyed by accountKey so a sub-account switch fully
- * remounts the view onto the new scope.
+ * /templates page. Scope is implicit by context: at Admin (no accountKey) the
+ * management view shows the SYSTEM library (accountKey null); inside a
+ * sub-account it shows ONLY that account's own templates. Clients get the
+ * read-only view of the same scope. No "browse system library" toggle — admins
+ * push templates to subaccounts instead. Keyed by accountKey so a sub-account
+ * switch fully remounts onto the new scope.
  */
 export function EmailTemplatesPanel({
   campaignDraftQuery,
   accountKey,
-  accountLabel,
   canManage,
   isClient,
-  libraryOpen,
-  refreshKey,
-  onCopyComplete,
 }: {
   campaignDraftQuery: string;
   accountKey?: string;
   accountLabel?: string;
   canManage: boolean;
   isClient: boolean;
-  libraryOpen: boolean;
-  refreshKey: number;
-  onCopyComplete: () => void;
 }) {
-  if (libraryOpen) {
-    return (
-      <ReadOnlyView
-        campaignDraftQuery={campaignDraftQuery}
-        copyTargetAccountKey={accountKey}
-        copyTargetAccountLabel={accountLabel}
-        onCopyComplete={onCopyComplete}
-        embedded
-      />
-    );
-  }
   if (canManage) {
     return (
       <ManagementView
-        key={`mgmt-${accountKey ?? 'admin'}-${refreshKey}`}
+        key={`mgmt-${accountKey ?? 'admin'}`}
         campaignDraftQuery={campaignDraftQuery}
         accountKey={accountKey}
         embedded
@@ -714,7 +408,7 @@ export function EmailTemplatesPanel({
   if (isClient) {
     return (
       <ReadOnlyView
-        key={`ro-${accountKey ?? 'admin'}-${refreshKey}`}
+        key={`ro-${accountKey ?? 'admin'}`}
         campaignDraftQuery={campaignDraftQuery}
         accountKey={accountKey}
         embedded
@@ -746,12 +440,7 @@ function ManagementView({
   const [loaded, setLoaded] = useState(false);
   const [showCreateChoice, setShowCreateChoice] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [search, setSearch] = useState('');
   const [tagData, setTagData] = useState<TagData>({ tags: [], assignments: {} });
-  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
-  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
-  const [tagMatchMode, setTagMatchMode] = useState<TagMatchMode>('any');
-  const [untaggedOnly, setUntaggedOnly] = useState(false);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [showTagModal, setShowTagModal] = useState(false);
   const [previewDesign, setPreviewDesign] = useState<string | null>(null);
@@ -760,14 +449,11 @@ function ManagementView({
   const [renameValue, setRenameValue] = useState('');
   const [renaming, setRenaming] = useState(false);
   const [downloadingDesign, setDownloadingDesign] = useState<string | null>(null);
-  const [publishFilter, setPublishFilter] = useState<PublishFilter>('all');
   const [publishingDesign, setPublishingDesign] = useState<string | null>(null);
   // Toolbar popover anchors
-  const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [showOverflowMenu, setShowOverflowMenu] = useState(false);
   // Bulk tag modal (opens from the bulk-action dock)
   const [bulkTagModalOpen, setBulkTagModalOpen] = useState(false);
-  const filterPopoverRef = useRef<HTMLDivElement>(null);
   const overflowMenuRef = useRef<HTMLDivElement>(null);
   const isCampaignDraft = campaignDraftQuery.length > 0;
 
@@ -796,15 +482,13 @@ function ManagementView({
   useEffect(() => { loadTemplates(); }, [accountKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!showFilterMenu && !showOverflowMenu) return;
+    if (!showOverflowMenu) return;
     const handler = (e: MouseEvent) => {
-      const target = e.target as Node;
-      if (showFilterMenu && !filterPopoverRef.current?.contains(target)) setShowFilterMenu(false);
-      if (showOverflowMenu && !overflowMenuRef.current?.contains(target)) setShowOverflowMenu(false);
+      if (!overflowMenuRef.current?.contains(e.target as Node)) setShowOverflowMenu(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, [showFilterMenu, showOverflowMenu]);
+  }, [showOverflowMenu]);
 
   const tplMap = useMemo(() => {
     const map: Record<string, TemplateEntry> = {};
@@ -812,89 +496,38 @@ function ManagementView({
     return map;
   }, [templates]);
 
-  const filtered = useMemo(() => {
-    let list = templates;
-    if (publishFilter === 'published') {
-      list = list.filter((t) => t.published === true);
-    } else if (publishFilter === 'draft') {
-      list = list.filter((t) => t.published !== true);
-    }
-    if (typeFilter === 'visual') {
-      list = list.filter((t) => t.editorType === 'visual');
-    } else if (typeFilter === 'code') {
-      list = list.filter((t) => t.editorType !== 'visual');
-    }
-    if (selectedCategories.size > 0) {
-      list = list.filter((t) => t.category != null && selectedCategories.has(t.category));
-    }
-    if (untaggedOnly) {
-      list = list.filter((t) => (tagData.assignments[t.design] || []).length === 0);
-    } else if (selectedTags.size > 0) {
-      list = list.filter((t) => {
-        const tags = tagData.assignments[t.design] || [];
-        if (tagMatchMode === 'all') {
-          for (const wanted of selectedTags) if (!tags.includes(wanted)) return false;
-          return true;
-        }
-        for (const tag of tags) if (selectedTags.has(tag)) return true;
-        return false;
-      });
-    }
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter((t) => {
-        const tags = tagData.assignments[t.design] || [];
-        return (
-          t.name.toLowerCase().includes(q) ||
-          t.design.toLowerCase().includes(q) ||
-          (t.category != null && t.category.toLowerCase().includes(q)) ||
-          tags.some((tag) => tag.toLowerCase().includes(q))
-        );
-      });
-    }
-    return list;
-  }, [templates, publishFilter, typeFilter, selectedCategories, untaggedOnly, selectedTags, tagMatchMode, search, tagData]);
+  // Type (Drag & Drop / HTML) is Email-specific — pre-filter, then the shared
+  // hook handles category/tags/status/search + facet counts (the left rail).
+  const typedTemplates = useMemo(() => {
+    if (typeFilter === 'visual') return templates.filter((t) => t.editorType === 'visual');
+    if (typeFilter === 'code') return templates.filter((t) => t.editorType !== 'visual');
+    return templates;
+  }, [templates, typeFilter]);
 
-  const draftCount = useMemo(() => templates.filter((t) => t.published !== true).length, [templates]);
-  const publishedCount = useMemo(() => templates.filter((t) => t.published === true).length, [templates]);
+  const { filters, setFilters, facets, filtered, active, reset } = useTemplateFilters(typedTemplates, {
+    getName: (t) => t.name || formatDesign(t.design),
+    getCategory: (t) => t.category,
+    getTags: (t) => tagData.assignments[t.design] ?? [],
+    // Publish status only applies to the system library (admin), not a
+    // sub-account's own templates — matches the old "no publish when scoped".
+    getStatus: scoped ? undefined : (t) => (t.published ? 'published' : 'draft'),
+  });
 
+  // Categories in use (for the card's inline category popover suggestions).
   const allCategories = useMemo(() => {
     const set = new Set<string>();
     for (const t of templates) if (t.category) set.add(t.category);
     return [...set].sort();
   }, [templates]);
 
-  const activeFilterCount =
-    (publishFilter !== 'all' ? 1 : 0) +
-    (typeFilter !== 'all' ? 1 : 0) +
-    selectedCategories.size +
-    (untaggedOnly ? 1 : 0) +
-    selectedTags.size +
-    (search.trim() ? 1 : 0);
-
-  const clearAllFilters = () => {
-    setSearch('');
-    setPublishFilter('all');
-    setTypeFilter('all');
-    setSelectedCategories(new Set());
-    setSelectedTags(new Set());
-    setUntaggedOnly(false);
-    setTagMatchMode('any');
-  };
-
-  /** Count of filters that live inside the Filter ▾ popover (Type, Category, Tags, Untagged). */
-  const filterMenuCount =
-    (typeFilter !== 'all' ? 1 : 0) +
-    selectedCategories.size +
-    selectedTags.size +
-    (untaggedOnly ? 1 : 0);
-
-  const toggleSetMember = <T extends string>(set: Set<T>, value: T): Set<T> => {
-    const next = new Set(set);
-    if (next.has(value)) next.delete(value);
-    else next.add(value);
-    return next;
-  };
+  // Type facet for the rail's extra section.
+  const typeCounts = useMemo(
+    () => ({
+      visual: templates.filter((t) => t.editorType === 'visual').length,
+      code: templates.filter((t) => t.editorType !== 'visual').length,
+    }),
+    [templates],
+  );
 
   /**
    * Persist a new tag assignment for one template. Sends the full tag payload
@@ -1286,108 +919,6 @@ function ManagementView({
         />
       )}
 
-      {/* Toolbar */}
-      <div className="mb-4 space-y-2">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
-              <div className="relative flex-1 min-w-[180px] max-w-xs">
-                <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search name, tag, category…"
-                  className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg pl-9 pr-3 py-2 text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]"
-                />
-              </div>
-
-              {!scoped && (
-                <SegmentedPicker
-                  value={publishFilter}
-                  onChange={setPublishFilter}
-                  options={[
-                    { value: 'all', label: 'All', count: templates.length },
-                    { value: 'published', label: 'Published', count: publishedCount },
-                    { value: 'draft', label: 'Drafts', count: draftCount },
-                  ]}
-                />
-              )}
-
-              <FilterDropdown
-                label="Filter"
-                icon={<FunnelIcon className="w-3.5 h-3.5" />}
-                open={showFilterMenu}
-                onOpenChange={setShowFilterMenu}
-                popoverRef={showFilterMenu ? filterPopoverRef : undefined}
-                badgeCount={filterMenuCount}
-                width={300}
-              >
-                <FilterMenuContent
-                  typeFilter={typeFilter}
-                  setTypeFilter={setTypeFilter}
-                  allCategories={allCategories}
-                  selectedCategories={selectedCategories}
-                  setSelectedCategories={setSelectedCategories}
-                  tags={tagData.tags}
-                  assignments={tagData.assignments}
-                  selectedTags={selectedTags}
-                  setSelectedTags={setSelectedTags}
-                  tagMatchMode={tagMatchMode}
-                  setTagMatchMode={setTagMatchMode}
-                  untaggedOnly={untaggedOnly}
-                  setUntaggedOnly={setUntaggedOnly}
-                  toggleSetMember={toggleSetMember}
-                />
-              </FilterDropdown>
-            </div>
-          </div>
-
-          {activeFilterCount > 0 && (
-            <div className="flex items-center gap-1.5 flex-wrap text-xs">
-              <span className="text-[var(--muted-foreground)] flex items-center gap-1">
-                <FunnelIcon className="w-3 h-3" />
-                {activeFilterCount} active
-              </span>
-              {publishFilter !== 'all' && (
-                <ActiveFilterChip label={publishFilter === 'published' ? 'Published' : 'Drafts'} onRemove={() => setPublishFilter('all')} />
-              )}
-              {typeFilter !== 'all' && (
-                <ActiveFilterChip label={typeFilter === 'visual' ? 'Drag & Drop' : 'HTML'} onRemove={() => setTypeFilter('all')} />
-              )}
-              {[...selectedCategories].map((cat) => (
-                <ActiveFilterChip
-                  key={`c-${cat}`}
-                  label={cat.replace(/-/g, ' ')}
-                  prefix="Category:"
-                  onRemove={() => setSelectedCategories(toggleSetMember(selectedCategories, cat))}
-                />
-              ))}
-              {untaggedOnly && (
-                <ActiveFilterChip label="Untagged" onRemove={() => setUntaggedOnly(false)} />
-              )}
-              {[...selectedTags].map((tag) => {
-                const color = getTagColor(tag);
-                return (
-                  <ActiveFilterChip
-                    key={`t-${tag}`}
-                    label={tag}
-                    colorClass={color.className}
-                    onRemove={() => setSelectedTags(toggleSetMember(selectedTags, tag))}
-                  />
-                );
-              })}
-              {search.trim() && (
-                <ActiveFilterChip label={`"${search.trim()}"`} prefix="Search:" onRemove={() => setSearch('')} />
-              )}
-              <button
-                onClick={clearAllFilters}
-                className="ml-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline-offset-2 hover:underline"
-              >
-                Clear all
-              </button>
-            </div>
-          )}
-      </div>
 
       {/* Create choice modal — single-step picker. Selecting a builder
           creates the template immediately with a default "Untitled
@@ -1449,24 +980,40 @@ function ManagementView({
         </div>
       )}
 
-      {/* Template grid */}
+      {/* Template grid with shared left filter rail + search */}
+      <TemplateLibraryShell
+        search={filters.search}
+        onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
+        resultCount={filtered.length}
+        rail={
+          <TemplateFilterRail
+            filters={filters}
+            setFilters={setFilters}
+            facets={facets}
+            active={active || typeFilter !== 'all'}
+            reset={() => { reset(); setTypeFilter('all'); }}
+            showStatus={!scoped}
+            extraSections={[
+              {
+                key: 'type',
+                title: 'Type',
+                options: [
+                  { value: 'visual', label: 'Drag & Drop', count: typeCounts.visual },
+                  { value: 'code', label: 'HTML', count: typeCounts.code },
+                ],
+                selected: typeFilter === 'all' ? null : typeFilter,
+                onSelect: (v) => setTypeFilter((v as TypeFilter) ?? 'all'),
+              } as FilterRailExtraSection,
+            ]}
+          />
+        }
+      >
       {filtered.length === 0 ? (
-        <div className="text-center py-16 border border-dashed border-[var(--border)] rounded-xl">
-          <BookOpenIcon className="w-8 h-8 mx-auto mb-3 text-[var(--muted-foreground)]" />
-          <p className="text-[var(--muted-foreground)] text-sm">
-            {activeFilterCount > 0 ? 'No templates match the current filters.' : 'No templates yet.'}
-          </p>
-          {activeFilterCount > 0 && (
-            <button
-              onClick={clearAllFilters}
-              className="mt-3 text-xs text-[var(--primary)] hover:underline"
-            >
-              Clear all filters
-            </button>
-          )}
+        <div className="glass-card rounded-2xl p-10 text-center text-sm text-[var(--muted-foreground)]">
+          {active || typeFilter !== 'all' ? 'No templates match your filters.' : 'No templates yet.'}
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((t) => {
             const tags = tagData.assignments[t.design] || [];
             const isSelected = selectedDesigns.has(t.design);
@@ -1515,10 +1062,7 @@ function ManagementView({
           })}
         </div>
       )}
-
-      <p className="text-xs text-[var(--muted-foreground)] mt-4">
-        {filtered.length} template{filtered.length !== 1 ? 's' : ''} available
-      </p>
+      </TemplateLibraryShell>
 
       {/* Modals */}
       {showTagModal && (
@@ -1866,16 +1410,10 @@ function ReadOnlyView({
   const router = useRouter();
   const [templates, setTemplates] = useState<TemplateEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [search, setSearch] = useState('');
   const [tagData, setTagData] = useState<TagData>({ tags: [], assignments: {} });
-  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
-  const [selectedCategories, setSelectedCategories] = useState<Set<string>>(new Set());
-  const [tagMatchMode, setTagMatchMode] = useState<TagMatchMode>('any');
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
-  const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [previewDesign, setPreviewDesign] = useState<string | null>(null);
   const [copyingDesign, setCopyingDesign] = useState<string | null>(null);
-  const filterPopoverRef = useRef<HTMLDivElement>(null);
   const isCampaignDraft = campaignDraftQuery.length > 0;
   const showCopyAction = Boolean(copyTargetAccountKey) && !accountKey;
 
@@ -1917,74 +1455,27 @@ function ReadOnlyView({
     }
   };
 
-  useEffect(() => {
-    if (!showFilterMenu) return;
-    const handler = (e: MouseEvent) => {
-      if (!filterPopoverRef.current?.contains(e.target as Node)) setShowFilterMenu(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showFilterMenu]);
+  // Type (Drag & Drop / HTML) pre-filter, then the shared hook handles
+  // category/tags/search + facet counts for the left rail.
+  const typedTemplates = useMemo(() => {
+    if (typeFilter === 'visual') return templates.filter((t) => t.editorType === 'visual');
+    if (typeFilter === 'code') return templates.filter((t) => t.editorType !== 'visual');
+    return templates;
+  }, [templates, typeFilter]);
 
-  const filtered = useMemo(() => {
-    let list = templates;
-    if (typeFilter === 'visual') list = list.filter((t) => t.editorType === 'visual');
-    else if (typeFilter === 'code') list = list.filter((t) => t.editorType !== 'visual');
-    if (selectedCategories.size > 0) {
-      list = list.filter((t) => t.category != null && selectedCategories.has(t.category));
-    }
-    if (selectedTags.size > 0) {
-      list = list.filter((t) => {
-        const tags = tagData.assignments[t.design] || [];
-        if (tagMatchMode === 'all') {
-          for (const wanted of selectedTags) if (!tags.includes(wanted)) return false;
-          return true;
-        }
-        for (const tag of tags) if (selectedTags.has(tag)) return true;
-        return false;
-      });
-    }
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter((t) => {
-        const tags = tagData.assignments[t.design] || [];
-        return (
-          t.name.toLowerCase().includes(q) ||
-          t.design.toLowerCase().includes(q) ||
-          (t.category != null && t.category.toLowerCase().includes(q)) ||
-          tags.some((tag) => tag.toLowerCase().includes(q))
-        );
-      });
-    }
-    return list;
-  }, [templates, typeFilter, selectedCategories, selectedTags, tagMatchMode, search, tagData]);
+  const { filters, setFilters, facets, filtered, active, reset } = useTemplateFilters(typedTemplates, {
+    getName: (t) => t.name || formatDesign(t.design),
+    getCategory: (t) => t.category,
+    getTags: (t) => tagData.assignments[t.design] ?? [],
+  });
 
-  const allCategories = useMemo(() => {
-    const set = new Set<string>();
-    for (const t of templates) if (t.category) set.add(t.category);
-    return [...set].sort();
-  }, [templates]);
-
-  const activeFilterCount =
-    (typeFilter !== 'all' ? 1 : 0) +
-    selectedCategories.size +
-    selectedTags.size +
-    (search.trim() ? 1 : 0);
-
-  const clearAllFilters = () => {
-    setSearch('');
-    setTypeFilter('all');
-    setSelectedCategories(new Set());
-    setSelectedTags(new Set());
-    setTagMatchMode('any');
-  };
-
-  const toggleInSet = <T extends string>(set: Set<T>, value: T): Set<T> => {
-    const next = new Set(set);
-    if (next.has(value)) next.delete(value);
-    else next.add(value);
-    return next;
-  };
+  const typeCounts = useMemo(
+    () => ({
+      visual: templates.filter((t) => t.editorType === 'visual').length,
+      code: templates.filter((t) => t.editorType !== 'visual').length,
+    }),
+    [templates],
+  );
 
   if (!loaded) {
     return <div className="text-[var(--muted-foreground)]">Loading...</div>;
@@ -2012,95 +1503,38 @@ function ReadOnlyView({
         </div>
       )}
 
-      <div className="mb-4 space-y-2">
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative flex-1 min-w-[180px] max-w-xs">
-            <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name, tag, category…"
-              className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg pl-9 pr-3 py-2 text-[var(--foreground)] placeholder:text-[var(--muted-foreground)]"
-            />
-          </div>
-          <FilterDropdown
-            label="Filter"
-            icon={<FunnelIcon className="w-3.5 h-3.5" />}
-            open={showFilterMenu}
-            onOpenChange={setShowFilterMenu}
-            popoverRef={showFilterMenu ? filterPopoverRef : undefined}
-            badgeCount={
-              (typeFilter !== 'all' ? 1 : 0) + selectedCategories.size + selectedTags.size
-            }
-            width={300}
-          >
-            <FilterMenuContent
-              typeFilter={typeFilter}
-              setTypeFilter={setTypeFilter}
-              allCategories={allCategories}
-              selectedCategories={selectedCategories}
-              setSelectedCategories={setSelectedCategories}
-              tags={tagData.tags}
-              assignments={tagData.assignments}
-              selectedTags={selectedTags}
-              setSelectedTags={setSelectedTags}
-              tagMatchMode={tagMatchMode}
-              setTagMatchMode={setTagMatchMode}
-              toggleSetMember={toggleInSet}
-            />
-          </FilterDropdown>
-        </div>
-
-        {activeFilterCount > 0 && (
-          <div className="flex items-center gap-1.5 flex-wrap text-xs">
-            <span className="text-[var(--muted-foreground)] flex items-center gap-1">
-              <FunnelIcon className="w-3 h-3" />
-              {activeFilterCount} active
-            </span>
-            {typeFilter !== 'all' && (
-              <ActiveFilterChip label={typeFilter === 'visual' ? 'Drag & Drop' : 'HTML'} onRemove={() => setTypeFilter('all')} />
-            )}
-            {[...selectedCategories].map((cat) => (
-              <ActiveFilterChip key={`c-${cat}`} label={cat.replace(/-/g, ' ')} prefix="Category:" onRemove={() => setSelectedCategories(toggleInSet(selectedCategories, cat))} />
-            ))}
-            {[...selectedTags].map((tag) => {
-              const color = getTagColor(tag);
-              return (
-                <ActiveFilterChip key={`t-${tag}`} label={tag} colorClass={color.className} onRemove={() => setSelectedTags(toggleInSet(selectedTags, tag))} />
-              );
-            })}
-            {search.trim() && (
-              <ActiveFilterChip label={`"${search.trim()}"`} prefix="Search:" onRemove={() => setSearch('')} />
-            )}
-            <button
-              onClick={clearAllFilters}
-              className="ml-1 text-[var(--muted-foreground)] hover:text-[var(--foreground)] underline-offset-2 hover:underline"
-            >
-              Clear all
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Grid */}
+      <TemplateLibraryShell
+        search={filters.search}
+        onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
+        resultCount={filtered.length}
+        rail={
+          <TemplateFilterRail
+            filters={filters}
+            setFilters={setFilters}
+            facets={facets}
+            active={active || typeFilter !== 'all'}
+            reset={() => { reset(); setTypeFilter('all'); }}
+            extraSections={[
+              {
+                key: 'type',
+                title: 'Type',
+                options: [
+                  { value: 'visual', label: 'Drag & Drop', count: typeCounts.visual },
+                  { value: 'code', label: 'HTML', count: typeCounts.code },
+                ],
+                selected: typeFilter === 'all' ? null : typeFilter,
+                onSelect: (v) => setTypeFilter((v as TypeFilter) ?? 'all'),
+              } as FilterRailExtraSection,
+            ]}
+          />
+        }
+      >
       {filtered.length === 0 ? (
-        <div className="text-center py-16 border border-dashed border-[var(--border)] rounded-xl">
-          <BookOpenIcon className="w-8 h-8 mx-auto mb-3 text-[var(--muted-foreground)]" />
-          <p className="text-[var(--muted-foreground)] text-sm">
-            {activeFilterCount > 0 ? 'No templates match the current filters.' : 'No templates available.'}
-          </p>
-          {activeFilterCount > 0 && (
-            <button
-              onClick={clearAllFilters}
-              className="mt-3 text-xs text-[var(--primary)] hover:underline"
-            >
-              Clear all filters
-            </button>
-          )}
+        <div className="glass-card rounded-2xl p-10 text-center text-sm text-[var(--muted-foreground)]">
+          {active || typeFilter !== 'all' ? 'No templates match your filters.' : 'No templates available.'}
         </div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((t) => {
             const tags = tagData.assignments[t.design] || [];
             const templateTypeLabel = getLibraryTemplateTypeLabel(t);
@@ -2142,10 +1576,7 @@ function ReadOnlyView({
           })}
         </div>
       )}
-
-      <p className="text-xs text-[var(--muted-foreground)] mt-4">
-        {filtered.length} template{filtered.length !== 1 ? 's' : ''} available
-      </p>
+      </TemplateLibraryShell>
 
       {/* Preview Modal */}
       {previewDesign && (() => {

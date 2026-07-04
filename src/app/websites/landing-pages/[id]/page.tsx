@@ -77,6 +77,13 @@ export default function LandingPageOverviewPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // Templates have no live-page overview — they're authored in the builder and
+  // managed from the Templates library. Anyone landing here for a template is
+  // sent straight into the editor.
+  React.useEffect(() => {
+    if (data?.page?.isTemplate) router.replace(subHref(`/websites/landing-pages/${id}/edit`));
+  }, [data?.page?.isTemplate, id, router, subHref]);
+
   const [publishing, setPublishing] = React.useState(false);
   const [duplicating, setDuplicating] = React.useState(false);
   const [savingAsTemplate, setSavingAsTemplate] = React.useState(false);

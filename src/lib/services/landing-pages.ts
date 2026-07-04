@@ -30,7 +30,13 @@ export interface LandingPageSummary {
   status: LandingPageStatus;
   /** When true, this row is a reusable template, not a live page. */
   isTemplate: boolean;
+  /** Shared template taxonomy (populated for template rows). */
+  category: string | null;
+  tags: string[];
   createdByUserId: string;
+  /** Resolved author display info (template card). Null until resolved. */
+  createdByName: string | null;
+  createdByImage: string | null;
   publishedAt: string;
   createdAt: string;
   updatedAt: string;
@@ -70,6 +76,8 @@ interface LandingPageRow {
   slug: string;
   status: string;
   isTemplate: boolean;
+  category: string | null;
+  tags: string | null;
   schema: Prisma.JsonValue;
   seoTitle: string | null;
   seoDescription: string | null;
@@ -87,6 +95,36 @@ interface LandingPageRow {
   updatedAt: Date;
 }
 
+function parseTagsJson(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Resolve author display info (name + avatar) for a set of summaries by user id. */
+async function attachAuthors(summaries: LandingPageSummary[]): Promise<LandingPageSummary[]> {
+  const ids = [...new Set(summaries.map((s) => s.createdByUserId).filter(Boolean))];
+  if (ids.length === 0) return summaries;
+  try {
+    const users = await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, avatarUrl: true } });
+    const byId = new Map(users.map((u) => [u.id, u]));
+    for (const s of summaries) {
+      const u = s.createdByUserId ? byId.get(s.createdByUserId) : undefined;
+      if (u) {
+        s.createdByName = u.name ?? null;
+        s.createdByImage = u.avatarUrl ?? null;
+      }
+    }
+  } catch {
+    /* best-effort */
+  }
+  return summaries;
+}
+
 function toSummary(row: LandingPageRow): LandingPageSummary {
   // parseLandingPageContent returns either a blocks-mode or html-mode
   // template; falls back to an empty blocks template so the table and
@@ -99,7 +137,11 @@ function toSummary(row: LandingPageRow): LandingPageSummary {
     slug: row.slug,
     status: (row.status as LandingPageStatus) ?? 'draft',
     isTemplate: row.isTemplate,
+    category: row.category ?? null,
+    tags: parseTagsJson(row.tags),
     createdByUserId: row.createdByUserId ?? '',
+    createdByName: null,
+    createdByImage: null,
     publishedAt: row.publishedAt?.toISOString() ?? '',
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -158,6 +200,19 @@ export async function listLandingPages(
     orderBy: { updatedAt: 'desc' },
   });
   return rows.map(toSummary);
+}
+
+/**
+ * List LP TEMPLATES (isTemplate=true) for the /templates Landing Pages tab.
+ * Scope mirrors every other kind: Admin (no accountKey) → the system library
+ * (accountKey null); inside a sub-account → only that account's own templates.
+ */
+export async function listLandingPageTemplates(accountKey?: string | null): Promise<LandingPageSummary[]> {
+  const rows = await prisma.landingPage.findMany({
+    where: { isTemplate: true, accountKey: accountKey ? accountKey : null },
+    orderBy: { updatedAt: 'desc' },
+  });
+  return attachAuthors(rows.map(toSummary));
 }
 
 export async function getLandingPage(
@@ -247,6 +302,38 @@ export async function createLandingPage(input: CreateLandingPageInput): Promise<
   return toDetail(row);
 }
 
+/**
+ * "Save as template" — clone a live LP's schema into a new LP TEMPLATE
+ * (`isTemplate=true`), so it shows in the Templates → Landing Pages tab and is
+ * editable in place by the LP builder.
+ */
+export async function saveLandingPageAsTemplate(input: {
+  lpId: string;
+  accountKeys: string[] | null;
+  name: string;
+  createdByUserId?: string;
+}): Promise<LandingPageDetail> {
+  const trimmed = input.name.trim();
+  if (!trimmed) throw new LandingPageServiceError('Template name is required.');
+  const src = await prisma.landingPage.findUnique({ where: { id: input.lpId } });
+  if (!src) throw new LandingPageServiceError('Source landing page not found.', 404);
+  if (
+    input.accountKeys &&
+    input.accountKeys.length > 0 &&
+    (src.accountKey == null || !input.accountKeys.includes(src.accountKey))
+  ) {
+    throw new LandingPageServiceError('Source landing page not found.', 404);
+  }
+  const schema = JSON.parse(JSON.stringify(src.schema)) as LandingPageContent;
+  return createLandingPage({
+    accountKey: src.accountKey,
+    name: trimmed,
+    schema,
+    isTemplate: true,
+    createdByUserId: input.createdByUserId,
+  });
+}
+
 export async function updateLandingPage(
   id: string,
   accountKeys: string[] | null,
@@ -265,6 +352,8 @@ export async function updateLandingPage(
     gtmContainerId?: unknown;
     customHeadHtml?: unknown;
     customBodyEndHtml?: unknown;
+    category?: unknown;
+    tags?: unknown;
   },
 ): Promise<LandingPageDetail> {
   const existing = await prisma.landingPage.findUnique({ where: { id } });
@@ -310,6 +399,16 @@ export async function updateLandingPage(
       throw new LandingPageServiceError('Schema must be a v1 LandingPageTemplate or HTML template.');
     }
     data.schema = patch.schema as unknown as Prisma.InputJsonValue;
+  }
+
+  // Shared template taxonomy — inline category/tags edits from the template card.
+  if (patch.category !== undefined) {
+    data.category = typeof patch.category === 'string' && patch.category.trim() ? patch.category.trim() : null;
+  }
+  if (patch.tags !== undefined) {
+    data.tags = Array.isArray(patch.tags)
+      ? JSON.stringify(patch.tags.filter((t): t is string => typeof t === 'string'))
+      : null;
   }
 
   if (patch.seoTitle !== undefined) {

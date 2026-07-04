@@ -22,13 +22,10 @@ import type { LandingPageContent } from '@/lib/landing-pages/types';
 
 interface AccountTemplate {
   id: string;
-  accountKey: string;
   name: string;
   description: string | null;
   schema: LandingPageContent;
-  sourceLpId: string | null;
   createdAt: string;
-  updatedAt: string;
 }
 
 const fetcher = async (url: string) => {
@@ -73,14 +70,17 @@ export function NewLandingPageModal({
   // and we have an accountKey to scope by — saves a request on the
   // common case of the modal being mounted but closed.
   const { data: tplData, mutate: refetchTemplates } = useSWR<{
-    templates: AccountTemplate[];
+    pages: { id: string; name: string; schema: LandingPageContent; createdAt: string }[];
   }>(
     open && accountKey
-      ? `/api/account-lp-templates?accountKey=${encodeURIComponent(accountKey)}`
+      ? `/api/landing-pages?isTemplate=true&accountKey=${encodeURIComponent(accountKey)}`
       : null,
     fetcher,
   );
-  const accountTemplates = tplData?.templates ?? [];
+  const accountTemplates: AccountTemplate[] = React.useMemo(
+    () => (tplData?.pages ?? []).map((p) => ({ id: p.id, name: p.name, description: null, schema: p.schema, createdAt: p.createdAt })),
+    [tplData],
+  );
 
   React.useEffect(() => {
     if (open) {
@@ -106,8 +106,8 @@ export function NewLandingPageModal({
   // expose `name` + `description` which is all the modal body
   // needs after selection.
   const selectedAccountTemplate =
-    selectedId.startsWith('account:')
-      ? accountTemplates.find((t) => `account:${t.id}` === selectedId)
+    selectedId.startsWith('page:')
+      ? accountTemplates.find((t) => `page:${t.id}` === selectedId)
       : null;
   const selectedPreset = !selectedAccountTemplate
     ? LP_TEMPLATE_PRESETS.find((p) => p.id === selectedId)
@@ -120,7 +120,7 @@ export function NewLandingPageModal({
       return;
     }
     try {
-      const res = await fetch(`/api/account-lp-templates/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/landing-pages/${id}`, { method: 'DELETE' });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
         toast.error(payload.error || 'Could not delete template');
@@ -128,7 +128,7 @@ export function NewLandingPageModal({
       }
       // If the deleted template was selected, fall back to the
       // default starting point so the picker isn't empty-stateful.
-      if (selectedId === `account:${id}`) setSelectedId('lead-capture');
+      if (selectedId === `page:${id}`) setSelectedId('lead-capture');
       void refetchTemplates();
       toast.success('Template deleted.');
     } catch {
@@ -143,7 +143,7 @@ export function NewLandingPageModal({
       // Account templates use the `account:<uuid>` id format so the
       // server can distinguish them from built-in preset ids.
       const templateId = selectedAccountTemplate
-        ? `account:${selectedAccountTemplate.id}`
+        ? `page:${selectedAccountTemplate.id}`
         : selected.id;
       const res = await fetch('/api/landing-pages', {
         method: 'POST',
@@ -242,8 +242,8 @@ export function NewLandingPageModal({
                   <AccountTemplateCard
                     key={tpl.id}
                     template={tpl}
-                    active={selectedId === `account:${tpl.id}`}
-                    onSelect={() => setSelectedId(`account:${tpl.id}`)}
+                    active={selectedId === `page:${tpl.id}`}
+                    onSelect={() => setSelectedId(`page:${tpl.id}`)}
                     onDelete={() => void handleDeleteTemplate(tpl.id, tpl.name)}
                   />
                 ))}

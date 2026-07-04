@@ -52,6 +52,8 @@ export async function PATCH(
       gtmContainerId: body?.gtmContainerId,
       customHeadHtml: body?.customHeadHtml,
       customBodyEndHtml: body?.customBodyEndHtml,
+      category: body?.category,
+      tags: body?.tags,
     });
     return NextResponse.json({ page });
   } catch (err) {

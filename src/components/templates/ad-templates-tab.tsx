@@ -1,6 +1,6 @@
 'use client';
 
-import { useContext, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import useSWR from 'swr';
@@ -22,8 +22,11 @@ import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-m
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import PrimaryButton from '@/components/primary-button';
-import { TemplatesHeaderActionsContext } from '@/app/email/templates/email-templates-view';
+import { TemplateHeaderActions } from '@/components/templates/template-header-actions';
 import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
+import { TemplateLibraryShell } from '@/components/templates/template-library-shell';
+import { TemplateFilterRail } from '@/components/templates/template-filter-rail';
+import { useTemplateFilters } from '@/components/templates/use-template-filters';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
@@ -65,20 +68,21 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
   // accounts" for a global (unscoped) template.
   const scopeName = (key: string | null) => (key ? accounts[key]?.dealer ?? key : null);
   const { confirm } = useLoomiDialog();
-  const headerSlot = useContext(TemplatesHeaderActionsContext);
 
   const { data, isLoading, error, mutate } = useSWR<{ templates?: DocTemplate[] }>(
     '/api/ad-generator/templates-doc?all=1',
     fetcher,
   );
-  // Scope to the active account's industry — in a subaccount you only see its
-  // industry's templates; in Admin (no account) you manage the whole library.
+  // Scoping: at Admin (no account) you manage the SYSTEM library (global,
+  // accountKey null); inside a sub-account you see ONLY that account's own
+  // templates (never the system library). Industry filter still applies.
   const templates = useMemo(
     () =>
       (data?.templates ?? [])
         .filter((t) => t.doc)
+        .filter((t) => (accountKey ? t.accountKey === accountKey : t.accountKey == null))
         .filter((t) => templateInIndustry({ industries: t.doc!.industries, fields: t.doc!.fields }, accountData?.category)),
-    [data, accountData?.category],
+    [data, accountKey, accountData?.category],
   );
   const branding = useMemo(() => brandingFromAccount(accountData), [accountData]);
   // Shared taxonomy vocabulary (categories + tags across every template kind).
@@ -87,6 +91,13 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
     () => ({ categories: taxData?.categories ?? [], tags: taxData?.tags ?? [] }),
     [taxData],
   );
+
+  const { filters, setFilters, facets, filtered, active, reset } = useTemplateFilters(templates, {
+    getName: (t) => t.name,
+    getCategory: (t) => t.category,
+    getTags: (t) => t.tags,
+    getStatus: (t) => (t.status === 'published' ? 'published' : 'draft'),
+  });
 
   // Every builder link carries `from` (this page + the Ads tab) so Back returns
   // to the Ads tab specifically, plus the active account. Assembled once.
@@ -260,15 +271,8 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
 
   return (
     <>
-      {/* Primary CTA in the page header (portaled), matching the Email tab. */}
-      {headerSlot &&
-        createPortal(
-          <PrimaryButton onClick={newTemplate}>
-            <PlusIcon className="w-4 h-4" />
-            New template
-          </PrimaryButton>,
-          headerSlot,
-        )}
+      {/* Create + ⋯ Manage tags in the page header (portaled), shared by all tabs. */}
+      <TemplateHeaderActions onCreate={newTemplate} createLabel="New template" onTagsSaved={() => void mutate()} />
 
       {templates.length === 0 ? (
         <div className="glass-card rounded-2xl p-12 text-center flex flex-col items-center">
@@ -277,7 +281,9 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
           </div>
           <h2 className="text-lg font-semibold mb-1">No ad templates yet</h2>
           <p className="text-sm text-[var(--muted-foreground)] max-w-md mb-6">
-            Design a reusable layout in the Template Builder — your team starts each ad from one of these.
+            {accountKey
+              ? 'No templates for this account yet — an admin can push templates to it from the system library.'
+              : 'Design a reusable layout in the Template Builder — your team starts each ad from one of these.'}
           </p>
           <button
             type="button"
@@ -289,37 +295,59 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
           </button>
         </div>
       ) : (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-        {templates.map((t) => {
-          const template = t.doc ? adTemplateFromDoc(t.id, t.doc) : undefined;
-          const badge = scheduleBadge(t);
-          return (
-            <TemplateCard
-              key={t.id}
-              preview={<AdPreviewThumb template={template} data={t.doc?.defaults ?? {}} branding={branding} height={150} />}
-              name={t.name}
-              status={t.status === 'published' ? 'published' : 'draft'}
-              scope={{ label: scopeName(t.accountKey) ?? 'All accounts', kind: t.accountKey ? 'account' : 'global' }}
-              category={t.category}
-              tags={t.tags ?? []}
-              taxonomy={taxonomy}
-              author={{ name: t.createdByName, email: t.createdByEmail, avatarUrl: t.createdByImage }}
-              editable
-              badges={
-                badge && (
-                  <span className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
-                    {badge}
-                  </span>
-                )
-              }
-              actions={actionsFor(t)}
-              onClick={() => edit(t.id)}
-              onCategoryChange={(c) => void patchTemplate(t.id, { category: c })}
-              onTagsChange={(tags) => void patchTemplate(t.id, { tags })}
+        <TemplateLibraryShell
+          search={filters.search}
+          onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
+          resultCount={filtered.length}
+          rail={
+            <TemplateFilterRail
+              filters={filters}
+              setFilters={setFilters}
+              facets={facets}
+              active={active}
+              reset={reset}
+              showStatus
             />
-          );
-        })}
-      </div>
+          }
+        >
+          {filtered.length === 0 ? (
+            <div className="glass-card rounded-2xl p-10 text-center text-sm text-[var(--muted-foreground)]">
+              No templates match your filters.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filtered.map((t) => {
+                const template = t.doc ? adTemplateFromDoc(t.id, t.doc) : undefined;
+                const badge = scheduleBadge(t);
+                return (
+                  <TemplateCard
+                    key={t.id}
+                    preview={<AdPreviewThumb template={template} data={t.doc?.defaults ?? {}} branding={branding} height={150} />}
+                    name={t.name}
+                    status={t.status === 'published' ? 'published' : 'draft'}
+                    scope={{ label: scopeName(t.accountKey) ?? 'All accounts', kind: t.accountKey ? 'account' : 'global' }}
+                    category={t.category}
+                    tags={t.tags ?? []}
+                    taxonomy={taxonomy}
+                    author={{ name: t.createdByName, email: t.createdByEmail, avatarUrl: t.createdByImage }}
+                    editable
+                    badges={
+                      badge && (
+                        <span className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+                          {badge}
+                        </span>
+                      )
+                    }
+                    actions={actionsFor(t)}
+                    onClick={() => edit(t.id)}
+                    onCategoryChange={(c) => void patchTemplate(t.id, { category: c })}
+                    onTagsChange={(tags) => void patchTemplate(t.id, { tags })}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </TemplateLibraryShell>
       )}
 
       {/* View preview */}

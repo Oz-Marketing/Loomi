@@ -1007,6 +1007,10 @@ model LandingPage {
   gtmContainerId    String?
   customHeadHtml    String?   @db.Text
   customBodyEndHtml String?   @db.Text
+  // Shared template taxonomy (Category + Tags) — used when isTemplate=true so LP
+  // templates organize alongside every other kind on /templates.
+  category          String?
+  tags              String?   @db.Text // JSON string[] of tag names
   createdByUserId   String?
   publishedAt       DateTime?
   createdAt         DateTime  @default(now())

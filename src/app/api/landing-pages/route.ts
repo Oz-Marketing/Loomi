@@ -7,18 +7,30 @@ import {
 } from '@/lib/api-auth';
 import {
   createLandingPage,
+  getLandingPage,
   LandingPageServiceError,
   listLandingPages,
+  listLandingPageTemplates,
 } from '@/lib/services/landing-pages';
 import { getLandingPagePreset } from '@/lib/landing-pages/templates';
 import { getLpTemplate } from '@/lib/services/lp-templates';
 import type { LandingPageContent } from '@/lib/landing-pages/types';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const { session, error } = await requireRole('developer', 'super_admin', 'admin');
   if (error) return error;
 
   const scope = getAccountScope(session!);
+
+  // Templates tab: LP templates (isTemplate=true), scoped Admin=system(null) /
+  // sub-account=own — matches every other template kind.
+  if (req.nextUrl.searchParams.get('isTemplate') === 'true') {
+    const accountKey = req.nextUrl.searchParams.get('accountKey')?.trim() || null;
+    if (accountKey && !canAccessAccount(scope, accountKey)) return forbidden();
+    const pages = await listLandingPageTemplates(accountKey);
+    return NextResponse.json({ pages });
+  }
+
   const pages = await listLandingPages(scope);
   return NextResponse.json({ pages });
 }
@@ -31,13 +43,16 @@ export async function POST(req: NextRequest) {
   const name = typeof body?.name === 'string' ? body.name.trim() : '';
   const accountKey = typeof body?.accountKey === 'string' ? body.accountKey.trim() : '';
   const templateId = typeof body?.templateId === 'string' ? body.templateId : 'blank';
+  const isTemplate = body?.isTemplate === true;
   if (!name) return NextResponse.json({ error: 'name is required' }, { status: 400 });
-  if (!accountKey) {
+  // Live pages + sub-account templates need an account; only an admin-curated
+  // system/library template (isTemplate + no account) may be account-less.
+  if (!accountKey && !isTemplate) {
     return NextResponse.json({ error: 'accountKey is required' }, { status: 400 });
   }
 
   const scope = getAccountScope(session!);
-  if (!canAccessAccount(scope, accountKey)) return forbidden();
+  if (accountKey && !canAccessAccount(scope, accountKey)) return forbidden();
 
   // Resolve the schema from one of two source kinds:
   //   1. Built-in preset by id ("blank" / "lead-capture" / etc.)
@@ -70,6 +85,12 @@ export async function POST(req: NextRequest) {
     // don't care, but cloning protects against future code that
     // mutates `schema`).
     schema = JSON.parse(JSON.stringify(template.schema)) as LandingPageContent;
+  } else if (templateId.startsWith('page:')) {
+    // Create a live LP from an LP TEMPLATE (a LandingPage with isTemplate=true).
+    const srcId = templateId.slice('page:'.length);
+    const src = await getLandingPage(srcId, scope);
+    if (!src) return NextResponse.json({ error: 'Template not found' }, { status: 404 });
+    schema = JSON.parse(JSON.stringify(src.schema)) as LandingPageContent;
   } else {
     const preset = getLandingPagePreset(templateId) ?? getLandingPagePreset('blank')!;
     schema = preset.build();
@@ -77,9 +98,10 @@ export async function POST(req: NextRequest) {
 
   try {
     const page = await createLandingPage({
-      accountKey,
+      accountKey: accountKey || null,
       name,
       schema,
+      isTemplate,
       createdByUserId: session!.user.id,
     });
     // Blank presets (both block-blank and html-blank) drop users

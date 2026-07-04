@@ -307,9 +307,16 @@ export function LandingPageBuilderPage({ id }: { id: string }) {
         <div className="flex items-center gap-2 min-w-0">
           <button
             type="button"
-            onClick={() => router.push(subHref(`/websites/landing-pages/${id}`))}
+            onClick={() =>
+              router.push(
+                // A template has no live-page overview — it's authored from the
+                // Templates library, so Back returns there. Live pages go to
+                // their overview as before.
+                page?.isTemplate ? subHref('/templates?tab=landing-pages') : subHref(`/websites/landing-pages/${id}`),
+              )
+            }
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors flex-shrink-0"
-            title="Back to overview"
+            title={page?.isTemplate ? 'Back to templates' : 'Back to overview'}
           >
             <ArrowLeftIcon className="w-4 h-4" />
             Back

@@ -59,6 +59,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.doc && typeof body.doc === 'object' && Array.isArray((body.doc as { sizes?: unknown }).sizes)) {
     const u = session?.user as { name?: string | null; email?: string | null; image?: string | null } | undefined;
     data.doc = JSON.stringify(body.doc);
+    // Keep the Ad Type tag column in sync with the doc's chosen type.
+    data.adTypeId = typeof (body.doc as { adType?: unknown }).adType === 'string' ? (body.doc as { adType: string }).adType : null;
     data.createdBy = u?.email ?? null;
     data.createdByName = u?.name ?? null;
     data.createdByEmail = u?.email ?? null;

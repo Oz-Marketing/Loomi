@@ -68,7 +68,9 @@ import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
+import { CornerBox, NumberInput } from '@/lib/email/editor/PropertyControls';
 import { GOOGLE_FONTS, googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
+import type { AdType } from '@/lib/ad-generator/ad-types';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { singleOfferDoc, dualOfferDoc } from '@/lib/ad-generator/templates/offer-docs';
 import { blankTemplateDoc } from '@/lib/ad-generator/doc-template';
@@ -641,6 +643,22 @@ export default function AdBuilderPage() {
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
 
+  // Patch the canvas iframe's document IN PLACE on every edit instead of swapping
+  // `srcDoc` (which navigates the iframe → a white flash on every change). Replacing
+  // documentElement.innerHTML keeps the same document (no navigation, no flash);
+  // the iframe keeps a constant shell `srcDoc` so it always has a same-origin doc.
+  // Driven by both this effect (on edits) and the iframe's onLoad (on (re)mount,
+  // after the shell finishes loading — which otherwise clobbers an early write).
+  const writeFrame = useCallback(() => {
+    const idoc = iframeRef.current?.contentDocument;
+    if (!idoc?.documentElement) return;
+    const inner = html.replace(/^[\s\S]*?<html[^>]*>/i, '').replace(/<\/html>\s*$/i, '');
+    idoc.documentElement.innerHTML = inner;
+  }, [html]);
+  useEffect(() => {
+    writeFrame();
+  }, [writeFrame]);
+
   // The ad scales to fill the canvas pane (measured), with a little padding.
   const [canvasRef, canvasSize] = useElementSize<HTMLDivElement>();
   const frameRef = useRef<HTMLDivElement>(null); // the artboard frame (for panel alignment)
@@ -871,6 +889,17 @@ export default function AdBuilderPage() {
   // apply → server-side crop → the element points at the new cropped image.
   const [cropModal, setCropModal] = useState<{ id: string; url: string; name: string } | null>(null);
   const [cropSaving, setCropSaving] = useState(false);
+  // Ad Types — to tag a template with a type (drives library filtering + the
+  // from-scratch question set). All active types; the settings popover picks one.
+  const [adTypes, setAdTypes] = useState<AdType[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/ad-generator/ad-types')
+      .then((r) => (r.ok ? r.json() : { adTypes: [] }))
+      .then((d: { adTypes?: AdType[] }) => { if (!cancelled) setAdTypes(d.adTypes ?? []); })
+      .catch(() => { if (!cancelled) setAdTypes([]); });
+    return () => { cancelled = true; };
+  }, []);
   // FLIP: gently slide Layers rows to their new spots when the drop order
   // actually changes during a drag. Transforms are cleared before measuring, so
   // an in-flight animation never pollutes the next measurement (no jitter).
@@ -2647,6 +2676,19 @@ export default function AdBuilderPage() {
                         );
                       })}
                     </div>
+                    {adTypes.length > 0 && (
+                      <div className="mt-4">
+                        <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Ad type</h3>
+                        <p className="mb-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Tag this template so it can be filtered by type in the library.</p>
+                        <FontSelect
+                          value={doc.adType ?? ''}
+                          onChange={(v) => setDoc((prev) => ({ ...prev, adType: v || undefined }))}
+                          previewFont={false}
+                          placeholder="None"
+                          options={[{ value: '', label: 'None' }, ...adTypes.map((t) => ({ value: t.id, label: `${t.industry}${t.category ? ` · ${t.category}` : ''} · ${t.name}` }))]}
+                        />
+                      </div>
+                    )}
                     <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
                       <button
                         onClick={() => {
@@ -3085,7 +3127,8 @@ export default function AdBuilderPage() {
                   <iframe
                     ref={iframeRef}
                     title="Template canvas"
-                    srcDoc={html}
+                    srcDoc="<!doctype html><html><head></head><body></body></html>"
+                    onLoad={writeFrame}
                     style={{
                       width: size.width,
                       height: size.height,
@@ -4278,12 +4321,7 @@ function SelectionPanel({
               {grad ? 'Use a solid color' : 'Use a gradient'}
             </button>
             {/* Corner radius only applies to a plain rectangle. */}
-            {kind === 'rect' && (
-              <label className="mt-3 flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-                Radius
-                <MiniNum title="Corner radius (px)" value={el.radius ?? 0} onChange={(v) => onEl({ radius: v ? Math.round(v) : undefined })} />
-              </label>
-            )}
+            {kind === 'rect' && <RadiusControl el={el} onEl={onEl} />}
             {/* Opacity + blend — composite the shape over what's beneath it. */}
             <CompositeControls el={el} onEl={onEl} />
           </PanelSection>
@@ -4324,11 +4362,8 @@ function SelectionPanel({
                 {cropping ? 'Done' : 'Crop'}
               </button>
             </div>
+            <RadiusControl el={el} onEl={onEl} />
             <div className="mt-3 flex flex-wrap items-center gap-4">
-              <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-                Radius
-                <MiniNum title="Corner radius (px)" value={el.radius ?? 0} onChange={(v) => onEl({ radius: v > 0 ? Math.round(v) : undefined })} />
-              </label>
               {el.fit === 'tile' && (
                 <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
                   Tile size
@@ -4843,23 +4878,49 @@ function GradientEditor({ value, onChange }: { value: GradientFill; onChange: (g
   );
 }
 
+/** Per-corner radius control (shared TL/TR/BR/BL box from the email editor, with a
+ *  link-all toggle) — seeds from the element's per-corner values or the single
+ *  `radius`, and writes the per-corner fields (clearing the legacy `radius`). */
+function RadiusControl({ el, onEl }: { el: DocElement; onEl: (patch: Partial<DocElement>) => void }) {
+  const base = el.radius ?? 0;
+  return (
+    <div className="mt-3">
+      <div className="mb-1.5 text-xs text-[var(--muted-foreground)]">Radius</div>
+      <CornerBox
+        values={{ tl: el.radiusTL ?? base, tr: el.radiusTR ?? base, br: el.radiusBR ?? base, bl: el.radiusBL ?? base }}
+        onChange={(v) =>
+          onEl({
+            radiusTL: v.tl || undefined,
+            radiusTR: v.tr || undefined,
+            radiusBR: v.br || undefined,
+            radiusBL: v.bl || undefined,
+            radius: undefined,
+          })
+        }
+      />
+    </div>
+  );
+}
+
 /** Opacity + blend-mode row — the compositing controls shared by shapes and
  *  images so a fill/overlay can tint or knock back what's beneath it. */
 function CompositeControls({ el, onEl }: { el: DocElement; onEl: (patch: Partial<DocElement>) => void }) {
   return (
     <div className="mt-3 space-y-2.5">
-      <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-        Opacity
-        <MiniNum
-          title="Opacity (%)"
+      <div>
+        <div className="mb-1 text-xs text-[var(--muted-foreground)]">Opacity</div>
+        <NumberInput
           value={el.opacity ?? 100}
-          step={5}
+          min={0}
+          max={100}
+          unit="%"
+          slider
           onChange={(v) => {
             const n = Math.max(0, Math.min(100, Math.round(v)));
             onEl({ opacity: n >= 100 ? undefined : n });
           }}
         />
-      </label>
+      </div>
       <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
         Blend
         <SearchableSelect

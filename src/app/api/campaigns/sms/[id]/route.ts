@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import {
-  deleteSmsBlast,
-  getSmsBlast,
-  updateSmsBlastDraft,
-} from '@/lib/services/sms-blasts';
+  deleteSmsCampaign,
+  getSmsCampaign,
+  updateSmsCampaignDraft,
+} from '@/lib/services/sms-campaigns';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -16,7 +16,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
   if (error) return error;
 
   const { id } = await params;
-  const campaign = await getSmsBlast(id);
+  const campaign = await getSmsCampaign(id);
   if (!campaign) {
     return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
   }
@@ -38,7 +38,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
   if (error) return error;
 
   const { id } = await params;
-  const existing = await getSmsBlast(id);
+  const existing = await getSmsCampaign(id);
   if (!existing) {
     return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
   }
@@ -56,7 +56,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
   }
 
   const body = await req.json().catch(() => ({}));
-  const patch: Parameters<typeof updateSmsBlastDraft>[1] = {};
+  const patch: Parameters<typeof updateSmsCampaignDraft>[1] = {};
 
   if (typeof body?.name === 'string') patch.name = body.name;
   if (typeof body?.message === 'string') patch.message = body.message;
@@ -89,7 +89,7 @@ export async function PATCH(req: NextRequest, { params }: RouteParams) {
   }
 
   try {
-    const updated = await updateSmsBlastDraft(id, patch);
+    const updated = await updateSmsCampaignDraft(id, patch);
     return NextResponse.json({ campaign: updated });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to update campaign';
@@ -103,7 +103,7 @@ export async function DELETE(_req: NextRequest, { params }: RouteParams) {
   if (error) return error;
 
   const { id } = await params;
-  const existing = await getSmsBlast(id);
+  const existing = await getSmsCampaign(id);
   if (!existing) {
     return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
   }
@@ -121,7 +121,7 @@ export async function DELETE(_req: NextRequest, { params }: RouteParams) {
   }
 
   try {
-    await deleteSmsBlast(id);
+    await deleteSmsCampaign(id);
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to delete campaign';

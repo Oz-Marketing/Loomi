@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
-import { listEmailBlasts, type EmailBlastSummary } from '@/lib/services/email-blasts';
-import { listSmsBlasts, type SmsBlastSummary } from '@/lib/services/sms-blasts';
+import { listEmailCampaigns, type EmailCampaignSummary } from '@/lib/services/email-campaigns';
+import { listSmsCampaigns, type SmsCampaignSummary } from '@/lib/services/sms-campaigns';
 
 /**
  * GET /api/campaigns/loomi/list?accountKey=<key>
  *
- * Returns every Loomi-native campaign (EmailBlast + SmsBlast) for
+ * Returns every Loomi-native campaign (EmailCampaign + SmsCampaign) for
  * the given account, mapped into the same Campaign shape the campaigns
  * list page already renders. Drafts are included on purpose — without
  * this, the user has no way to resume them from the campaigns list.
@@ -54,8 +54,8 @@ export async function GET(req: NextRequest) {
     statusParam === 'archived' || legacyIncludeArchived ? 'archived' : 'all';
 
   const [emails, sms] = await Promise.all([
-    listEmailBlasts({ limit: 500, accountKeys: visibilityScope, statusFilter }),
-    listSmsBlasts({ limit: 500, accountKeys: visibilityScope, statusFilter }),
+    listEmailCampaigns({ limit: 500, accountKeys: visibilityScope, statusFilter }),
+    listSmsCampaigns({ limit: 500, accountKeys: visibilityScope, statusFilter }),
   ]);
 
   function matchesAccount(accountKeys: string[]): boolean {
@@ -81,13 +81,13 @@ export async function GET(req: NextRequest) {
   const linkedSmsIdsOnEmails = new Set<string>();
   for (const e of emails) {
     const meta = parseMeta(e.metadata);
-    if (meta?.multiChannel && typeof meta.linkedSmsBlastId === 'string') {
-      linkedSmsIdsOnEmails.add(meta.linkedSmsBlastId);
+    if (meta?.multiChannel && typeof meta.linkedSmsCampaignId === 'string') {
+      linkedSmsIdsOnEmails.add(meta.linkedSmsCampaignId);
     }
   }
 
   // Archive filter is now applied at the DB layer via archivedAt in
-  // listEmailBlasts / listSmsBlasts — we no longer need to drop
+  // listEmailCampaigns / listSmsCampaigns — we no longer need to drop
   // archived rows here. Legacy archived rows that still rely on
   // metadata.archived are backfilled by a one-time migration; if any
   // slip through, the metadata fallback below keeps them hidden when
@@ -113,7 +113,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({ campaigns });
 }
 
-function parseMeta(raw: string | null | undefined): { multiChannel?: boolean; linkedSmsBlastId?: string; archived?: boolean } | null {
+function parseMeta(raw: string | null | undefined): { multiChannel?: boolean; linkedSmsCampaignId?: string; archived?: boolean } | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
@@ -127,9 +127,9 @@ function isArchived(metadata: string | null | undefined): boolean {
   return Boolean(parseMeta(metadata)?.archived);
 }
 
-function mapEmail(c: EmailBlastSummary) {
+function mapEmail(c: EmailCampaignSummary) {
   const meta = parseMeta(c.metadata);
-  const isMulti = Boolean(meta?.multiChannel && meta?.linkedSmsBlastId);
+  const isMulti = Boolean(meta?.multiChannel && meta?.linkedSmsCampaignId);
   return {
     id: c.id,
     campaignId: c.id,
@@ -148,7 +148,7 @@ function mapEmail(c: EmailBlastSummary) {
   };
 }
 
-function mapSms(c: SmsBlastSummary) {
+function mapSms(c: SmsCampaignSummary) {
   return {
     id: c.id,
     campaignId: c.id,

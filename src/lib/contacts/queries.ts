@@ -245,7 +245,7 @@ export interface MessagingSummary {
 /**
  * For a given list of contactIds, aggregate EmailEvent + SmsEvent
  * to populate the messaging summary the filter UI uses. Joins go
- * through EmailBlastRecipient / SmsBlastRecipient because
+ * through EmailCampaignRecipient / SmsCampaignRecipient because
  * events store the recipientId (snapshot), not contactId directly.
  *
  * Returns a Map keyed by contactId. Missing contacts mean "no
@@ -263,7 +263,7 @@ export async function getMessagingSummaryForContacts(
   // contactId/accountKey matches. "Delivered" wins over "processed"
   // — we want a real signal that the contact actually got the
   // message, not just that we queued it.
-  const emailRows = await prisma.emailBlastRecipient.findMany({
+  const emailRows = await prisma.emailCampaignRecipient.findMany({
     where: {
       accountKey,
       contactId: { in: contactIds },
@@ -280,7 +280,7 @@ export async function getMessagingSummaryForContacts(
     },
   });
 
-  const smsRows = await prisma.smsBlastRecipient.findMany({
+  const smsRows = await prisma.smsCampaignRecipient.findMany({
     where: {
       accountKey,
       contactId: { in: contactIds },
@@ -298,9 +298,9 @@ export async function getMessagingSummaryForContacts(
   });
 
   // Separate query for `open` events so we can flip `hasOpenedEmail`
-  // on the summary. Same EmailBlastRecipient join shape, just a
+  // on the summary. Same EmailCampaignRecipient join shape, just a
   // different event type filter.
-  const openRows = await prisma.emailBlastRecipient.findMany({
+  const openRows = await prisma.emailCampaignRecipient.findMany({
     where: {
       accountKey,
       contactId: { in: contactIds },
@@ -310,10 +310,10 @@ export async function getMessagingSummaryForContacts(
   });
   const openedIds = new Set(openRows.map((r) => r.contactId));
 
-  // Same EmailBlastRecipient join shape for `click` events so we can
+  // Same EmailCampaignRecipient join shape for `click` events so we can
   // flip `hasClickedEmail` — the engagement signal that survives Apple
   // Mail Privacy Protection (which auto-opens but never auto-clicks).
-  const clickRows = await prisma.emailBlastRecipient.findMany({
+  const clickRows = await prisma.emailCampaignRecipient.findMany({
     where: {
       accountKey,
       contactId: { in: contactIds },

@@ -70,7 +70,7 @@ export interface AccountData {
   metaAdAccountId?: string | null;
   // Reporting margin (%) for the Meta Ads report — set on the Meta Ads card.
   facebookAdsMargin?: number | null;
-  // Loomi-native sending identity. Used by EmailBlast sends when set;
+  // Loomi-native sending identity. Used by EmailCampaign sends when set;
   // otherwise the global SMTP_FROM env var is used.
   senderEmail?: string | null;
   senderName?: string | null;

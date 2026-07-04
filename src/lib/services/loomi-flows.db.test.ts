@@ -123,7 +123,7 @@ describe.skipIf(!RUN)('flow engine — DB integration', () => {
     const c = await prisma.contact.create({
       data: { accountKey: accA, email: `${PREFIX}r@x.com` },
     });
-    const campaign = await prisma.emailBlast.create({
+    const campaign = await prisma.emailCampaign.create({
       data: {
         name: `${PREFIX}wrapper`,
         accountKeys: JSON.stringify([accA]),
@@ -139,19 +139,19 @@ describe.skipIf(!RUN)('flow engine — DB integration', () => {
         accountKey: accA,
       },
     };
-    const r1 = await prisma.emailBlastRecipient.upsert({
+    const r1 = await prisma.emailCampaignRecipient.upsert({
       where,
       create: { campaignId: campaign.id, contactId: c.id, accountKey: accA, email: c.email!, status: 'pending' },
       update: { status: 'pending', messageId: null, sentAt: null },
     });
     // Second cycle: same key — must NOT throw P2002, must reuse the row.
-    const r2 = await prisma.emailBlastRecipient.upsert({
+    const r2 = await prisma.emailCampaignRecipient.upsert({
       where,
       create: { campaignId: campaign.id, contactId: c.id, accountKey: accA, email: c.email!, status: 'pending' },
       update: { status: 'pending', messageId: null, sentAt: null },
     });
     expect(r2.id).toBe(r1.id);
-    const count = await prisma.emailBlastRecipient.count({ where: { campaignId: campaign.id } });
+    const count = await prisma.emailCampaignRecipient.count({ where: { campaignId: campaign.id } });
     expect(count).toBe(1);
   });
 

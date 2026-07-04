@@ -5,7 +5,7 @@
 //   queued → undelivered | failed (sad path)
 // We persist each transition as its own SmsEvent row keyed by (sid,
 // eventType) so a replayed callback is a no-op upsert. Terminal states
-// also flip the originating SmsBlastRecipient.status.
+// also flip the originating SmsCampaignRecipient.status.
 //
 // Inbound STOP keywords go through the inbound webhook and produce
 // SmsSuppression rows so the campaign scheduler drops those phones
@@ -66,9 +66,9 @@ export async function processTwilioStatusCallback(
   if (!sid || !status) return false;
 
   // Find the originating recipient row by Twilio Message SID. We store
-  // it in EmailBlastRecipient.messageId / SmsBlastRecipient.messageId
+  // it in EmailCampaignRecipient.messageId / SmsCampaignRecipient.messageId
   // when the send returns 202.
-  const recipient = await prisma.smsBlastRecipient.findFirst({
+  const recipient = await prisma.smsCampaignRecipient.findFirst({
     where: { messageId: sid },
     select: { id: true, campaignId: true },
   });
@@ -103,7 +103,7 @@ export async function processTwilioStatusCallback(
 
   // Side effects on first-insert only.
   if (recipient && FAILURE_STATUSES.has(status)) {
-    await prisma.smsBlastRecipient.update({
+    await prisma.smsCampaignRecipient.update({
       where: { id: recipient.id },
       data: {
         status: 'failed',

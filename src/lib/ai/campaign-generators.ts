@@ -142,7 +142,7 @@ function fallbackEmailBuild(spec: CampaignPlanEmailSpec): TemplateBuild {
 /**
  * Generate a complete email design for a plan spec. Returns the structured
  * `templateBuild` (visual blocks or code HTML) for the caller to render +
- * persist as an EmailBlast draft.
+ * persist as an EmailCampaign draft.
  *
  * Runs the assistant in force-build mode (never clarifies) and falls back to a
  * deterministic spec-based email if the model still returns no build, so an

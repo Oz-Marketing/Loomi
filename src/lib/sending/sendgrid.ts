@@ -33,7 +33,7 @@ export interface SendGridSendInput {
   /** Tags surfaced in SendGrid's UI + carried into Event webhook payloads. */
   categories?: string[];
   /** Per-recipient custom args echoed back in webhooks; lets us match an
-   *  event to its EmailBlastRecipient row without a second lookup. */
+   *  event to its EmailCampaignRecipient row without a second lookup. */
   customArgs?: Record<string, string>;
   /**
    * CAN-SPAM / RFC 8058 compliance. When provided, SendGrid injects an
@@ -123,7 +123,7 @@ export async function setSendGridFromDomain(
  *
  * This is the per-recipient unit. The worker loops over recipients and
  * calls this once per row — SendGrid supports batching via
- * personalizations[], but keeping it 1:1 with EmailBlastRecipient
+ * personalizations[], but keeping it 1:1 with EmailCampaignRecipient
  * means a single failed send doesn't poison a whole batch and we can
  * update the row status atomically.
  */

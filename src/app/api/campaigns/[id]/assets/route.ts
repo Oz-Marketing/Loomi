@@ -6,13 +6,13 @@ import {
   linkAssetToCampaign,
 } from '@/lib/services/campaigns';
 import {
-  createDraftEmailBlast,
-  updateEmailBlastDraft,
-} from '@/lib/services/email-blasts';
+  createDraftEmailCampaign,
+  updateEmailCampaignDraft,
+} from '@/lib/services/email-campaigns';
 import {
-  createDraftSmsBlast,
-  updateSmsBlastDraft,
-} from '@/lib/services/sms-blasts';
+  createDraftSmsCampaign,
+  updateSmsCampaignDraft,
+} from '@/lib/services/sms-campaigns';
 import { SMS_MAX_CHARS } from '@/lib/campaigns/types';
 
 interface RouteParams {
@@ -86,13 +86,13 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
         content: html,
         createdByUserId: session!.user.id,
       });
-      const draft = await createDraftEmailBlast({
+      const draft = await createDraftEmailCampaign({
         name: name ?? subject,
         accountKeys,
         createdByUserId: session!.user.id,
         createdByRole: session!.user.role,
       });
-      await updateEmailBlastDraft(draft.id, {
+      await updateEmailCampaignDraft(draft.id, {
         subject,
         previewText: previewText || null,
         htmlContent: html,
@@ -106,13 +106,13 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
 
     if (kind === 'sms') {
       const message = (typeof body?.message === 'string' ? body.message : '').trim().slice(0, SMS_MAX_CHARS);
-      const draft = await createDraftSmsBlast({
+      const draft = await createDraftSmsCampaign({
         name,
         accountKeys,
         createdByUserId: session!.user.id,
         createdByRole: session!.user.role,
       });
-      await updateSmsBlastDraft(draft.id, { message, metadata });
+      await updateSmsCampaignDraft(draft.id, { message, metadata });
       await linkAssetToCampaign('sms', draft.id, id);
       return NextResponse.json({ asset: { id: draft.id, kind: 'sms', name: name ?? 'SMS' } }, { status: 201 });
     }

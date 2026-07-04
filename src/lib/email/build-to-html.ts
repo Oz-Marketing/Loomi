@@ -6,7 +6,7 @@
  * or raw `code` HTML. Turning that into final HTML only existed CLIENT-SIDE in
  * the editor (`handleAiBuildTemplate` → `syncVisualToCode`). The AI Campaign
  * Builder needs the same compile on the server so it can persist a rendered
- * EmailBlast draft without a round-trip through the editor.
+ * EmailCampaign draft without a round-trip through the editor.
  *
  * This faithfully reuses the editor's real pipeline:
  *   templateBuild.components
@@ -56,7 +56,7 @@ export interface RenderedEmail {
   textContent: string;
   /**
    * The v2 EmailTemplate JSON that produced the HTML, or null in code mode.
-   * Persist this (e.g. in EmailBlast.metadata) to keep the email editable
+   * Persist this (e.g. in EmailCampaign.metadata) to keep the email editable
    * in the visual builder.
    */
   template: EmailTemplate | null;

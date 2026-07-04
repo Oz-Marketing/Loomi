@@ -48,7 +48,7 @@ export interface TwilioSendInput {
 export interface TwilioSendResult {
   /** Twilio's `sid` for this message (starts with SM…). Stored on the
    *  recipient row so the status-callback webhook can join events back
-   *  to the originating SmsBlastRecipient. */
+   *  to the originating SmsCampaignRecipient. */
   messageSid: string;
   /** Status at submit time: queued | accepted | sending. Final state
    *  arrives via the status callback. */

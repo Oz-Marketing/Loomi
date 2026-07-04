@@ -40,7 +40,7 @@ async function withConcurrencyLimit<T>(
   return results;
 }
 
-type EmailBlastStatus =
+type EmailCampaignStatus =
   | 'draft'
   | 'queued'
   | 'scheduled'
@@ -52,8 +52,8 @@ type EmailBlastStatus =
 
 // Drafts are NOT processable — they live until the user explicitly
 // schedules them, at which point status transitions to queued/scheduled.
-const PROCESSABLE_STATUSES: EmailBlastStatus[] = ['queued', 'scheduled', 'processing'];
-const TERMINAL_STATUSES: EmailBlastStatus[] = ['completed', 'partial', 'failed', 'canceled'];
+const PROCESSABLE_STATUSES: EmailCampaignStatus[] = ['queued', 'scheduled', 'processing'];
+const TERMINAL_STATUSES: EmailCampaignStatus[] = ['completed', 'partial', 'failed', 'canceled'];
 const INVALID_EMAIL_ERROR = 'Recipient email is missing or blocked by hygiene policy';
 
 export interface EmailRecipientInput {
@@ -63,7 +63,7 @@ export interface EmailRecipientInput {
   fullName?: string;
 }
 
-export interface CreateEmailBlastInput {
+export interface CreateEmailCampaignInput {
   name?: string;
   subject: string;
   previewText?: string;
@@ -79,13 +79,13 @@ export interface CreateEmailBlastInput {
   metadata?: string | null;
 }
 
-export interface EmailBlastSummary {
+export interface EmailCampaignSummary {
   id: string;
   name: string;
   subject: string;
   previewText: string;
   sourceType: string;
-  status: EmailBlastStatus;
+  status: EmailCampaignStatus;
   scheduledFor: string;
   startedAt: string;
   completedAt: string;
@@ -223,7 +223,7 @@ function withPreviewText(htmlContent: string, previewText: string): string {
   return `${hiddenPreview}${htmlContent}`;
 }
 
-function buildCampaignMetadata(input: CreateEmailBlastInput): string | null {
+function buildCampaignMetadata(input: CreateEmailCampaignInput): string | null {
   const payload = {
     sourceType: normalizeSourceType(input.sourceType),
     sourceMetadata: input.metadata || '',
@@ -272,14 +272,14 @@ function toSummary(row: {
   createdAt: Date;
   updatedAt: Date;
   error: string | null;
-}): EmailBlastSummary {
+}): EmailCampaignSummary {
   return {
     id: row.id,
     name: row.name || '',
     subject: row.subject,
     previewText: row.previewText || '',
     sourceType: row.sourceType || 'template-library',
-    status: row.status as EmailBlastStatus,
+    status: row.status as EmailCampaignStatus,
     scheduledFor: row.scheduledFor?.toISOString() || '',
     startedAt: row.startedAt?.toISOString() || '',
     completedAt: row.completedAt?.toISOString() || '',
@@ -464,7 +464,7 @@ async function buildSenderMap(
   return map;
 }
 
-export async function createEmailBlast(input: CreateEmailBlastInput): Promise<EmailBlastSummary> {
+export async function createEmailCampaign(input: CreateEmailCampaignInput): Promise<EmailCampaignSummary> {
   const subject = sanitizeSubject(input.subject || '');
   const htmlContent = sanitizeHtml(input.htmlContent || '');
   const textContent = sanitizeText(input.textContent || '');
@@ -482,14 +482,14 @@ export async function createEmailBlast(input: CreateEmailBlastInput): Promise<Em
 
   const scheduledDate = parseDate(input.scheduledFor || undefined);
   const now = Date.now();
-  const status: EmailBlastStatus =
+  const status: EmailCampaignStatus =
     scheduledDate && scheduledDate.getTime() > now
       ? 'scheduled'
       : 'queued';
   const accountKeys = [...new Set(recipients.map((recipient) => recipient.accountKey))];
 
   const created = await prisma.$transaction(async (tx) => {
-    const campaign = await tx.emailBlast.create({
+    const campaign = await tx.emailCampaign.create({
       data: {
         name: input.name?.trim() || null,
         subject,
@@ -509,7 +509,7 @@ export async function createEmailBlast(input: CreateEmailBlastInput): Promise<Em
       },
     });
 
-    await tx.emailBlastRecipient.createMany({
+    await tx.emailCampaignRecipient.createMany({
       data: recipients.map((recipient) => ({
         campaignId: campaign.id,
         contactId: recipient.contactId,
@@ -538,19 +538,19 @@ function defaultDraftName(now: Date): string {
 }
 
 /**
- * Creates an empty EmailBlast row in 'draft' status. The campaign-builder
+ * Creates an empty EmailCampaign row in 'draft' status. The campaign-builder
  * flow walks the user through the remaining steps (recipients, template,
  * schedule) and PATCHes the same row at each step. The pg-boss worker
  * ignores drafts — they only fire once status transitions to 'scheduled'.
  */
-export async function createDraftEmailBlast(input: {
+export async function createDraftEmailCampaign(input: {
   name?: string;
   accountKeys?: string[];
   createdByUserId?: string;
   createdByRole?: string;
-}): Promise<EmailBlastSummary> {
+}): Promise<EmailCampaignSummary> {
   const name = (input.name || '').trim() || defaultDraftName(new Date());
-  const created = await prisma.emailBlast.create({
+  const created = await prisma.emailCampaign.create({
     data: {
       name,
       subject: '',
@@ -571,7 +571,7 @@ export async function createDraftEmailBlast(input: {
  * in `patch` are touched; unspecified fields keep their current values.
  * Pass `null` to clear a column.
  */
-export async function updateEmailBlastDraft(
+export async function updateEmailCampaignDraft(
   campaignId: string,
   patch: {
     name?: string;
@@ -586,10 +586,10 @@ export async function updateEmailBlastDraft(
     sourceContactIds?: string | null;
     sourceType?: string;
     scheduledFor?: Date | null;
-    status?: EmailBlastStatus;
+    status?: EmailCampaignStatus;
     metadata?: string | null;
   },
-): Promise<EmailBlastSummary> {
+): Promise<EmailCampaignSummary> {
   const data: Record<string, unknown> = {};
   if (patch.name !== undefined) data.name = patch.name;
   if (patch.subject !== undefined) data.subject = patch.subject;
@@ -606,7 +606,7 @@ export async function updateEmailBlastDraft(
   if (patch.status !== undefined) data.status = patch.status;
   if (patch.metadata !== undefined) data.metadata = patch.metadata;
 
-  const updated = await prisma.emailBlast.update({
+  const updated = await prisma.emailCampaign.update({
     where: { id: campaignId },
     data,
     select: emailCampaignSummarySelect,
@@ -615,8 +615,8 @@ export async function updateEmailBlastDraft(
 }
 
 /**
- * Transitions a draft EmailBlast into 'scheduled' (future send time) or
- * 'queued' (send immediately). Creates EmailBlastRecipient rows in the
+ * Transitions a draft EmailCampaign into 'scheduled' (future send time) or
+ * 'queued' (send immediately). Creates EmailCampaignRecipient rows in the
  * same transaction so the pg-boss worker has everything it needs once
  * scheduledFor passes.
  *
@@ -627,13 +627,13 @@ export async function updateEmailBlastDraft(
  * reports from the SendGrid Event webhook are the main producers of
  * suppression rows.
  */
-export async function scheduleEmailBlastDraft(
+export async function scheduleEmailCampaignDraft(
   campaignId: string,
   input: {
     recipients: EmailRecipientInput[];
     scheduledFor: Date | null; // null = send immediately
   },
-): Promise<EmailBlastSummary> {
+): Promise<EmailCampaignSummary> {
   const recipients = dedupeRecipients(input.recipients);
   if (recipients.length === 0) {
     throw new Error('At least one recipient is required');
@@ -673,14 +673,14 @@ export async function scheduleEmailBlastDraft(
 
   const now = Date.now();
   const isImmediate = !input.scheduledFor || input.scheduledFor.getTime() <= now;
-  const status: EmailBlastStatus = isImmediate ? 'queued' : 'scheduled';
+  const status: EmailCampaignStatus = isImmediate ? 'queued' : 'scheduled';
 
   const updated = await prisma.$transaction(async (tx) => {
     // Clear any pre-existing recipient rows so re-scheduling a draft
     // starts from a clean slate.
-    await tx.emailBlastRecipient.deleteMany({ where: { campaignId } });
+    await tx.emailCampaignRecipient.deleteMany({ where: { campaignId } });
 
-    await tx.emailBlastRecipient.createMany({
+    await tx.emailCampaignRecipient.createMany({
       data: recipients.map((recipient) => {
         if (!recipient.email) {
           return {
@@ -721,7 +721,7 @@ export async function scheduleEmailBlastDraft(
 
     const accountKeys = [...new Set(recipients.map((r) => r.accountKey).filter(Boolean))];
 
-    return tx.emailBlast.update({
+    return tx.emailCampaign.update({
       where: { id: campaignId },
       data: {
         status,
@@ -739,8 +739,8 @@ export async function scheduleEmailBlastDraft(
   return toSummary(updated);
 }
 
-export async function getEmailBlast(campaignId: string): Promise<EmailBlastSummary | null> {
-  const row = await prisma.emailBlast.findUnique({
+export async function getEmailCampaign(campaignId: string): Promise<EmailCampaignSummary | null> {
+  const row = await prisma.emailCampaign.findUnique({
     where: { id: campaignId },
     select: emailCampaignSummarySelect,
   });
@@ -752,9 +752,9 @@ export async function getEmailBlast(campaignId: string): Promise<EmailBlastSumma
  * campaigns (queued/processing) so the worker never finds itself running
  * a job whose campaign row has vanished mid-loop.
  */
-export async function deleteEmailBlast(campaignId: string): Promise<void> {
+export async function deleteEmailCampaign(campaignId: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    const row = await tx.emailBlast.findUnique({
+    const row = await tx.emailCampaign.findUnique({
       where: { id: campaignId },
       select: { status: true },
     });
@@ -762,8 +762,8 @@ export async function deleteEmailBlast(campaignId: string): Promise<void> {
     if (row.status === 'queued' || row.status === 'processing') {
       throw new Error('Cannot delete a campaign that is currently sending.');
     }
-    await tx.emailBlastRecipient.deleteMany({ where: { campaignId } });
-    await tx.emailBlast.delete({ where: { id: campaignId } });
+    await tx.emailCampaignRecipient.deleteMany({ where: { campaignId } });
+    await tx.emailCampaign.delete({ where: { id: campaignId } });
   });
 }
 
@@ -776,11 +776,11 @@ export async function deleteEmailBlast(campaignId: string): Promise<void> {
  * (queued/processing) can't be archived to keep the worker's state
  * machine simple.
  */
-export async function setEmailBlastArchived(
+export async function setEmailCampaignArchived(
   campaignId: string,
   archived: boolean,
-): Promise<EmailBlastSummary> {
-  const existing = await prisma.emailBlast.findUnique({
+): Promise<EmailCampaignSummary> {
+  const existing = await prisma.emailCampaign.findUnique({
     where: { id: campaignId },
     select: { status: true, metadata: true },
   });
@@ -797,7 +797,7 @@ export async function setEmailBlastArchived(
   }
   if (archived) meta.archived = true;
   else delete meta.archived;
-  const updated = await prisma.emailBlast.update({
+  const updated = await prisma.emailCampaign.update({
     where: { id: campaignId },
     data: {
       metadata: JSON.stringify(meta),
@@ -809,14 +809,14 @@ export async function setEmailBlastArchived(
 }
 
 /**
- * Explicit restore — same effect as setEmailBlastArchived(id, false)
+ * Explicit restore — same effect as setEmailCampaignArchived(id, false)
  * but rejects rows that aren't currently archived so the UI can
  * surface a clearer error than the legacy toggle would.
  */
-export async function restoreEmailBlast(
+export async function restoreEmailCampaign(
   campaignId: string,
-): Promise<EmailBlastSummary> {
-  const existing = await prisma.emailBlast.findUnique({
+): Promise<EmailCampaignSummary> {
+  const existing = await prisma.emailCampaign.findUnique({
     where: { id: campaignId },
     select: { archivedAt: true, metadata: true },
   });
@@ -826,7 +826,7 @@ export async function restoreEmailBlast(
   if (!isArchived) {
     throw new Error('Campaign is not archived — nothing to restore.');
   }
-  return setEmailBlastArchived(campaignId, false);
+  return setEmailCampaignArchived(campaignId, false);
 }
 
 /**
@@ -834,23 +834,23 @@ export async function restoreEmailBlast(
  * the retention window. Invoked by the daily purge worker. Returns
  * the number of rows removed for logging.
  */
-export async function purgeOldArchivedEmailBlasts(
+export async function purgeOldArchivedEmailCampaigns(
   retentionDays = 30,
 ): Promise<number> {
   const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
   // Hand-rolled fan-out: cascading recipient deletes happen inside
-  // deleteEmailBlast which guards against in-flight rows. We
+  // deleteEmailCampaign which guards against in-flight rows. We
   // pre-filter on archivedAt so the in-flight guard never trips.
-  const rows = await prisma.emailBlast.findMany({
+  const rows = await prisma.emailCampaign.findMany({
     where: { archivedAt: { not: null, lt: cutoff } },
     select: { id: true },
   });
   if (rows.length === 0) return 0;
   await prisma.$transaction(async (tx) => {
-    await tx.emailBlastRecipient.deleteMany({
+    await tx.emailCampaignRecipient.deleteMany({
       where: { campaignId: { in: rows.map((r) => r.id) } },
     });
-    await tx.emailBlast.deleteMany({
+    await tx.emailCampaign.deleteMany({
       where: { id: { in: rows.map((r) => r.id) } },
     });
   });
@@ -878,11 +878,11 @@ function parseArchivedMetadata(raw: string | null | undefined): boolean {
  * suffix, and recipient rows are NOT copied — the user will reselect the
  * audience in the Recipients step.
  */
-export async function duplicateEmailBlast(
+export async function duplicateEmailCampaign(
   campaignId: string,
   options?: { createdByUserId?: string; createdByRole?: string },
-): Promise<EmailBlastSummary> {
-  const source = await prisma.emailBlast.findUnique({
+): Promise<EmailCampaignSummary> {
+  const source = await prisma.emailCampaign.findUnique({
     where: { id: campaignId },
     select: emailCampaignSummarySelect,
   });
@@ -890,7 +890,7 @@ export async function duplicateEmailBlast(
     throw new Error('Source campaign not found');
   }
 
-  const created = await prisma.emailBlast.create({
+  const created = await prisma.emailCampaign.create({
     data: {
       name: source.name ? `${source.name} (Copy)` : defaultDraftName(new Date()),
       subject: source.subject || '',
@@ -914,13 +914,13 @@ export async function duplicateEmailBlast(
 
 export type CampaignStatusFilter = 'all' | 'archived';
 
-export async function listEmailBlasts(options?: {
+export async function listEmailCampaigns(options?: {
   limit?: number;
   accountKeys?: string[];
   /** 'all' (default) hides archived rows. 'archived' returns only
    *  archived rows so the table can show them under the StatusFilter. */
   statusFilter?: CampaignStatusFilter;
-}): Promise<EmailBlastSummary[]> {
+}): Promise<EmailCampaignSummary[]> {
   const limit = Math.max(1, Math.min(100, options?.limit ?? 25));
   const statusFilter = options?.statusFilter ?? 'all';
   // Filter on archivedAt at the DB layer — much cheaper than fetching
@@ -929,7 +929,7 @@ export async function listEmailBlasts(options?: {
     statusFilter === 'archived'
       ? { archivedAt: { not: null } }
       : { archivedAt: null };
-  const rows = await prisma.emailBlast.findMany({
+  const rows = await prisma.emailCampaign.findMany({
     where,
     select: emailCampaignSummarySelect,
     orderBy: { createdAt: 'desc' },
@@ -951,7 +951,7 @@ export async function listEmailBlasts(options?: {
 }
 
 async function summarizeCampaign(campaignId: string) {
-  const recipients = await prisma.emailBlastRecipient.findMany({
+  const recipients = await prisma.emailCampaignRecipient.findMany({
     where: { campaignId },
     select: { status: true, error: true },
   });
@@ -978,12 +978,12 @@ async function summarizeCampaign(campaignId: string) {
   };
 }
 
-export async function processEmailBlast(
+export async function processEmailCampaign(
   campaignId: string,
   options?: { concurrency?: number },
-): Promise<EmailBlastSummary> {
+): Promise<EmailCampaignSummary> {
   const concurrency = Math.max(1, Math.min(8, options?.concurrency ?? 3));
-  const campaign = await prisma.emailBlast.findUnique({
+  const campaign = await prisma.emailCampaign.findUnique({
     where: { id: campaignId },
     include: {
       recipients: {
@@ -994,13 +994,13 @@ export async function processEmailBlast(
   });
 
   if (!campaign) throw new Error('Email campaign not found');
-  if (TERMINAL_STATUSES.includes(campaign.status as EmailBlastStatus)) {
+  if (TERMINAL_STATUSES.includes(campaign.status as EmailCampaignStatus)) {
     return toSummary(campaign);
   }
 
   if (campaign.recipients.length === 0) {
     const counts = await summarizeCampaign(campaign.id);
-    const status: EmailBlastStatus =
+    const status: EmailCampaignStatus =
       counts.sent > 0 && counts.failed > 0
         ? 'partial'
         : counts.sent > 0
@@ -1008,7 +1008,7 @@ export async function processEmailBlast(
           : counts.failed > 0
             ? 'failed'
             : 'queued';
-    const updated = await prisma.emailBlast.update({
+    const updated = await prisma.emailCampaign.update({
       where: { id: campaign.id },
       data: {
         status,
@@ -1022,7 +1022,7 @@ export async function processEmailBlast(
     return toSummary(updated);
   }
 
-  await prisma.emailBlast.update({
+  await prisma.emailCampaign.update({
     where: { id: campaign.id },
     data: {
       status: 'processing',
@@ -1043,7 +1043,7 @@ export async function processEmailBlast(
   const tasks = campaign.recipients.map((recipient) => async () => {
     const recipientEmail = normalizeEmailAddress(recipient.email || '');
     if (!isLikelyDeliverableEmail(recipientEmail)) {
-      await prisma.emailBlastRecipient.update({
+      await prisma.emailCampaignRecipient.update({
         where: { id: recipient.id },
         data: {
           status: 'failed',
@@ -1069,7 +1069,7 @@ export async function processEmailBlast(
     const useSendGrid = Boolean(sender.sendgridApiKey && sender.senderEmail);
 
     if (!useSendGrid && !smtp) {
-      await prisma.emailBlastRecipient.update({
+      await prisma.emailCampaignRecipient.update({
         where: { id: recipient.id },
         data: {
           status: 'failed',
@@ -1123,7 +1123,7 @@ export async function processEmailBlast(
         messageId = info.messageId || null;
       }
 
-      await prisma.emailBlastRecipient.update({
+      await prisma.emailCampaignRecipient.update({
         where: { id: recipient.id },
         data: {
           status: 'sent',
@@ -1139,7 +1139,7 @@ export async function processEmailBlast(
           : err instanceof Error
             ? err.message
             : 'Failed to send email';
-      await prisma.emailBlastRecipient.update({
+      await prisma.emailCampaignRecipient.update({
         where: { id: recipient.id },
         data: {
           status: 'failed',
@@ -1152,7 +1152,7 @@ export async function processEmailBlast(
   await withConcurrencyLimit(tasks, concurrency);
 
   const counts = await summarizeCampaign(campaign.id);
-  const nextStatus: EmailBlastStatus =
+  const nextStatus: EmailCampaignStatus =
     counts.pending > 0
       ? 'processing'
       : counts.sent > 0 && counts.failed > 0
@@ -1163,7 +1163,7 @@ export async function processEmailBlast(
             ? 'failed'
             : 'queued';
 
-  const updated = await prisma.emailBlast.update({
+  const updated = await prisma.emailCampaign.update({
     where: { id: campaign.id },
     data: {
       sourceType: metadata.sourceType,
@@ -1179,15 +1179,15 @@ export async function processEmailBlast(
   return toSummary(updated);
 }
 
-export async function processDueEmailBlasts(options?: {
+export async function processDueEmailCampaigns(options?: {
   limit?: number;
   accountKeys?: string[];
   concurrency?: number;
-}): Promise<EmailBlastSummary[]> {
+}): Promise<EmailCampaignSummary[]> {
   const limit = Math.max(1, Math.min(20, options?.limit ?? 5));
   const now = new Date();
 
-  const rows = await prisma.emailBlast.findMany({
+  const rows = await prisma.emailCampaign.findMany({
     where: {
       status: { in: PROCESSABLE_STATUSES },
       OR: [
@@ -1211,9 +1211,9 @@ export async function processDueEmailBlasts(options?: {
     })
     .slice(0, limit);
 
-  const summaries: EmailBlastSummary[] = [];
+  const summaries: EmailCampaignSummary[] = [];
   for (const row of queue) {
-    const summary = await processEmailBlast(row.id, { concurrency: options?.concurrency });
+    const summary = await processEmailCampaign(row.id, { concurrency: options?.concurrency });
     summaries.push(summary);
   }
 

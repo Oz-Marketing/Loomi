@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { getCampaignEngagementById } from '@/lib/services/email-analytics';
-import { getEmailBlast } from '@/lib/services/email-blasts';
+import { getEmailCampaign } from '@/lib/services/email-campaigns';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -21,7 +21,7 @@ export async function GET(_req: NextRequest, { params }: RouteParams) {
 
   const { id } = await params;
 
-  const campaign = await getEmailBlast(id);
+  const campaign = await getEmailCampaign(id);
   if (!campaign) {
     return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
   }

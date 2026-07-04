@@ -11,7 +11,7 @@ import {
 //
 // Ad-hoc 1:1 SMS / MMS send from the contact detail page. Goes
 // through the same Twilio direct engine as bulk SMS campaigns but
-// does NOT create an SmsBlast — we don't want every "hey, your
+// does NOT create an SmsCampaign — we don't want every "hey, your
 // car's ready" message to show up in the campaigns list.
 //
 // The send is logged as an orphan SmsEvent row (recipientId NULL,

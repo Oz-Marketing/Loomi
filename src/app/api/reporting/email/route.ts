@@ -16,7 +16,7 @@ import { prisma } from '@/lib/prisma';
 import {
   GhlError,
   getGhlCredentials,
-  getEmailBlastsNormalized,
+  getEmailCampaignsNormalized,
   aggregateStats,
 } from '@/lib/integrations/gohighlevel';
 
@@ -46,7 +46,7 @@ export async function GET(req: NextRequest) {
       select: { dealer: true },
     });
     const creds = await getGhlCredentials(accountKey);
-    const all = await getEmailBlastsNormalized(creds);
+    const all = await getEmailCampaignsNormalized(creds);
 
     // Filter by scheduled date; undated campaigns pass through (Oz parity).
     const startMs = startDate ? new Date(`${startDate}T00:00:00Z`).getTime() : null;

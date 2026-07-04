@@ -4,7 +4,7 @@
 // flattened back onto the event (campaignId, recipientId, accountKey)
 // so we can aggregate without joins for the common cases.
 //
-// "Sent" comes from EmailBlastRecipient.sentAt rather than the
+// "Sent" comes from EmailCampaignRecipient.sentAt rather than the
 // SendGrid 'processed' / 'delivered' events: we mark the row 'sent'
 // synchronously when SendGrid returns 202, which lands earlier than
 // the corresponding webhook event and survives webhook outages.
@@ -124,11 +124,11 @@ export async function getEngagementTotals(
   const sentWhere = recipientWhere(input);
   const range = dateFilter(start, end);
   const sentDateFilter = range ? { sentAt: range } : {};
-  const sent = await prisma.emailBlastRecipient.count({
+  const sent = await prisma.emailCampaignRecipient.count({
     where: { ...sentWhere, status: 'sent', ...sentDateFilter },
   });
-  const skipped = await prisma.emailBlastRecipient.count({ where: { ...sentWhere, status: 'skipped' } });
-  const failed = await prisma.emailBlastRecipient.count({ where: { ...sentWhere, status: 'failed' } });
+  const skipped = await prisma.emailCampaignRecipient.count({ where: { ...sentWhere, status: 'skipped' } });
+  const failed = await prisma.emailCampaignRecipient.count({ where: { ...sentWhere, status: 'failed' } });
 
   // Event counts come from EmailEvent.
   const eventWhere = eventBaseWhere(accountKeys, start, end);
@@ -200,7 +200,7 @@ export async function getCampaignEngagement(
       }
     : {};
 
-  const campaigns = await prisma.emailBlast.findMany({
+  const campaigns = await prisma.emailCampaign.findMany({
     where,
     select: {
       id: true,
@@ -231,7 +231,7 @@ export async function getCampaignEngagement(
   const campaignIds = filtered.map((c) => c.id);
 
   // Batch counts: sent + skipped + failed per campaign
-  const recipientGroups = await prisma.emailBlastRecipient.groupBy({
+  const recipientGroups = await prisma.emailCampaignRecipient.groupBy({
     by: ['campaignId', 'status'],
     where: { campaignId: { in: campaignIds } },
     _count: { _all: true },
@@ -329,7 +329,7 @@ export async function getCampaignEngagementById(
 ): Promise<CampaignEngagementRow | null> {
   assertEventModelAvailable();
 
-  const campaign = await prisma.emailBlast.findUnique({
+  const campaign = await prisma.emailCampaign.findUnique({
     where: { id: campaignId },
     select: {
       id: true,
@@ -342,7 +342,7 @@ export async function getCampaignEngagementById(
   });
   if (!campaign) return null;
 
-  const recipientGroups = await prisma.emailBlastRecipient.groupBy({
+  const recipientGroups = await prisma.emailCampaignRecipient.groupBy({
     by: ['status'],
     where: { campaignId: campaign.id },
     _count: { _all: true },

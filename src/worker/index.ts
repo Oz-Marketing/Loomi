@@ -17,19 +17,19 @@ import './boot';
 
 import { getBoss, stopBoss } from '@/lib/queue/boss';
 import {
-  processDueEmailBlasts,
-} from '@/lib/services/email-blasts';
+  processDueEmailCampaigns,
+} from '@/lib/services/email-campaigns';
 import {
-  processDueSmsBlasts,
-} from '@/lib/services/sms-blasts';
+  processDueSmsCampaigns,
+} from '@/lib/services/sms-campaigns';
 import {
   processDueFlowEnrollments,
   processFlowTriggers,
   purgeOldArchivedFlows,
 } from '@/lib/services/loomi-flows';
 import { purgeOldArchivedEmails } from '@/lib/services/account-emails';
-import { purgeOldArchivedEmailBlasts } from '@/lib/services/email-blasts';
-import { purgeOldArchivedSmsBlasts } from '@/lib/services/sms-blasts';
+import { purgeOldArchivedEmailCampaigns } from '@/lib/services/email-campaigns';
+import { purgeOldArchivedSmsCampaigns } from '@/lib/services/sms-campaigns';
 import {
   DELIVER_CRM_LEAD_QUEUE,
   type DeliverCrmLeadJob,
@@ -49,24 +49,24 @@ const ARCHIVE_RETENTION_DAYS = 30;
 async function runProcessDueCampaigns(): Promise<void> {
   const startedAt = Date.now();
   try {
-    const emailResults = await processDueEmailBlasts({ limit: 5, concurrency: 3 });
+    const emailResults = await processDueEmailCampaigns({ limit: 5, concurrency: 3 });
     if (emailResults.length > 0) {
       console.log(
         `[worker] processed ${emailResults.length} email campaign(s) in ${Date.now() - startedAt}ms`,
       );
     }
   } catch (err) {
-    console.error('[worker] processDueEmailBlasts failed', err);
+    console.error('[worker] processDueEmailCampaigns failed', err);
   }
   try {
-    const smsResults = await processDueSmsBlasts({ limit: 5, concurrency: 3 });
+    const smsResults = await processDueSmsCampaigns({ limit: 5, concurrency: 3 });
     if (smsResults.length > 0) {
       console.log(
         `[worker] processed ${smsResults.length} sms campaign(s) in ${Date.now() - startedAt}ms`,
       );
     }
   } catch (err) {
-    console.error('[worker] processDueSmsBlasts failed', err);
+    console.error('[worker] processDueSmsCampaigns failed', err);
   }
 }
 
@@ -105,8 +105,8 @@ async function runPurgeArchived(): Promise<void> {
       await Promise.all([
         purgeOldArchivedFlows(ARCHIVE_RETENTION_DAYS),
         purgeOldArchivedEmails(ARCHIVE_RETENTION_DAYS),
-        purgeOldArchivedEmailBlasts(ARCHIVE_RETENTION_DAYS),
-        purgeOldArchivedSmsBlasts(ARCHIVE_RETENTION_DAYS),
+        purgeOldArchivedEmailCampaigns(ARCHIVE_RETENTION_DAYS),
+        purgeOldArchivedSmsCampaigns(ARCHIVE_RETENTION_DAYS),
       ]);
     const total =
       flowsPurged + emailsPurged + emailCampaignsPurged + smsCampaignsPurged;

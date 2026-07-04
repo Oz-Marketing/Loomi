@@ -23,6 +23,7 @@ import {
   CheckCircleIcon,
   ArrowDownTrayIcon,
   ArrowTopRightOnSquareIcon,
+  ChevronDownIcon,
   CheckIcon,
   EllipsisHorizontalIcon,
 } from '@heroicons/react/24/outline';
@@ -448,9 +449,8 @@ function ManagementView({
   const [renameDesign, setRenameDesign] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [renaming, setRenaming] = useState(false);
-  // Write-only spinner refs (value isn't surfaced anymore, only the setter runs).
-  const [, setDownloadingDesign] = useState<string | null>(null);
-  const [, setPublishingDesign] = useState<string | null>(null);
+  const [downloadingDesign, setDownloadingDesign] = useState<string | null>(null);
+  const [publishingDesign, setPublishingDesign] = useState<string | null>(null);
   // Toolbar popover anchors
   const [showOverflowMenu, setShowOverflowMenu] = useState(false);
   // Bulk tag modal (opens from the bulk-action dock)

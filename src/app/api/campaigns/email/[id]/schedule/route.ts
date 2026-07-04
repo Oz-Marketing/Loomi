@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import {
-  getEmailBlast,
-  scheduleEmailBlastDraft,
+  getEmailCampaign,
+  scheduleEmailCampaignDraft,
   type EmailRecipientInput,
-} from '@/lib/services/email-blasts';
+} from '@/lib/services/email-campaigns';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
   if (error) return error;
 
   const { id } = await params;
-  const existing = await getEmailBlast(id);
+  const existing = await getEmailCampaign(id);
   if (!existing) {
     return NextResponse.json({ error: 'Campaign not found' }, { status: 404 });
   }
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest, { params }: RouteParams) {
   const scheduledFor = parseDate(body?.scheduledFor);
 
   try {
-    const updated = await scheduleEmailBlastDraft(id, {
+    const updated = await scheduleEmailCampaignDraft(id, {
       recipients,
       scheduledFor,
     });

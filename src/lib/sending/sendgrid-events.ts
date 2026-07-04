@@ -114,7 +114,7 @@ async function persistSingleEvent(ev: SendGridEvent): Promise<boolean> {
   // insert. Cheap to look up by primary key.
   let recipientIdForRow: string | null = null;
   if (recipientId) {
-    const exists = await prisma.emailBlastRecipient.findUnique({
+    const exists = await prisma.emailCampaignRecipient.findUnique({
       where: { id: recipientId },
       select: { id: true },
     });
@@ -173,7 +173,7 @@ async function maybeUpdateRecipientStatus(
   if (eventType === 'bounce' || eventType === 'dropped') {
     const bounceType = typeof ev.type === 'string' ? ev.type : null;
     const isHard = bounceType ? HARD_BOUNCE_TYPES.has(bounceType) : eventType === 'bounce';
-    await prisma.emailBlastRecipient.update({
+    await prisma.emailCampaignRecipient.update({
       where: { id: recipientId },
       data: {
         status: 'failed',

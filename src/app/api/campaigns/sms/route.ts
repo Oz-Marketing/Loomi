@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import {
-  listSmsBlasts,
+  listSmsCampaigns,
   type CampaignStatusFilter,
-} from '@/lib/services/sms-blasts';
+} from '@/lib/services/sms-campaigns';
 
 /**
  * GET /api/campaigns/sms?limit=20&status=all|archived
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
     ? (session!.user.accountKeys ?? [])
     : undefined;
 
-  const campaigns = await listSmsBlasts({ limit, accountKeys, statusFilter });
+  const campaigns = await listSmsCampaigns({ limit, accountKeys, statusFilter });
   return NextResponse.json({ campaigns });
 }
 

@@ -1572,7 +1572,10 @@ function colorNameToHex(c: EvoxColor): string {
  */
 function VehicleColorPicker({ vehicleName, selectedCode, onPick }: { vehicleName: string; selectedCode: string; onPick: (url: string, colorCode: string) => void }) {
   const { accountKey } = useAccount();
-  const [swatches, setSwatches] = useState<{ vifnum: number; color: EvoxColor }[] | null>(null);
+  // One entry per distinct color NAME, carrying every (vifnum, code) that offers
+  // it — the same paint can appear under multiple trims/codes and only some
+  // have a rendered image, so we try them in order when the user picks.
+  const [swatches, setSwatches] = useState<{ color: EvoxColor; candidates: { vifnum: number; code: string }[] }[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [notConfigured, setNotConfigured] = useState(false);
   const [picking, setPicking] = useState<string | null>(null);
@@ -1605,20 +1608,21 @@ function VehicleColorPicker({ vehicleName, selectedCode, onPick }: { vehicleName
           setSwatches([]);
           return;
         }
-        // Flatten colors across every returned trim, deduped by full color
-        // NAME — EVOX repeats a color across trims, and different codes can
-        // share a simple label like "Silver", so name is the clearest key.
-        const seen = new Set<string>();
-        const list: { vifnum: number; color: EvoxColor }[] = [];
+        // Group colors across every returned trim by full color NAME (EVOX
+        // repeats a color across trims, and different codes can share a simple
+        // label like "Silver"). Keep ALL (vifnum, code) pairs per name so a
+        // pick can fall through to a trim that actually has the image.
+        const byName = new Map<string, { color: EvoxColor; candidates: { vifnum: number; code: string }[] }>();
         for (const v of j.vehicles ?? []) {
           for (const color of v.colors ?? []) {
             const key = (color.name || color.simple || color.code || '').toLowerCase();
-            if (!key || seen.has(key)) continue;
-            seen.add(key);
-            list.push({ vifnum: v.vifnum, color });
+            if (!key) continue;
+            const entry = byName.get(key);
+            if (entry) entry.candidates.push({ vifnum: v.vifnum, code: color.code });
+            else byName.set(key, { color, candidates: [{ vifnum: v.vifnum, code: color.code }] });
           }
         }
-        setSwatches(list);
+        setSwatches([...byName.values()]);
       })
       .catch(() => {
         if (!cancelled) setSwatches([]);
@@ -1631,18 +1635,29 @@ function VehicleColorPicker({ vehicleName, selectedCode, onPick }: { vehicleName
     };
   }, [ymm]);
 
-  async function pickColor(s: { vifnum: number; color: EvoxColor }) {
+  async function pickColor(s: { color: EvoxColor; candidates: { vifnum: number; code: string }[] }) {
     const c = s.color;
     setPicking(c.code);
     try {
-      const r = await fetch('/api/ad-generator/evox/resolve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vifnum: s.vifnum, colorCode: c.code, accountKey, hint: `${vehicleName}-${c.simple || c.name || c.code}` }),
-      });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-      onPick(j.url, c.code);
+      // Try each trim/code offering this color until one actually has an image
+      // (some EVOX codes for the same paint return no rendered product).
+      let picked: { url: string; code: string } | null = null;
+      for (const cand of s.candidates) {
+        const r = await fetch('/api/ad-generator/evox/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vifnum: cand.vifnum, colorCode: cand.code, accountKey, hint: `${vehicleName}-${c.simple || c.name || c.code}` }),
+        });
+        if (r.ok) {
+          const j = await r.json();
+          if (j.url) {
+            picked = { url: j.url, code: cand.code };
+            break;
+          }
+        }
+      }
+      if (!picked) throw new Error('No image available for that color');
+      onPick(picked.url, picked.code);
       toast.success('Color updated');
     } catch (err) {
       toast.error(`Couldn't switch color: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -1666,10 +1681,10 @@ function VehicleColorPicker({ vehicleName, selectedCode, onPick }: { vehicleName
         <div className="flex flex-wrap gap-2">
           {swatches.map((s) => {
             const c = s.color;
-            const selected = !!selectedCode && selectedCode === c.code;
+            const selected = !!selectedCode && s.candidates.some((cand) => cand.code === selectedCode);
             return (
               <button
-                key={c.code}
+                key={c.name || c.simple || c.code}
                 type="button"
                 onClick={() => pickColor(s)}
                 disabled={picking !== null}

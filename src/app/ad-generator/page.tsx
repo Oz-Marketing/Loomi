@@ -20,6 +20,7 @@ import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { ListToolbar } from '@/components/list-toolbar';
+import { AccountLogo } from '@/components/account-logo';
 import type { StatusFilterValue } from '@/components/status-filter';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
@@ -219,6 +220,12 @@ export default function AdGeneratorListPage() {
 
   return (
     <div>
+      {/* Clients have no app chrome — show their dealership's brand at the top. */}
+      {!isManager && (
+        <div className="mb-5 border-b border-[var(--border)] pb-4">
+          <AccountLogo className="h-9 w-auto max-w-[180px] object-contain" />
+        </div>
+      )}
       <div className="page-sticky-header mb-6">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">

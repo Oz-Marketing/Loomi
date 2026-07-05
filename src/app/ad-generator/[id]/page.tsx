@@ -25,6 +25,7 @@ import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { useAccount } from '@/contexts/account-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { MediaPickerModal } from '@/components/media-picker-modal';
+import { AccountLogo } from '@/components/account-logo';
 import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import { isVehicleIndustry } from '@/lib/ad-generator/industry';
@@ -505,8 +506,15 @@ export default function AdGeneratorPage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
       {pageFontFaceCss && <style dangerouslySetInnerHTML={{ __html: pageFontFaceCss }} />}
+      {/* Clients have no app chrome — carry their dealership's brand at the top
+          of the page instead of in a sidebar. */}
+      {!isManager && (
+        <div className="mb-5 border-b border-[var(--border)] pb-4">
+          <AccountLogo className="h-9 w-auto max-w-[180px] object-contain" />
+        </div>
+      )}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <Link
             href="/ad-generator"
             className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
@@ -520,7 +528,7 @@ export default function AdGeneratorPage() {
             onChange={(e) => setCreativeName(e.target.value)}
             placeholder="Untitled ad"
             title="Ad name"
-            className="min-w-0 rounded-lg border border-transparent bg-transparent px-2 py-1 text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
+            className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
           />
         </div>
         <div className="flex items-center gap-2">

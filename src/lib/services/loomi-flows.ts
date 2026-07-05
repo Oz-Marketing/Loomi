@@ -212,7 +212,7 @@ function parseFlowSettings(raw: string | null | undefined): FlowSettings {
 // ─────────────────────────────────────────────────────
 // JSON helpers (Prisma stores config blobs as Strings to
 // avoid Json column quirks across providers — matches the
-// EmailCampaign.metadata pattern elsewhere in this repo)
+// EmailBlast.metadata pattern elsewhere in this repo)
 // ─────────────────────────────────────────────────────
 
 function parseJson<T>(raw: string | null | undefined, fallback: T): T {
@@ -2417,7 +2417,7 @@ async function executeEmailNode(
   subject = applyMergetags(subject, mergeCtx);
   html = applyMergetags(html, mergeCtx);
 
-  // We piggyback on EmailCampaignRecipient so SendGrid Event Webhook
+  // We piggyback on EmailBlastRecipient so SendGrid Event Webhook
   // events flow into the same EmailEvent table that powers the
   // condition evaluator. The "campaign" wrapping is a no-op shell —
   // one row per flow email send, created on demand and reused.
@@ -2439,7 +2439,7 @@ async function executeEmailNode(
   // for the aggregate per-node stats the builder shows.)
   const recipientFullName =
     contact.fullName || `${contact.firstName ?? ''} ${contact.lastName ?? ''}`.trim() || null;
-  const recipient = await prisma.emailCampaignRecipient.upsert({
+  const recipient = await prisma.emailBlastRecipient.upsert({
     where: {
       campaignId_contactId_accountKey: {
         campaignId: wrapperCampaign.id,
@@ -2484,7 +2484,7 @@ async function executeEmailNode(
       },
       ...(sender.unsubscribeFooter ? { unsubscribe: sender.unsubscribeFooter } : {}),
     });
-    await prisma.emailCampaignRecipient.update({
+    await prisma.emailBlastRecipient.update({
       where: { id: recipient.id },
       data: {
         status: 'sent',
@@ -2507,7 +2507,7 @@ async function executeEmailNode(
         : err instanceof Error
           ? err.message
           : 'Failed to send email';
-    await prisma.emailCampaignRecipient.update({
+    await prisma.emailBlastRecipient.update({
       where: { id: recipient.id },
       data: { status: 'failed', error: errorMessage },
     });
@@ -2550,7 +2550,7 @@ async function getOrCreateFlowWrapperCampaign(
   // campaign instead of racing two duplicate shells (which would split
   // recipient rows + per-node analytics).
   const name = `Flow:${flowId}/Node:${nodeId}`;
-  return prisma.emailCampaign.upsert({
+  return prisma.emailBlast.upsert({
     where: { flowNodeKey: name },
     create: {
       flowNodeKey: name,
@@ -2752,7 +2752,7 @@ export interface NodeStats {
  *
  * Open / click / bounce counts are per *distinct recipient*, not per
  * raw event, so multiple opens of the same email by one person count
- * once — matches how the EmailCampaign analytics surface reads.
+ * once — matches how the EmailBlast analytics surface reads.
  */
 export async function getFlowNodeStats(
   flowId: string,
@@ -2851,7 +2851,7 @@ export async function getFlowNodeStats(
 // These three landed after the initial email-only enrollment engine.
 // SMS mirrors `executeEmailNode`: load the contact, gate on DND +
 // suppression, resolve per-account Twilio credentials, attach the
-// send to a wrapper SmsCampaign so status-callback webhooks route
+// send to a wrapper SmsBlast so status-callback webhooks route
 // SmsEvent rows back to a real recipient. Webhook fires an HTTP
 // request with mergetag-interpolated body, with a single 5xx/timeout
 // retry. Wait-until anchors against a Contact date field + offset.
@@ -2942,7 +2942,7 @@ async function executeSmsNode(
 
   const body = applyMergetags(rawMessage, mergetagCtx(enrollment, node, contact));
 
-  const wrapperCampaign = await getOrCreateFlowWrapperSmsCampaign(
+  const wrapperCampaign = await getOrCreateFlowWrapperSmsBlast(
     enrollment.flowId,
     node.id,
     body,
@@ -2955,7 +2955,7 @@ async function executeSmsNode(
   // silently kill recurring SMS sends.
   const smsRecipientFullName =
     contact.fullName || `${contact.firstName ?? ''} ${contact.lastName ?? ''}`.trim() || null;
-  const recipient = await prisma.smsCampaignRecipient.upsert({
+  const recipient = await prisma.smsBlastRecipient.upsert({
     where: {
       campaignId_contactId_accountKey: {
         campaignId: wrapperCampaign.id,
@@ -2993,7 +2993,7 @@ async function executeSmsNode(
       body,
       statusCallback: flowStatusCallbackUrl(contact.accountKey),
     });
-    await prisma.smsCampaignRecipient.update({
+    await prisma.smsBlastRecipient.update({
       where: { id: recipient.id },
       data: {
         status: 'sent',
@@ -3016,7 +3016,7 @@ async function executeSmsNode(
         : err instanceof Error
           ? err.message
           : 'Twilio send failed';
-    await prisma.smsCampaignRecipient.update({
+    await prisma.smsBlastRecipient.update({
       where: { id: recipient.id },
       data: { status: 'failed', error: errorMessage },
     });
@@ -3028,9 +3028,9 @@ async function executeSmsNode(
 
 /** Persistent wrapper-campaign per (flow node) for SMS — mirrors the
  *  email pattern so Twilio status-callback events flow back to the
- *  same SmsEvent / SmsCampaignRecipient join the campaign analytics
+ *  same SmsEvent / SmsBlastRecipient join the campaign analytics
  *  surface already understands. */
-async function getOrCreateFlowWrapperSmsCampaign(
+async function getOrCreateFlowWrapperSmsBlast(
   flowId: string,
   nodeId: string,
   message: string,
@@ -3038,7 +3038,7 @@ async function getOrCreateFlowWrapperSmsCampaign(
 ): Promise<{ id: string }> {
   // Atomic upsert on the unique flowNodeKey — see the email wrapper.
   const name = `Flow:${flowId}/Node:${nodeId}`;
-  return prisma.smsCampaign.upsert({
+  return prisma.smsBlast.upsert({
     where: { flowNodeKey: name },
     create: {
       flowNodeKey: name,

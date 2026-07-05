@@ -16,7 +16,7 @@ import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { LandingPagePreviewThumbnail } from '@/components/landing-pages/landing-page-preview-thumbnail';
 import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
-import { TemplateLibraryShell } from '@/components/templates/template-library-shell';
+import { TemplateLibraryShell, TemplateEmptyState } from '@/components/templates/template-library-shell';
 import { TemplateFilterRail } from '@/components/templates/template-filter-rail';
 import { TemplateHeaderActions } from '@/components/templates/template-header-actions';
 import { useTemplateFilters } from '@/components/templates/use-template-filters';
@@ -140,7 +140,7 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
     }
   };
 
-  const header = <TemplateHeaderActions onCreate={handleCreate} onTagsSaved={() => void mutate()} />;
+  const header = <TemplateHeaderActions onCreate={handleCreate} createLabel="New Landing Page Template" onTagsSaved={() => void mutate()} />;
 
   if (error) {
     return (
@@ -168,15 +168,13 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
     return (
       <>
         {header}
-        <div className="glass-card rounded-2xl px-6 py-14 text-center">
-          <div className="w-14 h-14 rounded-2xl bg-[var(--muted)] flex items-center justify-center mx-auto mb-4">
-            <RectangleStackIcon className="w-7 h-7 text-[var(--muted-foreground)]" />
-          </div>
-          <h3 className="text-lg font-semibold">No landing page templates yet</h3>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Create a template above (it opens in the landing page editor), or open a landing page and choose “Save as template”.
-          </p>
-        </div>
+        <TemplateEmptyState
+          icon={RectangleStackIcon}
+          title="No landing page templates yet"
+          subtitle="Create a template (it opens in the landing page editor), or open a landing page and choose “Save as template”."
+          actionLabel="New Landing Page Template"
+          onAction={handleCreate}
+        />
       </>
     );
   }

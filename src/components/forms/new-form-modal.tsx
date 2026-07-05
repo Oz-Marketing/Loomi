@@ -34,7 +34,7 @@ interface NewFormModalProps {
 
 /**
  * Template picker shown when a user clicks "New Form". Mirrors the
- * campaigns CreateCampaignModal pattern but with template cards instead
+ * campaigns CreateBlastModal pattern but with template cards instead
  * of channel cards. Confirm posts to /websites/forms/new with the
  * chosen templateId; that route decides whether to redirect to the
  * overview (templates) or straight into the editor (blank).

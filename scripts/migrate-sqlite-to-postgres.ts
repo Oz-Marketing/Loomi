@@ -22,10 +22,10 @@ const TABLE_ORDER = [
   'AccountEmail',
   'Audience',
   'LoomiFlow',
-  'SmsCampaign',
-  'SmsCampaignRecipient',
-  'EmailCampaign',
-  'EmailCampaignRecipient',
+  'SmsBlast',
+  'SmsBlastRecipient',
+  'EmailBlast',
+  'EmailBlastRecipient',
   'UserInvite',
 ] as const;
 

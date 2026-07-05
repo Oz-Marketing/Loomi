@@ -8,13 +8,13 @@ import {
   setCampaignStatus,
 } from '@/lib/services/campaigns';
 import {
-  createDraftEmailCampaign,
-  updateEmailCampaignDraft,
-} from '@/lib/services/email-campaigns';
+  createDraftEmailBlast,
+  updateEmailBlastDraft,
+} from '@/lib/services/email-blasts';
 import {
-  createDraftSmsCampaign,
-  updateSmsCampaignDraft,
-} from '@/lib/services/sms-campaigns';
+  createDraftSmsBlast,
+  updateSmsBlastDraft,
+} from '@/lib/services/sms-blasts';
 import { generateEmailForSpec, finalizeSmsMessage } from '@/lib/ai/campaign-generators';
 import { buildFormTemplate } from '@/lib/ai/form-builder';
 import { generateLandingPageForSpec } from '@/lib/ai/lp-generator';
@@ -135,13 +135,13 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
               content: rendered.template ? JSON.stringify(rendered.template) : rendered.html,
               createdByUserId: session!.user.id,
             });
-            const draft = await createDraftEmailCampaign({
+            const draft = await createDraftEmailBlast({
               name: spec.subject || spec.purpose,
               accountKeys: [accountKey],
               createdByUserId: session!.user.id,
               createdByRole: session!.user.role,
             });
-            await updateEmailCampaignDraft(draft.id, {
+            await updateEmailBlastDraft(draft.id, {
               subject: spec.subject,
               previewText: spec.previewText ?? null,
               htmlContent: rendered.html,
@@ -173,13 +173,13 @@ export async function POST(_req: NextRequest, { params }: RouteParams) {
           try {
             const message = finalizeSmsMessage(spec);
             if (!message) throw new Error('SMS message is empty');
-            const draft = await createDraftSmsCampaign({
+            const draft = await createDraftSmsBlast({
               name: spec.purpose,
               accountKeys: [accountKey],
               createdByUserId: session!.user.id,
               createdByRole: session!.user.role,
             });
-            await updateSmsCampaignDraft(draft.id, {
+            await updateSmsBlastDraft(draft.id, {
               message,
               metadata: JSON.stringify({
                 channel: 'SMS',

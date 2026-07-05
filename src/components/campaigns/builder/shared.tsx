@@ -77,9 +77,9 @@ export function assetEditorPath(
 ): string {
   switch (kind) {
     case 'email':
-      return href(`/messaging/campaigns/${id}/recipients`);
+      return href(`/messaging/blasts/${id}/recipients`);
     case 'sms':
-      return href(`/messaging/campaigns/sms/${id}/recipients`);
+      return href(`/messaging/blasts/sms/${id}/recipients`);
     case 'landingPage':
       return href(`/websites/landing-pages/${id}`);
     case 'form':

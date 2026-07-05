@@ -464,8 +464,8 @@ export function LifecycleActionCenter({
         dealer: r.dealer,
         next: r.dueIn30,
       })),
-      cta: 'Build service campaign',
-      href: '/messaging/campaigns',
+      cta: 'Build service blast',
+      href: '/messaging/blasts',
     },
     {
       label: 'Lease ending',
@@ -482,7 +482,7 @@ export function LifecycleActionCenter({
         next: r.endingIn30,
       })),
       cta: 'Build lease renewal',
-      href: '/messaging/campaigns',
+      href: '/messaging/blasts',
     },
     {
       label: 'Warranty expiring',
@@ -499,7 +499,7 @@ export function LifecycleActionCenter({
         next: r.expiringIn30,
       })),
       cta: 'Build extended warranty pitch',
-      href: '/messaging/campaigns',
+      href: '/messaging/blasts',
     },
   ];
 

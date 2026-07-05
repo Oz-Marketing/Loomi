@@ -412,7 +412,7 @@ function buildAnomalies(): AnomalyAlert[] {
       detail: 'BMW Spring Promo (test send): SendGrid auth: missing verified sender identity',
       accountKey: 'bmwSaltlake',
       dealer: 'BMW of Salt Lake',
-      href: '/messaging/campaigns',
+      href: '/messaging/blasts',
       timestamp: daysAgoIso(2, 3),
     },
     {

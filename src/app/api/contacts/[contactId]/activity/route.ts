@@ -77,7 +77,7 @@ export async function GET(
 
   try {
     const [emailRecipients, smsRecipients, orphanSmsEvents] = await Promise.all([
-      prisma.emailCampaignRecipient.findMany({
+      prisma.emailBlastRecipient.findMany({
         where: { accountKey, contactId },
         select: {
           id: true,
@@ -95,7 +95,7 @@ export async function GET(
           campaign: { select: { subject: true } },
         },
       }),
-      prisma.smsCampaignRecipient.findMany({
+      prisma.smsBlastRecipient.findMany({
         where: { accountKey, contactId },
         select: {
           id: true,

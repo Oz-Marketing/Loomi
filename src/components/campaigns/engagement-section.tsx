@@ -3,7 +3,7 @@
 // Engagement metrics surface — sits on the Campaigns Analytics page
 // below the existing campaign-status overview.
 //
-// Data comes from /api/campaigns/loomi/engagement which aggregates
+// Data comes from /api/blasts/loomi/engagement which aggregates
 // EmailEvent rows (delivered, open, click, bounce, etc.) populated by
 // the email-event webhook. For sub-accounts with no real sends yet
 // the section renders a demo/preview view with synthetic data so users
@@ -135,7 +135,7 @@ export function EngagementSection({
     if (bounds.start) params.set('start', bounds.start.toISOString());
     if (bounds.end) params.set('end', bounds.end.toISOString());
 
-    fetch(`/api/campaigns/loomi/engagement?${params.toString()}`)
+    fetch(`/api/blasts/loomi/engagement?${params.toString()}`)
       .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
@@ -204,7 +204,7 @@ export function EngagementSection({
               Demo data — start sending emails to get analytics
             </p>
             <p className="text-[11px] text-[var(--muted-foreground)] mt-0.5">
-              The numbers below are illustrative. Once your campaigns start sending, opens,
+              The numbers below are illustrative. Once your blasts start sending, opens,
               clicks, bounces, and unsubscribes will populate this report automatically.
             </p>
           </div>
@@ -276,15 +276,15 @@ export function EngagementSection({
         <div className="glass-section-card rounded-2xl border border-[var(--border)] overflow-hidden">
           <div className="px-5 py-3 border-b border-[var(--border)] flex items-center justify-between">
             <h3 className="text-sm font-semibold text-[var(--foreground)]">
-              Campaign performance
+              Blast performance
             </h3>
             <p className="text-[11px] text-[var(--muted-foreground)]">
-              {campaigns.length} campaign{campaigns.length === 1 ? '' : 's'}
+              {campaigns.length} blast{campaigns.length === 1 ? '' : 's'}
             </p>
           </div>
           {campaigns.length === 0 ? (
             <p className="px-5 py-6 text-xs text-[var(--muted-foreground)]">
-              No campaigns sent in this date range.
+              No blasts sent in this date range.
             </p>
           ) : (
             <div className="overflow-x-auto">

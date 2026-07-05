@@ -18,7 +18,7 @@ import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { FormPreviewThumbnail } from '@/components/forms/form-preview-thumbnail';
 import { DeployFormModal } from '@/components/forms/deploy-form-modal';
 import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
-import { TemplateLibraryShell } from '@/components/templates/template-library-shell';
+import { TemplateLibraryShell, TemplateEmptyState } from '@/components/templates/template-library-shell';
 import { TemplateFilterRail } from '@/components/templates/template-filter-rail';
 import { TemplateHeaderActions } from '@/components/templates/template-header-actions';
 import { useTemplateFilters } from '@/components/templates/use-template-filters';
@@ -141,16 +141,14 @@ export function FormTemplatesTab({ accountKey }: { accountKey?: string }) {
   if (templates.length === 0) {
     return (
       <>
-        <TemplateHeaderActions onCreate={handleCreate} onTagsSaved={() => void mutate()} />
-        <div className="glass-card rounded-2xl px-6 py-14 text-center">
-          <div className="w-14 h-14 rounded-2xl bg-[var(--muted)] flex items-center justify-center mx-auto mb-4">
-            <DocumentTextIcon className="w-7 h-7 text-[var(--muted-foreground)]" />
-          </div>
-          <h3 className="text-lg font-semibold">No form templates yet</h3>
-          <p className="text-sm text-[var(--muted-foreground)] mt-1">
-            Create a template above, or open a form on the Forms page and choose “Save as template”.
-          </p>
-        </div>
+        <TemplateHeaderActions onCreate={handleCreate} createLabel="New Form Template" onTagsSaved={() => void mutate()} />
+        <TemplateEmptyState
+          icon={DocumentTextIcon}
+          title="No form templates yet"
+          subtitle="Create a reusable form template, or open a form on the Forms page and choose “Save as template”."
+          actionLabel="New Form Template"
+          onAction={handleCreate}
+        />
       </>
     );
   }
@@ -170,7 +168,7 @@ export function FormTemplatesTab({ accountKey }: { accountKey?: string }) {
 
   return (
     <>
-      <TemplateHeaderActions onCreate={handleCreate} onTagsSaved={() => void mutate()} />
+      <TemplateHeaderActions onCreate={handleCreate} createLabel="New Form Template" onTagsSaved={() => void mutate()} />
       <TemplateLibraryShell
         search={filters.search}
         onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}

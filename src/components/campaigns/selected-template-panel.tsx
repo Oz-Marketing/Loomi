@@ -81,7 +81,7 @@ export function SelectedTemplatePanel({
       </div>
       <div className="bg-[var(--muted)]/30 p-4 flex-1 min-h-[600px]">
         <iframe
-          title="Campaign preview"
+          title="Blast preview"
           srcDoc={htmlContent}
           sandbox=""
           className="w-full h-full min-h-[580px] bg-white rounded-lg border border-[var(--border)]"

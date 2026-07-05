@@ -4,7 +4,7 @@
  * catch in-flight bookmarks / old links and forward them along.
  *
  * Phase 2 will fully extract the messaging analytics view from
- * `/messaging/campaigns/page.tsx` so it can render natively on
+ * `/messaging/blasts/page.tsx` so it can render natively on
  * reporting; until then this redirect lands the user on the engagement
  * surface where flow analytics already render.
  */

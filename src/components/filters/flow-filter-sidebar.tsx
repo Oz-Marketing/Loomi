@@ -17,7 +17,7 @@ import type {
   FlowFilterOptions,
   FlowFilterState,
 } from '@/components/filters/flow-toolbar';
-import type { RepFilterOption } from '@/components/filters/campaign-toolbar';
+import type { RepFilterOption } from '@/components/filters/blast-toolbar';
 
 interface FlowFilterSidebarProps {
   open?: boolean;

@@ -7,7 +7,44 @@
  * renders <TemplateLibraryShell search rail>{grid}</TemplateLibraryShell>.
  */
 import { useState } from 'react';
-import { MagnifyingGlassIcon, FunnelIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, FunnelIcon, XMarkIcon, PlusIcon } from '@heroicons/react/24/outline';
+import type { ComponentType, SVGProps } from 'react';
+
+/**
+ * The shared "no templates yet" card every tab shows when its library is empty
+ * (rail hidden). Icon + copy + a primary Create action, consistent across kinds.
+ */
+export function TemplateEmptyState({
+  icon: Icon,
+  title,
+  subtitle,
+  actionLabel,
+  onAction,
+}: {
+  icon: ComponentType<SVGProps<SVGSVGElement>>;
+  title: string;
+  subtitle: string;
+  actionLabel: string;
+  onAction: () => void;
+}) {
+  return (
+    <div className="glass-card rounded-2xl p-12 text-center flex flex-col items-center">
+      <div className="w-16 h-16 rounded-2xl bg-[var(--muted)] flex items-center justify-center mb-4">
+        <Icon className="w-8 h-8 text-[var(--muted-foreground)]" />
+      </div>
+      <h2 className="text-lg font-semibold mb-1">{title}</h2>
+      <p className="text-sm text-[var(--muted-foreground)] max-w-md mb-6">{subtitle}</p>
+      <button
+        type="button"
+        onClick={onAction}
+        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium hover:opacity-90 transition-opacity"
+      >
+        <PlusIcon className="w-4 h-4" />
+        {actionLabel}
+      </button>
+    </div>
+  );
+}
 
 export function TemplateLibraryShell({
   search,

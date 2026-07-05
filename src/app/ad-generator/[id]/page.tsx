@@ -1020,23 +1020,36 @@ function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleMode, ac
       <p className="mb-3 text-xs text-[var(--muted-foreground)]">
         Live lease / APR / cash programs from MarketCheck — applying one fills the offer <span className="text-[var(--foreground)]">and</span> the vehicle (name + EVOX image).
       </p>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <FontSelect value={year} onChange={setYear} options={yearOptions} previewFont={false} />
-        <FontSelect value={make} onChange={setMake} options={makeOptions} previewFont={false} />
-        <input
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && find()}
-          placeholder="Model (optional)"
-          className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-        />
-        <input
-          value={zip}
-          onChange={(e) => setZip(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && find()}
-          placeholder="ZIP (optional)"
-          className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-        />
+      {/* Two per row so the fields aren't scrunched in the narrow form column. */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Year</label>
+          <FontSelect value={year} onChange={setYear} options={yearOptions} previewFont={false} />
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Make</label>
+          <FontSelect value={make} onChange={setMake} options={makeOptions} previewFont={false} />
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Model</label>
+          <input
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && find()}
+            placeholder="e.g. Accord"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">ZIP</label>
+          <input
+            value={zip}
+            onChange={(e) => setZip(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && find()}
+            placeholder="Optional"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+          />
+        </div>
       </div>
       <button
         onClick={find}

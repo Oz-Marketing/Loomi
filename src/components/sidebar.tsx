@@ -83,7 +83,7 @@ const campaignBuilderNav: NavItem = {
 // channels). A flat top-level leaf; the old "Messaging" dropdown that
 // grouped Campaigns + Templates has been split apart.
 const emailSmsNav: NavItem = {
-  href: '/messaging/campaigns',
+  href: '/messaging/blasts',
   label: 'Emails & SMS',
   icon: ChatBubbleLeftRightIcon,
 };

@@ -19,11 +19,11 @@ type BuilderStepKey = (typeof BUILDER_STEPS)[number]['key'];
 function campaignBuilderStep(path: string): BuilderStepKey {
   // Strip optional /subaccount/<slug> prefix so the regexes below match
   // admin + sub-account routes with one set of patterns. The builder
-  // surfaces live under /messaging/campaigns/ now (or
-  // /subaccount/<slug>/messaging/campaigns/ for sub-accounts):
-  // Email: /messaging/campaigns/[id]/(recipients|template|schedule)
-  // SMS:   /messaging/campaigns/sms/[id]/(recipients|message|schedule)
-  // Multi: /messaging/campaigns/multi/[id]/(recipients|message|schedule)
+  // surfaces live under /messaging/blasts/ now (or
+  // /subaccount/<slug>/messaging/blasts/ for sub-accounts):
+  // Email: /messaging/blasts/[id]/(recipients|template|schedule)
+  // SMS:   /messaging/blasts/sms/[id]/(recipients|message|schedule)
+  // Multi: /messaging/blasts/multi/[id]/(recipients|message|schedule)
   const stripped = path.replace(/^\/subaccount\/[^/]+/, '');
   const multiMatch = stripped.match(/^\/messaging\/campaigns\/multi\/[^/]+\/(recipients|message|schedule)$/);
   if (multiMatch) return multiMatch[1] as BuilderStepKey;
@@ -170,7 +170,7 @@ function AppShell({ children }: { children: React.ReactNode }) {
                 // prompt — work is already preserved as a draft.
                 const active = document.activeElement as HTMLElement | null;
                 if (active && typeof active.blur === 'function') active.blur();
-                router.push('/messaging/campaigns');
+                router.push('/messaging/blasts');
               }}
               className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
               aria-label="Exit campaign builder"

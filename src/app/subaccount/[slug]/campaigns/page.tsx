@@ -6,5 +6,5 @@ interface PageProps {
 
 export default async function SubaccountCampaignsRedirect({ params }: PageProps) {
   const { slug } = await params;
-  redirect(`/subaccount/${slug}/messaging/campaigns`);
+  redirect(`/subaccount/${slug}/messaging/blasts`);
 }

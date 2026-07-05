@@ -22,7 +22,7 @@ async function main() {
   const targetId = process.argv[2];
 
   if (!targetId) {
-    const rows = await prisma.emailCampaign.findMany({
+    const rows = await prisma.emailBlast.findMany({
       select: {
         id: true,
         name: true,
@@ -45,7 +45,7 @@ async function main() {
     return;
   }
 
-  const campaign = await prisma.emailCampaign.findUnique({
+  const campaign = await prisma.emailBlast.findUnique({
     where: { id: targetId },
     select: { id: true, name: true, status: true, totalRecipients: true },
   });
@@ -57,7 +57,7 @@ async function main() {
   const sentCount = totalRecipients - 2;
 
   const now = new Date();
-  await prisma.emailCampaign.update({
+  await prisma.emailBlast.update({
     where: { id: campaign.id },
     data: {
       status: 'completed',

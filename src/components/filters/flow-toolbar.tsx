@@ -9,7 +9,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { AccountAvatar } from '@/components/account-avatar';
-import type { AccountFilterOption, RepFilterOption } from '@/components/filters/campaign-toolbar';
+import type { AccountFilterOption, RepFilterOption } from '@/components/filters/blast-toolbar';
 
 // -- Types --
 

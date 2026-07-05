@@ -30,7 +30,7 @@ import {
 } from '@/lib/date-ranges';
 import { parseEmailListPayload, type EmailListItem } from '@/lib/email-list-payload';
 import { ContactAnalytics } from '@/components/contacts/contact-analytics';
-import { CampaignPageAnalytics } from '@/components/campaigns/campaign-page-analytics';
+import { BlastPageAnalytics } from '@/components/campaigns/blast-page-analytics';
 import { AccountAvatar } from '@/components/account-avatar';
 import { formatRatePct, sumCampaignEngagement } from '@/lib/campaign-engagement';
 import { iconColorClassForLabel, iconColorHexForLabel } from '@/lib/icon-colors';
@@ -115,7 +115,7 @@ type EspWorkflow = {
   updatedAt?: string;
 };
 
-type LoomiEmailCampaign = {
+type LoomiEmailBlast = {
   id: string;
   name: string;
   subject: string;
@@ -129,7 +129,7 @@ type LoomiEmailCampaign = {
   scheduledFor?: string;
 };
 
-type LoomiSmsCampaign = {
+type LoomiSmsBlast = {
   id: string;
   name: string;
   message: string;
@@ -274,8 +274,8 @@ function buildMockManagementDataset(accounts: Record<string, AccountData>) {
   const contacts: AggregateContact[] = [];
   const espCampaigns: EspCampaign[] = [];
   const espWorkflows: EspWorkflow[] = [];
-  const loomiEmailCampaigns: LoomiEmailCampaign[] = [];
-  const loomiSmsCampaigns: LoomiSmsCampaign[] = [];
+  const loomiEmailBlasts: LoomiEmailBlast[] = [];
+  const loomiSmsBlasts: LoomiSmsBlast[] = [];
   const campaignPerAccount: Record<string, { dealer: string; count: number; connected: boolean; provider: string }> = {};
   const workflowPerAccount: Record<string, { dealer: string; count: number; connected: boolean; provider: string }> = {};
 
@@ -391,7 +391,7 @@ function buildMockManagementDataset(accounts: Record<string, AccountData>) {
 
     for (let i = 0; i < 5; i += 1) {
       const day = (index * 6 + i * 11) % 150;
-      loomiEmailCampaigns.push({
+      loomiEmailBlasts.push({
         id: `mock-loomi-email-${accountKey}-${i}`,
         name: `${dealer} Loomi Email ${i + 1}`,
         subject: `Exclusive Service Offer ${i + 1}`,
@@ -405,7 +405,7 @@ function buildMockManagementDataset(accounts: Record<string, AccountData>) {
         scheduledFor: i % 2 === 1 ? daysAgoIso(Math.max(0, day - 3), 9) : undefined,
       });
 
-      loomiSmsCampaigns.push({
+      loomiSmsBlasts.push({
         id: `mock-loomi-sms-${accountKey}-${i}`,
         name: `${dealer} Loomi SMS ${i + 1}`,
         message: `Service reminder for ${dealer}`,
@@ -427,8 +427,8 @@ function buildMockManagementDataset(accounts: Record<string, AccountData>) {
     contacts,
     espCampaigns,
     espWorkflows,
-    loomiEmailCampaigns,
-    loomiSmsCampaigns,
+    loomiEmailBlasts,
+    loomiSmsBlasts,
     campaignPerAccount,
     workflowPerAccount,
   };
@@ -535,8 +535,8 @@ function ManagementRoleDashboard({
   const lastFocusedRef = useRef<string | null>(null);
 
   const [emails, setEmails] = useState<EmailListItem[]>([]);
-  const [loomiEmailCampaigns, setLoomiEmailCampaigns] = useState<LoomiEmailCampaign[]>([]);
-  const [loomiSmsCampaigns, setLoomiSmsCampaigns] = useState<LoomiSmsCampaign[]>([]);
+  const [loomiEmailBlasts, setLoomiEmailBlasts] = useState<LoomiEmailBlast[]>([]);
+  const [loomiSmsBlasts, setLoomiSmsBlasts] = useState<LoomiSmsBlast[]>([]);
 
   const [phase1Errors, setPhase1Errors] = useState<{
     emails?: string;
@@ -780,8 +780,8 @@ function ManagementRoleDashboard({
     setMockContacts(mock.contacts);
     setMockEspCampaigns(mock.espCampaigns);
     setMockEspWorkflows(mock.espWorkflows);
-    setLoomiEmailCampaigns(mock.loomiEmailCampaigns);
-    setLoomiSmsCampaigns(mock.loomiSmsCampaigns);
+    setLoomiEmailBlasts(mock.loomiEmailBlasts);
+    setLoomiSmsBlasts(mock.loomiSmsBlasts);
     setUsingMockData(true);
     setLoading(false);
   }, [accounts]);
@@ -800,8 +800,8 @@ function ManagementRoleDashboard({
       setMockContacts(mock.contacts);
       setMockEspCampaigns(mock.espCampaigns);
       setMockEspWorkflows(mock.espWorkflows);
-      setLoomiEmailCampaigns(mock.loomiEmailCampaigns);
-      setLoomiSmsCampaigns(mock.loomiSmsCampaigns);
+      setLoomiEmailBlasts(mock.loomiEmailBlasts);
+      setLoomiSmsBlasts(mock.loomiSmsBlasts);
           setUsingMockData(true);
     }
   }, [accounts, usingMockData, contactsAgg.error, contactsAgg.isLoading]);
@@ -821,8 +821,8 @@ function ManagementRoleDashboard({
         loomiSmsRes,
       ] = await Promise.all([
         loadJson('/api/emails'),
-        loadJson('/api/campaigns/email?limit=50'),
-        loadJson('/api/campaigns/sms?limit=50'),
+        loadJson('/api/blasts/email?limit=50'),
+        loadJson('/api/blasts/sms?limit=50'),
       ]);
 
       if (cancelled) return;
@@ -838,18 +838,18 @@ function ManagementRoleDashboard({
       }
 
       if (loomiEmailRes.ok) {
-        const rows = asArray<LoomiEmailCampaign>((loomiEmailRes.json as Record<string, unknown>).campaigns);
-        setLoomiEmailCampaigns(rows);
+        const rows = asArray<LoomiEmailBlast>((loomiEmailRes.json as Record<string, unknown>).campaigns);
+        setLoomiEmailBlasts(rows);
       } else {
-        setLoomiEmailCampaigns([]);
+        setLoomiEmailBlasts([]);
         nextErrors.loomiEmail = String((loomiEmailRes.json as Record<string, unknown>).error || `Error ${loomiEmailRes.status}`);
       }
 
       if (loomiSmsRes.ok) {
-        const rows = asArray<LoomiSmsCampaign>((loomiSmsRes.json as Record<string, unknown>).campaigns);
-        setLoomiSmsCampaigns(rows);
+        const rows = asArray<LoomiSmsBlast>((loomiSmsRes.json as Record<string, unknown>).campaigns);
+        setLoomiSmsBlasts(rows);
       } else {
-        setLoomiSmsCampaigns([]);
+        setLoomiSmsBlasts([]);
         nextErrors.loomiSms = String((loomiSmsRes.json as Record<string, unknown>).error || `Error ${loomiSmsRes.status}`);
       }
 
@@ -991,20 +991,20 @@ function ManagementRoleDashboard({
     [filteredEspWorkflowsByAccount, bounds],
   );
 
-  const filteredLoomiEmailCampaigns = useMemo(
+  const filteredLoomiEmailBlasts = useMemo(
     () =>
-      loomiEmailCampaigns
+      loomiEmailBlasts
         .filter((campaign) => intersectsAccountSet(campaign.accountKeys, accountScopeSet))
         .filter((campaign) => inBounds(campaign.updatedAt || campaign.createdAt, bounds)),
-    [loomiEmailCampaigns, accountScopeSet, bounds],
+    [loomiEmailBlasts, accountScopeSet, bounds],
   );
 
-  const filteredLoomiSmsCampaigns = useMemo(
+  const filteredLoomiSmsBlasts = useMemo(
     () =>
-      loomiSmsCampaigns
+      loomiSmsBlasts
         .filter((campaign) => intersectsAccountSet(campaign.accountKeys, accountScopeSet))
         .filter((campaign) => inBounds(campaign.updatedAt || campaign.createdAt, bounds)),
-    [loomiSmsCampaigns, accountScopeSet, bounds],
+    [loomiSmsBlasts, accountScopeSet, bounds],
   );
 
   const scopedAccountKeys = accountScopeKeys;
@@ -1027,7 +1027,7 @@ function ManagementRoleDashboard({
       emailCount: filteredEmailsByAccount.length,
       campaignCount: filteredEspCampaigns.length,
       workflowCount: filteredEspWorkflows.length,
-      loomiCampaignCount: filteredLoomiEmailCampaigns.length + filteredLoomiSmsCampaigns.length,
+      loomiCampaignCount: filteredLoomiEmailBlasts.length + filteredLoomiSmsBlasts.length,
       engagement,
     };
   }, [
@@ -1036,8 +1036,8 @@ function ManagementRoleDashboard({
     filteredEmailsByAccount,
     filteredEspCampaigns,
     filteredEspWorkflows,
-    filteredLoomiEmailCampaigns.length,
-    filteredLoomiSmsCampaigns.length,
+    filteredLoomiEmailBlasts.length,
+    filteredLoomiSmsBlasts.length,
   ]);
 
 
@@ -1705,8 +1705,8 @@ function ClientRoleDashboard({
   const [customRange] = useState<CustomDateRange | null>(null);
 
   const [espCampaigns, setEspCampaigns] = useState<EspCampaign[]>([]);
-  const [loomiEmailCampaigns, setLoomiEmailCampaigns] = useState<LoomiEmailCampaign[]>([]);
-  const [loomiSmsCampaigns, setLoomiSmsCampaigns] = useState<LoomiSmsCampaign[]>([]);
+  const [loomiEmailBlasts, setLoomiEmailBlasts] = useState<LoomiEmailBlast[]>([]);
+  const [loomiSmsBlasts, setLoomiSmsBlasts] = useState<LoomiSmsBlast[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [usingMockData, setUsingMockData] = useState(false);
   const { theme } = useTheme();
@@ -1754,8 +1754,8 @@ function ClientRoleDashboard({
         const mock = buildMockManagementDataset(mockAccounts);
         if (cancelled) return;
         setEspCampaigns(mock.espCampaigns.filter((campaign) => campaign.accountKey === targetAccountKey));
-        setLoomiEmailCampaigns(mock.loomiEmailCampaigns.filter((campaign) => campaign.accountKeys.includes(targetAccountKey)));
-        setLoomiSmsCampaigns(mock.loomiSmsCampaigns.filter((campaign) => campaign.accountKeys.includes(targetAccountKey)));
+        setLoomiEmailBlasts(mock.loomiEmailBlasts.filter((campaign) => campaign.accountKeys.includes(targetAccountKey)));
+        setLoomiSmsBlasts(mock.loomiSmsBlasts.filter((campaign) => campaign.accountKeys.includes(targetAccountKey)));
         setUsingMockData(true);
         setLoading(false);
         return;
@@ -1764,8 +1764,8 @@ function ClientRoleDashboard({
       // ESP-fetched campaigns are gone — only Loomi-native email + SMS
       // campaigns feed the per-account dashboard now.
       const [loomiEmailRes, loomiSmsRes] = await Promise.all([
-        loadJson('/api/campaigns/email?limit=50'),
-        loadJson('/api/campaigns/sms?limit=50'),
+        loadJson('/api/blasts/email?limit=50'),
+        loadJson('/api/blasts/sms?limit=50'),
       ]);
 
       if (cancelled) return;
@@ -1773,17 +1773,17 @@ function ClientRoleDashboard({
       setEspCampaigns([]);
 
       if (loomiEmailRes.ok) {
-        const allRows = asArray<LoomiEmailCampaign>((loomiEmailRes.json as Record<string, unknown>).campaigns);
-        setLoomiEmailCampaigns(allRows.filter((campaign) => asArray<string>(campaign.accountKeys).includes(targetAccountKey)));
+        const allRows = asArray<LoomiEmailBlast>((loomiEmailRes.json as Record<string, unknown>).campaigns);
+        setLoomiEmailBlasts(allRows.filter((campaign) => asArray<string>(campaign.accountKeys).includes(targetAccountKey)));
       } else {
-        setLoomiEmailCampaigns([]);
+        setLoomiEmailBlasts([]);
       }
 
       if (loomiSmsRes.ok) {
-        const allRows = asArray<LoomiSmsCampaign>((loomiSmsRes.json as Record<string, unknown>).campaigns);
-        setLoomiSmsCampaigns(allRows.filter((campaign) => asArray<string>(campaign.accountKeys).includes(targetAccountKey)));
+        const allRows = asArray<LoomiSmsBlast>((loomiSmsRes.json as Record<string, unknown>).campaigns);
+        setLoomiSmsBlasts(allRows.filter((campaign) => asArray<string>(campaign.accountKeys).includes(targetAccountKey)));
       } else {
-        setLoomiSmsCampaigns([]);
+        setLoomiSmsBlasts([]);
       }
 
       setUsingMockData(false);
@@ -1821,14 +1821,14 @@ function ClientRoleDashboard({
     [espCampaigns, bounds],
   );
 
-  const filteredLoomiEmailCampaigns = useMemo(
-    () => loomiEmailCampaigns.filter((campaign) => inBounds(campaign.updatedAt || campaign.createdAt, bounds)),
-    [loomiEmailCampaigns, bounds],
+  const filteredLoomiEmailBlasts = useMemo(
+    () => loomiEmailBlasts.filter((campaign) => inBounds(campaign.updatedAt || campaign.createdAt, bounds)),
+    [loomiEmailBlasts, bounds],
   );
 
-  const filteredLoomiSmsCampaigns = useMemo(
-    () => loomiSmsCampaigns.filter((campaign) => inBounds(campaign.updatedAt || campaign.createdAt, bounds)),
-    [loomiSmsCampaigns, bounds],
+  const filteredLoomiSmsBlasts = useMemo(
+    () => loomiSmsBlasts.filter((campaign) => inBounds(campaign.updatedAt || campaign.createdAt, bounds)),
+    [loomiSmsBlasts, bounds],
   );
 
   const clientEngagement = useMemo(() => sumCampaignEngagement(filteredEspCampaigns), [filteredEspCampaigns]);
@@ -1859,10 +1859,10 @@ function ClientRoleDashboard({
   const clientChannelMix = useMemo(
     () => [
       { label: 'ESP Campaigns', value: filteredEspCampaigns.length },
-      { label: 'Loomi Email', value: filteredLoomiEmailCampaigns.length },
-      { label: 'Loomi SMS', value: filteredLoomiSmsCampaigns.length },
+      { label: 'Loomi Email', value: filteredLoomiEmailBlasts.length },
+      { label: 'Loomi SMS', value: filteredLoomiSmsBlasts.length },
     ],
-    [filteredEspCampaigns.length, filteredLoomiEmailCampaigns.length, filteredLoomiSmsCampaigns.length],
+    [filteredEspCampaigns.length, filteredLoomiEmailBlasts.length, filteredLoomiSmsBlasts.length],
   );
   const clientStatusMixLabels = useMemo(
     () => clientStatusMix.map((row) => row.label),
@@ -2055,19 +2055,19 @@ function ClientRoleDashboard({
         : 'ESP campaign',
     }));
 
-    const emailRows: Row[] = filteredLoomiEmailCampaigns.map((campaign) => ({
+    const emailRows: Row[] = filteredLoomiEmailBlasts.map((campaign) => ({
       id: `email-${campaign.id}`,
       source: 'email',
-      title: campaign.name || campaign.subject || 'Email Campaign',
+      title: campaign.name || campaign.subject || 'Email Blast',
       status: campaign.status,
       date: campaign.updatedAt || campaign.createdAt,
       detail: `${asNumber(campaign.sentCount)} sent · ${asNumber(campaign.failedCount)} failed`,
     }));
 
-    const smsRows: Row[] = filteredLoomiSmsCampaigns.map((campaign) => ({
+    const smsRows: Row[] = filteredLoomiSmsBlasts.map((campaign) => ({
       id: `sms-${campaign.id}`,
       source: 'sms',
-      title: campaign.name || 'SMS Campaign',
+      title: campaign.name || 'Text Blast',
       status: campaign.status,
       date: campaign.updatedAt || campaign.createdAt,
       detail: `${asNumber(campaign.sentCount)} sent · ${asNumber(campaign.failedCount)} failed`,
@@ -2076,7 +2076,7 @@ function ClientRoleDashboard({
     return [...espRows, ...emailRows, ...smsRows]
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
       .slice(0, 12);
-  }, [filteredEspCampaigns, filteredLoomiEmailCampaigns, filteredLoomiSmsCampaigns]);
+  }, [filteredEspCampaigns, filteredLoomiEmailBlasts, filteredLoomiSmsBlasts]);
 
   if (!accountKey || !accountData) {
     return (
@@ -2146,16 +2146,16 @@ function ClientRoleDashboard({
             {renderClientWidget('client_overview', (
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                <StatCard label="Campaigns" value={filteredEspCampaigns.length} icon={PaperAirplaneIcon} href={subHref('/messaging/campaigns')} />
-                <StatCard label="Scheduled" value={scheduledEsp} icon={ArrowPathIcon} href={subHref('/messaging/campaigns/schedule')} />
-                <StatCard label="Sent / Completed" value={sentEsp} icon={CheckCircleIcon} href={subHref('/messaging/campaigns')} />
-                <StatCard label="Loomi Email" value={filteredLoomiEmailCampaigns.length} icon={BookOpenIcon} href={subHref('/messaging/campaigns')} />
+                <StatCard label="Campaigns" value={filteredEspCampaigns.length} icon={PaperAirplaneIcon} href={subHref('/messaging/blasts')} />
+                <StatCard label="Scheduled" value={scheduledEsp} icon={ArrowPathIcon} href={subHref('/messaging/blasts/schedule')} />
+                <StatCard label="Sent / Completed" value={sentEsp} icon={CheckCircleIcon} href={subHref('/messaging/blasts')} />
+                <StatCard label="Loomi Email" value={filteredLoomiEmailBlasts.length} icon={BookOpenIcon} href={subHref('/messaging/blasts')} />
                 <StatCard
                   label="Loomi SMS"
-                  value={filteredLoomiSmsCampaigns.length}
+                  value={filteredLoomiSmsBlasts.length}
                   sub={`OR ${formatRatePct(clientEngagement.openRate)}`}
                   icon={ChartBarIcon}
-                  href={subHref('/messaging/campaigns')}
+                  href={subHref('/messaging/blasts')}
                 />
               </div>
 
@@ -2191,11 +2191,11 @@ function ClientRoleDashboard({
             <div>
               <div className="mb-4 flex items-center justify-between">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">ESP Campaign Performance</h3>
-                <Link href={subHref('/messaging/campaigns')} className="text-[10px] text-[var(--primary)] hover:underline">
+                <Link href={subHref('/messaging/blasts')} className="text-[10px] text-[var(--primary)] hover:underline">
                   Open campaign center
                 </Link>
               </div>
-              <CampaignPageAnalytics
+              <BlastPageAnalytics
                 campaigns={filteredEspCampaigns}
                 loading={loading}
                 showAccountBreakdown={false}
@@ -2208,7 +2208,7 @@ function ClientRoleDashboard({
           {renderClientWidget('client_recent', (
             <div className="glass-card rounded-xl p-4">
               <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold">Recent Campaign Activity</h3>
+                <h3 className="text-sm font-semibold">Recent Blast Activity</h3>
                 <span className="text-[10px] text-[var(--muted-foreground)]">{recentActivity.length} items</span>
               </div>
 

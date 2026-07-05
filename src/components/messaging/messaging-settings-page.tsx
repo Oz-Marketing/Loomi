@@ -62,7 +62,7 @@ export function MessagingSettingsPage({ tab }: MessagingSettingsPageProps) {
   );
 
   const accountLabel = accountData?.dealer || 'Sub-Account';
-  const backHref = subHref('/messaging/campaigns');
+  const backHref = subHref('/messaging/blasts');
 
   return (
     <div className="max-w-5xl mx-auto px-6 py-6">
@@ -72,7 +72,7 @@ export function MessagingSettingsPage({ tab }: MessagingSettingsPageProps) {
           className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors mb-3"
         >
           <ArrowLeftIcon className="w-3.5 h-3.5" />
-          Back to Campaigns
+          Back to Blasts
         </Link>
         <h1 className="text-2xl font-bold">Messaging Settings</h1>
         <p className="text-sm text-[var(--muted-foreground)] mt-1">

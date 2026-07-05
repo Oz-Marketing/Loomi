@@ -104,7 +104,7 @@ function tsToIso(v: unknown): string {
   return new Date(seconds * 1000).toISOString().slice(0, 19); // YYYY-MM-DDTHH:mm:ss (UTC)
 }
 
-export interface EmailCampaign {
+export interface EmailBlast {
   id: string;
   name: string;
   status: string;
@@ -133,12 +133,12 @@ export interface EmailCampaign {
 type Raw = Record<string, unknown>;
 
 /** Normalize a /emails/schedule row into our campaign shape (Oz parity). */
-export function normalizeCampaign(raw: Raw): EmailCampaign {
+export function normalizeCampaign(raw: Raw): EmailBlast {
   const sent = int(raw.totalCount ?? raw.processed);
   const delivered = int(raw.successCount ?? raw.success);
   const failed = int(raw.failed);
 
-  const c: EmailCampaign = {
+  const c: EmailBlast = {
     id: String(raw.id ?? raw._id ?? ''),
     name: (raw.name as string) ?? 'Untitled',
     status: (raw.status as string) ?? (raw.emailStatus as string) ?? 'unknown',
@@ -174,7 +174,7 @@ export function normalizeCampaign(raw: Raw): EmailCampaign {
 }
 
 /** Fetch + normalize all email campaigns for the location. */
-export async function getEmailCampaignsNormalized(creds: GhlCredentials): Promise<EmailCampaign[]> {
+export async function getEmailBlastsNormalized(creds: GhlCredentials): Promise<EmailBlast[]> {
   const res = await ghlGet<Raw>(creds, '/emails/schedule', { locationId: creds.locationId });
   // GHL returns the list under data / campaigns / schedules, or as the body itself.
   let list = (res.data ?? res.campaigns ?? res.schedules ?? res) as unknown;
@@ -210,8 +210,8 @@ export interface EmailAggregate {
 }
 
 /** Aggregate stats across campaigns (Oz parity). */
-export function aggregateStats(campaigns: EmailCampaign[]): EmailAggregate {
-  const sum = (k: keyof EmailCampaign) => campaigns.reduce((t, c) => t + (c[k] as number), 0);
+export function aggregateStats(campaigns: EmailBlast[]): EmailAggregate {
+  const sum = (k: keyof EmailBlast) => campaigns.reduce((t, c) => t + (c[k] as number), 0);
   const total_sent = sum('sent');
   const total_delivered = sum('delivered');
   const total_failed = sum('failed');

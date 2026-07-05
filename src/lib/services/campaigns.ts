@@ -90,8 +90,8 @@ const formAssetSelect = { id: true, name: true, status: true, schema: true } as 
 const flowAssetSelect = { id: true, name: true, status: true, metadata: true } as const;
 
 const campaignWithAssetsInclude = {
-  emailCampaigns: { select: emailAssetSelect },
-  smsCampaigns: { select: smsAssetSelect },
+  emailBlasts: { select: emailAssetSelect },
+  smsBlasts: { select: smsAssetSelect },
   landingPages: { select: lpAssetSelect },
   forms: { select: formAssetSelect },
   flows: { select: flowAssetSelect },
@@ -116,7 +116,7 @@ function loadCampaignWithAssets(id: string) {
 
 function collectAssets(row: NonNullable<CampaignWithAssets>): CampaignAssetSummary[] {
   const assets: CampaignAssetSummary[] = [];
-  for (const e of row.emailCampaigns) {
+  for (const e of row.emailBlasts) {
     assets.push({
       kind: 'email',
       id: e.id,
@@ -126,7 +126,7 @@ function collectAssets(row: NonNullable<CampaignWithAssets>): CampaignAssetSumma
       renderedHtml: e.htmlContent || null,
     });
   }
-  for (const s of row.smsCampaigns) {
+  for (const s of row.smsBlasts) {
     assets.push({
       kind: 'sms',
       id: s.id,
@@ -306,24 +306,24 @@ export async function deleteCampaign(id: string): Promise<void> {
   const campaign = await prisma.campaign.findUnique({
     where: { id },
     include: {
-      emailCampaigns: { select: { id: true, metadata: true } },
-      smsCampaigns: { select: { id: true } },
+      emailBlasts: { select: { id: true, metadata: true } },
+      smsBlasts: { select: { id: true } },
       landingPages: { select: { id: true } },
       forms: { select: { id: true } },
     },
   });
   if (!campaign) return;
 
-  const templateSlugs = campaign.emailCampaigns
+  const templateSlugs = campaign.emailBlasts
     .map((e) => parseJson<{ templateSlug?: string }>(e.metadata, {}).templateSlug)
     .filter((s): s is string => typeof s === 'string' && s.length > 0);
 
   await prisma.$transaction(async (tx) => {
-    if (campaign.emailCampaigns.length) {
-      await tx.emailCampaign.deleteMany({ where: { id: { in: campaign.emailCampaigns.map((e) => e.id) } } });
+    if (campaign.emailBlasts.length) {
+      await tx.emailBlast.deleteMany({ where: { id: { in: campaign.emailBlasts.map((e) => e.id) } } });
     }
-    if (campaign.smsCampaigns.length) {
-      await tx.smsCampaign.deleteMany({ where: { id: { in: campaign.smsCampaigns.map((s) => s.id) } } });
+    if (campaign.smsBlasts.length) {
+      await tx.smsBlast.deleteMany({ where: { id: { in: campaign.smsBlasts.map((s) => s.id) } } });
     }
     if (campaign.landingPages.length) {
       await tx.landingPage.deleteMany({ where: { id: { in: campaign.landingPages.map((l) => l.id) } } });
@@ -348,7 +348,7 @@ export async function deleteCampaign(id: string): Promise<void> {
 /**
  * Create an account-scoped Template from a campaign email's content and return
  * its slug. Backing each campaign email with a real Template (not just rendered
- * HTML on the EmailCampaign) is what makes the messaging template step preview
+ * HTML on the EmailBlast) is what makes the messaging template step preview
  * render and the editor open — that step keys off metadata.templateSlug.
  *
  * Pass v2 JSON content for a visually-editable email, or HTML for a code-mode
@@ -408,10 +408,10 @@ export async function linkAssetToCampaign(
 ): Promise<void> {
   switch (kind) {
     case 'email':
-      await prisma.emailCampaign.update({ where: { id: assetId }, data: { campaignId } });
+      await prisma.emailBlast.update({ where: { id: assetId }, data: { campaignId } });
       return;
     case 'sms':
-      await prisma.smsCampaign.update({ where: { id: assetId }, data: { campaignId } });
+      await prisma.smsBlast.update({ where: { id: assetId }, data: { campaignId } });
       return;
     case 'landingPage':
       await prisma.landingPage.update({ where: { id: assetId }, data: { campaignId } });

@@ -514,7 +514,7 @@ export default function AdGeneratorPage() {
         </div>
       )}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <Link
             href="/ad-generator"
             className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
@@ -528,7 +528,11 @@ export default function AdGeneratorPage() {
             onChange={(e) => setCreativeName(e.target.value)}
             placeholder="Untitled ad"
             title="Ad name"
-            className="min-w-0 flex-1 rounded-lg border border-transparent bg-transparent px-2 py-1 text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
+            // Hug the text: width tracks the value (with a sensible min), capped
+            // so a very long name scrolls inside the field rather than pushing
+            // the layout.
+            style={{ width: `${Math.min(48, Math.max(14, creativeName.length + 2))}ch` }}
+            className="min-w-0 max-w-full rounded-lg border border-transparent bg-transparent px-2 py-1 text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
           />
         </div>
         <div className="flex items-center gap-2">

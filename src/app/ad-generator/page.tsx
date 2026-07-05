@@ -219,7 +219,9 @@ export default function AdGeneratorListPage() {
   }
 
   return (
-    <div>
+    // Managers render inside the app shell's padded card; clients render bare,
+    // so give them the same centered, padded content column the editor uses.
+    <div className={!isManager ? 'mx-auto max-w-6xl px-6 py-8' : undefined}>
       {/* Clients have no app chrome — show their dealership's brand at the top. */}
       {!isManager && (
         <div className="mb-5 border-b border-[var(--border)] pb-4">

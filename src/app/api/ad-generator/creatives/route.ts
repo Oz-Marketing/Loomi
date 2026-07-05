@@ -6,7 +6,7 @@
  * Flag- + auth-gated; resilient (unmigrated table → empty list).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession } from '@/lib/api-auth';
+import { getAuthSession, getAccountScope, canAccessAccount, forbidden } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 
@@ -60,6 +60,9 @@ export async function GET(req: NextRequest) {
 
   const accountKey = (req.nextUrl.searchParams.get('accountKey') || '').trim();
   if (!accountKey) return NextResponse.json({ creatives: [] });
+  // A caller may only list ads for an account within their scope. Clients (and
+  // scoped admins) can't read another account's creatives by swapping the key.
+  if (!canAccessAccount(getAccountScope(session), accountKey)) return forbidden();
   try {
     const rows = (await prisma.adCreative.findMany({ where: { accountKey }, orderBy: { updatedAt: 'desc' } })) as Row[];
     return NextResponse.json({ creatives: rows.map(shape) });
@@ -86,6 +89,8 @@ export async function POST(req: NextRequest) {
   if (!accountKey || !templateId) {
     return NextResponse.json({ error: 'accountKey and templateId are required' }, { status: 400 });
   }
+  // Can't create an ad under an account outside the caller's scope.
+  if (!canAccessAccount(getAccountScope(session), accountKey)) return forbidden();
   const u = session.user as { id?: string; name?: string | null };
 
   // The ad's own design copy: an explicit doc (e.g. "from scratch" sends a blank

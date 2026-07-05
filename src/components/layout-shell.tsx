@@ -7,6 +7,7 @@ import { TopUtilityBar } from '@/components/top-utility-bar';
 import { AppLogo } from '@/components/app-logo';
 import { stripSubaccountPrefix } from '@/lib/account-slugs';
 import { SurfaceShell } from '@/components/surface-shell';
+import { useAccount } from '@/contexts/account-context';
 
 const BUILDER_STEPS = [
   { key: 'recipients', label: 'Recipients' },
@@ -92,6 +93,8 @@ function CampaignBuilderProgress({ current }: { current: BuilderStepKey }) {
 function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { userRole } = useAccount();
+  const isClientRole = userRole === 'client';
   const normalizedPath = stripSubaccountPrefix(pathname);
   const isFullScreen =
     normalizedPath.startsWith('/preview')
@@ -134,6 +137,13 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
   if (isFullScreen) {
     return <div className="flex-1">{children}</div>;
+  }
+
+  // Clients get a chrome-less experience — no sidebar, no top utility bar. Their
+  // whole product is the Ad Generator page (which carries its own account logo),
+  // so we render the page bare on its own background.
+  if (isClientRole) {
+    return <div className="flex-1 min-w-0">{children}</div>;
   }
 
   if (isFlowBuilder) {

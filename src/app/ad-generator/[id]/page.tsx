@@ -25,6 +25,8 @@ import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { useAccount } from '@/contexts/account-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { MediaPickerModal } from '@/components/media-picker-modal';
+import { AccountLogo } from '@/components/account-logo';
+import { MultiSelect } from '@/components/ui/multi-select';
 import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import { isVehicleIndustry } from '@/lib/ad-generator/industry';
@@ -263,20 +265,13 @@ export default function AdGeneratorPage() {
     const ids = raw ? raw.split(',').filter(Boolean).filter((id) => template.sizes.some((s) => s.id === id)) : [];
     return ids.length ? ids : template.sizes.map((s) => s.id);
   }, [data._sizes, template]);
-  const toggleSize = (id: string) => {
-    const cur = new Set(selectedSizeIds);
-    let added = false;
-    if (cur.has(id)) {
-      if (cur.size > 1) cur.delete(id); // keep at least one size
-    } else {
-      cur.add(id);
-      added = true;
-    }
-    // Persist in template order.
-    const next = template.sizes.filter((s) => cur.has(s.id)).map((s) => s.id);
+  // Persist the included sizes (multi-select), in template order and never
+  // empty; keep the previewed size within the set.
+  const setSizes = (ids: string[]) => {
+    const next = template.sizes.filter((s) => ids.includes(s.id)).map((s) => s.id);
+    if (next.length === 0) return; // keep at least one
     setData((d) => ({ ...d, _sizes: next.join(',') }));
-    if (added) setSizeId(id); // view a newly-included size
-    else if (!cur.has(sizeId)) setSizeId(next[0]); // removed the viewed one
+    if (!next.includes(sizeId)) setSizeId(next[0]);
   };
   // Keep the previewed size within the included set.
   useEffect(() => {
@@ -378,6 +373,18 @@ export default function AdGeneratorPage() {
   }, [template, data]);
 
   const set = (key: string, value: string) => setData((d) => ({ ...d, [key]: value }));
+
+  // In the client automotive flow the offer inputs live INSIDE the source panel
+  // (under "Manual entry"), not as a separate card — so pull the offer-group
+  // fields out here (minus the vehicle name/image, which the color picker owns).
+  const offerFieldsForPanel = useMemo(
+    () =>
+      groups
+        .filter(([g]) => g.startsWith('Offer'))
+        .flatMap(([, fs]) => fs)
+        .filter((f) => !/vehiclename|vehicleimageurl/i.test(f.key)),
+    [groups],
+  );
 
   async function download(targetSizeId: string) {
     setBusy(targetSizeId);
@@ -493,6 +500,13 @@ export default function AdGeneratorPage() {
   return (
     <div className="mx-auto max-w-6xl px-6 py-8">
       {pageFontFaceCss && <style dangerouslySetInnerHTML={{ __html: pageFontFaceCss }} />}
+      {/* Clients have no app chrome — carry their dealership's brand at the top
+          of the page instead of in a sidebar. */}
+      {!isManager && (
+        <div className="mb-5 border-b border-[var(--border)] pb-4">
+          <AccountLogo className="h-9 w-auto max-w-[180px] object-contain" />
+        </div>
+      )}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <Link
@@ -508,7 +522,11 @@ export default function AdGeneratorPage() {
             onChange={(e) => setCreativeName(e.target.value)}
             placeholder="Untitled ad"
             title="Ad name"
-            className="min-w-0 rounded-lg border border-transparent bg-transparent px-2 py-1 text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
+            // Hug the text: width tracks the value (with a sensible min), capped
+            // so a very long name scrolls inside the field rather than pushing
+            // the layout.
+            style={{ width: `${Math.min(48, Math.max(14, creativeName.length + 2))}ch` }}
+            className="min-w-0 max-w-full rounded-lg border border-transparent bg-transparent px-2 py-1 text-lg font-bold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
           />
         </div>
         <div className="flex items-center gap-2">
@@ -536,6 +554,7 @@ export default function AdGeneratorPage() {
 
           {showAutomotiveTools && (
             <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
+              <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Offer</h2>
               {/* Source tabs — where the vehicle + offer come from. */}
               <div className="mb-4 flex items-center gap-5 border-b border-[var(--border)]">
                 {(['oem', 'manual'] as const).map((s) => (
@@ -580,6 +599,15 @@ export default function AdGeneratorPage() {
                   accountKey={accountKey ?? undefined}
                   onApply={(patch) => setData((d) => ({ ...d, ...patch }))}
                 />
+              ) : !isManager ? (
+                // Clients enter the offer right here under "Manual entry" — no
+                // separate Offer card. (Managers keep the standalone Offer card
+                // below, so this is just a pointer for them.)
+                <div className="space-y-4">
+                  {offerFieldsForPanel.map((f) => (
+                    <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} allowVehiclePicker={showAutomotiveTools} />
+                  ))}
+                </div>
               ) : (
                 <p className="text-xs text-[var(--muted-foreground)]">Enter the vehicle and offer details by hand in the cards below.</p>
               )}
@@ -669,38 +697,75 @@ export default function AdGeneratorPage() {
           )}
 
           {groups
-            // Clients only see OEM Incentives (its own panel above) + Vehicle /
-            // Offer(s) / Legal (+ Shared, e.g. expiration). Everything else
-            // (Copy/Headline, Background, etc.) is admin-only.
-            .filter(([group]) => isManager || group === 'Vehicle' || group === 'Legal' || group === 'Shared' || group.startsWith('Offer'))
             .map(([group, fields]) => {
               // Same-model dual: Offer 2 rides Offer 1's vehicle, so hide its
               // vehicle inputs (they're auto-synced).
-              const shown = fields.filter(
+              let shown = fields.filter(
                 (f) => !(isDual && dualVehicleMode === 'same' && (f.key === 'o2_vehicleName' || f.key === 'o2_vehicleImageUrl')),
               );
+              // Clients can touch the OFFER(S), the VEHICLE COLOR, and the
+              // Legal fields they're responsible for (VIN / stock — the
+              // disclaimer stays read-only + auto-composed). The color is
+              // chosen through the vehicle image field (…ImageUrl → a
+              // client-only color picker). Everything else — vehicle name,
+              // Copy, branding — is hidden from the form but still rendered in
+              // the live preview; clients see it, they just can't edit it.
+              if (!isManager) {
+                shown = shown.filter((f) => {
+                  if (/vehiclename/i.test(f.key)) return false; // don't let clients switch the vehicle
+                  if (/vehicleimageurl/i.test(f.key)) return true; // vehicle color picker
+                  if (group === 'Legal') return true; // VIN / stock (+ read-only disclaimer)
+                  // Offer inputs move INTO the OEM/Manual panel on the
+                  // automotive flow; only keep them as their own card when
+                  // there's no such panel (non-vehicle template).
+                  if (group.startsWith('Offer')) return !showAutomotiveTools;
+                  return false;
+                });
+              }
+              return [group, shown] as const;
+            })
+            // Drop groups that have nothing left to show (e.g. Legal for clients).
+            .filter(([, shown]) => shown.length > 0)
+            .map(([group, shown]) => {
               const sharesVehicle = isDual && dualVehicleMode === 'same' && /Offer\s*2/i.test(group);
               return (
               <section key={group} className="glass-card rounded-2xl border border-[var(--border)] p-5">
-                <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{group}</h2>
+                <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{!isManager && group === 'Vehicle' ? 'Vehicle color' : group}</h2>
                 {sharesVehicle && (
                   <p className="-mt-2 mb-3 text-[11px] text-[var(--muted-foreground)]">Same vehicle as Offer 1 — switch to “Two models” above to give it its own.</p>
                 )}
                 <div className="space-y-4">
-                  {shown.map((f) =>
-                    f.key === 'disclaimer' ? (
-                      <DisclaimerField
-                        key={f.key}
-                        field={f}
-                        renderData={renderData}
-                        value={data.disclaimer ?? ''}
-                        onChange={(v) => set('disclaimer', v)}
-                        readOnly={!isManager}
-                      />
-                    ) : (
-                      <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} allowVehiclePicker={showAutomotiveTools} />
-                    ),
-                  )}
+                  {shown.map((f) => {
+                    if (f.key === 'disclaimer') {
+                      return (
+                        <DisclaimerField
+                          key={f.key}
+                          field={f}
+                          renderData={renderData}
+                          value={data.disclaimer ?? ''}
+                          onChange={(v) => set('disclaimer', v)}
+                          readOnly={!isManager}
+                        />
+                      );
+                    }
+                    // Clients don't get the full image field (URL / library /
+                    // vehicle search) — just the paint colors EVOX has for the
+                    // vehicle the offer already picked. Managers keep the full
+                    // field. `o2_vehicleImageUrl` pairs with `o2_vehicleName`.
+                    if (!isManager && /vehicleimageurl/i.test(f.key)) {
+                      const nameKey = f.key.replace(/vehicleImageUrl$/i, 'vehicleName');
+                      const codeKey = f.key.replace(/vehicleImageUrl$/i, 'vehicleColorCode');
+                      return (
+                        <VehicleColorPicker
+                          key={f.key}
+                          vehicleName={data[nameKey] ?? data.vehicleName ?? ''}
+                          selectedCode={data[codeKey] ?? ''}
+                          onPick={(url, code) => setData((d) => ({ ...d, [f.key]: url, [codeKey]: code }))}
+                        />
+                      );
+                    }
+                    return <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} allowVehiclePicker={showAutomotiveTools} />;
+                  })}
                 </div>
               </section>
               );
@@ -712,36 +777,31 @@ export default function AdGeneratorPage() {
           <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
             <div className="mb-3 flex items-center justify-between gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Sizes for this ad</span>
-              <Link
-                href={`/ad-generator/builder?ad=${encodeURIComponent(creativeId)}${accountKey ? `&account=${encodeURIComponent(accountKey)}` : ''}`}
-                className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
-                title="Open this ad's layout in the builder"
-              >
-                <Squares2X2Icon className="h-3.5 w-3.5" />
-                Edit design
-              </Link>
+              {/* The builder is a design tool — managers only. Clients never
+                  leave the form + preview. */}
+              {isManager && (
+                <Link
+                  href={`/ad-generator/builder?ad=${encodeURIComponent(creativeId)}${accountKey ? `&account=${encodeURIComponent(accountKey)}` : ''}`}
+                  className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
+                  title="Open this ad's layout in the builder"
+                >
+                  <Squares2X2Icon className="h-3.5 w-3.5" />
+                  Edit design
+                </Link>
+              )}
             </div>
 
-            {/* Multi-select: which sizes this ad includes (toggle in/out). The
-                currently-previewed size gets a ring. */}
-            <div className="mb-4 flex flex-wrap gap-1.5">
-              {template.sizes.map((s) => {
-                const included = selectedSizeIds.includes(s.id);
-                const viewing = s.id === sizeId;
-                return (
-                  <button
-                    key={s.id}
-                    onClick={() => toggleSize(s.id)}
-                    title={included ? `${s.label} — included (click to remove)` : `${s.label} — click to include`}
-                    className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                      included ? 'bg-[var(--primary)]/15 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)]'
-                    } ${viewing ? 'ring-1 ring-[var(--primary)]' : ''}`}
-                  >
-                    {included && <CheckIcon className="h-3 w-3" />}
-                    {s.label.split(' ')[0]}
-                  </button>
-                );
-              })}
+            {/* Which sizes this ad includes — a multi-select so it scales to
+                dozens of presets. The preview below pages through the chosen
+                set; the ZIP export renders exactly these. */}
+            <div className="mb-4">
+              <MultiSelect
+                value={selectedSizeIds}
+                onChange={setSizes}
+                options={template.sizes.map((s) => ({ value: s.id, label: s.label }))}
+                placeholder="Select sizes…"
+                searchable
+              />
             </div>
 
             <div className="flex justify-center rounded-xl bg-[var(--muted)]/40 p-4">
@@ -956,25 +1016,38 @@ function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleMode, ac
   return (
     <div>
       <p className="mb-3 text-xs text-[var(--muted-foreground)]">
-        Live lease / APR / cash programs from MarketCheck — applying one fills the offer <span className="text-[var(--foreground)]">and</span> the vehicle (name + EVOX image).
+        Pull a current lease / APR / cash offer — applying one fills in the offer <span className="text-[var(--foreground)]">and</span> the vehicle for you.
       </p>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <FontSelect value={year} onChange={setYear} options={yearOptions} previewFont={false} />
-        <FontSelect value={make} onChange={setMake} options={makeOptions} previewFont={false} />
-        <input
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && find()}
-          placeholder="Model (optional)"
-          className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-        />
-        <input
-          value={zip}
-          onChange={(e) => setZip(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && find()}
-          placeholder="ZIP (optional)"
-          className="rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-        />
+      {/* Two per row so the fields aren't scrunched in the narrow form column. */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Year</label>
+          <FontSelect value={year} onChange={setYear} options={yearOptions} previewFont={false} />
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Make</label>
+          <FontSelect value={make} onChange={setMake} options={makeOptions} previewFont={false} />
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Model</label>
+          <input
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && find()}
+            placeholder="e.g. Accord"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">ZIP</label>
+          <input
+            value={zip}
+            onChange={(e) => setZip(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && find()}
+            placeholder="Optional"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+          />
+        </div>
       </div>
       <button
         onClick={find}
@@ -1118,10 +1191,7 @@ function DisclaimerField({
   if (readOnly) {
     return (
       <div>
-        <label className="mb-1 flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)]">
-          {field.label}
-          <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-normal text-[var(--muted-foreground)]">Managed by your team</span>
-        </label>
+        <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">{field.label}</label>
         <div className="w-full whitespace-pre-wrap rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2 text-xs leading-snug text-[var(--muted-foreground)]">
           {value || '—'}
         </div>
@@ -1448,6 +1518,178 @@ function EvoxPickerModal({ onClose, onPick }: { onClose: () => void; onPick: (ur
       </div>
     </div>,
     document.body,
+  );
+}
+
+/** Approximate a display swatch color from an EVOX color's NAME — this product
+ *  returns names ("Ice Silver Metallic") but no RGB, so we map keywords to a
+ *  representative hex. Falls back to RGB when present, then a neutral chip. */
+const COLOR_NAME_HEX: [RegExp, string][] = [
+  [/white|ivory|frost/i, '#eceef0'],
+  [/black|ebony|obsidian|midnight/i, '#1b1b1e'],
+  [/silver|platinum|aluminum|titanium/i, '#c3c8cc'],
+  [/gr[ae]y|graphite|magnetite|slate|charcoal|gunmetal|steel/i, '#8b9095'],
+  [/red|crimson|scarlet|cardinal|garnet|ruby/i, '#c1201f'],
+  [/blue|navy|azure|cobalt|indigo|teal/i, '#1e50a8'],
+  [/green|emerald|olive|forest|lime/i, '#2f7d4f'],
+  [/yellow|gold|amber/i, '#e3b23c'],
+  [/orange|copper|sunset/i, '#d9682a'],
+  [/brown|bronze|tan|beige|mocha|espresso|sand/i, '#7c6242'],
+  [/purple|violet|plum|magenta/i, '#6a3d9a'],
+  [/pink|rose/i, '#dd6a8f'],
+];
+function colorNameToHex(c: EvoxColor): string {
+  if (c.rgb) return `#${c.rgb.replace('#', '')}`;
+  const hay = `${c.simple} ${c.name}`;
+  for (const [re, hex] of COLOR_NAME_HEX) if (re.test(hay)) return hex;
+  return '#cbd5e1';
+}
+
+/**
+ * Client-facing vehicle color picker. The vehicle itself is already decided by
+ * the chosen offer / OEM incentive (it lives in `vehicleName`), so clients
+ * never search — they pick from the paint colors EVOX stocks for that vehicle.
+ * Picking one resolves the transparent PNG (re-hosted server side) into the ad.
+ * We DON'T show the car image here — the live ad preview already reflects it.
+ * Until an offer names a vehicle, it shows a gentle hint instead of an empty grid.
+ */
+function VehicleColorPicker({ vehicleName, selectedCode, onPick }: { vehicleName: string; selectedCode: string; onPick: (url: string, colorCode: string) => void }) {
+  const { accountKey } = useAccount();
+  // One entry per distinct color NAME, carrying every (vifnum, code) that offers
+  // it — the same paint can appear under multiple trims/codes and only some
+  // have a rendered image, so we try them in order when the user picks.
+  const [swatches, setSwatches] = useState<{ color: EvoxColor; candidates: { vifnum: number; code: string }[] }[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [notConfigured, setNotConfigured] = useState(false);
+  const [picking, setPicking] = useState<string | null>(null);
+
+  // Parse "2026 Honda Accord" → year / make / model (the shape the incentive
+  // apply writes). Anything that doesn't match → no vehicle yet.
+  const ymm = useMemo(() => {
+    const m = vehicleName.trim().match(/^(\d{4})\s+(\S+)\s+(.+)$/);
+    return m ? { year: Number(m[1]), make: m[2], model: m[3] } : null;
+  }, [vehicleName]);
+
+  useEffect(() => {
+    if (!ymm) {
+      setSwatches(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setNotConfigured(false);
+    fetch('/api/ad-generator/evox/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ year: ymm.year, make: ymm.make, model: ymm.model }),
+    })
+      .then((r) => r.json())
+      .then((j: { configured?: boolean; vehicles?: EvoxVehicle[] }) => {
+        if (cancelled) return;
+        if (j.configured === false) {
+          setNotConfigured(true);
+          setSwatches([]);
+          return;
+        }
+        // Group colors across every returned trim by full color NAME (EVOX
+        // repeats a color across trims, and different codes can share a simple
+        // label like "Silver"). Keep ALL (vifnum, code) pairs per name so a
+        // pick can fall through to a trim that actually has the image.
+        const byName = new Map<string, { color: EvoxColor; candidates: { vifnum: number; code: string }[] }>();
+        for (const v of j.vehicles ?? []) {
+          for (const color of v.colors ?? []) {
+            const key = (color.name || color.simple || color.code || '').toLowerCase();
+            if (!key) continue;
+            const entry = byName.get(key);
+            if (entry) entry.candidates.push({ vifnum: v.vifnum, code: color.code });
+            else byName.set(key, { color, candidates: [{ vifnum: v.vifnum, code: color.code }] });
+          }
+        }
+        setSwatches([...byName.values()]);
+      })
+      .catch(() => {
+        if (!cancelled) setSwatches([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ymm]);
+
+  async function pickColor(s: { color: EvoxColor; candidates: { vifnum: number; code: string }[] }) {
+    const c = s.color;
+    setPicking(c.code);
+    try {
+      // Try each trim/code offering this color until one actually has an image
+      // (some EVOX codes for the same paint return no rendered product).
+      let picked: { url: string; code: string } | null = null;
+      for (const cand of s.candidates) {
+        const r = await fetch('/api/ad-generator/evox/resolve', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vifnum: cand.vifnum, colorCode: cand.code, accountKey, hint: `${vehicleName}-${c.simple || c.name || c.code}` }),
+        });
+        if (r.ok) {
+          const j = await r.json();
+          if (j.url) {
+            picked = { url: j.url, code: cand.code };
+            break;
+          }
+        }
+      }
+      if (!picked) throw new Error('No image available for that color');
+      onPick(picked.url, picked.code);
+      toast.success('Color updated');
+    } catch (err) {
+      toast.error(`Couldn't switch color: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setPicking(null);
+    }
+  }
+
+  return (
+    <div>
+      {!ymm ? (
+        <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-xs text-[var(--muted-foreground)]">
+          Choose an offer above to load your vehicle, then pick a color.
+        </p>
+      ) : loading ? (
+        <p className="text-xs text-[var(--muted-foreground)]">Loading colors for {vehicleName}…</p>
+      ) : notConfigured ? (
+        <p className="text-xs text-[var(--muted-foreground)]">Vehicle imagery isn’t available in this environment.</p>
+      ) : swatches && swatches.length ? (
+        <div className="flex flex-wrap gap-2">
+          {swatches.map((s) => {
+            const c = s.color;
+            const selected = !!selectedCode && s.candidates.some((cand) => cand.code === selectedCode);
+            return (
+              <button
+                key={c.name || c.simple || c.code}
+                type="button"
+                onClick={() => pickColor(s)}
+                disabled={picking !== null}
+                title={c.name || c.simple || c.code}
+                className={`flex items-center gap-2 rounded-full border py-1 pl-1 pr-3 transition-colors disabled:opacity-60 ${
+                  selected ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]' : 'border-[var(--border)] hover:border-[var(--primary)]'
+                }`}
+              >
+                <span
+                  className="relative flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full border border-black/10 shadow-inner"
+                  style={{ background: colorNameToHex(c) }}
+                >
+                  {picking === c.code && <span className="text-[9px] font-bold text-white mix-blend-difference">…</span>}
+                </span>
+                <span className="truncate text-[11px] font-medium text-[var(--foreground)]">{c.name || c.simple || c.code}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="text-xs text-[var(--muted-foreground)]">No stock colors found for {vehicleName}.</p>
+      )}
+    </div>
   );
 }
 

@@ -15,7 +15,7 @@
  * return [] so the generator simply falls back to code templates.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession, requireRole } from '@/lib/api-auth';
+import { getAuthSession, getAccountScope, requireRole } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 
@@ -97,8 +97,24 @@ export async function GET(req: NextRequest) {
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    // Global templates + the active account's own (when the caller passes one).
     const accountKey = req.nextUrl.searchParams.get('accountKey')?.trim();
+
+    // Clients get a curated library: ONLY templates a designer published to
+    // their own subaccount(s) — never the global/shared library. A requested
+    // accountKey outside their scope yields nothing. Everything is server-side
+    // so the client can't widen the list by tweaking the query.
+    if (session.user.role === 'client') {
+      const keys = getAccountScope(session) ?? [];
+      const allowed = accountKey ? (keys.includes(accountKey) ? [accountKey] : []) : keys;
+      if (allowed.length === 0) return NextResponse.json({ templates: [] });
+      const rows = (await prisma.adTemplateDoc.findMany({
+        where: { status: 'published', isActive: true, accountKey: { in: allowed } },
+        orderBy: { name: 'asc' },
+      })) as Row[];
+      return NextResponse.json({ templates: rows.map(shape).filter((t) => t.doc) });
+    }
+
+    // Admins+: global templates + the active account's own (when passed).
     const rows = (await prisma.adTemplateDoc.findMany({
       where: {
         status: 'published',

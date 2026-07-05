@@ -161,15 +161,11 @@ const adminNavItems: NavEntry[] = [
 // render; absolute items — Reporting / Ad Generator / Tools — stay global).
 const subaccountAdminNavItems: NavEntry[] = adminNavItems;
 
-// Client users: build/ops tools hidden; keep the destinations they own.
-const subaccountClientNavItems: NavEntry[] = [
-  dashboardNav,
-  templatesNav,
-  reportingLink,
-  { divider: true },
-  contactsNav,
-  emailSmsNav,
-];
+// Client users: while the platform is still being rolled out to accounts, a
+// client's entire experience is the Ad Generator — they fill in a designer-built
+// template's offer + vehicle and export. Everything else stays hidden until
+// those surfaces are opened up to clients.
+const subaccountClientNavItems: NavEntry[] = [adGeneratorNav];
 
 /** True if the current path matches any of a group's (or grandchild's) leaves. */
 function groupContainsPath(item: NavItem, prefix: string, normalizedPath: string): boolean {
@@ -273,10 +269,13 @@ export function Sidebar() {
       }
       bottom={
         <>
-          {/* Quick switch between Studio and Projects (App). */}
-          <div className="px-2 pb-1">
-            <SurfaceSwitch collapsed={collapsed} />
-          </div>
+          {/* Quick switch between Studio and Projects (App). Hidden for clients —
+              the App surface bounces them straight back, so it's a dead end. */}
+          {!isClientRole && (
+            <div className="px-2 pb-1">
+              <SurfaceSwitch collapsed={collapsed} />
+            </div>
+          )}
 
           {/* Settings / Theme Toggle */}
           <div className={`${collapsed ? 'p-2' : 'px-2 py-2'}`}>

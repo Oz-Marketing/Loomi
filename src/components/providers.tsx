@@ -65,6 +65,13 @@ function DevThemeToggle() {
   );
 }
 
+/** Renders its children for everyone EXCEPT clients — clients get a bare,
+ *  chrome-less Ad Generator with no assistant/dev affordances. */
+function NonClientOnly({ children }: { children: React.ReactNode }) {
+  const { userRole } = useAccount();
+  return userRole === 'client' ? null : <>{children}</>;
+}
+
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <SessionProvider>
@@ -75,8 +82,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
               <SidebarCollapseProvider>
                 {children}
                 <ThemedToaster />
-                <AiBubble />
-                <DevThemeToggle />
+                <NonClientOnly>
+                  <AiBubble />
+                  <DevThemeToggle />
+                </NonClientOnly>
               </SidebarCollapseProvider>
             </LoomiDialogProvider>
           </UnsavedChangesProvider>

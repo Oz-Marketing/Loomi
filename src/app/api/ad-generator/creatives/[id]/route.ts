@@ -2,7 +2,7 @@
  * Ad creative — GET / PATCH / DELETE one (by id). Flag- + auth-gated.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession } from '@/lib/api-auth';
+import { getAuthSession, getAccountScope, canAccessAccount, forbidden } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 
@@ -18,6 +18,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   try {
     const row = await prisma.adCreative.findUnique({ where: { id } });
     if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    // Only readable within the caller's account scope.
+    if (!canAccessAccount(getAccountScope(session), row.accountKey)) return forbidden();
     let data: Record<string, string> = {};
     try {
       data = JSON.parse(row.data) ?? {};
@@ -47,6 +49,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { id } = await params;
+  // Guard the target is within scope before mutating it.
+  const existing = await prisma.adCreative.findUnique({ where: { id }, select: { accountKey: true } });
+  if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  if (!canAccessAccount(getAccountScope(session), existing.accountKey)) return forbidden();
+
   let body: { name?: string; data?: Record<string, string>; status?: string; thumbnailUrl?: string; doc?: unknown };
   try {
     body = await req.json();
@@ -78,6 +85,9 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const { id } = await params;
+  const existing = await prisma.adCreative.findUnique({ where: { id }, select: { accountKey: true } });
+  if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  if (!canAccessAccount(getAccountScope(session), existing.accountKey)) return forbidden();
   try {
     await prisma.adCreative.delete({ where: { id } });
     return NextResponse.json({ ok: true });

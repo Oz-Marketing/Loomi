@@ -1180,14 +1180,22 @@ export default function AdBuilderPage() {
         setBox(sizeId, elId, baseBox);
         return;
       }
-      const fs = baseBox.fontSize ?? 16;
-      const natH = bb.height / scale + fs * 0.24; // native px + a little breathing room
-      const newH = clamp(natH / size.height, MIN_FRAC, 1.5);
+      // Hug the box to the rendered text's line box — the Canva/Figma "auto-size"
+      // behaviour. The Range client rects already include the full line height,
+      // so the ONLY extra room we add is the element's own padding (badges/pills).
+      // No arbitrary font-size fudge, or the outline floats away from the glyphs.
+      const pad = el.padding ?? 0;
+      const natH = bb.height / scale + pad * 2;
+      // Content-driven: hug the true text height and never inflate it up to
+      // MIN_FRAC — that floor keeps empty boxes grabbable, but text auto-size is
+      // allowed to be as tight as the glyphs (still guarded against zero).
+      const newH = clamp(natH / size.height, 0.005, 1.5);
       const patch: DocLayoutBox = { ...baseBox, h: newH };
       patch.y = baseBox.y + baseBox.h / 2 - newH / 2; // keep vertical center
       if (lineCount <= 1) {
-        const natW = bb.width / scale + fs * 0.2;
-        const newW = clamp(natW / size.width, MIN_FRAC, 1.5);
+        // +1px guards the final glyph's side-bearing against the box overflow clip.
+        const natW = bb.width / scale + pad * 2 + 1;
+        const newW = clamp(natW / size.width, 0.005, 1.5);
         if (el.align === 'center') patch.x = baseBox.x + baseBox.w / 2 - newW / 2;
         else if (el.align === 'right') patch.x = baseBox.x + baseBox.w - newW;
         patch.w = newW;

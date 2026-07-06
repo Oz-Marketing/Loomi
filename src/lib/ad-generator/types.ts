@@ -64,8 +64,8 @@ export interface AdTemplate {
   id: string;
   name: string;
   description: string;
-  /** Industries this template is offered to (account `category` values).
-   *  Empty/undefined → derived from content. Drives picker visibility. */
+  /** Industries this template is tagged for (account `category` values), for
+   *  library filtering. Empty/undefined → global to every industry. */
   industries?: string[];
   /** Shared template taxonomy — category + tags for library organization. */
   category?: string;

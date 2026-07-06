@@ -1,9 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { effectiveIndustries, templateInIndustry, isVehicleIndustry } from './industry';
-import type { FieldSpec } from './types';
-
-const vehicleFields: FieldSpec[] = [{ key: 'offerType', label: 'Offer', type: 'select' }];
-const plainFields: FieldSpec[] = [{ key: 'headline', label: 'Headline', type: 'text' }];
 
 describe('ad-generator industry scoping', () => {
   it('treats Automotive + Powersports as vehicle industries', () => {
@@ -14,30 +10,27 @@ describe('ad-generator industry scoping', () => {
   });
 
   it('uses explicit industries when set', () => {
-    expect(effectiveIndustries({ industries: ['Healthcare'], fields: plainFields })).toEqual(['Healthcare']);
+    expect(effectiveIndustries({ industries: ['Healthcare'] })).toEqual(['Healthcare']);
   });
 
-  it('derives Automotive + Powersports for untagged vehicle templates', () => {
-    expect(effectiveIndustries({ fields: vehicleFields })).toEqual(['Automotive', 'Powersports']);
+  it('an untagged template has no industries (global to all)', () => {
+    expect(effectiveIndustries({})).toEqual([]);
+    expect(effectiveIndustries({ industries: [] })).toEqual([]);
   });
 
-  it('derives nothing for an untagged non-vehicle template (stays hidden)', () => {
-    expect(effectiveIndustries({ fields: plainFields })).toEqual([]);
+  it('scopes a tagged template to matching accounts, hides it from others', () => {
+    expect(templateInIndustry({ industries: ['Automotive'] }, 'Automotive')).toBe(true);
+    expect(templateInIndustry({ industries: ['Automotive', 'Powersports'] }, 'Powersports')).toBe(true);
+    expect(templateInIndustry({ industries: ['Automotive'] }, 'Healthcare')).toBe(false);
   });
 
-  it('shows a vehicle template to automotive/powersports accounts, hides it from others', () => {
-    expect(templateInIndustry({ fields: vehicleFields }, 'Automotive')).toBe(true);
-    expect(templateInIndustry({ fields: vehicleFields }, 'Powersports')).toBe(true);
-    expect(templateInIndustry({ fields: vehicleFields }, 'Healthcare')).toBe(false);
-  });
-
-  it('an untagged non-vehicle template is hidden from every specific account', () => {
-    expect(templateInIndustry({ fields: plainFields }, 'Healthcare')).toBe(false);
-    expect(templateInIndustry({ fields: plainFields }, 'Automotive')).toBe(false);
+  it('an untagged template is global — visible to every account', () => {
+    expect(templateInIndustry({}, 'Healthcare')).toBe(true);
+    expect(templateInIndustry({ industries: [] }, 'Automotive')).toBe(true);
   });
 
   it('admin / no account sees the full library', () => {
-    expect(templateInIndustry({ fields: plainFields }, '')).toBe(true);
-    expect(templateInIndustry({ fields: vehicleFields }, null)).toBe(true);
+    expect(templateInIndustry({ industries: ['Healthcare'] }, '')).toBe(true);
+    expect(templateInIndustry({ industries: ['Automotive'] }, null)).toBe(true);
   });
 });

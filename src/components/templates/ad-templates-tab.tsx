@@ -80,7 +80,7 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
       (data?.templates ?? [])
         .filter((t) => t.doc)
         .filter((t) => (accountKey ? t.accountKey === accountKey : t.accountKey == null))
-        .filter((t) => templateInIndustry({ industries: t.doc!.industries, fields: t.doc!.fields }, accountData?.category)),
+        .filter((t) => templateInIndustry({ industries: t.doc!.industries }, accountData?.category)),
     [data, accountKey, accountData?.category],
   );
   const branding = useMemo(() => brandingFromAccount(accountData), [accountData]);

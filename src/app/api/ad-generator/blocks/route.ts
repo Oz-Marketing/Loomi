@@ -27,6 +27,7 @@ type Row = {
   doc: string;
   isActive: boolean;
   accountKey: string | null;
+  accountKeys: string | null;
   category: string | null;
   tags: string | null;
   updatedAt: Date;
@@ -35,7 +36,7 @@ type Row = {
   createdByImage: string | null;
 };
 
-function parseTags(raw: string | null): string[] {
+function parseKeys(raw: string | null): string[] {
   if (!raw) return [];
   try {
     const v = JSON.parse(raw);
@@ -43,6 +44,15 @@ function parseTags(raw: string | null): string[] {
   } catch {
     return [];
   }
+}
+const parseTags = parseKeys;
+
+/** Every subaccount a block is scoped to (union of the legacy single key + the
+ *  new array). Empty = global. */
+function blockAccountKeys(r: { accountKey: string | null; accountKeys: string | null }): string[] {
+  const set = new Set(parseKeys(r.accountKeys));
+  if (r.accountKey) set.add(r.accountKey);
+  return [...set];
 }
 
 /** Parse a stored block payload; null if it's not a usable shape. */
@@ -63,6 +73,7 @@ function shape(r: Row) {
     description: r.description,
     isActive: r.isActive,
     accountKey: r.accountKey,
+    accountKeys: blockAccountKeys(r),
     category: r.category,
     tags: parseTags(r.tags),
     updatedAt: r.updatedAt,
@@ -86,14 +97,19 @@ export async function GET(req: NextRequest) {
       const keys = getAccountScope(session) ?? [];
       allowedKey = accountKey && keys.includes(accountKey) ? accountKey : undefined;
     }
+    // Scoping lives partly in a JSON column (`accountKeys`), so filter in JS —
+    // the block library is small/curated. A block shows when it's global (no
+    // account scoping) or the active account is one of its assigned subaccounts.
     const rows = (await prisma.adBlock.findMany({
-      where: {
-        isActive: true,
-        OR: [{ accountKey: null }, ...(allowedKey ? [{ accountKey: allowedKey }] : [])],
-      },
+      where: { isActive: true },
       orderBy: { name: 'asc' },
     })) as Row[];
-    return NextResponse.json({ blocks: rows.map(shape).filter((b) => b.doc) });
+    const visible = rows.filter((r) => {
+      const keys = blockAccountKeys(r);
+      if (keys.length === 0) return true; // global
+      return allowedKey ? keys.includes(allowedKey) : false;
+    });
+    return NextResponse.json({ blocks: visible.map(shape).filter((b) => b.doc) });
   } catch (err) {
     console.warn('[api/ad-generator/blocks] falling back to []:', err);
     return NextResponse.json({ blocks: [] });
@@ -106,7 +122,7 @@ export async function POST(req: NextRequest) {
   if (error) return error;
   const session = await getAuthSession();
 
-  let body: { name?: string; description?: string; accountKey?: string | null; doc?: unknown };
+  let body: { name?: string; description?: string; accountKey?: string | null; accountKeys?: string[]; doc?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -117,15 +133,20 @@ export async function POST(req: NextRequest) {
   if (!parseBlockDoc(JSON.stringify(body.doc))) {
     return NextResponse.json({ error: 'doc must be a block payload (elements + boxes)' }, { status: 400 });
   }
-  const accountKey =
-    typeof body.accountKey === 'string' && body.accountKey.trim() ? body.accountKey.trim() : null;
+  // Subaccount scope: a de-duped list of account keys (empty = global). Accepts
+  // the new `accountKeys` array; falls back to the legacy single `accountKey`.
+  const requested = Array.isArray(body.accountKeys)
+    ? body.accountKeys
+    : typeof body.accountKey === 'string' && body.accountKey.trim()
+      ? [body.accountKey.trim()]
+      : [];
+  const accountKeys = [...new Set(requested.filter((k) => typeof k === 'string' && k.trim()).map((k) => k.trim()))];
 
-  // A scoped admin may only save a block to an account they can access.
-  if (accountKey) {
-    const scope = getAccountScope(session!);
-    if (scope !== null && !scope.includes(accountKey)) {
-      return NextResponse.json({ error: 'Access denied for that account' }, { status: 403 });
-    }
+  // A scoped admin may only assign a block to accounts they can access.
+  const scope = getAccountScope(session!);
+  if (scope !== null) {
+    const denied = accountKeys.filter((k) => !scope.includes(k));
+    if (denied.length) return NextResponse.json({ error: `Access denied for: ${denied.join(', ')}` }, { status: 403 });
   }
 
   const u = session?.user as { name?: string | null; email?: string | null; image?: string | null } | undefined;
@@ -135,14 +156,15 @@ export async function POST(req: NextRequest) {
         name,
         description: body.description?.trim() || null,
         doc: JSON.stringify(body.doc),
-        accountKey,
+        accountKey: null, // superseded by accountKeys (kept for legacy reads)
+        accountKeys: accountKeys.length ? JSON.stringify(accountKeys) : null,
         createdBy: u?.email ?? null,
         createdByName: u?.name ?? null,
         createdByEmail: u?.email ?? null,
         createdByImage: u?.image ?? null,
       },
     });
-    return NextResponse.json({ block: { id: row.id, name: row.name, accountKey: row.accountKey } });
+    return NextResponse.json({ block: { id: row.id, name: row.name, accountKeys } });
   } catch (err) {
     console.error('[api/ad-generator/blocks] create failed:', err);
     return NextResponse.json(

@@ -2180,7 +2180,11 @@ model AdBlock {
   description    String?  @db.Text
   doc            String   @db.Text // JSON: { version, sourceSize, elements, boxes, requiredFields, requiredDefaults, offerKit }
   isActive       Boolean  @default(true)
-  accountKey     String? // null = global; set = only that subaccount sees it
+  // Scoping: global = both null/empty. `accountKeys` (JSON string[]) is the
+  // current model — a block can be assigned to several subaccounts. `accountKey`
+  // (single) is kept for back-compat with blocks saved before multi-select.
+  accountKey     String? // legacy single-account scope; null = global
+  accountKeys    String? @db.Text // JSON string[] of subaccount keys; null/[] = global
   category       String?
   tags           String?  @db.Text // JSON string[] of tag names
   createdBy      String?

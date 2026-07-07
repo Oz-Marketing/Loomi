@@ -76,6 +76,9 @@ export interface AdTemplate {
   fields: FieldSpec[];
   /** Sensible starting values so the preview renders something real immediately. */
   defaults: AdData;
+  /** Opt-in: template lets the CLIENT choose 1 or 2 offers (mirrors
+   *  `TemplateDoc.allowOfferCountChoice`). Drives the form's offer-count control. */
+  allowOfferCountChoice?: boolean;
   /** Pure render: merged data + a size → a full HTML document sized to the ad. */
   render: (data: AdData, size: AdSize) => string;
 }

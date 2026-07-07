@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { SparklesIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon, PaintBrushIcon } from '@heroicons/react/24/outline';
+import { MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon, PaintBrushIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
@@ -232,7 +232,7 @@ export default function AdGeneratorListPage() {
       <div className="page-sticky-header mb-6">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-3">
-            <SparklesIcon className="w-7 h-7 text-[var(--primary)]" />
+            <MegaphoneIcon className="w-7 h-7 text-[var(--primary)]" />
             <div>
               <h2 className="text-2xl font-bold">Ad Generator</h2>
               <p className="text-[var(--muted-foreground)] mt-1">
@@ -316,7 +316,7 @@ export default function AdGeneratorListPage() {
                     }}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
                   >
-                    <SparklesIcon className="w-4 h-4 flex-shrink-0" />
+                    <MegaphoneIcon className="w-4 h-4 flex-shrink-0" />
                     <span>
                       From template library
                       <span className="block text-[11px] text-[var(--muted-foreground)]">Start from a ready-made layout.</span>
@@ -380,7 +380,7 @@ export default function AdGeneratorListPage() {
       {!accountKey ? (
         <div className="glass-card rounded-2xl p-12 text-center flex flex-col items-center">
           <div className="w-16 h-16 rounded-2xl bg-[var(--muted)] flex items-center justify-center mb-4">
-            <SparklesIcon className="w-8 h-8 text-[var(--muted-foreground)]" />
+            <MegaphoneIcon className="w-8 h-8 text-[var(--muted-foreground)]" />
           </div>
           <h2 className="text-lg font-semibold mb-1">Select an account</h2>
           <p className="text-sm text-[var(--muted-foreground)] max-w-md">
@@ -392,7 +392,7 @@ export default function AdGeneratorListPage() {
       ) : creatives.length === 0 ? (
         <div className="glass-card rounded-2xl p-12 text-center flex flex-col items-center">
           <div className="w-16 h-16 rounded-2xl bg-[var(--muted)] flex items-center justify-center mb-4">
-            <SparklesIcon className="w-8 h-8 text-[var(--muted-foreground)]" />
+            <MegaphoneIcon className="w-8 h-8 text-[var(--muted-foreground)]" />
           </div>
           <h2 className="text-lg font-semibold mb-1">No ads yet</h2>
           <p className="text-sm text-[var(--muted-foreground)] max-w-md mb-6">

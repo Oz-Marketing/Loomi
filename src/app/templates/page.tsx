@@ -7,7 +7,7 @@ import {
   EnvelopeIcon,
   DocumentTextIcon,
   RectangleStackIcon,
-  SparklesIcon,
+  MegaphoneIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { AD_GENERATOR_ENABLED } from '@/lib/feature-flags';
@@ -36,7 +36,7 @@ const MANAGER_TABS: TabDef[] = [
 
 // The Ad Generator is still feature-flagged, so the Ads tab only joins the
 // manager set when the flag is on (any admin+ can then edit ad templates).
-const ADS_TAB: TabDef = { id: 'ads', label: 'Ads', subtitle: 'Shared ad templates. Edit a layout here; create the account’s ad in the Ad Generator.', icon: SparklesIcon };
+const ADS_TAB: TabDef = { id: 'ads', label: 'Ads', subtitle: 'Shared ad templates. Edit a layout here; create the account’s ad in the Ad Generator.', icon: MegaphoneIcon };
 
 // Clients only ever had access to email templates — keep the unified
 // page scoped to that surface for them.

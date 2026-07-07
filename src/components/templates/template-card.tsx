@@ -36,6 +36,8 @@ export interface TemplateCardAction {
   icon: ComponentType<SVGProps<SVGSVGElement>>;
   run: () => void;
   danger?: boolean;
+  /** Rendered dimmed; `run` still fires (e.g. to explain why it's unavailable). */
+  disabled?: boolean;
 }
 
 export interface TemplateCardProps {
@@ -178,7 +180,7 @@ export function TemplateCard({
                     a.run();
                   }}
                   className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--muted)] ${
-                    a.danger ? 'text-red-500' : 'text-[var(--foreground)]'
+                    a.disabled ? 'text-[var(--muted-foreground)] opacity-60' : a.danger ? 'text-red-500' : 'text-[var(--foreground)]'
                   }`}
                 >
                   <a.icon className="h-4 w-4" />

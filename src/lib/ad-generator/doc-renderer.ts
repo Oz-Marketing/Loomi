@@ -1,6 +1,7 @@
 import type { AdData, AdSize } from './types';
 import type { TemplateDoc, DocElement, DocLayoutBox, Binding, GradientFill } from './doc-types';
 import { cssSafeFamily } from './fonts';
+import { elementShownForCount } from './offer-count';
 
 /**
  * The data-driven renderer: interprets a TemplateDoc into a full HTML document
@@ -28,6 +29,31 @@ function resolveBinding(b: Binding | undefined, data: AdData): string {
     case 'brand':
       return data[b.key] ?? '';
   }
+}
+
+/** Add thousands separators to a plain numeric string ("2999" → "2,999",
+ *  "28995.5" → "28,995.5"). Leaves already-formatted or non-numeric values
+ *  ("$2,999", "36 months") untouched. */
+function withThousands(v: string): string {
+  const s = String(v).trim();
+  const m = s.match(/^(-?)(\d{4,})(\.\d+)?$/); // 4+ digits so short ids/years aren't grouped
+  if (!m) return v;
+  const [, sign, intPart, dec = ''] = m;
+  return sign + Number(intPart).toLocaleString('en-US') + dec;
+}
+
+/** Replace `{{ field }}` tokens in text with live values, so a designer can
+ *  write a whole sentence ("With {{dueAtSigning}} due at signing") or a
+ *  disclaimer in ONE text block. Tokens resolve against the merged data
+ *  (form fields, computed `_offer*` tokens, brand values); number-typed fields
+ *  are comma-formatted. An unknown/empty token renders as nothing. */
+function interpolateTokens(text: string, data: AdData, numberKeys: Set<string>): string {
+  if (!text.includes('{{')) return text;
+  return text.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, key: string) => {
+    const raw = data[key];
+    if (raw == null || raw === '') return '';
+    return numberKeys.has(key) ? withThousands(raw) : raw;
+  });
 }
 
 /** Resolve a color token: `'brand'` → the account color, else the hex, else fallback. */
@@ -193,15 +219,19 @@ interface RenderCtx {
   /** Builder canvas: show empty text bindings as muted placeholders so every
    *  element stays visible + selectable. Off for export. */
   preview: boolean;
+  /** Keys of number-typed fields — their values render with thousands commas. */
+  numberKeys: Set<string>;
 }
 
 function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: RenderCtx): string {
   const { width, height, brand, brandStack } = ctx;
   // data-el-id lets the builder find + move this node live during a drag.
   const idAttr = ` data-el-id="${esc(el.id)}"`;
-  // In the builder, a hidden element is dimmed/blurred (still visible so it can
-  // be re-shown) rather than removed; on export it's omitted entirely.
-  const dim = ctx.preview && box.hidden ? 'opacity:0.35;filter:blur(1.5px);' : '';
+  // In the builder, a hidden element — or an offer-block element that isn't part
+  // of the currently-previewed offer count — is dimmed/blurred (still visible so
+  // it can be selected/re-tagged) rather than removed; on export it's omitted.
+  const dim =
+    ctx.preview && (box.hidden || !elementShownForCount(el, data)) ? 'opacity:0.35;filter:blur(1.5px);' : '';
   // Element-level compositing: opacity (any type) + blend mode. When dimmed in
   // preview, the dim opacity wins so "hidden" stays legible; blend still applies.
   const opacityFx = el.opacity != null && el.opacity < 100 ? `opacity:${clamp01(el.opacity / 100)};` : '';
@@ -301,7 +331,12 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   }
 
   // text
-  let value = esc(resolveBinding(el.binding, data));
+  let raw = resolveBinding(el.binding, data);
+  // Replace {{field}} tokens so one text block can be a full sentence/disclaimer.
+  raw = interpolateTokens(raw, data, ctx.numberKeys);
+  // A text element bound directly to a number field renders with thousands commas.
+  if (el.binding?.kind === 'field' && ctx.numberKeys.has(el.binding.key)) raw = withThousands(raw);
+  let value = esc(raw);
   let placeholder = false;
   if (!value) {
     if (!ctx.preview) return '';
@@ -350,7 +385,8 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
       ? `<link rel="stylesheet" href="${googleFontsUrl.replace(/"/g, '')}" />`
       : '';
   const brandStack = `${fontFamily ? `'${fontFamily}', ` : ''}-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif`;
-  const ctx: RenderCtx = { width, height, brand, brandStack, preview: opts?.preview ?? false };
+  const numberKeys = new Set(doc.fields.filter((f) => f.type === 'number').map((f) => f.key));
+  const ctx: RenderCtx = { width, height, brand, brandStack, preview: opts?.preview ?? false, numberKeys };
 
   const layout = doc.layouts[size.id] ?? {};
   const body = doc.elements
@@ -358,9 +394,15 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
     // Keep hidden elements in PREVIEW (dimmed); drop them on export. Elements
     // dragged fully off the artboard are "detached" (a canvas-only parking spot
     // in the builder) — never part of the rendered ad, so drop them here too.
+    // Offer-block elements that don't match the ad's offer count are likewise
+    // kept-but-dimmed in preview (so the designer can select/re-tag them) and
+    // dropped on export.
     .filter(
       (x): x is { el: DocElement; box: DocLayoutBox } =>
-        Boolean(x.box) && (ctx.preview || !x.box!.hidden) && !isBoxDetached(x.box!),
+        Boolean(x.box) &&
+        (ctx.preview || !x.box!.hidden) &&
+        (ctx.preview || elementShownForCount(x.el, data)) &&
+        !isBoxDetached(x.box!),
     )
     .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0))
     .map(({ el, box }) => renderElement(el, box, data, ctx))

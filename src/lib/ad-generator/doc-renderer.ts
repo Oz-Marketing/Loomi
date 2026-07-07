@@ -54,6 +54,18 @@ function borderRadiusCss(el: DocElement): string {
   return radius ? `border-radius:${radius}px;` : '';
 }
 
+/** Per-side-aware `padding` declaration. Emits a four-value padding (top right
+ *  bottom left) when any per-side override is set, each falling back to the
+ *  all-sides `padding` then 0; otherwise the single `padding`. '' when none. */
+function paddingCss(el: DocElement): string {
+  const { paddingTop, paddingRight, paddingBottom, paddingLeft, padding } = el;
+  if (paddingTop != null || paddingRight != null || paddingBottom != null || paddingLeft != null) {
+    const p = (v?: number) => `${Math.max(0, v ?? padding ?? 0)}px`;
+    return `padding:${p(paddingTop)} ${p(paddingRight)} ${p(paddingBottom)} ${p(paddingLeft)};`;
+  }
+  return padding ? `padding:${padding}px;` : '';
+}
+
 /** Parse a hex color (`#rgb`/`#rgba`/`#rrggbb`/`#rrggbbaa`) → channels + alpha
  *  (0..1). Returns null for non-hex input (e.g. an unresolved `'brand'` token). */
 function hexToRgba(hex: string): { r: number; g: number; b: number; a: number } | null {
@@ -305,8 +317,9 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   const color = placeholder ? '#cbd5e1' : resolveColor(el.color, brand, '#0f172a');
   const items = el.align === 'center' ? 'center' : el.align === 'right' ? 'flex-end' : 'flex-start';
   const bg = !placeholder && el.bg ? `background:${esc(resolveColor(el.bg, brand, brand))};` : '';
-  const padding = el.padding ? `padding:${el.padding}px;` : '';
-  const radius = el.radius ? `border-radius:${el.radius}px;` : '';
+  const padding = paddingCss(el); // per-side-aware
+  // Per-corner-aware (buttons can set each corner independently, like shapes).
+  const radius = borderRadiusCss(el);
   const styles =
     pos +
     `display:flex;flex-direction:column;justify-content:center;align-items:${items};` +

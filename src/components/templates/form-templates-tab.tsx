@@ -46,12 +46,18 @@ export function FormTemplatesTab({ accountKey }: { accountKey?: string }) {
   // sub-accounts only makes sense from the unscoped library view.
   const canDeploy = !accountKey;
   const [deployTarget, setDeployTarget] = useState<FormSummary | null>(null);
+  // key → dealer name, for the shared rail's Subaccount facet labels.
+  const accountLabels = useMemo(
+    () => Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.dealer || k])),
+    [accounts],
+  );
 
-  // Scoping: Admin (no account) → the system library (scope=system, accountKey
-  // null); inside a sub-account → only that account's own templates.
+  // Scoping: Admin (no account) → the WHOLE library (global + every subaccount's
+  // own; filter by scope via the rail's Subaccount facet); inside a sub-account
+  // → only that account's own templates.
   const query = accountKey
     ? `?isTemplate=true&accountKey=${encodeURIComponent(accountKey)}`
-    : '?isTemplate=true&scope=system';
+    : '?isTemplate=true';
   const { data, isLoading, error, mutate } = useSWR<{ forms: FormSummary[] }>(`/api/forms${query}`, fetcher);
   const { data: taxData } = useSWR<{ categories?: string[]; tags?: string[] }>('/api/template-taxonomy', fetcher);
   const taxonomy = useMemo(
@@ -65,6 +71,8 @@ export function FormTemplatesTab({ accountKey }: { accountKey?: string }) {
     getCategory: (f) => f.category,
     getTags: (f) => f.tags,
     getStatus: (f) => (f.status === 'published' ? 'published' : 'draft'),
+    // '' accountKey = system/global template → the global bucket.
+    getAccountKey: (f) => f.accountKey || null,
   });
 
   const patchForm = async (id: string, body: Record<string, unknown>) => {
@@ -170,8 +178,6 @@ export function FormTemplatesTab({ accountKey }: { accountKey?: string }) {
     <>
       <TemplateHeaderActions onCreate={handleCreate} createLabel="New Form Template" onTagsSaved={() => void mutate()} />
       <TemplateLibraryShell
-        search={filters.search}
-        onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
         resultCount={filtered.length}
         rail={
           <TemplateFilterRail
@@ -181,6 +187,9 @@ export function FormTemplatesTab({ accountKey }: { accountKey?: string }) {
             active={active}
             reset={reset}
             showStatus
+            accountLabels={accountLabels}
+            search={filters.search}
+            onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
           />
         }
       >

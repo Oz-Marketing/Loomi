@@ -7,7 +7,7 @@
  * renders <TemplateLibraryShell search rail>{grid}</TemplateLibraryShell>.
  */
 import { useState } from 'react';
-import { MagnifyingGlassIcon, FunnelIcon, XMarkIcon, PlusIcon } from '@heroicons/react/24/outline';
+import { FunnelIcon, XMarkIcon, PlusIcon } from '@heroicons/react/24/outline';
 import type { ComponentType, SVGProps } from 'react';
 
 /**
@@ -47,14 +47,10 @@ export function TemplateEmptyState({
 }
 
 export function TemplateLibraryShell({
-  search,
-  onSearch,
   rail,
   resultCount,
   children,
 }: {
-  search: string;
-  onSearch: (value: string) => void;
   /** A <TemplateFilterRail/> element (or null when there's nothing to filter). */
   rail: React.ReactNode;
   resultCount?: number;
@@ -64,33 +60,32 @@ export function TemplateLibraryShell({
 
   return (
     <div>
-      {/* Search + mobile filter toggle */}
-      <div className="mb-4 flex items-center gap-2">
-        <div className="relative w-full max-w-sm">
-          <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted-foreground)]" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => onSearch(e.target.value)}
-            placeholder="Search name, tag, category…"
-            className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] py-2 pl-9 pr-3 text-sm text-[var(--foreground)] outline-none transition-colors placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)]"
-          />
-        </div>
-        {rail && (
+      {/* Mobile-only filter toggle — the rail (with its own search box) collapses
+          behind it on small screens; on desktop the rail is always shown. */}
+      {rail && (
+        <div className="mb-4 lg:hidden">
           <button
             type="button"
             onClick={() => setRailOpen((v) => !v)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] lg:hidden"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
           >
             {railOpen ? <XMarkIcon className="h-4 w-4" /> : <FunnelIcon className="h-4 w-4" />}
             Filters
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
         {rail && (
-          <div className={`${railOpen ? 'block' : 'hidden'} lg:block`}>{rail}</div>
+          // On desktop the rail sticks below the docked page header and scrolls
+          // on its own (independent of the cards column) so a long facet list
+          // never pushes the page — `top` clears the compacted sticky header,
+          // `max-h` caps it to the remaining viewport.
+          <div
+            className={`${railOpen ? 'block' : 'hidden'} lg:sticky lg:top-[128px] lg:block lg:max-h-[calc(100vh-13rem)] lg:self-start lg:overflow-y-auto lg:overscroll-contain lg:pr-1`}
+          >
+            {rail}
+          </div>
         )}
         <div className="min-w-0 flex-1">
           {children}

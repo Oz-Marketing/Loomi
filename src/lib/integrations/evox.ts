@@ -157,6 +157,35 @@ export async function resolveImageUrl(vifnum: number, colorCode: string, hires =
 }
 
 /**
+ * Fetch a small (640px) transparent-PNG thumbnail for a vehicle+color as raw
+ * bytes — used by the picker's per-color swatch proxy so the ACTUAL jellybean
+ * shows (EVOX's YMM search returns color names but no swatch image/hex). Not
+ * re-hosted to S3 (it's just a preview); the final pick still goes through
+ * resolve + importEvoxImage. Returns null when unavailable.
+ */
+export async function resolveThumbBytes(vifnum: number, colorCode: string): Promise<Buffer | null> {
+  const url = await resolveImageUrl(vifnum, colorCode, false);
+  if (!url) return null;
+  try {
+    const k = apiKey();
+    const headers: Record<string, string> = {};
+    let fetchUrl = url;
+    if (new URL(url).host.includes('api.evoximages.com')) {
+      headers['x-api-key'] = k;
+      if (!url.includes('api_key=')) fetchUrl += `${url.includes('?') ? '&' : '?'}api_key=${encodeURIComponent(k)}`;
+    }
+    const res = await fetch(fetchUrl, { headers, signal: AbortSignal.timeout(TIMEOUT_MS) });
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    const head = buf.subarray(0, 1).toString('latin1');
+    if (head === '{' || head === '<') return null; // JSON/HTML error, not an image
+    return buf;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Download an EVOX image and re-host it on our S3 so saved ads never break when
  * the (pre-signed) EVOX CDN URL expires. Returns our stable URL, or the EVOX
  * URL unchanged if S3 isn't configured. CDN URLs are pre-signed — only

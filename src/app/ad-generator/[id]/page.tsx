@@ -764,7 +764,9 @@ export default function AdGeneratorPage() {
                         />
                       );
                     }
-                    return <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} allowVehiclePicker={showAutomotiveTools} />;
+                    // Managers get the full field, seeded with the offer vehicle
+                    // so its EVOX picker auto-searches the right jellybean (#246).
+                    return <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} allowVehiclePicker={showAutomotiveTools} evoxSeed={evoxSeedFor(f.key, data)} />;
                   })}
                 </div>
               </section>
@@ -978,6 +980,11 @@ function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleMode, ac
     const setVehicle = !(dual && which === 'o2_' && dualVehicleMode === 'same');
     if (setVehicle && (make || model)) {
       patch[`${p}vehicleName`] = [year, make, model].filter(Boolean).join(' ');
+      // Stash the structured vehicle so the EVOX color picker can seed + auto-search
+      // it (no re-typing) — see evoxSeedFor().
+      patch[`${p}_vehYear`] = String(year || '');
+      patch[`${p}_vehMake`] = make || '';
+      patch[`${p}_vehModel`] = model || '';
     }
     onApply(patch);
     toast.success(dual ? `Filled ${which === 'o2_' ? 'Offer 2' : 'Offer 1'} from the incentive` : 'Offer filled from the incentive');
@@ -1241,7 +1248,25 @@ function DisclaimerField({
   );
 }
 
-function Field({ field, value, onChange, allowVehiclePicker }: { field: FieldSpec; value: string; onChange: (v: string) => void; allowVehiclePicker?: boolean }) {
+/** Seed values (year/make/model) for the EVOX picker on a VEHICLE image field —
+ *  from the structured vehicle stashed when a MarketCheck offer was applied, else
+ *  parsed from the composed vehicleName. Empty for non-vehicle image fields. */
+function evoxSeedFor(key: string, data: AdData): { year?: string; make?: string; model?: string } {
+  if (!key.toLowerCase().includes('vehicleimage')) return {};
+  const prefix = key.startsWith('o2_') ? 'o2_' : '';
+  const make = data[`${prefix}_vehMake`];
+  const model = data[`${prefix}_vehModel`];
+  const year = data[`${prefix}_vehYear`];
+  if (make || model) return { year: year || undefined, make: make || undefined, model: model || undefined };
+  const name = (data[`${prefix}vehicleName`] || '').trim();
+  if (!name) return {};
+  const parts = name.split(/\s+/);
+  const y = /^\d{4}$/.test(parts[0]) ? parts[0] : undefined;
+  const rest = y ? parts.slice(1) : parts;
+  return { year: y, make: rest[0], model: rest[1] };
+}
+
+function Field({ field, value, onChange, allowVehiclePicker, evoxSeed }: { field: FieldSpec; value: string; onChange: (v: string) => void; allowVehiclePicker?: boolean; evoxSeed?: { year?: string; make?: string; model?: string } }) {
   const label = (
     <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
       {field.label}
@@ -1268,7 +1293,7 @@ function Field({ field, value, onChange, allowVehiclePicker }: { field: FieldSpe
     );
   }
   if (field.type === 'image') {
-    return <ImageField field={field} value={value} onChange={onChange} allowVehiclePicker={allowVehiclePicker} />;
+    return <ImageField field={field} value={value} onChange={onChange} allowVehiclePicker={allowVehiclePicker} evoxSeed={evoxSeed} />;
   }
   return (
     <div>
@@ -1291,7 +1316,7 @@ function Field({ field, value, onChange, allowVehiclePicker }: { field: FieldSpe
  * vehicle/color re-hosts the transparent PNG on our S3 and drops the stable
  * URL into the field.
  */
-function ImageField({ field, value, onChange, allowVehiclePicker }: { field: FieldSpec; value: string; onChange: (v: string) => void; allowVehiclePicker?: boolean }) {
+function ImageField({ field, value, onChange, allowVehiclePicker, evoxSeed }: { field: FieldSpec; value: string; onChange: (v: string) => void; allowVehiclePicker?: boolean; evoxSeed?: { year?: string; make?: string; model?: string } }) {
   const { accountKey } = useAccount();
   const [open, setOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -1344,22 +1369,50 @@ function ImageField({ field, value, onChange, allowVehiclePicker }: { field: Fie
           onClose={() => setLibraryOpen(false)}
         />
       )}
-      {open && <EvoxPickerModal onClose={() => setOpen(false)} onPick={(url) => { onChange(url); setOpen(false); }} />}
+      {open && <EvoxPickerModal initial={evoxSeed} onClose={() => setOpen(false)} onPick={(url) => { onChange(url); setOpen(false); }} />}
     </div>
   );
 }
 
-/** EVOX vehicle picker: search Year/Make/Model → pick a trim + color → image. */
-function EvoxPickerModal({ onClose, onPick }: { onClose: () => void; onPick: (url: string) => void }) {
+/** A color swatch that shows the ACTUAL jellybean via the thumbnail proxy (EVOX
+ *  search returns no swatch image/hex), falling back to a hex/grey chip on 404. */
+function EvoxColorSwatch({ vifnum, color }: { vifnum: number; color: EvoxColor }) {
+  const [ok, setOk] = useState(true);
+  if (ok) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={`/api/ad-generator/evox/thumb?vifnum=${vifnum}&color=${encodeURIComponent(color.code)}`}
+        alt={color.name || color.code}
+        loading="lazy"
+        onError={() => setOk(false)}
+        className="max-h-full max-w-full object-contain"
+      />
+    );
+  }
+  return <span className="h-6 w-6 rounded-full border border-[var(--border)]" style={{ background: color.rgb ? `#${color.rgb.replace('#', '')}` : '#cbd5e1' }} />;
+}
+
+/** EVOX vehicle picker: search Year/Make/Model → pick a trim + color → image.
+ *  `initial` seeds Year/Make/Model from the already-selected vehicle (e.g. a
+ *  MarketCheck offer) so you don't re-enter it — it auto-searches on open. */
+function EvoxPickerModal({ onClose, onPick, initial }: { onClose: () => void; onPick: (url: string) => void; initial?: { year?: string; make?: string; model?: string } }) {
   const { accountKey } = useAccount();
-  const [year, setYear] = useState(String(EVOX_CURRENT_YEAR));
-  const [make, setMake] = useState('');
-  const [model, setModel] = useState('');
+  const [year, setYear] = useState(initial?.year || String(EVOX_CURRENT_YEAR));
+  const [make, setMake] = useState(initial?.make || '');
+  const [model, setModel] = useState(initial?.model || '');
   const [trim, setTrim] = useState('');
   const [busy, setBusy] = useState(false);
   const [vehicles, setVehicles] = useState<EvoxVehicle[] | null>(null);
   const [notConfigured, setNotConfigured] = useState(false);
   const [picking, setPicking] = useState<string | null>(null);
+
+  // Seeded from a selected vehicle → run the search immediately so the color
+  // options appear without the user re-typing the vehicle.
+  useEffect(() => {
+    if (initial?.make && initial?.model) void search();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const yearOptions: FontSelectOption[] = EVOX_YEARS.map((y) => ({ value: String(y), label: String(y) }));
   const makeOptions: FontSelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
@@ -1494,12 +1547,7 @@ function EvoxPickerModal({ onClose, onPick }: { onClose: () => void; onPick: (ur
                       className="group relative overflow-hidden rounded-lg border border-[var(--border)] p-1.5 text-left transition-colors hover:border-[var(--primary)] disabled:opacity-60"
                     >
                       <div className="flex h-16 items-center justify-center rounded bg-[var(--muted)]/40">
-                        {c.thumbUrl ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={c.thumbUrl} alt={c.name} className="max-h-full max-w-full object-contain" />
-                        ) : (
-                          <span className="h-6 w-6 rounded-full border border-[var(--border)]" style={{ background: c.rgb ? `#${c.rgb.replace('#', '')}` : '#cbd5e1' }} />
-                        )}
+                        <EvoxColorSwatch vifnum={v.vifnum} color={c} />
                       </div>
                       <div className="mt-1 flex items-center gap-1.5">
                         <span className="h-3 w-3 flex-shrink-0 rounded-full border border-[var(--border)]" style={{ background: c.rgb ? `#${c.rgb.replace('#', '')}` : 'transparent' }} />

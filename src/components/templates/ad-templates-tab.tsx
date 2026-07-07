@@ -66,21 +66,27 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
   // Human name for a template's scope: its account's dealer name, or "All
   // accounts" for a global (unscoped) template.
   const scopeName = (key: string | null) => (key ? accounts[key]?.dealer ?? key : null);
+  // key → dealer name, for the shared rail's Subaccount facet labels.
+  const accountLabels = useMemo(
+    () => Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.dealer || k])),
+    [accounts],
+  );
   const { confirm } = useLoomiDialog();
 
   const { data, isLoading, error, mutate } = useSWR<{ templates?: DocTemplate[] }>(
     '/api/ad-generator/templates-doc?all=1',
     fetcher,
   );
-  // Scoping: at Admin (no account) you manage the SYSTEM library (global,
-  // accountKey null); inside a sub-account you see ONLY that account's own
-  // templates (never the system library). Industry filter still applies.
+  // Scoping: at Admin (no account) you manage the WHOLE library — global
+  // templates AND every subaccount's own (filter by scope via the rail's
+  // Subaccount facet); inside a sub-account you see only that account's own.
+  // Industry filter still applies.
   const templates = useMemo(
     () =>
       (data?.templates ?? [])
         .filter((t) => t.doc)
-        .filter((t) => (accountKey ? t.accountKey === accountKey : t.accountKey == null))
-        .filter((t) => templateInIndustry({ industries: t.doc!.industries, fields: t.doc!.fields }, accountData?.category)),
+        .filter((t) => (accountKey ? t.accountKey === accountKey : true))
+        .filter((t) => templateInIndustry({ industries: t.doc!.industries }, accountData?.category)),
     [data, accountKey, accountData?.category],
   );
   const branding = useMemo(() => brandingFromAccount(accountData), [accountData]);
@@ -96,6 +102,7 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
     getCategory: (t) => t.category,
     getTags: (t) => t.tags,
     getStatus: (t) => (t.status === 'published' ? 'published' : 'draft'),
+    getAccountKey: (t) => t.accountKey,
   });
 
   // Every builder link carries `from` (this page + the Ads tab) so Back returns
@@ -287,8 +294,6 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
         />
       ) : (
         <TemplateLibraryShell
-          search={filters.search}
-          onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
           resultCount={filtered.length}
           rail={
             <TemplateFilterRail
@@ -298,6 +303,9 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
               active={active}
               reset={reset}
               showStatus
+              accountLabels={accountLabels}
+              search={filters.search}
+              onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
             />
           }
         >

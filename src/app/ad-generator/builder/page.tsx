@@ -68,7 +68,7 @@ import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
-import { CornerBox, NumberInput } from '@/lib/email/editor/PropertyControls';
+import { CornerBox, SpacingBox, NumberInput } from '@/lib/email/editor/PropertyControls';
 import { GOOGLE_FONTS, googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { singleOfferDoc, dualOfferDoc } from '@/lib/ad-generator/templates/offer-docs';
@@ -80,9 +80,10 @@ import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type LayerNode } fro
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon, CropIcon } from '@/components/ad-generator/builder-icons';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
-import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode } from '@/lib/ad-generator/doc-types';
+import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType, AdData, AdSize } from '@/lib/ad-generator/types';
-import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
+import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
+import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
 const MIN_FRAC = 0.03; // smallest element edge as a fraction of the canvas
@@ -192,6 +193,56 @@ const OFFER_LABEL_OVERRIDE: Record<string, string> = {
   _offerLabel: 'offerLabel',
   _o2_offerLabel: 'o2_offerLabel',
 };
+
+// ── Content-source binding picker ──
+// The inspector's "Shows" control lets a designer point an element at a template
+// field, a computed offer value, brand data, or a static literal — so a
+// from-scratch layout can be wired to the offer engine (no code template needed).
+// Options are encoded as `static` | `field:<key>` | `brand:<key>` strings.
+const OFFER_TOKENS: { key: string; label: string }[] = [
+  { key: '_offerLabel', label: 'Offer label' },
+  { key: '_offerMain', label: 'Offer amount' },
+  { key: '_offerTerms', label: 'Offer terms' },
+];
+const OFFER_TOKENS_O2: { key: string; label: string }[] = [
+  { key: '_o2_offerLabel', label: 'Offer 2 label' },
+  { key: '_o2_offerMain', label: 'Offer 2 amount' },
+  { key: '_o2_offerTerms', label: 'Offer 2 terms' },
+];
+
+function bindingToSourceValue(b: Binding | undefined): string {
+  if (!b || b.kind === 'static') return 'static';
+  if (b.kind === 'field') return `field:${b.key}`;
+  return `brand:${b.key}`;
+}
+function sourceValueToBinding(v: string, currentValue: string): Binding {
+  if (v.startsWith('field:')) return { kind: 'field', key: v.slice(6) };
+  if (v.startsWith('brand:')) return { kind: 'brand', key: v.slice(6) as 'dealerName' | 'logoUrl' | 'brandColor' };
+  return { kind: 'static', value: currentValue };
+}
+/** Build the "Shows" options for an element: static, the template's compatible
+ *  fields, the computed offer tokens (text only), and brand data. */
+function buildContentSources(el: DocElement, fields: FieldSpec[]): SearchableSelectOption[] {
+  const isImage = el.type === 'image' || el.type === 'logo' || el.type === 'background';
+  const opts: SearchableSelectOption[] = [
+    { value: 'static', label: isImage ? 'Fixed image' : 'Type it in', group: 'Custom' },
+  ];
+  for (const f of fields) {
+    const fieldIsImage = f.type === 'image';
+    if (isImage !== fieldIsImage) continue; // image elements ↔ image fields; text ↔ the rest
+    opts.push({ value: `field:${f.key}`, label: f.label || f.key, group: 'Fields' });
+  }
+  if (!isImage) {
+    for (const t of OFFER_TOKENS) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Offer (auto)' });
+    if (fields.some((f) => f.key === 'o2_offerType')) {
+      for (const t of OFFER_TOKENS_O2) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Offer (auto)' });
+    }
+    opts.push({ value: 'brand:dealerName', label: 'Dealer name', group: 'Brand' });
+  } else {
+    opts.push({ value: 'brand:logoUrl', label: 'Account logo', group: 'Brand' });
+  }
+  return opts;
+}
 const WEIGHT_OPTIONS: FontSelectOption[] = [
   { value: '300', label: 'Light' },
   { value: '400', label: 'Regular' },
@@ -230,6 +281,25 @@ const TYPE_ICON: Record<DocElementType, React.ComponentType<{ className?: string
   shape: ShapeElementIcon,
   background: SwatchIcon,
 };
+
+// Element colour coding, used everywhere an element is referenced (Insert
+// palette, canvas selection outline + handles, Layers rows, the inspector type
+// badge): Text = blue, Image = pink, Button = purple, Shape = orange. A
+// "button" is a styled text element (a text el with a background pill).
+type ElementKind = 'text' | 'image' | 'button' | 'shape' | 'logo';
+const KIND_COLOR: Record<ElementKind, string> = {
+  text: '#3b82f6', // blue
+  image: '#ec4899', // pink
+  button: '#a855f7', // purple
+  shape: '#f97316', // orange
+  logo: '#14b8a6', // teal
+};
+function elementKind(el: { type: DocElementType; bg?: string }): ElementKind {
+  if (el.type === 'shape') return 'shape';
+  if (el.type === 'logo') return 'logo';
+  if (el.type === 'image' || el.type === 'background') return 'image';
+  return el.bg ? 'button' : 'text'; // text with a pill background reads as a Button
+}
 
 type SavedTemplate = {
   id: string;
@@ -474,6 +544,11 @@ export default function AdBuilderPage() {
   const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [fieldsOpen, setFieldsOpen] = useState(false);
+  // The element inspector and the Fields panel never share the screen (they'd
+  // overlap on the right) — selecting an element closes Fields.
+  useEffect(() => {
+    if (selectedIds.length) setFieldsOpen(false);
+  }, [selectedIds]);
   // Left rail: which panel (Elements / Layers / Industries / Sizes) is open as a
   // flyout. null = collapsed to just the icons.
   const [leftPanel, setLeftPanel] = useState<'insert' | 'layers' | null>(null);
@@ -550,6 +625,15 @@ export default function AdBuilderPage() {
   // Guards the one-time `?template=<id>` deep-load (edit a template from the
   // Templates → Ads tab).
   const deepLinkedRef = useRef(false);
+
+  // A NEW (unsaved) template inherits the active account's scope: building
+  // inside a subaccount publishes ONLY to that subaccount; building on the
+  // Admin account (accountKey null) publishes global ("All accounts"). A loaded
+  // template keeps its own stored scope (loadTemplate sets both id + scope), so
+  // we only sync while there's no template id and we're not in ad mode.
+  useEffect(() => {
+    if (!templateId && !adId) setScopeAccount(accountKey ?? null);
+  }, [accountKey, templateId, adId]);
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
 
@@ -987,6 +1071,13 @@ export default function AdBuilderPage() {
     return { mode: isImage ? 'image-edit' : 'text-edit', value };
   }, [selected, previewData]);
 
+  // "Shows" options for the selected element's Content source picker — its
+  // template fields + computed offer tokens + brand data (see buildContentSources).
+  const contentSources = useMemo<SearchableSelectOption[]>(
+    () => (selected ? buildContentSources(selected, doc.fields) : []),
+    [selected, doc.fields],
+  );
+
   // Write the selected element's content back to its source: static → the literal,
   // field → that field's default (the form data the generator prefills).
   const setSelectedContent = useCallback(
@@ -1149,54 +1240,6 @@ export default function AdBuilderPage() {
     });
   }, [doc.elements, setElement]);
 
-  // Best-practice text sizing: after a text resize, shrink the box to HUG its
-  // content so there's no leftover whitespace (industry standard — Canva/Figma).
-  // Height always hugs; width hugs too when the text is a single line (point
-  // text), while multi-line/paragraph text keeps its width and just reflows.
-  // Measured in the builder (from the live node) and stored, so the export —
-  // which renders the same stored box — stays pixel-perfect.
-  const fitTextBox = useCallback(
-    (elId: string, sizeId: string, baseBox: DocLayoutBox) => {
-      const idoc = iframeRef.current?.contentDocument;
-      const node = idoc?.querySelector(`[data-el-id="${elId}"]`) as HTMLElement | null;
-      const el = doc.elements.find((e) => e.id === elId);
-      if (!idoc || !node || el?.type !== 'text') {
-        setBox(sizeId, elId, baseBox);
-        return;
-      }
-      let bb: DOMRect;
-      let lineCount = 1;
-      try {
-        const range = idoc.createRange();
-        range.selectNodeContents(node);
-        const rects = [...range.getClientRects()];
-        bb = range.getBoundingClientRect();
-        lineCount = Math.max(1, new Set(rects.map((r) => Math.round(r.top))).size);
-      } catch {
-        setBox(sizeId, elId, baseBox);
-        return;
-      }
-      if (!bb.width || !bb.height) {
-        setBox(sizeId, elId, baseBox);
-        return;
-      }
-      const fs = baseBox.fontSize ?? 16;
-      const natH = bb.height / scale + fs * 0.24; // native px + a little breathing room
-      const newH = clamp(natH / size.height, MIN_FRAC, 1.5);
-      const patch: DocLayoutBox = { ...baseBox, h: newH };
-      patch.y = baseBox.y + baseBox.h / 2 - newH / 2; // keep vertical center
-      if (lineCount <= 1) {
-        const natW = bb.width / scale + fs * 0.2;
-        const newW = clamp(natW / size.width, MIN_FRAC, 1.5);
-        if (el.align === 'center') patch.x = baseBox.x + baseBox.w / 2 - newW / 2;
-        else if (el.align === 'right') patch.x = baseBox.x + baseBox.w - newW;
-        patch.w = newW;
-      }
-      setBox(sizeId, elId, patch);
-    },
-    [doc.elements, size.width, size.height, scale, setBox],
-  );
-
   // In-place text editing: turn the ACTUAL rendered node inside the iframe into a
   // contenteditable so the caret sits in the real text (WYSIWYG), rather than a
   // floating textarea. Runs once per edit session (keyed on the element id);
@@ -1356,8 +1399,9 @@ export default function AdBuilderPage() {
         fontWeight: 700,
         color: '#ffffff',
         align: 'center',
-        bg: 'brand',
-        radius: 999,
+        // A concrete black square by default — no `radius` (square) and a real
+        // hex (not `'brand'`, which rendered a colour the swatch didn't reflect).
+        bg: '#000000',
         padding: 14,
       };
       return { ...prev, elements: [...prev.elements, el], layouts };
@@ -1389,21 +1433,61 @@ export default function AdBuilderPage() {
     if (selected) setElement(selected.id, patch, `el:${selected.id}:${Object.keys(patch).sort().join(',')}`);
   };
 
-  // Z-order within the current size (z lives per-size on the box).
-  function bringForward() {
-    if (!selected || !selectedBox) return;
-    const maxZ = Object.values(layout).reduce((m, b) => Math.max(m, b.z ?? 0), 0);
-    setBox(size.id, selected.id, { ...selectedBox, z: maxZ + 1 });
-  }
-  function sendBack() {
-    if (!selected || !selectedBox) return;
-    const minZ = Object.values(layout).reduce((m, b) => Math.min(m, b.z ?? 0), 0);
-    setBox(size.id, selected.id, { ...selectedBox, z: minZ - 1 });
-  }
+  // Z-order within the current size (z lives per-size on the box). Front/back
+  // JUMP past everything; forward/backward STEP one layer by normalizing the
+  // stack to contiguous z then swapping the neighbour (ties broken by element
+  // order so a step is always deterministic). Functional setDoc so consecutive
+  // presses read fresh z.
+  const applyZ = useCallback(
+    (mode: 'front' | 'back' | 'forward' | 'backward') => {
+      if (selectedIds.length !== 1) return;
+      const id = selectedIds[0];
+      setDoc((prev) => {
+        const lay = prev.layouts[size.id] ?? {};
+        const b = lay[id];
+        if (!b) return prev;
+        if (mode === 'front' || mode === 'back') {
+          const zs = Object.values(lay).map((x) => x.z ?? 0);
+          const nz = mode === 'front' ? Math.max(...zs) + 1 : Math.min(...zs) - 1;
+          return { ...prev, layouts: { ...prev.layouts, [size.id]: { ...lay, [id]: { ...b, z: nz } } } };
+        }
+        const ids = Object.keys(lay);
+        if (ids.length < 2) return prev;
+        const elIndex = new Map(prev.elements.map((e, i) => [e.id, i] as const));
+        const order = ids.slice().sort((a, c) => {
+          const za = lay[a].z ?? 0;
+          const zc = lay[c].z ?? 0;
+          return za !== zc ? za - zc : (elIndex.get(a) ?? 0) - (elIndex.get(c) ?? 0);
+        });
+        const i = order.indexOf(id);
+        const j = i + (mode === 'forward' ? 1 : -1);
+        if (i < 0 || j < 0 || j >= order.length) return prev; // already at an end
+        [order[i], order[j]] = [order[j], order[i]];
+        const next = { ...lay };
+        order.forEach((eid, idx) => {
+          next[eid] = { ...next[eid], z: idx };
+        });
+        return { ...prev, layouts: { ...prev.layouts, [size.id]: next } };
+      }, `z:${mode}:${id}`);
+    },
+    [selectedIds, size.id],
+  );
 
   // ── template field-list operations ──
   const addField = () => {
     setDoc((prev) => ({ ...prev, fields: [...prev.fields, { key: `field_${rid()}`, label: 'New field', type: 'text' }] }));
+  };
+  // Inject the standard offer/vehicle question set (single or dual) so a
+  // designer can make ANY template client-manipulable — deduped by key, defaults
+  // seeded, never clobbering existing fields (see addFieldKit).
+  const addOfferFieldKit = (mode: 'single' | 'dual') => {
+    const added = addFieldKit(doc, mode).fields.length - doc.fields.length;
+    if (added === 0) {
+      toast('Those offer fields are already in this template.');
+      return;
+    }
+    setDoc((prev) => addFieldKit(prev, mode), `offerkit:${mode}`);
+    toast.success(`Added ${added} ${mode === 'dual' ? 'dual-offer' : 'offer'} field${added === 1 ? '' : 's'}`);
   };
   const updateFieldAt = (i: number, patch: Partial<FieldSpec>) => {
     setDoc((prev) => ({ ...prev, fields: prev.fields.map((f, idx) => (idx === i ? { ...f, ...patch } : f)) }), `field:${i}:${Object.keys(patch).sort().join(',')}`);
@@ -2012,8 +2096,12 @@ export default function AdBuilderPage() {
     const dyF = (e.clientY - d.sy) / d.fh;
     if (d.kind === 'single') {
       let box = computeBox(d.handle, d.start, dxF, dyF);
-      // Shift = constrain to the element's original aspect ratio (all elements).
-      if (d.handle !== 'move' && e.shiftKey) box = lockAspect(d.handle, d.start, box, d.nw, d.nh);
+      // Text sizing: font size is a PANEL property. A plain drag freely resizes
+      // the box (width sets the wrap; the box keeps whatever you drag). Holding
+      // ⌘/Ctrl SCALES the font (and locks aspect so the text scales like an
+      // object). Shift locks aspect for any element.
+      const scaleText = d.scaleFont && (e.metaKey || e.ctrlKey) && !!d.start.fontSize && d.start.h > 0;
+      if (d.handle !== 'move' && (e.shiftKey || scaleText)) box = lockAspect(d.handle, d.start, box, d.nw, d.nh);
       let gx: number | null = null;
       let gy: number | null = null;
       if (d.handle === 'move') {
@@ -2023,9 +2111,8 @@ export default function AdBuilderPage() {
         box.y = clamp(box.y + sy.off, 0, 1 - box.h);
         gx = sx.guide;
         gy = sy.guide;
-      } else if (d.scaleFont && d.start.fontSize && d.start.h > 0) {
-        // Resizing text scales the font with the box height (not just reflow).
-        box.fontSize = Math.max(4, Math.round(d.start.fontSize * (box.h / d.start.h)));
+      } else if (scaleText) {
+        box.fontSize = Math.max(4, Math.round(d.start.fontSize! * (box.h / d.start.h)));
       }
       d.live = box;
       setDragBox(box);
@@ -2079,13 +2166,8 @@ export default function AdBuilderPage() {
   onUpRef.current = () => {
     const d = dragRef.current;
     if (d?.kind === 'single') {
-      // After resizing a TEXT element, hug the box to the content (no whitespace).
-      const el = doc.elements.find((e) => e.id === d.elId);
-      if (el?.type === 'text' && d.handle !== 'move') {
-        fitTextBox(d.elId, d.sizeId, d.live);
-      } else {
-        setBox(d.sizeId, d.elId, d.live);
-      }
+      // Commit the drag as-is — text/button boxes size freely (no auto-hug).
+      setBox(d.sizeId, d.elId, d.live);
     } else if (d?.kind === 'group' || d?.kind === 'groupresize') {
       setDoc((prev) => {
         const lay = { ...(prev.layouts[d.sizeId] ?? {}) };
@@ -2453,19 +2535,11 @@ export default function AdBuilderPage() {
         if (e.shiftKey) ungroupSelected();
         else groupSelected();
       } else if (key === ']' || key === '[') {
-        // Bring forward (⌘]) / send back (⌘[) — z-order within the current size.
-        // Functional setDoc so consecutive presses read fresh z, not a stale closure.
+        // Z-order: ⌘] forward one / ⌘[ back one; add ⇧ to jump to front/back.
         if (selectedIds.length !== 1) return;
         e.preventDefault();
-        const id = selectedIds[0];
-        setDoc((prev) => {
-          const lay = prev.layouts[size.id] ?? {};
-          const b = lay[id];
-          if (!b) return prev;
-          const zs = Object.values(lay).map((x) => x.z ?? 0);
-          const nz = key === ']' ? Math.max(...zs) + 1 : Math.min(...zs) - 1;
-          return { ...prev, layouts: { ...prev.layouts, [size.id]: { ...lay, [id]: { ...b, z: nz } } } };
-        });
+        const forward = key === ']';
+        applyZ(e.shiftKey ? (forward ? 'front' : 'back') : forward ? 'forward' : 'backward');
       } else if (key === 'd') {
         // Duplicate (⌘D) the single selected element.
         if (selectedIds.length !== 1) return;
@@ -2476,7 +2550,7 @@ export default function AdBuilderPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [undo, redo, selectedIds, doc.elements, doc.groups, size.id, duplicateElement]);
+  }, [undo, redo, selectedIds, doc.elements, doc.groups, size.id, duplicateElement, applyZ]);
 
   // Autosave — debounced PATCH once there's a target (a saved template, or the
   // ad in ad mode). New/unsaved templates require an explicit Save first.
@@ -2508,11 +2582,12 @@ export default function AdBuilderPage() {
 
   // Element adders. A "Button" is a styled text element (no separate type); a
   // background is just an Image set to Fill — so no Logo / Background adders.
-  const adders: { label: string; Icon: React.ComponentType<{ className?: string }>; onAdd: () => void }[] = [
-    { label: 'Text', Icon: TextElementIcon, onAdd: () => addElement('text') },
-    { label: 'Image', Icon: PhotoIcon, onAdd: () => addElement('image') },
-    { label: 'Button', Icon: ButtonElementIcon, onAdd: addButton },
-    { label: 'Shape', Icon: ShapeElementIcon, onAdd: () => addElement('shape') },
+  const adders: Adder[] = [
+    { label: 'Text', Icon: TextElementIcon, onAdd: () => addElement('text'), color: KIND_COLOR.text },
+    { label: 'Image', Icon: PhotoIcon, onAdd: () => addElement('image'), color: KIND_COLOR.image },
+    { label: 'Button', Icon: ButtonElementIcon, onAdd: addButton, color: KIND_COLOR.button },
+    { label: 'Shape', Icon: ShapeElementIcon, onAdd: () => addElement('shape'), color: KIND_COLOR.shape },
+    { label: 'Logo', Icon: BuildingStorefrontIcon, onAdd: () => addElement('logo'), color: KIND_COLOR.logo },
     // No separate "Background": a background is a full-bleed Image (photo/texture)
     // or Shape (solid/gradient) — use those + the "Fill artboard & send to back"
     // action on the element's inspector.
@@ -2742,6 +2817,20 @@ export default function AdBuilderPage() {
                 action bar (bottom); view guides (outlines / margins) live here. */}
             <RailButton label="Insert" Icon={PlusIcon} primary active={leftPanel === 'insert'} onClick={() => setLeftPanel((p) => (p === 'insert' ? null : 'insert'))} />
             <RailButton label="Layers" Icon={LayersIcon} active={leftPanel === 'layers'} onClick={() => setLeftPanel((p) => (p === 'layers' ? null : 'layers'))} />
+            {/* Fields — the form that drives the ad (offer/vehicle/legal inputs +
+                element bindings). Right-docked panel, so it toggles on its own. */}
+            <RailButton
+              label="Fields"
+              Icon={Bars3BottomLeftIcon}
+              active={fieldsOpen}
+              onClick={() =>
+                setFieldsOpen((v) => {
+                  const next = !v;
+                  if (next) clearSelection(); // Fields + element inspector never share the screen
+                  return next;
+                })
+              }
+            />
             <div className="my-0.5 h-px w-6 bg-[var(--border)]" />
             {/* View guides — element outlines + safe-area margins (moved off the
                 canvas header so all the view controls sit on the rail). */}
@@ -2786,7 +2875,7 @@ export default function AdBuilderPage() {
             <div className="pointer-events-none absolute inset-y-0 left-full z-30 ml-2 flex w-[320px] flex-col gap-4 overflow-y-auto pb-1 pr-1">
           {/* Insert — element palette. Click a tile to drop it on the canvas. */}
           {leftPanel === 'insert' && (
-          <section className="glass-card pointer-events-auto rounded-2xl border border-[var(--border)] p-4">
+          <section className="pointer-events-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl">
             <h2 className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
               <PlusIcon className="h-3.5 w-3.5" />
               Insert
@@ -2799,7 +2888,7 @@ export default function AdBuilderPage() {
           {/* Layers — the stack of placed elements (top of the list = front).
               Double-click to rename · lock icon to lock · drag to reorder (z). */}
           {leftPanel === 'layers' && (
-          <section className="glass-card pointer-events-auto rounded-2xl border border-[var(--border)] p-4">
+          <section className="pointer-events-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
                 <LayersIcon className="h-3.5 w-3.5" />
@@ -2919,7 +3008,9 @@ export default function AdBuilderPage() {
                           className={`flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left ${isSel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}
                           title="Double-click to rename"
                         >
-                          <Icon className="h-4 w-4 flex-shrink-0 opacity-70" />
+                          <span className="flex-shrink-0" style={{ color: KIND_COLOR[elementKind(el)] }}>
+                            <Icon className="h-4 w-4" />
+                          </span>
                           <span className="min-w-0 flex-1 truncate text-xs font-medium">{elName(el)}</span>
                         </button>
                       )}
@@ -3142,21 +3233,33 @@ export default function AdBuilderPage() {
                     <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center p-6">
                       {/* faint dashed frame hinting the design area */}
                       <div className="pointer-events-none absolute inset-3 rounded-2xl border border-dashed border-[var(--primary)]/20" />
-                      <div className="pointer-events-auto relative w-full max-w-[22rem] overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--card-strong)]/95 shadow-2xl backdrop-blur-xl">
-                        <div className="flex flex-col items-center gap-2 bg-gradient-to-b from-[var(--primary)]/12 to-transparent px-6 pb-2 pt-6 text-center">
-                          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[#a855f7] text-white shadow-lg shadow-[var(--primary)]/30">
-                            <PaintBrushIcon className="h-6 w-6" />
+                      <div className="pointer-events-auto relative w-full max-w-[26rem] animate-fade-in-up">
+                        {/* Soft glow in the four element-palette colours so a blank
+                            canvas still feels alive + on-brand. */}
+                        <div
+                          aria-hidden
+                          className="pointer-events-none absolute -inset-8 -z-10 opacity-70 blur-3xl"
+                          style={{
+                            background:
+                              'radial-gradient(38% 38% at 22% 18%, #3b82f655, transparent 70%), radial-gradient(38% 38% at 82% 16%, #ec489955, transparent 70%), radial-gradient(42% 42% at 78% 88%, #a855f755, transparent 70%), radial-gradient(38% 38% at 18% 86%, #f9731655, transparent 70%)',
+                          }}
+                        />
+                        <div className="overflow-hidden rounded-3xl border border-[var(--border)] bg-[var(--card-strong)]/95 shadow-2xl backdrop-blur-xl">
+                          <div className="flex flex-col items-center gap-2 bg-gradient-to-b from-[var(--primary)]/12 to-transparent px-6 pb-3 pt-7 text-center">
+                            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-[var(--primary)] to-[#a855f7] text-white shadow-lg shadow-[var(--primary)]/30">
+                              <PaintBrushIcon className="h-7 w-7" />
+                            </div>
+                            <h3 className="text-lg font-bold text-[var(--foreground)]">Design your ad</h3>
+                            <p className="max-w-[17rem] text-xs leading-relaxed text-[var(--muted-foreground)]">
+                              Drop in your first element to start — text, image, button, or shape.
+                            </p>
                           </div>
-                          <h3 className="text-base font-bold text-[var(--foreground)]">Design your ad</h3>
-                          <p className="max-w-[16rem] text-xs leading-relaxed text-[var(--muted-foreground)]">
-                            Start with your first element — text, an image, a button, or a shape.
-                          </p>
-                        </div>
-                        <div className="px-5 pb-5 pt-3">
-                          <AdderGrid adders={adders} variant="onboarding" />
-                        </div>
-                        <div className="border-t border-[var(--border)] px-5 py-2.5 text-center text-[11px] text-[var(--muted-foreground)]">
-                          Need a different size? Open <span className="font-medium text-[var(--foreground)]">Sizes</span> from the bar below.
+                          <div className="px-5 pb-5 pt-3">
+                            <AdderGrid adders={adders} variant="onboarding" />
+                          </div>
+                          <div className="border-t border-[var(--border)] px-5 py-2.5 text-center text-[11px] text-[var(--muted-foreground)]">
+                            Need a different size? Open <span className="font-medium text-[var(--foreground)]">Sizes</span> from the bar below.
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -3210,7 +3313,11 @@ export default function AdBuilderPage() {
                     // spot). The iframe clips it away, so the builder draws its
                     // visual here in the (unclipped) overlay instead.
                     const detached = isDetached(b);
+                    // Type colour (Text=blue / Image=pink / Button=purple /
+                    // Shape=orange), exposed as `--kind` for the ring + handles.
+                    const kindColor = KIND_COLOR[elementKind(el)];
                     const boxStyle: CSSProperties = {
+                      ['--kind' as string]: kindColor,
                       left: b.x * frameW,
                       top: b.y * frameH,
                       width: b.w * frameW,
@@ -3267,9 +3374,9 @@ export default function AdBuilderPage() {
                         <span
                           className={`pointer-events-none absolute inset-0 rounded-[2px] ring-inset transition-colors ${
                             isCropping
-                              ? 'ring-2 ring-[var(--primary)]'
+                              ? 'ring-2 ring-[var(--kind)]'
                               : isSel
-                                ? 'ring-2 ring-[var(--primary)] bg-[var(--primary)]/10'
+                                ? 'ring-2 ring-[var(--kind)]'
                                 : detached
                                   ? 'ring-1 ring-dashed ring-amber-500/70 group-hover:ring-amber-500'
                                   : box.hidden
@@ -3278,17 +3385,21 @@ export default function AdBuilderPage() {
                                       ? 'ring-[1.5px] ring-dashed ring-[var(--primary)]/55 group-hover:ring-[var(--primary)]/90'
                                       : 'group-hover:ring-[1.5px] group-hover:ring-[var(--primary)]/70'
                           }`}
+                          style={isSel && !isCropping ? { backgroundColor: `${kindColor}1a` } : undefined}
                         />
                         {isSingleSel && (
                           <>
-                            <span className={`pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium text-white ${detached ? 'bg-amber-500' : 'bg-[var(--primary)]'}`}>
+                            <span
+                              className={`pointer-events-none absolute -top-5 left-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-medium text-white ${detached ? 'bg-amber-500' : ''}`}
+                              style={detached ? undefined : { backgroundColor: kindColor }}
+                            >
                               {isCropping ? 'Crop — drag to reposition' : detached ? `${elName(el)} — detached` : elName(el)}
                             </span>
                             {RESIZE_HANDLES.map((rh) => (
                               <span
                                 key={rh.h}
                                 onPointerDown={(e) => startSingleDrag(e, el.id, rh.h)}
-                                className="absolute h-2.5 w-2.5 rounded-[2px] border border-[var(--primary)] bg-[var(--card)]"
+                                className="absolute h-2.5 w-2.5 rounded-[2px] border border-[var(--kind)] bg-[var(--card)]"
                                 style={{
                                   left: `${rh.x * 100}%`,
                                   top: `${rh.y * 100}%`,
@@ -3510,6 +3621,7 @@ export default function AdBuilderPage() {
                   fontOptions={fontOptions}
                   brandLogos={brandLogos}
                   content={selectionContent}
+                  contentSources={contentSources}
                   onContentChange={setSelectedContent}
                   accountKey={accountKey ?? undefined}
                   onEl={updEl}
@@ -3539,6 +3651,7 @@ export default function AdBuilderPage() {
           defaults={doc.defaults}
           onClose={() => setFieldsOpen(false)}
           onAdd={addField}
+          onAddKit={addOfferFieldKit}
           onUpdate={updateFieldAt}
           onRename={renameFieldKeyAt}
           onDelete={deleteFieldAt}
@@ -3653,8 +3766,10 @@ export default function AdBuilderPage() {
                   )}
                   {single && (
                     <>
-                      <Item onClick={bringForward} kbd="⌘]">Bring forward</Item>
-                      <Item onClick={sendBack} kbd="⌘[">Send back</Item>
+                      <Item onClick={() => applyZ('front')} kbd="⌘⇧]">Bring to front</Item>
+                      <Item onClick={() => applyZ('forward')} kbd="⌘]">Bring forward</Item>
+                      <Item onClick={() => applyZ('backward')} kbd="⌘[">Send backward</Item>
+                      <Item onClick={() => applyZ('back')} kbd="⌘⇧[">Send to back</Item>
                       <Item onClick={() => duplicateElement(single.id)} kbd="⌘D">Duplicate</Item>
                       <Item onClick={() => toggleLock(single.id)}>{single.locked ? 'Unlock' : 'Lock'}</Item>
                       <Item onClick={() => toggleHidden(single.id)}>{selectedBox?.hidden ? 'Show in this size' : 'Hide in this size'}</Item>
@@ -3724,9 +3839,68 @@ function LabeledInput({
         type={type ?? 'text'}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+        className="w-full rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
       />
     </label>
+  );
+}
+
+/**
+ * A minimal custom dropdown styled to match `LabeledInput` (same border /
+ * `--card` background / compact size) so the Fields editor's Type control reads
+ * as one of the text fields, not a heavier native-looking select.
+ */
+function CompactSelect({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+  const sel = options.find((o) => o.value === value);
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-xs text-[var(--foreground)] outline-none transition-colors hover:border-[var(--primary)] focus:border-[var(--primary)]"
+      >
+        <span className="truncate">{sel?.label ?? value}</span>
+        <ChevronDownIcon className={`h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 z-50 mt-1 overflow-hidden rounded-md border border-[var(--border)] bg-[var(--card-strong)] p-1 shadow-lg backdrop-blur-2xl">
+          {options.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              onClick={() => {
+                onChange(o.value);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-xs transition-colors ${
+                o.value === value ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
+              }`}
+            >
+              <span className="truncate">{o.label}</span>
+              {o.value === value && <CheckIcon className="h-3 w-3 shrink-0" />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -3791,7 +3965,14 @@ function FieldRow({
   onSetDefault: (i: number, val: string) => void;
 }) {
   return (
-    <div className="rounded-lg border border-[var(--border)]">
+    // Subtle fill so a field row lifts off the group section it sits in (they
+    // otherwise share the panel background and blend together); the opened row
+    // gets a slight outline so the active one reads clearly.
+    <div
+      className={`rounded-lg border bg-[var(--muted)]/40 ${
+        expanded ? 'border-[var(--muted-foreground)]/40 ring-1 ring-[var(--muted-foreground)]/20' : 'border-[var(--border)]'
+      }`}
+    >
       <div className="flex items-center gap-2 px-3 py-2">
         <button onClick={onToggle} className="flex flex-1 items-center gap-2 text-left">
           <span className="truncate text-xs font-medium text-[var(--foreground)]">{field.label || field.key}</span>
@@ -3814,7 +3995,7 @@ function FieldRow({
           </div>
           <div className="grid grid-cols-2 gap-2">
             <SelectRow label="Type">
-              <FontSelect value={field.type} onChange={(v) => onUpdate(index, { type: v as FieldType })} options={FIELD_TYPE_OPTIONS} previewFont={false} />
+              <CompactSelect value={field.type} onChange={(v) => onUpdate(index, { type: v as FieldType })} options={FIELD_TYPE_OPTIONS} />
             </SelectRow>
             <LabeledInput label="Group" value={field.group ?? ''} onChange={(v) => onUpdate(index, { group: v || undefined })} />
           </div>
@@ -3847,6 +4028,7 @@ function FieldsSidebar({
   defaults,
   onClose,
   onAdd,
+  onAddKit,
   onUpdate,
   onRename,
   onDelete,
@@ -3856,12 +4038,46 @@ function FieldsSidebar({
   defaults: Record<string, string>;
   onClose: () => void;
   onAdd: () => void;
+  onAddKit: (mode: 'single' | 'dual') => void;
   onUpdate: (i: number, patch: Partial<FieldSpec>) => void;
   onRename: (i: number, newKey: string) => void;
   onDelete: (i: number) => void;
   onSetDefault: (i: number, val: string) => void;
 }) {
   const [expanded, setExpanded] = useState<number | null>(fields.length ? 0 : null);
+  // Group fields by their `group` (Vehicle / Offer / Legal / …) so a long kit
+  // (24–44 fields) reads as a few collapsible sections instead of a wall. Each
+  // entry keeps its original flat index so the index-based handlers still hit
+  // the right field.
+  const groups = useMemo(() => {
+    const m = new Map<string, { f: FieldSpec; i: number }[]>();
+    fields.forEach((f, i) => {
+      const g = (f.group || 'General').trim() || 'General';
+      if (!m.has(g)) m.set(g, []);
+      m.get(g)!.push({ f, i });
+    });
+    return [...m.entries()];
+  }, [fields]);
+  // A long list starts with only the first section open; a short one opens all.
+  // A single new section (from "Add field") auto-opens so it's not lost.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
+    const names = groups.map(([g]) => g);
+    return new Set(fields.length > 10 ? names.slice(0, 1) : names);
+  });
+  const prevGroupNames = useRef(new Set(groups.map(([g]) => g)));
+  useEffect(() => {
+    const cur = groups.map(([g]) => g);
+    const added = cur.filter((g) => !prevGroupNames.current.has(g));
+    if (added.length === 1) setOpenGroups((s) => new Set([...s, added[0]]));
+    prevGroupNames.current = new Set(cur);
+  }, [groups]);
+  const toggleGroup = (g: string) =>
+    setOpenGroups((s) => {
+      const next = new Set(s);
+      if (next.has(g)) next.delete(g);
+      else next.add(g);
+      return next;
+    });
   return (
     // Floating right-docked sidebar (no modal / backdrop) — the form that drives
     // the ad stays open beside the canvas while you design.
@@ -3876,31 +4092,75 @@ function FieldsSidebar({
         </button>
       </div>
       <div className="flex-1 space-y-2 overflow-y-auto p-4">
-        {fields.map((f, i) => (
-          <FieldRow
-            key={i}
-            field={f}
-            index={i}
-            expanded={expanded === i}
-            defaultValue={defaults[f.key] ?? ''}
-            onToggle={() => setExpanded(expanded === i ? null : i)}
-            onUpdate={onUpdate}
-            onRename={onRename}
-            onDelete={onDelete}
-            onSetDefault={onSetDefault}
-          />
-        ))}
+        {groups.map(([group, items]) => {
+          const open = openGroups.has(group);
+          return (
+            <div key={group} className="rounded-lg border border-[var(--border)]">
+              <button
+                type="button"
+                onClick={() => toggleGroup(group)}
+                className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--muted)]/40"
+              >
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-[var(--foreground)]">
+                  {open ? <ChevronDownIcon className="h-3.5 w-3.5" /> : <ChevronRightIcon className="h-3.5 w-3.5" />}
+                  {group}
+                </span>
+                <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] tabular-nums text-[var(--muted-foreground)]">{items.length}</span>
+              </button>
+              {open && (
+                <div className="space-y-2 border-t border-[var(--border)] p-2">
+                  {items.map(({ f, i }) => (
+                    <FieldRow
+                      key={i}
+                      field={f}
+                      index={i}
+                      expanded={expanded === i}
+                      defaultValue={defaults[f.key] ?? ''}
+                      onToggle={() => setExpanded(expanded === i ? null : i)}
+                      onUpdate={onUpdate}
+                      onRename={onRename}
+                      onDelete={onDelete}
+                      onSetDefault={onSetDefault}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
         {!fields.length && (
           <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-xs text-[var(--muted-foreground)]">No fields yet.</p>
         )}
       </div>
-      <button
-        onClick={onAdd}
-        className="m-4 mt-0 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-      >
-        <PlusIcon className="h-3.5 w-3.5" />
-        Add field
-      </button>
+      <div className="m-4 mt-0 space-y-2">
+        <button
+          onClick={onAdd}
+          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+        >
+          <PlusIcon className="h-3.5 w-3.5" />
+          Add field
+        </button>
+        {/* Drop in the standard offer/vehicle question set so this template
+            becomes client-manipulable (offer engine + EVOX color) — deduped,
+            never overwrites existing fields. */}
+        <div className="rounded-lg border border-dashed border-[var(--border)] p-2">
+          <div className="mb-1.5 px-0.5 text-[11px] font-medium text-[var(--muted-foreground)]">Add offer fields</div>
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => onAddKit('single')}
+              className="flex-1 rounded-md border border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+            >
+              Single vehicle
+            </button>
+            <button
+              onClick={() => onAddKit('dual')}
+              className="flex-1 rounded-md border border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+            >
+              Two vehicles
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3921,6 +4181,7 @@ function SelectionPanel({
   fontOptions,
   brandLogos,
   content,
+  contentSources,
   onContentChange,
   accountKey,
   onEl,
@@ -3938,6 +4199,7 @@ function SelectionPanel({
   fontOptions: FontSelectOption[];
   brandLogos: { key: string; label: string; url: string }[];
   content: { mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly'; value: string; note?: string } | null;
+  contentSources: SearchableSelectOption[];
   onContentChange: (value: string) => void;
   accountKey?: string;
   onEl: (patch: Partial<DocElement>) => void;
@@ -3952,6 +4214,7 @@ function SelectionPanel({
 }) {
   const fontSize = box.fontSize ?? 16;
   const typeLabel = el.type === 'text' ? 'Text' : el.type === 'image' ? 'Image' : el.type === 'logo' ? 'Logo' : el.type === 'background' ? 'Background' : 'Shape';
+  const kindColor = KIND_COLOR[elementKind(el)];
   const [picking, setPicking] = useState(false);
 
   return (
@@ -3969,7 +4232,7 @@ function SelectionPanel({
             title="Rename this layer"
             className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-sm font-semibold text-[var(--foreground)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--primary)] focus:bg-[var(--background)]"
           />
-          <span className="shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">{typeLabel}</span>
+          <span className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium" style={{ backgroundColor: `${kindColor}1f`, color: kindColor }}>{typeLabel}</span>
         </div>
         <button type="button" onClick={onClose} title="Deselect" aria-label="Deselect" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
           <XMarkIcon className="h-4 w-4" />
@@ -3977,9 +4240,21 @@ function SelectionPanel({
       </div>
 
       <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
-        {/* Content — edit the element's value directly; writes to the form data */}
+        {/* Content — pick what the element SHOWS (a form field, a computed offer
+            value, brand data, or a static literal), then edit the value below. */}
         {content && content.mode !== 'none' && (
           <PanelSection title="Content">
+            {contentSources.length > 0 && (
+              <div className="mb-2">
+                <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Shows</label>
+                <SearchableSelect
+                  value={bindingToSourceValue(el.binding)}
+                  onChange={(v) => onEl({ binding: sourceValueToBinding(v, content.value) })}
+                  options={contentSources}
+                  className="w-full"
+                />
+              </div>
+            )}
             {content.mode === 'text-edit' && (
               <textarea
                 value={content.value}
@@ -4141,36 +4416,40 @@ function SelectionPanel({
             </PanelSection>
 
             <PanelSection title="Color & spacing">
-              <div className="flex flex-wrap items-center gap-4">
-                <label className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
-                  Color
+              <div className="space-y-2.5">
+                {/* Button color — the pill background behind a text/button element. */}
+                <div className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span>Button color</span>
+                  {el.bg ? (
+                    <div className="flex items-center gap-2">
+                      <ColorSwatchInput title="Button color" value={el.bg !== 'brand' ? el.bg : '#4f46e5'} onChange={(v) => onEl({ bg: v })} />
+                      <BarBtn title="Remove button color" onClick={() => onEl({ bg: undefined })}>
+                        <XMarkIcon className="h-4 w-4" />
+                      </BarBtn>
+                    </div>
+                  ) : (
+                    <BarBtn title="Add a button background" onClick={() => onEl({ bg: '#000000', padding: el.padding ?? 14 })}>
+                      <span className="px-1 text-[10px] font-semibold leading-none">Add</span>
+                    </BarBtn>
+                  )}
+                </div>
+                <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span>Text color</span>
                   <ColorSwatchInput title="Text color" value={el.color && el.color !== 'brand' ? el.color : '#4f46e5'} onChange={(v) => onEl({ color: v })} />
                 </label>
-                <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-                  Letter
+                <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span>Letter</span>
                   <MiniNum title="Letter spacing (px)" value={el.letterSpacing ?? 0} onChange={(v) => onEl({ letterSpacing: v ? Math.round(v) : undefined })} />
                 </label>
-                <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
-                  Line
+                <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span>Line</span>
                   <MiniNum title="Line height" step={0.05} value={el.lineHeight ?? 1.1} onChange={(v) => onEl({ lineHeight: v || undefined })} />
                 </label>
+                {/* Per-corner radius + per-side padding for the button (same
+                    controls as shapes). */}
+                {el.bg && <RadiusControl el={el} onEl={onEl} />}
+                {el.bg && <PaddingControl el={el} onEl={onEl} />}
               </div>
-            </PanelSection>
-
-            <PanelSection title="Pill background">
-              {el.bg ? (
-                <div className="flex items-center gap-2">
-                  <ColorSwatchInput title="Pill background" value={el.bg !== 'brand' ? el.bg : '#4f46e5'} onChange={(v) => onEl({ bg: v })} />
-                  <span className="text-xs text-[var(--muted-foreground)]">On</span>
-                  <BarBtn title="Remove pill background" onClick={() => onEl({ bg: undefined })}>
-                    <XMarkIcon className="h-4 w-4" />
-                  </BarBtn>
-                </div>
-              ) : (
-                <BarBtn title="Add pill background" onClick={() => onEl({ bg: 'brand', radius: el.radius ?? 999, padding: el.padding ?? 14 })}>
-                  <span className="text-[10px] font-semibold leading-none">Pill</span>
-                </BarBtn>
-              )}
             </PanelSection>
           </>
         )}
@@ -4558,24 +4837,31 @@ function DetachedVisual({
   );
 }
 
-type Adder = { label: string; Icon: React.ComponentType<{ className?: string }>; onAdd: () => void };
+type Adder = { label: string; Icon: React.ComponentType<{ className?: string }>; onAdd: () => void; color: string };
 
 /** The element palette — a grid of tiles that drop an element on the canvas.
  *  Shared by the Insert flyout (`panel`) and the empty-canvas onboarding
  *  (`onboarding`); `variant` only tunes density. */
 function AdderGrid({ adders, variant }: { adders: Adder[]; variant: 'panel' | 'onboarding' }) {
   const cols = variant === 'panel' ? 'grid-cols-2' : 'grid-cols-5';
-  const tile = variant === 'panel' ? 'justify-center gap-2 py-5 text-xs' : 'gap-1.5 py-2.5 text-[10px]';
-  const icon = variant === 'panel' ? 'h-6 w-6' : 'h-5 w-5';
+  const tile = variant === 'panel' ? 'gap-2 py-4 text-xs' : 'gap-1.5 py-3 text-[10px]';
   return (
     <div className={`grid ${cols} gap-2`}>
       {adders.map((a) => (
         <button
           key={a.label}
           onClick={a.onAdd}
-          className={`group flex flex-col items-center rounded-xl border border-[var(--border)] px-2 font-medium text-[var(--foreground)] transition-all hover:-translate-y-0.5 hover:border-[var(--primary)] hover:bg-[var(--primary)]/5 hover:shadow-sm ${tile}`}
+          className={`group flex flex-col items-center justify-center rounded-xl border border-[var(--border)] px-2 font-medium text-[var(--foreground)] transition-all hover:-translate-y-0.5 hover:shadow-md ${tile}`}
+          onMouseEnter={(e) => (e.currentTarget.style.borderColor = a.color)}
+          onMouseLeave={(e) => (e.currentTarget.style.borderColor = '')}
         >
-          <a.Icon className={`${icon} text-[var(--muted-foreground)] transition-colors group-hover:text-[var(--primary)]`} />
+          {/* Colour-coded icon chip (Text=blue, Image=pink, Button=purple, Shape=orange). */}
+          <span
+            className="flex h-9 w-9 items-center justify-center rounded-xl transition-transform group-hover:scale-110"
+            style={{ backgroundColor: `${a.color}1f`, color: a.color }}
+          >
+            <a.Icon className="h-5 w-5" />
+          </span>
           {a.label}
         </button>
       ))}
@@ -4863,6 +5149,7 @@ function RadiusControl({ el, onEl }: { el: DocElement; onEl: (patch: Partial<Doc
     <div className="mt-3">
       <div className="mb-1.5 text-xs text-[var(--muted-foreground)]">Radius</div>
       <CornerBox
+        showSteppers
         values={{ tl: el.radiusTL ?? base, tr: el.radiusTR ?? base, br: el.radiusBR ?? base, bl: el.radiusBL ?? base }}
         onChange={(v) =>
           onEl({
@@ -4871,6 +5158,36 @@ function RadiusControl({ el, onEl }: { el: DocElement; onEl: (patch: Partial<Doc
             radiusBR: v.br || undefined,
             radiusBL: v.bl || undefined,
             radius: undefined,
+          })
+        }
+      />
+    </div>
+  );
+}
+
+/** Per-side padding control (shared T/R/B/L box, link-all toggle) — mirrors
+ *  RadiusControl. Seeds from the per-side values or the single `padding`, and
+ *  writes the per-side fields (clearing the legacy `padding`). */
+function PaddingControl({ el, onEl }: { el: DocElement; onEl: (patch: Partial<DocElement>) => void }) {
+  const base = el.padding ?? 0;
+  return (
+    <div className="mt-3">
+      <div className="mb-1.5 text-xs text-[var(--muted-foreground)]">Padding</div>
+      <SpacingBox
+        showSteppers
+        values={{
+          top: el.paddingTop ?? base,
+          right: el.paddingRight ?? base,
+          bottom: el.paddingBottom ?? base,
+          left: el.paddingLeft ?? base,
+        }}
+        onChange={(v) =>
+          onEl({
+            paddingTop: v.top || undefined,
+            paddingRight: v.right || undefined,
+            paddingBottom: v.bottom || undefined,
+            paddingLeft: v.left || undefined,
+            padding: undefined,
           })
         }
       />
@@ -5246,16 +5563,20 @@ function ShortcutsModal({ onClose }: { onClose: () => void }) {
         [`${mod} G`, 'Group selection'],
         [`${mod} ⇧ G`, 'Ungroup'],
         [`${mod} ]`, 'Bring forward'],
-        [`${mod} [`, 'Send back'],
+        [`${mod} [`, 'Send backward'],
+        [`${mod} ⇧ ]`, 'Bring to front'],
+        [`${mod} ⇧ [`, 'Send to back'],
       ],
     },
     {
-      title: 'Move',
+      title: 'Move & size',
       rows: [
         ['↑ ↓ ← →', 'Nudge 1px'],
         ['⇧ + arrows', 'Nudge 10px'],
         ['Drag', 'Move element'],
         ['Drag handles', 'Resize'],
+        ['⇧ drag', 'Lock aspect ratio'],
+        [`${mod} drag`, 'Scale text font'],
       ],
     },
     {

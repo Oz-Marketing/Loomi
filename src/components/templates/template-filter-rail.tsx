@@ -7,9 +7,9 @@
  * useTemplateFilters. Optional `extraSections` lets a tab add its own facet
  * (e.g. Email's lifecycle/design Type filter).
  */
-import { FolderIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { FolderIcon, XMarkIcon, BuildingStorefrontIcon, GlobeAltIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { getTagColor } from '@/lib/tag-colors';
-import type { TemplateFilterState, TemplateFilterFacets, StatusValue } from './use-template-filters';
+import { GLOBAL_SCOPE, type TemplateFilterState, type TemplateFilterFacets, type StatusValue } from './use-template-filters';
 
 export interface FilterRailExtraSection {
   key: string;
@@ -63,6 +63,9 @@ export function TemplateFilterRail({
   reset,
   showStatus = false,
   extraSections = [],
+  accountLabels,
+  search,
+  onSearch,
 }: {
   filters: TemplateFilterState;
   setFilters: (updater: (f: TemplateFilterState) => TemplateFilterState) => void;
@@ -71,14 +74,31 @@ export function TemplateFilterRail({
   reset: () => void;
   showStatus?: boolean;
   extraSections?: FilterRailExtraSection[];
+  /** Maps an account key → display name for the Subaccount section. */
+  accountLabels?: Record<string, string>;
+  /** Search box lives at the top of the rail (under the Filters label). Omit
+   *  onSearch to hide it. */
+  search?: string;
+  onSearch?: (value: string) => void;
 }) {
   const setCategory = (value: string | null) =>
     setFilters((f) => ({ ...f, category: f.category === value ? null : value }));
   const toggleTag = (value: string) =>
     setFilters((f) => ({ ...f, tags: f.tags.includes(value) ? f.tags.filter((t) => t !== value) : [...f.tags, value] }));
   const setStatus = (value: StatusValue) => setFilters((f) => ({ ...f, status: value }));
+  const setAccount = (value: string | null) =>
+    setFilters((f) => ({ ...f, accountKey: f.accountKey === value ? null : value }));
 
-  const nothing = facets.categories.length === 0 && facets.tags.length === 0 && extraSections.length === 0 && !showStatus;
+  // Only worth showing when templates span more than one scope (e.g. Admin sees
+  // global + several subaccounts). A single bucket = nothing to filter.
+  const showAccounts = facets.accounts.length > 1;
+  const nothing =
+    facets.categories.length === 0 &&
+    facets.tags.length === 0 &&
+    extraSections.length === 0 &&
+    !showStatus &&
+    !showAccounts &&
+    !onSearch;
   if (nothing) return null;
 
   return (
@@ -97,6 +117,19 @@ export function TemplateFilterRail({
         )}
       </div>
 
+      {onSearch && (
+        <div className="relative px-0.5">
+          <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted-foreground)]" />
+          <input
+            type="text"
+            value={search ?? ''}
+            onChange={(e) => onSearch(e.target.value)}
+            placeholder="Search…"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--card)] py-1.5 pl-8 pr-2 text-xs text-[var(--foreground)] outline-none transition-colors placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)]"
+          />
+        </div>
+      )}
+
       {showStatus && (
         <Section title="Status">
           {([
@@ -108,6 +141,24 @@ export function TemplateFilterRail({
               {s.label}
             </Row>
           ))}
+        </Section>
+      )}
+
+      {showAccounts && (
+        <Section title="Subaccount">
+          {facets.accounts.map((a) => {
+            const isGlobal = a.value === GLOBAL_SCOPE;
+            const label = isGlobal ? 'All accounts' : accountLabels?.[a.value] ?? a.value;
+            const Icon = isGlobal ? GlobeAltIcon : BuildingStorefrontIcon;
+            return (
+              <Row key={a.value} active={filters.accountKey === a.value} onClick={() => setAccount(a.value)} count={a.count}>
+                <span className="inline-flex items-center gap-1">
+                  <Icon className="h-3 w-3 flex-shrink-0" />
+                  <span className="truncate">{label}</span>
+                </span>
+              </Row>
+            );
+          })}
         </Section>
       )}
 

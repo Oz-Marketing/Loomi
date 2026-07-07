@@ -204,12 +204,21 @@ export async function listLandingPages(
 
 /**
  * List LP TEMPLATES (isTemplate=true) for the /templates Landing Pages tab.
- * Scope mirrors every other kind: Admin (no accountKey) → the system library
- * (accountKey null); inside a sub-account → only that account's own templates.
+ * - accountKey set → only that account's own templates.
+ * - includeAll (unrestricted admin at Admin level) → the WHOLE library: global
+ *   + every subaccount's own (the tab filters by scope via the rail facet).
+ * - otherwise → the system library only (accountKey null).
  */
-export async function listLandingPageTemplates(accountKey?: string | null): Promise<LandingPageSummary[]> {
+export async function listLandingPageTemplates(
+  accountKey?: string | null,
+  includeAll = false,
+): Promise<LandingPageSummary[]> {
   const rows = await prisma.landingPage.findMany({
-    where: { isTemplate: true, accountKey: accountKey ? accountKey : null },
+    where: accountKey
+      ? { isTemplate: true, accountKey }
+      : includeAll
+        ? { isTemplate: true }
+        : { isTemplate: true, accountKey: null },
     orderBy: { updatedAt: 'desc' },
   });
   return attachAuthors(rows.map(toSummary));

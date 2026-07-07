@@ -22,12 +22,16 @@ export async function GET(req: NextRequest) {
 
   const scope = getAccountScope(session!);
 
-  // Templates tab: LP templates (isTemplate=true), scoped Admin=system(null) /
-  // sub-account=own — matches every other template kind.
+  // Templates tab: LP templates (isTemplate=true). A sub-account sees only its
+  // own; at Admin an unrestricted manager (scope null) sees the WHOLE library
+  // (global + every subaccount), filtered client-side via the rail's Subaccount
+  // facet. A restricted admin still sees just the system library (no cross-
+  // tenant leak).
   if (req.nextUrl.searchParams.get('isTemplate') === 'true') {
     const accountKey = req.nextUrl.searchParams.get('accountKey')?.trim() || null;
     if (accountKey && !canAccessAccount(scope, accountKey)) return forbidden();
-    const pages = await listLandingPageTemplates(accountKey);
+    const includeAll = !accountKey && scope === null;
+    const pages = await listLandingPageTemplates(accountKey, includeAll);
     return NextResponse.json({ pages });
   }
 

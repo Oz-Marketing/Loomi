@@ -211,6 +211,18 @@
   --warning-border: rgb(194 107 23 / 0.28);
 }
 
+/* App-wide input safety net: a form control must never sit on the near-black
+   page background (`--background`) — lift it to the elevated `--card` surface
+   (the same fill the ad-generator Fields panel uses) so inputs read
+   consistently, especially in dark mode. The element + attribute selector out-
+   specifies the Tailwind `bg-[var(--background)]` utility. Scoped to real text
+   controls so colour/checkbox/range inputs are untouched. */
+input[class*="bg-[var(--background)]"],
+textarea[class*="bg-[var(--background)]"],
+select[class*="bg-[var(--background)]"] {
+  background-color: var(--card) !important;
+}
+
 /* Light mode warning color tuning (keeps dark mode unchanged) */
 [data-theme='light'] .text-amber-500,
 [data-theme='light'] .text-amber-400,

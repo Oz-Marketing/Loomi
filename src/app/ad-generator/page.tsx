@@ -23,9 +23,9 @@ import { ListToolbar } from '@/components/list-toolbar';
 import { AccountLogo } from '@/components/account-logo';
 import type { StatusFilterValue } from '@/components/status-filter';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
-import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
+import { ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
-import { vehicleModeFields, type VehicleFieldsMode } from '@/lib/ad-generator/vehicle-fields';
+import { addFieldKit, type VehicleFieldsMode } from '@/lib/ad-generator/vehicle-fields';
 import { catalogByCategory, aspectLabel, type CatalogSize } from '@/lib/ad-generator/ad-size-catalog';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -90,13 +90,13 @@ export default function AdGeneratorListPage() {
 
   // Resolution list (incl. retired templates) — for rendering existing ads.
   const templates = useMemo(() => [...ALL_TEMPLATES, ...dbTemplates], [dbTemplates]);
-  // Picker list — only OFFERED templates, scoped to this account's industry
-  // (non-automotive sees none for now). Clients pick ONLY from templates a
-  // designer published to their subaccount (dbTemplates, already scoped by the
-  // API) — never the built-in code starters.
+  // Picker list — the shared library (DB templates), scoped to this account's
+  // industry. Code-defined starters stay in ALL_TEMPLATES (so existing ads still
+  // render) but aren't offered here — the DB library is the single source (the
+  // built-in/DB split and the old Ad-Types filter row were both retired).
   const pickerTemplates = useMemo(
-    () => [...(isManager ? AD_TEMPLATES : []), ...dbTemplates].filter((t) => templateInIndustry(t, accountData?.category)),
-    [dbTemplates, accountData?.category, isManager],
+    () => dbTemplates.filter((t) => templateInIndustry(t, accountData?.category)),
+    [dbTemplates, accountData?.category],
   );
 
   useEffect(() => {
@@ -180,11 +180,12 @@ export default function AdGeneratorListPage() {
           height: size.height,
         };
       });
-      const doc = blankTemplateDoc(`blank-${Date.now()}`, trimmed, docSizes);
+      let doc = blankTemplateDoc(`blank-${Date.now()}`, trimmed, docSizes);
       // Optionally seed the vehicle/offer question set (single or dual) so a
       // from-scratch ad isn't a blank form — the offer engine gates on these
-      // fields being present.
-      if (vehicleMode !== 'none') doc.fields = vehicleModeFields(vehicleMode);
+      // fields being present. Same merge path the builder's "Add offer fields"
+      // action uses (fields + starter defaults, deduped by key).
+      if (vehicleMode !== 'none') doc = addFieldKit(doc, vehicleMode);
       const res = await fetch('/api/ad-generator/creatives', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

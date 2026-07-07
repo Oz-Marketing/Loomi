@@ -13,6 +13,7 @@ import {
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { LandingPagePreviewThumbnail } from '@/components/landing-pages/landing-page-preview-thumbnail';
 import { TemplateCard, type TemplateCardAction } from '@/components/templates/template-card';
@@ -38,7 +39,13 @@ const fetcher = async (url: string) => {
 export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string }) {
   const router = useRouter();
   const subHref = useSubaccountHref();
+  const { accounts } = useAccount();
   const { confirm } = useLoomiDialog();
+  // key → dealer name, for the shared rail's Subaccount facet + card scope badge.
+  const accountLabels = useMemo(
+    () => Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.dealer || k])),
+    [accounts],
+  );
   const [creating, setCreating] = useState(false);
   const [usingId, setUsingId] = useState<string | null>(null);
 
@@ -58,6 +65,8 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
     getCategory: (t) => t.category,
     getTags: (t) => t.tags,
     getStatus: (t) => (t.status === 'published' ? 'published' : 'draft'),
+    // '' accountKey = system/global template → the global bucket.
+    getAccountKey: (t) => t.accountKey || null,
   });
 
   const editTemplate = (t: LandingPageSummary) => router.push(subHref(`/websites/landing-pages/${t.id}/edit`));
@@ -194,8 +203,6 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
     <>
       {header}
       <TemplateLibraryShell
-        search={filters.search}
-        onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
         resultCount={filtered.length}
         rail={
           <TemplateFilterRail
@@ -205,6 +212,9 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
             active={active}
             reset={reset}
             showStatus
+            accountLabels={accountLabels}
+            search={filters.search}
+            onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
           />
         }
       >
@@ -220,7 +230,7 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
                 preview={<LandingPagePreviewThumbnail template={t.schema} height={160} />}
                 name={t.name || 'Untitled template'}
                 status={t.status === 'published' ? 'published' : 'draft'}
-                scope={!accountKey ? { label: 'All accounts', kind: 'global' } : undefined}
+                scope={!accountKey ? { label: t.accountKey ? accountLabels[t.accountKey] ?? t.accountKey : 'All accounts', kind: t.accountKey ? 'account' : 'global' } : undefined}
                 category={t.category}
                 tags={t.tags}
                 taxonomy={taxonomy}

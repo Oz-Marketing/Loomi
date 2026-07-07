@@ -309,9 +309,11 @@ export interface SpacingBoxProps {
   onChange: (values: { top: number; right: number; bottom: number; left: number }) => void;
   /** Sides that should be displayed (others render but disabled). Defaults to all 4. */
   sides?: ('top' | 'right' | 'bottom' | 'left')[];
+  /** Show the native number spinners (up/down arrows) instead of hiding them. */
+  showSteppers?: boolean;
 }
 
-export function SpacingBox({ values, onChange, sides = ['top', 'right', 'bottom', 'left'] }: SpacingBoxProps) {
+export function SpacingBox({ values, onChange, sides = ['top', 'right', 'bottom', 'left'], showSteppers }: SpacingBoxProps) {
   const top = values.top ?? 0;
   const right = values.right ?? 0;
   const bottom = values.bottom ?? 0;
@@ -333,6 +335,7 @@ export function SpacingBox({ values, onChange, sides = ['top', 'right', 'bottom'
     }
   };
 
+  const spin = showSteppers ? '' : '[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none';
   const cellInput = (side: 'top' | 'right' | 'bottom' | 'left', n: number) => {
     const enabled = sides.includes(side);
     return (
@@ -342,7 +345,7 @@ export function SpacingBox({ values, onChange, sides = ['top', 'right', 'bottom'
         onChange={(e) => setSide(side, Number(e.target.value) || 0)}
         disabled={!enabled}
         min={0}
-        className="w-full h-8 text-sm text-center bg-transparent border border-[var(--border)] rounded text-[var(--foreground)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] disabled:opacity-30 disabled:cursor-not-allowed [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+        className={`w-full h-8 text-sm text-center bg-transparent border border-[var(--border)] rounded text-[var(--foreground)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] disabled:opacity-30 disabled:cursor-not-allowed ${spin}`}
       />
     );
   };
@@ -383,9 +386,11 @@ export function SpacingBox({ values, onChange, sides = ['top', 'right', 'bottom'
 export interface CornerBoxProps {
   values: { tl?: number; tr?: number; br?: number; bl?: number };
   onChange: (values: { tl: number; tr: number; br: number; bl: number }) => void;
+  /** Show the native number spinners (up/down arrows) instead of hiding them. */
+  showSteppers?: boolean;
 }
 
-export function CornerBox({ values, onChange }: CornerBoxProps) {
+export function CornerBox({ values, onChange, showSteppers }: CornerBoxProps) {
   const tl = values.tl ?? 0;
   const tr = values.tr ?? 0;
   const br = values.br ?? 0;
@@ -407,13 +412,14 @@ export function CornerBox({ values, onChange }: CornerBoxProps) {
     }
   };
 
+  const spin = showSteppers ? '' : '[appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none';
   const cellInput = (corner: 'tl' | 'tr' | 'br' | 'bl', n: number) => (
     <input
       type="number"
       value={n}
       onChange={(e) => setCorner(corner, Number(e.target.value) || 0)}
       min={0}
-      className="w-full h-8 text-sm text-center bg-transparent border border-[var(--border)] rounded text-[var(--foreground)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+      className={`w-full h-8 text-sm text-center bg-transparent border border-[var(--border)] rounded text-[var(--foreground)] outline-none focus:border-[var(--primary)] focus:ring-1 focus:ring-[var(--primary)] ${spin}`}
     />
   );
 

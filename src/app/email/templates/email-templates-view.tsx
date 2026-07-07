@@ -435,7 +435,13 @@ function ManagementView({
 }) {
   const router = useRouter();
   const { confirm } = useLoomiDialog();
+  const { accounts } = useAccount();
   const scoped = Boolean(accountKey);
+  // key → dealer name, for the shared rail's Subaccount facet + card scope badge.
+  const accountLabels = useMemo(
+    () => Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.dealer || k])),
+    [accounts],
+  );
   const [templates, setTemplates] = useState<TemplateEntry[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [showCreateChoice, setShowCreateChoice] = useState(false);
@@ -459,13 +465,17 @@ function ManagementView({
 
   const loadTemplates = async () => {
     try {
+      // Admin (no accountKey): the WHOLE library — shared templates + every
+      // subaccount's own (scope=all, management-only). Restricted admins can't
+      // request cross-tenant scope, so fall back to the shared library.
       const listUrl = accountKey
         ? `/api/templates?accountKey=${encodeURIComponent(accountKey)}`
-        : '/api/templates';
-      const [tRes, tagRes] = await Promise.all([
+        : '/api/templates?scope=all';
+      const [tResRaw, tagRes] = await Promise.all([
         fetch(listUrl),
         fetch('/api/template-tags'),
       ]);
+      const tRes = !tResRaw.ok && !accountKey ? await fetch('/api/templates') : tResRaw;
       const tData = await tRes.json();
       const tagResult = await tagRes.json();
       setTemplates(Array.isArray(tData) ? tData : []);
@@ -511,6 +521,8 @@ function ManagementView({
     // Publish status only applies to the system library (admin), not a
     // sub-account's own templates — matches the old "no publish when scoped".
     getStatus: scoped ? undefined : (t) => (t.published ? 'published' : 'draft'),
+    // Subaccount facet — meaningful only at Admin (a scoped view is one bucket).
+    getAccountKey: (t) => t.accountKey ?? null,
   });
 
   // Categories in use (for the card's inline category popover suggestions).
@@ -991,8 +1003,6 @@ function ManagementView({
         />
       ) : (
       <TemplateLibraryShell
-        search={filters.search}
-        onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
         resultCount={filtered.length}
         rail={
           <TemplateFilterRail
@@ -1002,6 +1012,9 @@ function ManagementView({
             active={active || typeFilter !== 'all'}
             reset={() => { reset(); setTypeFilter('all'); }}
             showStatus={!scoped}
+            accountLabels={accountLabels}
+            search={filters.search}
+            onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
             extraSections={[
               {
                 key: 'type',
@@ -1049,6 +1062,7 @@ function ManagementView({
                 preview={<TemplatePreview design={t.design} height={180} />}
                 name={t.name || formatDesign(t.design)}
                 status={scoped ? undefined : isPublished ? 'published' : 'draft'}
+                scope={scoped ? undefined : { label: t.accountKey ? accountLabels[t.accountKey] ?? t.accountKey : 'All accounts', kind: t.accountKey ? 'account' : 'global' }}
                 badges={
                   <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
                     {templateTypeLabel}
@@ -1514,8 +1528,6 @@ function ReadOnlyView({
       )}
 
       <TemplateLibraryShell
-        search={filters.search}
-        onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
         resultCount={filtered.length}
         rail={
           <TemplateFilterRail
@@ -1524,6 +1536,8 @@ function ReadOnlyView({
             facets={facets}
             active={active || typeFilter !== 'all'}
             reset={() => { reset(); setTypeFilter('all'); }}
+            search={filters.search}
+            onSearch={(v) => setFilters((f) => ({ ...f, search: v }))}
             extraSections={[
               {
                 key: 'type',

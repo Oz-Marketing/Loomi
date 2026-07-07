@@ -105,8 +105,16 @@ export interface DocElement {
   /** Optional background behind the text (hex or `'brand'`) — for pills/badges
    *  like the expiration tag. Pairs with `radius` + `padding`. */
   bg?: string;
-  /** Inner padding in px (text with a `bg`, or to inset shape content). */
+  /** Inner padding in px (text with a `bg`, or to inset shape content). Kept as
+   *  the fallback for any per-side value left unset. */
   padding?: number;
+  /** Per-side padding overrides (px). When any is set the renderer emits a
+   *  four-value `padding` (top, right, bottom, left), falling back to `padding`
+   *  (then 0) for sides left undefined. */
+  paddingTop?: number;
+  paddingRight?: number;
+  paddingBottom?: number;
+  paddingLeft?: number;
   align?: 'left' | 'center' | 'right';
   // ── image / logo ──
   /** `contain` fits inside the box, `cover` fills + crops, `tile` repeats the

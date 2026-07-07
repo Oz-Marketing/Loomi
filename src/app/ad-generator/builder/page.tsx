@@ -68,7 +68,7 @@ import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
 import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
-import { CornerBox, NumberInput } from '@/lib/email/editor/PropertyControls';
+import { CornerBox, SpacingBox, NumberInput } from '@/lib/email/editor/PropertyControls';
 import { GOOGLE_FONTS, googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
 import { singleOfferDoc, dualOfferDoc } from '@/lib/ad-generator/templates/offer-docs';
@@ -286,16 +286,18 @@ const TYPE_ICON: Record<DocElementType, React.ComponentType<{ className?: string
 // palette, canvas selection outline + handles, Layers rows, the inspector type
 // badge): Text = blue, Image = pink, Button = purple, Shape = orange. A
 // "button" is a styled text element (a text el with a background pill).
-type ElementKind = 'text' | 'image' | 'button' | 'shape';
+type ElementKind = 'text' | 'image' | 'button' | 'shape' | 'logo';
 const KIND_COLOR: Record<ElementKind, string> = {
   text: '#3b82f6', // blue
   image: '#ec4899', // pink
   button: '#a855f7', // purple
   shape: '#f97316', // orange
+  logo: '#14b8a6', // teal
 };
 function elementKind(el: { type: DocElementType; bg?: string }): ElementKind {
   if (el.type === 'shape') return 'shape';
-  if (el.type === 'image' || el.type === 'logo' || el.type === 'background') return 'image';
+  if (el.type === 'logo') return 'logo';
+  if (el.type === 'image' || el.type === 'background') return 'image';
   return el.bg ? 'button' : 'text'; // text with a pill background reads as a Button
 }
 
@@ -723,10 +725,6 @@ export default function AdBuilderPage() {
   }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData]);
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
-  // Bumped when the canvas iframe (re)loads its shell — lets the text auto-size
-  // pass re-measure once the live nodes exist (the initial mount renders after
-  // this component, so a sig-only pass would measure before the frame is ready).
-  const [frameTick, setFrameTick] = useState(0);
 
   // Patch the canvas iframe's document IN PLACE on every edit instead of swapping
   // `srcDoc` (which navigates the iframe → a white flash on every change). Replacing
@@ -1242,128 +1240,6 @@ export default function AdBuilderPage() {
     });
   }, [doc.elements, setElement]);
 
-  // Best-practice text sizing: after a text resize, shrink the box to HUG its
-  // content so there's no leftover whitespace (industry standard — Canva/Figma).
-  // Height always hugs; width hugs too when the text is a single line (point
-  // text), while multi-line/paragraph text keeps its width and just reflows.
-  // Measured in the builder (from the live node) and stored, so the export —
-  // which renders the same stored box — stays pixel-perfect.
-  const fitTextBox = useCallback(
-    (elId: string, sizeId: string, baseBox: DocLayoutBox, opts?: { commitFallback?: boolean }) => {
-      // commitFallback: a resize must still commit its drag result even when we
-      // can't measure (baseBox is the drag box, not yet in the doc). The passive
-      // auto-size pass passes false — baseBox is already the stored box, so a
-      // failed/no-op measure should leave the doc untouched (never churn it).
-      const commitFallback = opts?.commitFallback ?? true;
-      const idoc = iframeRef.current?.contentDocument;
-      const node = idoc?.querySelector(`[data-el-id="${elId}"]`) as HTMLElement | null;
-      const el = doc.elements.find((e) => e.id === elId);
-      if (!idoc || !node || el?.type !== 'text') {
-        if (commitFallback) setBox(sizeId, elId, baseBox);
-        return;
-      }
-      let bb: DOMRect;
-      let lineCount = 1;
-      try {
-        const range = idoc.createRange();
-        range.selectNodeContents(node);
-        const rects = [...range.getClientRects()];
-        bb = range.getBoundingClientRect();
-        lineCount = Math.max(1, new Set(rects.map((r) => Math.round(r.top))).size);
-      } catch {
-        if (commitFallback) setBox(sizeId, elId, baseBox);
-        return;
-      }
-      if (!bb.width || !bb.height) {
-        if (commitFallback) setBox(sizeId, elId, baseBox);
-        return;
-      }
-      // Hug the box to the rendered text's line box — the Canva/Figma "auto-size"
-      // behaviour. The Range client rects already include the full line height,
-      // so the ONLY extra room we add is the element's own padding (badges/pills).
-      // No arbitrary font-size fudge, or the outline floats away from the glyphs.
-      // The measured node lives INSIDE the iframe, whose internal layout is
-      // native px — the canvas `scale` transform is on the iframe element in the
-      // parent doc and does NOT affect these rects. So use bb directly (dividing
-      // by scale inflates every hug by 1/scale — the old loose-box bug).
-      const pad = el.padding ?? 0;
-      const natH = bb.height + pad * 2;
-      // Content-driven: hug the true text height and never inflate it up to
-      // MIN_FRAC — that floor keeps empty boxes grabbable, but text auto-size is
-      // allowed to be as tight as the glyphs (still guarded against zero).
-      const newH = clamp(natH / size.height, 0.005, 1.5);
-      const patch: DocLayoutBox = { ...baseBox, h: newH };
-      patch.y = baseBox.y + baseBox.h / 2 - newH / 2; // keep vertical center
-      if (lineCount <= 1) {
-        // +1px guards the final glyph's side-bearing against the box overflow clip.
-        const natW = bb.width + pad * 2 + 1;
-        const newW = clamp(natW / size.width, 0.005, 1.5);
-        if (el.align === 'center') patch.x = baseBox.x + baseBox.w / 2 - newW / 2;
-        else if (el.align === 'right') patch.x = baseBox.x + baseBox.w - newW;
-        patch.w = newW;
-      }
-      // Already hugged (within ~0.2% of the canvas ≈ a couple px)? Skip so the
-      // passive auto-size pass can't loop or needlessly dirty the doc. A resize
-      // still commits (its baseBox is the drag box, not yet stored).
-      const near = (a: number, b: number) => Math.abs(a - b) <= 0.002;
-      const unchanged =
-        near(patch.x, baseBox.x) && near(patch.y, baseBox.y) && near(patch.w, baseBox.w) && near(patch.h, baseBox.h);
-      if (unchanged && !commitFallback) return;
-      setBox(sizeId, elId, patch);
-    },
-    [doc.elements, size.width, size.height, setBox],
-  );
-
-  // Latest state for the passive auto-size pass, without widening its dep array
-  // (which would fire it on unrelated edits).
-  const docRef = useRef(doc);
-  docRef.current = doc;
-  const sizeIdRef = useRef(sizeId);
-  sizeIdRef.current = sizeId;
-  const fitTextBoxRef = useRef(fitTextBox);
-  fitTextBoxRef.current = fitTextBox;
-
-  // Signature of everything that changes a text element's rendered SIZE
-  // (content, font metrics, per-size font size, padding, alignment). Box x/y/w/h
-  // are deliberately excluded so a hug can't feed back into the signature.
-  const textAutosizeSig = useMemo(
-    () =>
-      doc.elements
-        .filter((e) => e.type === 'text')
-        .map((e) => {
-          const b = doc.layouts[sizeId]?.[e.id];
-          const content =
-            e.binding?.kind === 'static'
-              ? e.binding.value
-              : e.binding?.kind === 'field'
-                ? String(previewData[e.binding.key] ?? '')
-                : '';
-          return [e.id, content, e.fontFamily, e.fontWeight, e.letterSpacing, e.lineHeight, e.uppercase, e.align, e.padding, b?.fontSize].join('');
-        })
-        .join(''),
-    [doc.elements, doc.layouts, sizeId, previewData],
-  );
-
-  // Auto-size text to its content (Canva/Figma "auto" text) so the box always
-  // hugs the glyphs — on add, edit, font/size tweak, and initial canvas load.
-  // The `writeFrame` effect is declared earlier, so it patches the iframe first
-  // in the same commit and the live nodes are current here; fitTextBox no-ops
-  // when a box is already tight. Skipped while inline-editing (don't fight the
-  // caret) — the commit changes the signature, which re-hugs afterward.
-  useEffect(() => {
-    if (editingText) return;
-    const idoc = iframeRef.current?.contentDocument;
-    if (!idoc) return;
-    const d = docRef.current;
-    const sid = sizeIdRef.current;
-    for (const el of d.elements) {
-      if (el.type !== 'text') continue;
-      const box = d.layouts[sid]?.[el.id];
-      if (box) fitTextBoxRef.current(el.id, sid, box, { commitFallback: false });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [textAutosizeSig, frameTick, editingText]);
-
   // In-place text editing: turn the ACTUAL rendered node inside the iframe into a
   // contenteditable so the caret sits in the real text (WYSIWYG), rather than a
   // floating textarea. Runs once per edit session (keyed on the element id);
@@ -1523,8 +1399,9 @@ export default function AdBuilderPage() {
         fontWeight: 700,
         color: '#ffffff',
         align: 'center',
-        bg: 'brand',
-        radius: 999,
+        // A concrete black square by default — no `radius` (square) and a real
+        // hex (not `'brand'`, which rendered a colour the swatch didn't reflect).
+        bg: '#000000',
         padding: 14,
       };
       return { ...prev, elements: [...prev.elements, el], layouts };
@@ -2219,10 +2096,10 @@ export default function AdBuilderPage() {
     const dyF = (e.clientY - d.sy) / d.fh;
     if (d.kind === 'single') {
       let box = computeBox(d.handle, d.start, dxF, dyF);
-      // Text sizing model (Figma-style): the font size is a PANEL property. A
-      // plain drag just reshapes the frame — width sets the wrap, height auto-
-      // fits on release (fitTextBox). Holding ⌘/Ctrl SCALES the font (and locks
-      // aspect so the text scales like an object). Shift locks aspect for any el.
+      // Text sizing: font size is a PANEL property. A plain drag freely resizes
+      // the box (width sets the wrap; the box keeps whatever you drag). Holding
+      // ⌘/Ctrl SCALES the font (and locks aspect so the text scales like an
+      // object). Shift locks aspect for any element.
       const scaleText = d.scaleFont && (e.metaKey || e.ctrlKey) && !!d.start.fontSize && d.start.h > 0;
       if (d.handle !== 'move' && (e.shiftKey || scaleText)) box = lockAspect(d.handle, d.start, box, d.nw, d.nh);
       let gx: number | null = null;
@@ -2289,13 +2166,8 @@ export default function AdBuilderPage() {
   onUpRef.current = () => {
     const d = dragRef.current;
     if (d?.kind === 'single') {
-      // After resizing a TEXT element, hug the box to the content (no whitespace).
-      const el = doc.elements.find((e) => e.id === d.elId);
-      if (el?.type === 'text' && d.handle !== 'move') {
-        fitTextBox(d.elId, d.sizeId, d.live);
-      } else {
-        setBox(d.sizeId, d.elId, d.live);
-      }
+      // Commit the drag as-is — text/button boxes size freely (no auto-hug).
+      setBox(d.sizeId, d.elId, d.live);
     } else if (d?.kind === 'group' || d?.kind === 'groupresize') {
       setDoc((prev) => {
         const lay = { ...(prev.layouts[d.sizeId] ?? {}) };
@@ -2715,6 +2587,7 @@ export default function AdBuilderPage() {
     { label: 'Image', Icon: PhotoIcon, onAdd: () => addElement('image'), color: KIND_COLOR.image },
     { label: 'Button', Icon: ButtonElementIcon, onAdd: addButton, color: KIND_COLOR.button },
     { label: 'Shape', Icon: ShapeElementIcon, onAdd: () => addElement('shape'), color: KIND_COLOR.shape },
+    { label: 'Logo', Icon: BuildingStorefrontIcon, onAdd: () => addElement('logo'), color: KIND_COLOR.logo },
     // No separate "Background": a background is a full-bleed Image (photo/texture)
     // or Shape (solid/gradient) — use those + the "Fill artboard & send to back"
     // action on the element's inspector.
@@ -3322,10 +3195,7 @@ export default function AdBuilderPage() {
                     ref={iframeRef}
                     title="Template canvas"
                     srcDoc="<!doctype html><html><head></head><body></body></html>"
-                    onLoad={() => {
-                      writeFrame();
-                      setFrameTick((t) => t + 1);
-                    }}
+                    onLoad={writeFrame}
                     style={{
                       width: size.width,
                       height: size.height,
@@ -3363,7 +3233,7 @@ export default function AdBuilderPage() {
                     <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center p-6">
                       {/* faint dashed frame hinting the design area */}
                       <div className="pointer-events-none absolute inset-3 rounded-2xl border border-dashed border-[var(--primary)]/20" />
-                      <div className="pointer-events-auto relative w-full max-w-[24rem] animate-fade-in-up">
+                      <div className="pointer-events-auto relative w-full max-w-[26rem] animate-fade-in-up">
                         {/* Soft glow in the four element-palette colours so a blank
                             canvas still feels alive + on-brand. */}
                         <div
@@ -4558,7 +4428,7 @@ function SelectionPanel({
                       </BarBtn>
                     </div>
                   ) : (
-                    <BarBtn title="Add a button background" onClick={() => onEl({ bg: 'brand', radius: el.radius ?? 999, padding: el.padding ?? 14 })}>
+                    <BarBtn title="Add a button background" onClick={() => onEl({ bg: '#000000', padding: el.padding ?? 14 })}>
                       <span className="px-1 text-[10px] font-semibold leading-none">Add</span>
                     </BarBtn>
                   )}
@@ -4575,8 +4445,10 @@ function SelectionPanel({
                   <span>Line</span>
                   <MiniNum title="Line height" step={0.05} value={el.lineHeight ?? 1.1} onChange={(v) => onEl({ lineHeight: v || undefined })} />
                 </label>
-                {/* Per-corner radius for the button pill (same control as shapes). */}
+                {/* Per-corner radius + per-side padding for the button (same
+                    controls as shapes). */}
                 {el.bg && <RadiusControl el={el} onEl={onEl} />}
+                {el.bg && <PaddingControl el={el} onEl={onEl} />}
               </div>
             </PanelSection>
           </>
@@ -4971,8 +4843,8 @@ type Adder = { label: string; Icon: React.ComponentType<{ className?: string }>;
  *  Shared by the Insert flyout (`panel`) and the empty-canvas onboarding
  *  (`onboarding`); `variant` only tunes density. */
 function AdderGrid({ adders, variant }: { adders: Adder[]; variant: 'panel' | 'onboarding' }) {
-  const cols = variant === 'panel' ? 'grid-cols-2' : 'grid-cols-4';
-  const tile = variant === 'panel' ? 'gap-2 py-4 text-xs' : 'gap-1.5 py-3 text-[11px]';
+  const cols = variant === 'panel' ? 'grid-cols-2' : 'grid-cols-5';
+  const tile = variant === 'panel' ? 'gap-2 py-4 text-xs' : 'gap-1.5 py-3 text-[10px]';
   return (
     <div className={`grid ${cols} gap-2`}>
       {adders.map((a) => (
@@ -5277,6 +5149,7 @@ function RadiusControl({ el, onEl }: { el: DocElement; onEl: (patch: Partial<Doc
     <div className="mt-3">
       <div className="mb-1.5 text-xs text-[var(--muted-foreground)]">Radius</div>
       <CornerBox
+        showSteppers
         values={{ tl: el.radiusTL ?? base, tr: el.radiusTR ?? base, br: el.radiusBR ?? base, bl: el.radiusBL ?? base }}
         onChange={(v) =>
           onEl({
@@ -5285,6 +5158,36 @@ function RadiusControl({ el, onEl }: { el: DocElement; onEl: (patch: Partial<Doc
             radiusBR: v.br || undefined,
             radiusBL: v.bl || undefined,
             radius: undefined,
+          })
+        }
+      />
+    </div>
+  );
+}
+
+/** Per-side padding control (shared T/R/B/L box, link-all toggle) — mirrors
+ *  RadiusControl. Seeds from the per-side values or the single `padding`, and
+ *  writes the per-side fields (clearing the legacy `padding`). */
+function PaddingControl({ el, onEl }: { el: DocElement; onEl: (patch: Partial<DocElement>) => void }) {
+  const base = el.padding ?? 0;
+  return (
+    <div className="mt-3">
+      <div className="mb-1.5 text-xs text-[var(--muted-foreground)]">Padding</div>
+      <SpacingBox
+        showSteppers
+        values={{
+          top: el.paddingTop ?? base,
+          right: el.paddingRight ?? base,
+          bottom: el.paddingBottom ?? base,
+          left: el.paddingLeft ?? base,
+        }}
+        onChange={(v) =>
+          onEl({
+            paddingTop: v.top || undefined,
+            paddingRight: v.right || undefined,
+            paddingBottom: v.bottom || undefined,
+            paddingLeft: v.left || undefined,
+            padding: undefined,
           })
         }
       />

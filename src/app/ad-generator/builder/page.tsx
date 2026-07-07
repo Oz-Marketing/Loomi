@@ -1401,6 +1401,98 @@ export default function AdBuilderPage() {
     setSelectedIds([newId]);
   }, [doc.elements]);
 
+  // Duplicate every element in `ids` at once (⌘D on a multi-selection), keeping
+  // each clone next to its original + offset, and select the new clones.
+  const duplicateElements = useCallback((ids: string[]) => {
+    const valid = ids.filter((id) => doc.elements.some((e) => e.id === id));
+    if (!valid.length) return;
+    const idSet = new Set(valid);
+    const idMap = new Map<string, string>();
+    for (const el of doc.elements) if (idSet.has(el.id)) idMap.set(el.id, `${el.type}-${rid()}`);
+    setDoc((prev) => {
+      const elements: DocElement[] = [];
+      for (const el of prev.elements) {
+        elements.push(el);
+        const newId = idMap.get(el.id);
+        if (newId) {
+          const clone = structuredClone(el);
+          clone.id = newId;
+          elements.push(clone);
+        }
+      }
+      const layouts = { ...prev.layouts };
+      for (const sid of Object.keys(prev.layouts)) {
+        const lay = { ...prev.layouts[sid] };
+        for (const [oldId, newId] of idMap) {
+          const b = prev.layouts[sid][oldId];
+          if (b) lay[newId] = { ...b, x: clamp(b.x + 0.03, 0, 1 - b.w), y: clamp(b.y + 0.03, 0, 1 - b.h), z: (b.z ?? 0) + 1 };
+        }
+        layouts[sid] = lay;
+      }
+      return { ...prev, elements, layouts };
+    });
+    setSelectedIds([...idMap.values()]);
+  }, [doc.elements]);
+
+  // ── bulk edits across the current multi-selection ──
+  // Patch a property on every selected ELEMENT (font, weight, color, align, …).
+  const patchSelectedElements = useCallback((patch: Partial<DocElement>) => {
+    const ids = new Set(selectedIds);
+    setDoc((prev) => ({ ...prev, elements: prev.elements.map((el) => (ids.has(el.id) ? { ...el, ...patch } : el)) }), `bulkel:${Object.keys(patch).sort().join(',')}`);
+  }, [selectedIds]);
+  // Patch the current-size BOX of every selected element (fontSize lives here).
+  const patchSelectedBoxes = useCallback((patch: Partial<DocLayoutBox>) => {
+    const ids = selectedIds;
+    setDoc((prev) => {
+      const lay = { ...(prev.layouts[size.id] ?? {}) };
+      for (const id of ids) if (lay[id]) lay[id] = { ...lay[id], ...patch };
+      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+    }, `bulkbox:${Object.keys(patch).sort().join(',')}`);
+  }, [selectedIds, size.id]);
+  // Nudge each selected element's font size by delta, keeping their relative sizes.
+  const bumpSelectedFontSize = useCallback((delta: number) => {
+    const ids = selectedIds;
+    setDoc((prev) => {
+      const lay = { ...(prev.layouts[size.id] ?? {}) };
+      for (const id of ids) if (lay[id]) lay[id] = { ...lay[id], fontSize: clamp(Math.round((lay[id].fontSize ?? 48) + delta), 4, 400) };
+      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+    }, 'bulkbox:fontSize');
+  }, [selectedIds, size.id]);
+
+  // Fit a text box to its rendered content on the given axis — the explicit
+  // action behind double-clicking a resize handle (n/s → height, e/w → width,
+  // corners → both). Measures the live node inside the iframe (native px), so
+  // the box hugs the wrapped text. NOT the old auto-hug (removed); user-invoked only.
+  const fitBoxToContent = useCallback((id: string, axis: 'h' | 'w' | 'both') => {
+    const node = iframeRef.current?.contentDocument?.querySelector(`[data-el-id="${id}"]`) as HTMLElement | null;
+    if (!node) return;
+    const prevStyle = { width: node.style.width, height: node.style.height, whiteSpace: node.style.whiteSpace };
+    let contentW = 0;
+    let contentH = 0;
+    if (axis === 'w' || axis === 'both') {
+      node.style.width = 'max-content';
+      node.style.whiteSpace = 'pre-wrap';
+      contentW = node.offsetWidth;
+      node.style.width = prevStyle.width;
+      node.style.whiteSpace = prevStyle.whiteSpace;
+    }
+    if (axis === 'h' || axis === 'both') {
+      node.style.height = 'auto';
+      contentH = node.offsetHeight;
+      node.style.height = prevStyle.height;
+    }
+    setDoc((prev) => {
+      const lay = { ...(prev.layouts[size.id] ?? {}) };
+      const b = lay[id];
+      if (!b) return prev;
+      const nb = { ...b };
+      if (contentW) nb.w = clamp(contentW / size.width, 0.02, 1 - b.x);
+      if (contentH) nb.h = clamp(contentH / size.height, 0.01, 1 - b.y);
+      lay[id] = nb;
+      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+    }, `fit:${axis}:${id}`);
+  }, [size.id, size.width, size.height]);
+
   const addElement = useCallback(
     (type: DocElementType) => {
       const id = `${type}-${rid()}`;
@@ -2596,16 +2688,16 @@ export default function AdBuilderPage() {
         const forward = key === ']';
         applyZ(e.shiftKey ? (forward ? 'front' : 'back') : forward ? 'forward' : 'backward');
       } else if (key === 'd') {
-        // Duplicate (⌘D) the single selected element.
-        if (selectedIds.length !== 1) return;
+        // Duplicate (⌘D) the whole selection — one or many elements.
+        if (!selectedIds.length) return;
         e.preventDefault();
-        duplicateElement(selectedIds[0]);
+        duplicateElements(selectedIds);
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [undo, redo, selectedIds, doc.elements, doc.groups, size.id, duplicateElement, applyZ]);
+  }, [undo, redo, selectedIds, doc.elements, doc.groups, size.id, duplicateElements, applyZ]);
 
   // Autosave — debounced PATCH once there's a target (a saved template, or the
   // ad in ad mode). New/unsaved templates require an explicit Save first.
@@ -3450,20 +3542,29 @@ export default function AdBuilderPage() {
                             >
                               {isCropping ? 'Crop — drag to reposition' : detached ? `${elName(el)} — detached` : elName(el)}
                             </span>
-                            {RESIZE_HANDLES.map((rh) => (
-                              <span
-                                key={rh.h}
-                                onPointerDown={(e) => startSingleDrag(e, el.id, rh.h)}
-                                className="absolute h-2.5 w-2.5 rounded-[2px] border border-[var(--kind)] bg-[var(--card)]"
-                                style={{
-                                  left: `${rh.x * 100}%`,
-                                  top: `${rh.y * 100}%`,
-                                  transform: 'translate(-50%, -50%)',
-                                  cursor: rh.cursor,
-                                  touchAction: 'none',
-                                }}
-                              />
-                            ))}
+                            {RESIZE_HANDLES.map((rh) => {
+                              // Double-click a handle on a text box to fit it to
+                              // its content: top/bottom → height, left/right →
+                              // width, a corner → both. (Explicit, not auto-hug.)
+                              const fitAxis = rh.h === 'n' || rh.h === 's' ? 'h' : rh.h === 'e' || rh.h === 'w' ? 'w' : 'both';
+                              const canFit = el.type === 'text';
+                              return (
+                                <span
+                                  key={rh.h}
+                                  onPointerDown={(e) => startSingleDrag(e, el.id, rh.h)}
+                                  onDoubleClick={canFit ? (e) => { e.stopPropagation(); fitBoxToContent(el.id, fitAxis); } : undefined}
+                                  title={canFit ? `Drag to resize · double-click to fit ${fitAxis === 'h' ? 'height' : fitAxis === 'w' ? 'width' : 'box'} to text` : undefined}
+                                  className="absolute h-2.5 w-2.5 rounded-[2px] border border-[var(--kind)] bg-[var(--card)]"
+                                  style={{
+                                    left: `${rh.x * 100}%`,
+                                    top: `${rh.y * 100}%`,
+                                    transform: 'translate(-50%, -50%)',
+                                    cursor: rh.cursor,
+                                    touchAction: 'none',
+                                  }}
+                                />
+                              );
+                            })}
                           </>
                         )}
                       </div>
@@ -3723,6 +3824,26 @@ export default function AdBuilderPage() {
                 />
               )}
 
+              {/* Bulk-edit panel for a multi-selection — mass-update font, size,
+                  weight, alignment, colour, spacing across all selected text. */}
+              {selectedIds.length > 1 && !editingText && (
+                <MultiSelectPanel
+                  elements={selectedIds.map((id) => doc.elements.find((e) => e.id === id)).filter((e): e is DocElement => Boolean(e))}
+                  sampleFontSize={(() => {
+                    const firstText = selectedIds.map((id) => layout[id]).find((b, i) => b && doc.elements.find((e) => e.id === selectedIds[i])?.type === 'text');
+                    return firstText?.fontSize ?? 48;
+                  })()}
+                  fontOptions={fontOptions}
+                  onElAll={patchSelectedElements}
+                  onBoxAll={patchSelectedBoxes}
+                  onBumpSize={bumpSelectedFontSize}
+                  onDuplicate={() => duplicateElements(selectedIds)}
+                  onDelete={deleteSelected}
+                  onClose={clearSelection}
+                  shifted={fieldsOpen}
+                />
+              )}
+
             </div>
         </div>
       </div>
@@ -3867,6 +3988,11 @@ export default function AdBuilderPage() {
                       </Item>
                       <Sep />
                     </>
+                  )}
+                  {multi && (
+                    <Item onClick={() => duplicateElements(selectedIds)} kbd="⌘D">
+                      Duplicate ({selectedIds.length})
+                    </Item>
                   )}
                   <Item onClick={deleteSelected} danger kbd="⌫">
                     Delete{multi ? ` (${selectedIds.length})` : ''}
@@ -4318,6 +4444,143 @@ function FieldsSidebar({
 }
 
 /**
+ * Bulk-edit panel for a multi-selection. Mirrors the single panel's typography
+ * controls but applies each change to EVERY selected element at once (font,
+ * size, weight, alignment, colour, spacing). Values shown reflect the first
+ * selected text box; changing one applies to all. Non-text elements in the
+ * selection are unaffected by the text controls.
+ */
+function MultiSelectPanel({
+  elements,
+  sampleFontSize,
+  fontOptions,
+  onElAll,
+  onBoxAll,
+  onBumpSize,
+  onDuplicate,
+  onDelete,
+  onClose,
+  shifted,
+}: {
+  elements: DocElement[];
+  sampleFontSize: number;
+  fontOptions: FontSelectOption[];
+  onElAll: (patch: Partial<DocElement>) => void;
+  onBoxAll: (patch: Partial<DocLayoutBox>) => void;
+  onBumpSize: (delta: number) => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+  shifted: boolean;
+}) {
+  const textEls = elements.filter((e) => e.type === 'text');
+  const sample = textEls[0];
+  return (
+    <div
+      data-adgen-panel
+      className={`absolute bottom-4 top-4 z-[70] flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[360px]' : 'right-4'}`}
+    >
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">
+        <span className="text-sm font-semibold text-[var(--foreground)]">{elements.length} selected</span>
+        <button type="button" onClick={onClose} title="Deselect" aria-label="Deselect" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+          <XMarkIcon className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
+        {textEls.length > 0 ? (
+          <>
+            <PanelSection title={`Font · ${textEls.length} text ${textEls.length === 1 ? 'box' : 'boxes'}`}>
+              <FontSelect value={sample?.fontFamily ?? ''} onChange={(v) => onElAll({ fontFamily: v || undefined })} options={fontOptions} />
+              <div className="mt-2 flex items-center gap-2">
+                <div className="flex flex-1 items-center gap-1">
+                  <BarBtn title="Smaller (all)" onClick={() => onBumpSize(-2)}>
+                    <MinusIcon className="h-4 w-4" />
+                  </BarBtn>
+                  <input
+                    type="number"
+                    aria-label="Font size (all)"
+                    defaultValue={sampleFontSize}
+                    key={sampleFontSize}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (!Number.isNaN(n)) onBoxAll({ fontSize: clamp(Math.round(n), 4, 400) });
+                    }}
+                    className="w-full min-w-0 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1.5 text-center text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                  />
+                  <BarBtn title="Larger (all)" onClick={() => onBumpSize(2)}>
+                    <PlusIcon className="h-4 w-4" />
+                  </BarBtn>
+                </div>
+                <div className="w-28 shrink-0">
+                  <FontSelect value={String(sample?.fontWeight ?? 400)} onChange={(v) => onElAll({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} />
+                </div>
+              </div>
+            </PanelSection>
+
+            <PanelSection title="Alignment">
+              <div className="flex items-center gap-1">
+                <BarBtn title="Align left" active={(sample?.align ?? 'left') === 'left'} onClick={() => onElAll({ align: 'left' })}>
+                  <Bars3BottomLeftIcon className="h-4 w-4" />
+                </BarBtn>
+                <BarBtn title="Align center" active={sample?.align === 'center'} onClick={() => onElAll({ align: 'center' })}>
+                  <Bars3Icon className="h-4 w-4" />
+                </BarBtn>
+                <BarBtn title="Align right" active={sample?.align === 'right'} onClick={() => onElAll({ align: 'right' })}>
+                  <Bars3BottomRightIcon className="h-4 w-4" />
+                </BarBtn>
+                <span className="mx-1 h-6 w-px bg-[var(--border)]" />
+                <BarBtn title="Uppercase" active={!!sample?.uppercase} onClick={() => onElAll({ uppercase: !sample?.uppercase })}>
+                  <span className="text-[11px] font-bold leading-none">Aa</span>
+                </BarBtn>
+              </div>
+            </PanelSection>
+
+            <PanelSection title="Color & spacing">
+              <div className="space-y-2.5">
+                <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span>Text color</span>
+                  <ColorSwatchInput title="Text color (all)" value={sample?.color && sample.color !== 'brand' ? sample.color : '#4f46e5'} onChange={(v) => onElAll({ color: v })} />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span>Letter</span>
+                  <MiniNum title="Letter spacing (px, all)" value={sample?.letterSpacing ?? 0} onChange={(v) => onElAll({ letterSpacing: v ? Math.round(v) : undefined })} />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span>Line</span>
+                  <MiniNum title="Line height (all)" step={0.05} value={sample?.lineHeight ?? 1.1} onChange={(v) => onElAll({ lineHeight: v || undefined })} />
+                </label>
+              </div>
+            </PanelSection>
+          </>
+        ) : (
+          <p className="px-1 py-4 text-xs leading-relaxed text-[var(--muted-foreground)]">
+            Select two or more <span className="text-[var(--foreground)]">text boxes</span> to mass-edit their font, size, weight, colour, and spacing.
+          </p>
+        )}
+      </div>
+
+      <div className="mt-auto flex items-center gap-2 border-t border-[var(--border)] p-3">
+        <button
+          type="button"
+          onClick={onDuplicate}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+        >
+          Duplicate all
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          className="flex items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-red-500/50 hover:text-red-500"
+        >
+          <TrashIcon className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
  * Floating properties panel for the selected element — sits to the right of the
  * canvas. The top "Content" section edits the element's value directly (type
  * text, pick/upload an image) and writes straight to the form data; derived and
@@ -4372,6 +4635,8 @@ function SelectionPanel({
   const typeLabel = el.type === 'text' ? 'Text' : el.type === 'image' ? 'Image' : el.type === 'logo' ? 'Logo' : el.type === 'background' ? 'Background' : 'Shape';
   const kindColor = KIND_COLOR[elementKind(el)];
   const [picking, setPicking] = useState(false);
+  // Field/offer/brand tokens a designer can drop into static text as {{key}}.
+  const insertableVars = contentSources.filter((o) => o.value.startsWith('field:'));
 
   return (
     <div
@@ -4412,13 +4677,34 @@ function SelectionPanel({
               </div>
             )}
             {content.mode === 'text-edit' && (
-              <textarea
-                value={content.value}
-                onChange={(e) => onContentChange(e.target.value)}
-                rows={2}
-                placeholder="Text"
-                className="w-full resize-y rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-              />
+              <>
+                <textarea
+                  value={content.value}
+                  onChange={(e) => onContentChange(e.target.value)}
+                  rows={2}
+                  placeholder="Text — type {{field}} to drop in a live value"
+                  className="w-full resize-y rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                />
+                {/* Insert a live field value inline, so one text block can be a
+                    whole sentence / disclaimer (e.g. "With {{dueAtSigning}} due"). */}
+                {insertableVars.length > 0 && (
+                  <div className="mt-1.5">
+                    <SearchableSelect
+                      value=""
+                      onChange={(v) => {
+                        const key = v.startsWith('field:') ? v.slice(6) : '';
+                        if (!key) return;
+                        const cur = content.value;
+                        onContentChange(`${cur}${cur && !/\s$/.test(cur) ? ' ' : ''}{{${key}}}`);
+                      }}
+                      options={insertableVars}
+                      placeholder="+ Insert field variable…"
+                      className="w-full"
+                    />
+                    <p className="mt-1 text-[10px] leading-snug text-[var(--muted-foreground)]">Type <code className="rounded bg-[var(--muted)] px-1">{'{{field}}'}</code> anywhere to insert live values — numbers get thousands commas.</p>
+                  </div>
+                )}
+              </>
             )}
             {content.mode === 'text-readonly' && (
               <>
@@ -4601,22 +4887,15 @@ function SelectionPanel({
 
             <PanelSection title="Color & spacing">
               <div className="space-y-2.5">
-                {/* Button color — the pill background behind a text/button element. */}
-                <div className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
-                  <span>Button color</span>
-                  {el.bg ? (
-                    <div className="flex items-center gap-2">
-                      <ColorSwatchInput title="Button color" value={el.bg !== 'brand' ? el.bg : '#4f46e5'} onChange={(v) => onEl({ bg: v })} />
-                      <BarBtn title="Remove button color" onClick={() => onEl({ bg: undefined })}>
-                        <XMarkIcon className="h-4 w-4" />
-                      </BarBtn>
-                    </div>
-                  ) : (
-                    <BarBtn title="Add a button background" onClick={() => onEl({ bg: '#000000', padding: el.padding ?? 14 })}>
-                      <span className="px-1 text-[10px] font-semibold leading-none">Add</span>
-                    </BarBtn>
-                  )}
-                </div>
+                {/* Button color — the pill background. Only a Button element (a
+                    text element WITH a background pill) exposes this; plain text
+                    does not. Make a button via Insert → Button. */}
+                {el.bg && (
+                  <div className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                    <span>Button color</span>
+                    <ColorSwatchInput title="Button color" value={el.bg !== 'brand' ? el.bg : '#4f46e5'} onChange={(v) => onEl({ bg: v })} />
+                  </div>
+                )}
                 <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
                   <span>Text color</span>
                   <ColorSwatchInput title="Text color" value={el.color && el.color !== 'brand' ? el.color : '#4f46e5'} onChange={(v) => onEl({ color: v })} />

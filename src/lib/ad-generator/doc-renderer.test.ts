@@ -176,6 +176,31 @@ describe('renderDoc', () => {
     expect(renderDoc(doc, { price: '$1' }, SIZE)).not.toContain('SHOULD-NOT-APPEAR');
   });
 
+  it('formats number-typed field values with thousands commas + interpolates {{tokens}}', () => {
+    const tDoc: TemplateDoc = {
+      ...doc,
+      fields: [{ key: 'dueAtSigning', label: 'Due', type: 'number' }],
+      elements: [
+        { id: 'due', type: 'text', binding: { kind: 'field', key: 'dueAtSigning' } },
+        { id: 'sentence', type: 'text', binding: { kind: 'static', value: 'With {{dueAtSigning}} due at signing' } },
+      ],
+      layouts: { square: { due: { x: 0, y: 0, w: 0.5, h: 0.1 }, sentence: { x: 0, y: 0.2, w: 1, h: 0.1 } } },
+    };
+    const html = renderDoc(tDoc, { dueAtSigning: '2999' }, SIZE);
+    expect(html).toContain('2,999'); // direct number binding grouped
+    expect(html).toContain('With 2,999 due at signing'); // token interpolated + grouped
+  });
+
+  it('leaves non-number fields ungrouped and drops unknown tokens', () => {
+    const tDoc: TemplateDoc = {
+      ...doc,
+      fields: [{ key: 'stock', label: 'Stock', type: 'text' }],
+      elements: [{ id: 't', type: 'text', binding: { kind: 'static', value: 'Stock {{stock}} / {{missing}}' } }],
+      layouts: { square: { t: { x: 0, y: 0, w: 1, h: 0.1 } } },
+    };
+    expect(renderDoc(tDoc, { stock: '4421' }, SIZE)).toContain('Stock 4421 / ');
+  });
+
   it('filters offer-block elements by the ad offer count', () => {
     const countDoc: TemplateDoc = {
       ...doc,

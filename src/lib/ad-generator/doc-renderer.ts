@@ -31,6 +31,31 @@ function resolveBinding(b: Binding | undefined, data: AdData): string {
   }
 }
 
+/** Add thousands separators to a plain numeric string ("2999" → "2,999",
+ *  "28995.5" → "28,995.5"). Leaves already-formatted or non-numeric values
+ *  ("$2,999", "36 months") untouched. */
+function withThousands(v: string): string {
+  const s = String(v).trim();
+  const m = s.match(/^(-?)(\d{4,})(\.\d+)?$/); // 4+ digits so short ids/years aren't grouped
+  if (!m) return v;
+  const [, sign, intPart, dec = ''] = m;
+  return sign + Number(intPart).toLocaleString('en-US') + dec;
+}
+
+/** Replace `{{ field }}` tokens in text with live values, so a designer can
+ *  write a whole sentence ("With {{dueAtSigning}} due at signing") or a
+ *  disclaimer in ONE text block. Tokens resolve against the merged data
+ *  (form fields, computed `_offer*` tokens, brand values); number-typed fields
+ *  are comma-formatted. An unknown/empty token renders as nothing. */
+function interpolateTokens(text: string, data: AdData, numberKeys: Set<string>): string {
+  if (!text.includes('{{')) return text;
+  return text.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_m, key: string) => {
+    const raw = data[key];
+    if (raw == null || raw === '') return '';
+    return numberKeys.has(key) ? withThousands(raw) : raw;
+  });
+}
+
 /** Resolve a color token: `'brand'` → the account color, else the hex, else fallback. */
 function resolveColor(c: string | undefined, brand: string, fallback: string): string {
   if (!c) return fallback;
@@ -194,6 +219,8 @@ interface RenderCtx {
   /** Builder canvas: show empty text bindings as muted placeholders so every
    *  element stays visible + selectable. Off for export. */
   preview: boolean;
+  /** Keys of number-typed fields — their values render with thousands commas. */
+  numberKeys: Set<string>;
 }
 
 function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: RenderCtx): string {
@@ -304,7 +331,12 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   }
 
   // text
-  let value = esc(resolveBinding(el.binding, data));
+  let raw = resolveBinding(el.binding, data);
+  // Replace {{field}} tokens so one text block can be a full sentence/disclaimer.
+  raw = interpolateTokens(raw, data, ctx.numberKeys);
+  // A text element bound directly to a number field renders with thousands commas.
+  if (el.binding?.kind === 'field' && ctx.numberKeys.has(el.binding.key)) raw = withThousands(raw);
+  let value = esc(raw);
   let placeholder = false;
   if (!value) {
     if (!ctx.preview) return '';
@@ -353,7 +385,8 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
       ? `<link rel="stylesheet" href="${googleFontsUrl.replace(/"/g, '')}" />`
       : '';
   const brandStack = `${fontFamily ? `'${fontFamily}', ` : ''}-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif`;
-  const ctx: RenderCtx = { width, height, brand, brandStack, preview: opts?.preview ?? false };
+  const numberKeys = new Set(doc.fields.filter((f) => f.type === 'number').map((f) => f.key));
+  const ctx: RenderCtx = { width, height, brand, brandStack, preview: opts?.preview ?? false, numberKeys };
 
   const layout = doc.layouts[size.id] ?? {};
   const body = doc.elements

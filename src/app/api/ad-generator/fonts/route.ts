@@ -11,9 +11,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
-import { prisma } from '@/lib/prisma';
-import { parseCustomFonts } from '@/lib/ad-generator/fonts';
-import { embeddedFontFaceCss } from '@/lib/ad-generator/render-fonts';
+import { hasUnrestrictedAccountAccess } from '@/lib/roles';
+import { accountCustomFontFaces, embeddedFontFaceCss } from '@/lib/ad-generator/render-fonts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,11 +23,13 @@ export async function GET(req: NextRequest) {
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   const accountKey = req.nextUrl.searchParams.get('accountKey') || undefined;
-  if (!accountKey) return NextResponse.json({ css: '' });
+  // Unrestricted admins see the union of every account's fonts (roll-up); others
+  // only the requested account's own.
+  const unrestricted = hasUnrestrictedAccountAccess(session.user.role, session.user.accountKeys ?? []);
+  if (!accountKey && !unrestricted) return NextResponse.json({ css: '' });
 
   try {
-    const account = await prisma.account.findUnique({ where: { key: accountKey }, select: { customFonts: true } });
-    const faces = parseCustomFonts(account?.customFonts);
+    const faces = await accountCustomFontFaces(accountKey, { unrestricted });
     const css = await embeddedFontFaceCss(faces);
     return NextResponse.json({ css });
   } catch (err) {

@@ -25,7 +25,7 @@ import type { StatusFilterValue } from '@/components/status-filter';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
-import { vehicleModeFields, type VehicleFieldsMode } from '@/lib/ad-generator/vehicle-fields';
+import { addFieldKit, type VehicleFieldsMode } from '@/lib/ad-generator/vehicle-fields';
 import { catalogByCategory, aspectLabel, type CatalogSize } from '@/lib/ad-generator/ad-size-catalog';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -180,11 +180,12 @@ export default function AdGeneratorListPage() {
           height: size.height,
         };
       });
-      const doc = blankTemplateDoc(`blank-${Date.now()}`, trimmed, docSizes);
+      let doc = blankTemplateDoc(`blank-${Date.now()}`, trimmed, docSizes);
       // Optionally seed the vehicle/offer question set (single or dual) so a
       // from-scratch ad isn't a blank form — the offer engine gates on these
-      // fields being present.
-      if (vehicleMode !== 'none') doc.fields = vehicleModeFields(vehicleMode);
+      // fields being present. Same merge path the builder's "Add offer fields"
+      // action uses (fields + starter defaults, deduped by key).
+      if (vehicleMode !== 'none') doc = addFieldKit(doc, vehicleMode);
       const res = await fetch('/api/ad-generator/creatives', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

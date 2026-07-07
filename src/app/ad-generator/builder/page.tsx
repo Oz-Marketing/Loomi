@@ -80,9 +80,10 @@ import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type LayerNode } fro
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon, CropIcon } from '@/components/ad-generator/builder-icons';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
-import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode } from '@/lib/ad-generator/doc-types';
+import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType, AdData, AdSize } from '@/lib/ad-generator/types';
-import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
+import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
+import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
 const MIN_FRAC = 0.03; // smallest element edge as a fraction of the canvas
@@ -192,6 +193,56 @@ const OFFER_LABEL_OVERRIDE: Record<string, string> = {
   _offerLabel: 'offerLabel',
   _o2_offerLabel: 'o2_offerLabel',
 };
+
+// ── Content-source binding picker ──
+// The inspector's "Shows" control lets a designer point an element at a template
+// field, a computed offer value, brand data, or a static literal — so a
+// from-scratch layout can be wired to the offer engine (no code template needed).
+// Options are encoded as `static` | `field:<key>` | `brand:<key>` strings.
+const OFFER_TOKENS: { key: string; label: string }[] = [
+  { key: '_offerLabel', label: 'Offer label' },
+  { key: '_offerMain', label: 'Offer amount' },
+  { key: '_offerTerms', label: 'Offer terms' },
+];
+const OFFER_TOKENS_O2: { key: string; label: string }[] = [
+  { key: '_o2_offerLabel', label: 'Offer 2 label' },
+  { key: '_o2_offerMain', label: 'Offer 2 amount' },
+  { key: '_o2_offerTerms', label: 'Offer 2 terms' },
+];
+
+function bindingToSourceValue(b: Binding | undefined): string {
+  if (!b || b.kind === 'static') return 'static';
+  if (b.kind === 'field') return `field:${b.key}`;
+  return `brand:${b.key}`;
+}
+function sourceValueToBinding(v: string, currentValue: string): Binding {
+  if (v.startsWith('field:')) return { kind: 'field', key: v.slice(6) };
+  if (v.startsWith('brand:')) return { kind: 'brand', key: v.slice(6) as 'dealerName' | 'logoUrl' | 'brandColor' };
+  return { kind: 'static', value: currentValue };
+}
+/** Build the "Shows" options for an element: static, the template's compatible
+ *  fields, the computed offer tokens (text only), and brand data. */
+function buildContentSources(el: DocElement, fields: FieldSpec[]): SearchableSelectOption[] {
+  const isImage = el.type === 'image' || el.type === 'logo' || el.type === 'background';
+  const opts: SearchableSelectOption[] = [
+    { value: 'static', label: isImage ? 'Fixed image' : 'Type it in', group: 'Custom' },
+  ];
+  for (const f of fields) {
+    const fieldIsImage = f.type === 'image';
+    if (isImage !== fieldIsImage) continue; // image elements ↔ image fields; text ↔ the rest
+    opts.push({ value: `field:${f.key}`, label: f.label || f.key, group: 'Fields' });
+  }
+  if (!isImage) {
+    for (const t of OFFER_TOKENS) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Offer (auto)' });
+    if (fields.some((f) => f.key === 'o2_offerType')) {
+      for (const t of OFFER_TOKENS_O2) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Offer (auto)' });
+    }
+    opts.push({ value: 'brand:dealerName', label: 'Dealer name', group: 'Brand' });
+  } else {
+    opts.push({ value: 'brand:logoUrl', label: 'Account logo', group: 'Brand' });
+  }
+  return opts;
+}
 const WEIGHT_OPTIONS: FontSelectOption[] = [
   { value: '300', label: 'Light' },
   { value: '400', label: 'Regular' },
@@ -1000,6 +1051,13 @@ export default function AdBuilderPage() {
     return { mode: isImage ? 'image-edit' : 'text-edit', value };
   }, [selected, previewData]);
 
+  // "Shows" options for the selected element's Content source picker — its
+  // template fields + computed offer tokens + brand data (see buildContentSources).
+  const contentSources = useMemo<SearchableSelectOption[]>(
+    () => (selected ? buildContentSources(selected, doc.fields) : []),
+    [selected, doc.fields],
+  );
+
   // Write the selected element's content back to its source: static → the literal,
   // field → that field's default (the form data the generator prefills).
   const setSelectedContent = useCallback(
@@ -1519,6 +1577,18 @@ export default function AdBuilderPage() {
   // ── template field-list operations ──
   const addField = () => {
     setDoc((prev) => ({ ...prev, fields: [...prev.fields, { key: `field_${rid()}`, label: 'New field', type: 'text' }] }));
+  };
+  // Inject the standard offer/vehicle question set (single or dual) so a
+  // designer can make ANY template client-manipulable — deduped by key, defaults
+  // seeded, never clobbering existing fields (see addFieldKit).
+  const addOfferFieldKit = (mode: 'single' | 'dual') => {
+    const added = addFieldKit(doc, mode).fields.length - doc.fields.length;
+    if (added === 0) {
+      toast('Those offer fields are already in this template.');
+      return;
+    }
+    setDoc((prev) => addFieldKit(prev, mode), `offerkit:${mode}`);
+    toast.success(`Added ${added} ${mode === 'dual' ? 'dual-offer' : 'offer'} field${added === 1 ? '' : 's'}`);
   };
   const updateFieldAt = (i: number, patch: Partial<FieldSpec>) => {
     setDoc((prev) => ({ ...prev, fields: prev.fields.map((f, idx) => (idx === i ? { ...f, ...patch } : f)) }), `field:${i}:${Object.keys(patch).sort().join(',')}`);
@@ -2852,6 +2922,9 @@ export default function AdBuilderPage() {
                 action bar (bottom); view guides (outlines / margins) live here. */}
             <RailButton label="Insert" Icon={PlusIcon} primary active={leftPanel === 'insert'} onClick={() => setLeftPanel((p) => (p === 'insert' ? null : 'insert'))} />
             <RailButton label="Layers" Icon={LayersIcon} active={leftPanel === 'layers'} onClick={() => setLeftPanel((p) => (p === 'layers' ? null : 'layers'))} />
+            {/* Fields — the form that drives the ad (offer/vehicle/legal inputs +
+                element bindings). Right-docked panel, so it toggles on its own. */}
+            <RailButton label="Fields" Icon={Bars3BottomLeftIcon} active={fieldsOpen} onClick={() => setFieldsOpen((v) => !v)} />
             <div className="my-0.5 h-px w-6 bg-[var(--border)]" />
             {/* View guides — element outlines + safe-area margins (moved off the
                 canvas header so all the view controls sit on the rail). */}
@@ -3623,6 +3696,7 @@ export default function AdBuilderPage() {
                   fontOptions={fontOptions}
                   brandLogos={brandLogos}
                   content={selectionContent}
+                  contentSources={contentSources}
                   onContentChange={setSelectedContent}
                   accountKey={accountKey ?? undefined}
                   onEl={updEl}
@@ -3652,6 +3726,7 @@ export default function AdBuilderPage() {
           defaults={doc.defaults}
           onClose={() => setFieldsOpen(false)}
           onAdd={addField}
+          onAddKit={addOfferFieldKit}
           onUpdate={updateFieldAt}
           onRename={renameFieldKeyAt}
           onDelete={deleteFieldAt}
@@ -3962,6 +4037,7 @@ function FieldsSidebar({
   defaults,
   onClose,
   onAdd,
+  onAddKit,
   onUpdate,
   onRename,
   onDelete,
@@ -3971,6 +4047,7 @@ function FieldsSidebar({
   defaults: Record<string, string>;
   onClose: () => void;
   onAdd: () => void;
+  onAddKit: (mode: 'single' | 'dual') => void;
   onUpdate: (i: number, patch: Partial<FieldSpec>) => void;
   onRename: (i: number, newKey: string) => void;
   onDelete: (i: number) => void;
@@ -4009,13 +4086,35 @@ function FieldsSidebar({
           <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-xs text-[var(--muted-foreground)]">No fields yet.</p>
         )}
       </div>
-      <button
-        onClick={onAdd}
-        className="m-4 mt-0 flex items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-      >
-        <PlusIcon className="h-3.5 w-3.5" />
-        Add field
-      </button>
+      <div className="m-4 mt-0 space-y-2">
+        <button
+          onClick={onAdd}
+          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+        >
+          <PlusIcon className="h-3.5 w-3.5" />
+          Add field
+        </button>
+        {/* Drop in the standard offer/vehicle question set so this template
+            becomes client-manipulable (offer engine + EVOX color) — deduped,
+            never overwrites existing fields. */}
+        <div className="rounded-lg border border-dashed border-[var(--border)] p-2">
+          <div className="mb-1.5 px-0.5 text-[11px] font-medium text-[var(--muted-foreground)]">Add offer fields</div>
+          <div className="flex gap-1.5">
+            <button
+              onClick={() => onAddKit('single')}
+              className="flex-1 rounded-md border border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+            >
+              Single vehicle
+            </button>
+            <button
+              onClick={() => onAddKit('dual')}
+              className="flex-1 rounded-md border border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+            >
+              Two vehicles
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -4036,6 +4135,7 @@ function SelectionPanel({
   fontOptions,
   brandLogos,
   content,
+  contentSources,
   onContentChange,
   accountKey,
   onEl,
@@ -4053,6 +4153,7 @@ function SelectionPanel({
   fontOptions: FontSelectOption[];
   brandLogos: { key: string; label: string; url: string }[];
   content: { mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly'; value: string; note?: string } | null;
+  contentSources: SearchableSelectOption[];
   onContentChange: (value: string) => void;
   accountKey?: string;
   onEl: (patch: Partial<DocElement>) => void;
@@ -4092,9 +4193,21 @@ function SelectionPanel({
       </div>
 
       <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
-        {/* Content — edit the element's value directly; writes to the form data */}
+        {/* Content — pick what the element SHOWS (a form field, a computed offer
+            value, brand data, or a static literal), then edit the value below. */}
         {content && content.mode !== 'none' && (
           <PanelSection title="Content">
+            {contentSources.length > 0 && (
+              <div className="mb-2">
+                <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Shows</label>
+                <SearchableSelect
+                  value={bindingToSourceValue(el.binding)}
+                  onChange={(v) => onEl({ binding: sourceValueToBinding(v, content.value) })}
+                  options={contentSources}
+                  className="w-full"
+                />
+              </div>
+            )}
             {content.mode === 'text-edit' && (
               <textarea
                 value={content.value}

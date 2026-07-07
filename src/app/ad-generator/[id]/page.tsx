@@ -195,12 +195,15 @@ export default function AdGeneratorPage() {
   // Mirrors the builder (see ad-generator/builder/page.tsx).
   const [embeddedFontCss, setEmbeddedFontCss] = useState('');
   useEffect(() => {
-    if (!accountKey || customFonts.length === 0) {
+    // Fetch embedded faces whenever there are custom fonts — including on the
+    // Admin account (accountKey null); the API unions every account's fonts for
+    // unrestricted users, and URL-only fonts drop cross-origin in the iframe.
+    if (customFonts.length === 0) {
       setEmbeddedFontCss('');
       return;
     }
     let cancelled = false;
-    fetch(`/api/ad-generator/fonts?accountKey=${encodeURIComponent(accountKey)}`)
+    fetch(`/api/ad-generator/fonts?accountKey=${encodeURIComponent(accountKey ?? '')}`)
       .then((r) => (r.ok ? r.json() : { css: '' }))
       .then((j: { css?: string }) => {
         if (!cancelled) setEmbeddedFontCss(j.css ?? '');

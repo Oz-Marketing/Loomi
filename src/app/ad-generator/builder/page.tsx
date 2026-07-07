@@ -696,12 +696,18 @@ export default function AdBuilderPage() {
   const fontFaceCss = useMemo(() => buildFontFaceCssFromUrls(customFonts), [customFonts]);
   const [embeddedFontCss, setEmbeddedFontCss] = useState('');
   useEffect(() => {
-    if (!accountKey || customFonts.length === 0) {
+    // Fetch embedded faces whenever there are custom fonts — INCLUDING on the
+    // Admin account (accountKey null). The srcdoc iframe drops URL fonts
+    // cross-origin, so embedding is what actually renders a brand font; skipping
+    // it when no account is active left admins with invisible (URL-only) fonts.
+    // The API unions every account's fonts for unrestricted users with an empty
+    // accountKey, so the roll-up embeds correctly here.
+    if (customFonts.length === 0) {
       setEmbeddedFontCss('');
       return;
     }
     let cancelled = false;
-    fetch(`/api/ad-generator/fonts?accountKey=${encodeURIComponent(accountKey)}`)
+    fetch(`/api/ad-generator/fonts?accountKey=${encodeURIComponent(accountKey ?? '')}`)
       .then((r) => (r.ok ? r.json() : { css: '' }))
       .then((j: { css?: string }) => {
         if (!cancelled) setEmbeddedFontCss(j.css ?? '');

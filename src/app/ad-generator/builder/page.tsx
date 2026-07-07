@@ -713,7 +713,13 @@ export default function AdBuilderPage() {
       cancelled = true;
     };
   }, [accountKey, customFonts.length]);
-  const effectiveFontCss = embeddedFontCss || fontFaceCss;
+  // Emit BOTH the URL faces and the embedded faces (embedded declared last, so
+  // it wins for the fonts that embedded — WYSIWYG with export). Crucially this
+  // is per-font, not all-or-nothing: with the admin roll-up embedding many
+  // accounts' fonts, any single font the server can't embed is omitted from
+  // `embeddedFontCss` — the URL face keeps it rendering instead of silently
+  // dropping (which is why brand fonts like Genesis vanished for admins).
+  const effectiveFontCss = [fontFaceCss, embeddedFontCss].filter(Boolean).join('\n');
   const fontOptions = useMemo<FontSelectOption[]>(
     () => [
       { value: '', label: 'Brand default' },

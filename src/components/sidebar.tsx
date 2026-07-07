@@ -13,7 +13,7 @@ import {
   Squares2X2Icon,
   UserGroupIcon,
   PhotoIcon,
-  SparklesIcon,
+  MegaphoneIcon,
   SunIcon,
   MoonIcon,
   Cog6ToothIcon,
@@ -99,7 +99,7 @@ const templatesNav: NavItem = {
 const adGeneratorNav: NavItem = {
   href: '/ad-generator',
   label: 'Ad Generator',
-  icon: SparklesIcon,
+  icon: MegaphoneIcon,
   absolute: true,
 };
 // Media library — re-added below Ad Generator.

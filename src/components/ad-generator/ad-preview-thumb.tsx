@@ -12,11 +12,17 @@ export function AdPreviewThumb({
   data,
   branding,
   height = 180,
+  sizeId,
+  boxW = 360,
 }: {
   template?: AdTemplate;
   data: AdData;
   branding: AdData;
   height?: number;
+  /** Render a specific size (by id); defaults to the template's first size. */
+  sizeId?: string;
+  /** Max width to fit the preview into (defaults to 360). */
+  boxW?: number;
 }) {
   if (!template) {
     return (
@@ -25,9 +31,8 @@ export function AdPreviewThumb({
       </div>
     );
   }
-  const size = template.sizes[0];
+  const size = (sizeId && template.sizes.find((s) => s.id === sizeId)) || template.sizes[0];
   const html = template.render({ ...template.defaults, ...data, ...branding }, size);
-  const boxW = 360;
   const scale = Math.min(boxW / size.width, height / size.height);
   return (
     <div className="flex items-center justify-center overflow-hidden bg-[var(--muted)]/40" style={{ height }}>

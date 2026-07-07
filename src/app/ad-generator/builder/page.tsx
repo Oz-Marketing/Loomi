@@ -1612,29 +1612,23 @@ export default function AdBuilderPage() {
   const addField = () => {
     setDoc((prev) => ({ ...prev, fields: [...prev.fields, { key: `field_${rid()}`, label: 'New field', type: 'text' }] }));
   };
-  // Inject the standard offer/vehicle question set (single or dual) so a
-  // designer can make ANY template client-manipulable — deduped by key, defaults
-  // seeded, never clobbering existing fields (see addFieldKit).
-  const addOfferFieldKit = (mode: 'single' | 'dual') => {
-    const added = addFieldKit(doc, mode).fields.length - doc.fields.length;
-    if (mode === 'single') {
-      if (added === 0) {
-        toast('Those offer fields are already in this template.');
-        return;
-      }
-      setDoc((prev) => addFieldKit(prev, 'single'), 'offerkit:single');
-      toast.success(`Added ${added} offer field${added === 1 ? '' : 's'}`);
-      return;
+  // Enable / disable the client's second offer (toggled from the settings cog).
+  // ON: add the offer/vehicle question set (single + o2_ sets, deduped), seed a
+  // recommended second-offer element block, and flip the opt-in flag. OFF: just
+  // clear the flag (fields/elements are kept, so toggling back on is lossless).
+  const setDualOffers = (on: boolean) => {
+    if (on) {
+      setDoc((prev) => {
+        const seeded = seedSecondOfferElements(addFieldKit(prev, 'dual'));
+        return { ...seeded, allowOfferCountChoice: true };
+      }, 'dual:on');
+      setPreviewCount(2);
+      toast.success('Second offer enabled');
+    } else {
+      setDoc((prev) => ({ ...prev, allowOfferCountChoice: false }), 'dual:off');
+      setPreviewCount(1);
+      toast('Second offer disabled');
     }
-    // Dual: add the o2_ fields (if any), enable the client's 1/2-offer choice,
-    // and seed a recommended second-offer element block. The designer then
-    // arranges the 2-offer layout via the canvas offer-count toggle.
-    setDoc((prev) => {
-      const seeded = seedSecondOfferElements(addFieldKit(prev, 'dual'));
-      return { ...seeded, allowOfferCountChoice: true };
-    }, 'offerkit:dual');
-    setPreviewCount(2);
-    toast.success(added > 0 ? `Added a second offer (${added} fields)` : 'Second offer enabled');
   };
   const updateFieldAt = (i: number, patch: Partial<FieldSpec>) => {
     setDoc((prev) => ({ ...prev, fields: prev.fields.map((f, idx) => (idx === i ? { ...f, ...patch } : f)) }), `field:${i}:${Object.keys(patch).sort().join(',')}`);
@@ -2887,6 +2881,28 @@ export default function AdBuilderPage() {
                       })}
                     </div>
                     <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign a category &amp; tags on the template card in the Templates library.</p>
+
+                    {/* Second offer — lets the client choose 1 or 2 offers. Enabling
+                        seeds the second-offer fields + a starter block; the 1/2 view
+                        switch (top bar) then edits each layout. */}
+                    <div className="mt-3 border-t border-[var(--border)] pt-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-[var(--foreground)]">Second offer</p>
+                          <p className="mt-0.5 text-[11px] leading-snug text-[var(--muted-foreground)]">Let the client choose 1 or 2 offers.</p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={!!doc.allowOfferCountChoice}
+                          onClick={() => setDualOffers(!doc.allowOfferCountChoice)}
+                          className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${doc.allowOfferCountChoice ? 'bg-[var(--primary)]' : 'bg-[var(--muted)]'}`}
+                        >
+                          <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${doc.allowOfferCountChoice ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
                       <button
                         onClick={() => {
@@ -3267,6 +3283,24 @@ export default function AdBuilderPage() {
           <div className="relative flex flex-shrink-0 items-center justify-end gap-2 border-b border-[var(--border)] px-3 py-2">
             {/* Zoom lives on the canvas (bottom-left); outlines + margins moved to
                 the left rail; the active size is shown on the canvas action bar. */}
+            {/* Offer-count view switch (centered) — flips the canvas + Fields panel
+                between the 1-offer and 2-offer layouts. Only when dual is enabled. */}
+            {supportsDual && (
+              <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
+                {([1, 2] as const).map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setPreviewCount(n)}
+                    title={`Edit the ${n}-offer layout`}
+                    className={`inline-flex h-7 items-center rounded-full px-3 text-xs font-medium transition-colors ${
+                      previewCount === n ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    {n} offer{n === 1 ? '' : 's'}
+                  </button>
+                ))}
+              </div>
+            )}
             {/* Undo / Redo */}
             <div className="flex items-center gap-0.5">
               <button
@@ -3695,32 +3729,6 @@ export default function AdBuilderPage() {
                   );
                 })()}
 
-              {/* Offer-count preview toggle — only when the template lets the
-                  client choose 1 or 2 offers. Flips which offer blocks show on
-                  the canvas (off-count blocks dim); mirrors what the client sees. */}
-              {supportsDual && (
-                <div
-                  className={`absolute bottom-3 z-20 flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card-strong)]/80 p-1 backdrop-blur-md transition-[right] ${
-                    fieldsOpen || selectedIds.length > 0 ? 'right-[372px]' : 'right-4'
-                  }`}
-                >
-                  {([1, 2] as const).map((n) => (
-                    <button
-                      key={n}
-                      onClick={() => setPreviewCount(n)}
-                      title={`Preview with ${n} offer${n === 1 ? '' : 's'}`}
-                      className={`inline-flex h-7 items-center rounded-lg px-2.5 text-xs font-medium transition-colors ${
-                        previewCount === n
-                          ? 'bg-[var(--primary)] text-white'
-                          : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
-                      }`}
-                    >
-                      {n} offer{n === 1 ? '' : 's'}
-                    </button>
-                  ))}
-                </div>
-              )}
-
               {doc.sizes.length > 0 && viewAll && (
                 <div className="absolute bottom-3 left-1/2 z-20 flex max-w-[92%] -translate-x-1/2 items-center gap-1.5 rounded-full border border-[var(--border)] bg-[var(--card-strong)]/80 py-1 pl-1.5 pr-2 backdrop-blur-md">
                   <button
@@ -3854,9 +3862,9 @@ export default function AdBuilderPage() {
           defaults={doc.defaults}
           accountKey={accountKey ?? undefined}
           brandLogos={brandLogos}
+          hideSecondOffer={supportsDual && previewCount === 1}
           onClose={() => setFieldsOpen(false)}
           onAdd={addField}
-          onAddKit={addOfferFieldKit}
           onUpdate={updateFieldAt}
           onRename={renameFieldKeyAt}
           onDelete={deleteFieldAt}
@@ -4296,9 +4304,9 @@ function FieldsSidebar({
   defaults,
   accountKey,
   brandLogos,
+  hideSecondOffer,
   onClose,
   onAdd,
-  onAddKit,
   onUpdate,
   onRename,
   onDelete,
@@ -4308,9 +4316,11 @@ function FieldsSidebar({
   defaults: Record<string, string>;
   accountKey?: string;
   brandLogos: { key: string; label: string; url: string }[];
+  /** In the 1-offer view, hide the second-offer (`o2_`) fields so the panel only
+   *  shows the fields relevant to the layout you're editing. */
+  hideSecondOffer: boolean;
   onClose: () => void;
   onAdd: () => void;
-  onAddKit: (mode: 'single' | 'dual') => void;
   onUpdate: (i: number, patch: Partial<FieldSpec>) => void;
   onRename: (i: number, newKey: string) => void;
   onDelete: (i: number) => void;
@@ -4320,16 +4330,17 @@ function FieldsSidebar({
   // Group fields by their `group` (Vehicle / Offer / Legal / …) so a long kit
   // (24–44 fields) reads as a few collapsible sections instead of a wall. Each
   // entry keeps its original flat index so the index-based handlers still hit
-  // the right field.
+  // the right field. In the 1-offer view, the second-offer fields are hidden.
   const groups = useMemo(() => {
     const m = new Map<string, { f: FieldSpec; i: number }[]>();
     fields.forEach((f, i) => {
+      if (hideSecondOffer && f.key.startsWith('o2_')) return;
       const g = (f.group || 'General').trim() || 'General';
       if (!m.has(g)) m.set(g, []);
       m.get(g)!.push({ f, i });
     });
     return [...m.entries()];
-  }, [fields]);
+  }, [fields, hideSecondOffer]);
   // A long list starts with only the first section open; a short one opens all.
   // A single new section (from "Add field") auto-opens so it's not lost.
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
@@ -4414,31 +4425,50 @@ function FieldsSidebar({
           <PlusIcon className="h-3.5 w-3.5" />
           Add field
         </button>
-        {/* Drop in the standard offer/vehicle question set so this template
-            becomes client-manipulable (offer engine + EVOX color) — deduped,
-            never overwrites existing fields. */}
-        <div className="rounded-lg border border-dashed border-[var(--border)] p-2">
-          <div className="mb-1.5 px-0.5 text-[11px] font-medium text-[var(--muted-foreground)]">Add offer fields</div>
-          <div className="flex gap-1.5">
-            <button
-              onClick={() => onAddKit('single')}
-              className="flex-1 rounded-md border border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-            >
-              Single vehicle
-            </button>
-            <button
-              onClick={() => onAddKit('dual')}
-              title="Add a second offer and let the client choose 1 or 2 offers"
-              className="flex-1 rounded-md border border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-            >
-              Second offer
-            </button>
-          </div>
-          <p className="mt-1.5 px-0.5 text-[10px] leading-snug text-[var(--muted-foreground)]">
-            “Second offer” lets the client pick 1 or 2 offers — seeds a recommended second block you can arrange with the canvas “1 / 2 offers” toggle.
-          </p>
-        </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * A textarea that highlights `{{field}}` tokens as purple pills. A transparent
+ * textarea sits over a styled backdrop that mirrors the text (same font/padding/
+ * wrapping) with tokens wrapped in a coloured span; scroll is synced. The caret
+ * + editing stay in the real textarea, so behaviour is unchanged.
+ */
+function TokenTextArea({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const backRef = useRef<HTMLDivElement>(null);
+  const syncScroll = () => {
+    if (backRef.current && taRef.current) {
+      backRef.current.scrollTop = taRef.current.scrollTop;
+      backRef.current.scrollLeft = taRef.current.scrollLeft;
+    }
+  };
+  const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const html =
+    escHtml(value).replace(
+      /\{\{\s*[\w.]+\s*\}\}/g,
+      (m) => `<span class="rounded bg-[var(--primary)]/15 font-medium text-[var(--primary)]">${m}</span>`,
+    ) + '​';
+  return (
+    <div className="relative">
+      <div
+        ref={backRef}
+        aria-hidden
+        className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words rounded-md border border-transparent bg-[var(--card)] px-2 py-1.5 text-xs leading-normal text-[var(--foreground)]"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      <textarea
+        ref={taRef}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onScroll={syncScroll}
+        rows={2}
+        placeholder={placeholder}
+        spellCheck={false}
+        className="relative w-full resize-y rounded-md border border-[var(--border)] bg-transparent px-2 py-1.5 text-xs leading-normal text-transparent caret-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)]"
+      />
     </div>
   );
 }
@@ -4678,15 +4708,8 @@ function SelectionPanel({
             )}
             {content.mode === 'text-edit' && (
               <>
-                <textarea
-                  value={content.value}
-                  onChange={(e) => onContentChange(e.target.value)}
-                  rows={2}
-                  placeholder="Text — type {{field}} to drop in a live value"
-                  className="w-full resize-y rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                />
-                {/* Insert a live field value inline, so one text block can be a
-                    whole sentence / disclaimer (e.g. "With {{dueAtSigning}} due"). */}
+                {/* Variable-aware text: {{field}} tokens render as purple pills. */}
+                <TokenTextArea value={content.value} onChange={onContentChange} placeholder="Text — type {{field}} to insert a live value" />
                 {insertableVars.length > 0 && (
                   <div className="mt-1.5">
                     <SearchableSelect
@@ -4701,7 +4724,6 @@ function SelectionPanel({
                       placeholder="+ Insert field variable…"
                       className="w-full"
                     />
-                    <p className="mt-1 text-[10px] leading-snug text-[var(--muted-foreground)]">Type <code className="rounded bg-[var(--muted)] px-1">{'{{field}}'}</code> anywhere to insert live values — numbers get thousands commas.</p>
                   </div>
                 )}
               </>

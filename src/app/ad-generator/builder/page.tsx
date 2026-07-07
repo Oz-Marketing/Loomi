@@ -663,13 +663,10 @@ export default function AdBuilderPage() {
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
 
-  // A template "supports dual" (client may choose 1 or 2 offers) once the
-  // designer has added a second offer — the opt-in flag, or (legacy) any `o2_`
-  // field. Gates the offer-count preview toggle + per-element "Appears in".
-  const supportsDual = useMemo(
-    () => Boolean(doc.allowOfferCountChoice) || doc.fields.some((f) => f.key.startsWith('o2_')),
-    [doc.allowOfferCountChoice, doc.fields],
-  );
+  // A template "supports dual" (client may choose 1 or 2 offers) only when the
+  // second offer is explicitly turned ON (settings cog). Gates the offer-count
+  // view switch + per-element "Appears in" — both hide when the toggle is off.
+  const supportsDual = Boolean(doc.allowOfferCountChoice);
   // When a dual template loads (or a second offer is just added), preview the
   // 2-offer layout so the designer sees the full arrangement. Fires once per
   // false→true flip; the designer can still flip the toggle to check 1-offer.
@@ -3292,12 +3289,12 @@ export default function AdBuilderPage() {
                   <button
                     key={n}
                     onClick={() => setPreviewCount(n)}
-                    title={`Edit the ${n === 1 ? 'single' : 'two'}-offer layout`}
+                    title={`Edit the ${n === 1 ? 'single' : 'dual'}-offer layout`}
                     className={`inline-flex h-7 items-center rounded-full px-3 text-xs font-medium transition-colors ${
                       previewCount === n ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
                     }`}
                   >
-                    Offer {n}
+                    {n === 1 ? 'Single Offer' : 'Dual Offer'}
                   </button>
                 ))}
               </div>
@@ -4437,9 +4434,23 @@ function FieldsSidebar({
  * wrapping) with tokens wrapped in a coloured span; scroll is synced. The caret
  * + editing stay in the real textarea, so behaviour is unchanged.
  */
-function TokenTextArea({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder?: string }) {
+function TokenTextArea({
+  value,
+  onChange,
+  placeholder,
+  options = [],
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  /** Field tokens offered by a `{{` autocomplete (value `field:<key>`). */
+  options?: SearchableSelectOption[];
+}) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const backRef = useRef<HTMLDivElement>(null);
+  const [caret, setCaret] = useState(0);
+  const [acOpen, setAcOpen] = useState(false);
+  const [acIdx, setAcIdx] = useState(0);
   const syncScroll = () => {
     if (backRef.current && taRef.current) {
       backRef.current.scrollTop = taRef.current.scrollTop;
@@ -4452,6 +4463,38 @@ function TokenTextArea({ value, onChange, placeholder }: { value: string; onChan
       /\{\{\s*[\w.]+\s*\}\}/g,
       (m) => `<span class="rounded bg-[var(--primary)]/15 font-medium text-[var(--primary)]">${m}</span>`,
     ) + '​';
+
+  // Autocomplete: an OPEN `{{` (optionally with a partial key) right before the
+  // caret, not yet closed by `}}`. Show matching field tokens; picking inserts
+  // `{{key}}`. Typing `{{` alone lists everything.
+  const openTok = /\{\{\s*([\w.]*)$/.exec(value.slice(0, caret));
+  const partial = openTok ? openTok[1].toLowerCase() : null;
+  const matches =
+    partial == null
+      ? []
+      : options.filter((o) => {
+          const key = o.value.replace(/^field:/, '');
+          return key.toLowerCase().includes(partial) || o.label.toLowerCase().includes(partial);
+        }).slice(0, 8);
+  const showAc = acOpen && matches.length > 0;
+
+  const insert = (opt: SearchableSelectOption) => {
+    const key = opt.value.replace(/^field:/, '');
+    const start = caret - (openTok?.[0].length ?? 0);
+    const injected = `{{${key}}}`;
+    const next = value.slice(0, start) + injected + value.slice(caret);
+    onChange(next);
+    setAcOpen(false);
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      const pos = start + injected.length;
+      ta.focus();
+      ta.setSelectionRange(pos, pos);
+      setCaret(pos);
+    });
+  };
+
   return (
     <div className="relative">
       <div
@@ -4463,13 +4506,47 @@ function TokenTextArea({ value, onChange, placeholder }: { value: string; onChan
       <textarea
         ref={taRef}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setCaret(e.target.selectionStart ?? 0);
+          setAcOpen(true);
+          setAcIdx(0);
+        }}
+        onClick={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+        onKeyUp={(e) => { if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0); }}
+        onKeyDown={(e) => {
+          if (!showAc) return;
+          if (e.key === 'ArrowDown') { e.preventDefault(); setAcIdx((i) => Math.min(matches.length - 1, i + 1)); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); setAcIdx((i) => Math.max(0, i - 1)); }
+          else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insert(matches[Math.min(acIdx, matches.length - 1)]); }
+          else if (e.key === 'Escape') { e.preventDefault(); setAcOpen(false); }
+        }}
         onScroll={syncScroll}
+        onBlur={() => setTimeout(() => setAcOpen(false), 120)}
         rows={2}
         placeholder={placeholder}
         spellCheck={false}
         className="relative w-full resize-y rounded-md border border-[var(--border)] bg-transparent px-2 py-1.5 text-xs leading-normal text-transparent caret-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)]"
       />
+      {showAc && (
+        <ul className="absolute left-0 right-0 top-full z-[80] mt-1 max-h-52 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--card-strong)] p-1 shadow-2xl backdrop-blur-2xl">
+          {matches.map((o, i) => (
+            <li key={o.value}>
+              <button
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); insert(o); }}
+                onMouseEnter={() => setAcIdx(i)}
+                className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors ${
+                  i === Math.min(acIdx, matches.length - 1) ? 'bg-[var(--primary)] text-white' : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
+                }`}
+              >
+                <span className="truncate">{o.label}</span>
+                {o.group && <span className={`ml-auto shrink-0 text-[10px] ${i === Math.min(acIdx, matches.length - 1) ? 'text-white/70' : 'text-[var(--muted-foreground)]'}`}>{o.group}</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -4709,8 +4786,9 @@ function SelectionPanel({
             )}
             {content.mode === 'text-edit' && (
               <>
-                {/* Variable-aware text: {{field}} tokens render as purple pills. */}
-                <TokenTextArea value={content.value} onChange={onContentChange} placeholder="Text — type {{field}} to insert a live value" />
+                {/* Variable-aware text: {{field}} tokens render as purple pills;
+                    typing {{ opens a field autocomplete. */}
+                <TokenTextArea value={content.value} onChange={onContentChange} options={insertableVars} placeholder="Text — type {{field}} to insert a live value" />
                 {insertableVars.length > 0 && (
                   <div className="mt-1.5">
                     <SearchableSelect
@@ -4780,7 +4858,7 @@ function SelectionPanel({
         {supportsDual && (
           <PanelSection title="Appears in">
             <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
-              {([['both', 'Both', undefined], ['1', '1 offer', [1]], ['2', '2 offers', [2]]] as const).map(
+              {([['both', 'Both', undefined], ['1', 'Offer 1', [1]], ['2', 'Offer 2', [2]]] as const).map(
                 ([val, label, counts]) => {
                   const cur = el.offerCounts && el.offerCounts.length === 1 ? String(el.offerCounts[0]) : 'both';
                   const active = cur === val;

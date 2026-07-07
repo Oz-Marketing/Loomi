@@ -83,6 +83,7 @@ import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType, AdData, AdSize } from '@/lib/ad-generator/types';
 import { addFieldKit, seedSecondOfferElements } from '@/lib/ad-generator/vehicle-fields';
+import { buildBlockPayload, insertBlockIntoDoc, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -520,7 +521,13 @@ function makeDefaultElement(id: string, type: DocElementType): DocElement {
 
 export default function AdBuilderPage() {
   const { accountData, accountKey, accounts, isUnrestricted } = useAccount();
-  const { prompt } = useLoomiDialog();
+  const { prompt, confirm } = useLoomiDialog();
+
+  // Reusable blocks (saved element clusters) available to insert here: global +
+  // this account's own. `blockDraft` opens the save dialog with a built payload.
+  type BlockRow = { id: string; name: string; accountKey: string | null; doc: BlockPayload };
+  const [blocks, setBlocks] = useState<BlockRow[]>([]);
+  const [blockDraft, setBlockDraft] = useState<BlockPayload | null>(null);
 
   // A brand-new template starts on an empty artboard (no starter layout). The
   // vehicle-offer doc is still a registered code template (opened via ?ad / ?
@@ -1545,6 +1552,59 @@ export default function AdBuilderPage() {
     });
     setSelectedIds([id]);
   }, []);
+
+  // ── Reusable blocks ──────────────────────────────────────────────────────
+  const refreshBlocks = useCallback(() => {
+    const qs = accountKey ? `?accountKey=${encodeURIComponent(accountKey)}` : '';
+    fetch(`/api/ad-generator/blocks${qs}`)
+      .then((r) => (r.ok ? r.json() : { blocks: [] }))
+      .then((j: { blocks?: BlockRow[] }) => setBlocks(j.blocks ?? []))
+      .catch(() => setBlocks([]));
+  }, [accountKey]);
+  useEffect(() => {
+    refreshBlocks();
+  }, [refreshBlocks]);
+
+  // Insert a saved block: clone its elements onto every size + re-seed the
+  // fields its bindings need, then select the new elements.
+  const insertBlock = useCallback((payload: BlockPayload) => {
+    setDoc((prev) => {
+      const { doc: next, newIds } = insertBlockIntoDoc(prev, payload, (type) => `${type}-${rid()}`);
+      setSelectedIds(newIds);
+      return next;
+    });
+    toast.success('Block inserted');
+  }, [setDoc]);
+
+  // Open the save dialog with a payload built from the current selection.
+  const saveSelectionAsBlock = useCallback(() => {
+    const payload = buildBlockPayload(doc, selectedIds, size.id);
+    if (!payload) {
+      toast.error('Select one or more elements first');
+      return;
+    }
+    setBlockDraft(payload);
+  }, [doc, selectedIds, size.id]);
+
+  const deleteBlock = useCallback(
+    async (id: string, name: string) => {
+      const ok = await confirm({
+        title: 'Delete block',
+        message: `Delete the block "${name}"? Templates already built with it are unaffected.`,
+        confirmLabel: 'Delete',
+        destructive: true,
+      });
+      if (!ok) return;
+      try {
+        const res = await fetch(`/api/ad-generator/blocks/${id}`, { method: 'DELETE' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setBlocks((bs) => bs.filter((b) => b.id !== id));
+      } catch (err) {
+        toast.error(`Couldn't delete block: ${err instanceof Error ? err.message : 'unknown error'}`);
+      }
+    },
+    [confirm],
+  );
 
   // Make the selected element a background: full-bleed (0,0,1,1) on every size +
   // sent behind everything. A background is just a full-bleed Image (photo /
@@ -3050,6 +3110,48 @@ export default function AdBuilderPage() {
           </section>
           )}
 
+          {/* Blocks — reusable element clusters (offer blocks, etc.). Click to
+              insert; save the current selection via the ⋯/right-click menu. */}
+          {leftPanel === 'insert' && (
+          <section className="pointer-events-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl">
+            <h2 className="mb-3 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              <Squares2X2Icon className="h-3.5 w-3.5" />
+              Blocks
+            </h2>
+            {blocks.length === 0 ? (
+              <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">
+                Select elements on the canvas, then <span className="text-[var(--foreground)]">Save as block</span> (right-click or the multi-select panel) to reuse them here.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-1">
+                {blocks.map((b) => (
+                  <div key={b.id} className="group flex items-center gap-1 rounded-lg border border-[var(--border)] pr-1 transition-colors hover:border-[var(--primary)]">
+                    <button
+                      type="button"
+                      onClick={() => insertBlock(b.doc)}
+                      title="Insert this block"
+                      className="flex min-w-0 flex-1 items-center justify-between gap-2 px-3 py-2 text-left text-sm text-[var(--foreground)]"
+                    >
+                      <span className="truncate">{b.name}</span>
+                      <span className="shrink-0 rounded-full border border-[var(--border)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)]">
+                        {b.accountKey ? 'Account' : 'Global'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteBlock(b.id, b.name)}
+                      title="Delete block"
+                      className="shrink-0 rounded-md p-1 text-[var(--muted-foreground)] opacity-0 transition-opacity hover:text-red-500 group-hover:opacity-100"
+                    >
+                      <TrashIcon className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+          )}
+
           {/* Layers — the stack of placed elements (top of the list = front).
               Double-click to rename · lock icon to lock · drag to reorder (z). */}
           {leftPanel === 'layers' && (
@@ -3849,6 +3951,7 @@ export default function AdBuilderPage() {
                   onBoxAll={patchSelectedBoxes}
                   onBumpSize={bumpSelectedFontSize}
                   onDuplicate={() => duplicateElements(selectedIds)}
+                  onSaveAsBlock={saveSelectionAsBlock}
                   onDelete={deleteSelected}
                   onClose={clearSelection}
                   shifted={fieldsOpen}
@@ -3922,6 +4025,19 @@ export default function AdBuilderPage() {
           onClose={() => { if (!cropSaving) setCropModal(null); }}
           onSave={applyBuilderCrop}
           confirmLabel="Crop"
+        />
+      )}
+
+      {blockDraft && (
+        <SaveBlockDialog
+          payload={blockDraft}
+          accountKey={accountKey ?? null}
+          accountLabel={accountData?.dealer ?? 'This account'}
+          onCancel={() => setBlockDraft(null)}
+          onSaved={() => {
+            setBlockDraft(null);
+            refreshBlocks();
+          }}
         />
       )}
 
@@ -4005,6 +4121,8 @@ export default function AdBuilderPage() {
                       Duplicate ({selectedIds.length})
                     </Item>
                   )}
+                  <Item onClick={saveSelectionAsBlock}>Save as block…</Item>
+                  <Sep />
                   <Item onClick={deleteSelected} danger kbd="⌫">
                     Delete{multi ? ` (${selectedIds.length})` : ''}
                   </Item>
@@ -4571,6 +4689,7 @@ function MultiSelectPanel({
   onBoxAll,
   onBumpSize,
   onDuplicate,
+  onSaveAsBlock,
   onDelete,
   onClose,
   shifted,
@@ -4582,6 +4701,7 @@ function MultiSelectPanel({
   onBoxAll: (patch: Partial<DocLayoutBox>) => void;
   onBumpSize: (delta: number) => void;
   onDuplicate: () => void;
+  onSaveAsBlock: () => void;
   onDelete: () => void;
   onClose: () => void;
   shifted: boolean;
@@ -4676,10 +4796,20 @@ function MultiSelectPanel({
       <div className="mt-auto flex items-center gap-2 border-t border-[var(--border)] p-3">
         <button
           type="button"
-          onClick={onDuplicate}
+          onClick={onSaveAsBlock}
+          title="Save these elements as a reusable block"
           className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
         >
-          Duplicate all
+          <Squares2X2Icon className="h-4 w-4" />
+          Save as block
+        </button>
+        <button
+          type="button"
+          onClick={onDuplicate}
+          title="Duplicate all"
+          className="flex items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+        >
+          Duplicate
         </button>
         <button
           type="button"
@@ -5403,6 +5533,122 @@ function DetachedVisual({
     >
       {val}
     </span>
+  );
+}
+
+/**
+ * Dialog to save the current selection as a reusable block. Name + scope
+ * (Global vs the current subaccount, when the builder is in one). POSTs to the
+ * blocks API and calls onSaved so the Insert panel refreshes.
+ */
+function SaveBlockDialog({
+  payload,
+  accountKey,
+  accountLabel,
+  onCancel,
+  onSaved,
+}: {
+  payload: BlockPayload;
+  accountKey: string | null;
+  accountLabel: string;
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [scope, setScope] = useState<'global' | 'account'>(accountKey ? 'account' : 'global');
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      toast.error('Give the block a name');
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await fetch('/api/ad-generator/blocks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: trimmed,
+          accountKey: scope === 'account' ? accountKey : null,
+          doc: payload,
+        }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      toast.success('Saved as a block');
+      onSaved();
+    } catch (err) {
+      toast.error(`Couldn't save block: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[210] flex items-center justify-center bg-black/40 p-4" onPointerDown={onCancel}>
+      <div
+        className="w-full max-w-sm rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-5 shadow-2xl backdrop-blur-2xl"
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <h3 className="mb-1 flex items-center gap-1.5 text-sm font-semibold text-[var(--foreground)]">
+          <Squares2X2Icon className="h-4 w-4" />
+          Save as block
+        </h3>
+        <p className="mb-4 text-xs leading-snug text-[var(--muted-foreground)]">
+          Save {payload.elements.length} element{payload.elements.length === 1 ? '' : 's'} as a reusable block you can insert from the Insert panel.
+        </p>
+        <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Name</label>
+        <input
+          autoFocus
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save();
+            if (e.key === 'Escape') onCancel();
+          }}
+          placeholder="e.g. Lease offer block"
+          className="mb-4 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+        />
+        <label className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Available to</label>
+        <div className="mb-5 flex gap-2">
+          {([
+            { key: 'global' as const, label: 'All accounts' },
+            ...(accountKey ? [{ key: 'account' as const, label: `${accountLabel} only` }] : []),
+          ]).map((opt) => (
+            <button
+              key={opt.key}
+              type="button"
+              onClick={() => setScope(opt.key)}
+              className={`flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                scope === opt.key
+                  ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
+                  : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={save}
+            disabled={saving}
+            className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Save block'}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -2169,6 +2169,31 @@ model AdTemplateDoc {
   @@index([accountKey])
 }
 
+// A reusable "block": a saved cluster of builder elements (e.g. a Lease/APR
+// offer block) a designer inserts from the Insert panel instead of rebuilding
+// it. `doc` is a lightweight JSON payload (elements + normalized boxes + the
+// fields those bindings need), NOT a full TemplateDoc. Scoped like templates:
+// null accountKey = global, set = only that subaccount sees it.
+model AdBlock {
+  id             String   @id @default(cuid())
+  name           String
+  description    String?  @db.Text
+  doc            String   @db.Text // JSON: { version, sourceSize, elements, boxes, requiredFields, requiredDefaults, offerKit }
+  isActive       Boolean  @default(true)
+  accountKey     String? // null = global; set = only that subaccount sees it
+  category       String?
+  tags           String?  @db.Text // JSON string[] of tag names
+  createdBy      String?
+  createdByName  String?
+  createdByEmail String?
+  createdByImage String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([isActive, accountKey])
+  @@index([accountKey])
+}
+
 // ─────────────────────────────────────────────────────
 // Ad Generator — ad size library
 // ─────────────────────────────────────────────────────

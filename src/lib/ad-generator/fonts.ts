@@ -96,3 +96,21 @@ export function availableCustomFonts(args: {
   }
   return dedupeFontFaces(all);
 }
+
+/**
+ * The distinct font-family names a doc actually references — every element's
+ * `fontFamily` plus any doc-level/default family. Used to embed ONLY the fonts
+ * a design uses instead of the whole roll-up union (which is ~MBs of base64 for
+ * an admin and made the editor laggy). Names that aren't custom fonts (Google /
+ * websafe) are harmless — the embed step just ignores families it has no face
+ * for. Mirrors `usedGoogleFontFamilies`.
+ */
+export function usedFontFamilies(
+  elements: { fontFamily?: string }[],
+  extra: (string | undefined | null)[] = [],
+): string[] {
+  const set = new Set<string>();
+  for (const el of elements) if (el.fontFamily) set.add(el.fontFamily);
+  for (const x of extra) if (x) set.add(x);
+  return [...set];
+}

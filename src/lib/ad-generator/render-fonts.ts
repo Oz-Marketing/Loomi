@@ -90,18 +90,18 @@ export async function embeddedFontFaceCss(faces: FontFace[]): Promise<string> {
 }
 
 /**
- * Replace `data.fontFaceCss` with the base64-embedded @font-face for ALL of the
- * account's custom fonts, so the render matches the editor regardless of whether
- * a font is chosen at the doc level (`data.fontFamily`) or per element
- * (`el.fontFamily`). Embedding every account face (not just the doc-level one)
- * is what keeps per-element brand fonts from silently dropping on export.
- * Mutates + returns data. Leaves `data.fontFaceCss` untouched when the account
- * has no custom fonts (or none could be fetched).
+ * Replace `data.fontFaceCss` with the base64-embedded @font-face for the custom
+ * fonts the render needs — scoped to `opts.families` (the families the doc
+ * actually uses) so we embed a few KB, not the whole roll-up union (~MBs of
+ * base64 for an admin). Passing every used family (doc-level `data.fontFamily`
+ * AND each `el.fontFamily`) keeps per-element brand fonts from dropping on
+ * export. Mutates + returns data; leaves `data.fontFaceCss` untouched when there
+ * are no matching custom fonts (or none could be fetched).
  */
 export async function embedAccountFontCss(
   accountKey: string | undefined,
   data: Record<string, string>,
-  opts?: { unrestricted?: boolean },
+  opts?: { unrestricted?: boolean; families?: string[] | null },
 ): Promise<Record<string, string>> {
   const faces = await accountCustomFontFaces(accountKey, opts);
   if (faces.length) data.fontFaceCss = await embeddedFontFaceCss(faces);
@@ -112,20 +112,27 @@ export async function embedAccountFontCss(
  * The custom font faces available to a request. For unrestricted (all-account)
  * users this is the union of every account's fonts — so a brand font uploaded
  * to any subaccount rolls up and renders on export, matching the editor. For
- * everyone else it's just the given account's own fonts.
+ * everyone else it's just the given account's own fonts. When `opts.families`
+ * is given, the result is narrowed to those family names (embed only what's
+ * used — the whole union is ~MBs and lags the editor).
  */
 export async function accountCustomFontFaces(
   accountKey: string | undefined,
-  opts?: { unrestricted?: boolean },
+  opts?: { unrestricted?: boolean; families?: string[] | null },
 ): Promise<FontFace[]> {
+  let faces: FontFace[];
   if (opts?.unrestricted) {
     const accounts = await prisma.account.findMany({ select: { customFonts: true } });
-    return dedupeFontFaces(accounts.flatMap((a) => parseCustomFonts(a.customFonts)));
+    faces = dedupeFontFaces(accounts.flatMap((a) => parseCustomFonts(a.customFonts)));
+  } else if (accountKey) {
+    const account = await prisma.account.findUnique({ where: { key: accountKey }, select: { customFonts: true } });
+    faces = parseCustomFonts(account?.customFonts);
+  } else {
+    return [];
   }
-  if (!accountKey) return [];
-  const account = await prisma.account.findUnique({
-    where: { key: accountKey },
-    select: { customFonts: true },
-  });
-  return parseCustomFonts(account?.customFonts);
+  if (opts?.families && opts.families.length) {
+    const want = new Set(opts.families);
+    faces = faces.filter((f) => want.has(f.family));
+  }
+  return faces;
 }

@@ -31,7 +31,7 @@ import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import { isVehicleIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
-import { availableCustomFonts, buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
+import { availableCustomFonts, buildFontFaceCssFromUrls, usedFontFamilies } from '@/lib/ad-generator/fonts';
 import { googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { isFieldVisible, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
@@ -188,22 +188,28 @@ export default function AdGeneratorPage() {
     ],
     [fontFamilies],
   );
-  // Base64-embedded @font-face for the account's fonts. The URL-based css below
-  // is instant but cross-origin/CORS can silently drop the font in a preview
-  // iframe; we fetch an embedded version and prefer it once loaded so brand
-  // fonts actually render (WYSIWYG with the export, which embeds the same way).
-  // Mirrors the builder (see ad-generator/builder/page.tsx).
+  // The selected doc-level font (declared here so the embed scoping below can
+  // reference it; the picker + reset live further down).
+  const [fontKey, setFontKey] = useState<string>('');
+  // Base64-embed ONLY the custom families this ad uses (its elements + the
+  // selected doc-level font) — not the whole roll-up union (~MBs for an admin,
+  // which made the editor laggy). Spaces fonts send no CORS header, so the
+  // embedded base64 is what actually renders. Mirrors the builder.
+  const customFamilySet = useMemo(() => new Set(customFonts.map((f) => f.family)), [customFonts]);
+  const usedFamilies = useMemo(
+    () => usedFontFamilies(docSnapshot?.elements ?? [], [fontKey]).filter((fam) => customFamilySet.has(fam)),
+    [docSnapshot, fontKey, customFamilySet],
+  );
+  const usedFamilyKey = usedFamilies.join('');
   const [embeddedFontCss, setEmbeddedFontCss] = useState('');
   useEffect(() => {
-    // Fetch embedded faces whenever there are custom fonts — including on the
-    // Admin account (accountKey null); the API unions every account's fonts for
-    // unrestricted users, and URL-only fonts drop cross-origin in the iframe.
-    if (customFonts.length === 0) {
+    if (usedFamilies.length === 0) {
       setEmbeddedFontCss('');
       return;
     }
     let cancelled = false;
-    fetch(`/api/ad-generator/fonts?accountKey=${encodeURIComponent(accountKey ?? '')}`)
+    const qs = `accountKey=${encodeURIComponent(accountKey ?? '')}&families=${encodeURIComponent(usedFamilies.join('\n'))}`;
+    fetch(`/api/ad-generator/fonts?${qs}`)
       .then((r) => (r.ok ? r.json() : { css: '' }))
       .then((j: { css?: string }) => {
         if (!cancelled) setEmbeddedFontCss(j.css ?? '');
@@ -214,20 +220,22 @@ export default function AdGeneratorPage() {
     return () => {
       cancelled = true;
     };
-  }, [accountKey, customFonts.length]);
-  // Page-level @font-face so the dropdown can preview the custom families.
-  // URL faces + embedded faces (embedded last so it wins where present). Per-font
-  // fallback: a font the server can't embed still renders via its URL rather than
-  // being dropped when the admin roll-up embeds many other accounts' fonts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountKey, usedFamilyKey]);
+  // Page-level @font-face (embedded base64 for the used families).
+  const usedCustomFonts = useMemo(
+    () => customFonts.filter((f) => usedFamilies.includes(f.family)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [customFonts, usedFamilyKey],
+  );
   const pageFontFaceCss = useMemo(
-    () => [buildFontFaceCssFromUrls(customFonts), embeddedFontCss].filter(Boolean).join('\n'),
-    [embeddedFontCss, customFonts],
+    () => [buildFontFaceCssFromUrls(usedCustomFonts), embeddedFontCss].filter(Boolean).join('\n'),
+    [embeddedFontCss, usedCustomFonts],
   );
 
   const [logoKey, setLogoKey] = useState<string>('light');
   const [colorKey, setColorKey] = useState<string>('primary');
   const [customColor, setCustomColor] = useState('');
-  const [fontKey, setFontKey] = useState<string>('');
 
   // Reset branding selections when the account changes.
   useEffect(() => {

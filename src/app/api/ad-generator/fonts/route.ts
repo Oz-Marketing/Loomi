@@ -28,8 +28,13 @@ export async function GET(req: NextRequest) {
   const unrestricted = hasUnrestrictedAccountAccess(session.user.role, session.user.accountKeys ?? []);
   if (!accountKey && !unrestricted) return NextResponse.json({ css: '' });
 
+  // Embed only the families the caller asks for (newline-delimited) — the editor
+  // sends the doc's used families so we return a few KB, not the whole ~MB union.
+  const familiesRaw = req.nextUrl.searchParams.get('families');
+  const families = familiesRaw ? familiesRaw.split('\n').map((s) => s.trim()).filter(Boolean) : null;
+
   try {
-    const faces = await accountCustomFontFaces(accountKey, { unrestricted });
+    const faces = await accountCustomFontFaces(accountKey, { unrestricted, families });
     const css = await embeddedFontFaceCss(faces);
     return NextResponse.json({ css });
   } catch (err) {

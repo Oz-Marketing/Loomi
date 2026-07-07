@@ -66,7 +66,7 @@ import { MediaPickerModal } from '@/components/media-picker-modal';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
-import { availableCustomFonts, buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
+import { availableCustomFonts, buildFontFaceCssFromUrls, usedFontFamilies } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { CornerBox, SpacingBox, NumberInput } from '@/lib/email/editor/PropertyControls';
 import { GOOGLE_FONTS, googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
@@ -689,25 +689,38 @@ export default function AdBuilderPage() {
     () => availableCustomFonts({ accountData, accounts, unrestricted: isUnrestricted }),
     [accountData, accounts, isUnrestricted],
   );
-  // URL-based @font-face (instant, but the preview iframe can silently drop these
-  // cross-origin fonts to CORS). We fetch a base64-embedded version below and
-  // prefer it once loaded, so a chosen brand font actually renders in the editor
-  // (WYSIWYG with the export, which embeds the same way).
-  const fontFaceCss = useMemo(() => buildFontFaceCssFromUrls(customFonts), [customFonts]);
+  // Embed ONLY the custom families the doc actually uses — not the whole
+  // roll-up union (an admin's union is ~45 faces / ~MBs of base64, which bloated
+  // the parent doc + the re-parsed iframe html and made the editor laggy). The
+  // dropdown still lists every family (names are cheap); a font gets embedded
+  // once it's applied to an element. Mirrors the Google-fonts `usedGoogleFontFamilies`.
+  const customFamilySet = useMemo(() => new Set(customFonts.map((f) => f.family)), [customFonts]);
+  const usedFamilies = useMemo(
+    () => usedFontFamilies(doc.elements, [doc.defaults?.fontFamily, adData?.fontFamily]).filter((fam) => customFamilySet.has(fam)),
+    [doc.elements, doc.defaults?.fontFamily, adData, customFamilySet],
+  );
+  const usedFamilyKey = usedFamilies.join('');
+  const usedCustomFonts = useMemo(
+    () => customFonts.filter((f) => customFamilySet.size && usedFamilies.includes(f.family)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [customFonts, usedFamilyKey],
+  );
+  // URL-based @font-face (instant, but the srcdoc iframe drops these cross-origin
+  // to CORS — our Spaces fonts send no CORS header, so this is really just a
+  // placeholder; the embedded base64 below is what actually renders).
+  const fontFaceCss = useMemo(() => buildFontFaceCssFromUrls(usedCustomFonts), [usedCustomFonts]);
   const [embeddedFontCss, setEmbeddedFontCss] = useState('');
   useEffect(() => {
-    // Fetch embedded faces whenever there are custom fonts — INCLUDING on the
-    // Admin account (accountKey null). The srcdoc iframe drops URL fonts
-    // cross-origin, so embedding is what actually renders a brand font; skipping
-    // it when no account is active left admins with invisible (URL-only) fonts.
-    // The API unions every account's fonts for unrestricted users with an empty
-    // accountKey, so the roll-up embeds correctly here.
-    if (customFonts.length === 0) {
+    // Base64-embed only the used families — works on the Admin account too
+    // (empty accountKey → the API unions every account's fonts for unrestricted
+    // users, then narrows to `families`).
+    if (usedFamilies.length === 0) {
       setEmbeddedFontCss('');
       return;
     }
     let cancelled = false;
-    fetch(`/api/ad-generator/fonts?accountKey=${encodeURIComponent(accountKey ?? '')}`)
+    const qs = `accountKey=${encodeURIComponent(accountKey ?? '')}&families=${encodeURIComponent(usedFamilies.join('\n'))}`;
+    fetch(`/api/ad-generator/fonts?${qs}`)
       .then((r) => (r.ok ? r.json() : { css: '' }))
       .then((j: { css?: string }) => {
         if (!cancelled) setEmbeddedFontCss(j.css ?? '');
@@ -718,13 +731,9 @@ export default function AdBuilderPage() {
     return () => {
       cancelled = true;
     };
-  }, [accountKey, customFonts.length]);
-  // Emit BOTH the URL faces and the embedded faces (embedded declared last, so
-  // it wins for the fonts that embedded — WYSIWYG with export). Crucially this
-  // is per-font, not all-or-nothing: with the admin roll-up embedding many
-  // accounts' fonts, any single font the server can't embed is omitted from
-  // `embeddedFontCss` — the URL face keeps it rendering instead of silently
-  // dropping (which is why brand fonts like Genesis vanished for admins).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountKey, usedFamilyKey]);
+  // URL faces + embedded faces (embedded last so it wins where present).
   const effectiveFontCss = [fontFaceCss, embeddedFontCss].filter(Boolean).join('\n');
   const fontOptions = useMemo<FontSelectOption[]>(
     () => [

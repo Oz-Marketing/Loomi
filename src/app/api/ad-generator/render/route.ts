@@ -11,6 +11,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession } from '@/lib/api-auth';
+import { hasUnrestrictedAccountAccess } from '@/lib/roles';
 import { resolveTemplate } from '@/lib/ad-generator/resolve-template';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
@@ -45,7 +46,9 @@ export async function POST(req: NextRequest) {
   if (!size) return NextResponse.json({ error: 'Unknown size' }, { status: 400 });
 
   // Re-build the font @font-face with base64-embedded files (preview sends URL-based).
-  const data = await embedAccountFontCss(body.accountKey, { ...(body.data ?? {}) });
+  // Admins roll up every account's fonts so a picked brand font still embeds.
+  const unrestricted = hasUnrestrictedAccountAccess(session.user.role, session.user.accountKeys ?? []);
+  const data = await embedAccountFontCss(body.accountKey, { ...(body.data ?? {}) }, { unrestricted });
 
   // Embed any curated Google fonts the design uses (editor loads them by URL; the
   // export inlines them so a one-shot screenshot never races the network).

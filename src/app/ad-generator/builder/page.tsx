@@ -66,7 +66,7 @@ import { MediaPickerModal } from '@/components/media-picker-modal';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
-import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
+import { availableCustomFonts, buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { CornerBox, SpacingBox, NumberInput } from '@/lib/email/editor/PropertyControls';
 import { GOOGLE_FONTS, googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
@@ -519,7 +519,7 @@ function makeDefaultElement(id: string, type: DocElementType): DocElement {
 }
 
 export default function AdBuilderPage() {
-  const { accountData, accountKey } = useAccount();
+  const { accountData, accountKey, accounts, isUnrestricted } = useAccount();
   const { prompt } = useLoomiDialog();
 
   // A brand-new template starts on an empty artboard (no starter layout). The
@@ -676,7 +676,12 @@ export default function AdBuilderPage() {
 
   // Account custom fonts: drive both the dropdown and the @font-face the canvas
   // needs so a chosen family actually renders.
-  const customFonts = useMemo(() => accountData?.customFonts ?? [], [accountData?.customFonts]);
+  // Admins get the roll-up (union of every subaccount's fonts); clients get only
+  // the active account's own. Drives both the dropdown and the @font-face.
+  const customFonts = useMemo(
+    () => availableCustomFonts({ accountData, accounts, unrestricted: isUnrestricted }),
+    [accountData, accounts, isUnrestricted],
+  );
   // URL-based @font-face (instant, but the preview iframe can silently drop these
   // cross-origin fonts to CORS). We fetch a base64-embedded version below and
   // prefer it once loaded, so a chosen brand font actually renders in the editor

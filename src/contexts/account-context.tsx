@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
 import type { UserRole } from '@/lib/auth';
+import { hasUnrestrictedAccountAccess } from '@/lib/roles';
 import {
   ADMIN_VALUE,
   readActiveAccountCookie,
@@ -86,6 +87,8 @@ interface AccountContextValue {
   account: AccountType;
   setAccount: (account: AccountType) => void;
   isAdmin: boolean;
+  /** User has full (all-account) access — drives font roll-up, etc. */
+  isUnrestricted: boolean;
   isAccount: boolean;
   accountKey: string | null;
   accountData: AccountData | null;
@@ -107,6 +110,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const userRole = (session?.user?.role as UserRole) ?? null;
   const userAccountKeys: string[] = session?.user?.accountKeys ?? [];
   const userAccountKeysSignature = userAccountKeys.join('|');
+  // Full-access users (developer / super_admin / admin with no assignments) see
+  // every account, so brand fonts uploaded to any subaccount roll up to them.
+  const isUnrestricted = userRole ? hasUnrestrictedAccountAccess(userRole, userAccountKeys) : false;
   const userName = session?.user?.name ?? null;
   const userTitle = session?.user?.title ?? null;
   const userEmail = session?.user?.email ?? null;
@@ -261,6 +267,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         account,
         setAccount,
         isAdmin,
+        isUnrestricted,
         isAccount,
         accountKey,
         accountData,

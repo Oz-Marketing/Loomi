@@ -15,6 +15,7 @@
  */
 import { uploadToS3, buildS3Key, s3PublicUrl, isS3Configured } from '@/lib/s3';
 import { prisma } from '@/lib/prisma';
+import { autoCropVehicleImage } from '@/lib/integrations/evox-crop';
 
 const BASE = 'https://api.evoximages.com/api/v1';
 const PID = Number(process.env.EVOX_PRODUCT_ID ?? 27);
@@ -206,11 +207,15 @@ export async function importEvoxImage(url: string, accountKey: string | null, hi
 
   const res = await fetch(fetchUrl, { headers, signal: AbortSignal.timeout(20000) });
   if (!res.ok) throw new Error(`EVOX image fetch HTTP ${res.status}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  const head = buf.subarray(0, 1).toString('latin1');
+  const raw = Buffer.from(await res.arrayBuffer());
+  const head = raw.subarray(0, 1).toString('latin1');
   if (head === '{' || head === '<') throw new Error('EVOX returned non-image data');
 
-  if (!isS3Configured()) return url; // no bucket → fall back to the EVOX URL
+  if (!isS3Configured()) return url; // no bucket → fall back to the (uncropped) EVOX URL
+
+  // Auto-crop tight to the vehicle: drops EVOX's wide empty margins and the
+  // bottom-right "©EVOX IMAGES" watermark so designers don't crop by hand.
+  const { buffer: buf } = await autoCropVehicleImage(raw);
   const safeHint = hint.replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '').toLowerCase() || 'vehicle';
   // Deterministic key (per account + vehicle/color) so re-picking the same
   // vehicle reuses one object + library entry instead of piling up dupes.

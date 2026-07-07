@@ -57,3 +57,42 @@ export function parseCustomFonts(raw: string | null | undefined): FontFace[] {
     return [];
   }
 }
+
+/**
+ * Collapse faces that are the same family/weight/style — e.g. the same OEM font
+ * uploaded to several subaccounts. Keeps the first occurrence so the admin
+ * roll-up doesn't embed the identical file dozens of times.
+ */
+export function dedupeFontFaces(faces: FontFace[]): FontFace[] {
+  const seen = new Set<string>();
+  const out: FontFace[] = [];
+  for (const f of faces) {
+    const key = `${cssSafeFamily(f.family)}|${f.weight ?? '400'}|${f.style ?? 'normal'}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(f);
+  }
+  return out;
+}
+
+/**
+ * Custom fonts available to the current user in the picker / preview.
+ *
+ * Unrestricted admins get the union of every account they can see, so a font
+ * uploaded to any subaccount's branding "rolls up" and is pickable everywhere.
+ * Everyone else (clients) gets only the active account's own fonts — one client
+ * never sees another's brand fonts.
+ */
+export function availableCustomFonts(args: {
+  accountData: { customFonts?: FontFace[] } | null;
+  accounts: Record<string, { customFonts?: FontFace[] }>;
+  unrestricted: boolean;
+}): FontFace[] {
+  const { accountData, accounts, unrestricted } = args;
+  if (!unrestricted) return accountData?.customFonts ?? [];
+  const all: FontFace[] = [];
+  for (const acc of Object.values(accounts)) {
+    if (acc?.customFonts?.length) all.push(...acc.customFonts);
+  }
+  return dedupeFontFaces(all);
+}

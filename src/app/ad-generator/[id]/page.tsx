@@ -31,7 +31,7 @@ import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import { isVehicleIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
-import { buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
+import { availableCustomFonts, buildFontFaceCssFromUrls } from '@/lib/ad-generator/fonts';
 import { googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { isFieldVisible, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
@@ -72,7 +72,7 @@ const WEBSAFE_FONTS = [
 ];
 
 export default function AdGeneratorPage() {
-  const { accountKey, accountData, userRole } = useAccount();
+  const { accountKey, accountData, userRole, accounts, isUnrestricted } = useAccount();
   // "Admins and up" get the full form; clients get a restricted subset (OEM
   // incentives, vehicle, offer, legal — with the disclaimer read-only). Branding
   // (logo/color/font) + background image are admin-only; clients get brand defaults.
@@ -172,7 +172,12 @@ export default function AdGeneratorPage() {
     [colors],
   );
 
-  const customFonts = useMemo(() => accountData?.customFonts ?? [], [accountData?.customFonts]);
+  // Admins get the roll-up (union of every subaccount's fonts); clients get only
+  // the active account's own.
+  const customFonts = useMemo(
+    () => availableCustomFonts({ accountData, accounts, unrestricted: isUnrestricted }),
+    [accountData, accounts, isUnrestricted],
+  );
   const fontFamilies = useMemo(() => [...new Set(customFonts.map((f) => f.family))], [customFonts]);
   // Font picker = system default + the account's uploaded fonts + websafe stacks.
   const fontOptions = useMemo<FontSelectOption[]>(

@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { downloadFromS3, s3KeyFromPublicUrl } from '@/lib/s3';
-import { fontFaceRule, parseCustomFonts, type FontFace } from '@/lib/ad-generator/fonts';
+import { dedupeFontFaces, fontFaceRule, parseCustomFonts, type FontFace } from '@/lib/ad-generator/fonts';
 import { googleFontsCssUrl } from '@/lib/ad-generator/google-fonts';
 
 /**
@@ -98,13 +98,34 @@ export async function embeddedFontFaceCss(faces: FontFace[]): Promise<string> {
  * Mutates + returns data. Leaves `data.fontFaceCss` untouched when the account
  * has no custom fonts (or none could be fetched).
  */
-export async function embedAccountFontCss(accountKey: string | undefined, data: Record<string, string>): Promise<Record<string, string>> {
-  if (!accountKey) return data;
+export async function embedAccountFontCss(
+  accountKey: string | undefined,
+  data: Record<string, string>,
+  opts?: { unrestricted?: boolean },
+): Promise<Record<string, string>> {
+  const faces = await accountCustomFontFaces(accountKey, opts);
+  if (faces.length) data.fontFaceCss = await embeddedFontFaceCss(faces);
+  return data;
+}
+
+/**
+ * The custom font faces available to a request. For unrestricted (all-account)
+ * users this is the union of every account's fonts — so a brand font uploaded
+ * to any subaccount rolls up and renders on export, matching the editor. For
+ * everyone else it's just the given account's own fonts.
+ */
+export async function accountCustomFontFaces(
+  accountKey: string | undefined,
+  opts?: { unrestricted?: boolean },
+): Promise<FontFace[]> {
+  if (opts?.unrestricted) {
+    const accounts = await prisma.account.findMany({ select: { customFonts: true } });
+    return dedupeFontFaces(accounts.flatMap((a) => parseCustomFonts(a.customFonts)));
+  }
+  if (!accountKey) return [];
   const account = await prisma.account.findUnique({
     where: { key: accountKey },
     select: { customFonts: true },
   });
-  const faces = parseCustomFonts(account?.customFonts);
-  if (faces.length) data.fontFaceCss = await embeddedFontFaceCss(faces);
-  return data;
+  return parseCustomFonts(account?.customFonts);
 }

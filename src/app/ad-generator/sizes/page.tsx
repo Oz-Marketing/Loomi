@@ -17,7 +17,7 @@ import {
   CheckIcon,
   XMarkIcon,
   RectangleGroupIcon,
-  SparklesIcon,
+  MegaphoneIcon,
   Squares2X2Icon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
@@ -171,7 +171,7 @@ export default function AdSizesPage() {
               href={`/ad-generator${acctQuery}`}
               className="flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
             >
-              <SparklesIcon className="w-4 h-4" />
+              <MegaphoneIcon className="w-4 h-4" />
               Ad Generator
             </Link>
             <Link

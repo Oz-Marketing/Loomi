@@ -5343,12 +5343,14 @@ function ShortcutsModal({ onClose }: { onClose: () => void }) {
       ],
     },
     {
-      title: 'Move',
+      title: 'Move & size',
       rows: [
         ['↑ ↓ ← →', 'Nudge 1px'],
         ['⇧ + arrows', 'Nudge 10px'],
         ['Drag', 'Move element'],
-        ['Drag handles', 'Resize'],
+        ['Drag handles', 'Resize (text reflows)'],
+        ['⇧ drag', 'Lock aspect ratio'],
+        [`${mod} drag`, 'Scale text font'],
       ],
     },
     {

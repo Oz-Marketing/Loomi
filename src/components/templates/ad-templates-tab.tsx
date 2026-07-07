@@ -1,19 +1,22 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import {
   PlusIcon,
-  SparklesIcon,
+  MegaphoneIcon,
+  ArrowUpRightIcon,
   EyeIcon,
   PencilSquareIcon,
   PencilIcon,
   DocumentDuplicateIcon,
   TrashIcon,
   XMarkIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   RocketLaunchIcon,
   CheckCircleIcon,
   ArrowUturnLeftIcon,
@@ -115,6 +118,9 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
   };
 
   const [preview, setPreview] = useState<DocTemplate | null>(null);
+  // Which size the detail modal is showing (index into the template's sizes).
+  const [previewSizeIdx, setPreviewSizeIdx] = useState(0);
+  useEffect(() => setPreviewSizeIdx(0), [preview?.id]);
   const [renameFor, setRenameFor] = useState<DocTemplate | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [deployFor, setDeployFor] = useState<DocTemplate | null>(null);
@@ -122,6 +128,31 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
   const [busy, setBusy] = useState(false);
 
   const edit = (id: string) => router.push(builderQuery({ template: id }));
+
+  // "Use this template" (subaccount): create an ad/creative from the template in
+  // the active account and open the Ad Generator form — the counterpart to the
+  // admin's "Deploy to subaccounts".
+  const useTemplate = async (t: DocTemplate) => {
+    if (!accountKey) {
+      toast.error('Select an account first');
+      return;
+    }
+    if (busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch('/api/ad-generator/creatives', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountKey, name: `New ${t.name}`, templateId: t.id, data: t.doc?.defaults ?? {} }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      router.push(`/ad-generator/${json.creative.id}`);
+    } catch (err) {
+      toast.error(`Couldn't create the ad: ${err instanceof Error ? err.message : 'unknown error'}`);
+      setBusy(false);
+    }
+  };
 
   // Inline taxonomy + publish edits — PATCH the row and refresh.
   const patchTemplate = async (id: string, body: Record<string, unknown>) => {
@@ -268,7 +299,13 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
     { key: 'edit', label: 'Edit', icon: PencilSquareIcon, run: () => edit(t.id) },
     { key: 'rename', label: 'Rename', icon: PencilIcon, run: () => { setRenameFor(t); setRenameValue(t.name); } },
     { key: 'clone', label: 'Clone', icon: DocumentDuplicateIcon, run: () => void clone(t) },
-    { key: 'deploy', label: 'Deploy to subaccounts', icon: RocketLaunchIcon, run: () => setDeployFor(t) },
+    // In a subaccount you USE the template (make an ad from it); at the admin
+    // level you DEPLOY it down to subaccounts.
+    accountKey
+      ? { key: 'use', label: 'Use this template', icon: ArrowUpRightIcon, run: () => void useTemplate(t) }
+      : t.status === 'published'
+        ? { key: 'deploy', label: 'Deploy to subaccounts', icon: RocketLaunchIcon, run: () => setDeployFor(t) }
+        : { key: 'deploy', label: 'Publish to deploy', icon: RocketLaunchIcon, disabled: true, run: () => toast('Publish this template first, then you can deploy it to subaccounts.') },
     t.status === 'published'
       ? { key: 'unpublish', label: 'Move to draft', icon: ArrowUturnLeftIcon, run: () => setPublished(t, false) }
       : { key: 'publish', label: 'Publish', icon: CheckCircleIcon, run: () => setPublished(t, true) },
@@ -282,7 +319,7 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
 
       {templates.length === 0 ? (
         <TemplateEmptyState
-          icon={SparklesIcon}
+          icon={MegaphoneIcon}
           title="No ad templates yet"
           subtitle={
             accountKey
@@ -338,7 +375,9 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
                       )
                     }
                     actions={actionsFor(t)}
-                    onClick={() => edit(t.id)}
+                    // In a subaccount, clicking a card opens the detail modal
+                    // (preview + Use / Edit); at the admin level it opens the editor.
+                    onClick={() => (accountKey ? setPreview(t) : edit(t.id))}
                     onCategoryChange={(c) => void patchTemplate(t.id, { category: c })}
                     onTagsChange={(tags) => void patchTemplate(t.id, { tags })}
                   />
@@ -352,29 +391,75 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
       {/* View preview */}
       {preview && typeof document !== 'undefined' && createPortal(
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4" onClick={() => setPreview(null)}>
-          <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-xl backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
-            <div className="mb-3 flex items-start justify-between gap-2">
+          {(() => {
+            const sizes = preview.doc?.sizes ?? [];
+            const idx = Math.min(previewSizeIdx, Math.max(0, sizes.length - 1));
+            const activeSize = sizes[idx];
+            const go = (d: number) => setPreviewSizeIdx((i) => (sizes.length ? (i + d + sizes.length) % sizes.length : 0));
+            return (
+          <div className="flex max-h-[92vh] w-full max-w-2xl flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-xl backdrop-blur-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-2 border-b border-[var(--border)] p-4">
               <div className="min-w-0">
-                <div className="truncate text-sm font-bold text-[var(--foreground)]">{preview.name}</div>
+                <div className="truncate text-base font-bold text-[var(--foreground)]">{preview.name}</div>
                 {preview.description && <div className="truncate text-xs text-[var(--muted-foreground)]">{preview.description}</div>}
               </div>
               <button onClick={() => setPreview(null)} className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
                 <XMarkIcon className="h-5 w-5" />
               </button>
             </div>
-            <div className="overflow-hidden rounded-xl border border-[var(--border)]">
-              <AdPreviewThumb template={preview.doc ? adTemplateFromDoc(preview.id, preview.doc) : undefined} data={preview.doc?.defaults ?? {}} branding={branding} height={320} />
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              <div className="overflow-hidden rounded-xl border border-[var(--border)]">
+                <AdPreviewThumb template={preview.doc ? adTemplateFromDoc(preview.id, preview.doc) : undefined} data={preview.doc?.defaults ?? {}} branding={branding} height={460} boxW={620} sizeId={activeSize?.id} />
+              </div>
+              {/* Size navigator — page through every size in the ad set. */}
+              {sizes.length > 1 && (
+                <div className="mt-3 flex items-center justify-center gap-2">
+                  <button onClick={() => go(-1)} title="Previous size" className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+                    <ChevronLeftIcon className="h-4 w-4" />
+                  </button>
+                  <span className="min-w-[10rem] text-center text-xs font-medium text-[var(--foreground)]">
+                    {activeSize?.label} <span className="tabular-nums text-[var(--muted-foreground)]">{idx + 1}/{sizes.length}</span>
+                  </span>
+                  <button onClick={() => go(1)} title="Next size" className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+                    <ChevronRightIcon className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+              {/* Ad-set info: category + tags + offer-count note. */}
+              <div className="mt-3 space-y-2 text-xs text-[var(--muted-foreground)]">
+                {(preview.category || (preview.tags?.length ?? 0) > 0) && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {preview.category && <span className="rounded bg-[var(--primary)]/10 px-1.5 py-0.5 text-[10px] font-medium text-[var(--primary)]">{preview.category}</span>}
+                    {(preview.tags ?? []).map((tag) => (
+                      <span key={tag} className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px]">{tag}</span>
+                    ))}
+                  </div>
+                )}
+                {preview.doc?.allowOfferCountChoice && <div>Clients can choose 1 or 2 offers.</div>}
+              </div>
             </div>
-            <div className="mt-3 flex justify-end gap-2">
+            <div className="flex justify-end gap-2 border-t border-[var(--border)] p-4">
               <button
                 onClick={() => { const t = preview; setPreview(null); edit(t.id); }}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 h-9 text-sm font-medium text-white hover:bg-[var(--primary)]/90"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 h-9 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
               >
                 <PencilSquareIcon className="h-4 w-4" />
                 Edit
               </button>
+              {accountKey && (
+                <button
+                  onClick={() => { const t = preview; setPreview(null); void useTemplate(t); }}
+                  disabled={busy}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-3 h-9 text-sm font-medium text-white transition-colors hover:bg-[var(--primary)]/90 disabled:opacity-60"
+                >
+                  <ArrowUpRightIcon className="h-4 w-4" />
+                  Use this template
+                </button>
+              )}
             </div>
           </div>
+            );
+          })()}
         </div>,
         document.body,
       )}

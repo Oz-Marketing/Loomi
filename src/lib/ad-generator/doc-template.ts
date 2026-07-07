@@ -20,6 +20,7 @@ export function adTemplateFromDoc(id: string, doc: TemplateDoc): AdTemplate {
     sizes: doc.sizes,
     fields: doc.fields,
     defaults: doc.defaults,
+    allowOfferCountChoice: doc.allowOfferCountChoice,
     // Enrich offer fields (_offerMain, …) so the offer block renders for every
     // doc — not only the hand-wired code template.
     render: (data, size) => renderDoc(doc, enrichOfferFields(data), size),

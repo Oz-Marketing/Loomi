@@ -82,7 +82,7 @@ import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType, AdData, AdSize } from '@/lib/ad-generator/types';
-import { addFieldKit } from '@/lib/ad-generator/vehicle-fields';
+import { addFieldKit, seedSecondOfferElements } from '@/lib/ad-generator/vehicle-fields';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -221,25 +221,47 @@ function sourceValueToBinding(v: string, currentValue: string): Binding {
   return { kind: 'static', value: currentValue };
 }
 /** Build the "Shows" options for an element: static, the template's compatible
- *  fields, the computed offer tokens (text only), and brand data. */
+ *  fields (grouped by their `group` so Offer 1 / Offer 2 / Vehicle / Legal read
+ *  as clear sections), the computed offer tokens (text only), and brand data.
+ *  Labels that collide across groups (e.g. "Vehicle" in both Offer 1 and Offer 2)
+ *  are auto-suffixed with their group so the control is unambiguous open OR
+ *  collapsed. */
 function buildContentSources(el: DocElement, fields: FieldSpec[]): SearchableSelectOption[] {
   const isImage = el.type === 'image' || el.type === 'logo' || el.type === 'background';
+  const hasO2 = fields.some((f) => f.key === 'o2_offerType');
   const opts: SearchableSelectOption[] = [
     { value: 'static', label: isImage ? 'Fixed image' : 'Type it in', group: 'Custom' },
   ];
   for (const f of fields) {
     const fieldIsImage = f.type === 'image';
     if (isImage !== fieldIsImage) continue; // image elements ↔ image fields; text ↔ the rest
-    opts.push({ value: `field:${f.key}`, label: f.label || f.key, group: 'Fields' });
+    opts.push({ value: `field:${f.key}`, label: f.label || f.key, group: f.group?.trim() || 'Fields' });
   }
   if (!isImage) {
-    for (const t of OFFER_TOKENS) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Offer (auto)' });
-    if (fields.some((f) => f.key === 'o2_offerType')) {
-      for (const t of OFFER_TOKENS_O2) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Offer (auto)' });
-    }
+    // Computed offer text. When the template has two offers, name Offer 1's
+    // tokens explicitly so they don't read as "the" offer next to Offer 2's.
+    const offer1Tokens = hasO2
+      ? [
+          { key: '_offerLabel', label: 'Offer 1 label' },
+          { key: '_offerMain', label: 'Offer 1 amount' },
+          { key: '_offerTerms', label: 'Offer 1 terms' },
+        ]
+      : OFFER_TOKENS;
+    for (const t of offer1Tokens) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text' });
+    if (hasO2) for (const t of OFFER_TOKENS_O2) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text' });
     opts.push({ value: 'brand:dealerName', label: 'Dealer name', group: 'Brand' });
   } else {
     opts.push({ value: 'brand:logoUrl', label: 'Account logo', group: 'Brand' });
+  }
+  // Offer 1 and Offer 2 share identical field labels ("Vehicle", "Offer type").
+  // Where a label collides, suffix ONLY the second-offer twin with its group
+  // (e.g. "Vehicle · Offer 2") — offer-1/originals stay clean, and the collapsed
+  // control reads unambiguously. Suffixing both would give silly "Vehicle · Vehicle".
+  const counts = new Map<string, number>();
+  for (const o of opts) counts.set(o.label, (counts.get(o.label) ?? 0) + 1);
+  for (const o of opts) {
+    const isSecondOffer = o.value.startsWith('field:o2_') || o.value.startsWith('field:_o2_');
+    if (isSecondOffer && (counts.get(o.label) ?? 0) > 1 && o.group) o.label = `${o.label} · ${o.group}`;
   }
   return opts;
 }
@@ -505,6 +527,10 @@ export default function AdBuilderPage() {
   // template), just not the blank-canvas default.
   const { doc, setDoc, undo, redo, canUndo, canRedo, reset: resetHistory } = useDocHistory(() => blankTemplateDoc('tmpl-blank', 'Untitled template'));
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
+  // Which offer count the canvas previews (1 or 2), for templates that let the
+  // client choose. Chrome shows in both; offer-block elements are dimmed when
+  // they don't belong to the previewed count. Drives `previewData._offerCount`.
+  const [previewCount, setPreviewCount] = useState<1 | 2>(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // Marquee (drag-to-select) rectangle in canvas fractions, while dragging the backdrop.
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -637,6 +663,17 @@ export default function AdBuilderPage() {
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
 
+  // A template "supports dual" (client may choose 1 or 2 offers) only when the
+  // second offer is explicitly turned ON (settings cog). Gates the offer-count
+  // view switch + per-element "Appears in" — both hide when the toggle is off.
+  const supportsDual = Boolean(doc.allowOfferCountChoice);
+  // When a dual template loads (or a second offer is just added), preview the
+  // 2-offer layout so the designer sees the full arrangement. Fires once per
+  // false→true flip; the designer can still flip the toggle to check 1-offer.
+  useEffect(() => {
+    if (supportsDual) setPreviewCount(2);
+  }, [supportsDual]);
+
   // Account custom fonts: drive both the dropdown and the @font-face the canvas
   // needs so a chosen family actually renders.
   const customFonts = useMemo(() => accountData?.customFonts ?? [], [accountData?.customFonts]);
@@ -712,6 +749,9 @@ export default function AdBuilderPage() {
       ...vehicleOfferPreviewData,
       ...doc.defaults, // designer-set default / preview values for fields
       ...(adData ?? {}), // ad mode: the ad's real content
+      // Preview the chosen offer count so off-count offer blocks dim (see the
+      // canvas offer-count toggle). Overrides any ad/default value while editing.
+      _offerCount: String(previewCount),
       ...(effectiveFontCss ? { fontFaceCss: effectiveFontCss } : {}),
       ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
       ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
@@ -722,7 +762,7 @@ export default function AdBuilderPage() {
       usedGoogleFontFamilies(doc.elements, typeof base.fontFamily === 'string' ? base.fontFamily : undefined),
     );
     return googleUrl ? { ...base, googleFontsUrl: googleUrl } : base;
-  }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData]);
+  }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData, previewCount]);
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
 
@@ -1358,6 +1398,98 @@ export default function AdBuilderPage() {
     setSelectedIds([newId]);
   }, [doc.elements]);
 
+  // Duplicate every element in `ids` at once (⌘D on a multi-selection), keeping
+  // each clone next to its original + offset, and select the new clones.
+  const duplicateElements = useCallback((ids: string[]) => {
+    const valid = ids.filter((id) => doc.elements.some((e) => e.id === id));
+    if (!valid.length) return;
+    const idSet = new Set(valid);
+    const idMap = new Map<string, string>();
+    for (const el of doc.elements) if (idSet.has(el.id)) idMap.set(el.id, `${el.type}-${rid()}`);
+    setDoc((prev) => {
+      const elements: DocElement[] = [];
+      for (const el of prev.elements) {
+        elements.push(el);
+        const newId = idMap.get(el.id);
+        if (newId) {
+          const clone = structuredClone(el);
+          clone.id = newId;
+          elements.push(clone);
+        }
+      }
+      const layouts = { ...prev.layouts };
+      for (const sid of Object.keys(prev.layouts)) {
+        const lay = { ...prev.layouts[sid] };
+        for (const [oldId, newId] of idMap) {
+          const b = prev.layouts[sid][oldId];
+          if (b) lay[newId] = { ...b, x: clamp(b.x + 0.03, 0, 1 - b.w), y: clamp(b.y + 0.03, 0, 1 - b.h), z: (b.z ?? 0) + 1 };
+        }
+        layouts[sid] = lay;
+      }
+      return { ...prev, elements, layouts };
+    });
+    setSelectedIds([...idMap.values()]);
+  }, [doc.elements]);
+
+  // ── bulk edits across the current multi-selection ──
+  // Patch a property on every selected ELEMENT (font, weight, color, align, …).
+  const patchSelectedElements = useCallback((patch: Partial<DocElement>) => {
+    const ids = new Set(selectedIds);
+    setDoc((prev) => ({ ...prev, elements: prev.elements.map((el) => (ids.has(el.id) ? { ...el, ...patch } : el)) }), `bulkel:${Object.keys(patch).sort().join(',')}`);
+  }, [selectedIds]);
+  // Patch the current-size BOX of every selected element (fontSize lives here).
+  const patchSelectedBoxes = useCallback((patch: Partial<DocLayoutBox>) => {
+    const ids = selectedIds;
+    setDoc((prev) => {
+      const lay = { ...(prev.layouts[size.id] ?? {}) };
+      for (const id of ids) if (lay[id]) lay[id] = { ...lay[id], ...patch };
+      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+    }, `bulkbox:${Object.keys(patch).sort().join(',')}`);
+  }, [selectedIds, size.id]);
+  // Nudge each selected element's font size by delta, keeping their relative sizes.
+  const bumpSelectedFontSize = useCallback((delta: number) => {
+    const ids = selectedIds;
+    setDoc((prev) => {
+      const lay = { ...(prev.layouts[size.id] ?? {}) };
+      for (const id of ids) if (lay[id]) lay[id] = { ...lay[id], fontSize: clamp(Math.round((lay[id].fontSize ?? 48) + delta), 4, 400) };
+      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+    }, 'bulkbox:fontSize');
+  }, [selectedIds, size.id]);
+
+  // Fit a text box to its rendered content on the given axis — the explicit
+  // action behind double-clicking a resize handle (n/s → height, e/w → width,
+  // corners → both). Measures the live node inside the iframe (native px), so
+  // the box hugs the wrapped text. NOT the old auto-hug (removed); user-invoked only.
+  const fitBoxToContent = useCallback((id: string, axis: 'h' | 'w' | 'both') => {
+    const node = iframeRef.current?.contentDocument?.querySelector(`[data-el-id="${id}"]`) as HTMLElement | null;
+    if (!node) return;
+    const prevStyle = { width: node.style.width, height: node.style.height, whiteSpace: node.style.whiteSpace };
+    let contentW = 0;
+    let contentH = 0;
+    if (axis === 'w' || axis === 'both') {
+      node.style.width = 'max-content';
+      node.style.whiteSpace = 'pre-wrap';
+      contentW = node.offsetWidth;
+      node.style.width = prevStyle.width;
+      node.style.whiteSpace = prevStyle.whiteSpace;
+    }
+    if (axis === 'h' || axis === 'both') {
+      node.style.height = 'auto';
+      contentH = node.offsetHeight;
+      node.style.height = prevStyle.height;
+    }
+    setDoc((prev) => {
+      const lay = { ...(prev.layouts[size.id] ?? {}) };
+      const b = lay[id];
+      if (!b) return prev;
+      const nb = { ...b };
+      if (contentW) nb.w = clamp(contentW / size.width, 0.02, 1 - b.x);
+      if (contentH) nb.h = clamp(contentH / size.height, 0.01, 1 - b.y);
+      lay[id] = nb;
+      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
+    }, `fit:${axis}:${id}`);
+  }, [size.id, size.width, size.height]);
+
   const addElement = useCallback(
     (type: DocElementType) => {
       const id = `${type}-${rid()}`;
@@ -1477,17 +1609,23 @@ export default function AdBuilderPage() {
   const addField = () => {
     setDoc((prev) => ({ ...prev, fields: [...prev.fields, { key: `field_${rid()}`, label: 'New field', type: 'text' }] }));
   };
-  // Inject the standard offer/vehicle question set (single or dual) so a
-  // designer can make ANY template client-manipulable — deduped by key, defaults
-  // seeded, never clobbering existing fields (see addFieldKit).
-  const addOfferFieldKit = (mode: 'single' | 'dual') => {
-    const added = addFieldKit(doc, mode).fields.length - doc.fields.length;
-    if (added === 0) {
-      toast('Those offer fields are already in this template.');
-      return;
+  // Enable / disable the client's second offer (toggled from the settings cog).
+  // ON: add the offer/vehicle question set (single + o2_ sets, deduped), seed a
+  // recommended second-offer element block, and flip the opt-in flag. OFF: just
+  // clear the flag (fields/elements are kept, so toggling back on is lossless).
+  const setDualOffers = (on: boolean) => {
+    if (on) {
+      setDoc((prev) => {
+        const seeded = seedSecondOfferElements(addFieldKit(prev, 'dual'));
+        return { ...seeded, allowOfferCountChoice: true };
+      }, 'dual:on');
+      setPreviewCount(2);
+      toast.success('Second offer enabled');
+    } else {
+      setDoc((prev) => ({ ...prev, allowOfferCountChoice: false }), 'dual:off');
+      setPreviewCount(1);
+      toast('Second offer disabled');
     }
-    setDoc((prev) => addFieldKit(prev, mode), `offerkit:${mode}`);
-    toast.success(`Added ${added} ${mode === 'dual' ? 'dual-offer' : 'offer'} field${added === 1 ? '' : 's'}`);
   };
   const updateFieldAt = (i: number, patch: Partial<FieldSpec>) => {
     setDoc((prev) => ({ ...prev, fields: prev.fields.map((f, idx) => (idx === i ? { ...f, ...patch } : f)) }), `field:${i}:${Object.keys(patch).sort().join(',')}`);
@@ -2541,16 +2679,16 @@ export default function AdBuilderPage() {
         const forward = key === ']';
         applyZ(e.shiftKey ? (forward ? 'front' : 'back') : forward ? 'forward' : 'backward');
       } else if (key === 'd') {
-        // Duplicate (⌘D) the single selected element.
-        if (selectedIds.length !== 1) return;
+        // Duplicate (⌘D) the whole selection — one or many elements.
+        if (!selectedIds.length) return;
         e.preventDefault();
-        duplicateElement(selectedIds[0]);
+        duplicateElements(selectedIds);
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [undo, redo, selectedIds, doc.elements, doc.groups, size.id, duplicateElement, applyZ]);
+  }, [undo, redo, selectedIds, doc.elements, doc.groups, size.id, duplicateElements, applyZ]);
 
   // Autosave — debounced PATCH once there's a target (a saved template, or the
   // ad in ad mode). New/unsaved templates require an explicit Save first.
@@ -2740,6 +2878,28 @@ export default function AdBuilderPage() {
                       })}
                     </div>
                     <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign a category &amp; tags on the template card in the Templates library.</p>
+
+                    {/* Second offer — lets the client choose 1 or 2 offers. Enabling
+                        seeds the second-offer fields + a starter block; the 1/2 view
+                        switch (top bar) then edits each layout. */}
+                    <div className="mt-3 border-t border-[var(--border)] pt-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-[var(--foreground)]">Second offer</p>
+                          <p className="mt-0.5 text-[11px] leading-snug text-[var(--muted-foreground)]">Let the client choose 1 or 2 offers.</p>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={!!doc.allowOfferCountChoice}
+                          onClick={() => setDualOffers(!doc.allowOfferCountChoice)}
+                          className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${doc.allowOfferCountChoice ? 'bg-[var(--primary)]' : 'bg-[var(--muted)]'}`}
+                        >
+                          <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${doc.allowOfferCountChoice ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
                       <button
                         onClick={() => {
@@ -3120,6 +3280,25 @@ export default function AdBuilderPage() {
           <div className="relative flex flex-shrink-0 items-center justify-end gap-2 border-b border-[var(--border)] px-3 py-2">
             {/* Zoom lives on the canvas (bottom-left); outlines + margins moved to
                 the left rail; the active size is shown on the canvas action bar. */}
+            {/* Offer view switch (centered) — flips the canvas + Fields panel
+                between the 1-offer and 2-offer layouts. Only when the client's
+                second offer is turned ON (settings cog). */}
+            {doc.allowOfferCountChoice && (
+              <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
+                {([1, 2] as const).map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setPreviewCount(n)}
+                    title={`Edit the ${n === 1 ? 'single' : 'dual'}-offer layout`}
+                    className={`inline-flex h-7 items-center rounded-full px-3 text-xs font-medium transition-colors ${
+                      previewCount === n ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    {n === 1 ? 'Single Offer' : 'Dual Offer'}
+                  </button>
+                ))}
+              </div>
+            )}
             {/* Undo / Redo */}
             <div className="flex items-center gap-0.5">
               <button
@@ -3395,20 +3574,29 @@ export default function AdBuilderPage() {
                             >
                               {isCropping ? 'Crop — drag to reposition' : detached ? `${elName(el)} — detached` : elName(el)}
                             </span>
-                            {RESIZE_HANDLES.map((rh) => (
-                              <span
-                                key={rh.h}
-                                onPointerDown={(e) => startSingleDrag(e, el.id, rh.h)}
-                                className="absolute h-2.5 w-2.5 rounded-[2px] border border-[var(--kind)] bg-[var(--card)]"
-                                style={{
-                                  left: `${rh.x * 100}%`,
-                                  top: `${rh.y * 100}%`,
-                                  transform: 'translate(-50%, -50%)',
-                                  cursor: rh.cursor,
-                                  touchAction: 'none',
-                                }}
-                              />
-                            ))}
+                            {RESIZE_HANDLES.map((rh) => {
+                              // Double-click a handle on a text box to fit it to
+                              // its content: top/bottom → height, left/right →
+                              // width, a corner → both. (Explicit, not auto-hug.)
+                              const fitAxis = rh.h === 'n' || rh.h === 's' ? 'h' : rh.h === 'e' || rh.h === 'w' ? 'w' : 'both';
+                              const canFit = el.type === 'text';
+                              return (
+                                <span
+                                  key={rh.h}
+                                  onPointerDown={(e) => startSingleDrag(e, el.id, rh.h)}
+                                  onDoubleClick={canFit ? (e) => { e.stopPropagation(); fitBoxToContent(el.id, fitAxis); } : undefined}
+                                  title={canFit ? `Drag to resize · double-click to fit ${fitAxis === 'h' ? 'height' : fitAxis === 'w' ? 'width' : 'box'} to text` : undefined}
+                                  className="absolute h-2.5 w-2.5 rounded-[2px] border border-[var(--kind)] bg-[var(--card)]"
+                                  style={{
+                                    left: `${rh.x * 100}%`,
+                                    top: `${rh.y * 100}%`,
+                                    transform: 'translate(-50%, -50%)',
+                                    cursor: rh.cursor,
+                                    touchAction: 'none',
+                                  }}
+                                />
+                              );
+                            })}
                           </>
                         )}
                       </div>
@@ -3624,6 +3812,7 @@ export default function AdBuilderPage() {
                   contentSources={contentSources}
                   onContentChange={setSelectedContent}
                   accountKey={accountKey ?? undefined}
+                  supportsDual={supportsDual}
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch }, `box:${selected.id}:${Object.keys(patch).sort().join(',')}`)}
                   onClose={clearSelection}
@@ -3641,6 +3830,26 @@ export default function AdBuilderPage() {
                 />
               )}
 
+              {/* Bulk-edit panel for a multi-selection — mass-update font, size,
+                  weight, alignment, colour, spacing across all selected text. */}
+              {selectedIds.length > 1 && !editingText && (
+                <MultiSelectPanel
+                  elements={selectedIds.map((id) => doc.elements.find((e) => e.id === id)).filter((e): e is DocElement => Boolean(e))}
+                  sampleFontSize={(() => {
+                    const firstText = selectedIds.map((id) => layout[id]).find((b, i) => b && doc.elements.find((e) => e.id === selectedIds[i])?.type === 'text');
+                    return firstText?.fontSize ?? 48;
+                  })()}
+                  fontOptions={fontOptions}
+                  onElAll={patchSelectedElements}
+                  onBoxAll={patchSelectedBoxes}
+                  onBumpSize={bumpSelectedFontSize}
+                  onDuplicate={() => duplicateElements(selectedIds)}
+                  onDelete={deleteSelected}
+                  onClose={clearSelection}
+                  shifted={fieldsOpen}
+                />
+              )}
+
             </div>
         </div>
       </div>
@@ -3649,9 +3858,11 @@ export default function AdBuilderPage() {
         <FieldsSidebar
           fields={doc.fields}
           defaults={doc.defaults}
+          accountKey={accountKey ?? undefined}
+          brandLogos={brandLogos}
+          hideSecondOffer={supportsDual && previewCount === 1}
           onClose={() => setFieldsOpen(false)}
           onAdd={addField}
-          onAddKit={addOfferFieldKit}
           onUpdate={updateFieldAt}
           onRename={renameFieldKeyAt}
           onDelete={deleteFieldAt}
@@ -3783,6 +3994,11 @@ export default function AdBuilderPage() {
                       </Item>
                       <Sep />
                     </>
+                  )}
+                  {multi && (
+                    <Item onClick={() => duplicateElements(selectedIds)} kbd="⌘D">
+                      Duplicate ({selectedIds.length})
+                    </Item>
                   )}
                   <Item onClick={deleteSelected} danger kbd="⌫">
                     Delete{multi ? ` (${selectedIds.length})` : ''}
@@ -3948,6 +4164,8 @@ function FieldRow({
   index,
   expanded,
   defaultValue,
+  accountKey,
+  brandLogos,
   onToggle,
   onUpdate,
   onRename,
@@ -3958,12 +4176,15 @@ function FieldRow({
   index: number;
   expanded: boolean;
   defaultValue: string;
+  accountKey?: string;
+  brandLogos: { key: string; label: string; url: string }[];
   onToggle: () => void;
   onUpdate: (i: number, patch: Partial<FieldSpec>) => void;
   onRename: (i: number, newKey: string) => void;
   onDelete: (i: number) => void;
   onSetDefault: (i: number, val: string) => void;
 }) {
+  const [picking, setPicking] = useState(false);
   return (
     // Subtle fill so a field row lifts off the group section it sits in (they
     // otherwise share the panel background and blend together); the opened row
@@ -3999,7 +4220,47 @@ function FieldRow({
             </SelectRow>
             <LabeledInput label="Group" value={field.group ?? ''} onChange={(v) => onUpdate(index, { group: v || undefined })} />
           </div>
-          <LabeledInput label="Default / preview value" value={defaultValue} onChange={(v) => onSetDefault(index, v)} />
+          {/* Default / preview value — the fallback shown in the picker thumb,
+              builder canvas, and client form until the client fills it in. For
+              image fields this is a media picker so a designer can drop a dummy
+              jellybean; everything else is a plain text box. */}
+          {field.type === 'image' ? (
+            <div>
+              <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Default / preview image</label>
+              <div className="flex items-center gap-3">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--border)] bg-[var(--muted)]/40">
+                  {defaultValue ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={defaultValue} alt="" className="h-full w-full object-contain" />
+                  ) : (
+                    <PhotoIcon className="h-5 w-5 text-[var(--muted-foreground)]" />
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setPicking(true)}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                  >
+                    <ArrowUpTrayIcon className="h-4 w-4" />
+                    {defaultValue ? 'Replace' : 'Choose / upload'}
+                  </button>
+                  {defaultValue && (
+                    <button
+                      type="button"
+                      onClick={() => onSetDefault(index, '')}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-red-500/50 hover:text-red-500"
+                    >
+                      <XMarkIcon className="h-4 w-4" />
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <LabeledInput label="Default / preview value" value={defaultValue} onChange={(v) => onSetDefault(index, v)} />
+          )}
           <LabeledInput label="Placeholder" value={field.placeholder ?? ''} onChange={(v) => onUpdate(index, { placeholder: v || undefined })} />
           <LabeledInput label="Help" value={field.help ?? ''} onChange={(v) => onUpdate(index, { help: v || undefined })} />
           <div className="grid grid-cols-2 items-end gap-2">
@@ -4014,6 +4275,19 @@ function FieldRow({
           {field.type === 'select' && <SelectOptionsEditor options={field.options ?? []} onChange={(opts) => onUpdate(index, { options: opts })} />}
         </div>
       )}
+      {picking && (
+        <MediaPickerModal
+          accountKey={accountKey}
+          showCategories
+          showFolders
+          brandingMedia={brandLogos.map((l) => ({ label: `${l.label} logo`, url: l.url }))}
+          onSelect={(url) => {
+            onSetDefault(index, url);
+            setPicking(false);
+          }}
+          onClose={() => setPicking(false)}
+        />
+      )}
     </div>
   );
 }
@@ -4026,9 +4300,11 @@ function FieldRow({
 function FieldsSidebar({
   fields,
   defaults,
+  accountKey,
+  brandLogos,
+  hideSecondOffer,
   onClose,
   onAdd,
-  onAddKit,
   onUpdate,
   onRename,
   onDelete,
@@ -4036,9 +4312,13 @@ function FieldsSidebar({
 }: {
   fields: FieldSpec[];
   defaults: Record<string, string>;
+  accountKey?: string;
+  brandLogos: { key: string; label: string; url: string }[];
+  /** In the 1-offer view, hide the second-offer (`o2_`) fields so the panel only
+   *  shows the fields relevant to the layout you're editing. */
+  hideSecondOffer: boolean;
   onClose: () => void;
   onAdd: () => void;
-  onAddKit: (mode: 'single' | 'dual') => void;
   onUpdate: (i: number, patch: Partial<FieldSpec>) => void;
   onRename: (i: number, newKey: string) => void;
   onDelete: (i: number) => void;
@@ -4048,16 +4328,17 @@ function FieldsSidebar({
   // Group fields by their `group` (Vehicle / Offer / Legal / …) so a long kit
   // (24–44 fields) reads as a few collapsible sections instead of a wall. Each
   // entry keeps its original flat index so the index-based handlers still hit
-  // the right field.
+  // the right field. In the 1-offer view, the second-offer fields are hidden.
   const groups = useMemo(() => {
     const m = new Map<string, { f: FieldSpec; i: number }[]>();
     fields.forEach((f, i) => {
+      if (hideSecondOffer && f.key.startsWith('o2_')) return;
       const g = (f.group || 'General').trim() || 'General';
       if (!m.has(g)) m.set(g, []);
       m.get(g)!.push({ f, i });
     });
     return [...m.entries()];
-  }, [fields]);
+  }, [fields, hideSecondOffer]);
   // A long list starts with only the first section open; a short one opens all.
   // A single new section (from "Add field") auto-opens so it's not lost.
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
@@ -4116,6 +4397,8 @@ function FieldsSidebar({
                       index={i}
                       expanded={expanded === i}
                       defaultValue={defaults[f.key] ?? ''}
+                      accountKey={accountKey}
+                      brandLogos={brandLogos}
                       onToggle={() => setExpanded(expanded === i ? null : i)}
                       onUpdate={onUpdate}
                       onRename={onRename}
@@ -4140,26 +4423,266 @@ function FieldsSidebar({
           <PlusIcon className="h-3.5 w-3.5" />
           Add field
         </button>
-        {/* Drop in the standard offer/vehicle question set so this template
-            becomes client-manipulable (offer engine + EVOX color) — deduped,
-            never overwrites existing fields. */}
-        <div className="rounded-lg border border-dashed border-[var(--border)] p-2">
-          <div className="mb-1.5 px-0.5 text-[11px] font-medium text-[var(--muted-foreground)]">Add offer fields</div>
-          <div className="flex gap-1.5">
-            <button
-              onClick={() => onAddKit('single')}
-              className="flex-1 rounded-md border border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-            >
-              Single vehicle
-            </button>
-            <button
-              onClick={() => onAddKit('dual')}
-              className="flex-1 rounded-md border border-[var(--border)] px-2 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-            >
-              Two vehicles
-            </button>
-          </div>
-        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A textarea that highlights `{{field}}` tokens as purple pills. A transparent
+ * textarea sits over a styled backdrop that mirrors the text (same font/padding/
+ * wrapping) with tokens wrapped in a coloured span; scroll is synced. The caret
+ * + editing stay in the real textarea, so behaviour is unchanged.
+ */
+function TokenTextArea({
+  value,
+  onChange,
+  placeholder,
+  options = [],
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  /** Field tokens offered by a `{{` autocomplete (value `field:<key>`). */
+  options?: SearchableSelectOption[];
+}) {
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const backRef = useRef<HTMLDivElement>(null);
+  const [caret, setCaret] = useState(0);
+  const [acOpen, setAcOpen] = useState(false);
+  const [acIdx, setAcIdx] = useState(0);
+  const syncScroll = () => {
+    if (backRef.current && taRef.current) {
+      backRef.current.scrollTop = taRef.current.scrollTop;
+      backRef.current.scrollLeft = taRef.current.scrollLeft;
+    }
+  };
+  const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const html =
+    escHtml(value).replace(
+      /\{\{\s*[\w.]+\s*\}\}/g,
+      (m) => `<span class="rounded bg-[var(--primary)]/15 font-medium text-[var(--primary)]">${m}</span>`,
+    ) + '​';
+
+  // Autocomplete: an OPEN `{{` (optionally with a partial key) right before the
+  // caret, not yet closed by `}}`. Show matching field tokens; picking inserts
+  // `{{key}}`. Typing `{{` alone lists everything.
+  const openTok = /\{\{\s*([\w.]*)$/.exec(value.slice(0, caret));
+  const partial = openTok ? openTok[1].toLowerCase() : null;
+  const matches =
+    partial == null
+      ? []
+      : options.filter((o) => {
+          const key = o.value.replace(/^field:/, '');
+          return key.toLowerCase().includes(partial) || o.label.toLowerCase().includes(partial);
+        }).slice(0, 8);
+  const showAc = acOpen && matches.length > 0;
+
+  const insert = (opt: SearchableSelectOption) => {
+    const key = opt.value.replace(/^field:/, '');
+    const start = caret - (openTok?.[0].length ?? 0);
+    const injected = `{{${key}}}`;
+    const next = value.slice(0, start) + injected + value.slice(caret);
+    onChange(next);
+    setAcOpen(false);
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      const pos = start + injected.length;
+      ta.focus();
+      ta.setSelectionRange(pos, pos);
+      setCaret(pos);
+    });
+  };
+
+  return (
+    <div className="relative">
+      <div
+        ref={backRef}
+        aria-hidden
+        className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words rounded-md border border-transparent bg-[var(--card)] px-2 py-1.5 text-xs leading-normal text-[var(--foreground)]"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      <textarea
+        ref={taRef}
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setCaret(e.target.selectionStart ?? 0);
+          setAcOpen(true);
+          setAcIdx(0);
+        }}
+        onClick={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+        onKeyUp={(e) => { if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0); }}
+        onKeyDown={(e) => {
+          if (!showAc) return;
+          if (e.key === 'ArrowDown') { e.preventDefault(); setAcIdx((i) => Math.min(matches.length - 1, i + 1)); }
+          else if (e.key === 'ArrowUp') { e.preventDefault(); setAcIdx((i) => Math.max(0, i - 1)); }
+          else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); insert(matches[Math.min(acIdx, matches.length - 1)]); }
+          else if (e.key === 'Escape') { e.preventDefault(); setAcOpen(false); }
+        }}
+        onScroll={syncScroll}
+        onBlur={() => setTimeout(() => setAcOpen(false), 120)}
+        rows={2}
+        placeholder={placeholder}
+        spellCheck={false}
+        className="relative w-full resize-y rounded-md border border-[var(--border)] bg-transparent px-2 py-1.5 text-xs leading-normal text-transparent caret-[var(--foreground)] outline-none placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)]"
+      />
+      {showAc && (
+        <ul className="absolute left-0 right-0 top-full z-[80] mt-1 max-h-52 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--card-strong)] p-1 shadow-2xl backdrop-blur-2xl">
+          {matches.map((o, i) => (
+            <li key={o.value}>
+              <button
+                type="button"
+                onMouseDown={(e) => { e.preventDefault(); insert(o); }}
+                onMouseEnter={() => setAcIdx(i)}
+                className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors ${
+                  i === Math.min(acIdx, matches.length - 1) ? 'bg-[var(--primary)] text-white' : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
+                }`}
+              >
+                <span className="truncate">{o.label}</span>
+                {o.group && <span className={`ml-auto shrink-0 text-[10px] ${i === Math.min(acIdx, matches.length - 1) ? 'text-white/70' : 'text-[var(--muted-foreground)]'}`}>{o.group}</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Bulk-edit panel for a multi-selection. Mirrors the single panel's typography
+ * controls but applies each change to EVERY selected element at once (font,
+ * size, weight, alignment, colour, spacing). Values shown reflect the first
+ * selected text box; changing one applies to all. Non-text elements in the
+ * selection are unaffected by the text controls.
+ */
+function MultiSelectPanel({
+  elements,
+  sampleFontSize,
+  fontOptions,
+  onElAll,
+  onBoxAll,
+  onBumpSize,
+  onDuplicate,
+  onDelete,
+  onClose,
+  shifted,
+}: {
+  elements: DocElement[];
+  sampleFontSize: number;
+  fontOptions: FontSelectOption[];
+  onElAll: (patch: Partial<DocElement>) => void;
+  onBoxAll: (patch: Partial<DocLayoutBox>) => void;
+  onBumpSize: (delta: number) => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  onClose: () => void;
+  shifted: boolean;
+}) {
+  const textEls = elements.filter((e) => e.type === 'text');
+  const sample = textEls[0];
+  return (
+    <div
+      data-adgen-panel
+      className={`absolute bottom-4 top-4 z-[70] flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl ${shifted ? 'right-[360px]' : 'right-4'}`}
+    >
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">
+        <span className="text-sm font-semibold text-[var(--foreground)]">{elements.length} selected</span>
+        <button type="button" onClick={onClose} title="Deselect" aria-label="Deselect" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+          <XMarkIcon className="h-4 w-4" />
+        </button>
+      </div>
+
+      <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
+        {textEls.length > 0 ? (
+          <>
+            <PanelSection title={`Font · ${textEls.length} text ${textEls.length === 1 ? 'box' : 'boxes'}`}>
+              <FontSelect value={sample?.fontFamily ?? ''} onChange={(v) => onElAll({ fontFamily: v || undefined })} options={fontOptions} />
+              <div className="mt-2 flex items-center gap-2">
+                <div className="flex flex-1 items-center gap-1">
+                  <BarBtn title="Smaller (all)" onClick={() => onBumpSize(-2)}>
+                    <MinusIcon className="h-4 w-4" />
+                  </BarBtn>
+                  <input
+                    type="number"
+                    aria-label="Font size (all)"
+                    defaultValue={sampleFontSize}
+                    key={sampleFontSize}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (!Number.isNaN(n)) onBoxAll({ fontSize: clamp(Math.round(n), 4, 400) });
+                    }}
+                    className="w-full min-w-0 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1.5 text-center text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                  />
+                  <BarBtn title="Larger (all)" onClick={() => onBumpSize(2)}>
+                    <PlusIcon className="h-4 w-4" />
+                  </BarBtn>
+                </div>
+                <div className="w-28 shrink-0">
+                  <FontSelect value={String(sample?.fontWeight ?? 400)} onChange={(v) => onElAll({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} />
+                </div>
+              </div>
+            </PanelSection>
+
+            <PanelSection title="Alignment">
+              <div className="flex items-center gap-1">
+                <BarBtn title="Align left" active={(sample?.align ?? 'left') === 'left'} onClick={() => onElAll({ align: 'left' })}>
+                  <Bars3BottomLeftIcon className="h-4 w-4" />
+                </BarBtn>
+                <BarBtn title="Align center" active={sample?.align === 'center'} onClick={() => onElAll({ align: 'center' })}>
+                  <Bars3Icon className="h-4 w-4" />
+                </BarBtn>
+                <BarBtn title="Align right" active={sample?.align === 'right'} onClick={() => onElAll({ align: 'right' })}>
+                  <Bars3BottomRightIcon className="h-4 w-4" />
+                </BarBtn>
+                <span className="mx-1 h-6 w-px bg-[var(--border)]" />
+                <BarBtn title="Uppercase" active={!!sample?.uppercase} onClick={() => onElAll({ uppercase: !sample?.uppercase })}>
+                  <span className="text-[11px] font-bold leading-none">Aa</span>
+                </BarBtn>
+              </div>
+            </PanelSection>
+
+            <PanelSection title="Color & spacing">
+              <div className="space-y-2.5">
+                <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span>Text color</span>
+                  <ColorSwatchInput title="Text color (all)" value={sample?.color && sample.color !== 'brand' ? sample.color : '#4f46e5'} onChange={(v) => onElAll({ color: v })} />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span>Letter</span>
+                  <MiniNum title="Letter spacing (px, all)" value={sample?.letterSpacing ?? 0} onChange={(v) => onElAll({ letterSpacing: v ? Math.round(v) : undefined })} />
+                </label>
+                <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span>Line</span>
+                  <MiniNum title="Line height (all)" step={0.05} value={sample?.lineHeight ?? 1.1} onChange={(v) => onElAll({ lineHeight: v || undefined })} />
+                </label>
+              </div>
+            </PanelSection>
+          </>
+        ) : (
+          <p className="px-1 py-4 text-xs leading-relaxed text-[var(--muted-foreground)]">
+            Select two or more <span className="text-[var(--foreground)]">text boxes</span> to mass-edit their font, size, weight, colour, and spacing.
+          </p>
+        )}
+      </div>
+
+      <div className="mt-auto flex items-center gap-2 border-t border-[var(--border)] p-3">
+        <button
+          type="button"
+          onClick={onDuplicate}
+          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+        >
+          Duplicate all
+        </button>
+        <button
+          type="button"
+          onClick={onDelete}
+          className="flex items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-red-500/50 hover:text-red-500"
+        >
+          <TrashIcon className="h-4 w-4" />
+        </button>
       </div>
     </div>
   );
@@ -4184,6 +4707,7 @@ function SelectionPanel({
   contentSources,
   onContentChange,
   accountKey,
+  supportsDual,
   onEl,
   onBox,
   onClose,
@@ -4202,6 +4726,9 @@ function SelectionPanel({
   contentSources: SearchableSelectOption[];
   onContentChange: (value: string) => void;
   accountKey?: string;
+  /** Whether this template lets the client choose 1 or 2 offers — gates the
+   *  per-element "Appears in" (offer-count) control. */
+  supportsDual: boolean;
   onEl: (patch: Partial<DocElement>) => void;
   onBox: (patch: Partial<DocLayoutBox>) => void;
   onClose: () => void;
@@ -4216,6 +4743,8 @@ function SelectionPanel({
   const typeLabel = el.type === 'text' ? 'Text' : el.type === 'image' ? 'Image' : el.type === 'logo' ? 'Logo' : el.type === 'background' ? 'Background' : 'Shape';
   const kindColor = KIND_COLOR[elementKind(el)];
   const [picking, setPicking] = useState(false);
+  // Field/offer/brand tokens a designer can drop into static text as {{key}}.
+  const insertableVars = contentSources.filter((o) => o.value.startsWith('field:'));
 
   return (
     <div
@@ -4256,13 +4785,27 @@ function SelectionPanel({
               </div>
             )}
             {content.mode === 'text-edit' && (
-              <textarea
-                value={content.value}
-                onChange={(e) => onContentChange(e.target.value)}
-                rows={2}
-                placeholder="Text"
-                className="w-full resize-y rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-              />
+              <>
+                {/* Variable-aware text: {{field}} tokens render as purple pills;
+                    typing {{ opens a field autocomplete. */}
+                <TokenTextArea value={content.value} onChange={onContentChange} options={insertableVars} placeholder="Text — type {{field}} to insert a live value" />
+                {insertableVars.length > 0 && (
+                  <div className="mt-1.5">
+                    <SearchableSelect
+                      value=""
+                      onChange={(v) => {
+                        const key = v.startsWith('field:') ? v.slice(6) : '';
+                        if (!key) return;
+                        const cur = content.value;
+                        onContentChange(`${cur}${cur && !/\s$/.test(cur) ? ' ' : ''}{{${key}}}`);
+                      }}
+                      options={insertableVars}
+                      placeholder="+ Insert field variable…"
+                      className="w-full"
+                    />
+                  </div>
+                )}
+              </>
             )}
             {content.mode === 'text-readonly' && (
               <>
@@ -4306,6 +4849,34 @@ function SelectionPanel({
                 )}
               </div>
             )}
+          </PanelSection>
+        )}
+
+        {/* Appears in — for templates where the client picks 1 or 2 offers, which
+            offer count(s) show this element. Chrome stays "Both"; offer-2 blocks
+            are "2 offers". Preview each with the canvas offer-count toggle. */}
+        {supportsDual && (
+          <PanelSection title="Appears in">
+            <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
+              {([['both', 'Both', undefined], ['1', 'Offer 1', [1]], ['2', 'Offer 2', [2]]] as const).map(
+                ([val, label, counts]) => {
+                  const cur = el.offerCounts && el.offerCounts.length === 1 ? String(el.offerCounts[0]) : 'both';
+                  const active = cur === val;
+                  return (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => onEl({ offerCounts: counts ? [...counts] : undefined })}
+                      className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                        active ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                },
+              )}
+            </div>
           </PanelSection>
         )}
 
@@ -4417,22 +4988,15 @@ function SelectionPanel({
 
             <PanelSection title="Color & spacing">
               <div className="space-y-2.5">
-                {/* Button color — the pill background behind a text/button element. */}
-                <div className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
-                  <span>Button color</span>
-                  {el.bg ? (
-                    <div className="flex items-center gap-2">
-                      <ColorSwatchInput title="Button color" value={el.bg !== 'brand' ? el.bg : '#4f46e5'} onChange={(v) => onEl({ bg: v })} />
-                      <BarBtn title="Remove button color" onClick={() => onEl({ bg: undefined })}>
-                        <XMarkIcon className="h-4 w-4" />
-                      </BarBtn>
-                    </div>
-                  ) : (
-                    <BarBtn title="Add a button background" onClick={() => onEl({ bg: '#000000', padding: el.padding ?? 14 })}>
-                      <span className="px-1 text-[10px] font-semibold leading-none">Add</span>
-                    </BarBtn>
-                  )}
-                </div>
+                {/* Button color — the pill background. Only a Button element (a
+                    text element WITH a background pill) exposes this; plain text
+                    does not. Make a button via Insert → Button. */}
+                {el.bg && (
+                  <div className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
+                    <span>Button color</span>
+                    <ColorSwatchInput title="Button color" value={el.bg !== 'brand' ? el.bg : '#4f46e5'} onChange={(v) => onEl({ bg: v })} />
+                  </div>
+                )}
                 <label className="flex items-center justify-between gap-2 text-xs text-[var(--muted-foreground)]">
                   <span>Text color</span>
                   <ColorSwatchInput title="Text color" value={el.color && el.color !== 'brand' ? el.color : '#4f46e5'} onChange={(v) => onEl({ color: v })} />

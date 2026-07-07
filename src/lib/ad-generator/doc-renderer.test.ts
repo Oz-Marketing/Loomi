@@ -176,6 +176,72 @@ describe('renderDoc', () => {
     expect(renderDoc(doc, { price: '$1' }, SIZE)).not.toContain('SHOULD-NOT-APPEAR');
   });
 
+  it('formats number-typed field values with thousands commas + interpolates {{tokens}}', () => {
+    const tDoc: TemplateDoc = {
+      ...doc,
+      fields: [{ key: 'dueAtSigning', label: 'Due', type: 'number' }],
+      elements: [
+        { id: 'due', type: 'text', binding: { kind: 'field', key: 'dueAtSigning' } },
+        { id: 'sentence', type: 'text', binding: { kind: 'static', value: 'With {{dueAtSigning}} due at signing' } },
+      ],
+      layouts: { square: { due: { x: 0, y: 0, w: 0.5, h: 0.1 }, sentence: { x: 0, y: 0.2, w: 1, h: 0.1 } } },
+    };
+    const html = renderDoc(tDoc, { dueAtSigning: '2999' }, SIZE);
+    expect(html).toContain('2,999'); // direct number binding grouped
+    expect(html).toContain('With 2,999 due at signing'); // token interpolated + grouped
+  });
+
+  it('leaves non-number fields ungrouped and drops unknown tokens', () => {
+    const tDoc: TemplateDoc = {
+      ...doc,
+      fields: [{ key: 'stock', label: 'Stock', type: 'text' }],
+      elements: [{ id: 't', type: 'text', binding: { kind: 'static', value: 'Stock {{stock}} / {{missing}}' } }],
+      layouts: { square: { t: { x: 0, y: 0, w: 1, h: 0.1 } } },
+    };
+    expect(renderDoc(tDoc, { stock: '4421' }, SIZE)).toContain('Stock 4421 / ');
+  });
+
+  it('filters offer-block elements by the ad offer count', () => {
+    const countDoc: TemplateDoc = {
+      ...doc,
+      elements: [
+        { id: 'o1', type: 'text', binding: { kind: 'static', value: 'OFFER-ONE' } }, // both (untagged)
+        { id: 'o2', type: 'text', binding: { kind: 'static', value: 'OFFER-TWO' }, offerCounts: [2] }, // 2 only
+        { id: 'single-only', type: 'text', binding: { kind: 'static', value: 'SOLO' }, offerCounts: [1] }, // 1 only
+      ],
+      layouts: {
+        square: {
+          o1: { x: 0, y: 0, w: 0.5, h: 0.1 },
+          o2: { x: 0.5, y: 0, w: 0.5, h: 0.1 },
+          'single-only': { x: 0, y: 0.2, w: 0.5, h: 0.1 },
+        },
+      },
+    };
+    // 1 offer: offer-2 block dropped, single-only shown.
+    const one = renderDoc(countDoc, { _offerCount: '1' }, SIZE);
+    expect(one).toContain('OFFER-ONE');
+    expect(one).not.toContain('OFFER-TWO');
+    expect(one).toContain('SOLO');
+    // 2 offers: both offer blocks shown, single-only dropped.
+    const two = renderDoc(countDoc, { _offerCount: '2' }, SIZE);
+    expect(two).toContain('OFFER-ONE');
+    expect(two).toContain('OFFER-TWO');
+    expect(two).not.toContain('SOLO');
+    // Preview keeps off-count elements (dimmed) so the designer can re-tag them.
+    const preview = renderDoc(countDoc, { _offerCount: '1' }, SIZE, { preview: true });
+    expect(preview).toContain('OFFER-TWO');
+  });
+
+  it('defaults an untagged o2_-bound element to the 2-offer count (legacy dual, no migration)', () => {
+    const legacyDoc: TemplateDoc = {
+      ...doc,
+      elements: [{ id: 'o2', type: 'text', binding: { kind: 'field', key: '_o2_offerMain' } }],
+      layouts: { square: { o2: { x: 0, y: 0, w: 0.5, h: 0.1 } } },
+    };
+    expect(renderDoc(legacyDoc, { _offerCount: '1', _o2_offerMain: 'X2' }, SIZE)).not.toContain('X2');
+    expect(renderDoc(legacyDoc, { _offerCount: '2', _o2_offerMain: 'X2' }, SIZE)).toContain('X2');
+  });
+
   it('renders the background gradient + accent bar', () => {
     expect(renderDoc(doc, {}, SIZE)).toContain('linear-gradient(135deg, #ffffff 0%, #eeeeee 100%)');
   });

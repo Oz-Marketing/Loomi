@@ -213,8 +213,11 @@ export default function AdGeneratorPage() {
     };
   }, [accountKey, customFonts.length]);
   // Page-level @font-face so the dropdown can preview the custom families.
+  // URL faces + embedded faces (embedded last so it wins where present). Per-font
+  // fallback: a font the server can't embed still renders via its URL rather than
+  // being dropped when the admin roll-up embeds many other accounts' fonts.
   const pageFontFaceCss = useMemo(
-    () => embeddedFontCss || buildFontFaceCssFromUrls(customFonts),
+    () => [buildFontFaceCssFromUrls(customFonts), embeddedFontCss].filter(Boolean).join('\n'),
     [embeddedFontCss, customFonts],
   );
 

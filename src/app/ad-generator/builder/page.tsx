@@ -4772,7 +4772,8 @@ function FieldsSidebar({
   onDelete: (i: number) => void;
   onSetDefault: (i: number, val: string) => void;
 }) {
-  const [expanded, setExpanded] = useState<number | null>(fields.length ? 0 : null);
+  // All field rows start collapsed — the designer opens the one they want.
+  const [expanded, setExpanded] = useState<number | null>(null);
   // Group fields by their `group` (Vehicle / Offer / Legal / …) so a long kit
   // (24–44 fields) reads as a few collapsible sections instead of a wall. Each
   // entry keeps its original flat index so the index-based handlers still hit

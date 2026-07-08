@@ -84,7 +84,6 @@ import { singleOfferDoc, dualOfferDoc } from '@/lib/ad-generator/templates/offer
 import { blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { DatePicker, type DateRange } from '@/components/ui/date-picker';
 import { MultiSelect } from '@/components/ui/multi-select';
-import { CategoryEditorPopover } from '@/components/templates/taxonomy-controls';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
@@ -646,20 +645,21 @@ export default function AdBuilderPage() {
   const [addSizeOpen, setAddSizeOpen] = useState(false);
   // Sizes popover on the canvas action bar (replaces the old left-rail Sizes panel).
   const [sizesOpen, setSizesOpen] = useState(false);
-  // Template settings popover in the header cog (Category + Industries + Save as new).
+  // Template settings popover in the header cog (Industries + Second offer + Save as new).
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [categoryOpen, setCategoryOpen] = useState(false);
-  const categoryPopRef = useRef<HTMLDivElement | null>(null);
-  // Category → starter field-set registry (designer-managed; "Vehicle Offer"
-  // ships seeded with the offer question set). Drives the Category picker's
-  // options + seeding a category's fields when picked.
-  type CategoryStarter = { name: string; fields: FieldSpec[]; defaults: Record<string, string> };
-  const [categoryStarters, setCategoryStarters] = useState<CategoryStarter[]>([]);
+  // Field PRESETS — a designer-managed registry of reusable field-sets (fields +
+  // sections + defaults). Applying one seeds its fields (merge-missing) into the
+  // current template; "Save current fields as a preset" upserts one. Lives in the
+  // Fields sidebar (not tied to the library Category). "Vehicle Offer" ships
+  // seeded with the offer question set. (Backed by the AdCategoryStarter table /
+  // category-starters API — the store predates the "preset" rename.)
+  type Preset = { name: string; fields: FieldSpec[]; defaults: Record<string, string> };
+  const [presets, setPresets] = useState<Preset[]>([]);
   useEffect(() => {
     fetch('/api/ad-generator/category-starters')
       .then((r) => (r.ok ? r.json() : { starters: [] }))
-      .then((j: { starters?: CategoryStarter[] }) => setCategoryStarters(j.starters ?? []))
-      .catch(() => setCategoryStarters([]));
+      .then((j: { starters?: Preset[] }) => setPresets(j.starters ?? []))
+      .catch(() => setPresets([]));
   }, []);
   // Publish popover — Draft / live-now / scheduled window.
   const [publishOpen, setPublishOpen] = useState(false);
@@ -1865,35 +1865,37 @@ export default function AdBuilderPage() {
       toast('Second offer disabled');
     }
   };
-  // Set the template's Category and — if that category has a starter field set —
-  // seed its fields (merge-missing, never overwrites the designer's fields). This
-  // is how "Vehicle Offer" fills the offer questions; other categories seed
-  // whatever starter a designer has saved for them (or nothing).
-  const applyCategory = (name: string | null) => {
-    const starter = name ? categoryStarters.find((s) => s.name === name) : null;
+  // Apply a preset: seed its fields (merge-missing, never overwrites the
+  // designer's fields) + defaults into the current template. This is how
+  // "Vehicle Offer" fills the offer questions. Not tied to the library Category.
+  const applyPreset = (name: string) => {
+    const preset = presets.find((s) => s.name === name);
+    if (!preset?.fields?.length) return;
     setDoc((prev) => {
-      const next: TemplateDoc = { ...prev, category: name ?? undefined };
-      if (starter?.fields?.length) {
-        const have = new Set(prev.fields.map((f) => f.key));
-        const add = starter.fields.filter((f) => !have.has(f.key));
-        if (add.length) next.fields = [...prev.fields, ...add];
-        const defaults = { ...prev.defaults };
-        for (const [k, v] of Object.entries(starter.defaults ?? {})) if (!(k in defaults)) defaults[k] = v;
-        next.defaults = defaults;
-      }
+      const next: TemplateDoc = { ...prev };
+      const have = new Set(prev.fields.map((f) => f.key));
+      const add = preset.fields.filter((f) => !have.has(f.key));
+      if (add.length) next.fields = [...prev.fields, ...add];
+      const defaults = { ...prev.defaults };
+      for (const [k, v] of Object.entries(preset.defaults ?? {})) if (!(k in defaults)) defaults[k] = v;
+      next.defaults = defaults;
       return next;
-    }, 'category');
-    if (starter?.fields?.length) toast.success(`Seeded ${starter.name} fields`);
-    setCategoryOpen(false);
+    }, 'preset');
+    toast.success(`Applied “${name}” preset`);
   };
-  // Save the current template's fields as the starter for its category, so future
-  // templates in that category start pre-filled. Designer-managed; managers only.
-  const saveCategoryStarter = async () => {
-    const name = doc.category?.trim();
-    if (!name) {
-      toast.error('Pick a category first');
-      return;
-    }
+  // Save the current template's fields (+ defaults) as a reusable, named preset.
+  // Designer-managed; managers only (the POST route enforces the role).
+  const savePreset = async () => {
+    const name = (
+      await prompt({
+        title: 'Save preset',
+        message: 'Save the current fields and their sections/defaults as a reusable preset you can apply to any template.',
+        placeholder: 'Preset name (e.g. Vehicle Offer)',
+        confirmLabel: 'Save preset',
+        required: true,
+      })
+    )?.trim();
+    if (!name) return;
     try {
       const res = await fetch('/api/ad-generator/category-starters', {
         method: 'POST',
@@ -1901,13 +1903,13 @@ export default function AdBuilderPage() {
         body: JSON.stringify({ name, fields: doc.fields, defaults: doc.defaults }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
-      setCategoryStarters((prev) => {
+      setPresets((prev) => {
         const rest = prev.filter((s) => s.name !== name);
         return [...rest, { name, fields: doc.fields, defaults: doc.defaults }].sort((a, b) => a.name.localeCompare(b.name));
       });
-      toast.success(`Saved as the "${name}" starter`);
+      toast.success(`Saved “${name}” preset`);
     } catch (err) {
-      toast.error(`Couldn't save starter: ${err instanceof Error ? err.message : 'unknown error'}`);
+      toast.error(`Couldn't save preset: ${err instanceof Error ? err.message : 'unknown error'}`);
     }
   };
   const updateFieldAt = (i: number, patch: Partial<FieldSpec>) => {
@@ -3128,45 +3130,6 @@ export default function AdBuilderPage() {
                 <>
                   <div className="fixed inset-0 z-[90]" onClick={() => setSettingsOpen(false)} />
                   <div className="absolute right-0 top-11 z-[100] w-72 max-w-[calc(100vw-2rem)] rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl">
-                    {/* Category — free-form (shared taxonomy). A category can carry a
-                        starter field set; picking it seeds those fields. "Vehicle
-                        Offer" ships seeded with the offer questions. */}
-                    <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Category</h3>
-                    <p className="mb-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
-                      Picking a category with a saved starter fills in its fields (e.g. “Vehicle Offer” seeds the offer questions).
-                    </p>
-                    <div className="relative mb-2">
-                      <button
-                        type="button"
-                        onClick={() => setCategoryOpen((v) => !v)}
-                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--foreground)] transition-colors hover:border-[var(--primary)]"
-                      >
-                        <span className={doc.category ? '' : 'text-[var(--muted-foreground)]'}>{doc.category || 'No category'}</span>
-                        <ChevronDownIcon className="h-4 w-4 shrink-0 text-[var(--muted-foreground)]" />
-                      </button>
-                      {categoryOpen && (
-                        <CategoryEditorPopover
-                          popoverRef={categoryPopRef}
-                          allCategories={[...new Set([...categoryStarters.map((s) => s.name), ...(doc.category ? [doc.category] : [])])].sort()}
-                          current={doc.category ?? null}
-                          onSelect={(cat) => applyCategory(cat)}
-                          onCreate={(cat) => applyCategory(cat)}
-                          onClear={() => applyCategory(null)}
-                        />
-                      )}
-                    </div>
-                    {doc.category && (
-                      <button
-                        type="button"
-                        onClick={saveCategoryStarter}
-                        className="mb-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-                        title={`Save this template's fields as the default starter for "${doc.category}"`}
-                      >
-                        <BookmarkSquareIcon className="h-3.5 w-3.5" />
-                        Save fields as “{doc.category}” starter
-                      </button>
-                    )}
-                    <div className="mb-3 border-t border-[var(--border)]" />
                     <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Industries</h3>
                     <p className="mb-3 text-[11px] leading-snug text-[var(--muted-foreground)]">
                       Which accounts can use this template. None selected → only vehicle-offer accounts (Automotive, Powersports).
@@ -4217,6 +4180,9 @@ export default function AdBuilderPage() {
                   onDeleteGroup={deleteFieldGroup}
                   onMoveGroup={moveFieldGroup}
                   onMoveField={moveFieldToGroup}
+                  presets={presets.map((p) => p.name)}
+                  onApplyPreset={applyPreset}
+                  onSavePreset={savePreset}
                 />
               )}
 
@@ -4889,6 +4855,9 @@ function FieldsSidebar({
   onDeleteGroup,
   onMoveGroup,
   onMoveField,
+  presets,
+  onApplyPreset,
+  onSavePreset,
 }: {
   fields: FieldSpec[];
   /** Ordered, designer-defined group names (may include empty groups). */
@@ -4896,6 +4865,10 @@ function FieldsSidebar({
   defaults: Record<string, string>;
   accountKey?: string;
   brandLogos: { key: string; label: string; url: string }[];
+  /** Reusable field-set presets — names only; apply seeds fields, save upserts. */
+  presets: string[];
+  onApplyPreset: (name: string) => void;
+  onSavePreset: () => void;
   /** In the 1-offer view, hide the second-offer (`o2_`) fields so the panel only
    *  shows the fields relevant to the layout you're editing. */
   hideSecondOffer: boolean;
@@ -4916,6 +4889,15 @@ function FieldsSidebar({
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  // Presets popover (the header cog) — apply a saved field-set or save this one.
+  const [presetsOpen, setPresetsOpen] = useState(false);
+  const presetsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!presetsOpen) return;
+    const h = (e: MouseEvent) => { if (!presetsRef.current?.contains(e.target as Node)) setPresetsOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [presetsOpen]);
   // Drag source is tracked in refs (read synchronously in onDrop, unaffected by
   // React's async state) + mirrored to state for the drag visual.
   const [dragGroup, setDragGroup] = useState<number | null>(null);
@@ -5031,15 +5013,61 @@ function FieldsSidebar({
   return (
     // Left-docked panel inside the canvas — the form that drives the ad stays
     // open beside the canvas while you design.
-    <div data-adgen-panel className="absolute left-4 top-4 bottom-4 z-[70] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl">
+    <div data-adgen-panel className="absolute left-4 top-4 bottom-4 z-[70] flex w-[400px] max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl">
       <div className="flex items-start justify-between gap-2 border-b border-[var(--border)] p-4">
-        <div>
+        <div className="min-w-0">
           <h2 className="text-sm font-bold text-[var(--foreground)]">Template fields</h2>
           <p className="text-xs text-[var(--muted-foreground)]">The form users fill — organize them into sections that carry to the client form.</p>
         </div>
-        <button onClick={onClose} title="Close" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
-          <XMarkIcon className="h-5 w-5" />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {/* Presets — apply a saved field-set to this template, or save the
+              current fields as a reusable preset. */}
+          <div ref={presetsRef} className="relative">
+            <button
+              onClick={() => setPresetsOpen((v) => !v)}
+              title="Field presets"
+              aria-pressed={presetsOpen}
+              className={`rounded-md p-1 transition-colors ${presetsOpen ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
+            >
+              <Cog6ToothIcon className="h-5 w-5" />
+            </button>
+            {presetsOpen && (
+              <div className="absolute right-0 top-full z-[95] mt-1 w-64 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-2 shadow-2xl backdrop-blur-2xl">
+                <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">Apply a preset</p>
+                <p className="px-2 pb-1.5 text-[11px] leading-snug text-[var(--muted-foreground)]">Fills in a saved set of fields + sections (e.g. Vehicle Offer). Won’t overwrite fields you already have.</p>
+                <div className="max-h-56 overflow-y-auto">
+                  {presets.length === 0 ? (
+                    <p className="px-2 py-2 text-[11px] italic text-[var(--muted-foreground)]">No presets saved yet.</p>
+                  ) : (
+                    presets.map((name) => (
+                      <button
+                        key={name}
+                        onClick={() => { onApplyPreset(name); setPresetsOpen(false); }}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                      >
+                        <RectangleStackIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)]" />
+                        <span className="truncate">{name}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+                <div className="my-1.5 border-t border-[var(--border)]" />
+                <button
+                  onClick={() => { onSavePreset(); setPresetsOpen(false); }}
+                  disabled={fields.length === 0}
+                  title={fields.length === 0 ? 'Add some fields first' : 'Save the current fields as a reusable preset'}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/10 disabled:opacity-40"
+                >
+                  <BookmarkSquareIcon className="h-3.5 w-3.5 shrink-0" />
+                  Save current fields as a preset…
+                </button>
+              </div>
+            )}
+          </div>
+          <button onClick={onClose} title="Close" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
       </div>
       <div ref={flipRef} className="flex-1 space-y-2 overflow-y-auto p-4">
         {orderedNames.map((group, gi) => {

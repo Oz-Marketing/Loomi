@@ -585,12 +585,19 @@ export default function AdBuilderPage() {
   const { doc, setDoc, undo, redo, canUndo, canRedo, reset: resetHistory } = useDocHistory(() => blankTemplateDoc('tmpl-blank', 'Untitled template'));
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // The group the user has "drilled into" via double-click (Figma-style): while
+  // set, clicks act on individual members of this group instead of selecting the
+  // whole group as a unit. Cleared when the selection leaves the group.
+  const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null);
   // Marquee (drag-to-select) rectangle in canvas fractions, while dragging the backdrop.
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   // Live boxes for a group (multi-select) drag, keyed by element id.
   const [groupLive, setGroupLive] = useState<Record<string, DocLayoutBox> | null>(null);
   const selectOne = useCallback((id: string) => setSelectedIds([id]), []);
-  const clearSelection = useCallback(() => setSelectedIds([]), []);
+  const clearSelection = useCallback(() => {
+    setSelectedIds([]);
+    setFocusedGroupId(null);
+  }, []);
   const toggleSelect = useCallback((id: string) => setSelectedIds((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id])), []);
   const [showOutlines, setShowOutlines] = useState(true);
   // Multi-artboard: when on, every *checked* size is laid out together on the
@@ -1040,6 +1047,13 @@ export default function AdBuilderPage() {
     (gid: string) => doc.elements.filter((e) => ancestorChain(e.id).includes(gid)).map((e) => e.id),
     [doc.elements, ancestorChain],
   );
+  // Leaving the drilled-into group (selecting something outside it, or clearing)
+  // exits that group so the next click selects a whole group again.
+  useEffect(() => {
+    if (!focusedGroupId) return;
+    const stillInside = selectedIds.length > 0 && selectedIds.every((id) => ancestorChain(id).includes(focusedGroupId));
+    if (!stillInside) setFocusedGroupId(null);
+  }, [selectedIds, focusedGroupId, ancestorChain]);
 
   // The multi-selection "is a group" when it's exactly one group's full leaf set
   // — drives the Group ↔ Ungroup toggle in the selection toolbar.
@@ -2797,22 +2811,34 @@ export default function AdBuilderPage() {
       startBgPan(e, bgImageId);
       return;
     }
-    // A grouped element selects (and drags) its OUTERMOST group as a unit
-    // (double-click drills into the element). Nested groups → top-level group.
+    // A deliberate multi-selection wins: pressing any of its members drags the
+    // whole set together, even when some members are grouped (otherwise the
+    // group-collapse branch below would shrink the selection to one group).
+    if (selectedIds.length > 1 && selectedIds.includes(elId)) {
+      startGroupDrag(e);
+      return;
+    }
     const chain = ancestorChain(elId);
     const outer = chain[chain.length - 1];
+    // Drilled into this element's group (double-click): act on the individual
+    // member — select and drag just it, don't re-collapse to the whole group.
+    if (focusedGroupId && chain.includes(focusedGroupId)) {
+      selectOne(elId);
+      startSingleDrag(e, elId, 'move');
+      return;
+    }
+    // A grouped element (not drilled in) selects (and drags) its OUTERMOST group
+    // as a unit — double-click drills into it. Nested groups → top-level group.
     if (outer) {
       const members = membersOf(outer).filter((id) => !lockedIds.has(id));
       if (members.length > 1) {
+        setFocusedGroupId(null);
         setSelectedIds(members);
         startGroupDrag(e, members);
         return;
       }
     }
-    if (selectedIds.length > 1 && selectedIds.includes(elId)) {
-      startGroupDrag(e);
-      return;
-    }
+    setFocusedGroupId(null);
     selectOne(elId);
     startSingleDrag(e, elId, 'move');
   }
@@ -3776,7 +3802,20 @@ export default function AdBuilderPage() {
                         onPointerDown={(e) => onBoxPointerDown(e, el.id)}
                         onContextMenu={(e) => openCanvasMenu(e, el.id)}
                         onDoubleClick={(e) => {
-                          // Editable text: double-click to edit its value inline.
+                          const chain = ancestorChain(el.id);
+                          const inFocusedGroup = focusedGroupId ? chain.includes(focusedGroupId) : false;
+                          // First double-click on a grouped element: drill INTO the
+                          // group and select just this member, so you can act on it.
+                          // (Editing its text takes a second double-click, once we're
+                          // already drilled in — matching Figma/Canva.)
+                          if (el.groupId && !lockedIds.has(el.id) && !inFocusedGroup) {
+                            e.stopPropagation();
+                            setFocusedGroupId(chain[0] ?? el.groupId);
+                            selectOne(el.id);
+                            return;
+                          }
+                          // Editable text: edit its value inline. Reached for ungrouped
+                          // text directly, or for a grouped child we've drilled into.
                           if (textEditTarget(el)) {
                             e.stopPropagation();
                             startTextEdit(el.id);
@@ -3789,11 +3828,6 @@ export default function AdBuilderPage() {
                             e.stopPropagation();
                             toast('This text is generated from the offer fields — edit those in the Fields panel.');
                             return;
-                          }
-                          // Otherwise drill into a group: select just this member.
-                          if (el.groupId && !lockedIds.has(el.id)) {
-                            e.stopPropagation();
-                            selectOne(el.id);
                           }
                         }}
                         title={detached ? `${elName(el)} (detached — drag onto the artboard to add)` : box.hidden ? `${elName(el)} (hidden here)` : elName(el)}

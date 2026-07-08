@@ -2123,16 +2123,6 @@ export default function AdBuilderPage() {
 
   // ── industries (which accounts this template is offered to) ──
   const allIndustries = useIndustries();
-  const toggleIndustry = useCallback(
-    (name: string) => {
-      setDoc((prev) => {
-        const cur = prev.industries ?? [];
-        const next = cur.includes(name) ? cur.filter((i) => i !== name) : [...cur, name];
-        return { ...prev, industries: next };
-      });
-    },
-    [setDoc],
-  );
 
   // ── save / load ──
   async function save(asNew = false) {
@@ -3067,24 +3057,13 @@ export default function AdBuilderPage() {
                     <p className="mb-3 text-[11px] leading-snug text-[var(--muted-foreground)]">
                       Which accounts can use this template. None selected → only vehicle-offer accounts (Automotive, Powersports).
                     </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {allIndustries.map((name) => {
-                        const on = (doc.industries ?? []).includes(name);
-                        return (
-                          <button
-                            key={name}
-                            onClick={() => toggleIndustry(name)}
-                            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                              on
-                                ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
-                                : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
-                            }`}
-                          >
-                            {name}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    <MultiSelect
+                      value={doc.industries ?? []}
+                      onChange={(vals) => setDoc((prev) => ({ ...prev, industries: vals }), 'industries')}
+                      options={allIndustries.map((name) => ({ value: name, label: name }))}
+                      placeholder="All vehicle-offer accounts"
+                      menuZIndex={260}
+                    />
                     <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign tags on the template card in the Templates library.</p>
 
                     {/* Second offer — lets the client choose 1 or 2 offers. Enabling
@@ -3094,7 +3073,7 @@ export default function AdBuilderPage() {
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0">
                           <p className="text-xs font-medium text-[var(--foreground)]">Second offer</p>
-                          <p className="mt-0.5 text-[11px] leading-snug text-[var(--muted-foreground)]">Let the client choose 1 or 2 offers.</p>
+                          <p className="mt-0.5 text-[11px] leading-snug text-[var(--muted-foreground)]">Allows the client to use 2 offers in 1 template.</p>
                         </div>
                         <button
                           type="button"
@@ -3126,8 +3105,9 @@ export default function AdBuilderPage() {
                             setSettingsOpen(false);
                           }}
                           disabled={saving}
-                          className="w-full rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-50"
+                          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-50"
                         >
+                          <BookmarkSquareIcon className="h-4 w-4" />
                           Save as new
                         </button>
                       )}
@@ -4102,25 +4082,27 @@ export default function AdBuilderPage() {
                 />
               )}
 
+              {/* Template Fields — left-docked inside the canvas (mirrors the
+                  right settings panel), so both can be open at once. */}
+              {fieldsOpen && (
+                <FieldsSidebar
+                  fields={doc.fields}
+                  defaults={doc.defaults}
+                  accountKey={accountKey ?? undefined}
+                  brandLogos={brandLogos}
+                  hideSecondOffer={supportsDual && previewCount === 1}
+                  onClose={() => setFieldsOpen(false)}
+                  onAdd={addField}
+                  onUpdate={updateFieldAt}
+                  onRename={renameFieldKeyAt}
+                  onDelete={deleteFieldAt}
+                  onSetDefault={setDefaultAt}
+                />
+              )}
+
             </div>
         </div>
       </div>
-
-      {fieldsOpen && (
-        <FieldsSidebar
-          fields={doc.fields}
-          defaults={doc.defaults}
-          accountKey={accountKey ?? undefined}
-          brandLogos={brandLogos}
-          hideSecondOffer={supportsDual && previewCount === 1}
-          onClose={() => setFieldsOpen(false)}
-          onAdd={addField}
-          onUpdate={updateFieldAt}
-          onRename={renameFieldKeyAt}
-          onDelete={deleteFieldAt}
-          onSetDefault={setDefaultAt}
-        />
-      )}
 
       {/* Sizes — a centered modal (switch / add / remove / copy layout), opened
           from the canvas action bar. Backdrop click closes it. */}
@@ -4631,7 +4613,7 @@ function FieldsSidebar({
   return (
     // Floating right-docked sidebar (no modal / backdrop) — the form that drives
     // the ad stays open beside the canvas while you design.
-    <div data-adgen-panel className="fixed left-16 top-20 bottom-4 z-40 flex w-[340px] max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl">
+    <div data-adgen-panel className="absolute left-4 top-4 bottom-4 z-[70] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl">
       <div className="flex items-start justify-between gap-2 border-b border-[var(--border)] p-4">
         <div>
           <h2 className="text-sm font-bold text-[var(--foreground)]">Template fields</h2>

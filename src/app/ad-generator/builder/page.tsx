@@ -67,6 +67,7 @@ import {
   CalendarDaysIcon,
   ChevronUpDownIcon,
   FolderArrowDownIcon,
+  ArrowUpRightIcon,
 } from '@heroicons/react/24/outline';
 import { BranchIcon } from '@/components/icons/branch';
 import { useAccount } from '@/contexts/account-context';
@@ -329,6 +330,15 @@ const AUDIENCE_OPTIONS: FontSelectOption[] = [
   { value: 'client', label: 'Client' },
   { value: 'internal', label: 'Internal (you only)' },
 ];
+// The subaccount branding-color slots surfaced as quick-pick swatches in every
+// color popover (only those actually set on the account show).
+const BRAND_COLOR_KEYS = [
+  { key: 'primary', label: 'Primary' },
+  { key: 'secondary', label: 'Secondary' },
+  { key: 'accent', label: 'Accent' },
+  { key: 'background', label: 'Background' },
+  { key: 'text', label: 'Text' },
+] as const;
 // The catch-all form section. A field with no explicit group resolves here, so
 // no field is ever "ungrouped"; it's a normal renamable/deletable section.
 const DEFAULT_GROUP = 'General';
@@ -6548,12 +6558,89 @@ function BarBtn({
   );
 }
 
+/** A color picker that opens a small popover: the subaccount's BRAND colors as
+ *  one-click swatches (only when inside a subaccount — an admin/no-account view
+ *  shows none), a custom color input + hex field, and a quick "Edit brand
+ *  colors" link that opens the subaccount's branding settings in a new tab.
+ *  Used by every color control (fill, background, text, button, gradient stops)
+ *  so brand colors are one click away wherever a color is set. */
 function ColorSwatchInput({ title, value, onChange }: { title: string; value: string; onChange: (v: string) => void }) {
+  const { accountData, accountKey } = useAccount();
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t) || popRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onScroll = () => setOpen(false);
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('scroll', onScroll, true);
+    return () => { document.removeEventListener('mousedown', onDown); window.removeEventListener('scroll', onScroll, true); };
+  }, [open]);
+  // Brand colors only in a subaccount (accountKey set); admin/no-account = none.
+  const palette = (accountKey ? accountData?.branding?.colors : undefined) as Record<string, string | undefined> | undefined;
+  const brandSwatches = BRAND_COLOR_KEYS
+    .map((k) => ({ key: k.key as string, label: k.label as string, value: palette?.[k.key] }))
+    .filter((c): c is { key: string; label: string; value: string } => !!c.value);
+  const editHref = accountKey ? `/settings/subaccounts/${encodeURIComponent(accountKey)}?tab=branding` : null;
+  const toggle = () => {
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) setPos({ top: r.bottom + 6, left: Math.max(8, Math.min(r.left, window.innerWidth - 224)) });
+    setOpen((v) => !v);
+  };
   return (
-    <label title={title} className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md hover:bg-[var(--muted)]">
-      <span className="h-4 w-4 rounded-full border border-[var(--border)]" style={{ background: value }} />
-      <input type="color" value={value} onChange={(e) => onChange(e.target.value)} className="sr-only" />
-    </label>
+    <>
+      <button ref={btnRef} type="button" title={title} onClick={toggle} className="inline-flex h-8 w-8 items-center justify-center rounded-md hover:bg-[var(--muted)]">
+        <span className="h-4 w-4 rounded-full border border-[var(--border)]" style={{ background: value }} />
+      </button>
+      {open && pos && createPortal(
+        <div ref={popRef} style={{ top: pos.top, left: pos.left }} className="fixed z-[200] w-52 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-3 shadow-2xl backdrop-blur-2xl">
+          {brandSwatches.length > 0 && (
+            <div className="mb-3">
+              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">Brand colors</p>
+              <div className="flex flex-wrap gap-1.5">
+                {brandSwatches.map((c) => (
+                  <button
+                    key={c.key}
+                    type="button"
+                    title={`${c.label} · ${c.value}`}
+                    onClick={() => { onChange(c.value); setOpen(false); }}
+                    className={`h-7 w-7 rounded-full border transition-transform hover:scale-110 ${c.value.toLowerCase() === value.toLowerCase() ? 'ring-2 ring-[var(--primary)] ring-offset-2 ring-offset-[var(--card-strong)]' : 'border-[var(--border)]'}`}
+                    style={{ background: c.value }}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">Custom</p>
+          <div className="flex items-center gap-2">
+            <label title="Pick a custom color" className="relative inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md border border-[var(--border)]">
+              <span className="h-4 w-4 rounded-full" style={{ background: value }} />
+              <input type="color" value={/^#[0-9a-fA-F]{6}$/.test(value) ? value : '#000000'} onChange={(e) => onChange(e.target.value)} className="sr-only" />
+            </label>
+            <input
+              type="text"
+              value={value}
+              placeholder="#000000"
+              onChange={(e) => onChange(e.target.value)}
+              className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+            />
+          </div>
+          {editHref && (
+            <a href={editHref} target="_blank" rel="noopener noreferrer" className="mt-3 flex items-center gap-1 text-[11px] font-medium text-[var(--primary)] transition-opacity hover:opacity-80">
+              Edit brand colors
+              <ArrowUpRightIcon className="h-3 w-3" />
+            </a>
+          )}
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 

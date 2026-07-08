@@ -1,7 +1,6 @@
 import type { AdData, AdSize } from './types';
 import type { TemplateDoc, DocElement, DocLayoutBox, Binding, GradientFill } from './doc-types';
 import { cssSafeFamily } from './fonts';
-import { elementShownForCount } from './offer-count';
 
 /**
  * The data-driven renderer: interprets a TemplateDoc into a full HTML document
@@ -227,11 +226,9 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   const { width, height, brand, brandStack } = ctx;
   // data-el-id lets the builder find + move this node live during a drag.
   const idAttr = ` data-el-id="${esc(el.id)}"`;
-  // In the builder, a hidden element — or an offer-block element that isn't part
-  // of the currently-previewed offer count — is dimmed/blurred (still visible so
-  // it can be selected/re-tagged) rather than removed; on export it's omitted.
-  const dim =
-    ctx.preview && (box.hidden || !elementShownForCount(el, data)) ? 'opacity:0.35;filter:blur(1.5px);' : '';
+  // In the builder, a hidden element is dimmed/blurred (still visible so it can
+  // be selected) rather than removed; on export it's omitted.
+  const dim = ctx.preview && box.hidden ? 'opacity:0.35;filter:blur(1.5px);' : '';
   // Element-level compositing: opacity (any type) + blend mode. When dimmed in
   // preview, the dim opacity wins so "hidden" stays legible; blend still applies.
   const opacityFx = el.opacity != null && el.opacity < 100 ? `opacity:${clamp01(el.opacity / 100)};` : '';
@@ -394,14 +391,10 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
     // Keep hidden elements in PREVIEW (dimmed); drop them on export. Elements
     // dragged fully off the artboard are "detached" (a canvas-only parking spot
     // in the builder) — never part of the rendered ad, so drop them here too.
-    // Offer-block elements that don't match the ad's offer count are likewise
-    // kept-but-dimmed in preview (so the designer can select/re-tag them) and
-    // dropped on export.
     .filter(
       (x): x is { el: DocElement; box: DocLayoutBox } =>
         Boolean(x.box) &&
         (ctx.preview || !x.box!.hidden) &&
-        (ctx.preview || elementShownForCount(x.el, data)) &&
         !isBoxDetached(x.box!),
     )
     .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0))

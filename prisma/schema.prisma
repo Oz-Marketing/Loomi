@@ -2198,6 +2198,22 @@ model AdBlock {
   @@index([accountKey])
 }
 
+// A template Category's optional STARTER field set. Picking a category in the ad
+// builder seeds these fields into the template (merge-missing). Designer-managed
+// ("Save current fields as this category's starter") — NOT hardcoded. "Vehicle
+// Offer" is seeded with the offer question set; other categories start blank
+// until someone saves a starter for them. Global (shared taxonomy, no account).
+model AdCategoryStarter {
+  id            String   @id @default(cuid())
+  name          String   @unique // category name, e.g. "Vehicle Offer"
+  fields        String   @db.Text // JSON FieldSpec[]
+  defaults      String   @db.Text // JSON AdData (starter default / preview values)
+  createdBy     String?
+  createdByName String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
 // ─────────────────────────────────────────────────────
 // Ad Generator — ad size library
 // ─────────────────────────────────────────────────────

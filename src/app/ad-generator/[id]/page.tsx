@@ -34,10 +34,9 @@ import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { availableCustomFonts, buildFontFaceCssFromUrls, usedFontFamilies } from '@/lib/ad-generator/fonts';
 import { googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
-import { isFieldVisible, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
+import { isFieldVisible, isClientField, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
 import { composeDisclaimer } from '@/lib/ad-generator/disclaimer';
 import { missingRequired, type OemOfferRule } from '@/lib/ad-generator/compliance';
-import { effectiveOfferCount } from '@/lib/ad-generator/offer-count';
 import type { EvoxVehicle, EvoxColor } from '@/lib/integrations/evox';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
 
@@ -315,19 +314,11 @@ export default function AdGeneratorPage() {
   );
   const showAutomotiveTools = isVehicleAccount && isVehicleOffer;
 
-  // Dual-offer templates carry o2_ fields. Reps choose whether the two offers
-  // are on the SAME model (Offer 2 reuses Offer 1's vehicle) or TWO models.
+  // A template shows two offers when it carries o2_ fields (a "dual" template) —
+  // that's a property of the template's design, not a client choice. Reps only
+  // choose whether the two offers are on the SAME model (Offer 2 reuses Offer 1's
+  // vehicle) or TWO models. (One-offer vs two-offer is now separate templates.)
   const isDual = useMemo(() => template.fields.some((f) => f.key.startsWith('o2_')), [template]);
-  // When the template opts in (`allowOfferCountChoice`), the CLIENT chooses 1 or
-  // 2 offers — written to `data._offerCount`, honored by the renderer. Otherwise
-  // the count is fixed (legacy dual = always 2, single = 1). `effectiveOfferCount`
-  // resolves `_offerCount` (or infers from o2 data for pre-feature ads).
-  const supportsOfferCountChoice = Boolean(template.allowOfferCountChoice);
-  const offerCount = useMemo(
-    () => (supportsOfferCountChoice ? effectiveOfferCount(data) : isDual ? 2 : 1),
-    [supportsOfferCountChoice, isDual, data],
-  );
-  const setOfferCount = (n: 1 | 2) => setData((d) => ({ ...d, _offerCount: String(n) }));
   const [dualVehicleMode, setDualVehicleMode] = useState<'same' | 'two'>('same');
   // Offer sourcing: pull from OEM incentives (MarketCheck) or enter manually.
   const [offerSource, setOfferSource] = useState<'oem' | 'manual'>('oem');
@@ -399,8 +390,12 @@ export default function AdGeneratorPage() {
       if (!m.has(g)) m.set(g, []);
       m.get(g)!.push(f);
     }
-    return [...m.entries()];
-  }, [template, data]);
+    // Order sections by the template's designer-defined group order so the
+    // client form matches the builder; any extra groups keep first-seen order.
+    const order = docSnapshot?.fieldGroups ?? [];
+    const rank = (g: string) => { const i = order.indexOf(g); return i < 0 ? order.length + 1 : i; };
+    return [...m.entries()].sort((a, b) => rank(a[0]) - rank(b[0]));
+  }, [template, data, docSnapshot]);
 
   const set = (key: string, value: string) => setData((d) => ({ ...d, [key]: value }));
 
@@ -600,28 +595,8 @@ export default function AdGeneratorPage() {
                 ))}
               </div>
 
-              {/* Offer count — the client chooses 1 or 2 offers (opt-in templates). */}
-              {supportsOfferCountChoice && (
-                <div className="mb-4 flex items-center justify-between gap-2 rounded-lg bg-[var(--muted)]/40 px-3 py-2">
-                  <span className="text-xs font-medium text-[var(--foreground)]">Offers in this ad</span>
-                  <div className="inline-flex items-center gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--background)] p-0.5">
-                    {([1, 2] as const).map((n) => (
-                      <button
-                        key={n}
-                        onClick={() => setOfferCount(n)}
-                        className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                          offerCount === n ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                        }`}
-                      >
-                        {n} offer{n === 1 ? '' : 's'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               {/* Dual-offer structure — a distinct config row (not another pill pair). */}
-              {isDual && offerCount === 2 && (
+              {isDual && (
                 <div className="mb-4 flex items-center justify-between gap-2 rounded-lg bg-[var(--muted)]/40 px-3 py-2">
                   <span className="text-xs font-medium text-[var(--foreground)]">The two offers are on</span>
                   <div className="inline-flex items-center gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--background)] p-0.5">
@@ -644,7 +619,7 @@ export default function AdGeneratorPage() {
                 <OemIncentivesPanel
                   defaultMake={oemMake}
                   defaultZip={accountData?.postalCode}
-                  dual={isDual && offerCount === 2}
+                  dual={isDual}
                   dualVehicleMode={dualVehicleMode}
                   accountKey={accountKey ?? undefined}
                   onApply={(patch) => setData((d) => ({ ...d, ...patch }))}
@@ -748,31 +723,26 @@ export default function AdGeneratorPage() {
 
           {groups
             .map(([group, fields]) => {
-              // One offer selected: hide ALL second-offer inputs (the ad renders
-              // a single offer). Otherwise, same-model dual hides just Offer 2's
-              // vehicle inputs (auto-synced from Offer 1).
+              // Same-model dual hides Offer 2's vehicle inputs (auto-synced from
+              // Offer 1); everything else shows.
               let shown = fields.filter((f) => {
-                if (offerCount === 1 && f.key.startsWith('o2_')) return false;
                 if (isDual && dualVehicleMode === 'same' && (f.key === 'o2_vehicleName' || f.key === 'o2_vehicleImageUrl')) return false;
                 return true;
               });
-              // Clients can touch the OFFER(S), the VEHICLE COLOR, and the
-              // Legal fields they're responsible for (VIN / stock — the
-              // disclaimer stays read-only + auto-composed). The color is
-              // chosen through the vehicle image field (…ImageUrl → a
-              // client-only color picker). Everything else — vehicle name,
-              // Copy, branding — is hidden from the form but still rendered in
-              // the live preview; clients see it, they just can't edit it.
+              // Client visibility is DESIGNER-SET per field (`audience`): a client
+              // sees the fields marked "Client", not a hardcoded list. Managers
+              // see everything. The automotive vehicle-offer flow keeps two
+              // functional routing rules on top: the vehicle name is hidden
+              // (the vehicle comes from the chosen offer), and the offer inputs
+              // render inside the OEM/Manual panel rather than as their own card.
               if (!isManager) {
                 shown = shown.filter((f) => {
-                  if (/vehiclename/i.test(f.key)) return false; // don't let clients switch the vehicle
-                  if (/vehicleimageurl/i.test(f.key)) return true; // vehicle color picker
-                  if (group === 'Legal') return true; // VIN / stock (+ read-only disclaimer)
-                  // Offer inputs move INTO the OEM/Manual panel on the
-                  // automotive flow; only keep them as their own card when
-                  // there's no such panel (non-vehicle template).
-                  if (group.startsWith('Offer')) return !showAutomotiveTools;
-                  return false;
+                  if (!isClientField(f)) return false; // designer marked it internal
+                  if (showAutomotiveTools) {
+                    if (/vehiclename/i.test(f.key)) return false; // vehicle comes from the offer
+                    if (group.startsWith('Offer') && !/vehicleimageurl/i.test(f.key)) return false; // in the OEM panel
+                  }
+                  return true;
                 });
               }
               return [group, shown] as const;
@@ -1373,6 +1343,13 @@ function ImageField({ field, value, onChange, allowVehiclePicker, evoxSeed }: { 
   const { accountKey } = useAccount();
   const [open, setOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
+  // Source is designer-declared per field. `evox` shows only the vehicle
+  // picker; `both` shows manual inputs + the picker; `manual` (default) shows
+  // just the manual inputs. Legacy automotive templates still get EVOX via
+  // `allowVehiclePicker` even when the field predates the `imageSource` flag.
+  const src = field.imageSource ?? 'manual';
+  const evoxAllowed = allowVehiclePicker || src === 'evox' || src === 'both';
+  const manualAllowed = src !== 'evox';
   return (
     <div>
       <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
@@ -1380,31 +1357,36 @@ function ImageField({ field, value, onChange, allowVehiclePicker, evoxSeed }: { 
         {field.help && <span className="ml-1 font-normal text-[var(--muted-foreground)]">— {field.help}</span>}
       </label>
       <div className="flex gap-2">
-        <input
-          type="text"
-          value={value}
-          placeholder={field.placeholder || 'Image URL'}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-        />
-        <button
-          type="button"
-          onClick={() => setLibraryOpen(true)}
-          title="Pick from the media library"
-          className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
-        >
-          <PhotoIcon className="h-4 w-4" />
-          Library
-        </button>
-        {/* EVOX vehicle photography — automotive vehicle offers only. */}
-        {allowVehiclePicker && (
+        {manualAllowed && (
+          <input
+            type="text"
+            value={value}
+            placeholder={field.placeholder || 'Image URL'}
+            onChange={(e) => onChange(e.target.value)}
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+          />
+        )}
+        {manualAllowed && (
+          <button
+            type="button"
+            onClick={() => setLibraryOpen(true)}
+            title="Pick from the media library"
+            className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+          >
+            <PhotoIcon className="h-4 w-4" />
+            Library
+          </button>
+        )}
+        {/* EVOX vehicle photography — designer-enabled per field (or legacy
+            automotive templates). Full-width when it's the only picker. */}
+        {evoxAllowed && (
           <button
             type="button"
             onClick={() => setOpen(true)}
-            className="flex flex-shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+            className={`flex flex-shrink-0 items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] ${manualAllowed ? '' : 'w-full flex-shrink'}`}
           >
             <TruckIcon className="h-4 w-4" />
-            Vehicle
+            {manualAllowed ? 'Vehicle' : 'Choose vehicle image'}
           </button>
         )}
       </div>

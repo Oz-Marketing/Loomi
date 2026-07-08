@@ -18,7 +18,7 @@
  * Behind AD_GENERATOR_ENABLED (404 in prod).
  */
 
-import { useMemo, useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties } from 'react';
+import { useMemo, useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties, type ComponentType } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -61,7 +61,14 @@ import {
   BookmarkSquareIcon,
   VariableIcon,
   MagnifyingGlassIcon,
+  EllipsisVerticalIcon,
+  PencilSquareIcon,
+  HashtagIcon,
+  CalendarDaysIcon,
+  ChevronUpDownIcon,
+  FolderArrowDownIcon,
 } from '@heroicons/react/24/outline';
+import { BranchIcon } from '@/components/icons/branch';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
@@ -77,6 +84,7 @@ import { singleOfferDoc, dualOfferDoc } from '@/lib/ad-generator/templates/offer
 import { blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { DatePicker, type DateRange } from '@/components/ui/date-picker';
 import { MultiSelect } from '@/components/ui/multi-select';
+import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
 import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type LayerNode } from '@/lib/ad-generator/layer-tree';
@@ -84,8 +92,7 @@ import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIc
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
-import type { FieldSpec, FieldType, AdData, AdSize } from '@/lib/ad-generator/types';
-import { addFieldKit, seedSecondOfferElements } from '@/lib/ad-generator/vehicle-fields';
+import { isFieldVisible, isClientField, type FieldSpec, type FieldType, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
@@ -233,6 +240,11 @@ function sourceValueToBinding(v: string, currentValue: string): Binding {
 function buildContentSources(el: DocElement, fields: FieldSpec[]): SearchableSelectOption[] {
   const isImage = el.type === 'image' || el.type === 'logo' || el.type === 'background';
   const hasO2 = fields.some((f) => f.key === 'o2_offerType');
+  // Only surface the computed offer tokens when the template actually has the
+  // offer question set — otherwise a blank/non-offer template lists Offer
+  // label/amount/terms that resolve to nothing (confusing). They ride in with
+  // the "Vehicle Offer" category starter (or the offer field kit).
+  const hasOffer = fields.some((f) => f.key === 'offerType');
   const opts: SearchableSelectOption[] = [
     { value: 'static', label: isImage ? 'Fixed image' : 'Type it in', group: 'Custom' },
   ];
@@ -242,17 +254,20 @@ function buildContentSources(el: DocElement, fields: FieldSpec[]): SearchableSel
     opts.push({ value: `field:${f.key}`, label: f.label || f.key, group: f.group?.trim() || 'Fields' });
   }
   if (!isImage) {
-    // Computed offer text. When the template has two offers, name Offer 1's
-    // tokens explicitly so they don't read as "the" offer next to Offer 2's.
-    const offer1Tokens = hasO2
-      ? [
-          { key: '_offerLabel', label: 'Offer 1 label' },
-          { key: '_offerMain', label: 'Offer 1 amount' },
-          { key: '_offerTerms', label: 'Offer 1 terms' },
-        ]
-      : OFFER_TOKENS;
-    for (const t of offer1Tokens) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text' });
-    if (hasO2) for (const t of OFFER_TOKENS_O2) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text' });
+    // Computed offer text — only when the template has the offer question set
+    // (otherwise these tokens resolve to nothing). Name Offer 1's tokens
+    // explicitly when a second offer exists.
+    if (hasOffer) {
+      const offer1Tokens = hasO2
+        ? [
+            { key: '_offerLabel', label: 'Offer 1 label' },
+            { key: '_offerMain', label: 'Offer 1 amount' },
+            { key: '_offerTerms', label: 'Offer 1 terms' },
+          ]
+        : OFFER_TOKENS;
+      for (const t of offer1Tokens) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text' });
+      if (hasO2) for (const t of OFFER_TOKENS_O2) opts.push({ value: `field:${t.key}`, label: t.label, group: 'Computed offer text' });
+    }
     opts.push({ value: 'brand:dealerName', label: 'Dealer name', group: 'Brand' });
   } else {
     opts.push({ value: 'brand:logoUrl', label: 'Account logo', group: 'Brand' });
@@ -285,8 +300,40 @@ const FIELD_TYPE_OPTIONS: FontSelectOption[] = [
   { value: 'date', label: 'Date' },
   { value: 'select', label: 'Select' },
   { value: 'color', label: 'Color' },
-  { value: 'image', label: 'Image URL' },
+  { value: 'image', label: 'Image' },
 ];
+// Per-type icon + color for the field-row header — mirrors the element KIND
+// color-coding (Text = blue, Image = pink) so a designer scans field types at a
+// glance; the other input types get their own distinct hues. Icons are drawn
+// with currentColor, so a wrapping span sets the color.
+const FIELD_TYPE_META: Record<FieldType, { Icon: ComponentType<{ className?: string }>; color: string }> = {
+  text: { Icon: TextElementIcon, color: '#3b82f6' }, // blue (mirrors Text element)
+  textarea: { Icon: Bars3BottomLeftIcon, color: '#6366f1' }, // indigo
+  number: { Icon: HashtagIcon, color: '#f59e0b' }, // amber
+  date: { Icon: CalendarDaysIcon, color: '#10b981' }, // emerald
+  select: { Icon: ChevronUpDownIcon, color: '#06b6d4' }, // cyan
+  color: { Icon: SwatchIcon, color: '#f43f5e' }, // rose
+  image: { Icon: PhotoIcon, color: '#ec4899' }, // pink (mirrors Image element)
+};
+// Where an image field's picture comes from — lets a designer wire any image
+// field to the vehicle-image API (EVOX) or keep it manual, per field.
+const IMAGE_SOURCE_OPTIONS: FontSelectOption[] = [
+  { value: 'manual', label: 'Manual (upload / library)' },
+  { value: 'evox', label: 'Vehicle image (EVOX)' },
+  { value: 'both', label: 'Both — manual + vehicle' },
+];
+// Who fills a field on the creative form — designer-set, replaces the old
+// hardcoded client/manager split. Client = the client edits it; Internal =
+// managers/designers only (hidden from clients).
+const AUDIENCE_OPTIONS: FontSelectOption[] = [
+  { value: 'client', label: 'Client' },
+  { value: 'internal', label: 'Internal (you only)' },
+];
+// The catch-all form section. A field with no explicit group resolves here, so
+// no field is ever "ungrouped"; it's a normal renamable/deletable section.
+const DEFAULT_GROUP = 'General';
+// Per-browser opt-out for the "deleting a section deletes its fields" confirm.
+const SKIP_DELETE_SECTION_KEY = 'adgen-skip-delete-section-confirm';
 type Handle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 const RESIZE_HANDLES: { h: Handle; x: number; y: number; cursor: string }[] = [
@@ -537,10 +584,6 @@ export default function AdBuilderPage() {
   // template), just not the blank-canvas default.
   const { doc, setDoc, undo, redo, canUndo, canRedo, reset: resetHistory } = useDocHistory(() => blankTemplateDoc('tmpl-blank', 'Untitled template'));
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
-  // Which offer count the canvas previews (1 or 2), for templates that let the
-  // client choose. Chrome shows in both; offer-block elements are dimmed when
-  // they don't belong to the previewed count. Drives `previewData._offerCount`.
-  const [previewCount, setPreviewCount] = useState<1 | 2>(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // Marquee (drag-to-select) rectangle in canvas fractions, while dragging the backdrop.
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -579,12 +622,10 @@ export default function AdBuilderPage() {
   // Figma-style alignment guides shown while dragging (fractions, or null).
   const [guides, setGuides] = useState<{ x: number | null; y: number | null }>({ x: null, y: null });
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  // Template Fields is a LEFT-docked panel (same shell as the element inspector),
+  // so it can be open at the same time as the element/block settings panel on the
+  // right. It shares the left slot with Insert/Layers (one at a time).
   const [fieldsOpen, setFieldsOpen] = useState(false);
-  // The element inspector and the Fields panel never share the screen (they'd
-  // overlap on the right) — selecting an element closes Fields.
-  useEffect(() => {
-    if (selectedIds.length) setFieldsOpen(false);
-  }, [selectedIds]);
   // Left rail: which panel (Elements / Layers / Industries / Sizes) is open as a
   // flyout. null = collapsed to just the icons.
   const [leftPanel, setLeftPanel] = useState<'insert' | 'layers' | null>(null);
@@ -608,8 +649,22 @@ export default function AdBuilderPage() {
   const [addSizeOpen, setAddSizeOpen] = useState(false);
   // Sizes popover on the canvas action bar (replaces the old left-rail Sizes panel).
   const [sizesOpen, setSizesOpen] = useState(false);
-  // Template settings popover in the header cog (Industries + Save as new).
+  // Template settings popover in the header cog (Industries + Second offer + Save as new).
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Field PRESETS — a designer-managed registry of reusable field-sets (fields +
+  // sections + defaults). Applying one seeds its fields (merge-missing) into the
+  // current template; "Save current fields as a preset" upserts one. Lives in the
+  // Fields sidebar (not tied to the library Category). "Vehicle Offer" ships
+  // seeded with the offer question set. (Backed by the AdCategoryStarter table /
+  // category-starters API — the store predates the "preset" rename.)
+  type Preset = { name: string; fields: FieldSpec[]; defaults: Record<string, string> };
+  const [presets, setPresets] = useState<Preset[]>([]);
+  useEffect(() => {
+    fetch('/api/ad-generator/category-starters')
+      .then((r) => (r.ok ? r.json() : { starters: [] }))
+      .then((j: { starters?: Preset[] }) => setPresets(j.starters ?? []))
+      .catch(() => setPresets([]));
+  }, []);
   // Publish popover — Draft / live-now / scheduled window.
   const [publishOpen, setPublishOpen] = useState(false);
   const publishRef = useRef<HTMLDivElement>(null);
@@ -672,17 +727,6 @@ export default function AdBuilderPage() {
   }, [accountKey, templateId, adId]);
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
-
-  // A template "supports dual" (client may choose 1 or 2 offers) only when the
-  // second offer is explicitly turned ON (settings cog). Gates the offer-count
-  // view switch + per-element "Appears in" — both hide when the toggle is off.
-  const supportsDual = Boolean(doc.allowOfferCountChoice);
-  // When a dual template loads (or a second offer is just added), preview the
-  // 2-offer layout so the designer sees the full arrangement. Fires once per
-  // false→true flip; the designer can still flip the toggle to check 1-offer.
-  useEffect(() => {
-    if (supportsDual) setPreviewCount(2);
-  }, [supportsDual]);
 
   // Account custom fonts: drive both the dropdown and the @font-face the canvas
   // needs so a chosen family actually renders.
@@ -785,9 +829,6 @@ export default function AdBuilderPage() {
       ...vehicleOfferPreviewData,
       ...doc.defaults, // designer-set default / preview values for fields
       ...(adData ?? {}), // ad mode: the ad's real content
-      // Preview the chosen offer count so off-count offer blocks dim (see the
-      // canvas offer-count toggle). Overrides any ad/default value while editing.
-      _offerCount: String(previewCount),
       ...(effectiveFontCss ? { fontFaceCss: effectiveFontCss } : {}),
       ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
       ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
@@ -798,7 +839,7 @@ export default function AdBuilderPage() {
       usedGoogleFontFamilies(doc.elements, typeof base.fontFamily === 'string' ? base.fontFamily : undefined),
     );
     return googleUrl ? { ...base, googleFontsUrl: googleUrl } : base;
-  }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData, previewCount]);
+  }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData]);
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
 
@@ -1710,25 +1751,151 @@ export default function AdBuilderPage() {
   );
 
   // ── template field-list operations ──
-  const addField = () => {
-    setDoc((prev) => ({ ...prev, fields: [...prev.fields, { key: `field_${rid()}`, label: 'New field', type: 'text' }] }));
+  // Every field ALWAYS belongs to a real group — there is no "ungrouped" limbo.
+  // A field with no explicit group resolves to the "General" catch-all section
+  // (`DEFAULT_GROUP`), which is a normal, renamable/deletable section like any
+  // other. Add a field into a specific group (a section's "+ Add field"), or —
+  // for the bare "Field" button — into the last section (or a fresh General).
+  const addField = (group?: string) => {
+    setDoc((prev) => {
+      const groups = currentGroups(prev);
+      const target = group?.trim() || groups[groups.length - 1] || DEFAULT_GROUP;
+      const fieldGroups = groups.includes(target) ? groups : [...groups, target];
+      return { ...prev, fieldGroups, fields: [...prev.fields, { key: `field_${rid()}`, label: 'New field', type: 'text', group: target }] };
+    });
   };
-  // Enable / disable the client's second offer (toggled from the settings cog).
-  // ON: add the offer/vehicle question set (single + o2_ sets, deduped), seed a
-  // recommended second-offer element block, and flip the opt-in flag. OFF: just
-  // clear the flag (fields/elements are kept, so toggling back on is lossless).
-  const setDualOffers = (on: boolean) => {
-    if (on) {
-      setDoc((prev) => {
-        const seeded = seedSecondOfferElements(addFieldKit(prev, 'dual'));
-        return { ...seeded, allowOfferCountChoice: true };
-      }, 'dual:on');
-      setPreviewCount(2);
-      toast.success('Second offer enabled');
-    } else {
-      setDoc((prev) => ({ ...prev, allowOfferCountChoice: false }), 'dual:off');
-      setPreviewCount(1);
-      toast('Second offer disabled');
+  // ── Field groups (designer-defined form sections; ordered on the doc) ──
+  // Ordered group list: explicit `fieldGroups`, unioned with any group present
+  // on a field — an ungrouped field counts under the "General" section, so it's
+  // never orphaned. Mirrors the FieldsSidebar's `orderedNames` (indices match).
+  const currentGroups = (d: TemplateDoc): string[] => {
+    const base = (d.fieldGroups ?? []).slice();
+    for (const f of d.fields) { const g = f.group?.trim() || DEFAULT_GROUP; if (!base.includes(g)) base.push(g); }
+    return base;
+  };
+  const addFieldGroup = () => {
+    setDoc((prev) => {
+      const groups = currentGroups(prev);
+      let name = 'New group';
+      for (let n = 2; groups.includes(name); n++) name = `New group ${n}`;
+      return { ...prev, fieldGroups: [...groups, name] };
+    });
+    return;
+  };
+  const renameFieldGroup = (oldName: string, next: string) => {
+    const finalName = next.trim() || oldName;
+    setDoc((prev) => {
+      const groups = [...new Set(currentGroups(prev).map((g) => (g === oldName ? finalName : g)))];
+      // Assign a real name — including previously-ungrouped fields that resolved
+      // to the General section when it's being renamed.
+      const fields = prev.fields.map((f) => ((f.group?.trim() || DEFAULT_GROUP) === oldName ? { ...f, group: finalName } : f));
+      return { ...prev, fieldGroups: groups, fields };
+    }, `renamegroup:${oldName}`);
+  };
+  const deleteFieldGroup = async (name: string) => {
+    const inGroup = doc.fields.filter((f) => (f.group?.trim() || DEFAULT_GROUP) === name);
+    const doDelete = () =>
+      setDoc((prev) => ({
+        ...prev,
+        fieldGroups: currentGroups(prev).filter((g) => g !== name),
+        // Delete the section AND its fields (undoable via ⌘Z).
+        fields: prev.fields.filter((f) => (f.group?.trim() || DEFAULT_GROUP) !== name),
+      }), `deletegroup:${name}`);
+    // Empty section → remove silently. Section with fields → confirm, since the
+    // fields go with it (with a "don't show again" opt-out stored per browser).
+    if (inGroup.length === 0) { doDelete(); return; }
+    const skip = typeof window !== 'undefined' && window.localStorage.getItem(SKIP_DELETE_SECTION_KEY) === '1';
+    if (!skip) {
+      const dontAsk = { current: false };
+      const ok = await confirm({
+        title: 'Delete section?',
+        message: `Deleting “${name}” will also delete the ${inGroup.length} field${inGroup.length === 1 ? '' : 's'} inside it. You can undo with ⌘Z.`,
+        destructive: true,
+        confirmLabel: 'Delete section',
+        body: <DontShowAgainCheckbox onChange={(v) => { dontAsk.current = v; }} />,
+      });
+      if (!ok) return;
+      if (dontAsk.current && typeof window !== 'undefined') window.localStorage.setItem(SKIP_DELETE_SECTION_KEY, '1');
+    }
+    doDelete();
+  };
+  const moveFieldGroup = (from: number, to: number) => {
+    setDoc((prev) => {
+      const groups = currentGroups(prev);
+      if (from < 0 || to < 0 || from >= groups.length || to >= groups.length || from === to) return prev;
+      const next = [...groups];
+      const [m] = next.splice(from, 1);
+      next.splice(to, 0, m);
+      return { ...prev, fieldGroups: next };
+    });
+  };
+  // Move a field (by key) into `group`, positioned before `beforeKey` (else at the
+  // group's end). Reorders `doc.fields` so within-group order is preserved.
+  const moveFieldToGroup = (key: string, group: string | undefined, beforeKey?: string) => {
+    setDoc((prev) => {
+      const g = group?.trim() || DEFAULT_GROUP; // never leave a field ungrouped
+      const fields = [...prev.fields];
+      const idx = fields.findIndex((f) => f.key === key);
+      if (idx < 0) return prev;
+      const [moved] = fields.splice(idx, 1);
+      moved.group = g;
+      let insertAt = -1;
+      if (beforeKey) insertAt = fields.findIndex((f) => f.key === beforeKey);
+      if (insertAt < 0) {
+        // Land at the end of the target group (after its last field).
+        for (let i = 0; i < fields.length; i++) if ((fields[i].group?.trim() || DEFAULT_GROUP) === g) insertAt = i + 1;
+      }
+      if (insertAt < 0) fields.push(moved); else fields.splice(insertAt, 0, moved);
+      const groups = currentGroups(prev);
+      const fieldGroups = groups.includes(g) ? groups : [...groups, g];
+      return { ...prev, fields, fieldGroups };
+    });
+  };
+  // Apply a preset: seed its fields (merge-missing, never overwrites the
+  // designer's fields) + defaults into the current template. This is how
+  // "Vehicle Offer" fills the offer questions. Not tied to the library Category.
+  const applyPreset = (name: string) => {
+    const preset = presets.find((s) => s.name === name);
+    if (!preset?.fields?.length) return;
+    setDoc((prev) => {
+      const next: TemplateDoc = { ...prev };
+      const have = new Set(prev.fields.map((f) => f.key));
+      const add = preset.fields.filter((f) => !have.has(f.key));
+      if (add.length) next.fields = [...prev.fields, ...add];
+      const defaults = { ...prev.defaults };
+      for (const [k, v] of Object.entries(preset.defaults ?? {})) if (!(k in defaults)) defaults[k] = v;
+      next.defaults = defaults;
+      return next;
+    }, 'preset');
+    toast.success(`Applied “${name}” preset`);
+  };
+  // Save the current template's fields (+ defaults) as a reusable, named preset.
+  // Designer-managed; managers only (the POST route enforces the role).
+  const savePreset = async () => {
+    const name = (
+      await prompt({
+        title: 'Save preset',
+        message: 'Save the current fields and their sections/defaults as a reusable preset you can apply to any template.',
+        placeholder: 'Preset name (e.g. Vehicle Offer)',
+        confirmLabel: 'Save preset',
+        required: true,
+      })
+    )?.trim();
+    if (!name) return;
+    try {
+      const res = await fetch('/api/ad-generator/category-starters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, fields: doc.fields, defaults: doc.defaults }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      setPresets((prev) => {
+        const rest = prev.filter((s) => s.name !== name);
+        return [...rest, { name, fields: doc.fields, defaults: doc.defaults }].sort((a, b) => a.name.localeCompare(b.name));
+      });
+      toast.success(`Saved “${name}” preset`);
+    } catch (err) {
+      toast.error(`Couldn't save preset: ${err instanceof Error ? err.message : 'unknown error'}`);
     }
   };
   const updateFieldAt = (i: number, patch: Partial<FieldSpec>) => {
@@ -2058,16 +2225,6 @@ export default function AdBuilderPage() {
 
   // ── industries (which accounts this template is offered to) ──
   const allIndustries = useIndustries();
-  const toggleIndustry = useCallback(
-    (name: string) => {
-      setDoc((prev) => {
-        const cur = prev.industries ?? [];
-        const next = cur.includes(name) ? cur.filter((i) => i !== name) : [...cur, name];
-        return { ...prev, industries: next };
-      });
-    },
-    [setDoc],
-  );
 
   // ── save / load ──
   async function save(asNew = false) {
@@ -2963,46 +3120,14 @@ export default function AdBuilderPage() {
                     <p className="mb-3 text-[11px] leading-snug text-[var(--muted-foreground)]">
                       Which accounts can use this template. None selected → only vehicle-offer accounts (Automotive, Powersports).
                     </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {allIndustries.map((name) => {
-                        const on = (doc.industries ?? []).includes(name);
-                        return (
-                          <button
-                            key={name}
-                            onClick={() => toggleIndustry(name)}
-                            className={`rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                              on
-                                ? 'border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]'
-                                : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)]'
-                            }`}
-                          >
-                            {name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                    <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign a category &amp; tags on the template card in the Templates library.</p>
-
-                    {/* Second offer — lets the client choose 1 or 2 offers. Enabling
-                        seeds the second-offer fields + a starter block; the 1/2 view
-                        switch (top bar) then edits each layout. */}
-                    <div className="mt-3 border-t border-[var(--border)] pt-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium text-[var(--foreground)]">Second offer</p>
-                          <p className="mt-0.5 text-[11px] leading-snug text-[var(--muted-foreground)]">Let the client choose 1 or 2 offers.</p>
-                        </div>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={!!doc.allowOfferCountChoice}
-                          onClick={() => setDualOffers(!doc.allowOfferCountChoice)}
-                          className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${doc.allowOfferCountChoice ? 'bg-[var(--primary)]' : 'bg-[var(--muted)]'}`}
-                        >
-                          <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${doc.allowOfferCountChoice ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                        </button>
-                      </div>
-                    </div>
+                    <MultiSelect
+                      value={doc.industries ?? []}
+                      onChange={(vals) => setDoc((prev) => ({ ...prev, industries: vals }), 'industries')}
+                      options={allIndustries.map((name) => ({ value: name, label: name }))}
+                      placeholder="All vehicle-offer accounts"
+                      menuZIndex={260}
+                    />
+                    <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign tags on the template card in the Templates library.</p>
 
                     <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
                       <button
@@ -3022,8 +3147,9 @@ export default function AdBuilderPage() {
                             setSettingsOpen(false);
                           }}
                           disabled={saving}
-                          className="w-full rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-50"
+                          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:opacity-50"
                         >
+                          <BookmarkSquareIcon className="h-4 w-4" />
                           Save as new
                         </button>
                       )}
@@ -3079,10 +3205,10 @@ export default function AdBuilderPage() {
                 Background). Lives in the rail alongside Layers so adding never
                 collides with an open panel. Sizes are managed on the canvas
                 action bar (bottom); view guides (outlines / margins) live here. */}
-            <RailButton label="Insert" Icon={PlusIcon} primary active={leftPanel === 'insert'} onClick={() => setLeftPanel((p) => (p === 'insert' ? null : 'insert'))} />
-            <RailButton label="Layers" Icon={LayersIcon} active={leftPanel === 'layers'} onClick={() => setLeftPanel((p) => (p === 'layers' ? null : 'layers'))} />
-            {/* Fields — the form that drives the ad (offer/vehicle/legal inputs +
-                element bindings). Right-docked panel, so it toggles on its own. */}
+            <RailButton label="Insert" Icon={PlusIcon} primary active={leftPanel === 'insert'} onClick={() => { setLeftPanel((p) => (p === 'insert' ? null : 'insert')); setFieldsOpen(false); }} />
+            <RailButton label="Layers" Icon={LayersIcon} active={leftPanel === 'layers'} onClick={() => { setLeftPanel((p) => (p === 'layers' ? null : 'layers')); setFieldsOpen(false); }} />
+            {/* Fields — the form that drives the ad. Left-docked (shares the left
+                slot with Insert/Layers); coexists with the right settings panel. */}
             <RailButton
               label="Fields"
               Icon={Bars3BottomLeftIcon}
@@ -3090,7 +3216,7 @@ export default function AdBuilderPage() {
               onClick={() =>
                 setFieldsOpen((v) => {
                   const next = !v;
-                  if (next) clearSelection(); // Fields + element inspector never share the screen
+                  if (next) setLeftPanel(null); // Fields takes the left slot from Insert/Layers
                   return next;
                 })
               }
@@ -3426,25 +3552,6 @@ export default function AdBuilderPage() {
           <div className="relative flex flex-shrink-0 items-center justify-end gap-2 border-b border-[var(--border)] px-3 py-2">
             {/* Zoom lives on the canvas (bottom-left); outlines + margins moved to
                 the left rail; the active size is shown on the canvas action bar. */}
-            {/* Offer view switch (centered) — flips the canvas + Fields panel
-                between the 1-offer and 2-offer layouts. Only when the client's
-                second offer is turned ON (settings cog). */}
-            {doc.allowOfferCountChoice && (
-              <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
-                {([1, 2] as const).map((n) => (
-                  <button
-                    key={n}
-                    onClick={() => setPreviewCount(n)}
-                    title={`Edit the ${n === 1 ? 'single' : 'dual'}-offer layout`}
-                    className={`inline-flex h-7 items-center rounded-full px-3 text-xs font-medium transition-colors ${
-                      previewCount === n ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
-                    }`}
-                  >
-                    {n === 1 ? 'Single Offer' : 'Dual Offer'}
-                  </button>
-                ))}
-              </div>
-            )}
             {/* Undo / Redo */}
             <div className="flex items-center gap-0.5">
               <button
@@ -3958,12 +4065,11 @@ export default function AdBuilderPage() {
                   contentSources={contentSources}
                   onContentChange={setSelectedContent}
                   accountKey={accountKey ?? undefined}
-                  supportsDual={supportsDual}
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch }, `box:${selected.id}:${Object.keys(patch).sort().join(',')}`)}
                   onClose={clearSelection}
                   onFillArtboard={() => fillArtboardAndSendBack(selected.id)}
-                  shifted={fieldsOpen}
+                  shifted={false}
                   cropping={cropModal?.id === selected.id}
                   onToggleCrop={() => {
                     const url = resolveBindingUrl(selected);
@@ -3993,30 +4099,39 @@ export default function AdBuilderPage() {
                   onSaveAsBlock={saveSelectionAsBlock}
                   onDelete={deleteSelected}
                   onClose={clearSelection}
-                  shifted={fieldsOpen}
-                  supportsDual={supportsDual}
+                  shifted={false}
+                />
+              )}
+
+              {/* Template Fields — left-docked inside the canvas (mirrors the
+                  right settings panel), so both can be open at once. */}
+              {fieldsOpen && (
+                <FieldsSidebar
+                  fields={doc.fields}
+                  fieldGroups={currentGroups(doc)}
+                  defaults={doc.defaults}
+                  accountKey={accountKey ?? undefined}
+                  brandLogos={brandLogos}
+                  onClose={() => setFieldsOpen(false)}
+                  onAdd={addField}
+                  onUpdate={updateFieldAt}
+                  onRename={renameFieldKeyAt}
+                  onDelete={deleteFieldAt}
+                  onSetDefault={setDefaultAt}
+                  onAddGroup={addFieldGroup}
+                  onRenameGroup={renameFieldGroup}
+                  onDeleteGroup={deleteFieldGroup}
+                  onMoveGroup={moveFieldGroup}
+                  onMoveField={moveFieldToGroup}
+                  presets={presets.map((p) => p.name)}
+                  onApplyPreset={applyPreset}
+                  onSavePreset={savePreset}
                 />
               )}
 
             </div>
         </div>
       </div>
-
-      {fieldsOpen && (
-        <FieldsSidebar
-          fields={doc.fields}
-          defaults={doc.defaults}
-          accountKey={accountKey ?? undefined}
-          brandLogos={brandLogos}
-          hideSecondOffer={supportsDual && previewCount === 1}
-          onClose={() => setFieldsOpen(false)}
-          onAdd={addField}
-          onUpdate={updateFieldAt}
-          onRename={renameFieldKeyAt}
-          onDelete={deleteFieldAt}
-          onSetDefault={setDefaultAt}
-        />
-      )}
 
       {/* Sizes — a centered modal (switch / add / remove / copy layout), opened
           from the canvas action bar. Backdrop click closes it. */}
@@ -4178,16 +4293,38 @@ export default function AdBuilderPage() {
   );
 }
 
-function SelectRow({ label, children }: { label: string; children: React.ReactNode }) {
+/** A `?` info icon with a Loomi tooltip — used to clarify builder controls. */
+function InfoTip({ text }: { text: React.ReactNode }) {
+  return (
+    <Tooltip label={text}>
+      <QuestionMarkCircleIcon
+        className="h-3.5 w-3.5 cursor-help text-[var(--muted-foreground)]/70 transition-colors hover:text-[var(--foreground)]"
+        onClick={(e) => e.stopPropagation()}
+      />
+    </Tooltip>
+  );
+}
+
+/** A form-control label + optional `?` hint tooltip. */
+function HintLabel({ label, hint, className = '' }: { label: string; hint?: React.ReactNode; className?: string }) {
+  return (
+    <span className={`mb-1 flex items-center gap-1 text-[var(--muted-foreground)] ${className}`}>
+      {label}
+      {hint && <InfoTip text={hint} />}
+    </span>
+  );
+}
+
+function SelectRow({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div>
-      <label className="mb-1 block text-[var(--muted-foreground)]">{label}</label>
+      <HintLabel label={label} hint={hint} />
       {children}
     </div>
   );
 }
 
-function ToggleRow({ label, on, onClick }: { label: string; on: boolean; onClick: () => void }) {
+function ToggleRow({ label, hint, on, onClick }: { label: string; hint?: React.ReactNode; on: boolean; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -4195,7 +4332,7 @@ function ToggleRow({ label, on, onClick }: { label: string; on: boolean; onClick
         on ? 'border-[var(--primary)] text-[var(--primary)]' : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
       }`}
     >
-      <span>{label}</span>
+      <span className="flex items-center gap-1">{label}{hint && <InfoTip text={hint} />}</span>
       <span className={`h-3.5 w-3.5 rounded-sm border ${on ? 'border-[var(--primary)] bg-[var(--primary)]' : 'border-[var(--border)]'}`} />
     </button>
   );
@@ -4204,18 +4341,20 @@ function ToggleRow({ label, on, onClick }: { label: string; on: boolean; onClick
 
 function LabeledInput({
   label,
+  hint,
   value,
   onChange,
   type,
 }: {
   label: string;
+  hint?: React.ReactNode;
   value: string;
   onChange: (v: string) => void;
   type?: string;
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-[var(--muted-foreground)]">{label}</span>
+      <HintLabel label={label} hint={hint} />
       <input
         type={type ?? 'text'}
         value={value}
@@ -4324,6 +4463,8 @@ function SelectOptionsEditor({
   );
 }
 
+/** Group picker — pick an existing group (so a designer sees where other fields
+ *  live) or create a new one inline. Preserves the typed name as-is. */
 function FieldRow({
   field,
   index,
@@ -4331,11 +4472,14 @@ function FieldRow({
   defaultValue,
   accountKey,
   brandLogos,
+  allFields,
+  groupNames,
   onToggle,
   onUpdate,
   onRename,
   onDelete,
   onSetDefault,
+  onMoveToGroup,
 }: {
   field: FieldSpec;
   index: number;
@@ -4343,13 +4487,40 @@ function FieldRow({
   defaultValue: string;
   accountKey?: string;
   brandLogos: { key: string; label: string; url: string }[];
+  /** Sibling fields — for the "Show only when" conditional-visibility picker. */
+  allFields: FieldSpec[];
+  /** All section names, ordered — for the ⋯ "Move to group" picker. */
+  groupNames: string[];
   onToggle: () => void;
   onUpdate: (i: number, patch: Partial<FieldSpec>) => void;
   onRename: (i: number, newKey: string) => void;
   onDelete: (i: number) => void;
   onSetDefault: (i: number, val: string) => void;
+  onMoveToGroup: (key: string, group: string) => void;
 }) {
   const [picking, setPicking] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Two-level ⋯ menu: the root actions, or the "Move to group" section list.
+  const [showMoveList, setShowMoveList] = useState(false);
+  // Whether the "Show only when" section is shown in the editor — on if the field
+  // already has a condition, or the designer picks "Conditional field" in the ⋯ menu.
+  const [showConditional, setShowConditional] = useState(!!field.visibleWhen);
+  // Advanced options collapsed by default — these forms get long; show only the
+  // high-level fields (Label / Type / Default) until the designer opts in.
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) { setShowMoveList(false); return; }
+    const h = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [menuOpen]);
+  // The field that gates this one's visibility (for the "Show only when" UI).
+  const condField = field.visibleWhen ? allFields.find((f) => f.key === field.visibleWhen!.field) : undefined;
+  // Color-coded type badge/icon + this field's current section (to exclude it
+  // from the "Move to group" list).
+  const typeMeta = FIELD_TYPE_META[field.type];
+  const currentGroup = field.group?.trim() || DEFAULT_GROUP;
   return (
     // Subtle fill so a field row lifts off the group section it sits in (they
     // otherwise share the panel background and blend together); the opened row
@@ -4360,31 +4531,108 @@ function FieldRow({
       }`}
     >
       <div className="flex items-center gap-2 px-3 py-2">
-        <button onClick={onToggle} className="flex flex-1 items-center gap-2 text-left">
-          <span className="truncate text-xs font-medium text-[var(--foreground)]">{field.label || field.key}</span>
-          <span className="text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">{field.type}</span>
-          {field.copy && <span className="rounded bg-[var(--primary)]/10 px-1 text-[9px] font-medium text-[var(--primary)]">AI</span>}
+        <button onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+          <span className="shrink-0" style={{ color: typeMeta.color }} title={field.type}>
+            <typeMeta.Icon className="h-3 w-3" />
+          </span>
+          <span className="min-w-0 truncate text-[11px] font-medium text-[var(--foreground)]">{field.label || field.key}</span>
+          <span className="shrink-0 text-[8px] font-medium uppercase tracking-wide" style={{ color: typeMeta.color }}>{field.type}</span>
+          {field.copy && <span className="shrink-0 rounded bg-[var(--primary)]/10 px-1 text-[9px] font-medium text-[var(--primary)]">AI</span>}
+          {field.audience === 'internal' && (
+            <Tooltip label="Internal only — hidden from clients">
+              <EyeSlashIcon className="h-3 w-3 shrink-0 text-[var(--muted-foreground)]" />
+            </Tooltip>
+          )}
+          {field.visibleWhen && (
+            <Tooltip label="Conditional field">
+              <BranchIcon className="h-3 w-3 shrink-0 text-[var(--primary)]" />
+            </Tooltip>
+          )}
         </button>
-        <button
-          onClick={() => onDelete(index)}
-          title="Delete field"
-          className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500"
-        >
-          <TrashIcon className="h-3.5 w-3.5" />
-        </button>
+        {/* Subtle peek at the default/preview value so a designer can scan values
+            without expanding each row (image fields skip it — the value is a URL). */}
+        {field.type !== 'image' && defaultValue.trim() && (
+          <span className="max-w-[45%] shrink truncate text-right text-[11px] text-[var(--muted-foreground)]/80" title={defaultValue}>
+            {defaultValue}
+          </span>
+        )}
+        {/* Row menu — Conditional field + Delete (replaces the bare trash icon). */}
+        <div ref={menuRef} className="relative shrink-0">
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            title="More"
+            className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          >
+            <EllipsisVerticalIcon className="h-4 w-4" />
+          </button>
+          {menuOpen && (
+            <div className="absolute right-0 top-full z-[90] mt-1 w-48 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--card-strong)] py-1 shadow-2xl backdrop-blur-2xl">
+              {showMoveList ? (
+                <>
+                  <button
+                    onClick={() => setShowMoveList(false)}
+                    className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+                  >
+                    <ChevronLeftIcon className="h-3 w-3" />
+                    Move to group
+                  </button>
+                  <div className="max-h-52 overflow-y-auto">
+                    {groupNames.map((g) => (
+                      <button
+                        key={g}
+                        onClick={() => { if (g !== currentGroup) onMoveToGroup(field.key, g); setMenuOpen(false); }}
+                        disabled={g === currentGroup}
+                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-[var(--muted)] ${g === currentGroup ? 'text-[var(--muted-foreground)]' : 'text-[var(--foreground)]'}`}
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${g === currentGroup ? 'bg-[var(--primary)]' : 'bg-transparent'}`} />
+                        <span className="truncate">{g}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setShowMoveList(true)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                  >
+                    <FolderArrowDownIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+                    Move to group
+                    <ChevronRightIcon className="ml-auto h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+                  </button>
+                  <button
+                    onClick={() => { setShowConditional(true); if (!expanded) onToggle(); setMenuOpen(false); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                  >
+                    <BranchIcon className="h-3.5 w-3.5 text-[var(--primary)]" />
+                    Conditional field
+                  </button>
+                  <button
+                    onClick={() => { onDelete(index); setMenuOpen(false); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-500 transition-colors hover:bg-red-500/10"
+                  >
+                    <TrashIcon className="h-3.5 w-3.5" />
+                    Delete
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
       {expanded && (
         <div className="space-y-2 border-t border-[var(--border)] px-3 py-3 text-xs">
+          {/* Basic — the high-level fields filled most often. */}
           <div className="grid grid-cols-2 gap-2">
-            <LabeledInput label="Label" value={field.label} onChange={(v) => onUpdate(index, { label: v })} />
-            <LabeledInput label="Key" value={field.key} onChange={(v) => onRename(index, v)} />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <SelectRow label="Type">
+            <LabeledInput label="Label" hint="What the client sees above this field in the form." value={field.label} onChange={(v) => onUpdate(index, { label: v })} />
+            <SelectRow label="Type" hint="How the client fills this field: plain text, number, a date picker, a color, an image picker, or a dropdown (select).">
               <CompactSelect value={field.type} onChange={(v) => onUpdate(index, { type: v as FieldType })} options={FIELD_TYPE_OPTIONS} />
             </SelectRow>
-            <LabeledInput label="Group" value={field.group ?? ''} onChange={(v) => onUpdate(index, { group: v || undefined })} />
           </div>
+          {/* Filled by — who edits this field on the creative form. */}
+          <SelectRow label="Filled by" hint="Who fills this field on the creative form. Client: the client sees and edits it. Internal: only you/managers — hidden from clients (managers always see every field).">
+            <CompactSelect value={field.audience ?? 'client'} onChange={(v) => onUpdate(index, { audience: v === 'internal' ? 'internal' : undefined })} options={AUDIENCE_OPTIONS} />
+          </SelectRow>
           {/* Default / preview value — the fallback shown in the picker thumb,
               builder canvas, and client form until the client fills it in. For
               image fields this is a media picker so a designer can drop a dummy
@@ -4424,20 +4672,88 @@ function FieldRow({
               </div>
             </div>
           ) : (
-            <LabeledInput label="Default / preview value" value={defaultValue} onChange={(v) => onSetDefault(index, v)} />
+            <LabeledInput label="Default / preview value" hint="Shown in the preview + client form until the client edits it — great for mock data (e.g. “36”). A {{token}} here resolves against the other fields." value={defaultValue} onChange={(v) => onSetDefault(index, v)} />
           )}
-          <LabeledInput label="Placeholder" value={field.placeholder ?? ''} onChange={(v) => onUpdate(index, { placeholder: v || undefined })} />
-          <LabeledInput label="Help" value={field.help ?? ''} onChange={(v) => onUpdate(index, { help: v || undefined })} />
-          <div className="grid grid-cols-2 items-end gap-2">
-            <LabeledInput
-              label="Max length"
-              type="number"
-              value={field.maxLength != null ? String(field.maxLength) : ''}
-              onChange={(v) => onUpdate(index, { maxLength: v ? Number(v) : undefined })}
-            />
-            <ToggleRow label="AI may write" on={!!field.copy} onClick={() => onUpdate(index, { copy: field.copy ? undefined : true })} />
-          </div>
+          {field.type === 'image' && (
+            <SelectRow label="Source" hint="Where the picture comes from. Manual: the client uploads or picks from the media library. Vehicle image (EVOX): the client picks a vehicle + paint color from the vehicle-image library. Both: offer the manual inputs and the vehicle picker.">
+              <CompactSelect value={field.imageSource ?? 'manual'} onChange={(v) => onUpdate(index, { imageSource: v as 'manual' | 'evox' | 'both' })} options={IMAGE_SOURCE_OPTIONS} />
+            </SelectRow>
+          )}
           {field.type === 'select' && <SelectOptionsEditor options={field.options ?? []} onChange={(opts) => onUpdate(index, { options: opts })} />}
+          {/* Conditional visibility — opt-in via the ⋯ menu. Shows this field only
+              when another field has a given value (e.g. Lease fields only when
+              Offer type = Lease). Honored by the client form + AI via isFieldVisible. */}
+          {showConditional && (
+            <div className="rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 p-2.5">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--foreground)]">
+                  <BranchIcon className="h-3.5 w-3.5 text-[var(--primary)]" />
+                  Show only when
+                  <InfoTip text="This field appears only when the chosen field equals one of the selected values. Turn off to always show it." />
+                </span>
+                <button
+                  onClick={() => { onUpdate(index, { visibleWhen: undefined }); setShowConditional(false); }}
+                  title="Turn off conditional visibility"
+                  className="rounded p-0.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                >
+                  <XMarkIcon className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <CompactSelect
+                value={field.visibleWhen?.field ?? ''}
+                onChange={(fk) =>
+                  onUpdate(index, {
+                    visibleWhen: fk ? { field: fk, in: field.visibleWhen?.field === fk ? field.visibleWhen.in : [] } : undefined,
+                  })
+                }
+                options={[{ value: '', label: 'Choose a field…' }, ...allFields.filter((f) => f.key !== field.key && f.key).map((f) => ({ value: f.key, label: f.label || f.key }))]}
+              />
+              <div className="py-1 text-center text-sm font-semibold text-[var(--muted-foreground)]">=</div>
+              {condField?.type === 'select' && condField.options?.length ? (
+                <MultiSelect
+                  value={field.visibleWhen?.in ?? []}
+                  onChange={(vals) => field.visibleWhen && onUpdate(index, { visibleWhen: { field: field.visibleWhen.field, in: vals } })}
+                  options={condField.options.map((o) => ({ value: o.value, label: o.label }))}
+                  placeholder="any value"
+                />
+              ) : (
+                <input
+                  value={field.visibleWhen?.in.join(', ') ?? ''}
+                  disabled={!field.visibleWhen?.field}
+                  onChange={(e) => field.visibleWhen && onUpdate(index, { visibleWhen: { field: field.visibleWhen.field, in: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) } })}
+                  placeholder={field.visibleWhen?.field ? 'value(s), comma-separated' : 'choose a field first'}
+                  className="w-full rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)] disabled:opacity-50"
+                />
+              )}
+            </div>
+          )}
+          {/* Advanced — technical / optional bits, hidden until opened so the
+              common case (Label / Type / Default) stays short. */}
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="flex w-full items-center justify-between rounded-md py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+          >
+            <span className="flex items-center gap-1.5"><Cog6ToothIcon className="h-3.5 w-3.5" />Advanced options</span>
+            {showAdvanced ? <ChevronDownIcon className="h-3.5 w-3.5" /> : <ChevronRightIcon className="h-3.5 w-3.5" />}
+          </button>
+          {showAdvanced && (
+            <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 p-2.5">
+              <LabeledInput label="Key" hint="The internal id used in {{variable}} tokens and element bindings (e.g. {{leaseTerm}}). Must be unique — renaming updates every reference automatically. Use the ⋯ menu’s “Move to group” to change this field’s section." value={field.key} onChange={(v) => onRename(index, v)} />
+              <LabeledInput label="Placeholder" hint="Faint hint text inside the empty input on the client form (not a real value)." value={field.placeholder ?? ''} onChange={(v) => onUpdate(index, { placeholder: v || undefined })} />
+              <LabeledInput label="Help" hint="A one-line note shown under this field on the client form to guide what they enter." value={field.help ?? ''} onChange={(v) => onUpdate(index, { help: v || undefined })} />
+              <div className="grid grid-cols-2 items-end gap-2">
+                <LabeledInput
+                  label="Max length"
+                  hint="Optional character cap — a fit hint for on-canvas text and a limit the AI copywriter respects."
+                  type="number"
+                  value={field.maxLength != null ? String(field.maxLength) : ''}
+                  onChange={(v) => onUpdate(index, { maxLength: v ? Number(v) : undefined })}
+                />
+                <ToggleRow label="AI may write" hint="Let the AI copywriter fill this field. Use for marketing copy (headline, tagline) — never for data/price/legal, which the AI must not change." on={!!field.copy} onClick={() => onUpdate(index, { copy: field.copy ? undefined : true })} />
+              </div>
+            </div>
+          )}
         </div>
       )}
       {picking && (
@@ -4462,133 +4778,517 @@ function FieldRow({
  * element bindings read. Renaming a key cascades to bindings; deleting a field
  * detaches any element bound to it.
  */
+/** Small 6-dot drag handle. */
+function GripDots({ className = '' }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 10 16" className={className} fill="currentColor" aria-hidden="true">
+      <circle cx="2.5" cy="3" r="1.1" /><circle cx="7.5" cy="3" r="1.1" />
+      <circle cx="2.5" cy="8" r="1.1" /><circle cx="7.5" cy="8" r="1.1" />
+      <circle cx="2.5" cy="13" r="1.1" /><circle cx="7.5" cy="13" r="1.1" />
+    </svg>
+  );
+}
+
+/** "Don't show this again" checkbox for the delete-section confirm dialog —
+ *  reports its value up so the caller can persist the opt-out. */
+function DontShowAgainCheckbox({ onChange }: { onChange: (v: boolean) => void }) {
+  const [checked, setChecked] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => { const v = !checked; setChecked(v); onChange(v); }}
+      className="mt-3 flex items-center gap-2 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+    >
+      <span className={`flex h-4 w-4 items-center justify-center rounded border transition-colors ${checked ? 'border-[var(--primary)] bg-[var(--primary)] text-white' : 'border-[var(--border)]'}`}>
+        {checked && <CheckIcon className="h-3 w-3" />}
+      </span>
+      Don’t show this again
+    </button>
+  );
+}
+
+/** A single input control for the form preview — mirrors how the creative form
+ *  renders each field type (label + help + placeholder), so a designer sees the
+ *  shape at a glance. Interactive only to test conditional visibility. */
+function PreviewControl({ field, value, onChange, internalBadge }: { field: FieldSpec; value: string; onChange: (v: string) => void; internalBadge?: boolean }) {
+  const inputCls = 'w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]';
+  return (
+    <div className={internalBadge ? 'rounded-lg border border-dashed border-[var(--border)] bg-[var(--muted)]/20 p-2' : ''}>
+      <label className="mb-1 flex flex-wrap items-center gap-1.5 text-xs font-medium text-[var(--foreground)]">
+        <span>{field.label || field.key}</span>
+        {internalBadge && (
+          <span className="inline-flex items-center gap-1 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+            <EyeSlashIcon className="h-2.5 w-2.5" />Internal
+          </span>
+        )}
+        {field.help && <span className="w-full font-normal text-[var(--muted-foreground)]">{field.help}</span>}
+      </label>
+      {field.type === 'textarea' ? (
+        <textarea value={value} placeholder={field.placeholder} onChange={(e) => onChange(e.target.value)} rows={2} className={inputCls} />
+      ) : field.type === 'select' ? (
+        <CompactSelect value={value} onChange={onChange} options={[{ value: '', label: field.placeholder || 'Select…' }, ...(field.options ?? []).map((o) => ({ value: o.value, label: o.label }))]} />
+      ) : field.type === 'color' ? (
+        <div className="flex items-center gap-2">
+          <input type="color" value={value || '#000000'} onChange={(e) => onChange(e.target.value)} className="h-9 w-12 cursor-pointer rounded border border-[var(--border)] bg-transparent" />
+          <input type="text" value={value} placeholder={field.placeholder || '#000000'} onChange={(e) => onChange(e.target.value)} className={inputCls} />
+        </div>
+      ) : field.type === 'image' ? (
+        <div className="flex items-center gap-2 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)]">
+          <PhotoIcon className="h-4 w-4 shrink-0" />
+          {field.imageSource === 'evox' ? 'Vehicle image picker' : field.imageSource === 'both' ? 'Upload / library or vehicle picker' : 'Upload / media library'}
+        </div>
+      ) : (
+        <input type={field.type === 'date' ? 'date' : 'text'} value={value} placeholder={field.placeholder} onChange={(e) => onChange(e.target.value)} className={inputCls} />
+      )}
+    </div>
+  );
+}
+
+/** Live form preview built from the current fields — shows the designer what the
+ *  creative form looks like, with a Client/Full switch (Client hides fields the
+ *  designer marked Internal). Honors conditional visibility as you type. */
+function FormPreview({ fields, fieldGroups, defaults }: { fields: FieldSpec[]; fieldGroups: string[]; defaults: Record<string, string> }) {
+  const [view, setView] = useState<'client' | 'full'>('client');
+  const [vals, setVals] = useState<Record<string, string>>({});
+  const data = useMemo(() => ({ ...defaults, ...vals }), [defaults, vals]);
+  const setVal = (k: string, v: string) => setVals((s) => ({ ...s, [k]: v }));
+  const internalCount = useMemo(() => fields.filter((f) => !isClientField(f)).length, [fields]);
+  const groups = useMemo(() => {
+    const m = new Map<string, FieldSpec[]>();
+    for (const f of fields) {
+      if (view === 'client' && !isClientField(f)) continue;
+      if (!isFieldVisible(f, data)) continue; // conditional visibility
+      const g = f.group?.trim() || DEFAULT_GROUP;
+      if (!m.has(g)) m.set(g, []);
+      m.get(g)!.push(f);
+    }
+    const rank = (g: string) => { const i = fieldGroups.indexOf(g); return i < 0 ? fieldGroups.length + 1 : i; };
+    return [...m.entries()].sort((a, b) => rank(a[0]) - rank(b[0]));
+  }, [fields, fieldGroups, data, view]);
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex items-center gap-0.5 border-b border-[var(--border)] p-3">
+        <div className="flex flex-1 items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
+          {(['client', 'full'] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${view === v ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
+            >
+              {v === 'client' ? 'Client view' : 'Full form'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex-1 space-y-5 overflow-y-auto p-4">
+        <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">
+          {view === 'client'
+            ? internalCount > 0
+              ? `What a client sees and fills in — ${internalCount} internal field${internalCount === 1 ? '' : 's'} hidden here.`
+              : 'What a client fills in. Every field is client-facing right now — set a field’s “Filled by” to Internal to hide it from clients.'
+            : 'Every field. Dashed rows tagged “Internal” are hidden from clients (only you fill them in).'}
+        </p>
+        {groups.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-6 text-center text-xs text-[var(--muted-foreground)]">
+            {view === 'client' ? 'No client-facing fields yet — mark fields “Client”, or add some.' : 'No fields yet.'}
+          </p>
+        ) : (
+          groups.map(([group, fs]) => (
+            <section key={group}>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{group}</h3>
+              <div className="space-y-3">
+                {fs.map((f) => (
+                  <PreviewControl key={f.key} field={f} value={vals[f.key] ?? defaults[f.key] ?? ''} onChange={(v) => setVal(f.key, v)} internalBadge={view === 'full' && !isClientField(f)} />
+                ))}
+              </div>
+            </section>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FieldsSidebar({
   fields,
+  fieldGroups,
   defaults,
   accountKey,
   brandLogos,
-  hideSecondOffer,
   onClose,
   onAdd,
   onUpdate,
   onRename,
   onDelete,
   onSetDefault,
+  onAddGroup,
+  onRenameGroup,
+  onDeleteGroup,
+  onMoveGroup,
+  onMoveField,
+  presets,
+  onApplyPreset,
+  onSavePreset,
 }: {
   fields: FieldSpec[];
+  /** Ordered, designer-defined group names (may include empty groups). */
+  fieldGroups: string[];
   defaults: Record<string, string>;
   accountKey?: string;
   brandLogos: { key: string; label: string; url: string }[];
-  /** In the 1-offer view, hide the second-offer (`o2_`) fields so the panel only
-   *  shows the fields relevant to the layout you're editing. */
-  hideSecondOffer: boolean;
+  /** Reusable field-set presets — names only; apply seeds fields, save upserts. */
+  presets: string[];
+  onApplyPreset: (name: string) => void;
+  onSavePreset: () => void;
   onClose: () => void;
-  onAdd: () => void;
+  onAdd: (group?: string) => void;
   onUpdate: (i: number, patch: Partial<FieldSpec>) => void;
   onRename: (i: number, newKey: string) => void;
   onDelete: (i: number) => void;
   onSetDefault: (i: number, val: string) => void;
+  onAddGroup: () => void;
+  onRenameGroup: (oldName: string, next: string) => void;
+  onDeleteGroup: (name: string) => void;
+  onMoveGroup: (from: number, to: number) => void;
+  onMoveField: (key: string, group: string | undefined, beforeKey?: string) => void;
 }) {
-  const [expanded, setExpanded] = useState<number | null>(fields.length ? 0 : null);
-  // Group fields by their `group` (Vehicle / Offer / Legal / …) so a long kit
-  // (24–44 fields) reads as a few collapsible sections instead of a wall. Each
-  // entry keeps its original flat index so the index-based handlers still hit
-  // the right field. In the 1-offer view, the second-offer fields are hidden.
-  const groups = useMemo(() => {
-    const m = new Map<string, { f: FieldSpec; i: number }[]>();
-    fields.forEach((f, i) => {
-      if (hideSecondOffer && f.key.startsWith('o2_')) return;
-      const g = (f.group || 'General').trim() || 'General';
-      if (!m.has(g)) m.set(g, []);
-      m.get(g)!.push({ f, i });
-    });
-    return [...m.entries()];
-  }, [fields, hideSecondOffer]);
-  // A long list starts with only the first section open; a short one opens all.
-  // A single new section (from "Add field") auto-opens so it's not lost.
-  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
-    const names = groups.map(([g]) => g);
-    return new Set(fields.length > 10 ? names.slice(0, 1) : names);
-  });
-  const prevGroupNames = useRef(new Set(groups.map(([g]) => g)));
+  // All field rows start collapsed — the designer opens the one they want.
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
+  const [renamingGroup, setRenamingGroup] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  // Preview mode — swap the editor for a live client-form mock of these fields.
+  const [previewOpen, setPreviewOpen] = useState(false);
+  // Presets popover (the header cog) — apply a saved field-set or save this one.
+  const [presetsOpen, setPresetsOpen] = useState(false);
+  const presetsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const cur = groups.map(([g]) => g);
-    const added = cur.filter((g) => !prevGroupNames.current.has(g));
+    if (!presetsOpen) return;
+    const h = (e: MouseEvent) => { if (!presetsRef.current?.contains(e.target as Node)) setPresetsOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [presetsOpen]);
+  // Drag source is tracked in refs (read synchronously in onDrop, unaffected by
+  // React's async state) + mirrored to state for the drag visual.
+  const [dragGroup, setDragGroup] = useState<number | null>(null);
+  const [dragField, setDragField] = useState<string | null>(null);
+  // Where the dragged item will land — drives the single insertion line shown at
+  // the drop point. For fields it's a BOUNDARY index within a section (0..len),
+  // computed once at the section-body level so there's exactly one drop zone per
+  // gap (not a per-row before/after pair) and gaps/padding never fall through to
+  // an append. For sections it's a before/after edge on the hovered section.
+  const [fieldDrop, setFieldDrop] = useState<{ group: string; index: number } | null>(null);
+  const [groupDrop, setGroupDrop] = useState<{ id: string; edge: 'before' | 'after' } | null>(null);
+  const dragGroupRef = useRef<number | null>(null);
+  const dragFieldRef = useRef<string | null>(null);
+  const startGroupDrag = (gi: number) => { dragGroupRef.current = gi; dragFieldRef.current = null; setDragGroup(gi); };
+  const startFieldDrag = (key: string) => { dragFieldRef.current = key; dragGroupRef.current = null; setDragField(key); };
+  const endDrag = () => { dragGroupRef.current = null; dragFieldRef.current = null; setDragGroup(null); setDragField(null); setFieldDrop(null); setGroupDrop(null); };
+
+  // Ordered section list: the designer-defined groups, unioned with any group
+  // present on a field — an ungrouped field resolves to the "General" section,
+  // so every field has a real, editable home (no separate ungrouped bucket).
+  // Mirrors the parent's `currentGroups` so index-based handlers line up. Each
+  // field keeps its flat index into `fields` so the handlers hit the right one.
+  const GENERAL = DEFAULT_GROUP;
+  const orderedNames = useMemo(() => {
+    const base = fieldGroups.slice();
+    for (const f of fields) { const g = f.group?.trim() || GENERAL; if (!base.includes(g)) base.push(g); }
+    return base;
+  }, [fieldGroups, fields]);
+  const rows = useMemo(() => fields.map((f, i) => ({ f, i })), [fields]);
+  const itemsFor = (name: string) => rows.filter(({ f }) => (f.group?.trim() || GENERAL) === name);
+  // Auto-open a newly-added group so it isn't lost.
+  const prevNames = useRef(new Set(orderedNames));
+  useEffect(() => {
+    const added = orderedNames.filter((g) => !prevNames.current.has(g));
     if (added.length === 1) setOpenGroups((s) => new Set([...s, added[0]]));
-    prevGroupNames.current = new Set(cur);
-  }, [groups]);
+    prevNames.current = new Set(orderedNames);
+  }, [orderedNames]);
   const toggleGroup = (g: string) =>
-    setOpenGroups((s) => {
-      const next = new Set(s);
-      if (next.has(g)) next.delete(g);
-      else next.add(g);
-      return next;
+    setOpenGroups((s) => { const next = new Set(s); if (next.has(g)) next.delete(g); else next.add(g); return next; });
+
+  // FLIP animation: after any reorder, tagged nodes glide from their previous
+  // position to the new one. Gated on an order signature so expanding/collapsing
+  // a row (which doesn't reorder) never animates.
+  const flipRef = useRef<HTMLDivElement>(null);
+  const posRef = useRef<Map<string, number>>(new Map());
+  const orderSig = orderedNames.join('|') + '::' + rows.map(({ f }) => `${f.group?.trim() || GENERAL}/${f.key}`).join(',');
+  const prevSig = useRef(orderSig);
+  useLayoutEffect(() => {
+    const container = flipRef.current;
+    if (!container) return;
+    const changed = prevSig.current !== orderSig;
+    container.querySelectorAll<HTMLElement>('[data-flip-key]').forEach((node) => {
+      const key = node.dataset.flipKey!;
+      const top = node.getBoundingClientRect().top;
+      const prev = posRef.current.get(key);
+      if (changed && prev !== undefined) {
+        const dy = prev - top;
+        if (Math.abs(dy) > 1) node.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }], { duration: 180, easing: 'cubic-bezier(0.2, 0, 0, 1)' });
+      }
+      posRef.current.set(key, top);
     });
-  return (
-    // Floating right-docked sidebar (no modal / backdrop) — the form that drives
-    // the ad stays open beside the canvas while you design.
-    <div data-adgen-panel className="fixed right-4 top-20 bottom-4 z-40 flex w-[340px] max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl">
-      <div className="flex items-start justify-between gap-2 border-b border-[var(--border)] p-4">
-        <div>
-          <h2 className="text-sm font-bold text-[var(--foreground)]">Template fields</h2>
-          <p className="text-xs text-[var(--muted-foreground)]">The form users fill — and what AI copy + element bindings read.</p>
+    prevSig.current = orderSig;
+  });
+
+  const renderFieldRow = (f: FieldSpec, i: number, group: string, pos: number, count: number) => {
+    // Lines are driven by the section-body boundary (`fieldDrop.index`): draw
+    // above the row sitting at the boundary, or below the last row when the
+    // boundary is the section end. Exactly one line, no dead gaps.
+    const lineBefore = fieldDrop?.group === group && fieldDrop.index === pos;
+    const lineAfter = fieldDrop?.group === group && pos === count - 1 && fieldDrop.index === count;
+    return (
+      <div
+        key={f.key}
+        data-flip-key={`f:${f.key}`}
+        data-field-row
+        className="relative"
+      >
+        {lineBefore && <div className="pointer-events-none absolute -top-[5px] left-1 right-1 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
+        <div className={`flex items-start gap-1 rounded-lg transition-[opacity,transform] duration-150 ${dragField === f.key ? 'opacity-40' : ''}`}>
+          <span
+            draggable
+            onDragStart={(e) => { e.stopPropagation(); startFieldDrag(f.key); }}
+            onDragEnd={endDrag}
+            title="Drag to reorder / move to another group"
+            className="mt-2.5 shrink-0 cursor-grab text-[var(--muted-foreground)]/60 hover:text-[var(--foreground)] active:cursor-grabbing"
+          >
+            <GripDots className="h-3.5 w-2" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <FieldRow
+              field={f}
+              index={i}
+              expanded={expanded === f.key}
+              defaultValue={defaults[f.key] ?? ''}
+              accountKey={accountKey}
+              brandLogos={brandLogos}
+              allFields={fields}
+              groupNames={orderedNames}
+              onToggle={() => setExpanded(expanded === f.key ? null : f.key)}
+              onUpdate={onUpdate}
+              onRename={onRename}
+              onDelete={onDelete}
+              onSetDefault={onSetDefault}
+              onMoveToGroup={(key, g) => onMoveField(key, g)}
+            />
+          </div>
         </div>
-        <button onClick={onClose} title="Close" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
-          <XMarkIcon className="h-5 w-5" />
-        </button>
+        {lineAfter && <div className="pointer-events-none absolute -bottom-[5px] left-1 right-1 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
       </div>
-      <div className="flex-1 space-y-2 overflow-y-auto p-4">
-        {groups.map(([group, items]) => {
+    );
+  };
+
+  return (
+    // Left-docked panel inside the canvas — the form that drives the ad stays
+    // open beside the canvas while you design.
+    <div data-adgen-panel className="absolute left-4 top-4 bottom-4 z-[70] flex w-[400px] max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl">
+      <div className="flex items-start justify-between gap-2 border-b border-[var(--border)] p-4">
+        <div className="min-w-0">
+          <h2 className="text-sm font-bold text-[var(--foreground)]">{previewOpen ? 'Form preview' : 'Template fields'}</h2>
+          <p className="text-xs text-[var(--muted-foreground)]">{previewOpen ? 'How the fields look on the creative form.' : 'The form users fill — organize them into sections that carry to the client form.'}</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {/* Preview — flip the panel between editing fields and a live mock of
+              the client form built from them. */}
+          <button
+            onClick={() => { setPreviewOpen((v) => !v); setPresetsOpen(false); }}
+            title={previewOpen ? 'Back to editing fields' : 'Preview the form'}
+            aria-pressed={previewOpen}
+            className={`rounded-md p-1 transition-colors ${previewOpen ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
+          >
+            {previewOpen ? <PencilSquareIcon className="h-5 w-5" /> : <EyeIcon className="h-5 w-5" />}
+          </button>
+          {/* Presets — apply a saved field-set to this template, or save the
+              current fields as a reusable preset. */}
+          <div ref={presetsRef} className={`relative ${previewOpen ? 'hidden' : ''}`}>
+            <button
+              onClick={() => setPresetsOpen((v) => !v)}
+              title="Field presets"
+              aria-pressed={presetsOpen}
+              className={`rounded-md p-1 transition-colors ${presetsOpen ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
+            >
+              <Cog6ToothIcon className="h-5 w-5" />
+            </button>
+            {presetsOpen && (
+              <div className="absolute right-0 top-full z-[95] mt-1 w-64 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-2 shadow-2xl backdrop-blur-2xl">
+                <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">Apply a preset</p>
+                <p className="px-2 pb-1.5 text-[11px] leading-snug text-[var(--muted-foreground)]">Fills in a saved set of fields + sections (e.g. Vehicle Offer). Won’t overwrite fields you already have.</p>
+                <div className="max-h-56 overflow-y-auto">
+                  {presets.length === 0 ? (
+                    <p className="px-2 py-2 text-[11px] italic text-[var(--muted-foreground)]">No presets saved yet.</p>
+                  ) : (
+                    presets.map((name) => (
+                      <button
+                        key={name}
+                        onClick={() => { onApplyPreset(name); setPresetsOpen(false); }}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                      >
+                        <RectangleStackIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)]" />
+                        <span className="truncate">{name}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+                <div className="my-1.5 border-t border-[var(--border)]" />
+                <button
+                  onClick={() => { onSavePreset(); setPresetsOpen(false); }}
+                  disabled={fields.length === 0}
+                  title={fields.length === 0 ? 'Add some fields first' : 'Save the current fields as a reusable preset'}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/10 disabled:opacity-40"
+                >
+                  <BookmarkSquareIcon className="h-3.5 w-3.5 shrink-0" />
+                  Save current fields as a preset…
+                </button>
+              </div>
+            )}
+          </div>
+          <button onClick={onClose} title="Close" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+      </div>
+      {previewOpen ? (
+        <FormPreview fields={fields} fieldGroups={fieldGroups} defaults={defaults} />
+      ) : (
+      <>
+      <div ref={flipRef} className="flex-1 space-y-2 overflow-y-auto p-4">
+        {orderedNames.map((group, gi) => {
           const open = openGroups.has(group);
+          const items = itemsFor(group);
+          const renaming = renamingGroup === group;
+          const gLineBefore = groupDrop?.id === group && groupDrop.edge === 'before';
+          const gLineAfter = groupDrop?.id === group && groupDrop.edge === 'after';
+          const groupKeys = items.map(({ f }) => f.key);
           return (
-            <div key={group} className="rounded-lg border border-[var(--border)]">
-              <button
-                type="button"
-                onClick={() => toggleGroup(group)}
-                className="flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--muted)]/40"
-              >
-                <span className="flex items-center gap-1.5 text-xs font-semibold text-[var(--foreground)]">
-                  {open ? <ChevronDownIcon className="h-3.5 w-3.5" /> : <ChevronRightIcon className="h-3.5 w-3.5" />}
-                  {group}
+            <div
+              key={group}
+              data-flip-key={`g:${group}`}
+              className={`relative rounded-lg border transition-[opacity,transform] duration-150 ${dragGroup === gi ? 'opacity-40' : ''} border-[var(--border)]`}
+              onDragOver={(e) => {
+                if (dragGroupRef.current !== null) {
+                  e.preventDefault();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  const edge = e.clientY < r.top + r.height / 2 ? 'before' : 'after';
+                  setGroupDrop((p) => (p && p.id === group && p.edge === edge ? p : { id: group, edge }));
+                } else if (dragFieldRef.current) {
+                  e.preventDefault();
+                }
+              }}
+              onDrop={() => {
+                const fromG = dragGroupRef.current;
+                if (fromG !== null) {
+                  const edge = groupDrop?.id === group ? groupDrop.edge : 'before';
+                  let target = edge === 'before' ? gi : gi + 1;
+                  if (fromG < target) target -= 1; // account for removal before insertion
+                  target = Math.max(0, Math.min(target, orderedNames.length - 1));
+                  if (target !== fromG) onMoveGroup(fromG, target);
+                } else if (dragFieldRef.current) {
+                  // Fallback (e.g. dropping on a collapsed section header): append.
+                  onMoveField(dragFieldRef.current, group, undefined);
+                }
+                endDrag();
+              }}
+            >
+              {gLineBefore && <div className="pointer-events-none absolute -top-[5px] left-0 right-0 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
+              {gLineAfter && <div className="pointer-events-none absolute -bottom-[5px] left-0 right-0 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
+              <div className="flex items-center gap-1 px-2 py-2">
+                <span
+                  draggable
+                  onDragStart={() => startGroupDrag(gi)}
+                  onDragEnd={endDrag}
+                  title="Drag to reorder section"
+                  className="shrink-0 cursor-grab text-[var(--muted-foreground)]/60 hover:text-[var(--foreground)] active:cursor-grabbing"
+                >
+                  <GripDots className="h-4 w-2.5" />
                 </span>
-                <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] tabular-nums text-[var(--muted-foreground)]">{items.length}</span>
-              </button>
-              {open && (
-                <div className="space-y-2 border-t border-[var(--border)] p-2">
-                  {items.map(({ f, i }) => (
-                    <FieldRow
-                      key={i}
-                      field={f}
-                      index={i}
-                      expanded={expanded === i}
-                      defaultValue={defaults[f.key] ?? ''}
-                      accountKey={accountKey}
-                      brandLogos={brandLogos}
-                      onToggle={() => setExpanded(expanded === i ? null : i)}
-                      onUpdate={onUpdate}
-                      onRename={onRename}
-                      onDelete={onDelete}
-                      onSetDefault={onSetDefault}
+                <button type="button" onClick={() => toggleGroup(group)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+                  {open ? <ChevronDownIcon className="h-3.5 w-3.5 shrink-0" /> : <ChevronRightIcon className="h-3.5 w-3.5 shrink-0" />}
+                  {renaming ? (
+                    <input
+                      autoFocus
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { onRenameGroup(group, renameDraft); setRenamingGroup(null); } if (e.key === 'Escape') setRenamingGroup(null); }}
+                      onBlur={() => { onRenameGroup(group, renameDraft); setRenamingGroup(null); }}
+                      className="min-w-0 flex-1 rounded border border-[var(--primary)] bg-[var(--input)] px-1 py-0.5 text-xs font-semibold text-[var(--foreground)] outline-none"
                     />
-                  ))}
+                  ) : (
+                    <span className="truncate text-xs font-semibold text-[var(--foreground)]">{group}</span>
+                  )}
+                </button>
+                <span className="shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] tabular-nums text-[var(--muted-foreground)]">{items.length}</span>
+                <button type="button" onClick={() => { setRenamingGroup(group); setRenameDraft(group); }} title="Rename section" className="shrink-0 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+                  <PencilSquareIcon className="h-3.5 w-3.5" />
+                </button>
+                <button type="button" onClick={() => onDeleteGroup(group)} title="Delete section (also deletes its fields)" className="shrink-0 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500">
+                  <TrashIcon className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {open && (
+                <div
+                  className="space-y-2 border-t border-[var(--border)] p-2"
+                  onDragOver={(e) => {
+                    if (!dragFieldRef.current) return;
+                    e.preventDefault();
+                    // One boundary for the whole section: the first row whose
+                    // midpoint is below the cursor (else the section end). Covers
+                    // the gaps + padding too, so a drop never falls through to an
+                    // append and there's exactly one drop zone per gap.
+                    const rowEls = [...e.currentTarget.querySelectorAll<HTMLElement>('[data-field-row]')];
+                    let index = rowEls.length;
+                    for (let k = 0; k < rowEls.length; k++) {
+                      const r = rowEls[k].getBoundingClientRect();
+                      if (e.clientY < r.top + r.height / 2) { index = k; break; }
+                    }
+                    setGroupDrop(null);
+                    setFieldDrop((p) => (p && p.group === group && p.index === index ? p : { group, index }));
+                  }}
+                  onDrop={(e) => {
+                    e.stopPropagation();
+                    const src = dragFieldRef.current;
+                    if (src) {
+                      const index = fieldDrop?.group === group ? fieldDrop.index : groupKeys.length;
+                      const beforeKey = index < groupKeys.length ? groupKeys[index] : undefined;
+                      if (src !== beforeKey) onMoveField(src, group, beforeKey);
+                    }
+                    endDrag();
+                  }}
+                >
+                  {items.map(({ f, i }, pos) => renderFieldRow(f, i, group, pos, items.length))}
+                  {items.length === 0 && <p className="px-1 py-1 text-[11px] text-[var(--muted-foreground)]">No fields in this section yet.</p>}
+                  <button
+                    onClick={() => onAdd(group)}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+                  >
+                    <PlusIcon className="h-3.5 w-3.5" />
+                    Add field to {group}
+                  </button>
                 </div>
               )}
             </div>
           );
         })}
-        {!fields.length && (
-          <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-xs text-[var(--muted-foreground)]">No fields yet.</p>
+
+        {orderedNames.length === 0 && (
+          <div className="rounded-lg border border-dashed border-[var(--border)] px-3 py-5 text-center">
+            <p className="text-xs text-[var(--muted-foreground)]">No fields yet. Create a section, then add fields to it.</p>
+          </div>
         )}
       </div>
-      <div className="m-4 mt-0 space-y-2">
+      <div className="m-4 mt-0">
         <button
-          onClick={onAdd}
-          className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+          onClick={onAddGroup}
+          className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
         >
           <PlusIcon className="h-3.5 w-3.5" />
-          Add field
+          New section
         </button>
       </div>
+      </>
+      )}
     </div>
   );
 }
@@ -4815,7 +5515,6 @@ function MultiSelectPanel({
   onDelete,
   onClose,
   shifted,
-  supportsDual,
 }: {
   elements: DocElement[];
   sampleFontSize: number;
@@ -4828,16 +5527,9 @@ function MultiSelectPanel({
   onDelete: () => void;
   onClose: () => void;
   shifted: boolean;
-  supportsDual: boolean;
 }) {
   const textEls = elements.filter((e) => e.type === 'text');
   const sample = textEls[0];
-  // Shared "Appears in" (offer-count) state across the selection — null when the
-  // selected elements disagree, so no segment reads as active until you set one.
-  const offerState = (() => {
-    const states = elements.map((e) => (e.offerCounts && e.offerCounts.length === 1 ? String(e.offerCounts[0]) : 'both'));
-    return states.every((s) => s === states[0]) ? states[0] : null;
-  })();
   return (
     <div
       data-adgen-panel
@@ -4851,31 +5543,6 @@ function MultiSelectPanel({
       </div>
 
       <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
-        {/* Appears in — bulk-set the offer-count on every selected element, so a
-            whole grouped offer block can be shown/hidden at once (not per box). */}
-        {supportsDual && (
-          <PanelSection title="Appears in">
-            <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
-              {([['both', 'Both', undefined], ['1', 'Offer 1', [1]], ['2', 'Offer 2', [2]]] as const).map(
-                ([val, label, counts]) => {
-                  const active = offerState === val;
-                  return (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => onElAll({ offerCounts: counts ? [...counts] : undefined })}
-                      className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
-                        active ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  );
-                },
-              )}
-            </div>
-          </PanelSection>
-        )}
         {textEls.length > 0 ? (
           <>
             <PanelSection title={`Font · ${textEls.length} text ${textEls.length === 1 ? 'box' : 'boxes'}`}>
@@ -4997,7 +5664,6 @@ function SelectionPanel({
   contentSources,
   onContentChange,
   accountKey,
-  supportsDual,
   onEl,
   onBox,
   onClose,
@@ -5016,9 +5682,6 @@ function SelectionPanel({
   contentSources: SearchableSelectOption[];
   onContentChange: (value: string) => void;
   accountKey?: string;
-  /** Whether this template lets the client choose 1 or 2 offers — gates the
-   *  per-element "Appears in" (offer-count) control. */
-  supportsDual: boolean;
   onEl: (patch: Partial<DocElement>) => void;
   onBox: (patch: Partial<DocLayoutBox>) => void;
   onClose: () => void;
@@ -5126,34 +5789,6 @@ function SelectionPanel({
                 )}
               </div>
             )}
-          </PanelSection>
-        )}
-
-        {/* Appears in — for templates where the client picks 1 or 2 offers, which
-            offer count(s) show this element. Chrome stays "Both"; offer-2 blocks
-            are "2 offers". Preview each with the canvas offer-count toggle. */}
-        {supportsDual && (
-          <PanelSection title="Appears in">
-            <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
-              {([['both', 'Both', undefined], ['1', 'Offer 1', [1]], ['2', 'Offer 2', [2]]] as const).map(
-                ([val, label, counts]) => {
-                  const cur = el.offerCounts && el.offerCounts.length === 1 ? String(el.offerCounts[0]) : 'both';
-                  const active = cur === val;
-                  return (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => onEl({ offerCounts: counts ? [...counts] : undefined })}
-                      className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
-                        active ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  );
-                },
-              )}
-            </div>
           </PanelSection>
         )}
 

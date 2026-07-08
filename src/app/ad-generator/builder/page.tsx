@@ -62,8 +62,8 @@ import {
   VariableIcon,
   MagnifyingGlassIcon,
   EllipsisVerticalIcon,
-  FunnelIcon,
 } from '@heroicons/react/24/outline';
+import { BranchIcon } from '@/components/icons/branch';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
@@ -4549,7 +4549,11 @@ function FieldRow({
           <span className="shrink-0 truncate text-xs font-medium text-[var(--foreground)]">{field.label || field.key}</span>
           <span className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">{field.type}</span>
           {field.copy && <span className="shrink-0 rounded bg-[var(--primary)]/10 px-1 text-[9px] font-medium text-[var(--primary)]">AI</span>}
-          {field.visibleWhen && <FunnelIcon className="h-3 w-3 shrink-0 text-[var(--primary)]" title="Conditional field" />}
+          {field.visibleWhen && (
+            <Tooltip label="Conditional field">
+              <BranchIcon className="h-3 w-3 shrink-0 text-[var(--primary)]" />
+            </Tooltip>
+          )}
         </button>
         {/* Subtle peek at the default/preview value so a designer can scan values
             without expanding each row (image fields skip it — the value is a URL). */}
@@ -4573,7 +4577,7 @@ function FieldRow({
                 onClick={() => { setShowConditional(true); if (!expanded) onToggle(); setMenuOpen(false); }}
                 className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
               >
-                <FunnelIcon className="h-3.5 w-3.5 text-[var(--primary)]" />
+                <BranchIcon className="h-3.5 w-3.5 text-[var(--primary)]" />
                 Conditional field
               </button>
               <button
@@ -4645,7 +4649,7 @@ function FieldRow({
             <div className="rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 p-2.5">
               <div className="mb-2 flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--foreground)]">
-                  <FunnelIcon className="h-3.5 w-3.5 text-[var(--primary)]" />
+                  <BranchIcon className="h-3.5 w-3.5 text-[var(--primary)]" />
                   Show only when
                   <InfoTip text="This field appears only when the chosen field equals one of the selected values. Turn off to always show it." />
                 </span>

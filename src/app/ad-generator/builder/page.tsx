@@ -61,6 +61,8 @@ import {
   BookmarkSquareIcon,
   VariableIcon,
   MagnifyingGlassIcon,
+  EllipsisVerticalIcon,
+  FunnelIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
@@ -4435,6 +4437,57 @@ function SelectOptionsEditor({
   );
 }
 
+/** Group picker — pick an existing group (so a designer sees where other fields
+ *  live) or create a new one inline. Preserves the typed name as-is. */
+function GroupPicker({ value, options, onChange }: { value?: string; options: string[]; onChange: (v: string | undefined) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open]);
+  const q = query.trim();
+  const filtered = options.filter((o) => o.toLowerCase().includes(q.toLowerCase()));
+  const canCreate = !!q && !options.some((o) => o.toLowerCase() === q.toLowerCase());
+  const pick = (v: string | undefined) => { onChange(v); setOpen(false); setQuery(''); };
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-xs text-[var(--foreground)] transition-colors hover:border-[var(--primary)]"
+      >
+        <span className={value ? '' : 'text-[var(--muted-foreground)]'}>{value || 'General'}</span>
+        <ChevronDownIcon className={`h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-[80] mt-1 rounded-lg border border-[var(--border)] bg-[var(--card-strong)] p-1 shadow-2xl backdrop-blur-2xl">
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && canCreate) pick(q); }}
+            placeholder="Search or create…"
+            className="mb-1 w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+          />
+          <div className="max-h-40 overflow-y-auto">
+            <button type="button" onClick={() => pick(undefined)} className="flex w-full items-center rounded-md px-2 py-1 text-left text-xs text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)]">General (no group)</button>
+            {filtered.map((o) => (
+              <button key={o} type="button" onClick={() => pick(o)} className={`flex w-full items-center rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-[var(--muted)] ${o === value ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>{o}</button>
+            ))}
+            {canCreate && (
+              <button type="button" onClick={() => pick(q)} className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left text-xs text-[var(--primary)] transition-colors hover:bg-[var(--muted)]">+ Create “{q}”</button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FieldRow({
   field,
   index,
@@ -4464,8 +4517,21 @@ function FieldRow({
   onSetDefault: (i: number, val: string) => void;
 }) {
   const [picking, setPicking] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // Whether the "Show only when" section is shown in the editor — on if the field
+  // already has a condition, or the designer picks "Conditional field" in the ⋯ menu.
+  const [showConditional, setShowConditional] = useState(!!field.visibleWhen);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const h = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [menuOpen]);
   // The field that gates this one's visibility (for the "Show only when" UI).
   const condField = field.visibleWhen ? allFields.find((f) => f.key === field.visibleWhen!.field) : undefined;
+  // Distinct group names across the template — for the Group picker's suggestions.
+  const groupOptions = [...new Set(allFields.map((f) => f.group?.trim()).filter((g): g is string => !!g))].sort();
   return (
     // Subtle fill so a field row lifts off the group section it sits in (they
     // otherwise share the panel background and blend together); the opened row
@@ -4480,6 +4546,7 @@ function FieldRow({
           <span className="shrink-0 truncate text-xs font-medium text-[var(--foreground)]">{field.label || field.key}</span>
           <span className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">{field.type}</span>
           {field.copy && <span className="shrink-0 rounded bg-[var(--primary)]/10 px-1 text-[9px] font-medium text-[var(--primary)]">AI</span>}
+          {field.visibleWhen && <FunnelIcon className="h-3 w-3 shrink-0 text-[var(--primary)]" title="Conditional field" />}
         </button>
         {/* Subtle peek at the default/preview value so a designer can scan values
             without expanding each row (image fields skip it — the value is a URL). */}
@@ -4488,13 +4555,34 @@ function FieldRow({
             {defaultValue}
           </span>
         )}
-        <button
-          onClick={() => onDelete(index)}
-          title="Delete field"
-          className="shrink-0 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500"
-        >
-          <TrashIcon className="h-3.5 w-3.5" />
-        </button>
+        {/* Row menu — Conditional field + Delete (replaces the bare trash icon). */}
+        <div ref={menuRef} className="relative shrink-0">
+          <button
+            onClick={() => setMenuOpen((v) => !v)}
+            title="More"
+            className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          >
+            <EllipsisVerticalIcon className="h-4 w-4" />
+          </button>
+          {menuOpen && (
+            <div className="absolute right-0 top-full z-[90] mt-1 w-44 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--card-strong)] py-1 shadow-2xl backdrop-blur-2xl">
+              <button
+                onClick={() => { setShowConditional(true); if (!expanded) onToggle(); setMenuOpen(false); }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+              >
+                <FunnelIcon className="h-3.5 w-3.5 text-[var(--primary)]" />
+                Conditional field
+              </button>
+              <button
+                onClick={() => { onDelete(index); setMenuOpen(false); }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-500 transition-colors hover:bg-red-500/10"
+              >
+                <TrashIcon className="h-3.5 w-3.5" />
+                Delete
+              </button>
+            </div>
+          )}
+        </div>
       </div>
       {expanded && (
         <div className="space-y-2 border-t border-[var(--border)] px-3 py-3 text-xs">
@@ -4506,7 +4594,9 @@ function FieldRow({
             <SelectRow label="Type" hint="How the client fills this field: plain text, number, a date picker, a color, an image picker, or a dropdown (select).">
               <CompactSelect value={field.type} onChange={(v) => onUpdate(index, { type: v as FieldType })} options={FIELD_TYPE_OPTIONS} />
             </SelectRow>
-            <LabeledInput label="Group" hint="Optional. Groups this field with others under a heading in the form + Fields panel (e.g. “Offer”, “Vehicle”, “Legal”). Fields sharing a Group name collapse into one section; blank = “General”." value={field.group ?? ''} onChange={(v) => onUpdate(index, { group: v || undefined })} />
+            <SelectRow label="Group" hint="Groups this field with others under a heading in the form + Fields panel (e.g. “Offer”, “Vehicle”, “Legal”). Pick an existing group or create one; blank = “General”.">
+              <GroupPicker value={field.group} options={groupOptions} onChange={(g) => onUpdate(index, { group: g })} />
+            </SelectRow>
           </div>
           {/* Default / preview value — the fallback shown in the picker thumb,
               builder canvas, and client form until the client fills it in. For
@@ -4551,12 +4641,25 @@ function FieldRow({
           )}
           <LabeledInput label="Placeholder" hint="Faint hint text inside the empty input on the client form (not a real value)." value={field.placeholder ?? ''} onChange={(v) => onUpdate(index, { placeholder: v || undefined })} />
           <LabeledInput label="Help" hint="A one-line note shown under this field on the client form to guide what they enter." value={field.help ?? ''} onChange={(v) => onUpdate(index, { help: v || undefined })} />
-          {/* Conditional visibility — show this field only when another field has
-              a given value (e.g. Lease fields only when Offer type = Lease). The
-              client form + AI copy already honor this via `isFieldVisible`. */}
-          <div>
-            <HintLabel label="Show only when" hint="Make this field appear only when another field has a specific value — e.g. show the Lease fields only when Offer type is Lease. Leave “Always show” to always display it." />
-            <div className="grid grid-cols-2 gap-2">
+          {/* Conditional visibility — opt-in via the ⋯ menu. Shows this field only
+              when another field has a given value (e.g. Lease fields only when
+              Offer type = Lease). Honored by the client form + AI via isFieldVisible. */}
+          {showConditional && (
+            <div className="rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 p-2.5">
+              <div className="mb-2 flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--foreground)]">
+                  <FunnelIcon className="h-3.5 w-3.5 text-[var(--primary)]" />
+                  Show only when
+                  <InfoTip text="This field appears only when the chosen field equals one of the selected values. Turn off to always show it." />
+                </span>
+                <button
+                  onClick={() => { onUpdate(index, { visibleWhen: undefined }); setShowConditional(false); }}
+                  title="Turn off conditional visibility"
+                  className="rounded p-0.5 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                >
+                  <XMarkIcon className="h-3.5 w-3.5" />
+                </button>
+              </div>
               <CompactSelect
                 value={field.visibleWhen?.field ?? ''}
                 onChange={(fk) =>
@@ -4564,26 +4667,27 @@ function FieldRow({
                     visibleWhen: fk ? { field: fk, in: field.visibleWhen?.field === fk ? field.visibleWhen.in : [] } : undefined,
                   })
                 }
-                options={[{ value: '', label: 'Always show' }, ...allFields.filter((f) => f.key !== field.key && f.key).map((f) => ({ value: f.key, label: f.label || f.key }))]}
+                options={[{ value: '', label: 'Choose a field…' }, ...allFields.filter((f) => f.key !== field.key && f.key).map((f) => ({ value: f.key, label: f.label || f.key }))]}
               />
-              {field.visibleWhen?.field &&
-                (condField?.type === 'select' && condField.options?.length ? (
-                  <MultiSelect
-                    value={field.visibleWhen.in}
-                    onChange={(vals) => onUpdate(index, { visibleWhen: { field: field.visibleWhen!.field, in: vals } })}
-                    options={condField.options.map((o) => ({ value: o.value, label: o.label }))}
-                    placeholder="any value"
-                  />
-                ) : (
-                  <input
-                    value={field.visibleWhen.in.join(', ')}
-                    onChange={(e) => onUpdate(index, { visibleWhen: { field: field.visibleWhen!.field, in: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) } })}
-                    placeholder="value(s), comma-separated"
-                    className="w-full rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                  />
-                ))}
+              <div className="py-1 text-center text-sm font-semibold text-[var(--muted-foreground)]">=</div>
+              {condField?.type === 'select' && condField.options?.length ? (
+                <MultiSelect
+                  value={field.visibleWhen?.in ?? []}
+                  onChange={(vals) => field.visibleWhen && onUpdate(index, { visibleWhen: { field: field.visibleWhen.field, in: vals } })}
+                  options={condField.options.map((o) => ({ value: o.value, label: o.label }))}
+                  placeholder="any value"
+                />
+              ) : (
+                <input
+                  value={field.visibleWhen?.in.join(', ') ?? ''}
+                  disabled={!field.visibleWhen?.field}
+                  onChange={(e) => field.visibleWhen && onUpdate(index, { visibleWhen: { field: field.visibleWhen.field, in: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) } })}
+                  placeholder={field.visibleWhen?.field ? 'value(s), comma-separated' : 'choose a field first'}
+                  className="w-full rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)] disabled:opacity-50"
+                />
+              )}
             </div>
-          </div>
+          )}
           <div className="grid grid-cols-2 items-end gap-2">
             <LabeledInput
               label="Max length"

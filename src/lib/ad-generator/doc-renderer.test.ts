@@ -201,45 +201,24 @@ describe('renderDoc', () => {
     expect(renderDoc(tDoc, { stock: '4421' }, SIZE)).toContain('Stock 4421 / ');
   });
 
-  it('filters offer-block elements by the ad offer count', () => {
+  it('renders all offer elements regardless of legacy _offerCount (dual = always shows both)', () => {
     const countDoc: TemplateDoc = {
       ...doc,
       elements: [
-        { id: 'o1', type: 'text', binding: { kind: 'static', value: 'OFFER-ONE' } }, // both (untagged)
-        { id: 'o2', type: 'text', binding: { kind: 'static', value: 'OFFER-TWO' }, offerCounts: [2] }, // 2 only
-        { id: 'single-only', type: 'text', binding: { kind: 'static', value: 'SOLO' }, offerCounts: [1] }, // 1 only
+        { id: 'o1', type: 'text', binding: { kind: 'static', value: 'OFFER-ONE' } },
+        { id: 'o2', type: 'text', binding: { kind: 'field', key: '_o2_offerMain' } },
       ],
       layouts: {
         square: {
           o1: { x: 0, y: 0, w: 0.5, h: 0.1 },
           o2: { x: 0.5, y: 0, w: 0.5, h: 0.1 },
-          'single-only': { x: 0, y: 0.2, w: 0.5, h: 0.1 },
         },
       },
     };
-    // 1 offer: offer-2 block dropped, single-only shown.
-    const one = renderDoc(countDoc, { _offerCount: '1' }, SIZE);
-    expect(one).toContain('OFFER-ONE');
-    expect(one).not.toContain('OFFER-TWO');
-    expect(one).toContain('SOLO');
-    // 2 offers: both offer blocks shown, single-only dropped.
-    const two = renderDoc(countDoc, { _offerCount: '2' }, SIZE);
-    expect(two).toContain('OFFER-ONE');
-    expect(two).toContain('OFFER-TWO');
-    expect(two).not.toContain('SOLO');
-    // Preview keeps off-count elements (dimmed) so the designer can re-tag them.
-    const preview = renderDoc(countDoc, { _offerCount: '1' }, SIZE, { preview: true });
-    expect(preview).toContain('OFFER-TWO');
-  });
-
-  it('defaults an untagged o2_-bound element to the 2-offer count (legacy dual, no migration)', () => {
-    const legacyDoc: TemplateDoc = {
-      ...doc,
-      elements: [{ id: 'o2', type: 'text', binding: { kind: 'field', key: '_o2_offerMain' } }],
-      layouts: { square: { o2: { x: 0, y: 0, w: 0.5, h: 0.1 } } },
-    };
-    expect(renderDoc(legacyDoc, { _offerCount: '1', _o2_offerMain: 'X2' }, SIZE)).not.toContain('X2');
-    expect(renderDoc(legacyDoc, { _offerCount: '2', _o2_offerMain: 'X2' }, SIZE)).toContain('X2');
+    // A dual template always shows both offers now; a leftover _offerCount is ignored.
+    const html = renderDoc(countDoc, { _offerCount: '1', _o2_offerMain: 'X2' }, SIZE);
+    expect(html).toContain('OFFER-ONE');
+    expect(html).toContain('X2');
   });
 
   it('renders the background gradient + accent bar', () => {

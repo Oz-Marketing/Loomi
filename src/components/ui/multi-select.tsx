@@ -31,6 +31,9 @@ export interface MultiSelectProps {
   className?: string;
   /** Color for the selected pills (e.g. a team color). Defaults to primary. */
   accentColor?: string;
+  /** Popover z-index. Override when the trigger lives inside a modal whose own
+   *  z is above the default (e.g. 200) so the menu isn't rendered behind it. */
+  menuZIndex?: number;
 }
 
 export function MultiSelect({
@@ -41,6 +44,7 @@ export function MultiSelect({
   searchable,
   className,
   accentColor,
+  menuZIndex,
 }: MultiSelectProps) {
   const accent = accentColor ?? 'var(--primary)';
   const [open, setOpen] = useState(false);
@@ -179,6 +183,7 @@ export function MultiSelect({
             data-builder-popout-portal
             className="fixed z-[200] rounded-xl border border-[var(--border)] bg-[var(--card-strong)] backdrop-blur-2xl backdrop-saturate-150 shadow-2xl overflow-hidden focus:outline-none"
             style={{
+              ...(menuZIndex != null ? { zIndex: menuZIndex } : {}),
               top: coords.top,
               left: coords.left,
               minWidth: coords.width,

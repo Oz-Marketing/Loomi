@@ -425,7 +425,7 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
                   </button>
                 </div>
               )}
-              {/* Ad-set info: category + tags + offer-count note. */}
+              {/* Ad-set info: category + tags. */}
               <div className="mt-3 space-y-2 text-xs text-[var(--muted-foreground)]">
                 {(preview.category || (preview.tags?.length ?? 0) > 0) && (
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -435,7 +435,6 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
                     ))}
                   </div>
                 )}
-                {preview.doc?.allowOfferCountChoice && <div>Clients can choose 1 or 2 offers.</div>}
               </div>
             </div>
             <div className="flex justify-end gap-2 border-t border-[var(--border)] p-4">

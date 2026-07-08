@@ -2180,7 +2180,11 @@ model AdBlock {
   description    String?  @db.Text
   doc            String   @db.Text // JSON: { version, sourceSize, elements, boxes, requiredFields, requiredDefaults, offerKit }
   isActive       Boolean  @default(true)
-  accountKey     String? // null = global; set = only that subaccount sees it
+  // Scoping: global = both null/empty. `accountKeys` (JSON string[]) is the
+  // current model — a block can be assigned to several subaccounts. `accountKey`
+  // (single) is kept for back-compat with blocks saved before multi-select.
+  accountKey     String? // legacy single-account scope; null = global
+  accountKeys    String? @db.Text // JSON string[] of subaccount keys; null/[] = global
   category       String?
   tags           String?  @db.Text // JSON string[] of tag names
   createdBy      String?
@@ -2192,6 +2196,22 @@ model AdBlock {
 
   @@index([isActive, accountKey])
   @@index([accountKey])
+}
+
+// A template Category's optional STARTER field set. Picking a category in the ad
+// builder seeds these fields into the template (merge-missing). Designer-managed
+// ("Save current fields as this category's starter") — NOT hardcoded. "Vehicle
+// Offer" is seeded with the offer question set; other categories start blank
+// until someone saves a starter for them. Global (shared taxonomy, no account).
+model AdCategoryStarter {
+  id            String   @id @default(cuid())
+  name          String   @unique // category name, e.g. "Vehicle Offer"
+  fields        String   @db.Text // JSON FieldSpec[]
+  defaults      String   @db.Text // JSON AdData (starter default / preview values)
+  createdBy     String?
+  createdByName String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 // ─────────────────────────────────────────────────────

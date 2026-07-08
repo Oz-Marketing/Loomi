@@ -20,13 +20,21 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
   const { id } = await params;
 
   try {
-    const block = await prisma.adBlock.findUnique({ where: { id }, select: { accountKey: true } });
+    const block = await prisma.adBlock.findUnique({ where: { id }, select: { accountKey: true, accountKeys: true } });
     if (!block) return NextResponse.json({ error: 'Not found' }, { status: 404 });
-    if (block.accountKey) {
-      const scope = getAccountScope(session!);
-      if (scope !== null && !scope.includes(block.accountKey)) {
-        return NextResponse.json({ error: 'Access denied for that account' }, { status: 403 });
-      }
+    // Union of the block's assigned accounts (legacy single + the array).
+    const keys = new Set<string>();
+    if (block.accountKey) keys.add(block.accountKey);
+    try {
+      const arr = block.accountKeys ? JSON.parse(block.accountKeys) : [];
+      if (Array.isArray(arr)) for (const k of arr) if (typeof k === 'string') keys.add(k);
+    } catch {
+      /* ignore malformed */
+    }
+    const scope = getAccountScope(session!);
+    // A scoped admin may only delete a block if they can access ALL its accounts.
+    if (scope !== null && keys.size && [...keys].some((k) => !scope.includes(k))) {
+      return NextResponse.json({ error: 'Access denied for that account' }, { status: 403 });
     }
     await prisma.adBlock.update({ where: { id }, data: { isActive: false } });
     return NextResponse.json({ ok: true });

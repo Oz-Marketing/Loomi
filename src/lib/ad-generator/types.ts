@@ -50,9 +50,31 @@ export interface FieldSpec {
    * data-driven templates (a binding can hold the same condition).
    */
   visibleWhen?: { field: string; in: string[] };
+  /**
+   * For `image` fields: where the picture comes from. `manual` (default) =
+   * upload / media library / URL. `evox` = the client picks a vehicle + paint
+   * color from EVOX (jellybean photography); the manual inputs are hidden.
+   * `both` = offer manual inputs AND the EVOX picker. Lets a designer wire any
+   * image field to the vehicle-image API without hardcoding the `vehicleImageUrl`
+   * key — the designer picks API vs manual per field.
+   */
+  imageSource?: 'manual' | 'evox' | 'both';
+  /**
+   * Who fills this field in on the creative form. `client` (default) → the
+   * client sees + edits it. `internal` → only managers/designers (hidden from
+   * clients). Designer-set, per field — replaces the old hardcoded, automotive-
+   * centric client/manager split so any template's client-facing fields are the
+   * ones the designer marks `client`. (Managers always see every field.)
+   */
+  audience?: 'client' | 'internal';
 }
 
 export type AdData = Record<string, string>;
+
+/** Whether `field` is shown to a client (non-manager) on the creative form. */
+export function isClientField(field: FieldSpec): boolean {
+  return (field.audience ?? 'client') === 'client';
+}
 
 /** True if `field` should be shown given the current form `data`. */
 export function isFieldVisible(field: FieldSpec, data: AdData): boolean {
@@ -76,9 +98,6 @@ export interface AdTemplate {
   fields: FieldSpec[];
   /** Sensible starting values so the preview renders something real immediately. */
   defaults: AdData;
-  /** Opt-in: template lets the CLIENT choose 1 or 2 offers (mirrors
-   *  `TemplateDoc.allowOfferCountChoice`). Drives the form's offer-count control. */
-  allowOfferCountChoice?: boolean;
   /** Pure render: merged data + a size → a full HTML document sized to the ad. */
   render: (data: AdData, size: AdSize) => string;
 }

@@ -37,7 +37,6 @@ import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { isFieldVisible, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
 import { composeDisclaimer } from '@/lib/ad-generator/disclaimer';
 import { missingRequired, type OemOfferRule } from '@/lib/ad-generator/compliance';
-import { effectiveOfferCount } from '@/lib/ad-generator/offer-count';
 import type { EvoxVehicle, EvoxColor } from '@/lib/integrations/evox';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
 
@@ -315,19 +314,11 @@ export default function AdGeneratorPage() {
   );
   const showAutomotiveTools = isVehicleAccount && isVehicleOffer;
 
-  // Dual-offer templates carry o2_ fields. Reps choose whether the two offers
-  // are on the SAME model (Offer 2 reuses Offer 1's vehicle) or TWO models.
+  // A template shows two offers when it carries o2_ fields (a "dual" template) —
+  // that's a property of the template's design, not a client choice. Reps only
+  // choose whether the two offers are on the SAME model (Offer 2 reuses Offer 1's
+  // vehicle) or TWO models. (One-offer vs two-offer is now separate templates.)
   const isDual = useMemo(() => template.fields.some((f) => f.key.startsWith('o2_')), [template]);
-  // When the template opts in (`allowOfferCountChoice`), the CLIENT chooses 1 or
-  // 2 offers — written to `data._offerCount`, honored by the renderer. Otherwise
-  // the count is fixed (legacy dual = always 2, single = 1). `effectiveOfferCount`
-  // resolves `_offerCount` (or infers from o2 data for pre-feature ads).
-  const supportsOfferCountChoice = Boolean(template.allowOfferCountChoice);
-  const offerCount = useMemo(
-    () => (supportsOfferCountChoice ? effectiveOfferCount(data) : isDual ? 2 : 1),
-    [supportsOfferCountChoice, isDual, data],
-  );
-  const setOfferCount = (n: 1 | 2) => setData((d) => ({ ...d, _offerCount: String(n) }));
   const [dualVehicleMode, setDualVehicleMode] = useState<'same' | 'two'>('same');
   // Offer sourcing: pull from OEM incentives (MarketCheck) or enter manually.
   const [offerSource, setOfferSource] = useState<'oem' | 'manual'>('oem');
@@ -604,28 +595,8 @@ export default function AdGeneratorPage() {
                 ))}
               </div>
 
-              {/* Offer count — the client chooses 1 or 2 offers (opt-in templates). */}
-              {supportsOfferCountChoice && (
-                <div className="mb-4 flex items-center justify-between gap-2 rounded-lg bg-[var(--muted)]/40 px-3 py-2">
-                  <span className="text-xs font-medium text-[var(--foreground)]">Offers in this ad</span>
-                  <div className="inline-flex items-center gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--background)] p-0.5">
-                    {([1, 2] as const).map((n) => (
-                      <button
-                        key={n}
-                        onClick={() => setOfferCount(n)}
-                        className={`rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                          offerCount === n ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                        }`}
-                      >
-                        {n} offer{n === 1 ? '' : 's'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               {/* Dual-offer structure — a distinct config row (not another pill pair). */}
-              {isDual && offerCount === 2 && (
+              {isDual && (
                 <div className="mb-4 flex items-center justify-between gap-2 rounded-lg bg-[var(--muted)]/40 px-3 py-2">
                   <span className="text-xs font-medium text-[var(--foreground)]">The two offers are on</span>
                   <div className="inline-flex items-center gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--background)] p-0.5">
@@ -648,7 +619,7 @@ export default function AdGeneratorPage() {
                 <OemIncentivesPanel
                   defaultMake={oemMake}
                   defaultZip={accountData?.postalCode}
-                  dual={isDual && offerCount === 2}
+                  dual={isDual}
                   dualVehicleMode={dualVehicleMode}
                   accountKey={accountKey ?? undefined}
                   onApply={(patch) => setData((d) => ({ ...d, ...patch }))}
@@ -752,11 +723,9 @@ export default function AdGeneratorPage() {
 
           {groups
             .map(([group, fields]) => {
-              // One offer selected: hide ALL second-offer inputs (the ad renders
-              // a single offer). Otherwise, same-model dual hides just Offer 2's
-              // vehicle inputs (auto-synced from Offer 1).
+              // Same-model dual hides Offer 2's vehicle inputs (auto-synced from
+              // Offer 1); everything else shows.
               let shown = fields.filter((f) => {
-                if (offerCount === 1 && f.key.startsWith('o2_')) return false;
                 if (isDual && dualVehicleMode === 'same' && (f.key === 'o2_vehicleName' || f.key === 'o2_vehicleImageUrl')) return false;
                 return true;
               });

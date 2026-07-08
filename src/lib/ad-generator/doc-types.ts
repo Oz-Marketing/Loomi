@@ -89,15 +89,6 @@ export interface DocElement {
   /** Group membership — elements sharing a groupId move/select together and nest
    *  under the group in the Layers panel. The group list lives on the doc. */
   groupId?: string;
-  /** Which offer counts this element appears in, for templates that let the
-   *  client choose 1 or 2 offers (see `TemplateDoc.allowOfferCountChoice`).
-   *  `undefined` = shown for BOTH counts (chrome + offer-1 default). `[2]` =
-   *  only when the ad shows 2 offers; `[1]` = only when it shows 1. An element's
-   *  offer-block membership is the same across all sizes, so this lives on the
-   *  shared element, not per-size. When unset, the renderer derives a sensible
-   *  default from the binding (an `o2_`/`_o2_`-bound element defaults to `[2]`),
-   *  so existing dual templates behave correctly with no migration. */
-  offerCounts?: number[];
   /** What the element displays. Omitted for plain shapes. */
   binding?: Binding;
   // ── text ──
@@ -268,10 +259,4 @@ export interface TemplateDoc {
   /** sizeId → (elementId → placement). */
   layouts: Record<string, Record<string, DocLayoutBox>>;
   defaults: AdData;
-  /** Opt-in: when true, the creative form lets the CLIENT choose 1 or 2 offers
-   *  (writes `data._offerCount`), and elements are shown/hidden per count via
-   *  `DocElement.offerCounts`. Absent/false → the template's offer count is
-   *  fixed (single, or always-2 for legacy dual templates) — unchanged behavior.
-   *  Set when the designer adds a second offer in the builder. */
-  allowOfferCountChoice?: boolean;
 }

@@ -93,7 +93,6 @@ import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
 import type { FieldSpec, FieldType, AdData, AdSize } from '@/lib/ad-generator/types';
-import { addFieldKit, seedSecondOfferElements } from '@/lib/ad-generator/vehicle-fields';
 import { buildBlockPayload, insertBlockIntoDoc, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
@@ -578,10 +577,6 @@ export default function AdBuilderPage() {
   // template), just not the blank-canvas default.
   const { doc, setDoc, undo, redo, canUndo, canRedo, reset: resetHistory } = useDocHistory(() => blankTemplateDoc('tmpl-blank', 'Untitled template'));
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
-  // Which offer count the canvas previews (1 or 2), for templates that let the
-  // client choose. Chrome shows in both; offer-block elements are dimmed when
-  // they don't belong to the previewed count. Drives `previewData._offerCount`.
-  const [previewCount, setPreviewCount] = useState<1 | 2>(1);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // Marquee (drag-to-select) rectangle in canvas fractions, while dragging the backdrop.
   const [marquee, setMarquee] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
@@ -726,17 +721,6 @@ export default function AdBuilderPage() {
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
 
-  // A template "supports dual" (client may choose 1 or 2 offers) only when the
-  // second offer is explicitly turned ON (settings cog). Gates the offer-count
-  // view switch + per-element "Appears in" — both hide when the toggle is off.
-  const supportsDual = Boolean(doc.allowOfferCountChoice);
-  // When a dual template loads (or a second offer is just added), preview the
-  // 2-offer layout so the designer sees the full arrangement. Fires once per
-  // false→true flip; the designer can still flip the toggle to check 1-offer.
-  useEffect(() => {
-    if (supportsDual) setPreviewCount(2);
-  }, [supportsDual]);
-
   // Account custom fonts: drive both the dropdown and the @font-face the canvas
   // needs so a chosen family actually renders.
   // Admins get the roll-up (union of every subaccount's fonts); clients get only
@@ -838,9 +822,6 @@ export default function AdBuilderPage() {
       ...vehicleOfferPreviewData,
       ...doc.defaults, // designer-set default / preview values for fields
       ...(adData ?? {}), // ad mode: the ad's real content
-      // Preview the chosen offer count so off-count offer blocks dim (see the
-      // canvas offer-count toggle). Overrides any ad/default value while editing.
-      _offerCount: String(previewCount),
       ...(effectiveFontCss ? { fontFaceCss: effectiveFontCss } : {}),
       ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
       ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
@@ -851,7 +832,7 @@ export default function AdBuilderPage() {
       usedGoogleFontFamilies(doc.elements, typeof base.fontFamily === 'string' ? base.fontFamily : undefined),
     );
     return googleUrl ? { ...base, googleFontsUrl: googleUrl } : base;
-  }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData, previewCount]);
+  }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData]);
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
 
@@ -1862,24 +1843,6 @@ export default function AdBuilderPage() {
       const fieldGroups = groups.includes(g) ? groups : [...groups, g];
       return { ...prev, fields, fieldGroups };
     });
-  };
-  // Enable / disable the client's second offer (toggled from the settings cog).
-  // ON: add the offer/vehicle question set (single + o2_ sets, deduped), seed a
-  // recommended second-offer element block, and flip the opt-in flag. OFF: just
-  // clear the flag (fields/elements are kept, so toggling back on is lossless).
-  const setDualOffers = (on: boolean) => {
-    if (on) {
-      setDoc((prev) => {
-        const seeded = seedSecondOfferElements(addFieldKit(prev, 'dual'));
-        return { ...seeded, allowOfferCountChoice: true };
-      }, 'dual:on');
-      setPreviewCount(2);
-      toast.success('Second offer enabled');
-    } else {
-      setDoc((prev) => ({ ...prev, allowOfferCountChoice: false }), 'dual:off');
-      setPreviewCount(1);
-      toast('Second offer disabled');
-    }
   };
   // Apply a preset: seed its fields (merge-missing, never overwrites the
   // designer's fields) + defaults into the current template. This is how
@@ -3159,27 +3122,6 @@ export default function AdBuilderPage() {
                     />
                     <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign tags on the template card in the Templates library.</p>
 
-                    {/* Second offer — lets the client choose 1 or 2 offers. Enabling
-                        seeds the second-offer fields + a starter block; the 1/2 view
-                        switch (top bar) then edits each layout. */}
-                    <div className="mt-3 border-t border-[var(--border)] pt-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium text-[var(--foreground)]">Second offer</p>
-                          <p className="mt-0.5 text-[11px] leading-snug text-[var(--muted-foreground)]">Allows the client to use 2 offers in 1 template.</p>
-                        </div>
-                        <button
-                          type="button"
-                          role="switch"
-                          aria-checked={!!doc.allowOfferCountChoice}
-                          onClick={() => setDualOffers(!doc.allowOfferCountChoice)}
-                          className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors ${doc.allowOfferCountChoice ? 'bg-[var(--primary)]' : 'bg-[var(--muted)]'}`}
-                        >
-                          <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${doc.allowOfferCountChoice ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                        </button>
-                      </div>
-                    </div>
-
                     <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
                       <button
                         onClick={() => {
@@ -3603,25 +3545,6 @@ export default function AdBuilderPage() {
           <div className="relative flex flex-shrink-0 items-center justify-end gap-2 border-b border-[var(--border)] px-3 py-2">
             {/* Zoom lives on the canvas (bottom-left); outlines + margins moved to
                 the left rail; the active size is shown on the canvas action bar. */}
-            {/* Offer view switch (centered) — flips the canvas + Fields panel
-                between the 1-offer and 2-offer layouts. Only when the client's
-                second offer is turned ON (settings cog). */}
-            {doc.allowOfferCountChoice && (
-              <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
-                {([1, 2] as const).map((n) => (
-                  <button
-                    key={n}
-                    onClick={() => setPreviewCount(n)}
-                    title={`Edit the ${n === 1 ? 'single' : 'dual'}-offer layout`}
-                    className={`inline-flex h-7 items-center rounded-full px-3 text-xs font-medium transition-colors ${
-                      previewCount === n ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
-                    }`}
-                  >
-                    {n === 1 ? 'Single Offer' : 'Dual Offer'}
-                  </button>
-                ))}
-              </div>
-            )}
             {/* Undo / Redo */}
             <div className="flex items-center gap-0.5">
               <button
@@ -4135,7 +4058,6 @@ export default function AdBuilderPage() {
                   contentSources={contentSources}
                   onContentChange={setSelectedContent}
                   accountKey={accountKey ?? undefined}
-                  supportsDual={supportsDual}
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch }, `box:${selected.id}:${Object.keys(patch).sort().join(',')}`)}
                   onClose={clearSelection}
@@ -4171,7 +4093,6 @@ export default function AdBuilderPage() {
                   onDelete={deleteSelected}
                   onClose={clearSelection}
                   shifted={false}
-                  supportsDual={supportsDual}
                 />
               )}
 
@@ -4184,7 +4105,6 @@ export default function AdBuilderPage() {
                   defaults={doc.defaults}
                   accountKey={accountKey ?? undefined}
                   brandLogos={brandLogos}
-                  hideSecondOffer={supportsDual && previewCount === 1}
                   onClose={() => setFieldsOpen(false)}
                   onAdd={addField}
                   onUpdate={updateFieldAt}
@@ -4877,7 +4797,6 @@ function FieldsSidebar({
   defaults,
   accountKey,
   brandLogos,
-  hideSecondOffer,
   onClose,
   onAdd,
   onUpdate,
@@ -4903,9 +4822,6 @@ function FieldsSidebar({
   presets: string[];
   onApplyPreset: (name: string) => void;
   onSavePreset: () => void;
-  /** In the 1-offer view, hide the second-offer (`o2_`) fields so the panel only
-   *  shows the fields relevant to the layout you're editing. */
-  hideSecondOffer: boolean;
   onClose: () => void;
   onAdd: (group?: string) => void;
   onUpdate: (i: number, patch: Partial<FieldSpec>) => void;
@@ -4960,7 +4876,7 @@ function FieldsSidebar({
     for (const f of fields) { const g = f.group?.trim() || GENERAL; if (!base.includes(g)) base.push(g); }
     return base;
   }, [fieldGroups, fields]);
-  const rows = useMemo(() => fields.map((f, i) => ({ f, i })).filter(({ f }) => !(hideSecondOffer && f.key.startsWith('o2_'))), [fields, hideSecondOffer]);
+  const rows = useMemo(() => fields.map((f, i) => ({ f, i })), [fields]);
   const itemsFor = (name: string) => rows.filter(({ f }) => (f.group?.trim() || GENERAL) === name);
   // Auto-open a newly-added group so it isn't lost.
   const prevNames = useRef(new Set(orderedNames));
@@ -5463,7 +5379,6 @@ function MultiSelectPanel({
   onDelete,
   onClose,
   shifted,
-  supportsDual,
 }: {
   elements: DocElement[];
   sampleFontSize: number;
@@ -5476,16 +5391,9 @@ function MultiSelectPanel({
   onDelete: () => void;
   onClose: () => void;
   shifted: boolean;
-  supportsDual: boolean;
 }) {
   const textEls = elements.filter((e) => e.type === 'text');
   const sample = textEls[0];
-  // Shared "Appears in" (offer-count) state across the selection — null when the
-  // selected elements disagree, so no segment reads as active until you set one.
-  const offerState = (() => {
-    const states = elements.map((e) => (e.offerCounts && e.offerCounts.length === 1 ? String(e.offerCounts[0]) : 'both'));
-    return states.every((s) => s === states[0]) ? states[0] : null;
-  })();
   return (
     <div
       data-adgen-panel
@@ -5499,31 +5407,6 @@ function MultiSelectPanel({
       </div>
 
       <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
-        {/* Appears in — bulk-set the offer-count on every selected element, so a
-            whole grouped offer block can be shown/hidden at once (not per box). */}
-        {supportsDual && (
-          <PanelSection title="Appears in">
-            <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
-              {([['both', 'Both', undefined], ['1', 'Offer 1', [1]], ['2', 'Offer 2', [2]]] as const).map(
-                ([val, label, counts]) => {
-                  const active = offerState === val;
-                  return (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => onElAll({ offerCounts: counts ? [...counts] : undefined })}
-                      className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
-                        active ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  );
-                },
-              )}
-            </div>
-          </PanelSection>
-        )}
         {textEls.length > 0 ? (
           <>
             <PanelSection title={`Font · ${textEls.length} text ${textEls.length === 1 ? 'box' : 'boxes'}`}>
@@ -5645,7 +5528,6 @@ function SelectionPanel({
   contentSources,
   onContentChange,
   accountKey,
-  supportsDual,
   onEl,
   onBox,
   onClose,
@@ -5664,9 +5546,6 @@ function SelectionPanel({
   contentSources: SearchableSelectOption[];
   onContentChange: (value: string) => void;
   accountKey?: string;
-  /** Whether this template lets the client choose 1 or 2 offers — gates the
-   *  per-element "Appears in" (offer-count) control. */
-  supportsDual: boolean;
   onEl: (patch: Partial<DocElement>) => void;
   onBox: (patch: Partial<DocLayoutBox>) => void;
   onClose: () => void;
@@ -5774,34 +5653,6 @@ function SelectionPanel({
                 )}
               </div>
             )}
-          </PanelSection>
-        )}
-
-        {/* Appears in — for templates where the client picks 1 or 2 offers, which
-            offer count(s) show this element. Chrome stays "Both"; offer-2 blocks
-            are "2 offers". Preview each with the canvas offer-count toggle. */}
-        {supportsDual && (
-          <PanelSection title="Appears in">
-            <div className="flex items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
-              {([['both', 'Both', undefined], ['1', 'Offer 1', [1]], ['2', 'Offer 2', [2]]] as const).map(
-                ([val, label, counts]) => {
-                  const cur = el.offerCounts && el.offerCounts.length === 1 ? String(el.offerCounts[0]) : 'both';
-                  const active = cur === val;
-                  return (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => onEl({ offerCounts: counts ? [...counts] : undefined })}
-                      className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
-                        active ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  );
-                },
-              )}
-            </div>
           </PanelSection>
         )}
 

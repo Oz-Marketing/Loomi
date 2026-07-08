@@ -326,6 +326,8 @@ const IMAGE_SOURCE_OPTIONS: FontSelectOption[] = [
 // The catch-all form section. A field with no explicit group resolves here, so
 // no field is ever "ungrouped"; it's a normal renamable/deletable section.
 const DEFAULT_GROUP = 'General';
+// Per-browser opt-out for the "deleting a section deletes its fields" confirm.
+const SKIP_DELETE_SECTION_KEY = 'adgen-skip-delete-section-confirm';
 type Handle = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 const RESIZE_HANDLES: { h: Handle; x: number; y: number; cursor: string }[] = [
@@ -1802,18 +1804,32 @@ export default function AdBuilderPage() {
       return { ...prev, fieldGroups: groups, fields };
     }, `renamegroup:${oldName}`);
   };
-  const deleteFieldGroup = (name: string) => {
-    setDoc((prev) => {
-      const remaining = currentGroups(prev).filter((g) => g !== name);
-      const hasFields = prev.fields.some((f) => (f.group?.trim() || DEFAULT_GROUP) === name);
-      // A section's fields are never orphaned — re-home them into the General
-      // catch-all (or, when General itself is deleted, the next section / a fresh
-      // General). Deleting an empty section just removes it.
-      const target = hasFields ? (name === DEFAULT_GROUP ? (remaining[0] ?? DEFAULT_GROUP) : DEFAULT_GROUP) : undefined;
-      const fieldGroups = target && !remaining.includes(target) ? [...remaining, target] : remaining;
-      const fields = prev.fields.map((f) => ((f.group?.trim() || DEFAULT_GROUP) === name ? { ...f, group: target } : f));
-      return { ...prev, fieldGroups, fields };
-    });
+  const deleteFieldGroup = async (name: string) => {
+    const inGroup = doc.fields.filter((f) => (f.group?.trim() || DEFAULT_GROUP) === name);
+    const doDelete = () =>
+      setDoc((prev) => ({
+        ...prev,
+        fieldGroups: currentGroups(prev).filter((g) => g !== name),
+        // Delete the section AND its fields (undoable via ⌘Z).
+        fields: prev.fields.filter((f) => (f.group?.trim() || DEFAULT_GROUP) !== name),
+      }), `deletegroup:${name}`);
+    // Empty section → remove silently. Section with fields → confirm, since the
+    // fields go with it (with a "don't show again" opt-out stored per browser).
+    if (inGroup.length === 0) { doDelete(); return; }
+    const skip = typeof window !== 'undefined' && window.localStorage.getItem(SKIP_DELETE_SECTION_KEY) === '1';
+    if (!skip) {
+      const dontAsk = { current: false };
+      const ok = await confirm({
+        title: 'Delete section?',
+        message: `Deleting “${name}” will also delete the ${inGroup.length} field${inGroup.length === 1 ? '' : 's'} inside it. You can undo with ⌘Z.`,
+        destructive: true,
+        confirmLabel: 'Delete section',
+        body: <DontShowAgainCheckbox onChange={(v) => { dontAsk.current = v; }} />,
+      });
+      if (!ok) return;
+      if (dontAsk.current && typeof window !== 'undefined') window.localStorage.setItem(SKIP_DELETE_SECTION_KEY, '1');
+    }
+    doDelete();
   };
   const moveFieldGroup = (from: number, to: number) => {
     setDoc((prev) => {
@@ -4837,6 +4853,24 @@ function GripDots({ className = '' }: { className?: string }) {
   );
 }
 
+/** "Don't show this again" checkbox for the delete-section confirm dialog —
+ *  reports its value up so the caller can persist the opt-out. */
+function DontShowAgainCheckbox({ onChange }: { onChange: (v: boolean) => void }) {
+  const [checked, setChecked] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => { const v = !checked; setChecked(v); onChange(v); }}
+      className="mt-3 flex items-center gap-2 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+    >
+      <span className={`flex h-4 w-4 items-center justify-center rounded border transition-colors ${checked ? 'border-[var(--primary)] bg-[var(--primary)] text-white' : 'border-[var(--border)]'}`}>
+        {checked && <CheckIcon className="h-3 w-3" />}
+      </span>
+      Don’t show this again
+    </button>
+  );
+}
+
 function FieldsSidebar({
   fields,
   fieldGroups,
@@ -5139,7 +5173,7 @@ function FieldsSidebar({
                 <button type="button" onClick={() => { setRenamingGroup(group); setRenameDraft(group); }} title="Rename section" className="shrink-0 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
                   <PencilSquareIcon className="h-3.5 w-3.5" />
                 </button>
-                <button type="button" onClick={() => onDeleteGroup(group)} title="Delete section (its fields move to another section)" className="shrink-0 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500">
+                <button type="button" onClick={() => onDeleteGroup(group)} title="Delete section (also deletes its fields)" className="shrink-0 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500">
                   <TrashIcon className="h-3.5 w-3.5" />
                 </button>
               </div>

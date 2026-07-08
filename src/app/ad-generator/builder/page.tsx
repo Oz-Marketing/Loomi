@@ -4788,12 +4788,9 @@ function FieldsSidebar({
     });
     return [...m.entries()];
   }, [fields, hideSecondOffer]);
-  // A long list starts with only the first section open; a short one opens all.
-  // A single new section (from "Add field") auto-opens so it's not lost.
-  const [openGroups, setOpenGroups] = useState<Set<string>>(() => {
-    const names = groups.map(([g]) => g);
-    return new Set(fields.length > 10 ? names.slice(0, 1) : names);
-  });
+  // All sections start collapsed — the panel opens as a clean scannable list.
+  // A newly-added section (from "Add field") still auto-opens so it's not lost.
+  const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
   const prevGroupNames = useRef(new Set(groups.map(([g]) => g)));
   useEffect(() => {
     const cur = groups.map(([g]) => g);

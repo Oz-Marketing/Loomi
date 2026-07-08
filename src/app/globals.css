@@ -118,14 +118,15 @@
   --card-foreground: #09090b;
   --border: rgba(0, 0, 0, 0.09);
   --input: rgba(0, 0, 0, 0.05);
-  --primary: #3b82f6;
+  /* One primary app-wide: match dark mode's indigo (was #3b82f6 blue). */
+  --primary: #6366f1;
   --primary-foreground: #ffffff;
   --muted: rgba(0, 0, 0, 0.04);
   --muted-foreground: #71717a;
   --accent: rgba(0, 0, 0, 0.04);
   --accent-foreground: #09090b;
   --destructive: #dc2626;
-  --ring: #3b82f6;
+  --ring: #6366f1;
   --radius: 0.5rem;
 
   /* Gradient background — light mode */
@@ -150,7 +151,7 @@
   --sidebar-muted: rgba(0, 0, 0, 0.03);
   --sidebar-muted-foreground: #52525b;
   --sidebar-input: rgba(0, 0, 0, 0.04);
-  --sidebar-ring: #2563eb;
+  --sidebar-ring: #6366f1;
   --sidebar-highlight: rgba(255, 255, 255, 0.5);
   --sidebar-shadow: 0 8px 32px rgba(0, 0, 0, 0.08),
     inset 0 0.5px 0 rgba(255, 255, 255, 0.8);

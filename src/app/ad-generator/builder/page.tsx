@@ -18,7 +18,7 @@
  * Behind AD_GENERATOR_ENABLED (404 in prod).
  */
 
-import { useMemo, useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties } from 'react';
+import { useMemo, useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties, type ComponentType } from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import { toast } from 'sonner';
@@ -63,6 +63,10 @@ import {
   MagnifyingGlassIcon,
   EllipsisVerticalIcon,
   PencilSquareIcon,
+  HashtagIcon,
+  CalendarDaysIcon,
+  ChevronUpDownIcon,
+  FolderArrowDownIcon,
 } from '@heroicons/react/24/outline';
 import { BranchIcon } from '@/components/icons/branch';
 import { useAccount } from '@/contexts/account-context';
@@ -300,6 +304,19 @@ const FIELD_TYPE_OPTIONS: FontSelectOption[] = [
   { value: 'color', label: 'Color' },
   { value: 'image', label: 'Image' },
 ];
+// Per-type icon + color for the field-row header — mirrors the element KIND
+// color-coding (Text = blue, Image = pink) so a designer scans field types at a
+// glance; the other input types get their own distinct hues. Icons are drawn
+// with currentColor, so a wrapping span sets the color.
+const FIELD_TYPE_META: Record<FieldType, { Icon: ComponentType<{ className?: string }>; color: string }> = {
+  text: { Icon: TextElementIcon, color: '#3b82f6' }, // blue (mirrors Text element)
+  textarea: { Icon: Bars3BottomLeftIcon, color: '#6366f1' }, // indigo
+  number: { Icon: HashtagIcon, color: '#f59e0b' }, // amber
+  date: { Icon: CalendarDaysIcon, color: '#10b981' }, // emerald
+  select: { Icon: ChevronUpDownIcon, color: '#06b6d4' }, // cyan
+  color: { Icon: SwatchIcon, color: '#f43f5e' }, // rose
+  image: { Icon: PhotoIcon, color: '#ec4899' }, // pink (mirrors Image element)
+};
 // Where an image field's picture comes from — lets a designer wire any image
 // field to the vehicle-image API (EVOX) or keep it manual, per field.
 const IMAGE_SOURCE_OPTIONS: FontSelectOption[] = [
@@ -4539,55 +4556,6 @@ function SelectOptionsEditor({
 
 /** Group picker — pick an existing group (so a designer sees where other fields
  *  live) or create a new one inline. Preserves the typed name as-is. */
-function GroupPicker({ value, options, onChange }: { value?: string; options: string[]; onChange: (v: string | undefined) => void }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener('mousedown', h);
-    return () => document.removeEventListener('mousedown', h);
-  }, [open]);
-  const q = query.trim();
-  const filtered = options.filter((o) => o.toLowerCase().includes(q.toLowerCase()));
-  const canCreate = !!q && !options.some((o) => o.toLowerCase() === q.toLowerCase());
-  const pick = (v: string | undefined) => { onChange(v); setOpen(false); setQuery(''); };
-  return (
-    <div ref={ref} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center justify-between gap-2 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-xs text-[var(--foreground)] transition-colors hover:border-[var(--primary)]"
-      >
-        <span className={value ? '' : 'text-[var(--muted-foreground)]'}>{value || 'General'}</span>
-        <ChevronDownIcon className={`h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && (
-        <div className="absolute left-0 right-0 top-full z-[80] mt-1 rounded-lg border border-[var(--border)] bg-[var(--card-strong)] p-1 shadow-2xl backdrop-blur-2xl">
-          <input
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && canCreate) pick(q); }}
-            placeholder="Search or create…"
-            className="mb-1 w-full rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-          />
-          <div className="max-h-40 overflow-y-auto">
-            <button type="button" onClick={() => pick(undefined)} className="flex w-full items-center rounded-md px-2 py-1 text-left text-xs text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)]">General (no group)</button>
-            {filtered.map((o) => (
-              <button key={o} type="button" onClick={() => pick(o)} className={`flex w-full items-center rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-[var(--muted)] ${o === value ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>{o}</button>
-            ))}
-            {canCreate && (
-              <button type="button" onClick={() => pick(q)} className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-left text-xs text-[var(--primary)] transition-colors hover:bg-[var(--muted)]">+ Create “{q}”</button>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function FieldRow({
   field,
   index,
@@ -4596,11 +4564,13 @@ function FieldRow({
   accountKey,
   brandLogos,
   allFields,
+  groupNames,
   onToggle,
   onUpdate,
   onRename,
   onDelete,
   onSetDefault,
+  onMoveToGroup,
 }: {
   field: FieldSpec;
   index: number;
@@ -4610,14 +4580,19 @@ function FieldRow({
   brandLogos: { key: string; label: string; url: string }[];
   /** Sibling fields — for the "Show only when" conditional-visibility picker. */
   allFields: FieldSpec[];
+  /** All section names, ordered — for the ⋯ "Move to group" picker. */
+  groupNames: string[];
   onToggle: () => void;
   onUpdate: (i: number, patch: Partial<FieldSpec>) => void;
   onRename: (i: number, newKey: string) => void;
   onDelete: (i: number) => void;
   onSetDefault: (i: number, val: string) => void;
+  onMoveToGroup: (key: string, group: string) => void;
 }) {
   const [picking, setPicking] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Two-level ⋯ menu: the root actions, or the "Move to group" section list.
+  const [showMoveList, setShowMoveList] = useState(false);
   // Whether the "Show only when" section is shown in the editor — on if the field
   // already has a condition, or the designer picks "Conditional field" in the ⋯ menu.
   const [showConditional, setShowConditional] = useState(!!field.visibleWhen);
@@ -4626,15 +4601,17 @@ function FieldRow({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!menuOpen) return;
+    if (!menuOpen) { setShowMoveList(false); return; }
     const h = (e: MouseEvent) => { if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false); };
     document.addEventListener('mousedown', h);
     return () => document.removeEventListener('mousedown', h);
   }, [menuOpen]);
   // The field that gates this one's visibility (for the "Show only when" UI).
   const condField = field.visibleWhen ? allFields.find((f) => f.key === field.visibleWhen!.field) : undefined;
-  // Distinct group names across the template — for the Group picker's suggestions.
-  const groupOptions = [...new Set(allFields.map((f) => f.group?.trim()).filter((g): g is string => !!g))].sort();
+  // Color-coded type badge/icon + this field's current section (to exclude it
+  // from the "Move to group" list).
+  const typeMeta = FIELD_TYPE_META[field.type];
+  const currentGroup = field.group?.trim() || DEFAULT_GROUP;
   return (
     // Subtle fill so a field row lifts off the group section it sits in (they
     // otherwise share the panel background and blend together); the opened row
@@ -4645,9 +4622,12 @@ function FieldRow({
       }`}
     >
       <div className="flex items-center gap-2 px-3 py-2">
-        <button onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-2 text-left">
-          <span className="shrink-0 truncate text-xs font-medium text-[var(--foreground)]">{field.label || field.key}</span>
-          <span className="shrink-0 text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">{field.type}</span>
+        <button onClick={onToggle} className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
+          <span className="shrink-0" style={{ color: typeMeta.color }} title={field.type}>
+            <typeMeta.Icon className="h-3 w-3" />
+          </span>
+          <span className="min-w-0 truncate text-[11px] font-medium text-[var(--foreground)]">{field.label || field.key}</span>
+          <span className="shrink-0 text-[8px] font-medium uppercase tracking-wide" style={{ color: typeMeta.color }}>{field.type}</span>
           {field.copy && <span className="shrink-0 rounded bg-[var(--primary)]/10 px-1 text-[9px] font-medium text-[var(--primary)]">AI</span>}
           {field.visibleWhen && (
             <Tooltip label="Conditional field">
@@ -4672,21 +4652,56 @@ function FieldRow({
             <EllipsisVerticalIcon className="h-4 w-4" />
           </button>
           {menuOpen && (
-            <div className="absolute right-0 top-full z-[90] mt-1 w-44 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--card-strong)] py-1 shadow-2xl backdrop-blur-2xl">
-              <button
-                onClick={() => { setShowConditional(true); if (!expanded) onToggle(); setMenuOpen(false); }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-              >
-                <BranchIcon className="h-3.5 w-3.5 text-[var(--primary)]" />
-                Conditional field
-              </button>
-              <button
-                onClick={() => { onDelete(index); setMenuOpen(false); }}
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-500 transition-colors hover:bg-red-500/10"
-              >
-                <TrashIcon className="h-3.5 w-3.5" />
-                Delete
-              </button>
+            <div className="absolute right-0 top-full z-[90] mt-1 w-48 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--card-strong)] py-1 shadow-2xl backdrop-blur-2xl">
+              {showMoveList ? (
+                <>
+                  <button
+                    onClick={() => setShowMoveList(false)}
+                    className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+                  >
+                    <ChevronLeftIcon className="h-3 w-3" />
+                    Move to group
+                  </button>
+                  <div className="max-h-52 overflow-y-auto">
+                    {groupNames.map((g) => (
+                      <button
+                        key={g}
+                        onClick={() => { if (g !== currentGroup) onMoveToGroup(field.key, g); setMenuOpen(false); }}
+                        disabled={g === currentGroup}
+                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors hover:bg-[var(--muted)] ${g === currentGroup ? 'text-[var(--muted-foreground)]' : 'text-[var(--foreground)]'}`}
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${g === currentGroup ? 'bg-[var(--primary)]' : 'bg-transparent'}`} />
+                        <span className="truncate">{g}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setShowMoveList(true)}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                  >
+                    <FolderArrowDownIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+                    Move to group
+                    <ChevronRightIcon className="ml-auto h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+                  </button>
+                  <button
+                    onClick={() => { setShowConditional(true); if (!expanded) onToggle(); setMenuOpen(false); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                  >
+                    <BranchIcon className="h-3.5 w-3.5 text-[var(--primary)]" />
+                    Conditional field
+                  </button>
+                  <button
+                    onClick={() => { onDelete(index); setMenuOpen(false); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-500 transition-colors hover:bg-red-500/10"
+                  >
+                    <TrashIcon className="h-3.5 w-3.5" />
+                    Delete
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -4806,12 +4821,7 @@ function FieldRow({
           </button>
           {showAdvanced && (
             <div className="space-y-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 p-2.5">
-              <div className="grid grid-cols-2 gap-2">
-                <LabeledInput label="Key" hint="The internal id used in {{variable}} tokens and element bindings (e.g. {{leaseTerm}}). Must be unique — renaming updates every reference automatically." value={field.key} onChange={(v) => onRename(index, v)} />
-                <SelectRow label="Group" hint="Groups this field with others under a heading in the form + Fields panel (e.g. “Offer”, “Vehicle”, “Legal”). Pick an existing group or create one; blank = “General”.">
-                  <GroupPicker value={field.group} options={groupOptions} onChange={(g) => onUpdate(index, { group: g })} />
-                </SelectRow>
-              </div>
+              <LabeledInput label="Key" hint="The internal id used in {{variable}} tokens and element bindings (e.g. {{leaseTerm}}). Must be unique — renaming updates every reference automatically. Use the ⋯ menu’s “Move to group” to change this field’s section." value={field.key} onChange={(v) => onRename(index, v)} />
               <LabeledInput label="Placeholder" hint="Faint hint text inside the empty input on the client form (not a real value)." value={field.placeholder ?? ''} onChange={(v) => onUpdate(index, { placeholder: v || undefined })} />
               <LabeledInput label="Help" hint="A one-line note shown under this field on the client form to guide what they enter." value={field.help ?? ''} onChange={(v) => onUpdate(index, { help: v || undefined })} />
               <div className="grid grid-cols-2 items-end gap-2">
@@ -4910,11 +4920,14 @@ function FieldsSidebar({
   // React's async state) + mirrored to state for the drag visual.
   const [dragGroup, setDragGroup] = useState<number | null>(null);
   const [dragField, setDragField] = useState<string | null>(null);
+  // Where the dragged item will land — drives the insertion line ("-----") shown
+  // between rows/sections at the drop point. `id` is a field key or group name.
+  const [dropLine, setDropLine] = useState<{ kind: 'field' | 'group'; id: string; edge: 'before' | 'after' } | null>(null);
   const dragGroupRef = useRef<number | null>(null);
   const dragFieldRef = useRef<string | null>(null);
   const startGroupDrag = (gi: number) => { dragGroupRef.current = gi; dragFieldRef.current = null; setDragGroup(gi); };
   const startFieldDrag = (key: string) => { dragFieldRef.current = key; dragGroupRef.current = null; setDragField(key); };
-  const endDrag = () => { dragGroupRef.current = null; dragFieldRef.current = null; setDragGroup(null); setDragField(null); };
+  const endDrag = () => { dragGroupRef.current = null; dragFieldRef.current = null; setDragGroup(null); setDragField(null); setDropLine(null); };
 
   // Ordered section list: the designer-defined groups, unioned with any group
   // present on a field — an ungrouped field resolves to the "General" section,
@@ -4939,40 +4952,96 @@ function FieldsSidebar({
   const toggleGroup = (g: string) =>
     setOpenGroups((s) => { const next = new Set(s); if (next.has(g)) next.delete(g); else next.add(g); return next; });
 
-  const renderFieldRow = (f: FieldSpec, i: number) => (
-    <div
-      key={f.key}
-      onDragOver={(e) => { if (dragFieldRef.current) e.preventDefault(); }}
-      onDrop={(e) => { e.stopPropagation(); const src = dragFieldRef.current; if (src && src !== f.key) onMoveField(src, f.group, f.key); endDrag(); }}
-      className={`flex items-start gap-1 rounded-lg ${dragField && dragField !== f.key ? 'ring-1 ring-[var(--primary)]/40' : ''}`}
-    >
-      <span
-        draggable
-        onDragStart={(e) => { e.stopPropagation(); startFieldDrag(f.key); }}
-        onDragEnd={endDrag}
-        title="Drag to reorder / move to another group"
-        className="mt-2.5 shrink-0 cursor-grab text-[var(--muted-foreground)]/60 hover:text-[var(--foreground)] active:cursor-grabbing"
+  // The field immediately after `f` within its section (for "drop after" moves);
+  // undefined = f is last, so the moved field appends to the section's end.
+  const nextInGroupKey = (f: FieldSpec): string | undefined => {
+    const g = f.group?.trim() || GENERAL;
+    const same = fields.filter((x) => (x.group?.trim() || GENERAL) === g);
+    const idx = same.findIndex((x) => x.key === f.key);
+    return same[idx + 1]?.key;
+  };
+
+  // FLIP animation: after any reorder, tagged nodes glide from their previous
+  // position to the new one. Gated on an order signature so expanding/collapsing
+  // a row (which doesn't reorder) never animates.
+  const flipRef = useRef<HTMLDivElement>(null);
+  const posRef = useRef<Map<string, number>>(new Map());
+  const orderSig = orderedNames.join('|') + '::' + rows.map(({ f }) => `${f.group?.trim() || GENERAL}/${f.key}`).join(',');
+  const prevSig = useRef(orderSig);
+  useLayoutEffect(() => {
+    const container = flipRef.current;
+    if (!container) return;
+    const changed = prevSig.current !== orderSig;
+    container.querySelectorAll<HTMLElement>('[data-flip-key]').forEach((node) => {
+      const key = node.dataset.flipKey!;
+      const top = node.getBoundingClientRect().top;
+      const prev = posRef.current.get(key);
+      if (changed && prev !== undefined) {
+        const dy = prev - top;
+        if (Math.abs(dy) > 1) node.animate([{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }], { duration: 180, easing: 'cubic-bezier(0.2, 0, 0, 1)' });
+      }
+      posRef.current.set(key, top);
+    });
+    prevSig.current = orderSig;
+  });
+
+  const renderFieldRow = (f: FieldSpec, i: number) => {
+    const lineBefore = dropLine?.kind === 'field' && dropLine.id === f.key && dropLine.edge === 'before';
+    const lineAfter = dropLine?.kind === 'field' && dropLine.id === f.key && dropLine.edge === 'after';
+    return (
+      <div
+        key={f.key}
+        data-flip-key={`f:${f.key}`}
+        className="relative"
+        onDragOver={(e) => {
+          if (!dragFieldRef.current) return;
+          e.preventDefault();
+          const r = e.currentTarget.getBoundingClientRect();
+          const edge = e.clientY < r.top + r.height / 2 ? 'before' : 'after';
+          setDropLine((p) => (p && p.kind === 'field' && p.id === f.key && p.edge === edge ? p : { kind: 'field', id: f.key, edge }));
+        }}
+        onDrop={(e) => {
+          e.stopPropagation();
+          const src = dragFieldRef.current;
+          const edge = dropLine?.kind === 'field' && dropLine.id === f.key ? dropLine.edge : 'before';
+          if (src && src !== f.key) onMoveField(src, f.group, edge === 'before' ? f.key : nextInGroupKey(f));
+          endDrag();
+        }}
       >
-        <GripDots className="h-3.5 w-2" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <FieldRow
-          field={f}
-          index={i}
-          expanded={expanded === f.key}
-          defaultValue={defaults[f.key] ?? ''}
-          accountKey={accountKey}
-          brandLogos={brandLogos}
-          allFields={fields}
-          onToggle={() => setExpanded(expanded === f.key ? null : f.key)}
-          onUpdate={onUpdate}
-          onRename={onRename}
-          onDelete={onDelete}
-          onSetDefault={onSetDefault}
-        />
+        {lineBefore && <div className="pointer-events-none absolute -top-[3px] left-1 right-1 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
+        <div className={`flex items-start gap-1 rounded-lg transition-[opacity,transform] duration-150 ${dragField === f.key ? 'opacity-40' : ''}`}>
+          <span
+            draggable
+            onDragStart={(e) => { e.stopPropagation(); startFieldDrag(f.key); }}
+            onDragEnd={endDrag}
+            title="Drag to reorder / move to another group"
+            className="mt-2.5 shrink-0 cursor-grab text-[var(--muted-foreground)]/60 hover:text-[var(--foreground)] active:cursor-grabbing"
+          >
+            <GripDots className="h-3.5 w-2" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <FieldRow
+              field={f}
+              index={i}
+              expanded={expanded === f.key}
+              defaultValue={defaults[f.key] ?? ''}
+              accountKey={accountKey}
+              brandLogos={brandLogos}
+              allFields={fields}
+              groupNames={orderedNames}
+              onToggle={() => setExpanded(expanded === f.key ? null : f.key)}
+              onUpdate={onUpdate}
+              onRename={onRename}
+              onDelete={onDelete}
+              onSetDefault={onSetDefault}
+              onMoveToGroup={(key, g) => onMoveField(key, g)}
+            />
+          </div>
+        </div>
+        {lineAfter && <div className="pointer-events-none absolute -bottom-[3px] left-1 right-1 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
       </div>
-    </div>
-  );
+    );
+  };
 
   return (
     // Left-docked panel inside the canvas — the form that drives the ad stays
@@ -4987,22 +5056,44 @@ function FieldsSidebar({
           <XMarkIcon className="h-5 w-5" />
         </button>
       </div>
-      <div className="flex-1 space-y-2 overflow-y-auto p-4">
+      <div ref={flipRef} className="flex-1 space-y-2 overflow-y-auto p-4">
         {orderedNames.map((group, gi) => {
           const open = openGroups.has(group);
           const items = itemsFor(group);
           const renaming = renamingGroup === group;
+          const gLineBefore = dropLine?.kind === 'group' && dropLine.id === group && dropLine.edge === 'before';
+          const gLineAfter = dropLine?.kind === 'group' && dropLine.id === group && dropLine.edge === 'after';
           return (
             <div
               key={group}
-              className={`rounded-lg border ${dragGroup === gi ? 'opacity-50' : ''} border-[var(--border)]`}
-              onDragOver={(e) => { if (dragGroupRef.current !== null || dragFieldRef.current) e.preventDefault(); }}
+              data-flip-key={`g:${group}`}
+              className={`relative rounded-lg border transition-[opacity,transform] duration-150 ${dragGroup === gi ? 'opacity-40' : ''} border-[var(--border)]`}
+              onDragOver={(e) => {
+                if (dragGroupRef.current !== null) {
+                  e.preventDefault();
+                  const r = e.currentTarget.getBoundingClientRect();
+                  const edge = e.clientY < r.top + r.height / 2 ? 'before' : 'after';
+                  setDropLine((p) => (p && p.kind === 'group' && p.id === group && p.edge === edge ? p : { kind: 'group', id: group, edge }));
+                } else if (dragFieldRef.current) {
+                  e.preventDefault();
+                }
+              }}
               onDrop={() => {
-                if (dragGroupRef.current !== null) onMoveGroup(dragGroupRef.current, gi);
-                else if (dragFieldRef.current) onMoveField(dragFieldRef.current, group, undefined);
+                const fromG = dragGroupRef.current;
+                if (fromG !== null) {
+                  const edge = dropLine?.kind === 'group' && dropLine.id === group ? dropLine.edge : 'before';
+                  let target = edge === 'before' ? gi : gi + 1;
+                  if (fromG < target) target -= 1; // account for removal before insertion
+                  target = Math.max(0, Math.min(target, orderedNames.length - 1));
+                  if (target !== fromG) onMoveGroup(fromG, target);
+                } else if (dragFieldRef.current) {
+                  onMoveField(dragFieldRef.current, group, undefined);
+                }
                 endDrag();
               }}
             >
+              {gLineBefore && <div className="pointer-events-none absolute -top-[5px] left-0 right-0 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
+              {gLineAfter && <div className="pointer-events-none absolute -bottom-[5px] left-0 right-0 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
               <div className="flex items-center gap-1 px-2 py-2">
                 <span
                   draggable
@@ -5060,21 +5151,13 @@ function FieldsSidebar({
           </div>
         )}
       </div>
-      <div className="m-4 mt-0 flex gap-2">
+      <div className="m-4 mt-0">
         <button
           onClick={onAddGroup}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
+          className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
         >
           <PlusIcon className="h-3.5 w-3.5" />
           New section
-        </button>
-        <button
-          onClick={() => onAdd()}
-          title="Add a field (into the last section, or a new General section)"
-          className="flex items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
-        >
-          <PlusIcon className="h-3.5 w-3.5" />
-          Field
         </button>
       </div>
     </div>

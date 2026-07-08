@@ -4920,14 +4920,18 @@ function FieldsSidebar({
   // React's async state) + mirrored to state for the drag visual.
   const [dragGroup, setDragGroup] = useState<number | null>(null);
   const [dragField, setDragField] = useState<string | null>(null);
-  // Where the dragged item will land — drives the insertion line ("-----") shown
-  // between rows/sections at the drop point. `id` is a field key or group name.
-  const [dropLine, setDropLine] = useState<{ kind: 'field' | 'group'; id: string; edge: 'before' | 'after' } | null>(null);
+  // Where the dragged item will land — drives the single insertion line shown at
+  // the drop point. For fields it's a BOUNDARY index within a section (0..len),
+  // computed once at the section-body level so there's exactly one drop zone per
+  // gap (not a per-row before/after pair) and gaps/padding never fall through to
+  // an append. For sections it's a before/after edge on the hovered section.
+  const [fieldDrop, setFieldDrop] = useState<{ group: string; index: number } | null>(null);
+  const [groupDrop, setGroupDrop] = useState<{ id: string; edge: 'before' | 'after' } | null>(null);
   const dragGroupRef = useRef<number | null>(null);
   const dragFieldRef = useRef<string | null>(null);
   const startGroupDrag = (gi: number) => { dragGroupRef.current = gi; dragFieldRef.current = null; setDragGroup(gi); };
   const startFieldDrag = (key: string) => { dragFieldRef.current = key; dragGroupRef.current = null; setDragField(key); };
-  const endDrag = () => { dragGroupRef.current = null; dragFieldRef.current = null; setDragGroup(null); setDragField(null); setDropLine(null); };
+  const endDrag = () => { dragGroupRef.current = null; dragFieldRef.current = null; setDragGroup(null); setDragField(null); setFieldDrop(null); setGroupDrop(null); };
 
   // Ordered section list: the designer-defined groups, unioned with any group
   // present on a field — an ungrouped field resolves to the "General" section,
@@ -4951,15 +4955,6 @@ function FieldsSidebar({
   }, [orderedNames]);
   const toggleGroup = (g: string) =>
     setOpenGroups((s) => { const next = new Set(s); if (next.has(g)) next.delete(g); else next.add(g); return next; });
-
-  // The field immediately after `f` within its section (for "drop after" moves);
-  // undefined = f is last, so the moved field appends to the section's end.
-  const nextInGroupKey = (f: FieldSpec): string | undefined => {
-    const g = f.group?.trim() || GENERAL;
-    const same = fields.filter((x) => (x.group?.trim() || GENERAL) === g);
-    const idx = same.findIndex((x) => x.key === f.key);
-    return same[idx + 1]?.key;
-  };
 
   // FLIP animation: after any reorder, tagged nodes glide from their previous
   // position to the new one. Gated on an order signature so expanding/collapsing
@@ -4985,30 +4980,20 @@ function FieldsSidebar({
     prevSig.current = orderSig;
   });
 
-  const renderFieldRow = (f: FieldSpec, i: number) => {
-    const lineBefore = dropLine?.kind === 'field' && dropLine.id === f.key && dropLine.edge === 'before';
-    const lineAfter = dropLine?.kind === 'field' && dropLine.id === f.key && dropLine.edge === 'after';
+  const renderFieldRow = (f: FieldSpec, i: number, group: string, pos: number, count: number) => {
+    // Lines are driven by the section-body boundary (`fieldDrop.index`): draw
+    // above the row sitting at the boundary, or below the last row when the
+    // boundary is the section end. Exactly one line, no dead gaps.
+    const lineBefore = fieldDrop?.group === group && fieldDrop.index === pos;
+    const lineAfter = fieldDrop?.group === group && pos === count - 1 && fieldDrop.index === count;
     return (
       <div
         key={f.key}
         data-flip-key={`f:${f.key}`}
+        data-field-row
         className="relative"
-        onDragOver={(e) => {
-          if (!dragFieldRef.current) return;
-          e.preventDefault();
-          const r = e.currentTarget.getBoundingClientRect();
-          const edge = e.clientY < r.top + r.height / 2 ? 'before' : 'after';
-          setDropLine((p) => (p && p.kind === 'field' && p.id === f.key && p.edge === edge ? p : { kind: 'field', id: f.key, edge }));
-        }}
-        onDrop={(e) => {
-          e.stopPropagation();
-          const src = dragFieldRef.current;
-          const edge = dropLine?.kind === 'field' && dropLine.id === f.key ? dropLine.edge : 'before';
-          if (src && src !== f.key) onMoveField(src, f.group, edge === 'before' ? f.key : nextInGroupKey(f));
-          endDrag();
-        }}
       >
-        {lineBefore && <div className="pointer-events-none absolute -top-[3px] left-1 right-1 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
+        {lineBefore && <div className="pointer-events-none absolute -top-[5px] left-1 right-1 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
         <div className={`flex items-start gap-1 rounded-lg transition-[opacity,transform] duration-150 ${dragField === f.key ? 'opacity-40' : ''}`}>
           <span
             draggable
@@ -5038,7 +5023,7 @@ function FieldsSidebar({
             />
           </div>
         </div>
-        {lineAfter && <div className="pointer-events-none absolute -bottom-[3px] left-1 right-1 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
+        {lineAfter && <div className="pointer-events-none absolute -bottom-[5px] left-1 right-1 z-10 h-[2px] rounded-full bg-[var(--primary)]" />}
       </div>
     );
   };
@@ -5061,8 +5046,9 @@ function FieldsSidebar({
           const open = openGroups.has(group);
           const items = itemsFor(group);
           const renaming = renamingGroup === group;
-          const gLineBefore = dropLine?.kind === 'group' && dropLine.id === group && dropLine.edge === 'before';
-          const gLineAfter = dropLine?.kind === 'group' && dropLine.id === group && dropLine.edge === 'after';
+          const gLineBefore = groupDrop?.id === group && groupDrop.edge === 'before';
+          const gLineAfter = groupDrop?.id === group && groupDrop.edge === 'after';
+          const groupKeys = items.map(({ f }) => f.key);
           return (
             <div
               key={group}
@@ -5073,7 +5059,7 @@ function FieldsSidebar({
                   e.preventDefault();
                   const r = e.currentTarget.getBoundingClientRect();
                   const edge = e.clientY < r.top + r.height / 2 ? 'before' : 'after';
-                  setDropLine((p) => (p && p.kind === 'group' && p.id === group && p.edge === edge ? p : { kind: 'group', id: group, edge }));
+                  setGroupDrop((p) => (p && p.id === group && p.edge === edge ? p : { id: group, edge }));
                 } else if (dragFieldRef.current) {
                   e.preventDefault();
                 }
@@ -5081,12 +5067,13 @@ function FieldsSidebar({
               onDrop={() => {
                 const fromG = dragGroupRef.current;
                 if (fromG !== null) {
-                  const edge = dropLine?.kind === 'group' && dropLine.id === group ? dropLine.edge : 'before';
+                  const edge = groupDrop?.id === group ? groupDrop.edge : 'before';
                   let target = edge === 'before' ? gi : gi + 1;
                   if (fromG < target) target -= 1; // account for removal before insertion
                   target = Math.max(0, Math.min(target, orderedNames.length - 1));
                   if (target !== fromG) onMoveGroup(fromG, target);
                 } else if (dragFieldRef.current) {
+                  // Fallback (e.g. dropping on a collapsed section header): append.
                   onMoveField(dragFieldRef.current, group, undefined);
                 }
                 endDrag();
@@ -5129,8 +5116,36 @@ function FieldsSidebar({
                 </button>
               </div>
               {open && (
-                <div className="space-y-2 border-t border-[var(--border)] p-2">
-                  {items.map(({ f, i }) => renderFieldRow(f, i))}
+                <div
+                  className="space-y-2 border-t border-[var(--border)] p-2"
+                  onDragOver={(e) => {
+                    if (!dragFieldRef.current) return;
+                    e.preventDefault();
+                    // One boundary for the whole section: the first row whose
+                    // midpoint is below the cursor (else the section end). Covers
+                    // the gaps + padding too, so a drop never falls through to an
+                    // append and there's exactly one drop zone per gap.
+                    const rowEls = [...e.currentTarget.querySelectorAll<HTMLElement>('[data-field-row]')];
+                    let index = rowEls.length;
+                    for (let k = 0; k < rowEls.length; k++) {
+                      const r = rowEls[k].getBoundingClientRect();
+                      if (e.clientY < r.top + r.height / 2) { index = k; break; }
+                    }
+                    setGroupDrop(null);
+                    setFieldDrop((p) => (p && p.group === group && p.index === index ? p : { group, index }));
+                  }}
+                  onDrop={(e) => {
+                    e.stopPropagation();
+                    const src = dragFieldRef.current;
+                    if (src) {
+                      const index = fieldDrop?.group === group ? fieldDrop.index : groupKeys.length;
+                      const beforeKey = index < groupKeys.length ? groupKeys[index] : undefined;
+                      if (src !== beforeKey) onMoveField(src, group, beforeKey);
+                    }
+                    endDrag();
+                  }}
+                >
+                  {items.map(({ f, i }, pos) => renderFieldRow(f, i, group, pos, items.length))}
                   {items.length === 0 && <p className="px-1 py-1 text-[11px] text-[var(--muted-foreground)]">No fields in this section yet.</p>}
                   <button
                     onClick={() => onAdd(group)}

@@ -34,7 +34,7 @@ import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { availableCustomFonts, buildFontFaceCssFromUrls, usedFontFamilies } from '@/lib/ad-generator/fonts';
 import { googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
-import { isFieldVisible, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
+import { isFieldVisible, isClientField, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
 import { composeDisclaimer } from '@/lib/ad-generator/disclaimer';
 import { missingRequired, type OemOfferRule } from '@/lib/ad-generator/compliance';
 import type { EvoxVehicle, EvoxColor } from '@/lib/integrations/evox';
@@ -729,25 +729,20 @@ export default function AdGeneratorPage() {
                 if (isDual && dualVehicleMode === 'same' && (f.key === 'o2_vehicleName' || f.key === 'o2_vehicleImageUrl')) return false;
                 return true;
               });
-              // Clients can touch the OFFER(S), the VEHICLE COLOR, and the
-              // Legal fields they're responsible for (VIN / stock — the
-              // disclaimer stays read-only + auto-composed). The color is
-              // chosen through the vehicle image field (…ImageUrl → a
-              // client-only color picker). Everything else — vehicle name,
-              // Copy, branding — is hidden from the form but still rendered in
-              // the live preview; clients see it, they just can't edit it.
+              // Client visibility is DESIGNER-SET per field (`audience`): a client
+              // sees the fields marked "Client", not a hardcoded list. Managers
+              // see everything. The automotive vehicle-offer flow keeps two
+              // functional routing rules on top: the vehicle name is hidden
+              // (the vehicle comes from the chosen offer), and the offer inputs
+              // render inside the OEM/Manual panel rather than as their own card.
               if (!isManager) {
                 shown = shown.filter((f) => {
-                  if (/vehiclename/i.test(f.key)) return false; // don't let clients switch the vehicle
-                  if (/vehicleimageurl/i.test(f.key)) return true; // vehicle color picker
-                  // Designer-enabled vehicle-image fields are explicitly client-facing.
-                  if (f.type === 'image' && (f.imageSource === 'evox' || f.imageSource === 'both')) return true;
-                  if (group === 'Legal') return true; // VIN / stock (+ read-only disclaimer)
-                  // Offer inputs move INTO the OEM/Manual panel on the
-                  // automotive flow; only keep them as their own card when
-                  // there's no such panel (non-vehicle template).
-                  if (group.startsWith('Offer')) return !showAutomotiveTools;
-                  return false;
+                  if (!isClientField(f)) return false; // designer marked it internal
+                  if (showAutomotiveTools) {
+                    if (/vehiclename/i.test(f.key)) return false; // vehicle comes from the offer
+                    if (group.startsWith('Offer') && !/vehicleimageurl/i.test(f.key)) return false; // in the OEM panel
+                  }
+                  return true;
                 });
               }
               return [group, shown] as const;

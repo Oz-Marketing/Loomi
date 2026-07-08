@@ -59,9 +59,22 @@ export interface FieldSpec {
    * key — the designer picks API vs manual per field.
    */
   imageSource?: 'manual' | 'evox' | 'both';
+  /**
+   * Who fills this field in on the creative form. `client` (default) → the
+   * client sees + edits it. `internal` → only managers/designers (hidden from
+   * clients). Designer-set, per field — replaces the old hardcoded, automotive-
+   * centric client/manager split so any template's client-facing fields are the
+   * ones the designer marks `client`. (Managers always see every field.)
+   */
+  audience?: 'client' | 'internal';
 }
 
 export type AdData = Record<string, string>;
+
+/** Whether `field` is shown to a client (non-manager) on the creative form. */
+export function isClientField(field: FieldSpec): boolean {
+  return (field.audience ?? 'client') === 'client';
+}
 
 /** True if `field` should be shown given the current form `data`. */
 export function isFieldVisible(field: FieldSpec, data: AdData): boolean {

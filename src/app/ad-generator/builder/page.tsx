@@ -92,7 +92,7 @@ import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIc
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
-import type { FieldSpec, FieldType, AdData, AdSize } from '@/lib/ad-generator/types';
+import { isFieldVisible, isClientField, type FieldSpec, type FieldType, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
@@ -321,6 +321,13 @@ const IMAGE_SOURCE_OPTIONS: FontSelectOption[] = [
   { value: 'manual', label: 'Manual (upload / library)' },
   { value: 'evox', label: 'Vehicle image (EVOX)' },
   { value: 'both', label: 'Both — manual + vehicle' },
+];
+// Who fills a field on the creative form — designer-set, replaces the old
+// hardcoded client/manager split. Client = the client edits it; Internal =
+// managers/designers only (hidden from clients).
+const AUDIENCE_OPTIONS: FontSelectOption[] = [
+  { value: 'client', label: 'Client' },
+  { value: 'internal', label: 'Internal (you only)' },
 ];
 // The catch-all form section. A field with no explicit group resolves here, so
 // no field is ever "ungrouped"; it's a normal renamable/deletable section.
@@ -4531,6 +4538,11 @@ function FieldRow({
           <span className="min-w-0 truncate text-[11px] font-medium text-[var(--foreground)]">{field.label || field.key}</span>
           <span className="shrink-0 text-[8px] font-medium uppercase tracking-wide" style={{ color: typeMeta.color }}>{field.type}</span>
           {field.copy && <span className="shrink-0 rounded bg-[var(--primary)]/10 px-1 text-[9px] font-medium text-[var(--primary)]">AI</span>}
+          {field.audience === 'internal' && (
+            <Tooltip label="Internal only — hidden from clients">
+              <EyeSlashIcon className="h-3 w-3 shrink-0 text-[var(--muted-foreground)]" />
+            </Tooltip>
+          )}
           {field.visibleWhen && (
             <Tooltip label="Conditional field">
               <BranchIcon className="h-3 w-3 shrink-0 text-[var(--primary)]" />
@@ -4617,6 +4629,10 @@ function FieldRow({
               <CompactSelect value={field.type} onChange={(v) => onUpdate(index, { type: v as FieldType })} options={FIELD_TYPE_OPTIONS} />
             </SelectRow>
           </div>
+          {/* Filled by — who edits this field on the creative form. */}
+          <SelectRow label="Filled by" hint="Who fills this field on the creative form. Client: the client sees and edits it. Internal: only you/managers — hidden from clients (managers always see every field).">
+            <CompactSelect value={field.audience ?? 'client'} onChange={(v) => onUpdate(index, { audience: v === 'internal' ? 'internal' : undefined })} options={AUDIENCE_OPTIONS} />
+          </SelectRow>
           {/* Default / preview value — the fallback shown in the picker thumb,
               builder canvas, and client form until the client fills it in. For
               image fields this is a media picker so a designer can drop a dummy
@@ -4791,6 +4807,98 @@ function DontShowAgainCheckbox({ onChange }: { onChange: (v: boolean) => void })
   );
 }
 
+/** A single input control for the form preview — mirrors how the creative form
+ *  renders each field type (label + help + placeholder), so a designer sees the
+ *  shape at a glance. Interactive only to test conditional visibility. */
+function PreviewControl({ field, value, onChange }: { field: FieldSpec; value: string; onChange: (v: string) => void }) {
+  const inputCls = 'w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]';
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
+        {field.label || field.key}
+        {field.help && <span className="ml-1 font-normal text-[var(--muted-foreground)]">— {field.help}</span>}
+      </label>
+      {field.type === 'textarea' ? (
+        <textarea value={value} placeholder={field.placeholder} onChange={(e) => onChange(e.target.value)} rows={2} className={inputCls} />
+      ) : field.type === 'select' ? (
+        <CompactSelect value={value} onChange={onChange} options={[{ value: '', label: field.placeholder || 'Select…' }, ...(field.options ?? []).map((o) => ({ value: o.value, label: o.label }))]} />
+      ) : field.type === 'color' ? (
+        <div className="flex items-center gap-2">
+          <input type="color" value={value || '#000000'} onChange={(e) => onChange(e.target.value)} className="h-9 w-12 cursor-pointer rounded border border-[var(--border)] bg-transparent" />
+          <input type="text" value={value} placeholder={field.placeholder || '#000000'} onChange={(e) => onChange(e.target.value)} className={inputCls} />
+        </div>
+      ) : field.type === 'image' ? (
+        <div className="flex items-center gap-2 rounded-lg border border-dashed border-[var(--border)] px-3 py-2 text-xs text-[var(--muted-foreground)]">
+          <PhotoIcon className="h-4 w-4 shrink-0" />
+          {field.imageSource === 'evox' ? 'Vehicle image picker' : field.imageSource === 'both' ? 'Upload / library or vehicle picker' : 'Upload / media library'}
+        </div>
+      ) : (
+        <input type={field.type === 'date' ? 'date' : 'text'} value={value} placeholder={field.placeholder} onChange={(e) => onChange(e.target.value)} className={inputCls} />
+      )}
+    </div>
+  );
+}
+
+/** Live form preview built from the current fields — shows the designer what the
+ *  creative form looks like, with a Client/Full switch (Client hides fields the
+ *  designer marked Internal). Honors conditional visibility as you type. */
+function FormPreview({ fields, fieldGroups, defaults }: { fields: FieldSpec[]; fieldGroups: string[]; defaults: Record<string, string> }) {
+  const [view, setView] = useState<'client' | 'full'>('client');
+  const [vals, setVals] = useState<Record<string, string>>({});
+  const data = useMemo(() => ({ ...defaults, ...vals }), [defaults, vals]);
+  const setVal = (k: string, v: string) => setVals((s) => ({ ...s, [k]: v }));
+  const groups = useMemo(() => {
+    const m = new Map<string, FieldSpec[]>();
+    for (const f of fields) {
+      if (view === 'client' && !isClientField(f)) continue;
+      if (!isFieldVisible(f, data)) continue; // conditional visibility
+      const g = f.group?.trim() || DEFAULT_GROUP;
+      if (!m.has(g)) m.set(g, []);
+      m.get(g)!.push(f);
+    }
+    const rank = (g: string) => { const i = fieldGroups.indexOf(g); return i < 0 ? fieldGroups.length + 1 : i; };
+    return [...m.entries()].sort((a, b) => rank(a[0]) - rank(b[0]));
+  }, [fields, fieldGroups, data, view]);
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex items-center gap-0.5 border-b border-[var(--border)] p-3">
+        <div className="flex flex-1 items-center gap-0.5 rounded-lg border border-[var(--border)] p-0.5">
+          {(['client', 'full'] as const).map((v) => (
+            <button
+              key={v}
+              onClick={() => setView(v)}
+              className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${view === v ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'}`}
+            >
+              {v === 'client' ? 'Client view' : 'Full form'}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="flex-1 space-y-5 overflow-y-auto p-4">
+        <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">
+          {view === 'client' ? 'What a client sees and fills in.' : 'Every field, including internal ones only you fill in.'}
+        </p>
+        {groups.length === 0 ? (
+          <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-6 text-center text-xs text-[var(--muted-foreground)]">
+            {view === 'client' ? 'No client-facing fields yet — mark fields “Client”, or add some.' : 'No fields yet.'}
+          </p>
+        ) : (
+          groups.map(([group, fs]) => (
+            <section key={group}>
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{group}</h3>
+              <div className="space-y-3">
+                {fs.map((f) => (
+                  <PreviewControl key={f.key} field={f} value={vals[f.key] ?? defaults[f.key] ?? ''} onChange={(v) => setVal(f.key, v)} />
+                ))}
+              </div>
+            </section>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 function FieldsSidebar({
   fields,
   fieldGroups,
@@ -4839,6 +4947,8 @@ function FieldsSidebar({
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  // Preview mode — swap the editor for a live client-form mock of these fields.
+  const [previewOpen, setPreviewOpen] = useState(false);
   // Presets popover (the header cog) — apply a saved field-set or save this one.
   const [presetsOpen, setPresetsOpen] = useState(false);
   const presetsRef = useRef<HTMLDivElement>(null);
@@ -4966,13 +5076,23 @@ function FieldsSidebar({
     <div data-adgen-panel className="absolute left-4 top-4 bottom-4 z-[70] flex w-[400px] max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl">
       <div className="flex items-start justify-between gap-2 border-b border-[var(--border)] p-4">
         <div className="min-w-0">
-          <h2 className="text-sm font-bold text-[var(--foreground)]">Template fields</h2>
-          <p className="text-xs text-[var(--muted-foreground)]">The form users fill — organize them into sections that carry to the client form.</p>
+          <h2 className="text-sm font-bold text-[var(--foreground)]">{previewOpen ? 'Form preview' : 'Template fields'}</h2>
+          <p className="text-xs text-[var(--muted-foreground)]">{previewOpen ? 'How the fields look on the creative form.' : 'The form users fill — organize them into sections that carry to the client form.'}</p>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
+          {/* Preview — flip the panel between editing fields and a live mock of
+              the client form built from them. */}
+          <button
+            onClick={() => { setPreviewOpen((v) => !v); setPresetsOpen(false); }}
+            title={previewOpen ? 'Back to editing fields' : 'Preview the form'}
+            aria-pressed={previewOpen}
+            className={`rounded-md p-1 transition-colors ${previewOpen ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]'}`}
+          >
+            {previewOpen ? <PencilSquareIcon className="h-5 w-5" /> : <EyeIcon className="h-5 w-5" />}
+          </button>
           {/* Presets — apply a saved field-set to this template, or save the
               current fields as a reusable preset. */}
-          <div ref={presetsRef} className="relative">
+          <div ref={presetsRef} className={`relative ${previewOpen ? 'hidden' : ''}`}>
             <button
               onClick={() => setPresetsOpen((v) => !v)}
               title="Field presets"
@@ -5019,6 +5139,10 @@ function FieldsSidebar({
           </button>
         </div>
       </div>
+      {previewOpen ? (
+        <FormPreview fields={fields} fieldGroups={fieldGroups} defaults={defaults} />
+      ) : (
+      <>
       <div ref={flipRef} className="flex-1 space-y-2 overflow-y-auto p-4">
         {orderedNames.map((group, gi) => {
           const open = openGroups.has(group);
@@ -5153,6 +5277,8 @@ function FieldsSidebar({
           New section
         </button>
       </div>
+      </>
+      )}
     </div>
   );
 }

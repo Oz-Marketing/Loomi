@@ -8,6 +8,20 @@ import type { EvoxVehicle } from '@/lib/integrations/evox';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
 import { EVOX_CURRENT_YEAR, EVOX_YEARS, EVOX_MAKES } from './evox-makes';
 
+// A representative model per make so the Model placeholder matches the selected
+// make (e.g. Subaru → Crosstrek) instead of a fixed, off-brand "Accord".
+const MODEL_EXAMPLE: Record<string, string> = {
+  Acura: 'MDX', 'Alfa Romeo': 'Giulia', Audi: 'Q5', BMW: 'X3', Buick: 'Enclave',
+  Cadillac: 'Escalade', Chevrolet: 'Silverado', Chrysler: 'Pacifica', Dodge: 'Durango',
+  Fiat: '500X', Ford: 'F-150', Genesis: 'GV70', GMC: 'Sierra', Honda: 'Accord',
+  Hyundai: 'Tucson', Infiniti: 'QX60', Jaguar: 'F-PACE', Jeep: 'Grand Cherokee',
+  Kia: 'Telluride', 'Land Rover': 'Defender', Lexus: 'RX', Lincoln: 'Corsair',
+  Maserati: 'Grecale', Mazda: 'CX-5', 'Mercedes-Benz': 'GLC', MINI: 'Cooper',
+  Mitsubishi: 'Outlander', Nissan: 'Rogue', Polestar: '2', Porsche: 'Cayenne',
+  Ram: '1500', Rivian: 'R1S', Subaru: 'Crosstrek', Tesla: 'Model 3', Toyota: 'RAV4',
+  Volkswagen: 'Tiguan', Volvo: 'XC90',
+};
+
 /**
  * OEM Incentives (MarketCheck) — look up the live lease / APR / cash programs
  * for a vehicle and apply one to auto-fill the structured offer fields. Manual
@@ -158,7 +172,7 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
             value={model}
             onChange={(e) => setModel(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && find()}
-            placeholder="e.g. Accord"
+            placeholder={MODEL_EXAMPLE[make] ? `e.g. ${MODEL_EXAMPLE[make]}` : 'Model name'}
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
           />
         </div>

@@ -341,7 +341,7 @@ function SubmissionsBody() {
   const { form } = useFormDetail();
   return (
     <section>
-      <SubmissionsTable formId={form.id} schema={form.schema} />
+      <SubmissionsTable formId={form.id} schema={form.schema} accountKey={form.accountKey} />
     </section>
   );
 }

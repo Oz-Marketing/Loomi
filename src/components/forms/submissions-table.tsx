@@ -18,9 +18,12 @@ interface SubmissionsTableProps {
   /** Optional — passed through to the detail drawer so submitted
    *  values can be labelled instead of showing raw field keys. */
   schema?: FormTemplate;
+  /** Owning account of the form — threaded to the drawer so its
+   *  "View contact" link can resolve the contact detail page. */
+  accountKey?: string;
 }
 
-export function SubmissionsTable({ formId, schema }: SubmissionsTableProps) {
+export function SubmissionsTable({ formId, schema, accountKey }: SubmissionsTableProps) {
   const { data, isLoading } = useSWR<{
     submissions: FormSubmissionRow[];
     total: number;
@@ -102,6 +105,7 @@ export function SubmissionsTable({ formId, schema }: SubmissionsTableProps) {
       <SubmissionDetailDrawer
         submission={selected}
         schema={schema}
+        accountKey={accountKey}
         onClose={() => setSelected(null)}
       />
     </>

@@ -45,11 +45,35 @@ export function SurfaceShell({
   }, [mobileOpen, setMobileOpen]);
 
   // Track whether the content card has scrolled (drives the pinned header's
-  // opaque state). Re-sync on navigation since the card element persists.
+  // opaque + compacted state). Re-sync on navigation since the card element
+  // persists.
+  //
+  // The docked header compacts its top padding, which SHORTENS the header by
+  // ~14–20px. On a page that only just overflows, docking removes enough
+  // height to clamp scrollTop back under the trigger, which un-docks, which
+  // restores the height — a feedback loop that reads as scroll jitter. Two
+  // guards kill it:
+  //   1. Hysteresis — dock past DOCK_ON, only pop back up below DOCK_OFF, so a
+  //      single boundary can't flip the state twice per gesture.
+  //   2. A minimum scroll range — never dock unless the page overflows by more
+  //      than the compaction delta (measured while un-docked, so it reflects
+  //      the rest-state range). Below that, docking would always clamp-bounce,
+  //      so we simply stay at rest. Barely-scrolling pages lose the compaction,
+  //      which is invisible there anyway.
   useEffect(() => {
     const main = mainRef.current;
     if (!main) return;
-    const onScroll = () => setScrolled(main.scrollTop > 0);
+    const DOCK_ON = 16; // enter docked once scrolled past this
+    const DOCK_OFF = 4; // leave docked once back under this (hysteresis)
+    const MIN_RANGE = 48; // rest-state overflow required to dock at all
+    const onScroll = () =>
+      setScrolled((prev) => {
+        const top = main.scrollTop;
+        if (prev) return top > DOCK_OFF;
+        const restRange = main.scrollHeight - main.clientHeight; // un-docked here
+        if (restRange < MIN_RANGE) return false;
+        return top > DOCK_ON;
+      });
     onScroll();
     main.addEventListener('scroll', onScroll, { passive: true });
     return () => main.removeEventListener('scroll', onScroll);

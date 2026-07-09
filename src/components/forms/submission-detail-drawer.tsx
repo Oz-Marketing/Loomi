@@ -20,6 +20,10 @@ interface SubmissionDetailDrawerProps {
    *  user-facing labels. When absent the drawer falls back to raw
    *  field keys (still works, just less friendly). */
   schema?: FormTemplate;
+  /** Owning account of the form. Required to build a working
+   *  "View contact" link — the contact detail page resolves the
+   *  contact by id + accountKey, and errors without the latter. */
+  accountKey?: string;
   onClose: () => void;
 }
 
@@ -32,6 +36,7 @@ interface SubmissionDetailDrawerProps {
 export function SubmissionDetailDrawer({
   submission,
   schema,
+  accountKey,
   onClose,
 }: SubmissionDetailDrawerProps) {
   const open = !!submission;
@@ -100,7 +105,7 @@ export function SubmissionDetailDrawer({
         aria-hidden="true"
       />
       <aside
-        className="absolute top-0 right-0 h-full w-[min(480px,100vw)] bg-[var(--card)] border-l border-[var(--border)] shadow-2xl flex flex-col"
+        className="absolute top-3 right-3 bottom-3 w-[min(480px,calc(100vw-1.5rem))] bg-[var(--card-strong)] border border-[var(--border)] rounded-2xl shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <header className="flex items-start justify-between gap-3 px-5 py-4 border-b border-[var(--border)] flex-shrink-0">
@@ -141,7 +146,11 @@ export function SubmissionDetailDrawer({
                     {contact.phone && <p className="truncate">{contact.phone}</p>}
                   </div>
                   <Link
-                    href={subHref(`/contacts/${contact.id}`)}
+                    href={subHref(
+                      accountKey
+                        ? `/contacts/${contact.id}?accountKey=${encodeURIComponent(accountKey)}`
+                        : `/contacts/${contact.id}`,
+                    )}
                     className="mt-2 inline-flex items-center gap-1 text-xs text-[var(--primary)] hover:underline"
                   >
                     View contact

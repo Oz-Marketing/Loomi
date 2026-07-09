@@ -22,6 +22,7 @@ import { toast } from 'sonner';
 import { ArrowDownTrayIcon, ExclamationTriangleIcon, Squares2X2Icon, ArrowLeftIcon, ArrowRightIcon, ArrowPathIcon, CheckIcon, CloudIcon, BookmarkSquareIcon } from '@heroicons/react/24/outline';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { useAccount } from '@/contexts/account-context';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { AccountLogo } from '@/components/account-logo';
 import { MultiSelect } from '@/components/ui/multi-select';
@@ -124,6 +125,14 @@ export default function AdGeneratorPage() {
   const [loaded, setLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const savedRef = useRef('');
+  // The form autosaves, so tell the global unsaved-changes guard it's clean
+  // whenever a save lands — otherwise the generic DOM dirty-tracker flags
+  // "unsaved changes" forever (it never learns the autosave happened), firing
+  // the modal on navigation even though everything is saved.
+  const { markClean } = useUnsavedChanges();
+  useEffect(() => {
+    if (saveStatus === 'saved') markClean();
+  }, [saveStatus, markClean]);
 
   // Load the creative once: its template + saved field values + name + status.
   useEffect(() => {

@@ -72,6 +72,7 @@ import {
 import { BranchIcon } from '@/components/icons/branch';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
@@ -730,6 +731,13 @@ export default function AdBuilderPage() {
   // Serialized snapshot of what's persisted — autosave fires only when the live
   // doc/name/status diverge from this.
   const savedRef = useRef('');
+  // The builder autosaves, so tell the global unsaved-changes guard it's clean
+  // whenever a save lands — otherwise the generic DOM dirty-tracker flags
+  // "unsaved changes" forever (it never learns the autosave happened).
+  const { markClean } = useUnsavedChanges();
+  useEffect(() => {
+    if (saveStatus === 'saved') markClean();
+  }, [saveStatus, markClean]);
   // Guards the one-time `?template=<id>` deep-load (edit a template from the
   // Templates → Ads tab).
   const deepLinkedRef = useRef(false);
@@ -2776,7 +2784,19 @@ export default function AdBuilderPage() {
       });
       const j = (await res.json().catch(() => null)) as { file?: { url: string }; error?: string } | null;
       if (!res.ok || !j?.file?.url) throw new Error(j?.error || `HTTP ${res.status}`);
-      setElement(cropModal.id, { binding: { kind: 'static', value: j.file.url } });
+      const url = j.file.url;
+      // Preserve the element's binding. A FIELD-bound image (e.g. Vehicle Image
+      // URL) keeps its field binding — the cropped image becomes that field's
+      // default — so cropping no longer silently reverts it to a Fixed Image.
+      // Static/brand fall back to pinning the cropped asset (a baked crop can't
+      // ride a live brand binding).
+      const cur = doc.elements.find((e) => e.id === cropModal.id);
+      if (cur?.binding?.kind === 'field') {
+        const key = cur.binding.key;
+        setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: url } }), `crop:${cropModal.id}`);
+      } else {
+        setElement(cropModal.id, { binding: { kind: 'static', value: url } });
+      }
       toast.success('Image cropped');
       setCropModal(null);
     } catch (err) {
@@ -4997,7 +5017,10 @@ function FieldsSidebar({
   onMoveField: (key: string, group: string | undefined, beforeKey?: string) => void;
 }) {
   // All field rows start collapsed — the designer opens the one they want.
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // Tracked by the field's flat INDEX (not its `key`): the key is user-editable
+  // in Advanced options, and keying expansion/React-key on it made editing the
+  // key orphan the expansion + remount the row → the row collapsed mid-edit.
+  const [expanded, setExpanded] = useState<number | null>(null);
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
@@ -5084,7 +5107,7 @@ function FieldsSidebar({
     const lineAfter = fieldDrop?.group === group && pos === count - 1 && fieldDrop.index === count;
     return (
       <div
-        key={f.key}
+        key={i}
         data-flip-key={`f:${f.key}`}
         data-field-row
         className="relative"
@@ -5104,13 +5127,13 @@ function FieldsSidebar({
             <FieldRow
               field={f}
               index={i}
-              expanded={expanded === f.key}
+              expanded={expanded === i}
               defaultValue={defaults[f.key] ?? ''}
               accountKey={accountKey}
               brandLogos={brandLogos}
               allFields={fields}
               groupNames={orderedNames}
-              onToggle={() => setExpanded(expanded === f.key ? null : f.key)}
+              onToggle={() => setExpanded(expanded === i ? null : i)}
               onUpdate={onUpdate}
               onRename={onRename}
               onDelete={onDelete}

@@ -2,35 +2,16 @@
 
 import { useMemo } from 'react';
 import { isFieldVisible, type AdData, type FieldSpec } from '@/lib/ad-generator/types';
-import { OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { OemIncentivesPanel } from './oem-incentives-panel';
 import { VehicleColorPicker } from './vehicle-colors';
 import { Field } from './fields';
 
 export type VehicleSlot = { imageKey: string; nameKey: string; codeKey: string; label: string };
 
-// Recap formatting: offer type → color pill; money fields → "$1,234". Mirrors
-// the pill colors used in the OEM incentive results list.
-const OFFER_TYPE_LABEL: Record<string, string> = Object.fromEntries(OFFER_TYPES.map((o) => [o.value, o.label]));
-const OFFER_TYPE_BADGE: Record<string, string> = {
-  lease: 'bg-blue-500/15 text-blue-500',
-  apr: 'bg-emerald-500/15 text-emerald-500',
-  discount: 'bg-amber-500/15 text-amber-500',
-  sales_price: 'bg-violet-500/15 text-violet-500',
-  custom: 'bg-[var(--muted)] text-[var(--muted-foreground)]',
-};
-const MONEY_KEYS = new Set(['monthlyPayment', 'msrp', 'dueAtSigning', 'securityDeposit', 'salePrice', 'discountAmount', 'costPerThousand']);
-// Keys the MarketCheck incentive `apply()` fills — these show in the locked
-// recap. Everything else (e.g. securityDeposit) is editable below it. Split by
-// this fixed set, NOT by whether a field currently has a value: a value-based
-// split moves a field into the recap on its first keystroke, unmounting the
-// input mid-type (the "locks after one character" bug).
+// Keys the MarketCheck incentive apply() fills. Fields NOT in this set (e.g.
+// securityDeposit) are the ones a rep still edits after applying an offer.
 const INCENTIVE_KEYS = new Set(['offerType', 'monthlyPayment', 'leaseTerm', 'dueAtSigning', 'aprRate', 'aprTerm', 'discountAmount', 'msrp', 'expiration', 'vehicleName']);
 const baseKey = (k: string) => k.replace(/^o2_/, '');
-function fmtMoney(v: string): string {
-  const n = Number(v.replace(/[$,]/g, ''));
-  return Number.isFinite(n) && v.trim() !== '' ? `$${n.toLocaleString('en-US')}` : v;
-}
 
 /**
  * The unified Offer card — the single home for the vehicle + offer, for both
@@ -77,18 +58,6 @@ export function OfferCard({
   accountKey?: string;
   allowVehiclePicker: boolean;
 }) {
-  // The OEM tab swaps its results for a locked recap once an offer has actually
-  // been applied — detected by a SUBSTANTIVE value (payment / term / amount /
-  // vehicle), not just `offerType`/`offerLabel`, which carry template defaults.
-  // Locked recap = the incentive-provided fields that came back with a value.
-  const recapRows = useMemo(
-    () =>
-      manualFields
-        .filter((f) => INCENTIVE_KEYS.has(baseKey(f.key)))
-        .map((f) => ({ key: f.key, label: f.label, value: (data[f.key] ?? '').toString().trim() }))
-        .filter((r) => r.value),
-    [manualFields, data],
-  );
   // An OEM incentive was actually applied — the ONLY reliable signal, since a
   // fresh creative carries template defaults (monthly $299, MSRP $34,000,
   // "2024 Toyota Camry SE" …) that are indistinguishable from a real offer by
@@ -165,43 +134,15 @@ export function OfferCard({
             accountKey={accountKey}
             onApply={(patch) => setData((d) => ({ ...d, ...patch }))}
           />
-          {oemApplied && (
-            <div className="mt-4 rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 p-3">
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-                From the manufacturer
-              </div>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-                {recapRows.map((r) => {
-                  const bk = baseKey(r.key);
-                  const isMoney = MONEY_KEYS.has(bk);
-                  const dt = isMoney ? r.label.replace(/\s*\(\$\)\s*$/, '') : r.label;
-                  return (
-                    <div key={r.key} className="flex flex-col">
-                      <dt className="text-[10px] uppercase tracking-wide text-[var(--muted-foreground)]">{dt}</dt>
-                      <dd className="text-sm font-medium text-[var(--foreground)]">
-                        {bk === 'offerType' ? (
-                          <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold ${OFFER_TYPE_BADGE[r.value] ?? OFFER_TYPE_BADGE.custom}`}>
-                            {OFFER_TYPE_LABEL[r.value] ?? r.value}
-                          </span>
-                        ) : isMoney ? (
-                          fmtMoney(r.value)
-                        ) : (
-                          r.value
-                        )}
-                      </dd>
-                    </div>
-                  );
-                })}
-              </dl>
-              {/* Fields the incentive doesn't provide (e.g. Security deposit) —
-                  editable here so the OEM offer can still meet OEM compliance. */}
-              {editableRest.length > 0 && (
-                <div className="mt-3 space-y-3 border-t border-[var(--border)] pt-3">
-                  {editableRest.map((f) => (
-                    <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} allowVehiclePicker={allowVehiclePicker} />
-                  ))}
-                </div>
-              )}
+          {/* No manufacturer recap card — the selected incentive card above shows
+              the offer. We only surface the fields the incentive doesn't provide
+              (e.g. Security deposit) so an OEM offer can still meet compliance. */}
+          {oemApplied && editableRest.length > 0 && (
+            <div className="mt-4 space-y-3 rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 p-3">
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">Additional details</div>
+              {editableRest.map((f) => (
+                <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} allowVehiclePicker={allowVehiclePicker} />
+              ))}
             </div>
           )}
         </>

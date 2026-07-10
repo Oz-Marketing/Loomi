@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { ArrowPathIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, MagnifyingGlassIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import type { EvoxVehicle } from '@/lib/integrations/evox';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
@@ -47,6 +47,8 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
   const [resolvingImg, setResolvingImg] = useState(false);
   // Offer-type result filter — the set of types the user has toggled OFF.
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(new Set());
+  // The incentive card the user last applied — kept outlined + checked.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
 
   const yearOptions: FontSelectOption[] = EVOX_YEARS.filter((y) => y >= 2020).map((y) => ({ value: String(y), label: String(y) }));
   const makeOptions: FontSelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
@@ -70,6 +72,8 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
       else next.add(t);
       return next;
     });
+  // Stable identity for selection highlighting (MarketCheck rows may lack an id).
+  const keyOf = (inc: MarketCheckIncentive) => inc.id || `${inc.type}:${inc.offerDetails || inc.description || ''}`;
 
   async function find() {
     if (!make) {
@@ -242,10 +246,10 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
         <p className="mt-3 text-center text-[11px] text-[var(--muted-foreground)]">{fallbackNote}</p>
       )}
       {incentives && incentives.length > 0 && (
-        <>
-          {/* Offer-type filter — toggle which kinds of offers to show. */}
+        <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 p-2">
+          {/* Offer-type filter — inside the container, above the results. */}
           {presentTypes.length > 1 && (
-            <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <div className="mb-2 flex flex-wrap items-center gap-1.5 border-b border-[var(--border)] px-1 pb-2">
               <span className="mr-0.5 text-[10px] font-medium uppercase tracking-wide text-[var(--muted-foreground)]">Show</span>
               {presentTypes.map((t) => {
                 const on = !hiddenTypes.has(t);
@@ -264,33 +268,33 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
             </div>
           )}
 
-          {/* Results — clickable cards inside a background container. */}
-          <div className="mt-2 rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 p-2">
-            <div className="max-h-72 space-y-2 overflow-y-auto">
-              {visibleIncentives.length === 0 ? (
-                <p className="py-6 text-center text-xs text-[var(--muted-foreground)]">No offers match the selected types.</p>
-              ) : (
-                visibleIncentives.map((inc, i) => {
-                  const badge = (
-                    <span className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${typeBadge[inc.type]}`}>{inc.type}</span>
-                  );
-                  const detail = (
-                    <>
-                      <p className="text-xs font-medium text-[var(--foreground)]">{inc.offerDetails || inc.description}</p>
-                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-[var(--muted-foreground)]">
-                        {inc.payment > 0 && <span>${Math.round(inc.payment).toLocaleString()}/mo</span>}
-                        {inc.rate > 0 && <span>{inc.rate}% APR</span>}
-                        {inc.amount > 0 && <span>${Math.round(inc.amount).toLocaleString()} cash</span>}
-                        {inc.term > 0 && <span>{inc.term} mo</span>}
-                        {inc.downPayment > 0 && <span>${Math.round(inc.downPayment).toLocaleString()} DAS</span>}
-                        {inc.trim && <span>{inc.trim}</span>}
-                        {inc.endDate && <span>ends {inc.endDate.slice(0, 10)}</span>}
-                      </div>
-                    </>
-                  );
-                  // Dual keeps explicit Offer 1 / Offer 2 buttons (the card can't
-                  // guess which slot). Single: the whole card is the click target.
-                  return dual ? (
+          <div className="max-h-72 space-y-2 overflow-y-auto">
+            {visibleIncentives.length === 0 ? (
+              <p className="py-6 text-center text-xs text-[var(--muted-foreground)]">No offers match the selected types.</p>
+            ) : (
+              visibleIncentives.map((inc, i) => {
+                const badge = (
+                  <span className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${typeBadge[inc.type]}`}>{inc.type}</span>
+                );
+                const detail = (
+                  <>
+                    <p className="text-xs font-medium text-[var(--foreground)]">{inc.offerDetails || inc.description}</p>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-[var(--muted-foreground)]">
+                      {inc.payment > 0 && <span>${Math.round(inc.payment).toLocaleString()}/mo</span>}
+                      {inc.rate > 0 && <span>{inc.rate}% APR</span>}
+                      {inc.amount > 0 && <span>${Math.round(inc.amount).toLocaleString()} cash</span>}
+                      {inc.term > 0 && <span>{inc.term} mo</span>}
+                      {inc.downPayment > 0 && <span>${Math.round(inc.downPayment).toLocaleString()} DAS</span>}
+                      {inc.trim && <span>{inc.trim}</span>}
+                      {inc.endDate && <span>ends {inc.endDate.slice(0, 10)}</span>}
+                    </div>
+                  </>
+                );
+                // Dual keeps explicit Offer 1 / Offer 2 buttons (the card can't
+                // guess which slot). Single: the whole card is the click target,
+                // and stays outlined + checked once selected.
+                if (dual) {
+                  return (
                     <div key={inc.id || i} className="rounded-xl border border-[var(--border)] bg-[var(--card)] p-3">
                       <div className="mb-1 flex items-center justify-between gap-2">
                         {badge}
@@ -301,25 +305,38 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
                       </div>
                       {detail}
                     </div>
-                  ) : (
-                    <button
-                      key={inc.id || i}
-                      type="button"
-                      onClick={() => apply(inc, '')}
-                      className="group block w-full cursor-pointer rounded-xl border border-[var(--border)] bg-[var(--card)] p-3 text-left transition-all hover:border-[var(--primary)] hover:bg-[var(--card-strong)] hover:shadow-sm"
-                    >
-                      <div className="mb-1 flex items-center justify-between gap-2">
-                        {badge}
-                        <span className="text-[10px] font-semibold text-[var(--primary)] opacity-0 transition-opacity group-hover:opacity-100">Use this offer →</span>
-                      </div>
-                      {detail}
-                    </button>
                   );
-                })
-              )}
-            </div>
+                }
+                const isSelected = selectedKey === keyOf(inc);
+                return (
+                  <button
+                    key={inc.id || i}
+                    type="button"
+                    onClick={() => { setSelectedKey(keyOf(inc)); apply(inc, ''); }}
+                    aria-pressed={isSelected}
+                    className={`group block w-full cursor-pointer rounded-xl border p-3 text-left transition-all ${
+                      isSelected
+                        ? 'border-[var(--primary)] bg-[var(--card-strong)] ring-2 ring-[var(--primary)]/40'
+                        : 'border-[var(--border)] bg-[var(--card)] hover:border-[var(--primary)] hover:bg-[var(--card-strong)] hover:shadow-sm'
+                    }`}
+                  >
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      {badge}
+                      {isSelected ? (
+                        <span className="flex items-center gap-1 text-[10px] font-semibold text-[var(--primary)]">
+                          <CheckCircleIcon className="h-4 w-4" /> Selected
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-semibold text-[var(--primary)] opacity-0 transition-opacity group-hover:opacity-100">Use this offer →</span>
+                      )}
+                    </div>
+                    {detail}
+                  </button>
+                );
+              })
+            )}
           </div>
-        </>
+        </div>
       )}
     </div>
   );

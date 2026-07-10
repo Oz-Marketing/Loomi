@@ -32,9 +32,10 @@ export function colorNameToHex(c: EvoxColor): string {
 type Swatch = { color: EvoxColor; candidates: { vifnum: number; code: string }[] };
 
 /**
- * A single paint-color tile showing the ACTUAL EVOX jellybean in full — the
- * whole vehicle is contained in the tile (not cover-cropped) so you see the
- * real car and its paint. Falls back to an approximated hex chip on 404.
+ * A single paint-color tile showing the ACTUAL EVOX jellybean, cover-cropped
+ * and zoomed so the vehicle fills the tile — this pushes the transparent
+ * padding and the bottom-right EVOX watermark out of frame. Falls back to an
+ * approximated hex chip on 404.
  */
 function JellybeanTile({ vifnum, code, color }: { vifnum: number; code: string; color: EvoxColor }) {
   const [ok, setOk] = useState(true);
@@ -48,8 +49,11 @@ function JellybeanTile({ vifnum, code, color }: { vifnum: number; code: string; 
       alt={color.name || color.code}
       loading="lazy"
       onError={() => setOk(false)}
-      // contain shows the full vehicle, no crop.
-      className="h-full w-full object-contain"
+      // cover + zoom fills the tile: crops the transparent margins and pushes the
+      // bottom-right EVOX watermark out of frame. object-position pulls toward the
+      // body's upper-left so the vehicle stays centered.
+      className="h-full w-full object-cover"
+      style={{ transform: 'scale(1.5)', objectPosition: '44% 34%' }}
     />
   );
 }

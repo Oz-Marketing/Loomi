@@ -19,7 +19,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownTrayIcon, ExclamationTriangleIcon, Squares2X2Icon, ArrowLeftIcon, ArrowRightIcon, ArrowPathIcon, CheckIcon, CloudIcon, BookmarkSquareIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, ExclamationTriangleIcon, PencilIcon, ArrowLeftIcon, ArrowRightIcon, ArrowPathIcon, CheckIcon, CloudIcon, BookmarkSquareIcon } from '@heroicons/react/24/outline';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { useAccount } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
@@ -796,7 +796,7 @@ export default function AdGeneratorPage() {
                   className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
                   title="Open this ad's layout in the builder"
                 >
-                  <Squares2X2Icon className="h-3.5 w-3.5" />
+                  <PencilIcon className="h-3.5 w-3.5" />
                   Edit design
                 </Link>
               )}

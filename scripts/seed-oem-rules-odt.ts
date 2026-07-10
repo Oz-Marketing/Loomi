@@ -11,12 +11,15 @@
  *   financial_institution → financialInstitution    discount_source → discountSource
  *   trim → vehicleName (Loomi's combined Vehicle field carries the trim)
  *
- * Sanitization: ODT's data required lease-only fields (lease_due,
- * security_deposit) and APR-only fields (cost_per_thousand,
- * financial_institution) on offer types where Loomi's form doesn't show them —
- * that would block export with no way to fill the field, and it reads as
- * builder misconfiguration rather than OEM policy. Those keys are kept only on
- * the offer types whose form exposes them.
+ * Sanitization: a required field is kept only on offer types whose form
+ * actually exposes it — requiring an unfillable field would block export
+ * forever. As of the Subaru parity change, the vehicle-offer + dual-offer forms
+ * expose dueAtSigning + securityDeposit on lease/apr/discount/sales_price, so
+ * Subaru now matches ODT exactly. Still sanitized: Mazda drops the APR-only keys
+ * (cost_per_thousand, financial_institution) from lease/custom, which have no
+ * form field there. NOTE: Volkswagen still drops lease_due (dueAtSigning) from
+ * apr/sales_price for legacy reasons — that field is now exposed there, so VW
+ * could be restored to full ODT parity if desired (not done here).
  *
  * Idempotent upsert. Run:
  *   DOTENV_CONFIG_PATH=.env.local npx tsx -r dotenv/config scripts/seed-oem-rules-odt.ts
@@ -28,12 +31,12 @@ const RULES: { make: string; requiredFields: Record<string, string[]>; notes: st
     make: 'Subaru',
     requiredFields: {
       lease: ['vin', 'msrp', 'disclaimer', 'expiration', 'leaseTerm', 'dueAtSigning', 'securityDeposit'],
-      apr: ['vin', 'msrp', 'disclaimer', 'expiration', 'aprTerm'],
-      discount: ['vin', 'msrp', 'disclaimer', 'expiration', 'discountSource'],
-      sales_price: ['vin', 'msrp', 'disclaimer', 'expiration'],
+      apr: ['vin', 'msrp', 'disclaimer', 'expiration', 'dueAtSigning', 'securityDeposit', 'aprTerm'],
+      discount: ['vin', 'msrp', 'disclaimer', 'expiration', 'dueAtSigning', 'securityDeposit', 'discountSource'],
+      sales_price: ['vin', 'msrp', 'disclaimer', 'expiration', 'dueAtSigning', 'securityDeposit'],
       custom: ['vin', 'expiration'],
     },
-    notes: 'Ported from ODT Monthly Offers oem_offer_rules. Lease-only keys kept on lease only (see seed script).',
+    notes: 'Ported from ODT Monthly Offers oem_offer_rules — exact match. dueAtSigning + securityDeposit required on all offer types (the vehicle-offer form exposes them on lease/apr/discount/sales_price to satisfy this).',
   },
   {
     make: 'Kia',

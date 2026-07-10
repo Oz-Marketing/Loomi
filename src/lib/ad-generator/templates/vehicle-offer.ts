@@ -144,8 +144,8 @@ export const vehicleOffer: AdTemplate = {
     // Lease
     { key: 'monthlyPayment', label: 'Monthly payment ($)', type: 'text', group: 'Offer', placeholder: '299', visibleWhen: { field: 'offerType', in: ['lease'] } },
     { key: 'leaseTerm', label: 'Lease term (months)', type: 'text', group: 'Offer', placeholder: '36', visibleWhen: { field: 'offerType', in: ['lease'] } },
-    { key: 'dueAtSigning', label: 'Due at signing ($)', type: 'text', group: 'Offer', placeholder: '2999', visibleWhen: { field: 'offerType', in: ['lease'] } },
-    { key: 'securityDeposit', label: 'Security deposit ($)', type: 'text', group: 'Offer', placeholder: '0', help: 'Some OEM programs require stating it (e.g. "No security deposit required").', visibleWhen: { field: 'offerType', in: ['lease'] } },
+    { key: 'dueAtSigning', label: 'Due at signing ($)', type: 'text', group: 'Offer', placeholder: '2999', visibleWhen: { field: 'offerType', in: ['lease', 'apr', 'discount', 'sales_price'] } },
+    { key: 'securityDeposit', label: 'Security deposit ($)', type: 'text', group: 'Offer', placeholder: '0', help: 'Some OEM programs require stating it on non-lease offers too (e.g. Subaru).', visibleWhen: { field: 'offerType', in: ['lease', 'apr', 'discount', 'sales_price'] } },
     // APR
     { key: 'aprRate', label: 'APR rate (%)', type: 'text', group: 'Offer', placeholder: '1.9', visibleWhen: { field: 'offerType', in: ['apr'] } },
     { key: 'aprTerm', label: 'APR term (months)', type: 'text', group: 'Offer', placeholder: '60', visibleWhen: { field: 'offerType', in: ['apr'] } },

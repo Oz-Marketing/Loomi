@@ -232,7 +232,7 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
       const res = await fetch('/api/ad-generator/templates-doc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `${t.name} (copy)`, description: t.description ?? undefined, doc: t.doc, status: 'draft' }),
+        body: JSON.stringify({ name: `${t.name} (copy)`, description: t.description ?? undefined, doc: t.doc, status: 'draft', ...(accountKey ? { accountKey } : {}) }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       toast.success(`Cloned "${t.name}"`);

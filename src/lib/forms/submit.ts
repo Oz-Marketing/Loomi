@@ -12,6 +12,7 @@ import { parseFormTemplate } from './types';
 import { validateSubmission, FormValidationError } from './validate';
 import { enrollContactForFormSubmission } from '@/lib/services/loomi-flows';
 import { enqueueFormSubmissionCrmLeads } from '@/lib/integrations/crm/dispatch';
+import { sendLeadNotificationEmail } from './notify';
 import {
   TURNSTILE_RESPONSE_FIELD,
   isTurnstileConfigured,
@@ -179,6 +180,16 @@ export async function submitForm(args: {
     await enqueueFormSubmissionCrmLeads({ form, submission });
   } catch (err) {
     console.error('[forms/submit] CRM lead enqueue failed', err);
+  }
+
+  // Notify the configured lead-notification inbox, if any. Best-effort —
+  // a delivery failure must never roll back the already-persisted submission.
+  if (form.notificationEmail) {
+    try {
+      await sendLeadNotificationEmail({ form, submission });
+    } catch (err) {
+      console.error('[forms/submit] lead notification email failed', err);
+    }
   }
 
   return {

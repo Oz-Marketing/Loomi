@@ -60,6 +60,9 @@ export interface FormDetail extends FormSummary {
   /** Per-form lead source stamped onto Contact.source on submit. Empty
    *  string when unset — submissions then fall back to `Loomi - {name}`. */
   leadSource: string;
+  /** Comma-separated email address(es) notified on each new submission.
+   *  Empty string when unset — no lead notification email is sent. */
+  notificationEmail: string;
   /** Recommended embed snippet (script tag with auto-resizing iframe). */
   embedSnippet: string;
   /** All embed variants — UI shows both with their own copy buttons. */
@@ -157,6 +160,7 @@ function toDetail(row: {
   redirectUrl: string | null;
   successMessage: string | null;
   leadSource: string | null;
+  notificationEmail: string | null;
   listId: string | null;
   forwardToCrm: boolean;
   submissionCount: number;
@@ -173,6 +177,7 @@ function toDetail(row: {
     redirectUrl: row.redirectUrl ?? '',
     successMessage: row.successMessage ?? DEFAULT_SUCCESS_MESSAGE,
     leadSource: row.leadSource ?? '',
+    notificationEmail: row.notificationEmail ?? '',
     embedSnippet: snippets.script,
     embedSnippets: snippets,
   };
@@ -467,6 +472,7 @@ export async function updateForm(
     redirectUrl?: unknown;
     successMessage?: unknown;
     leadSource?: unknown;
+    notificationEmail?: unknown;
     listId?: unknown;
     forwardToCrm?: unknown;
   },
@@ -547,6 +553,21 @@ export async function updateForm(
     const value = typeof patch.leadSource === 'string' ? patch.leadSource.trim() : '';
     // Blank clears the override → submissions fall back to `Loomi - {name}`.
     data.leadSource = value || null;
+  }
+
+  if (patch.notificationEmail !== undefined) {
+    if (patch.notificationEmail !== null && typeof patch.notificationEmail !== 'string') {
+      throw new FormServiceError('notificationEmail must be a string or null');
+    }
+    const raw = typeof patch.notificationEmail === 'string' ? patch.notificationEmail : '';
+    const addresses = raw
+      .split(',')
+      .map((addr) => addr.trim())
+      .filter(Boolean);
+    if (addresses.some((addr) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr))) {
+      throw new FormServiceError('notificationEmail must be a valid email address');
+    }
+    data.notificationEmail = addresses.join(', ') || null;
   }
 
   if (patch.listId !== undefined) {

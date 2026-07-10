@@ -772,6 +772,10 @@ model Form {
   // `Loomi - {form name}` at submit time (see lib/forms/submit.ts) so each
   // form is distinguishable in lead reporting without manual entry.
   leadSource      String?
+  // Comma-separated list of email addresses notified whenever this form
+  // receives a new submission. Blank/unset means no lead notification is
+  // sent (see lib/forms/notify.ts).
+  notificationEmail String?
   // Optional ContactList to attach upserted contacts to on submit.
   // Uses the same no-overwrite semantics as importContacts(listId).
   listId          String?

@@ -1,9 +1,11 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { isFieldVisible, type AdData, type FieldSpec } from '@/lib/ad-generator/types';
+import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { OemIncentivesPanel } from './oem-incentives-panel';
 import { VehicleColorPicker } from './vehicle-colors';
+import { EVOX_CURRENT_YEAR, EVOX_YEARS, EVOX_MAKES } from './evox-makes';
 import { Field } from './fields';
 
 export type VehicleSlot = { imageKey: string; nameKey: string; codeKey: string; label: string };
@@ -67,8 +69,12 @@ export function OfferCard({
     const flag = (k: string) => !!(data[k] ?? '').toString().trim();
     return flag('_oemApplied') || flag('o2__oemApplied') || flag('_vehMake') || flag('o2__vehMake');
   }, [data]);
-  // A resolvable "YYYY Make Model" vehicle name — lets Manual entry keep the
-  // color picker even without an OEM selection.
+  // A vehicle was EXPLICITLY chosen — via an OEM incentive apply or the Manual
+  // YMM picker, both of which stash `_vehMake`. This (not the template-default
+  // vehicleName) is what reveals the color swatches, so a fresh creative never
+  // shows them without input.
+  const vehicleChosen = useMemo(() => !!(data['_vehMake'] || data['o2__vehMake']), [data]);
+  // …and its name resolves to a full "YYYY Make Model" so EVOX can look it up.
   const hasVehicle = useMemo(
     () => vehicleSlots.some((slot) => /^\d{4}\s+\S+\s+.+$/.test((data[slot.nameKey] ?? data.vehicleName ?? '').toString().trim())),
     [vehicleSlots, data],
@@ -157,6 +163,24 @@ export function OfferCard({
       ) : (
         // Manual entry — the editable offer fields, inline (no separate card).
         <div className="space-y-4">
+          {/* Automotive templates get a Year/Make/Model picker here so the vehicle
+              (and thus the color swatches) can be chosen without an OEM incentive.
+              Sets vehicleName + the same `_veh*` stash the incentive apply() uses. */}
+          {vehicleSlots.length > 0 && (
+            <ManualVehiclePicker
+              initial={{ year: data._vehYear, make: data._vehMake, model: data._vehModel }}
+              defaultMake={oemMake}
+              onChange={({ year, make, model }) =>
+                setData((d) => ({
+                  ...d,
+                  vehicleName: [year, make, model].filter(Boolean).join(' '),
+                  _vehYear: year,
+                  _vehMake: make,
+                  _vehModel: model,
+                }))
+              }
+            />
+          )}
           {manualFields.length ? (
             manualFields.map((f) => <Field key={f.key} field={f} value={data[f.key] ?? ''} onChange={(v) => set(f.key, v)} allowVehiclePicker={allowVehiclePicker} />)
           ) : (
@@ -165,10 +189,10 @@ export function OfferCard({
         </div>
       )}
 
-      {/* Vehicle color — only after an OEM offer is applied (which loads the
-          vehicle), or on Manual entry once a vehicle name is set. Never shown on
-          a fresh OEM tab, where template defaults would otherwise surface it. */}
-      {vehicleSlots.length > 0 && (oemApplied || (offerSource === 'manual' && hasVehicle)) && (
+      {/* Vehicle color — only once a vehicle has been EXPLICITLY chosen (OEM
+          apply or the Manual YMM picker) AND its name resolves. Template defaults
+          never trigger it, on either tab. */}
+      {vehicleSlots.length > 0 && vehicleChosen && hasVehicle && (
         <div className="mt-5 border-t border-[var(--border)] pt-4">
           <h3 className="mb-3 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Vehicle color</h3>
           <div className="space-y-4">
@@ -186,5 +210,44 @@ export function OfferCard({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Compact Year / Make / Model picker for the Manual entry tab — sets the vehicle
+ * so the color picker can load EVOX swatches without an OEM incentive. Local
+ * state keeps the inputs snappy; every change is pushed up so `vehicleName` +
+ * the `_veh*` stash stay in the ad data.
+ */
+function ManualVehiclePicker({
+  initial,
+  defaultMake,
+  onChange,
+}: {
+  initial?: { year?: string; make?: string; model?: string };
+  defaultMake?: string;
+  onChange: (v: { year: string; make: string; model: string }) => void;
+}) {
+  const [year, setYear] = useState(initial?.year || String(EVOX_CURRENT_YEAR));
+  const [make, setMake] = useState(initial?.make || defaultMake || '');
+  const [model, setModel] = useState(initial?.model || '');
+  const yearOptions: FontSelectOption[] = EVOX_YEARS.filter((y) => y >= 2020).map((y) => ({ value: String(y), label: String(y) }));
+  const makeOptions: FontSelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
+  return (
+    <div>
+      <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
+        Vehicle <span className="font-normal text-[var(--muted-foreground)]">— sets the vehicle + loads its colors below</span>
+      </label>
+      <div className="grid grid-cols-3 gap-2">
+        <FontSelect value={year} onChange={(v) => { setYear(v); onChange({ year: v, make, model }); }} options={yearOptions} previewFont={false} />
+        <FontSelect value={make} onChange={(v) => { setMake(v); onChange({ year, make: v, model }); }} options={makeOptions} previewFont={false} />
+        <input
+          value={model}
+          onChange={(e) => { setModel(e.target.value); onChange({ year, make, model: e.target.value }); }}
+          placeholder="Model"
+          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+        />
+      </div>
+    </div>
   );
 }

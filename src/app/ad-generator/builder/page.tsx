@@ -53,6 +53,7 @@ import {
   Square2StackIcon,
   Squares2X2Icon,
   QuestionMarkCircleIcon,
+  InformationCircleIcon,
   MagnifyingGlassPlusIcon,
   MagnifyingGlassMinusIcon,
   SwatchIcon,
@@ -91,6 +92,7 @@ import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
 import { enrichOfferFields, OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
+import { vehicleOffer } from '@/lib/ad-generator/templates/vehicle-offer';
 import { requiredFieldsFor, FIELD_LABELS, type OemOfferRule } from '@/lib/ad-generator/compliance';
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type LayerNode } from '@/lib/ad-generator/layer-tree';
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon, CropIcon } from '@/components/ad-generator/builder-icons';
@@ -292,6 +294,8 @@ function buildContentSources(el: DocElement, fields: FieldSpec[]): SearchableSel
 // Make/OEM options for the template-settings picker — the shared EVOX make list,
 // with a blank "None" so a template can be untagged.
 const MAKE_OPTIONS: FontSelectOption[] = [{ value: '', label: 'None' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
+// Canonical field spec per key — the source for the compliance "insert" action.
+const FIELD_SPEC_BY_KEY: Record<string, FieldSpec> = Object.fromEntries(vehicleOffer.fields.map((f) => [f.key, f]));
 const WEIGHT_OPTIONS: FontSelectOption[] = [
   { value: '300', label: 'Light' },
   { value: '400', label: 'Regular' },
@@ -657,6 +661,34 @@ export default function AdBuilderPage() {
     }).filter((r) => requiredFieldsFor(r.type.value, oemRule).length > 0);
   }, [doc.make, doc.fields, oemRule]);
   const complianceMissing = compliance ? compliance.reduce((n, r) => n + r.missing.length, 0) : 0;
+  // Compliance "insert": add the required field to the template (making it visible
+  // for that offer type, so the warning clears) and drop a text element bound to it
+  // onto the artboard so the designer can place it.
+  const insertComplianceField = (key: string, offerType: string) => {
+    const id = `text-${rid()}`;
+    setDoc((prev) => {
+      const base = prev.fields.find((f) => f.key === key) ?? FIELD_SPEC_BY_KEY[key];
+      // Ensure the field is present + shown for this offer type.
+      const ensured =
+        base && base.visibleWhen?.field === 'offerType' && !base.visibleWhen.in.includes(offerType)
+          ? { ...base, visibleWhen: { ...base.visibleWhen, in: [...base.visibleWhen.in, offerType] } }
+          : base;
+      const fields = ensured
+        ? prev.fields.some((f) => f.key === key)
+          ? prev.fields.map((f) => (f.key === key ? ensured : f))
+          : [...prev.fields, ensured]
+        : prev.fields;
+      const el: DocElement = { ...makeDefaultElement(id, 'text'), binding: { kind: 'field', key }, autoSize: true };
+      const layouts = { ...prev.layouts };
+      for (const sid of Object.keys(prev.layouts)) {
+        const zs = Object.values(prev.layouts[sid]).map((b) => b.z ?? 0);
+        layouts[sid] = { ...prev.layouts[sid], [id]: { x: 0.06, y: 0.06, w: 0.3, h: 0.08, z: (zs.length ? Math.max(...zs) : 0) + 1 } };
+      }
+      return { ...prev, fields, elements: [...prev.elements, el], layouts };
+    });
+    setSelectedIds([id]);
+    toast.success(`Added ${FIELD_LABELS[key] ?? key}`);
+  };
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // The group the user has "drilled into" via double-click (Figma-style): while
@@ -3909,7 +3941,7 @@ export default function AdBuilderPage() {
             {/* Compliance status for the tagged make — pinned to the left. */}
             {doc.make && compliance && compliance.length > 0 && (
               <div className="mr-auto">
-                <ComplianceChip make={doc.make} compliance={compliance} missing={complianceMissing} />
+                <ComplianceChip make={doc.make} compliance={compliance} missing={complianceMissing} onInsert={insertComplianceField} />
               </div>
             )}
             {/* Zoom lives on the canvas (bottom-left); outlines + margins moved to
@@ -5308,18 +5340,19 @@ function FormPreview({ fields, fieldGroups, defaults }: { fields: FieldSpec[]; f
   );
 }
 
-// Group header ⋯ menu — Rename / Duplicate / Delete, mirroring the field row's
-// menu (self-contained open state + click-outside close).
 // Compliance status chip for the canvas action bar: a compact warning (or green
-// "compliant") that opens a per-offer-type breakdown on click.
+// "compliant") that opens a per-offer-type breakdown on click. Each missing field
+// is an "insert" button that adds it to the template + drops it on the artboard.
 function ComplianceChip({
   make,
   compliance,
   missing,
+  onInsert,
 }: {
   make: string;
   compliance: { type: { value: string; label: string }; missing: string[] }[];
   missing: number;
+  onInsert: (key: string, offerType: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -5362,9 +5395,24 @@ function ComplianceChip({
                   <XMarkIcon className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" strokeWidth={2.5} />
                 )}
                 <span className="w-20 shrink-0 font-medium text-[var(--muted-foreground)]">{type.label}</span>
-                <span className={m.length ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--muted-foreground)]'}>
-                  {m.length === 0 ? 'Ready' : m.map((k) => FIELD_LABELS[k] ?? k).join(', ')}
-                </span>
+                {m.length === 0 ? (
+                  <span className="text-[var(--muted-foreground)]">Ready</span>
+                ) : (
+                  <span className="flex flex-1 flex-wrap gap-1">
+                    {m.map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => onInsert(k, type.value)}
+                        title={`Insert “${FIELD_LABELS[k] ?? k}” — adds the field + drops it on the artboard`}
+                        className="inline-flex items-center gap-0.5 rounded bg-amber-500/10 px-1 py-0.5 text-amber-600 transition-colors hover:bg-amber-500/25 dark:text-amber-400"
+                      >
+                        <PlusIcon className="h-2.5 w-2.5" strokeWidth={2.5} />
+                        {FIELD_LABELS[k] ?? k}
+                      </button>
+                    ))}
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -6490,23 +6538,23 @@ function SelectionPanel({
                 • Hug (default): the box follows the text (no wrap); resizing scales the font.
                 • Fit to box:    a fixed W×H frame; the text auto-scales to fill it. */}
             <PanelSection title="Sizing">
-              <button
-                type="button"
-                role="switch"
-                aria-checked={isFit}
-                onClick={() => onSetSizing(isFit ? 'hug' : 'fit')}
-                className="flex w-full cursor-pointer items-center justify-between gap-2 text-xs font-medium text-[var(--foreground)]"
-              >
-                <span>Fit to box</span>
-                <span className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${isFit ? 'bg-[var(--primary)]' : 'border border-[var(--border)] bg-[var(--muted)]'}`}>
-                  <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${isFit ? 'translate-x-4' : 'translate-x-0.5'}`} />
+              <div className="flex w-full items-center justify-between gap-2">
+                <span className="flex items-center gap-1 text-xs font-medium text-[var(--foreground)]">
+                  Fit to box
+                  <Tooltip label="On: a fixed frame — drag W and H and the text auto-scales to fill it, staying put as the value changes (aligns horizontally + vertically). Off: the box hugs the text — type to resize it, Enter for a new line.">
+                    <InformationCircleIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+                  </Tooltip>
                 </span>
-              </button>
-              <p className="mt-1.5 text-[10px] leading-tight text-[var(--muted-foreground)]">
-                {isFit
-                  ? 'A fixed frame — drag W and H; the text auto-scales to fill it and stays put as the value changes. Aligns horizontally + vertically.'
-                  : 'Off: the box hugs the text — type to resize it, Enter for a new line.'}
-              </p>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={isFit}
+                  onClick={() => onSetSizing(isFit ? 'hug' : 'fit')}
+                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${isFit ? 'bg-[var(--primary)]' : 'border border-[var(--border)] bg-[var(--muted)]'}`}
+                >
+                  <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${isFit ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                </button>
+              </div>
             </PanelSection>
 
             <PanelSection title="Alignment">

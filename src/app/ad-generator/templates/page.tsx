@@ -8,7 +8,7 @@
  * the /ad-generator layout; admin-only here.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import { ArrowLeftIcon, PlusIcon, PencilSquareIcon, TrashIcon } from '@heroicons/react/24/outline';
@@ -230,6 +230,26 @@ function TemplateForm({
 }) {
   const input =
     'w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]';
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+  // Insert a {token} into the body at the cursor (or replacing the selection),
+  // then restore focus + cursor right after it — so building a template is
+  // click-to-insert instead of remembering + typing slug names.
+  const insertToken = (token: string) => {
+    const ta = bodyRef.current;
+    const cur = draft.body;
+    if (!ta) {
+      setDraft({ ...draft, body: cur + token });
+      return;
+    }
+    const start = ta.selectionStart ?? cur.length;
+    const end = ta.selectionEnd ?? cur.length;
+    setDraft({ ...draft, body: cur.slice(0, start) + token + cur.slice(end) });
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + token.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  };
   return (
     <div className="glass-card mb-5 rounded-xl border border-[var(--primary)]/30 p-5">
       <h2 className="mb-4 text-sm font-semibold text-[var(--foreground)]">{draft.id ? 'Edit template' : 'New template'}</h2>
@@ -260,15 +280,29 @@ function TemplateForm({
       <div className="mt-4">
         <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">Body</label>
         <textarea
+          ref={bodyRef}
           rows={4}
           className={`${input} resize-y`}
           value={draft.body}
           placeholder="{apr_rate}% APR for {apr_term} months with approved credit. See dealer for details."
           onChange={(e) => setDraft({ ...draft, body: e.target.value })}
         />
-        <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
-          Tokens (filled from the offer): {Object.keys(DISCLAIMER_SLUGS).map((s) => `{${s}}`).join('  ')}
+        <p className="mb-1.5 mt-2 text-[11px] font-medium text-[var(--muted-foreground)]">
+          Click to insert a token <span className="font-normal">— it fills from the offer at render time:</span>
         </p>
+        <div className="flex flex-wrap gap-1">
+          {Object.keys(DISCLAIMER_SLUGS).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => insertToken(`{${s}}`)}
+              title={`Insert {${s}}`}
+              className="rounded bg-[var(--primary)]/10 px-1.5 py-0.5 text-[11px] font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/20"
+            >
+              {`{${s}}`}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="mt-4 flex justify-end gap-2">
         <button onClick={onCancel} className="rounded-lg px-3 py-2 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)]">

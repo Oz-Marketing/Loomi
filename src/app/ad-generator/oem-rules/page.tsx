@@ -15,6 +15,8 @@ import { ArrowLeftIcon, PlusIcon, PencilSquareIcon, TrashIcon } from '@heroicons
 import { useAccount } from '@/contexts/account-context';
 import { OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { FIELD_LABELS } from '@/lib/ad-generator/compliance';
+import { vehicleOffer } from '@/lib/ad-generator/templates/vehicle-offer';
+import { isFieldVisible } from '@/lib/ad-generator/types';
 
 // All offer types are editable — including custom. Its on-ad copy is free text,
 // but an OEM can still require fields on a custom offer (e.g. ODT's Mazda custom
@@ -44,6 +46,15 @@ const REQUIREABLE_FIELDS = [
   'disclaimer',
   'expiration',
 ];
+
+// Whether a field actually appears on the client form for a given offer type
+// (via the field's visibleWhen). Fields that don't are still selectable in the
+// editor but de-emphasized, so the eye goes to what usually applies there.
+const FIELD_SPECS = Object.fromEntries(vehicleOffer.fields.map((f) => [f.key, f]));
+function isTypical(key: string, offerType: string): boolean {
+  const spec = FIELD_SPECS[key];
+  return spec ? isFieldVisible(spec, { offerType }) : true;
+}
 
 interface Rule {
   id: string;
@@ -205,19 +216,39 @@ export default function OemRulesPage() {
               const selected = draft.requiredFields[t.value] ?? [];
               return (
                 <div key={t.value} className="rounded-lg border border-[var(--border)] p-3">
-                  <div className="mb-2 text-xs font-medium text-[var(--muted-foreground)]">{t.label}</div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-[var(--foreground)]">{t.label}</span>
+                      <span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">
+                        {selected.length} required
+                      </span>
+                    </div>
+                    {selected.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setDraft((d) => (d ? { ...d, requiredFields: { ...d.requiredFields, [t.value]: [] } } : d))}
+                        className="text-[10px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
                   <div className="flex flex-wrap gap-1.5">
                     {REQUIREABLE_FIELDS.map((key) => {
                       const on = selected.includes(key);
+                      const typical = isTypical(key, t.value);
                       return (
                         <button
                           key={key}
                           type="button"
                           onClick={() => toggleField(t.value, key)}
+                          title={!typical ? `Not shown on the ${t.label} form — usually not required here` : undefined}
                           className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                             on
                               ? 'bg-[var(--primary)] text-white'
-                              : 'border border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+                              : typical
+                                ? 'border border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+                                : 'border border-dashed border-[var(--border)] text-[var(--muted-foreground)]/45 hover:border-[var(--primary)] hover:text-[var(--muted-foreground)]'
                           }`}
                         >
                           {FIELD_LABELS[key] ?? key}

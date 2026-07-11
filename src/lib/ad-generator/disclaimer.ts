@@ -97,16 +97,24 @@ export function substituteTokens(body: string, values: Record<string, string>): 
  * Compose the final disclaimer: substitute tokens into the chosen template
  * (or the per-offer-type default), then append the dealer-fee boilerplate (if
  * not already present) and a VIN / Stock# line (if provided).
+ *
+ * `rawBody` overrides the template path: when set (e.g. a MarketCheck OEM
+ * offer's authoritative fine print), it's used VERBATIM — no token substitution —
+ * and only the shared boilerplate + VIN/Stock append still run (matching ODT).
  */
-export function composeDisclaimer(data: AdData, templateBody?: string): string {
-  const type = (data.offerType as OfferType) || 'custom';
-  const body =
-    (templateBody && templateBody.trim()) ||
-    DEFAULT_DISCLAIMER_TEMPLATES[type] ||
-    DEFAULT_DISCLAIMER_TEMPLATES.custom;
-
+export function composeDisclaimer(data: AdData, templateBody?: string, rawBody?: string): string {
   const values = buildTokenValues(data);
-  let out = substituteTokens(body, values).trim();
+  let out: string;
+  if (rawBody != null && rawBody.trim()) {
+    out = rawBody.trim();
+  } else {
+    const type = (data.offerType as OfferType) || 'custom';
+    const body =
+      (templateBody && templateBody.trim()) ||
+      DEFAULT_DISCLAIMER_TEMPLATES[type] ||
+      DEFAULT_DISCLAIMER_TEMPLATES.custom;
+    out = substituteTokens(body, values).trim();
+  }
 
   if (!/dealer[-\s]?imposed fees/i.test(out)) {
     out = `${out} ${DEALER_FEE_BOILERPLATE}`;

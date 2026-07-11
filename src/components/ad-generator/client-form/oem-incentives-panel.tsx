@@ -135,26 +135,44 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
       patch[`${p}offerType`] = 'apr';
       patch[`${p}aprRate`] = String(inc.rate);
       if (inc.term) patch[`${p}aprTerm`] = String(inc.term);
+      // Cost per $1,000 financed — amortized from rate + term (matches ODT's
+      // auto-calc). 0% APR is the simple principal/term case.
+      if (inc.term > 0) {
+        const r = inc.rate / 100 / 12;
+        const cpt = r > 0 ? (r / (1 - Math.pow(1 + r, -inc.term))) * 1000 : 1000 / inc.term;
+        patch[`${p}costPerThousand`] = cpt.toFixed(2);
+      }
     } else if (inc.type === 'cash') {
       patch[`${p}offerType`] = 'discount';
       if (inc.amount) patch[`${p}discountAmount`] = String(Math.round(inc.amount));
+    } else if (inc.type === 'other') {
+      // Misc / unrecognized programs → free-text custom offer type.
+      patch[`${p}offerType`] = 'custom';
     }
     if (inc.msrp) patch[`${p}msrp`] = String(Math.round(inc.msrp));
     if (inc.endDate) {
       const d = new Date(inc.endDate);
-      if (!Number.isNaN(d.getTime())) patch.expiration = d.toISOString().slice(0, 10); // shared
+      if (!Number.isNaN(d.getTime())) patch.expiration = d.toISOString().slice(0, 10); // shared (kept only if empty — see OfferCard onApply)
     }
+    // The OEM offer's own fine print is authoritative — carry MarketCheck's
+    // eligibility text into the disclaimer (used verbatim; DisclaimerField stops
+    // auto-composing over it, and picking a template re-binds). `_oemDisclaimer`
+    // changes per apply so a fresh selection re-takes over; empty text leaves the
+    // template-composed disclaimer in place. Shared across offer slots.
+    patch._oemDisclaimer = keyOf(inc);
+    patch._oemDisclaimerText = inc.eligibility?.trim() || '';
     // We already know the vehicle from the search — fill it too (name now, EVOX
     // jellybean async). For a same-model dual, Offer 2 rides Offer 1's vehicle,
     // so don't overwrite it here.
     const setVehicle = !(dual && which === 'o2_' && dualVehicleMode === 'same');
     if (setVehicle && (make || model)) {
-      patch[`${p}vehicleName`] = [year, make, model].filter(Boolean).join(' ');
+      patch[`${p}vehicleName`] = [year, make, model, inc.trim].filter(Boolean).join(' ');
       // Stash the structured vehicle so the EVOX color picker can seed + auto-search
-      // it (no re-typing) — see evoxSeedFor().
+      // it (no re-typing) — see evoxSeedFor(). Trim sharpens the EVOX image match.
       patch[`${p}_vehYear`] = String(year || '');
       patch[`${p}_vehMake`] = make || '';
       patch[`${p}_vehModel`] = model || '';
+      if (inc.trim) patch[`${p}_vehTrim`] = inc.trim;
     }
     // Explicit marker that an OEM incentive was actually applied. The OfferCard
     // gates the vehicle-color picker on this, so a fresh creative's template
@@ -168,7 +186,7 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
     toast.success(dual ? `Filled ${which === 'o2_' ? 'Offer 2' : 'Offer 1'} from the incentive` : 'Offer filled from the incentive');
     if (setVehicle && make) {
       setResolvingImg(true);
-      resolveJellybean(make, model, Number(year))
+      resolveJellybean(make, model, Number(year), inc.trim || undefined)
         .then((url) => { if (url) onApply({ [`${p}vehicleImageUrl`]: url }); })
         .finally(() => setResolvingImg(false));
     }
@@ -176,9 +194,9 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
 
   // Auto-pull the EVOX jellybean for the searched vehicle: first matching trim +
   // its first color → resolve (which re-hosts to our S3, so it's cached).
-  async function resolveJellybean(mk: string, mdl: string, yr: number): Promise<string | null> {
+  async function resolveJellybean(mk: string, mdl: string, yr: number, trim?: string): Promise<string | null> {
     try {
-      const s = await fetch('/api/ad-generator/evox/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year: yr, make: mk, model: mdl }) });
+      const s = await fetch('/api/ad-generator/evox/search', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ year: yr, make: mk, model: mdl, trim }) });
       const sj = await s.json().catch(() => ({}));
       const v = (sj.vehicles ?? [])[0] as EvoxVehicle | undefined;
       const color = v?.colors?.[0];

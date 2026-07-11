@@ -146,7 +146,14 @@ export function OfferCard({
               zip: data._oemZip,
               selectedKey: data._oemSelectedKey,
             }}
-            onApply={(patch) => setData((d) => ({ ...d, ...patch }))}
+            onApply={(patch) =>
+              setData((d) => {
+                const next = { ...d, ...patch };
+                // A manually-set expiration wins over the OEM offer's end date.
+                if (patch.expiration && d.expiration?.trim()) next.expiration = d.expiration;
+                return next;
+              })
+            }
           />
           {/* No manufacturer recap card — the selected incentive card above shows
               the offer. We only surface the fields the incentive doesn't provide

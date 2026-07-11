@@ -165,6 +165,8 @@ export function DisclaimerField({
   const [templates, setTemplates] = useState<DisclaimerTemplateOption[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const editedRef = useRef(false);
+  // Set when the user picks a template to override an OEM offer's disclaimer.
+  const [override, setOverride] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,7 +184,19 @@ export function DisclaimerField({
   }, [offerType]);
 
   const tmpl = templates.find((t) => t.id === selectedId);
-  const composed = composeDisclaimer(renderData, tmpl?.body);
+  // A selected MarketCheck OEM offer stashes its authoritative fine print in
+  // `_oemDisclaimerText` — used verbatim (boilerplate + VIN/Stock still appended)
+  // unless the user overrides by picking a template.
+  const oemRaw = renderData._oemDisclaimer && !override ? renderData._oemDisclaimerText || undefined : undefined;
+  const composed = composeDisclaimer(renderData, tmpl?.body, oemRaw);
+
+  // When a new OEM offer is applied (`_oemDisclaimer` changes), let its disclaimer
+  // take over again — drop any prior template override / manual-edit opt-out.
+  useEffect(() => {
+    setOverride(false);
+    editedRef.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [renderData._oemDisclaimer]);
 
   // Auto-fill the disclaimer whenever the composed result changes (offer / VIN
   // / Stock# / template edits) — unless the user has typed their own text.
@@ -228,6 +242,7 @@ export function DisclaimerField({
           value={selectedId}
           onChange={(v) => {
             editedRef.current = false; // re-selecting a template re-binds auto-fill
+            setOverride(true); // ...and overrides an OEM-supplied disclaimer
             setSelectedId(v);
           }}
           options={templateOptions}

@@ -28,7 +28,6 @@ import { AccountLogo } from '@/components/account-logo';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
-import { isVehicleIndustry } from '@/lib/ad-generator/industry';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { availableCustomFonts, buildFontFaceCssFromUrls, usedFontFamilies } from '@/lib/ad-generator/fonts';
 import { googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
@@ -310,16 +309,17 @@ export default function AdGeneratorPage() {
   };
 
   // Industry-aware tooling. The ad generator supports any industry/ad type via
-  // data-driven templates; the automotive-only helpers (OEM incentive lookup,
-  // EVOX vehicle picker) appear only for an Automotive account on a vehicle-
-  // offer template. Everything else (AI copy, branding, the template's own
-  // fields) is generic, so events, grand openings, etc. get a clean form.
-  const isVehicleAccount = isVehicleIndustry(accountData?.category);
+  // data-driven templates; the automotive helpers (OEM incentive lookup, EVOX
+  // vehicle picker) appear whenever the TEMPLATE is a vehicle offer (has an
+  // offerType / vehicleImageUrl field) — regardless of the active account, so a
+  // vehicle-offer template always gets the modern OEM UI (even in admin/global
+  // context, with no account selected). Non-vehicle templates (events, grand
+  // openings) still fall to the clean generic form.
   const isVehicleOffer = useMemo(
     () => template.fields.some((f) => f.key === 'offerType' || f.key === 'vehicleImageUrl'),
     [template],
   );
-  const showAutomotiveTools = isVehicleAccount && isVehicleOffer;
+  const showAutomotiveTools = isVehicleOffer;
 
   // A template shows two offers when it carries o2_ fields (a "dual" template) —
   // that's a property of the template's design, not a client choice. Reps only
@@ -338,10 +338,12 @@ export default function AdGeneratorPage() {
     });
   }, [isDual, dualVehicleMode, data.vehicleName, data.vehicleImageUrl]);
 
-  // OEM compliance: pull the active account's make-keyed required-field rule
-  // (resilient — null when none/unmigrated → baseline applies), then compute
-  // which required fields are still empty. Export is gated on this.
-  const oemMake = accountData?.oem || accountData?.oems?.[0] || '';
+  // OEM compliance: pull the make-keyed required-field rule (resilient — null
+  // when none/unmigrated → baseline applies), then compute which required fields
+  // are still empty. Export is gated on this. Prefer the make of the offer's own
+  // vehicle (set by an OEM incentive or the YMM picker) so a Subaru offer inside a
+  // multi-make account validates against Subaru's rule, not the account default.
+  const oemMake = data._vehMake?.trim() || accountData?.oem || accountData?.oems?.[0] || '';
   useEffect(() => {
     if (!oemMake) {
       setOemRule(null);

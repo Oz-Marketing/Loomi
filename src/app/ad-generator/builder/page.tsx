@@ -89,7 +89,9 @@ import { DatePicker, type DateRange } from '@/components/ui/date-picker';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
-import { enrichOfferFields } from '@/lib/ad-generator/offer-text';
+import { enrichOfferFields, OFFER_TYPES } from '@/lib/ad-generator/offer-text';
+import { isVehicleIndustry } from '@/lib/ad-generator/industry';
+import { requiredFieldsFor, FIELD_LABELS, type OemOfferRule } from '@/lib/ad-generator/compliance';
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, type LayerNode } from '@/lib/ad-generator/layer-tree';
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon, CropIcon } from '@/components/ad-generator/builder-icons';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
@@ -603,6 +605,10 @@ function makeDefaultElement(id: string, type: DocElementType): DocElement {
 export default function AdBuilderPage() {
   const { accountData, accountKey, accounts, isUnrestricted } = useAccount();
   const { prompt, confirm } = useLoomiDialog();
+  // Automotive templates can be tagged with a make/OEM; when they are, the Fields
+  // panel shows a compliance checklist against that make's OEM rule.
+  const isAutomotive = isVehicleIndustry(accountData?.category) || isUnrestricted;
+  const [oemRule, setOemRule] = useState<OemOfferRule | null>(null);
 
   // Reusable blocks (saved element clusters) available to insert here: global +
   // this account's own. `blockDraft` opens the save dialog with a built payload.
@@ -614,6 +620,18 @@ export default function AdBuilderPage() {
   // vehicle-offer doc is still a registered code template (opened via ?ad / ?
   // template), just not the blank-canvas default.
   const { doc, setDoc, undo, redo, canUndo, canRedo, reset: resetHistory } = useDocHistory(() => blankTemplateDoc('tmpl-blank', 'Untitled template'));
+  // Pull the OEM rule for the template's make so the Fields panel can flag any
+  // required field that's missing from the template. Cleared when no make is set.
+  const docMake = doc.make?.trim() ?? '';
+  useEffect(() => {
+    if (!docMake) { setOemRule(null); return; }
+    let cancelled = false;
+    fetch(`/api/ad-generator/oem-rules?make=${encodeURIComponent(docMake)}`)
+      .then((r) => (r.ok ? r.json() : { rule: null }))
+      .then((d: { rule?: OemOfferRule | null }) => { if (!cancelled) setOemRule(d.rule ?? null); })
+      .catch(() => { if (!cancelled) setOemRule(null); });
+    return () => { cancelled = true; };
+  }, [docMake]);
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // The group the user has "drilled into" via double-click (Figma-style): while
@@ -3418,6 +3436,27 @@ export default function AdBuilderPage() {
                     />
                     <p className="mt-2 text-[11px] leading-snug text-[var(--muted-foreground)]">Assign tags on the template card in the Templates library.</p>
 
+                    {isAutomotive && (
+                      <div className="mt-4 border-t border-[var(--border)] pt-3">
+                        <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Make / OEM</h3>
+                        <p className="mb-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
+                          Tie this template to an OEM — the Fields panel then flags any required compliance field it&apos;s missing.
+                        </p>
+                        <input
+                          value={doc.make ?? ''}
+                          onChange={(e) => setDoc((prev) => ({ ...prev, make: e.target.value || undefined }), 'make')}
+                          list="oem-make-suggestions"
+                          placeholder="e.g. Kia — blank for none"
+                          className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                        />
+                        <datalist id="oem-make-suggestions">
+                          {(accountData?.oems ?? (accountData?.oem ? [accountData.oem] : [])).map((m) => (
+                            <option key={m} value={m} />
+                          ))}
+                        </datalist>
+                      </div>
+                    )}
+
                     <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
                       <button
                         onClick={() => {
@@ -4425,6 +4464,8 @@ export default function AdBuilderPage() {
                   defaults={doc.defaults}
                   accountKey={accountKey ?? undefined}
                   brandLogos={brandLogos}
+                  make={doc.make}
+                  oemRule={oemRule}
                   onClose={() => setFieldsOpen(false)}
                   onAdd={addField}
                   onUpdate={updateFieldAt}
@@ -5303,6 +5344,8 @@ function FieldsSidebar({
   defaults,
   accountKey,
   brandLogos,
+  make,
+  oemRule,
   onClose,
   onAdd,
   onUpdate,
@@ -5329,6 +5372,10 @@ function FieldsSidebar({
   defaults: Record<string, string>;
   accountKey?: string;
   brandLogos: { key: string; label: string; url: string }[];
+  /** The make this template is tagged for (drives the compliance checklist). */
+  make?: string;
+  /** The OEM rule for `make` (required fields per offer type), or null. */
+  oemRule: OemOfferRule | null;
   /** Reusable field-set presets — names only; apply seeds fields, save upserts. */
   presets: string[];
   onApplyPreset: (name: string) => void;
@@ -5401,6 +5448,21 @@ function FieldsSidebar({
     return base;
   }, [fieldGroups, fields]);
   const rows = useMemo(() => fields.map((f, i) => ({ f, i })), [fields]);
+  // Compliance checklist: for the tagged make, which required fields (per offer
+  // type) are missing from this template — i.e. not present OR not shown for that
+  // offer type. Empty `missing` = that offer type is export-ready for the make.
+  const compliance = useMemo(() => {
+    if (!make) return null;
+    return OFFER_TYPES.map((t) => {
+      const required = requiredFieldsFor(t.value, oemRule);
+      const missing = required.filter((k) => {
+        const spec = fields.find((f) => f.key === k);
+        return !spec || !isFieldVisible(spec, { offerType: t.value });
+      });
+      return { type: t, missing };
+    }).filter((r) => requiredFieldsFor(r.type.value, oemRule).length > 0);
+  }, [make, oemRule, fields]);
+  const complianceIssues = compliance ? compliance.reduce((n, r) => n + r.missing.length, 0) : 0;
   const itemsFor = (name: string) => rows.filter(({ f }) => (f.group?.trim() || GENERAL) === name);
   // Auto-open a newly-added group so it isn't lost.
   const prevNames = useRef(new Set(orderedNames));
@@ -5586,6 +5648,39 @@ function FieldsSidebar({
       ) : (
       <>
       <div ref={flipRef} className="flex-1 space-y-2 overflow-y-auto p-4">
+        {make && compliance && compliance.length > 0 && (
+          <div className={`rounded-lg border p-3 ${complianceIssues > 0 ? 'border-amber-500/40 bg-amber-500/5' : 'border-emerald-500/40 bg-emerald-500/5'}`}>
+            <div className="mb-1.5 flex items-center gap-1.5">
+              {complianceIssues > 0 ? (
+                <ExclamationTriangleIcon className="h-4 w-4 shrink-0 text-amber-500" />
+              ) : (
+                <CheckIcon className="h-4 w-4 shrink-0 text-emerald-500" strokeWidth={2.5} />
+              )}
+              <span className="text-xs font-semibold text-[var(--foreground)]">{make} compliance</span>
+              <span className={`ml-auto text-[10px] font-medium ${complianceIssues > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                {complianceIssues > 0 ? `${complianceIssues} field${complianceIssues === 1 ? '' : 's'} missing` : 'All required fields present'}
+              </span>
+            </div>
+            <p className="mb-2 text-[10px] leading-snug text-[var(--muted-foreground)]">
+              Required by the {make} OEM rule per offer type. Missing fields block export of that offer type until added here.
+            </p>
+            <div className="space-y-1">
+              {compliance.map(({ type, missing }) => (
+                <div key={type.value} className="flex items-start gap-1.5 text-[11px]">
+                  {missing.length === 0 ? (
+                    <CheckIcon className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" strokeWidth={2.5} />
+                  ) : (
+                    <XMarkIcon className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" strokeWidth={2.5} />
+                  )}
+                  <span className="w-20 shrink-0 font-medium text-[var(--muted-foreground)]">{type.label}</span>
+                  <span className={missing.length ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--muted-foreground)]'}>
+                    {missing.length === 0 ? 'Ready' : missing.map((k) => FIELD_LABELS[k] ?? k).join(', ')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {orderedNames.map((group, gi) => {
           const open = openGroups.has(group);
           const items = itemsFor(group);

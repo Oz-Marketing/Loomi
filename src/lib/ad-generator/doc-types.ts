@@ -240,6 +240,11 @@ export interface TemplateDoc {
    *  (vehicle templates default to Automotive + Powersports). Drives which
    *  accounts see it in the picker. */
   industries?: string[];
+  /** The make/OEM this template is built for (e.g. "Kia"). When set, the builder
+   *  shows a compliance checklist against that make's OEM rule — so a designer sees
+   *  which required fields must be present before ads from it can be exported.
+   *  Automotive only; matched case-insensitively to AdOemOfferRule.make. */
+  make?: string;
   /** Shared template taxonomy: a single category + freeform tags, used to
    *  organize/filter this template alongside every other kind on /templates. */
   category?: string;

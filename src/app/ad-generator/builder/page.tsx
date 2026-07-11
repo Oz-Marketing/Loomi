@@ -637,6 +637,20 @@ export default function AdBuilderPage() {
   // when the template targets Automotive — explicitly selected, or the empty
   // "all vehicle-offer accounts" default (which includes Automotive).
   const templateIsAutomotive = (doc.industries ?? []).length === 0 || (doc.industries ?? []).includes('Automotive');
+  // Compliance vs. the tagged make's OEM rule: per offer type, which required
+  // fields are missing (absent, or not shown for that offer type). Surfaced as a
+  // chip on the canvas action bar. Null when the template has no make.
+  const compliance = useMemo(() => {
+    if (!doc.make) return null;
+    return OFFER_TYPES.map((t) => {
+      const missing = requiredFieldsFor(t.value, oemRule).filter((k) => {
+        const spec = doc.fields.find((f) => f.key === k);
+        return !spec || !isFieldVisible(spec, { offerType: t.value });
+      });
+      return { type: t, missing };
+    }).filter((r) => requiredFieldsFor(r.type.value, oemRule).length > 0);
+  }, [doc.make, doc.fields, oemRule]);
+  const complianceMissing = compliance ? compliance.reduce((n, r) => n + r.missing.length, 0) : 0;
   const [sizeId, setSizeId] = useState(doc.sizes[0].id);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   // The group the user has "drilled into" via double-click (Figma-style): while
@@ -3878,6 +3892,12 @@ export default function AdBuilderPage() {
         {/* Canvas */}
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)]">
           <div className="relative flex flex-shrink-0 items-center justify-end gap-2 border-b border-[var(--border)] px-3 py-2">
+            {/* Compliance status for the tagged make — pinned to the left. */}
+            {doc.make && compliance && compliance.length > 0 && (
+              <div className="mr-auto">
+                <ComplianceChip make={doc.make} compliance={compliance} missing={complianceMissing} />
+              </div>
+            )}
             {/* Zoom lives on the canvas (bottom-left); outlines + margins moved to
                 the left rail; the active size is shown on the canvas action bar. */}
             {/* Undo / Redo */}
@@ -4464,8 +4484,6 @@ export default function AdBuilderPage() {
                   defaults={doc.defaults}
                   accountKey={accountKey ?? undefined}
                   brandLogos={brandLogos}
-                  make={doc.make}
-                  oemRule={oemRule}
                   onClose={() => setFieldsOpen(false)}
                   onAdd={addField}
                   onUpdate={updateFieldAt}
@@ -5279,6 +5297,70 @@ function FormPreview({ fields, fieldGroups, defaults }: { fields: FieldSpec[]; f
 
 // Group header ⋯ menu — Rename / Duplicate / Delete, mirroring the field row's
 // menu (self-contained open state + click-outside close).
+// Compliance status chip for the canvas action bar: a compact warning (or green
+// "compliant") that opens a per-offer-type breakdown on click.
+function ComplianceChip({
+  make,
+  compliance,
+  missing,
+}: {
+  make: string;
+  compliance: { type: { value: string; label: string }; missing: string[] }[];
+  missing: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open]);
+  const ok = missing === 0;
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title={`${make} compliance`}
+        className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors ${ok ? 'text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400' : 'text-amber-600 hover:bg-amber-500/10 dark:text-amber-400'}`}
+      >
+        {ok ? <CheckIcon className="h-4 w-4" strokeWidth={2.5} /> : <ExclamationTriangleIcon className="h-4 w-4" />}
+        <span>{ok ? `${make} compliant` : `${missing} required field${missing === 1 ? '' : 's'} missing`}</span>
+        <ChevronDownIcon className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-[95] mt-1 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-3 shadow-2xl backdrop-blur-2xl">
+          <div className="mb-1.5 flex items-center gap-1.5">
+            <span className="text-xs font-semibold text-[var(--foreground)]">{make} compliance</span>
+            <span className={`ml-auto text-[10px] font-medium ${ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+              {ok ? 'All required fields present' : `${missing} missing`}
+            </span>
+          </div>
+          <p className="mb-2 text-[10px] leading-snug text-[var(--muted-foreground)]">
+            Required by the {make} OEM rule per offer type. Missing fields block export of that offer type until added to the template&apos;s fields.
+          </p>
+          <div className="space-y-1">
+            {compliance.map(({ type, missing: m }) => (
+              <div key={type.value} className="flex items-start gap-1.5 text-[11px]">
+                {m.length === 0 ? (
+                  <CheckIcon className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" strokeWidth={2.5} />
+                ) : (
+                  <XMarkIcon className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" strokeWidth={2.5} />
+                )}
+                <span className="w-20 shrink-0 font-medium text-[var(--muted-foreground)]">{type.label}</span>
+                <span className={m.length ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--muted-foreground)]'}>
+                  {m.length === 0 ? 'Ready' : m.map((k) => FIELD_LABELS[k] ?? k).join(', ')}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GroupHeaderMenu({
   onRename,
   onDuplicate,
@@ -5344,8 +5426,6 @@ function FieldsSidebar({
   defaults,
   accountKey,
   brandLogos,
-  make,
-  oemRule,
   onClose,
   onAdd,
   onUpdate,
@@ -5372,10 +5452,6 @@ function FieldsSidebar({
   defaults: Record<string, string>;
   accountKey?: string;
   brandLogos: { key: string; label: string; url: string }[];
-  /** The make this template is tagged for (drives the compliance checklist). */
-  make?: string;
-  /** The OEM rule for `make` (required fields per offer type), or null. */
-  oemRule: OemOfferRule | null;
   /** Reusable field-set presets — names only; apply seeds fields, save upserts. */
   presets: string[];
   onApplyPreset: (name: string) => void;
@@ -5448,21 +5524,6 @@ function FieldsSidebar({
     return base;
   }, [fieldGroups, fields]);
   const rows = useMemo(() => fields.map((f, i) => ({ f, i })), [fields]);
-  // Compliance checklist: for the tagged make, which required fields (per offer
-  // type) are missing from this template — i.e. not present OR not shown for that
-  // offer type. Empty `missing` = that offer type is export-ready for the make.
-  const compliance = useMemo(() => {
-    if (!make) return null;
-    return OFFER_TYPES.map((t) => {
-      const required = requiredFieldsFor(t.value, oemRule);
-      const missing = required.filter((k) => {
-        const spec = fields.find((f) => f.key === k);
-        return !spec || !isFieldVisible(spec, { offerType: t.value });
-      });
-      return { type: t, missing };
-    }).filter((r) => requiredFieldsFor(r.type.value, oemRule).length > 0);
-  }, [make, oemRule, fields]);
-  const complianceIssues = compliance ? compliance.reduce((n, r) => n + r.missing.length, 0) : 0;
   const itemsFor = (name: string) => rows.filter(({ f }) => (f.group?.trim() || GENERAL) === name);
   // Auto-open a newly-added group so it isn't lost.
   const prevNames = useRef(new Set(orderedNames));
@@ -5648,39 +5709,6 @@ function FieldsSidebar({
       ) : (
       <>
       <div ref={flipRef} className="flex-1 space-y-2 overflow-y-auto p-4">
-        {make && compliance && compliance.length > 0 && (
-          <div className={`rounded-lg border p-3 ${complianceIssues > 0 ? 'border-amber-500/40 bg-amber-500/5' : 'border-emerald-500/40 bg-emerald-500/5'}`}>
-            <div className="mb-1.5 flex items-center gap-1.5">
-              {complianceIssues > 0 ? (
-                <ExclamationTriangleIcon className="h-4 w-4 shrink-0 text-amber-500" />
-              ) : (
-                <CheckIcon className="h-4 w-4 shrink-0 text-emerald-500" strokeWidth={2.5} />
-              )}
-              <span className="text-xs font-semibold text-[var(--foreground)]">{make} compliance</span>
-              <span className={`ml-auto text-[10px] font-medium ${complianceIssues > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
-                {complianceIssues > 0 ? `${complianceIssues} field${complianceIssues === 1 ? '' : 's'} missing` : 'All required fields present'}
-              </span>
-            </div>
-            <p className="mb-2 text-[10px] leading-snug text-[var(--muted-foreground)]">
-              Required by the {make} OEM rule per offer type. Missing fields block export of that offer type until added here.
-            </p>
-            <div className="space-y-1">
-              {compliance.map(({ type, missing }) => (
-                <div key={type.value} className="flex items-start gap-1.5 text-[11px]">
-                  {missing.length === 0 ? (
-                    <CheckIcon className="mt-0.5 h-3 w-3 shrink-0 text-emerald-500" strokeWidth={2.5} />
-                  ) : (
-                    <XMarkIcon className="mt-0.5 h-3 w-3 shrink-0 text-amber-500" strokeWidth={2.5} />
-                  )}
-                  <span className="w-20 shrink-0 font-medium text-[var(--muted-foreground)]">{type.label}</span>
-                  <span className={missing.length ? 'text-amber-600 dark:text-amber-400' : 'text-[var(--muted-foreground)]'}>
-                    {missing.length === 0 ? 'Ready' : missing.map((k) => FIELD_LABELS[k] ?? k).join(', ')}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
         {orderedNames.map((group, gi) => {
           const open = openGroups.has(group);
           const items = itemsFor(group);

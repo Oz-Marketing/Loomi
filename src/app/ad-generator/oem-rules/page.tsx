@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
-import { ArrowLeftIcon, PlusIcon, PencilSquareIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, PlusIcon, PencilSquareIcon, TrashIcon, DocumentTextIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { FIELD_LABELS } from '@/lib/ad-generator/compliance';
@@ -54,6 +54,23 @@ const FIELD_SPECS = Object.fromEntries(vehicleOffer.fields.map((f) => [f.key, f]
 function isTypical(key: string, offerType: string): boolean {
   const spec = FIELD_SPECS[key];
   return spec ? isFieldVisible(spec, { offerType }) : true;
+}
+
+function PillToggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
+  return (
+    <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--foreground)]">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${checked ? 'bg-[var(--primary)]' : 'border border-[var(--border)] bg-[var(--muted)]'}`}
+      >
+        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${checked ? 'translate-x-4' : 'translate-x-0.5'}`} />
+      </button>
+      {label}
+    </label>
+  );
 }
 
 interface Rule {
@@ -172,12 +189,14 @@ export default function OemRulesPage() {
         </div>
       </div>
 
-      <div className="mb-6 flex items-center justify-between gap-3">
-        <div className="flex gap-1 text-xs">
-          <Link href="/ad-generator/templates" className="rounded-md px-2.5 py-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
-            Disclaimer Templates
+      <div className="mb-6 flex items-center justify-between gap-3 border-b border-[var(--border)]">
+        <div className="flex items-center gap-6">
+          <Link href="/ad-generator/templates" className="flex items-center gap-1.5 border-b-2 border-transparent pb-2.5 text-sm font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]">
+            <DocumentTextIcon className="h-4 w-4" /> Disclaimer Templates
           </Link>
-          <span className="rounded-md bg-[var(--primary)]/10 px-2.5 py-1 font-medium text-[var(--primary)]">OEM Rules</span>
+          <span className="flex items-center gap-1.5 border-b-2 border-[var(--primary)] pb-2.5 text-sm font-semibold text-[var(--primary)]">
+            <ShieldCheckIcon className="h-4 w-4" /> OEM Rules
+          </span>
         </div>
         {!draft && (
           <button
@@ -202,11 +221,8 @@ export default function OemRulesPage() {
                 onChange={(e) => setDraft({ ...draft, make: e.target.value })}
               />
             </div>
-            <div className="flex items-end pb-1">
-              <label className="flex items-center gap-2 text-sm text-[var(--foreground)]">
-                <input type="checkbox" checked={draft.isActive} onChange={(e) => setDraft({ ...draft, isActive: e.target.checked })} />
-                Active
-              </label>
+            <div className="flex items-end pb-1.5">
+              <PillToggle checked={draft.isActive} onChange={(v) => setDraft({ ...draft, isActive: v })} label="Active" />
             </div>
           </div>
 

@@ -6,8 +6,9 @@
  * "Save current fields as this category's starter" upserts here. "Vehicle Offer"
  * ships seeded with the offer question set (scripts/seed-vehicle-offer-category).
  *
- * - GET  → all starters: { name, fields, defaults }[]
- * - POST → upsert one (managers): { name, fields, defaults }
+ * - GET    → all starters: { name, fields, defaults }[]
+ * - POST   → upsert one (managers): { name, fields, defaults }
+ * - DELETE → remove one (managers): ?name=<name>
  *
  * Resilient: if the table isn't migrated, GET returns [].
  */
@@ -86,5 +87,23 @@ export async function POST(req: NextRequest) {
       { error: 'Could not save — has the table been migrated in this environment?' },
       { status: 500 },
     );
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  if (!(await adGeneratorAllowed())) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+  const { error } = await requireRole('developer', 'super_admin', 'admin');
+  if (error) return error;
+
+  const name = req.nextUrl.searchParams.get('name')?.trim();
+  if (!name) return NextResponse.json({ error: 'name is required' }, { status: 400 });
+  try {
+    await prisma.adCategoryStarter.delete({ where: { name } });
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    // Already gone → treat as success so the client list stays in sync.
+    if ((err as { code?: string })?.code === 'P2025') return NextResponse.json({ ok: true });
+    console.error('[api/ad-generator/category-starters] delete failed:', err);
+    return NextResponse.json({ error: 'Could not delete preset' }, { status: 500 });
   }
 }

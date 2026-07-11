@@ -352,16 +352,33 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   const padding = paddingCss(el); // per-side-aware
   // Per-corner-aware (buttons can set each corner independently, like shapes).
   const radius = borderRadiusCss(el);
-  const styles =
-    pos +
-    `display:flex;flex-direction:column;justify-content:center;align-items:${items};` +
+  const common =
     `font-family:${family};font-size:${box.fontSize ?? 16}px;font-weight:${el.fontWeight ?? 400};` +
     `color:${esc(color)};text-align:${el.align ?? 'left'};line-height:${el.lineHeight ?? 1.1};` +
     (el.letterSpacing ? `letter-spacing:${el.letterSpacing}px;` : '') +
     (el.uppercase ? 'text-transform:uppercase;' : '') +
     bg +
     padding +
-    radius +
+    radius;
+  if (el.autoSize) {
+    // Hug mode: the element sizes to its content (width:max-content, no wrap;
+    // explicit newlines still break via white-space:pre) and is ANCHORED by
+    // `align` — the box's left/center/right edge stays fixed while the text
+    // grows from it. Because it's content-sized, it hugs whatever value renders,
+    // including dynamic client data of a different length than the design value.
+    // The stored w/h aren't a clamp here — they only drive the builder's handles.
+    const anchorX = el.align === 'center' ? (box.x + box.w / 2) * width : el.align === 'right' ? (box.x + box.w) * width : box.x * width;
+    const anchorY = (box.y + box.h / 2) * height;
+    const shiftX = el.align === 'center' ? '-50%' : el.align === 'right' ? '-100%' : '0';
+    const posAuto =
+      `position:absolute;left:${anchorX}px;top:${anchorY}px;transform:translate(${shiftX},-50%);` +
+      `width:max-content;max-width:none;white-space:pre;`;
+    return `<div${idAttr} style="${dim}${fx}${posAuto}${common}">${value}</div>`;
+  }
+  const styles =
+    pos +
+    `display:flex;flex-direction:column;justify-content:center;align-items:${items};` +
+    common +
     'overflow:hidden;';
   return `<div${idAttr} style="${dim}${fx}${styles}">${value}</div>`;
 }

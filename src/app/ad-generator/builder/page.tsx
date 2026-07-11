@@ -50,6 +50,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   RectangleStackIcon,
+  Square2StackIcon,
   Squares2X2Icon,
   QuestionMarkCircleIcon,
   MagnifyingGlassPlusIcon,
@@ -1387,7 +1388,41 @@ export default function AdBuilderPage() {
 
   // Commit writes back to the bound value: static → the literal; field → the
   // field's default in `doc.defaults` (the form data the generator prefills).
+  // Resize an auto-size ("hug") text box's stored w/h to its rendered content so
+  // the selection handles wrap the text (the renderer already hugs visually).
+  // Measures the live node forced to max-content/no-wrap, then keeps the
+  // align-anchored edge + vertical center fixed so the box grows from the anchor.
+  const hugBoxToContent = useCallback((id: string) => {
+    const node = iframeRef.current?.contentDocument?.querySelector(`[data-el-id="${id}"]`) as HTMLElement | null;
+    if (!node) return;
+    const prev = { width: node.style.width, height: node.style.height, whiteSpace: node.style.whiteSpace, transform: node.style.transform };
+    node.style.transform = 'none';
+    node.style.width = 'max-content';
+    node.style.whiteSpace = 'pre';
+    node.style.height = 'auto';
+    const contentW = node.offsetWidth;
+    const contentH = node.offsetHeight;
+    node.style.width = prev.width; node.style.height = prev.height; node.style.whiteSpace = prev.whiteSpace; node.style.transform = prev.transform;
+    if (!contentW || !contentH) return;
+    setDoc((prevDoc) => {
+      const el = prevDoc.elements.find((e) => e.id === id);
+      const lay = { ...(prevDoc.layouts[size.id] ?? {}) };
+      const b = lay[id];
+      if (!b) return prevDoc;
+      const w = clamp(contentW / size.width, 0.01, 1.5);
+      const h = clamp(contentH / size.height, 0.01, 1.5);
+      const align = el?.align ?? 'left';
+      const x = align === 'center' ? b.x + b.w / 2 - w / 2 : align === 'right' ? b.x + b.w - w : b.x;
+      const y = b.y + b.h / 2 - h / 2;
+      lay[id] = { ...b, x, y, w, h };
+      return { ...prevDoc, layouts: { ...prevDoc.layouts, [size.id]: lay } };
+    }, `hug:${id}`);
+  }, [size.id, size.width, size.height]);
+
   const commitTextEdit = useCallback(() => {
+    // Read the latest value via the functional updater — the blur handler is
+    // bound once per edit session, so this closure can be stale; `cur` is always
+    // the current typed value.
     setEditingText((cur) => {
       if (!cur) return null;
       const el = doc.elements.find((e) => e.id === cur.id);
@@ -1400,9 +1435,11 @@ export default function AdBuilderPage() {
         const key = OFFER_LABEL_OVERRIDE[b.key] ?? b.key;
         setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: cur.value } }));
       }
+      // Re-hug once the committed value has rendered (auto-size text only).
+      if (el?.autoSize) { const id = cur.id; requestAnimationFrame(() => hugBoxToContent(id)); }
       return null;
     });
-  }, [doc.elements, setElement]);
+  }, [doc.elements, setElement, hugBoxToContent]);
 
   // In-place text editing: turn the ACTUAL rendered node inside the iframe into a
   // contenteditable so the caret sits in the real text (WYSIWYG), rather than a
@@ -1630,7 +1667,9 @@ export default function AdBuilderPage() {
         };
         const layouts = { ...prev.layouts };
         for (const s of prev.sizes) layouts[s.id] = { ...layouts[s.id], [id]: { ...box } };
-        return { ...prev, elements: [...prev.elements, makeDefaultElement(id, type)], layouts };
+        // New text hugs its content by default (no wrap; resize scales the font).
+        const el = type === 'text' ? { ...makeDefaultElement(id, type), autoSize: true } : makeDefaultElement(id, type);
+        return { ...prev, elements: [...prev.elements, el], layouts };
       });
       setSelectedIds([id]);
     },
@@ -1659,6 +1698,8 @@ export default function AdBuilderPage() {
         // hex (not `'brand'`, which rendered a colour the swatch didn't reflect).
         bg: '#000000',
         padding: 14,
+        // A button pill hugs its label (grows with the text, no wrap).
+        autoSize: true,
       };
       return { ...prev, elements: [...prev.elements, el], layouts };
     });
@@ -1840,10 +1881,10 @@ export default function AdBuilderPage() {
     if (!skip) {
       const dontAsk = { current: false };
       const ok = await confirm({
-        title: 'Delete section?',
+        title: 'Delete group?',
         message: `Deleting “${name}” will also delete the ${inGroup.length} field${inGroup.length === 1 ? '' : 's'} inside it. You can undo with ⌘Z.`,
         destructive: true,
-        confirmLabel: 'Delete section',
+        confirmLabel: 'Delete group',
         body: <DontShowAgainCheckbox onChange={(v) => { dontAsk.current = v; }} />,
       });
       if (!ok) return;
@@ -1929,6 +1970,95 @@ export default function AdBuilderPage() {
     } catch (err) {
       toast.error(`Couldn't save preset: ${err instanceof Error ? err.message : 'unknown error'}`);
     }
+  };
+  // Update an existing preset in place with the current template's fields —
+  // "I tweaked the field-set, save it back over the preset." Reuses the upsert
+  // POST (the name already exists). Managers only (route-enforced).
+  const updatePreset = async (name: string) => {
+    const ok = await confirm({
+      title: 'Update preset?',
+      message: `Replace “${name}” with the current fields and defaults? Templates you’ve already built won’t change.`,
+      confirmLabel: 'Update preset',
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch('/api/ad-generator/category-starters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, fields: doc.fields, defaults: doc.defaults }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      setPresets((prev) => prev.map((s) => (s.name === name ? { name, fields: doc.fields, defaults: doc.defaults } : s)));
+      toast.success(`Updated “${name}” preset`);
+    } catch (err) {
+      toast.error(`Couldn't update preset: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  };
+  // Delete a preset from the registry. Only removes the reusable preset —
+  // templates already built keep their fields. Managers only (route-enforced).
+  const deletePreset = async (name: string) => {
+    const ok = await confirm({
+      title: 'Delete preset?',
+      message: `Delete the “${name}” preset? This only removes the reusable preset — templates you’ve already built keep their fields. You can’t undo this.`,
+      destructive: true,
+      confirmLabel: 'Delete preset',
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/ad-generator/category-starters?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      setPresets((prev) => prev.filter((s) => s.name !== name));
+      toast.success(`Deleted “${name}” preset`);
+    } catch (err) {
+      toast.error(`Couldn't delete preset: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  };
+  // Duplicate one field, dropped in right after the original (fresh key, "copy"
+  // label, its default carried over). Undoable via ⌘Z.
+  const duplicateFieldAt = (i: number) => {
+    setDoc((prev) => {
+      const src = prev.fields[i];
+      if (!src) return prev;
+      const clone: FieldSpec = { ...structuredClone(src), key: `field_${rid()}`, label: src.label ? `${src.label} copy` : 'New field' };
+      const fields = [...prev.fields];
+      fields.splice(i + 1, 0, clone);
+      const defaults = { ...prev.defaults };
+      if (src.key in defaults) defaults[clone.key] = defaults[src.key];
+      return { ...prev, fields, defaults };
+    });
+  };
+  // Duplicate a whole section: a new "<name> copy" group placed right after the
+  // original, with every field cloned (fresh keys + defaults). Conditional
+  // (visibleWhen) references between the copied fields re-point to the copies so
+  // the duplicate is self-contained — ideal for a second offer built off the first.
+  const duplicateFieldGroup = (name: string) => {
+    setDoc((prev) => {
+      const groups = currentGroups(prev);
+      const gi = groups.indexOf(name);
+      if (gi < 0) return prev;
+      let newName = `${name} copy`;
+      for (let n = 2; groups.includes(newName); n++) newName = `${name} copy ${n}`;
+      const members = prev.fields.filter((f) => (f.group?.trim() || DEFAULT_GROUP) === name);
+      const keyMap = new Map<string, string>();
+      const clones: FieldSpec[] = members.map((f) => {
+        const key = `field_${rid()}`;
+        keyMap.set(f.key, key);
+        return { ...structuredClone(f), key, group: newName };
+      });
+      for (const c of clones) {
+        if (c.visibleWhen && keyMap.has(c.visibleWhen.field)) c.visibleWhen = { ...c.visibleWhen, field: keyMap.get(c.visibleWhen.field)! };
+      }
+      const fieldGroups = [...groups];
+      fieldGroups.splice(gi + 1, 0, newName);
+      // Land the clones right after the source group's last field.
+      const fields = [...prev.fields];
+      let insertAt = fields.length;
+      for (let k = 0; k < fields.length; k++) if ((fields[k].group?.trim() || DEFAULT_GROUP) === name) insertAt = k + 1;
+      fields.splice(insertAt, 0, ...clones);
+      const defaults = { ...prev.defaults };
+      for (const [oldKey, newKey] of keyMap) if (oldKey in defaults) defaults[newKey] = defaults[oldKey];
+      return { ...prev, fields, fieldGroups, defaults };
+    });
   };
   const updateFieldAt = (i: number, patch: Partial<FieldSpec>) => {
     setDoc((prev) => ({ ...prev, fields: prev.fields.map((f, idx) => (idx === i ? { ...f, ...patch } : f)) }), `field:${i}:${Object.keys(patch).sort().join(',')}`);
@@ -2436,7 +2566,7 @@ export default function AdBuilderPage() {
 
   // ── pointer interactions: single drag · group drag · marquee select ──
   type DragState =
-    | { kind: 'single'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; elId: string; start: DocLayoutBox; live: DocLayoutBox; targetsX: number[]; targetsY: number[]; scaleFont: boolean }
+    | { kind: 'single'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; elId: string; start: DocLayoutBox; live: DocLayoutBox; targetsX: number[]; targetsY: number[]; scaleFont: boolean; autoSize: boolean }
     | { kind: 'group'; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; items: { elId: string; start: DocLayoutBox }[]; bounds: { left: number; cx: number; right: number; top: number; cy: number; bottom: number }; minDx: number; maxDx: number; minDy: number; maxDy: number; targetsX: number[]; targetsY: number[]; live: Record<string, DocLayoutBox> }
     | { kind: 'groupresize'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; bounds: { left: number; top: number; right: number; bottom: number }; items: { elId: string; start: DocLayoutBox; isText: boolean }[]; live: Record<string, DocLayoutBox> }
     | { kind: 'marquee'; left: number; top: number; fw: number; fh: number; startXF: number; startYF: number; rect: { x: number; y: number; w: number; h: number } }
@@ -2470,6 +2600,10 @@ export default function AdBuilderPage() {
   function moveNode(elId: string, b: DocLayoutBox, nw: number, nh: number) {
     const node = iframeRef.current?.contentDocument?.querySelector(`[data-el-id="${elId}"]`) as HTMLElement | null;
     if (node) {
+      // Drive the node as a plain box during the drag. Auto-size text renders with
+      // an align-anchored transform (translate); clear it here so left/top/width
+      // describe the same rectangle the committed render will produce.
+      node.style.transform = '';
       node.style.left = `${b.x * nw}px`;
       node.style.top = `${b.y * nh}px`;
       node.style.width = `${b.w * nw}px`;
@@ -2527,11 +2661,12 @@ export default function AdBuilderPage() {
     const dyF = (e.clientY - d.sy) / d.fh;
     if (d.kind === 'single') {
       let box = computeBox(d.handle, d.start, dxF, dyF);
-      // Text sizing: font size is a PANEL property. A plain drag freely resizes
-      // the box (width sets the wrap; the box keeps whatever you drag). Holding
-      // ⌘/Ctrl SCALES the font (and locks aspect so the text scales like an
-      // object). Shift locks aspect for any element.
-      const scaleText = d.scaleFont && (e.metaKey || e.ctrlKey) && !!d.start.fontSize && d.start.h > 0;
+      // Text sizing: an AUTO-SIZE ("hug") text box scales its font on any resize
+      // (the box tracks the text, so widening the box grows the text). A classic
+      // fixed text box resizes freely, and ⌘/Ctrl scales its font instead. Either
+      // way the font-scale path locks aspect so the text scales like an object;
+      // Shift locks aspect for any element.
+      const scaleText = d.scaleFont && (d.autoSize || e.metaKey || e.ctrlKey) && !!d.start.fontSize && d.start.h > 0;
       if (d.handle !== 'move' && (e.shiftKey || scaleText)) box = lockAspect(d.handle, d.start, box, d.nw, d.nh);
       let gx: number | null = null;
       let gy: number | null = null;
@@ -2653,8 +2788,10 @@ export default function AdBuilderPage() {
     const box = (doc.layouts[size.id] ?? {})[elId];
     if (!box) return;
     const { tx, ty } = snapTargets(new Set([elId]));
-    const scaleFont = doc.elements.find((el) => el.id === elId)?.type === 'text';
-    dragRef.current = { kind: 'single', handle, sx: e.clientX, sy: e.clientY, fw: frameW, fh: frameH, nw: size.width, nh: size.height, sizeId: size.id, elId, start: { ...box }, live: { ...box }, targetsX: tx, targetsY: ty, scaleFont };
+    const elDef = doc.elements.find((el) => el.id === elId);
+    const scaleFont = elDef?.type === 'text';
+    const autoSize = !!elDef?.autoSize;
+    dragRef.current = { kind: 'single', handle, sx: e.clientX, sy: e.clientY, fw: frameW, fh: frameH, nw: size.width, nh: size.height, sizeId: size.id, elId, start: { ...box }, live: { ...box }, targetsX: tx, targetsY: ty, scaleFont, autoSize };
     setDragBox({ ...box });
     listen();
   }
@@ -4131,6 +4268,7 @@ export default function AdBuilderPage() {
                   accountKey={accountKey ?? undefined}
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch }, `box:${selected.id}:${Object.keys(patch).sort().join(',')}`)}
+                  onToggleAutoSize={(v) => { updEl({ autoSize: v || undefined }); if (v) hugBoxToContent(selected.id); }}
                   onClose={clearSelection}
                   onFillArtboard={() => fillArtboardAndSendBack(selected.id)}
                   shifted={false}
@@ -4181,15 +4319,20 @@ export default function AdBuilderPage() {
                   onUpdate={updateFieldAt}
                   onRename={renameFieldKeyAt}
                   onDelete={deleteFieldAt}
+                  onDuplicateField={duplicateFieldAt}
                   onSetDefault={setDefaultAt}
                   onAddGroup={addFieldGroup}
                   onRenameGroup={renameFieldGroup}
                   onDeleteGroup={deleteFieldGroup}
+                  onDuplicateGroup={duplicateFieldGroup}
                   onMoveGroup={moveFieldGroup}
                   onMoveField={moveFieldToGroup}
                   presets={presets.map((p) => p.name)}
                   onApplyPreset={applyPreset}
                   onSavePreset={savePreset}
+                  onUpdatePreset={updatePreset}
+                  onDeletePreset={deletePreset}
+                  canManagePresets={isUnrestricted}
                 />
               )}
 
@@ -4542,6 +4685,7 @@ function FieldRow({
   onUpdate,
   onRename,
   onDelete,
+  onDuplicate,
   onSetDefault,
   onMoveToGroup,
 }: {
@@ -4559,6 +4703,7 @@ function FieldRow({
   onUpdate: (i: number, patch: Partial<FieldSpec>) => void;
   onRename: (i: number, newKey: string) => void;
   onDelete: (i: number) => void;
+  onDuplicate: (i: number) => void;
   onSetDefault: (i: number, val: string) => void;
   onMoveToGroup: (key: string, group: string) => void;
 }) {
@@ -4670,6 +4815,13 @@ function FieldRow({
                   >
                     <BranchIcon className="h-3.5 w-3.5 text-[var(--primary)]" />
                     Conditional field
+                  </button>
+                  <button
+                    onClick={() => { onDuplicate(index); setMenuOpen(false); }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+                  >
+                    <Square2StackIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+                    Duplicate
                   </button>
                   <button
                     onClick={() => { onDelete(index); setMenuOpen(false); }}
@@ -4973,6 +5125,67 @@ function FormPreview({ fields, fieldGroups, defaults }: { fields: FieldSpec[]; f
   );
 }
 
+// Group header ⋯ menu — Rename / Duplicate / Delete, mirroring the field row's
+// menu (self-contained open state + click-outside close).
+function GroupHeaderMenu({
+  onRename,
+  onDuplicate,
+  onDelete,
+}: {
+  onRename: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', h);
+    return () => document.removeEventListener('mousedown', h);
+  }, [open]);
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="More"
+        className="rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+      >
+        <EllipsisVerticalIcon className="h-4 w-4" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-[90] mt-1 w-44 overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--card-strong)] py-1 shadow-2xl backdrop-blur-2xl">
+          <button
+            type="button"
+            onClick={() => { onRename(); setOpen(false); }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+          >
+            <PencilSquareIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+            Rename
+          </button>
+          <button
+            type="button"
+            onClick={() => { onDuplicate(); setOpen(false); }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+          >
+            <Square2StackIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+            Duplicate
+          </button>
+          <button
+            type="button"
+            onClick={() => { onDelete(); setOpen(false); }}
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-red-500 transition-colors hover:bg-red-500/10"
+          >
+            <TrashIcon className="h-3.5 w-3.5" />
+            Delete
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FieldsSidebar({
   fields,
   fieldGroups,
@@ -4984,15 +5197,20 @@ function FieldsSidebar({
   onUpdate,
   onRename,
   onDelete,
+  onDuplicateField,
   onSetDefault,
   onAddGroup,
   onRenameGroup,
   onDeleteGroup,
+  onDuplicateGroup,
   onMoveGroup,
   onMoveField,
   presets,
   onApplyPreset,
   onSavePreset,
+  onUpdatePreset,
+  onDeletePreset,
+  canManagePresets,
 }: {
   fields: FieldSpec[];
   /** Ordered, designer-defined group names (may include empty groups). */
@@ -5004,15 +5222,23 @@ function FieldsSidebar({
   presets: string[];
   onApplyPreset: (name: string) => void;
   onSavePreset: () => void;
+  /** Overwrite an existing preset with the current fields (managers only). */
+  onUpdatePreset: (name: string) => void;
+  /** Remove a preset from the registry (managers only). */
+  onDeletePreset: (name: string) => void;
+  /** Whether this user may save/update/delete presets (unrestricted access). */
+  canManagePresets: boolean;
   onClose: () => void;
   onAdd: (group?: string) => void;
   onUpdate: (i: number, patch: Partial<FieldSpec>) => void;
   onRename: (i: number, newKey: string) => void;
   onDelete: (i: number) => void;
+  onDuplicateField: (i: number) => void;
   onSetDefault: (i: number, val: string) => void;
   onAddGroup: () => void;
   onRenameGroup: (oldName: string, next: string) => void;
   onDeleteGroup: (name: string) => void;
+  onDuplicateGroup: (name: string) => void;
   onMoveGroup: (from: number, to: number) => void;
   onMoveField: (key: string, group: string | undefined, beforeKey?: string) => void;
 }) {
@@ -5137,6 +5363,7 @@ function FieldsSidebar({
               onUpdate={onUpdate}
               onRename={onRename}
               onDelete={onDelete}
+              onDuplicate={onDuplicateField}
               onSetDefault={onSetDefault}
               onMoveToGroup={(key, g) => onMoveField(key, g)}
             />
@@ -5154,7 +5381,7 @@ function FieldsSidebar({
       <div className="flex items-start justify-between gap-2 border-b border-[var(--border)] p-4">
         <div className="min-w-0">
           <h2 className="text-sm font-bold text-[var(--foreground)]">{previewOpen ? 'Form preview' : 'Template fields'}</h2>
-          <p className="text-xs text-[var(--muted-foreground)]">{previewOpen ? 'How the fields look on the creative form.' : 'The form users fill — organize them into sections that carry to the client form.'}</p>
+          <p className="text-xs text-[var(--muted-foreground)]">{previewOpen ? 'How the fields look on the creative form.' : 'The form users fill — organize them into groups that carry to the client form.'}</p>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           {/* Preview — flip the panel between editing fields and a live mock of
@@ -5181,33 +5408,60 @@ function FieldsSidebar({
             {presetsOpen && (
               <div className="absolute right-0 top-full z-[95] mt-1 w-64 overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-2 shadow-2xl backdrop-blur-2xl">
                 <p className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">Apply a preset</p>
-                <p className="px-2 pb-1.5 text-[11px] leading-snug text-[var(--muted-foreground)]">Fills in a saved set of fields + sections (e.g. Vehicle Offer). Won’t overwrite fields you already have.</p>
+                <p className="px-2 pb-1.5 text-[11px] leading-snug text-[var(--muted-foreground)]">Fills in a saved set of fields + groups (e.g. Vehicle Offer). Won’t overwrite fields you already have.{canManagePresets ? ' Hover a preset to update or delete it.' : ''}</p>
                 <div className="max-h-56 overflow-y-auto">
                   {presets.length === 0 ? (
                     <p className="px-2 py-2 text-[11px] italic text-[var(--muted-foreground)]">No presets saved yet.</p>
                   ) : (
                     presets.map((name) => (
-                      <button
-                        key={name}
-                        onClick={() => { onApplyPreset(name); setPresetsOpen(false); }}
-                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
-                      >
-                        <RectangleStackIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)]" />
-                        <span className="truncate">{name}</span>
-                      </button>
+                      // Whole row is the apply target; on hover (or keyboard focus)
+                      // managers get inline Update / Delete affordances.
+                      <div key={name} className="group flex items-center rounded-md pr-1 transition-colors hover:bg-[var(--muted)]">
+                        <button
+                          onClick={() => { onApplyPreset(name); setPresetsOpen(false); }}
+                          title={`Apply “${name}”`}
+                          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-[var(--foreground)]"
+                        >
+                          <RectangleStackIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)]" />
+                          <span className="truncate">{name}</span>
+                        </button>
+                        {canManagePresets && (
+                          <>
+                            <button
+                              onClick={() => { onUpdatePreset(name); setPresetsOpen(false); }}
+                              disabled={fields.length === 0}
+                              title={fields.length === 0 ? 'Add some fields first' : 'Update this preset with the current fields'}
+                              className="shrink-0 rounded p-1 text-[var(--muted-foreground)] opacity-0 transition-colors hover:bg-[var(--background)] hover:text-[var(--foreground)] focus:opacity-100 group-hover:opacity-100 disabled:opacity-40"
+                            >
+                              <ArrowPathIcon className="h-3.5 w-3.5" />
+                            </button>
+                            <button
+                              onClick={() => { onDeletePreset(name); setPresetsOpen(false); }}
+                              title="Delete this preset"
+                              className="shrink-0 rounded p-1 text-[var(--muted-foreground)] opacity-0 transition-colors hover:bg-red-500/10 hover:text-red-500 focus:opacity-100 group-hover:opacity-100"
+                            >
+                              <TrashIcon className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     ))
                   )}
                 </div>
-                <div className="my-1.5 border-t border-[var(--border)]" />
-                <button
-                  onClick={() => { onSavePreset(); setPresetsOpen(false); }}
-                  disabled={fields.length === 0}
-                  title={fields.length === 0 ? 'Add some fields first' : 'Save the current fields as a reusable preset'}
-                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/10 disabled:opacity-40"
-                >
-                  <BookmarkSquareIcon className="h-3.5 w-3.5 shrink-0" />
-                  Save current fields as a preset…
-                </button>
+                {canManagePresets && (
+                  <>
+                    <div className="my-1.5 border-t border-[var(--border)]" />
+                    <button
+                      onClick={() => { onSavePreset(); setPresetsOpen(false); }}
+                      disabled={fields.length === 0}
+                      title={fields.length === 0 ? 'Add some fields first' : 'Save the current fields as a new reusable preset'}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-medium text-[var(--primary)] transition-colors hover:bg-[var(--primary)]/10 disabled:opacity-40"
+                    >
+                      <BookmarkSquareIcon className="h-3.5 w-3.5 shrink-0" />
+                      Save current fields as a preset…
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -5265,7 +5519,7 @@ function FieldsSidebar({
                   draggable
                   onDragStart={() => startGroupDrag(gi)}
                   onDragEnd={endDrag}
-                  title="Drag to reorder section"
+                  title="Drag to reorder group"
                   className="shrink-0 cursor-grab text-[var(--muted-foreground)]/60 hover:text-[var(--foreground)] active:cursor-grabbing"
                 >
                   <GripDots className="h-4 w-2.5" />
@@ -5287,12 +5541,12 @@ function FieldsSidebar({
                   )}
                 </button>
                 <span className="shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] tabular-nums text-[var(--muted-foreground)]">{items.length}</span>
-                <button type="button" onClick={() => { setRenamingGroup(group); setRenameDraft(group); }} title="Rename section" className="shrink-0 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
-                  <PencilSquareIcon className="h-3.5 w-3.5" />
-                </button>
-                <button type="button" onClick={() => onDeleteGroup(group)} title="Delete section (also deletes its fields)" className="shrink-0 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500">
-                  <TrashIcon className="h-3.5 w-3.5" />
-                </button>
+                {/* Group actions live in a ⋯ menu, mirroring the field rows. */}
+                <GroupHeaderMenu
+                  onRename={() => { setRenamingGroup(group); setRenameDraft(group); }}
+                  onDuplicate={() => onDuplicateGroup(group)}
+                  onDelete={() => onDeleteGroup(group)}
+                />
               </div>
               {open && (
                 <div
@@ -5325,7 +5579,7 @@ function FieldsSidebar({
                   }}
                 >
                   {items.map(({ f, i }, pos) => renderFieldRow(f, i, group, pos, items.length))}
-                  {items.length === 0 && <p className="px-1 py-1 text-[11px] text-[var(--muted-foreground)]">No fields in this section yet.</p>}
+                  {items.length === 0 && <p className="px-1 py-1 text-[11px] text-[var(--muted-foreground)]">No fields in this group yet.</p>}
                   <button
                     onClick={() => onAdd(group)}
                     className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-[var(--border)] px-3 py-1.5 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
@@ -5341,7 +5595,7 @@ function FieldsSidebar({
 
         {orderedNames.length === 0 && (
           <div className="rounded-lg border border-dashed border-[var(--border)] px-3 py-5 text-center">
-            <p className="text-xs text-[var(--muted-foreground)]">No fields yet. Create a section, then add fields to it.</p>
+            <p className="text-xs text-[var(--muted-foreground)]">No fields yet. Create a group, then add fields to it.</p>
           </div>
         )}
       </div>
@@ -5351,7 +5605,7 @@ function FieldsSidebar({
           className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-semibold text-[var(--primary-foreground)] transition-opacity hover:opacity-90"
         >
           <PlusIcon className="h-3.5 w-3.5" />
-          New section
+          New group
         </button>
       </div>
       </>
@@ -5733,6 +5987,7 @@ function SelectionPanel({
   accountKey,
   onEl,
   onBox,
+  onToggleAutoSize,
   onClose,
   onFillArtboard,
   shifted,
@@ -5751,6 +6006,8 @@ function SelectionPanel({
   accountKey?: string;
   onEl: (patch: Partial<DocElement>) => void;
   onBox: (patch: Partial<DocLayoutBox>) => void;
+  /** Text only: toggle the hug/auto-size mode (and re-hug when turning it on). */
+  onToggleAutoSize: (v: boolean) => void;
   onClose: () => void;
   /** Make this element a full-bleed background (fill artboard + send to back on
    *  every size). Shown for Image + Shape. */
@@ -5764,6 +6021,24 @@ function SelectionPanel({
   const kindColor = KIND_COLOR[elementKind(el)];
   const [picking, setPicking] = useState(false);
   const isImageEl = el.type === 'image' || el.type === 'logo' || el.type === 'background';
+  // A "hug" text box derives its w/h from the text, so changing the font also
+  // scales the box (keeping the align-anchored edge fixed) rather than leaving
+  // stale handles. Manual W/H editing is disabled for it.
+  const isHug = el.type === 'text' && !!el.autoSize;
+  const applyFontSize = (next: number) => {
+    const n = clamp(Math.round(next), 4, 400);
+    if (isHug && fontSize > 0) {
+      const r = n / fontSize;
+      const w = box.w * r;
+      const h = box.h * r;
+      const align = el.align ?? 'left';
+      const x = align === 'center' ? box.x + box.w / 2 - w / 2 : align === 'right' ? box.x + box.w - w : box.x;
+      const y = box.y + box.h / 2 - h / 2;
+      onBox({ fontSize: n, w, h, x, y });
+    } else {
+      onBox({ fontSize: n });
+    }
+  };
   // Field/offer tokens a designer can drop into text as {{key}}.
   const insertableVars = contentSources.filter((o) => o.value.startsWith('field:'));
 
@@ -5909,11 +6184,19 @@ function SelectionPanel({
             </label>
             <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
               W
-              <MiniNum title="Width (px)" value={Math.round(box.w * sizeW)} onChange={(v) => onBox({ w: Math.max(1, v) / sizeW })} />
+              {isHug ? (
+                <span title="Auto — the box hugs the text" className="flex-1 rounded-md border border-[var(--border)] bg-[var(--muted)]/40 px-2 py-1 text-center text-[11px] italic text-[var(--muted-foreground)]">auto</span>
+              ) : (
+                <MiniNum title="Width (px)" value={Math.round(box.w * sizeW)} onChange={(v) => onBox({ w: Math.max(1, v) / sizeW })} />
+              )}
             </label>
             <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
               H
-              <MiniNum title="Height (px)" value={Math.round(box.h * sizeH)} onChange={(v) => onBox({ h: Math.max(1, v) / sizeH })} />
+              {isHug ? (
+                <span title="Auto — the box hugs the text" className="flex-1 rounded-md border border-[var(--border)] bg-[var(--muted)]/40 px-2 py-1 text-center text-[11px] italic text-[var(--muted-foreground)]">auto</span>
+              ) : (
+                <MiniNum title="Height (px)" value={Math.round(box.h * sizeH)} onChange={(v) => onBox({ h: Math.max(1, v) / sizeH })} />
+              )}
             </label>
           </div>
         </PanelSection>
@@ -5924,7 +6207,7 @@ function SelectionPanel({
               <FontSelect value={el.fontFamily ?? ''} onChange={(v) => onEl({ fontFamily: v || undefined })} options={fontOptions} />
               <div className="mt-2 flex items-center gap-2">
                 <div className="flex flex-1 items-center gap-1">
-                  <BarBtn title="Smaller" onClick={() => onBox({ fontSize: Math.max(4, fontSize - 2) })}>
+                  <BarBtn title="Smaller" onClick={() => applyFontSize(fontSize - 2)}>
                     <MinusIcon className="h-4 w-4" />
                   </BarBtn>
                   <input
@@ -5933,11 +6216,11 @@ function SelectionPanel({
                     value={fontSize}
                     onChange={(e) => {
                       const n = Number(e.target.value);
-                      if (!Number.isNaN(n)) onBox({ fontSize: clamp(Math.round(n), 4, 400) });
+                      if (!Number.isNaN(n)) applyFontSize(n);
                     }}
                     className="w-full min-w-0 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1.5 text-center text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
                   />
-                  <BarBtn title="Larger" onClick={() => onBox({ fontSize: Math.min(400, fontSize + 2) })}>
+                  <BarBtn title="Larger" onClick={() => applyFontSize(fontSize + 2)}>
                     <PlusIcon className="h-4 w-4" />
                   </BarBtn>
                 </div>
@@ -5945,6 +6228,26 @@ function SelectionPanel({
                   <FontSelect value={String(el.fontWeight ?? 400)} onChange={(v) => onEl({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} />
                 </div>
               </div>
+              {/* Hug mode — box fits the text (no wrap) and resize scales the font.
+                  Turn OFF for paragraph text (e.g. legal disclaimers) that must
+                  wrap within a fixed width. */}
+              <button
+                type="button"
+                onClick={() => onToggleAutoSize(!el.autoSize)}
+                className={`mt-2 flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
+                  el.autoSize
+                    ? 'border-[var(--primary)] bg-[var(--primary)]/10'
+                    : 'border-[var(--border)] hover:border-[var(--primary)]/60'
+                }`}
+              >
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-xs font-medium text-[var(--foreground)]">Hug text</span>
+                  <span className="text-[10px] leading-tight text-[var(--muted-foreground)]">Fits the text · no wrap · resize scales font</span>
+                </span>
+                <span className={`relative h-4 w-7 shrink-0 rounded-full transition-colors ${el.autoSize ? 'bg-[var(--primary)]' : 'bg-[var(--muted-foreground)]/40'}`}>
+                  <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-white transition-all ${el.autoSize ? 'left-3.5' : 'left-0.5'}`} />
+                </span>
+              </button>
             </PanelSection>
 
             <PanelSection title="Alignment">

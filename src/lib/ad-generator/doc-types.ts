@@ -116,6 +116,13 @@ export interface DocElement {
   paddingBottom?: number;
   paddingLeft?: number;
   align?: 'left' | 'center' | 'right';
+  /** Text only: when true the box HUGS its text — it never wraps (explicit
+   *  newlines still break), and resizing the box scales the FONT instead of
+   *  reflowing. The renderer sizes the element to its content (anchored by
+   *  `align`), so it hugs whatever value is present at render time, including
+   *  dynamic client data. Undefined/false = the classic fixed box that wraps
+   *  within its width (keep this for paragraph text like legal disclaimers). */
+  autoSize?: boolean;
   // ── image / logo ──
   /** `contain` fits inside the box, `cover` fills + crops, `tile` repeats the
    *  image to fill (for seamless textures/patterns). */

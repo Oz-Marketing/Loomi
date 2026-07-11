@@ -360,23 +360,11 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     bg +
     padding +
     radius;
-  if (el.autoSize && el.lockWidth) {
-    // Hug + pinned width: the box WIDTH is fixed (box.w); the font auto-scales (via
-    // the fit script / builder parent) so the single-line text fills that width,
-    // and the height is AUTO so the text is contained and never overflows — for any
-    // value, incl. dynamic client data. Anchored at the box's top-left.
-    const posFit =
-      `position:absolute;left:${box.x * width}px;top:${box.y * height}px;` +
-      `width:${box.w * width}px;height:auto;`;
-    const styles = posFit + common + `white-space:pre;text-align:${el.align ?? 'left'};overflow:visible;`;
-    return `<div${idAttr} data-fit style="${dim}${fx}${styles}">${value}</div>`;
-  }
   if (el.autoSize) {
-    // Hug mode: the element sizes to its content (width:max-content, no wrap;
+    // HUG (default): the element sizes to its content (width:max-content, no wrap;
     // explicit newlines still break via white-space:pre) and is ANCHORED by
     // `align` — the box's left/center/right edge stays fixed while the text
-    // grows from it. Because it's content-sized, it hugs whatever value renders,
-    // including dynamic client data of a different length than the design value.
+    // grows from it. Hugs whatever value renders, incl. dynamic client data.
     // The stored w/h aren't a clamp here — they only drive the builder's handles.
     const anchorX = el.align === 'center' ? (box.x + box.w / 2) * width : el.align === 'right' ? (box.x + box.w) * width : box.x * width;
     const anchorY = (box.y + box.h / 2) * height;
@@ -386,12 +374,18 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
       `width:max-content;max-width:none;white-space:pre;`;
     return `<div${idAttr} data-hug style="${dim}${fx}${posAuto}${common}">${value}</div>`;
   }
+  // FIT TO BOX: a fixed W×H frame. The font auto-scales (fit script / builder
+  // parent) so the text always fills/fits the frame and never overflows — for any
+  // value, incl. dynamic client data — wrapping to the width, aligned by `align`
+  // (horizontal) + `vAlign` (vertical). Text can't gap away from or collide with
+  // neighbours as the value changes.
+  const vItems = el.vAlign === 'top' ? 'flex-start' : el.vAlign === 'bottom' ? 'flex-end' : 'center';
   const styles =
     pos +
-    `display:flex;flex-direction:column;justify-content:center;align-items:${items};` +
+    `display:flex;flex-direction:column;justify-content:${vItems};align-items:${items};` +
     common +
-    'overflow:hidden;';
-  return `<div${idAttr} style="${dim}${fx}${styles}">${value}</div>`;
+    'white-space:pre-wrap;overflow:hidden;';
+  return `<div${idAttr} data-fit style="${dim}${fx}${styles}">${value}</div>`;
 }
 
 /** Render a TemplateDoc + data at a given size into a full HTML document. */
@@ -443,11 +437,11 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
     ? `<div style="position:absolute;top:0;left:0;right:0;height:${Math.max(4, Math.min(width, height) / 80)}px;background:${brand};"></div>`
     : '';
 
-  // Pinned-width (Hug + lockWidth) text scales its font to fill the box at render
-  // time. On EXPORT (Puppeteer parses scripts) this inline script does it; the
+  // Fit-to-box text scales its font at render time so it fills/fits its fixed
+  // frame. On EXPORT (Puppeteer parses scripts) this inline script does it; the
   // builder can't run it (it writes via innerHTML) and drives the same logic from
   // the parent. Exposed as window.__fitText so the exporter forces a final pass.
-  const hasFit = doc.elements.some((el) => el.autoSize && el.lockWidth);
+  const hasFit = body.includes('data-fit');
   const fitScript = hasFit ? `<script>${FIT_SCRIPT}</script>` : '';
 
   return `<!doctype html>
@@ -464,22 +458,28 @@ ${googleLink}
 </html>`;
 }
 
-// Injected verbatim (see renderDoc). For each [data-fit] element, scale the font
-// from its current size so the single-line text fills the box width — one pass is
-// exact (width is linear in font-size). Measured via a Range (padding-agnostic).
-// Loop-safe: font-size changes don't change the box's client width, so the
-// ResizeObserver won't re-fire; the MutationObserver watches text, not attributes.
+// Injected verbatim (see renderDoc). For each [data-fit] element, binary-search
+// the font size so the (wrapped) text is as large as possible while fitting the
+// box's inner width AND height — it fills/fits the fixed frame and never overflows.
+// Measured via a Range (padding- and alignment-agnostic). Loop-safe: font-size
+// changes don't resize the fixed box, so the ResizeObserver won't re-fire; the
+// MutationObserver watches text, not attributes.
 const FIT_SCRIPT = `(function(){
   function fitOne(el){
     try{
       var cs=getComputedStyle(el);
       var availW=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);
-      if(availW<=0)return;
-      var cur=parseFloat(cs.fontSize)||16;
-      var r=document.createRange(); r.selectNodeContents(el);
-      var rect=r.getBoundingClientRect();
-      if(!rect.width)return;
-      el.style.fontSize=Math.max(1,Math.min(2000,cur*(availW/rect.width)))+'px';
+      var availH=el.clientHeight-parseFloat(cs.paddingTop||0)-parseFloat(cs.paddingBottom||0);
+      if(availW<=0||availH<=0)return;
+      var lo=1, hi=Math.max(2,availH*2);
+      for(var i=0;i<18;i++){
+        var mid=(lo+hi)/2;
+        el.style.fontSize=mid+'px';
+        var r=document.createRange(); r.selectNodeContents(el);
+        var rect=r.getBoundingClientRect();
+        if(rect.width<=availW+0.5 && rect.height<=availH+0.5) lo=mid; else hi=mid;
+      }
+      el.style.fontSize=lo+'px';
     }catch(e){}
   }
   function fitAll(){ document.querySelectorAll('[data-fit]').forEach(fitOne); }

@@ -464,23 +464,29 @@ function elName(el: DocElement): string {
   return b.key;
 }
 
-/** Scale a pinned-width ("Hug + lockWidth") text node's font so its single-line
- *  text fills the box WIDTH (height is auto, so it's contained). Mirrors the
- *  FIT_SCRIPT injected for export — the builder writes the canvas via innerHTML,
- *  so scripts there don't run and the parent must drive the fit. One pass is exact
- *  (text width is linear in font-size). Measured via a Range so padding is ignored. */
+/** Binary-search a Fit-to-box text node's font so its (wrapped) text is as large
+ *  as fits the box's inner width AND height. Mirrors the FIT_SCRIPT injected for
+ *  export — the builder writes the canvas via innerHTML, so scripts there don't
+ *  run and the parent drives the fit. Measured via a Range (padding-agnostic). */
 function fitTextNode(node: HTMLElement) {
   const win = node.ownerDocument?.defaultView;
   if (!win) return;
   const cs = win.getComputedStyle(node);
   const availW = node.clientWidth - parseFloat(cs.paddingLeft || '0') - parseFloat(cs.paddingRight || '0');
-  if (availW <= 0) return;
-  const cur = parseFloat(cs.fontSize) || 16;
-  const r = node.ownerDocument.createRange();
-  r.selectNodeContents(node);
-  const rect = r.getBoundingClientRect();
-  if (!rect.width) return;
-  node.style.fontSize = `${Math.max(1, Math.min(2000, cur * (availW / rect.width)))}px`;
+  const availH = node.clientHeight - parseFloat(cs.paddingTop || '0') - parseFloat(cs.paddingBottom || '0');
+  if (availW <= 0 || availH <= 0) return;
+  let lo = 1;
+  let hi = Math.max(2, availH * 2);
+  for (let i = 0; i < 18; i++) {
+    const mid = (lo + hi) / 2;
+    node.style.fontSize = `${mid}px`;
+    const r = node.ownerDocument.createRange();
+    r.selectNodeContents(node);
+    const rect = r.getBoundingClientRect();
+    if (rect.width <= availW + 0.5 && rect.height <= availH + 0.5) lo = mid;
+    else hi = mid;
+  }
+  node.style.fontSize = `${lo}px`;
 }
 
 /** Apply a drag/resize delta (in canvas fractions) to a box, clamped on-canvas. */
@@ -957,11 +963,12 @@ export default function AdBuilderPage() {
   const syncAutoBoxes = useCallback(() => {
     const idoc = iframeRef.current?.contentDocument;
     if (!idoc) return;
-    // [data-hug]: width AND height track the text (auto width). [data-fit]: only
-    // height tracks — the width is designer-pinned (Hug + lockWidth), font fills it.
-    const hug = [...idoc.querySelectorAll<HTMLElement>('[data-hug]')].map((n) => ({ id: n.getAttribute('data-el-id'), lockW: false, ...measureGlyphs(idoc, n) }));
-    const fit = [...idoc.querySelectorAll<HTMLElement>('[data-fit]')].map((n) => ({ id: n.getAttribute('data-el-id'), lockW: true, ...measureGlyphs(idoc, n) }));
-    const measured = [...hug, ...fit].filter((m): m is { id: string; lockW: boolean; w: number; h: number } => !!m.id && m.h > 0);
+    // HUG text ([data-hug]) sizes to its glyphs, so its stored box (which drives
+    // the handles) must track the text's width AND height, keeping the align edge +
+    // vertical center fixed. Fit-to-box is a FIXED frame — never ressynced here.
+    const measured = [...idoc.querySelectorAll<HTMLElement>('[data-hug]')]
+      .map((n) => ({ id: n.getAttribute('data-el-id'), ...measureGlyphs(idoc, n) }))
+      .filter((m): m is { id: string; w: number; h: number } => !!m.id && m.w > 0 && m.h > 0);
     if (!measured.length) return;
     setDoc((prev) => {
       const lay = { ...(prev.layouts[size.id] ?? {}) };
@@ -969,29 +976,21 @@ export default function AdBuilderPage() {
       for (const m of measured) {
         const b = lay[m.id];
         if (!b) continue;
+        const nw = clamp(m.w / size.width, 0.01, 1.5);
         const nh = clamp(m.h / size.height, 0.01, 1.5);
-        if (m.lockW) {
-          // Pinned width: keep w/x (designer-set); the height (top-anchored) hugs.
-          if (Math.abs(nh - b.h) > 0.003) {
-            lay[m.id] = { ...b, h: nh };
-            changed = true;
-          }
-        } else {
-          const nw = clamp(m.w / size.width, 0.01, 1.5);
-          const align = prev.elements.find((e) => e.id === m.id)?.align ?? 'left';
-          const nx = align === 'center' ? b.x + b.w / 2 - nw / 2 : align === 'right' ? b.x + b.w - nw : b.x;
-          const ny = b.y + b.h / 2 - nh / 2;
-          if (Math.abs(nw - b.w) > 0.003 || Math.abs(nh - b.h) > 0.003 || Math.abs(nx - b.x) > 0.003 || Math.abs(ny - b.y) > 0.003) {
-            lay[m.id] = { ...b, x: nx, y: ny, w: nw, h: nh };
-            changed = true;
-          }
+        const align = prev.elements.find((e) => e.id === m.id)?.align ?? 'left';
+        const nx = align === 'center' ? b.x + b.w / 2 - nw / 2 : align === 'right' ? b.x + b.w - nw : b.x;
+        const ny = b.y + b.h / 2 - nh / 2;
+        if (Math.abs(nw - b.w) > 0.003 || Math.abs(nh - b.h) > 0.003 || Math.abs(nx - b.x) > 0.003 || Math.abs(ny - b.y) > 0.003) {
+          lay[m.id] = { ...b, x: nx, y: ny, w: nw, h: nh };
+          changed = true;
         }
       }
       return changed ? { ...prev, layouts: { ...prev.layouts, [size.id]: lay } } : prev;
     }, 'autoboxes');
   }, [size.id, size.width, size.height]);
-  // Fill the font of every pinned-width text node so it spans the box (the injected
-  // FIT_SCRIPT can't run in the builder — see writeFrame). Cheap; safe per write/drag/edit.
+  // Fit the font of every Fit-to-box text node so it fills its fixed frame (the
+  // injected FIT_SCRIPT can't run in the builder — see writeFrame). Safe per write/drag/edit.
   const fitTextNodes = useCallback(() => {
     iframeRef.current?.contentDocument?.querySelectorAll<HTMLElement>('[data-fit]').forEach(fitTextNode);
   }, []);
@@ -1621,9 +1620,24 @@ export default function AdBuilderPage() {
       if (node.hasAttribute('data-fit')) fitTextNode(node);
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter') {
+        // Enter inserts a new line (multi-line text); click out to commit, Esc to
+        // cancel. Insert a LITERAL "\n" text node (not a <br>, which textContent
+        // drops) so the newline survives the commit + the pre/pre-wrap render.
         e.preventDefault();
-        node.blur(); // triggers commit
+        const idoc = node.ownerDocument;
+        const sel = idoc.defaultView?.getSelection();
+        if (sel && sel.rangeCount) {
+          const range = sel.getRangeAt(0);
+          range.deleteContents();
+          const tn = idoc.createTextNode('\n');
+          range.insertNode(tn);
+          range.setStartAfter(tn);
+          range.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(range);
+          onInput(); // sync value + refit (manual DOM edits don't fire `input`)
+        }
       } else if (e.key === 'Escape') {
         e.preventDefault();
         setEditingText(null); // cancel
@@ -2694,7 +2708,7 @@ export default function AdBuilderPage() {
 
   // ── pointer interactions: single drag · group drag · marquee select ──
   type DragState =
-    | { kind: 'single'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; elId: string; start: DocLayoutBox; live: DocLayoutBox; targetsX: number[]; targetsY: number[]; scaleFont: boolean; autoSize: boolean; lockWidth: boolean }
+    | { kind: 'single'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; elId: string; start: DocLayoutBox; live: DocLayoutBox; targetsX: number[]; targetsY: number[]; scaleFont: boolean; autoSize: boolean }
     | { kind: 'group'; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; items: { elId: string; start: DocLayoutBox }[]; bounds: { left: number; cx: number; right: number; top: number; cy: number; bottom: number }; minDx: number; maxDx: number; minDy: number; maxDy: number; targetsX: number[]; targetsY: number[]; live: Record<string, DocLayoutBox> }
     | { kind: 'groupresize'; handle: Handle; sx: number; sy: number; fw: number; fh: number; nw: number; nh: number; sizeId: string; bounds: { left: number; top: number; right: number; bottom: number }; items: { elId: string; start: DocLayoutBox; isText: boolean }[]; live: Record<string, DocLayoutBox> }
     | { kind: 'marquee'; left: number; top: number; fw: number; fh: number; startXF: number; startYF: number; rect: { x: number; y: number; w: number; h: number } }
@@ -2796,9 +2810,10 @@ export default function AdBuilderPage() {
       // fixed text box resizes freely, and ⌘/Ctrl scales its font instead. Either
       // way the font-scale path locks aspect so the text scales like an object;
       // Shift locks aspect for any element.
-      // Pinned-width (lockWidth) text resizes its WIDTH (font auto-fills); don't
-      // hand-scale the font for it. Auto-hug text scales font on any resize.
-      const scaleText = d.scaleFont && !d.lockWidth && (d.autoSize || e.metaKey || e.ctrlKey) && !!d.start.fontSize && d.start.h > 0;
+      // HUG text scales its font on resize (the box re-hugs). FIT-to-box text is a
+      // fixed frame — resizing just changes the frame and the font auto-fits (via
+      // moveNode below), so we don't hand-scale it.
+      const scaleText = d.scaleFont && d.autoSize && !!d.start.fontSize && d.start.h > 0;
       if (d.handle !== 'move' && (e.shiftKey || scaleText)) box = lockAspect(d.handle, d.start, box, d.nw, d.nh);
       let gx: number | null = null;
       let gy: number | null = null;
@@ -2923,8 +2938,7 @@ export default function AdBuilderPage() {
     const elDef = doc.elements.find((el) => el.id === elId);
     const scaleFont = elDef?.type === 'text';
     const autoSize = !!elDef?.autoSize;
-    const lockWidth = !!elDef?.lockWidth;
-    dragRef.current = { kind: 'single', handle, sx: e.clientX, sy: e.clientY, fw: frameW, fh: frameH, nw: size.width, nh: size.height, sizeId: size.id, elId, start: { ...box }, live: { ...box }, targetsX: tx, targetsY: ty, scaleFont, autoSize, lockWidth };
+    dragRef.current = { kind: 'single', handle, sx: e.clientX, sy: e.clientY, fw: frameW, fh: frameH, nw: size.width, nh: size.height, sizeId: size.id, elId, start: { ...box }, live: { ...box }, targetsX: tx, targetsY: ty, scaleFont, autoSize };
     setDragBox({ ...box });
     listen();
   }
@@ -4435,8 +4449,7 @@ export default function AdBuilderPage() {
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch }, `box:${selected.id}:${Object.keys(patch).sort().join(',')}`)}
                   onSetSizing={(mode) => {
-                    // Leaving Hug drops the pinned-width flag (only meaningful in Hug).
-                    updEl({ autoSize: mode === 'hug' ? true : undefined, ...(mode === 'hug' ? {} : { lockWidth: undefined }) });
+                    updEl({ autoSize: mode === 'hug' ? true : undefined });
                     if (mode === 'hug') hugBoxToContent(selected.id);
                   }}
                   onClose={clearSelection}
@@ -6242,7 +6255,7 @@ function SelectionPanel({
   onBox: (patch: Partial<DocLayoutBox>) => void;
   /** Text only: set the sizing mode — fixed (wrap) / hug (box follows text).
    *  Re-hugs when switching to hug. */
-  onSetSizing: (mode: 'fixed' | 'hug') => void;
+  onSetSizing: (mode: 'hug' | 'fit') => void;
   onClose: () => void;
   /** Make this element a full-bleed background (fill artboard + send to back on
    *  every size). Shown for Image + Shape. */
@@ -6256,16 +6269,15 @@ function SelectionPanel({
   const kindColor = KIND_COLOR[elementKind(el)];
   const [picking, setPicking] = useState(false);
   const isImageEl = el.type === 'image' || el.type === 'logo' || el.type === 'background';
-  // Text sizing mode. Hug: box follows the text (font drives the box, so W/H are
-  // auto and resizing scales the font). Fixed: fixed box, text wraps within it.
-  const sizingMode: 'fixed' | 'hug' = el.autoSize ? 'hug' : 'fixed';
+  // Text sizing mode. Hug (default): the box follows the text (W/H auto, resizing
+  // scales the font). Fit to box: a fixed W×H frame; the text auto-scales to fill
+  // it (W/H editable, the font stepper becomes an "auto" note).
+  const sizingMode: 'hug' | 'fit' = el.autoSize ? 'hug' : 'fit';
   const isHug = el.type === 'text' && sizingMode === 'hug';
-  // Hug with a pinned width: the font auto-fills the fixed width (W is editable,
-  // H stays auto, and the font stepper is replaced by an "auto" note).
-  const isLockW = isHug && !!el.lockWidth;
+  const isFit = el.type === 'text' && sizingMode === 'fit';
   const applyFontSize = (next: number) => {
     const n = clamp(Math.round(next), 4, 400);
-    if (isHug && !isLockW && fontSize > 0) {
+    if (isHug && fontSize > 0) {
       const r = n / fontSize;
       const w = box.w * r;
       const h = box.h * r;
@@ -6422,17 +6434,8 @@ function SelectionPanel({
             </label>
             <label className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
               W
-              {isLockW ? (
-                // Pinned width: editable, with a reset back to auto-hug.
-                <div className="flex flex-1 items-center gap-1">
-                  <MiniNum title="Fixed width (px) — text fills it" value={Math.round(box.w * sizeW)} onChange={(v) => onBox({ w: Math.max(1, v) / sizeW })} />
-                  <button type="button" title="Back to auto width (hug the text)" onClick={() => onEl({ lockWidth: undefined })} className="shrink-0 rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
-                    <ArrowPathIcon className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ) : isHug ? (
-                // Auto width: click to pin the current width (text then fills it).
-                <button type="button" title="Auto — the box hugs the text. Click to pin a fixed width the text fills." onClick={() => onEl({ lockWidth: true })} className="flex-1 rounded-md border border-[var(--border)] bg-[var(--muted)]/40 px-2 py-1 text-center text-[11px] italic text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]">auto</button>
+              {isHug ? (
+                <span title="Auto — the box hugs the text" className="flex-1 rounded-md border border-[var(--border)] bg-[var(--muted)]/40 px-2 py-1 text-center text-[11px] italic text-[var(--muted-foreground)]">auto</span>
               ) : (
                 <MiniNum title="Width (px)" value={Math.round(box.w * sizeW)} onChange={(v) => onBox({ w: Math.max(1, v) / sizeW })} />
               )}
@@ -6453,10 +6456,10 @@ function SelectionPanel({
             <PanelSection title="Font">
               <FontSelect value={el.fontFamily ?? ''} onChange={(v) => onEl({ fontFamily: v || undefined })} options={fontOptions} />
               <div className="mt-2 flex items-center gap-2">
-                {/* Pinned width: the font auto-fills the box, so the size stepper
-                    is replaced by an "auto" note. */}
-                {isLockW ? (
-                  <div className="flex-1 rounded-md border border-[var(--border)] bg-[var(--muted)]/40 px-2 py-1.5 text-center text-[11px] italic text-[var(--muted-foreground)]">Font fills the width</div>
+                {/* Fit to box: the font auto-scales to the frame, so the size
+                    stepper is replaced by an "auto" note. */}
+                {isFit ? (
+                  <div className="flex-1 rounded-md border border-[var(--border)] bg-[var(--muted)]/40 px-2 py-1.5 text-center text-[11px] italic text-[var(--muted-foreground)]">Auto — fits the box</div>
                 ) : (
                   <div className="flex flex-1 items-center gap-1">
                     <BarBtn title="Smaller" onClick={() => applyFontSize(fontSize - 2)}>
@@ -6484,13 +6487,13 @@ function SelectionPanel({
             </PanelSection>
 
             {/* Sizing — how the box and text relate:
-                • Fixed: the box is fixed; long text wraps (use for paragraphs/disclaimers).
-                • Hug:   the box follows the text (no wrap); resizing scales the font. */}
+                • Hug (default): the box follows the text (no wrap); resizing scales the font.
+                • Fit to box:    a fixed W×H frame; the text auto-scales to fill it. */}
             <PanelSection title="Sizing">
               <div className="grid grid-cols-2 gap-1">
                 {([
-                  { key: 'fixed', label: 'Fixed', hint: 'Fixed box · text wraps' },
-                  { key: 'hug', label: 'Hug', hint: 'Box fits the text · no wrap' },
+                  { key: 'hug', label: 'Hug', hint: 'Box hugs the text · no wrap' },
+                  { key: 'fit', label: 'Fit to box', hint: 'Fixed frame · text scales to fit' },
                 ] as const).map((m) => (
                   <button
                     key={m.key}
@@ -6508,11 +6511,9 @@ function SelectionPanel({
                 ))}
               </div>
               <p className="mt-1.5 text-[10px] leading-tight text-[var(--muted-foreground)]">
-                {isLockW
-                  ? 'Width is pinned — the font fills it. Edit W (or drag a side handle); reset W to “auto” to hug again.'
-                  : sizingMode === 'hug'
-                    ? 'Box grows with the text; drag a handle to scale the font, or set a fixed W so the text fills it.'
-                    : 'Long text wraps within the box. Best for paragraphs and disclaimers.'}
+                {sizingMode === 'hug'
+                  ? 'The box hugs the text — type to resize it, Enter for a new line.'
+                  : 'A fixed frame — drag W and H; the text auto-scales to fill it and stays put as the value changes. Aligns horizontally + vertically.'}
               </p>
             </PanelSection>
 
@@ -6527,6 +6528,21 @@ function SelectionPanel({
                 <BarBtn title="Align right" active={el.align === 'right'} onClick={() => onEl({ align: 'right' })}>
                   <Bars3BottomRightIcon className="h-4 w-4" />
                 </BarBtn>
+                {/* Vertical alignment — only meaningful inside a Fit-to-box frame. */}
+                {isFit && (
+                  <>
+                    <span className="mx-1 h-6 w-px bg-[var(--border)]" />
+                    <BarBtn title="Align top" active={(el.vAlign ?? 'middle') === 'top'} onClick={() => onEl({ vAlign: 'top' })}>
+                      <span className="flex h-4 w-4 flex-col justify-start"><span className="h-[2px] w-full rounded bg-current" /></span>
+                    </BarBtn>
+                    <BarBtn title="Align middle" active={(el.vAlign ?? 'middle') === 'middle'} onClick={() => onEl({ vAlign: undefined })}>
+                      <span className="flex h-4 w-4 flex-col justify-center"><span className="h-[2px] w-full rounded bg-current" /></span>
+                    </BarBtn>
+                    <BarBtn title="Align bottom" active={el.vAlign === 'bottom'} onClick={() => onEl({ vAlign: 'bottom' })}>
+                      <span className="flex h-4 w-4 flex-col justify-end"><span className="h-[2px] w-full rounded bg-current" /></span>
+                    </BarBtn>
+                  </>
+                )}
                 <span className="mx-1 h-6 w-px bg-[var(--border)]" />
                 <BarBtn title="Uppercase" active={!!el.uppercase} onClick={() => onEl({ uppercase: !el.uppercase })}>
                   <span className="text-[11px] font-bold leading-none">Aa</span>

@@ -116,19 +116,18 @@ export interface DocElement {
   paddingBottom?: number;
   paddingLeft?: number;
   align?: 'left' | 'center' | 'right';
-  /** Text only: when true the box HUGS its text — it never wraps (explicit
-   *  newlines still break), and resizing the box scales the FONT instead of
-   *  reflowing. The renderer sizes the element to its content (anchored by
-   *  `align`), so it hugs whatever value is present at render time, including
-   *  dynamic client data. Undefined/false = the classic fixed box that wraps
-   *  within its width (keep this for paragraph text like legal disclaimers). */
+  /** Text vertical alignment WITHIN a Fit-to-box frame (ignored in Hug). */
+  vAlign?: 'top' | 'middle' | 'bottom';
+  /** Text sizing mode (default Hug):
+   *  - HUG (`autoSize` truthy, the default for new text): the box hugs its text —
+   *    never wraps (explicit newlines still break), grows/shrinks with the value,
+   *    anchored by `align`. No fixed W/H.
+   *  - FIT TO BOX (`autoSize` falsy): a fixed W×H frame; the text wraps to the
+   *    width and the font auto-scales at render time so it always fills/fits the
+   *    frame and never overflows — for any value, incl. dynamic client data —
+   *    aligned by `align` (horizontal) + `vAlign` (vertical). Used for a price
+   *    that must keep a stable footprint, and for paragraph text like disclaimers. */
   autoSize?: boolean;
-  /** Text only, within Hug (`autoSize`): pin the WIDTH instead of auto-hugging it.
-   *  The box keeps the stored `box.w` and the font auto-scales at render time so
-   *  the single-line text fills that width (height still auto-hugs, so it never
-   *  overflows) — including for dynamic client values. Undefined = auto width
-   *  (the box hugs the text at a fixed font). */
-  lockWidth?: boolean;
   // ── image / logo ──
   /** `contain` fits inside the box, `cover` fills + crops, `tile` repeats the
    *  image to fill (for seamless textures/patterns). */

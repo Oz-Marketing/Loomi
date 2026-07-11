@@ -40,6 +40,18 @@ interface Draft {
 const EMPTY: Draft = { make: '', offerType: 'lease', name: '', body: '', isDefault: false, isActive: true };
 const OFFER_TYPE_LABEL = Object.fromEntries(OFFER_TYPES.map((o) => [o.value, o.label]));
 
+/** Render body text with `{slug}` tokens as subtle pills, so it's clear which
+ *  parts auto-fill from the offer vs. which are fixed legal wording. */
+function highlightTokens(text: string) {
+  return text.split(/(\{[a-z_]+\})/g).map((part, i) =>
+    /^\{[a-z_]+\}$/.test(part) ? (
+      <span key={i} className="rounded bg-[var(--primary)]/10 px-1 font-medium text-[var(--primary)]">{part}</span>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
+}
+
 export default function DisclaimerTemplatesPage() {
   const { userRole } = useAccount();
   const isAdmin = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
@@ -184,7 +196,7 @@ export default function DisclaimerTemplatesPage() {
                   </button>
                 </div>
               </div>
-              <p className="line-clamp-2 text-xs text-[var(--muted-foreground)]">{t.body}</p>
+              <p className="line-clamp-3 text-xs leading-relaxed text-[var(--muted-foreground)]">{highlightTokens(t.body)}</p>
             </div>
           ))}
         </div>

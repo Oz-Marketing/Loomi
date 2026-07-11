@@ -264,9 +264,7 @@ export default function OemRulesPage() {
       ) : (
         <div className="space-y-2">
           {items.map((r) => {
-            const summary = EDITABLE_TYPES.filter((t) => (r.requiredFields[t.value]?.length ?? 0) > 0)
-              .map((t) => `${TYPE_LABEL[t.value]}: ${r.requiredFields[t.value].map((k) => FIELD_LABELS[k] ?? k).join(', ')}`)
-              .join('  ·  ');
+            const activeTypes = EDITABLE_TYPES.filter((t) => (r.requiredFields[t.value]?.length ?? 0) > 0);
             return (
               <div key={r.id} className="glass-card rounded-xl border border-[var(--border)] p-4">
                 <div className="mb-1 flex items-center justify-between gap-2">
@@ -293,8 +291,25 @@ export default function OemRulesPage() {
                     </button>
                   </div>
                 </div>
-                <p className="text-xs text-[var(--muted-foreground)]">{summary || 'No extra requirements'}</p>
-                {r.notes && <p className="mt-1 text-[11px] italic text-[var(--muted-foreground)]">{r.notes}</p>}
+                {activeTypes.length === 0 ? (
+                  <p className="text-xs text-[var(--muted-foreground)]">No extra requirements — baseline fields only.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {activeTypes.map((t) => (
+                      <div key={t.value} className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                        <span className="w-36 shrink-0 text-[11px] font-semibold text-[var(--foreground)]">{TYPE_LABEL[t.value]}</span>
+                        <div className="flex flex-1 flex-wrap gap-1">
+                          {r.requiredFields[t.value].map((k) => (
+                            <span key={k} className="rounded-md bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">
+                              {FIELD_LABELS[k] ?? k}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {r.notes && <p className="mt-2 border-t border-[var(--border)] pt-2 text-[11px] italic text-[var(--muted-foreground)]">{r.notes}</p>}
               </div>
             );
           })}

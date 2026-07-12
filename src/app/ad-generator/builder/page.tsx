@@ -5223,7 +5223,17 @@ function FieldRow({
               </div>
             </div>
           ) : (
-            <LabeledInput label="Default / preview value" hint="Shown in the preview + client form until the client edits it — great for mock data (e.g. “36”). A {{token}} here resolves against the other fields." value={defaultValue} onChange={(v) => onSetDefault(index, v)} />
+            <div>
+              <HintLabel label="Default / preview value" hint="Shown in the preview + client form until the client edits it — great for mock data (e.g. “36”). Insert {{tokens}} with the variable icon (→); they resolve against the other fields." />
+              <TokenTextArea
+                value={defaultValue}
+                onChange={(v) => onSetDefault(index, v)}
+                options={allFields
+                  .filter((f) => f.key !== field.key && f.type !== 'image')
+                  .map((f) => ({ value: `field:${f.key}`, label: f.label || f.key }))}
+                placeholder="e.g. 36 — or text with {{tokens}}"
+              />
+            </div>
           )}
           {field.type === 'image' && (
             <SelectRow label="Source" hint="Where the picture comes from. Manual: the client uploads or picks from the media library. Vehicle image (EVOX): the client picks a vehicle + paint color from the vehicle-image library. Both: offer the manual inputs and the vehicle picker.">
@@ -6810,26 +6820,26 @@ function SelectionPanel({
             {/* Sizing — how the box and text relate. Three mutually-exclusive modes:
                 • Hug:  the box follows the text (no wrap); resizing scales the font.
                 • Wrap: a fixed W×H frame; the text wraps at YOUR font size, contained.
-                • Fit:  a fixed W×H frame; the text auto-scales to fill it. */}
+                • Fill: a fixed W×H frame; the text auto-scales to fill it (value 'fit'). */}
             <PanelSection title="Sizing">
               <div className="flex items-center gap-2">
                 <div className="flex flex-1 items-center gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--muted)] p-0.5">
-                  {(['hug', 'wrap', 'fit'] as const).map((m) => (
+                  {([['hug', 'Hug'], ['wrap', 'Wrap'], ['fit', 'Fill']] as const).map(([m, labelText]) => (
                     <button
                       key={m}
                       type="button"
                       onClick={() => onSetSizing(m)}
-                      className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium capitalize transition-colors ${
+                      className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
                         sizingMode === m
                           ? 'bg-[var(--card)] text-[var(--foreground)] shadow-sm'
                           : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
                       }`}
                     >
-                      {m}
+                      {labelText}
                     </button>
                   ))}
                 </div>
-                <Tooltip label="Hug: the box hugs the text (no wrap) — type to resize it, Enter for a new line. Wrap: a fixed frame — drag W and H and the text wraps at your chosen font size, staying contained. Fit: a fixed frame — the text auto-scales to fill it.">
+                <Tooltip label="Hug: the box hugs the text (no wrap) — type to resize it, Enter for a new line. Wrap: a fixed frame — drag W and H and the text wraps at your chosen font size, staying contained. Fill: a fixed frame — the text auto-scales to fill it.">
                   <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
                 </Tooltip>
               </div>

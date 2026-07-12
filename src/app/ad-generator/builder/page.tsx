@@ -456,9 +456,11 @@ function bestSnap(edges: number[], targets: number[], threshold: number): { off:
   return { off, guide };
 }
 
-/** What actually gets persisted — the dirty check + autosave compare against this. */
-function serializeDoc(doc: TemplateDoc, name: string, status: string): string {
-  return JSON.stringify({ status, doc: { ...doc, name: name.trim() } });
+/** What actually gets persisted — the dirty check + autosave compare against this.
+ *  In ad mode the ad's field DATA rides along (editing a `{{field}}` box on the
+ *  artboard writes there), so a data-only change still marks dirty + autosaves. */
+function serializeDoc(doc: TemplateDoc, name: string, status: string, adData?: AdData | null): string {
+  return JSON.stringify({ status, doc: { ...doc, name: name.trim() }, data: adData ?? null });
 }
 
 function rid(): string {
@@ -1658,6 +1660,18 @@ export default function AdBuilderPage() {
     }, `hug:${id}`);
   }, [size.id, size.width, size.height]);
 
+  // Write a FIELD VALUE to the source the preview actually reads. In ad mode
+  // that's the ad's DATA (which overrides doc.defaults), so an inline `{{field}}`
+  // edit sticks + persists to the ad; otherwise the template's doc.defaults
+  // (the designer-set preview/default value).
+  const writeFieldValue = useCallback(
+    (key: string, value: string) => {
+      if (adId) setAdData((prev) => ({ ...(prev ?? {}), [key]: value }));
+      else setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: value } }), `fieldval:${key}`);
+    },
+    [adId],
+  );
+
   const commitTextEdit = useCallback(() => {
     // Read the latest value via the functional updater — the blur handler is
     // bound once per edit session, so this closure can be stale; `cur` is always
@@ -1668,24 +1682,22 @@ export default function AdBuilderPage() {
       const b = el?.binding;
       const tokenKey = pureFieldTokenKey(el);
       if (tokenKey != null) {
-        // Pure `{{field}}` box: save the typed value to the field default and
-        // KEEP the token binding intact, so the box stays a live variable that
-        // now resolves to the new value (e.g. 499 → 599).
-        const key = OFFER_LABEL_OVERRIDE[tokenKey] ?? tokenKey;
-        setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: cur.value } }));
+        // Pure `{{field}}` box: save the typed value to the field and KEEP the
+        // token binding intact, so the box stays a live variable that now
+        // resolves to the new value (e.g. 499 → 599).
+        writeFieldValue(OFFER_LABEL_OVERRIDE[tokenKey] ?? tokenKey, cur.value);
       } else if (b?.kind === 'static') {
         setElement(cur.id, { binding: { kind: 'static', value: cur.value } });
       } else if (b?.kind === 'field') {
         // Offer-label bindings write their free-text override field, not the
         // derived `_offer*` key (which enrichOfferFields would recompute).
-        const key = OFFER_LABEL_OVERRIDE[b.key] ?? b.key;
-        setDoc((prev) => ({ ...prev, defaults: { ...prev.defaults, [key]: cur.value } }));
+        writeFieldValue(OFFER_LABEL_OVERRIDE[b.key] ?? b.key, cur.value);
       }
       // The auto-size boxes re-hug on the next canvas write via syncAutoBoxes —
       // the reliable point to measure (after the iframe reflects the new value).
       return null;
     });
-  }, [doc.elements, setElement]);
+  }, [doc.elements, setElement, writeFieldValue]);
 
   // In-place text editing: turn the ACTUAL rendered node inside the iframe into a
   // contenteditable so the caret sits in the real text (WYSIWYG), rather than a
@@ -2661,10 +2673,10 @@ export default function AdBuilderPage() {
         const res = await fetch(`/api/ad-generator/creatives/${adId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, doc: { ...doc, name } }),
+          body: JSON.stringify({ name, doc: { ...doc, name }, ...(adData ? { data: adData } : {}) }),
         });
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
-        savedRef.current = serializeDoc(doc, name, status);
+        savedRef.current = serializeDoc(doc, name, status, adData);
         setSaveStatus('saved');
         toast.success('Saved to this ad');
       } catch (err) {
@@ -2798,7 +2810,7 @@ export default function AdBuilderPage() {
           setAdData(c.data ?? {});
           setTemplateName(c.name);
           setSizeId(d.sizes[0].id);
-          savedRef.current = serializeDoc(d, c.name, 'draft');
+          savedRef.current = serializeDoc(d, c.name, 'draft', c.data ?? {});
           setSaveStatus('saved');
           return;
         }
@@ -3416,14 +3428,14 @@ export default function AdBuilderPage() {
   // ad in ad mode). New/unsaved templates require an explicit Save first.
   useEffect(() => {
     if (!templateId && !adId) return;
-    const snapshot = serializeDoc(doc, templateName, status);
+    const snapshot = serializeDoc(doc, templateName, status, adData);
     if (snapshot === savedRef.current) return; // nothing changed since last persist
     const handle = window.setTimeout(async () => {
       setSaveStatus('saving');
       try {
         const url = adId ? `/api/ad-generator/creatives/${adId}` : `/api/ad-generator/templates-doc/${templateId}`;
         const body = adId
-          ? { name: templateName.trim() || 'Untitled ad', doc: { ...doc, name: templateName.trim() } }
+          ? { name: templateName.trim() || 'Untitled ad', doc: { ...doc, name: templateName.trim() }, ...(adData ? { data: adData } : {}) }
           : { name: templateName.trim(), status, doc: { ...doc, name: templateName.trim() } };
         const res = await fetch(url, {
           method: 'PATCH',
@@ -3438,7 +3450,7 @@ export default function AdBuilderPage() {
       }
     }, 1200);
     return () => window.clearTimeout(handle);
-  }, [doc, templateName, status, templateId, adId]);
+  }, [doc, templateName, status, templateId, adId, adData]);
 
   // Element adders. A "Button" is a styled text element (no separate type); a
   // background is just an Image set to Fill — so no Logo / Background adders.

@@ -4195,6 +4195,44 @@ export default function AdBuilderPage() {
                           </div>
                           <div className="px-5 pb-5 pt-3">
                             <AdderGrid adders={adders} variant="onboarding" />
+                            {/* Start from a block — the built-in switchable offer
+                                block (automotive) + any saved blocks, so a blank
+                                canvas can begin from a pre-wired cluster. */}
+                            {(templateIsAutomotive || blocks.length > 0) && (
+                              <div className="mt-4">
+                                <p className="mb-2 text-center text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Or start from a block</p>
+                                <div className="flex flex-col gap-1.5">
+                                  {templateIsAutomotive && (
+                                    <button
+                                      type="button"
+                                      onClick={() => insertBlock(OFFER_BLOCK_PAYLOAD)}
+                                      title="Drops the label + $ + number + % + terms block and adds the offer fields — it reformats for lease / APR / cash / discount."
+                                      className="flex w-full items-start gap-2 rounded-lg border border-[var(--primary)]/40 bg-[var(--primary)]/5 px-3 py-2 text-left transition-colors hover:bg-[var(--primary)]/10"
+                                    >
+                                      <Squares2X2Icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--primary)]" />
+                                      <span className="min-w-0">
+                                        <span className="block text-sm font-medium text-[var(--primary)]">Vehicle offer block</span>
+                                        <span className="block text-[10px] leading-snug text-[var(--muted-foreground)]">Offer fields + a block that reformats for lease / APR / cash / discount.</span>
+                                      </span>
+                                    </button>
+                                  )}
+                                  {blocks.map((b) => (
+                                    <button
+                                      key={b.id}
+                                      type="button"
+                                      onClick={() => insertBlock(b.doc)}
+                                      title="Insert this block"
+                                      className="flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] px-3 py-2 text-left text-sm text-[var(--foreground)] transition-colors hover:border-[var(--primary)]"
+                                    >
+                                      <span className="truncate">{b.name}</span>
+                                      <span className="shrink-0 rounded-full border border-[var(--border)] px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-[var(--muted-foreground)]">
+                                        {b.accountKeys?.length ? `${b.accountKeys.length} acct${b.accountKeys.length > 1 ? 's' : ''}` : 'Global'}
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
                           </div>
                           <div className="border-t border-[var(--border)] px-5 py-2.5 text-center text-[11px] text-[var(--muted-foreground)]">
                             Need a different size? Open <span className="font-medium text-[var(--foreground)]">Sizes</span> from the bar below.

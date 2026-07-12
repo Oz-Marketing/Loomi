@@ -878,9 +878,12 @@ export default function AdBuilderPage() {
   // dropdown still lists every family (names are cheap); a font gets embedded
   // once it's applied to an element. Mirrors the Google-fonts `usedGoogleFontFamilies`.
   const customFamilySet = useMemo(() => new Set(customFonts.map((f) => f.family)), [customFonts]);
+  // The account's "Brand default" font — what every Brand-default text box
+  // resolves to (see previewData). Included in the embed set so its face loads.
+  const brandDefaultFont = accountData?.branding?.fonts?.brandDefault || '';
   const usedFamilies = useMemo(
-    () => usedFontFamilies(doc.elements, [doc.defaults?.fontFamily, adData?.fontFamily]).filter((fam) => customFamilySet.has(fam)),
-    [doc.elements, doc.defaults?.fontFamily, adData, customFamilySet],
+    () => usedFontFamilies(doc.elements, [doc.defaults?.fontFamily, adData?.fontFamily, brandDefaultFont]).filter((fam) => customFamilySet.has(fam)),
+    [doc.elements, doc.defaults?.fontFamily, adData, brandDefaultFont, customFamilySet],
   );
   const usedFamilyKey = usedFamilies.join('');
   const usedCustomFonts = useMemo(
@@ -963,6 +966,10 @@ export default function AdBuilderPage() {
   const previewData = useMemo(() => {
     const base = enrichOfferFields({
       ...vehicleOfferPreviewData,
+      // The account's Brand-default font — a low-priority fallback so
+      // "Brand default" text renders in it, while an explicit template/ad font
+      // (doc.defaults / adData) still overrides.
+      ...(brandDefaultFont ? { fontFamily: brandDefaultFont } : {}),
       ...doc.defaults, // designer-set default / preview values for fields
       ...(adData ?? {}), // ad mode: the ad's real content
       ...(effectiveFontCss ? { fontFaceCss: effectiveFontCss } : {}),

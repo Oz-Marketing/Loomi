@@ -196,14 +196,17 @@ export default function AdGeneratorPage() {
   // The selected doc-level font (declared here so the embed scoping below can
   // reference it; the picker + reset live further down).
   const [fontKey, setFontKey] = useState<string>('');
+  // The account's "Brand default" font — used when this ad hasn't picked its own
+  // doc-level font, so "Brand default" text resolves to the subaccount brand font.
+  const brandDefaultFont = accountData?.branding?.fonts?.brandDefault || '';
   // Base64-embed ONLY the custom families this ad uses (its elements + the
   // selected doc-level font) — not the whole roll-up union (~MBs for an admin,
   // which made the editor laggy). Spaces fonts send no CORS header, so the
   // embedded base64 is what actually renders. Mirrors the builder.
   const customFamilySet = useMemo(() => new Set(customFonts.map((f) => f.family)), [customFonts]);
   const usedFamilies = useMemo(
-    () => usedFontFamilies(docSnapshot?.elements ?? [], [fontKey]).filter((fam) => customFamilySet.has(fam)),
-    [docSnapshot, fontKey, customFamilySet],
+    () => usedFontFamilies(docSnapshot?.elements ?? [], [fontKey, brandDefaultFont]).filter((fam) => customFamilySet.has(fam)),
+    [docSnapshot, fontKey, brandDefaultFont, customFamilySet],
   );
   const usedFamilyKey = usedFamilies.join('');
   const [embeddedFontCss, setEmbeddedFontCss] = useState('');
@@ -256,7 +259,8 @@ export default function AdGeneratorPage() {
       ? customColor || undefined
       : colorSwatches.find((c) => c.key === colorKey)?.value ?? colorSwatches[0]?.value ?? undefined;
 
-  const selectedFontFamily = fontKey;
+  // The ad's own font pick wins; otherwise fall back to the account brand font.
+  const selectedFontFamily = fontKey || brandDefaultFont;
   // Google CSS2 <link> for every Google family the design actually uses (per
   // element) + the doc-level pick — mirrors the builder so the preview renders
   // real fonts. gstatic sends CORS, so the URL loads fine in the srcdoc iframe.

@@ -71,6 +71,9 @@ const WEBSAFE_FONTS = [
 
 const DEFAULT_HEADING_FONT = WEBSAFE_FONTS[1].value;
 const DEFAULT_BODY_FONT = WEBSAFE_FONTS[0].value;
+// Plain family names (not CSS stacks) for the Ad Generator brand-default picker —
+// the ad renderer wraps the chosen family as `'<name>', <system fallback>`.
+const SYSTEM_BRAND_FONTS = ['Arial', 'Helvetica', 'Georgia', 'Times New Roman', 'Verdana', 'Tahoma', 'Trebuchet MS', 'Courier New'];
 
 function validHexColor(value: string, fallback: string): string {
   return /^#(?:[0-9a-fA-F]{3}){1,2}$/.test(value) ? value : fallback;
@@ -217,6 +220,9 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   const [brandTextColor, setBrandTextColor] = useState('#111827');
   const [brandHeadingFont, setBrandHeadingFont] = useState(DEFAULT_HEADING_FONT);
   const [brandBodyFont, setBrandBodyFont] = useState(DEFAULT_BODY_FONT);
+  // The Ad Generator's "Brand default" font — a family NAME (uploaded custom
+  // font or a plain system family), not a CSS stack. Empty = system default.
+  const [brandDefaultFont, setBrandDefaultFont] = useState('');
   // Uploaded custom font files (e.g. OEM-required). Persisted immediately via
   // the fonts API (like logos), not through the branding Save button.
   type CustomFontDef = { family: string; weight?: string; style?: string; url: string };
@@ -282,6 +288,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     setBrandTextColor(accountData.branding?.colors?.text || '#111827');
     setBrandHeadingFont(accountData.branding?.fonts?.heading || DEFAULT_HEADING_FONT);
     setBrandBodyFont(accountData.branding?.fonts?.body || DEFAULT_BODY_FONT);
+    setBrandDefaultFont(accountData.branding?.fonts?.brandDefault || '');
     // Custom values
     setCustomValues(accountData.customValues || {});
     setSavedCustomValues(accountData.customValues || {});
@@ -321,6 +328,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
       brandTextColor: a.branding?.colors?.text || '#111827',
       brandHeadingFont: a.branding?.fonts?.heading || DEFAULT_HEADING_FONT,
       brandBodyFont: a.branding?.fonts?.body || DEFAULT_BODY_FONT,
+      brandDefaultFont: a.branding?.fonts?.brandDefault || '',
     };
   }
 
@@ -336,7 +344,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
       accountRepId: accountRepId ?? '',
       logoLight, logoDark, logoWhite, logoBlack,
       brandPrimaryColor, brandSecondaryColor, brandAccentColor,
-      brandBackgroundColor, brandTextColor, brandHeadingFont, brandBodyFont,
+      brandBackgroundColor, brandTextColor, brandHeadingFont, brandBodyFont, brandDefaultFont,
     };
     return Object.keys(snap).some(k => snap[k] !== current[k]);
   }, [
@@ -344,7 +352,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     bizAddress, bizCity, bizState, bizZip, bizWebsite, bizTimezone, accountRepId,
     logoLight, logoDark, logoWhite, logoBlack,
     brandPrimaryColor, brandSecondaryColor, brandAccentColor,
-    brandBackgroundColor, brandTextColor, brandHeadingFont, brandBodyFont,
+    brandBackgroundColor, brandTextColor, brandHeadingFont, brandBodyFont, brandDefaultFont,
   ]);
 
   // ── Fetch on mount ──
@@ -484,6 +492,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
           fonts: {
             heading: brandHeadingFont || undefined,
             body: brandBodyFont || undefined,
+            brandDefault: brandDefaultFont || undefined,
           },
         },
         customValues: Object.keys(customValuesToSave).length > 0 ? customValuesToSave : undefined,
@@ -1164,6 +1173,25 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
               <p className="text-[11px] text-[var(--muted-foreground)] mb-4 -mt-2">
                 Websafe stacks for everyday copy, plus uploaded OEM/brand fonts for the Ad Generator.
               </p>
+
+              {/* The Ad Generator's "Brand default" font resolves to this — an
+                  uploaded custom font or a system family. */}
+              <div className="mb-4">
+                <label className={labelClass}>Ad Generator brand font</label>
+                <FontSelect
+                  value={brandDefaultFont}
+                  onChange={setBrandDefaultFont}
+                  previewFont={false}
+                  options={[
+                    { value: '', label: 'None — system default' },
+                    ...[...new Set(customFonts.map((f) => f.family))].map((fam) => ({ value: fam, label: fam, group: 'Uploaded' })),
+                    ...SYSTEM_BRAND_FONTS.map((fam) => ({ value: fam, label: fam, group: 'System' })),
+                  ]}
+                />
+                <p className="text-[11px] text-[var(--muted-foreground)] mt-1">
+                  Every text box set to “Brand default” in the Ad Generator uses this font. Upload a font below to add it here.
+                </p>
+              </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>

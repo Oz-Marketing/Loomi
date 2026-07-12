@@ -48,6 +48,10 @@ export interface AccountData {
     fonts?: {
       heading?: string;
       body?: string;
+      /** Family name (e.g. "Gotham") the Ad Generator's "Brand default" font
+       *  resolves to for this account — an uploaded custom font or a system
+       *  family. Distinct from heading/body (which are CSS stacks for email). */
+      brandDefault?: string;
     };
   };
   /** Uploaded custom font files (e.g. OEM-required), per account. */

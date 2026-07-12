@@ -122,12 +122,18 @@ export interface DocElement {
    *  - HUG (`autoSize` truthy, the default for new text): the box hugs its text —
    *    never wraps (explicit newlines still break), grows/shrinks with the value,
    *    anchored by `align`. No fixed W/H.
-   *  - FIT TO BOX (`autoSize` falsy): a fixed W×H frame; the text wraps to the
-   *    width and the font auto-scales at render time so it always fills/fits the
-   *    frame and never overflows — for any value, incl. dynamic client data —
-   *    aligned by `align` (horizontal) + `vAlign` (vertical). Used for a price
-   *    that must keep a stable footprint, and for paragraph text like disclaimers. */
+   *  - FIT TO BOX (`autoSize` falsy, `wrap` falsy): a fixed W×H frame; the text
+   *    wraps to the width and the font auto-scales at render time so it always
+   *    fills/fits the frame and never overflows — for any value — aligned by
+   *    `align` (horizontal) + `vAlign` (vertical). Used for a price that must keep
+   *    a stable footprint.
+   *  - WRAP (`autoSize` falsy, `wrap` truthy): a fixed W×H frame; the text wraps
+   *    at your CHOSEN font size (not auto-scaled), stays contained (clipped), and
+   *    both W and H are resizable. Used for paragraph text like disclaimers. */
   autoSize?: boolean;
+  /** WRAP mode — see `autoSize`. Only meaningful when `autoSize` is falsy: keeps a
+   *  fixed font and wraps (vs Fit-to-box, which auto-scales the font to fill). */
+  wrap?: boolean;
   // ── image / logo ──
   /** `contain` fits inside the box, `cover` fills + crops, `tile` repeats the
    *  image to fill (for seamless textures/patterns). */

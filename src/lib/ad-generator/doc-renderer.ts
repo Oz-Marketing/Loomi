@@ -391,14 +391,19 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     fitPad +
     common +
     'overflow:hidden;';
+  // WRAP: a fixed W×H frame like Fit, but the font stays at the element's chosen
+  // size (no auto-scale). `data-wrap` keeps it out of the fit script/parent, so
+  // it never rescales — the text just wraps at the frame width and is clipped by
+  // overflow:hidden. Used for paragraph copy (disclaimers) that must stay legible.
   // The value lives in a `text-box`-trimmed inner box so the FRAME hugs the
   // glyph ink (cap height → alphabetic baseline), not the font's line box — this
   // kills the ascent/descent "leading" gap above and below the text (most
   // visible on big numbers like a price). It's inline-block + max-width:100% so
   // it still wraps at the frame width AND shrink-wraps to the ink for the fit to
   // measure. The fit script/parent measure THIS node, not a Range.
+  const marker = el.wrap ? 'data-wrap' : 'data-fit';
   const inner = `<div data-fit-inner style="display:inline-block;max-width:100%;white-space:pre-wrap;text-box:trim-both cap alphabetic;">${value}</div>`;
-  return `<div${idAttr} data-fit style="${dim}${fx}${styles}">${inner}</div>`;
+  return `<div${idAttr} ${marker} style="${dim}${fx}${styles}">${inner}</div>`;
 }
 
 /** Render a TemplateDoc + data at a given size into a full HTML document. */

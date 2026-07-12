@@ -4568,7 +4568,7 @@ export default function AdBuilderPage() {
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch }, `box:${selected.id}:${Object.keys(patch).sort().join(',')}`)}
                   onSetSizing={(mode) => {
-                    updEl({ autoSize: mode === 'hug' ? true : undefined });
+                    updEl({ autoSize: mode === 'hug' ? true : undefined, wrap: mode === 'wrap' ? true : undefined });
                     if (mode === 'hug') hugBoxToContent(selected.id);
                   }}
                   fitFontPx={fitFontPx}
@@ -6428,9 +6428,9 @@ function SelectionPanel({
   accountKey?: string;
   onEl: (patch: Partial<DocElement>) => void;
   onBox: (patch: Partial<DocLayoutBox>) => void;
-  /** Text only: set the sizing mode — fixed (wrap) / hug (box follows text).
-   *  Re-hugs when switching to hug. */
-  onSetSizing: (mode: 'hug' | 'fit') => void;
+  /** Text only: set the sizing mode — hug (box follows text) / wrap (fixed frame,
+   *  fixed font, wraps) / fit (fixed frame, font auto-scales). Re-hugs on hug. */
+  onSetSizing: (mode: 'hug' | 'wrap' | 'fit') => void;
   /** Text/Fit-to-box only: the measured auto-scaled font size (px), for a
    *  read-only readout. Null when unavailable (not yet fit / not fit mode). */
   fitFontPx: number | null;
@@ -6452,10 +6452,12 @@ function SelectionPanel({
   const [picking, setPicking] = useState(false);
   const isImageEl = el.type === 'image' || el.type === 'logo' || el.type === 'background';
   // Text sizing mode. Hug (default): the box follows the text (W/H auto, resizing
-  // scales the font). Fit to box: a fixed W×H frame; the text auto-scales to fill
-  // it (W/H editable, the font stepper becomes an "auto" note).
-  const sizingMode: 'hug' | 'fit' = el.autoSize ? 'hug' : 'fit';
+  // scales the font). Wrap: a fixed W×H frame; the text wraps at YOUR font size
+  // (W/H editable, font stepper editable). Fit to box: a fixed W×H frame; the text
+  // auto-scales to fill it (W/H editable, the font stepper becomes an "auto" note).
+  const sizingMode: 'hug' | 'wrap' | 'fit' = el.autoSize ? 'hug' : el.wrap ? 'wrap' : 'fit';
   const isHug = el.type === 'text' && sizingMode === 'hug';
+  const isWrap = el.type === 'text' && sizingMode === 'wrap';
   const isFit = el.type === 'text' && sizingMode === 'fit';
   // Font-size input keeps a local draft string while focused so a multi-digit
   // value (e.g. "12") isn't snapped to the min (4) on the first keystroke.
@@ -6723,26 +6725,31 @@ function SelectionPanel({
               </div>
             </PanelSection>
 
-            {/* Sizing — how the box and text relate:
-                • Hug (default): the box follows the text (no wrap); resizing scales the font.
-                • Fit to box:    a fixed W×H frame; the text auto-scales to fill it. */}
+            {/* Sizing — how the box and text relate. Three mutually-exclusive modes:
+                • Hug:  the box follows the text (no wrap); resizing scales the font.
+                • Wrap: a fixed W×H frame; the text wraps at YOUR font size, contained.
+                • Fit:  a fixed W×H frame; the text auto-scales to fill it. */}
             <PanelSection title="Sizing">
-              <div className="flex w-full items-center justify-between gap-2">
-                <span className="flex items-center gap-1 text-xs font-medium text-[var(--foreground)]">
-                  Fit to box
-                  <Tooltip label="On: a fixed frame — drag W and H and the text auto-scales to fill it, staying put as the value changes (aligns horizontally + vertically). Off: the box hugs the text — type to resize it, Enter for a new line.">
-                    <InformationCircleIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
-                  </Tooltip>
-                </span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={isFit}
-                  onClick={() => onSetSizing(isFit ? 'hug' : 'fit')}
-                  className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${isFit ? 'bg-[var(--primary)]' : 'border border-[var(--border)] bg-[var(--muted)]'}`}
-                >
-                  <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${isFit ? 'translate-x-4' : 'translate-x-0.5'}`} />
-                </button>
+              <div className="flex items-center gap-2">
+                <div className="flex flex-1 items-center gap-0.5 rounded-lg border border-[var(--border)] bg-[var(--muted)] p-0.5">
+                  {(['hug', 'wrap', 'fit'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => onSetSizing(m)}
+                      className={`flex-1 rounded-md px-2 py-1 text-[11px] font-medium capitalize transition-colors ${
+                        sizingMode === m
+                          ? 'bg-[var(--card)] text-[var(--foreground)] shadow-sm'
+                          : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                      }`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+                <Tooltip label="Hug: the box hugs the text (no wrap) — type to resize it, Enter for a new line. Wrap: a fixed frame — drag W and H and the text wraps at your chosen font size, staying contained. Fit: a fixed frame — the text auto-scales to fill it.">
+                  <InformationCircleIcon className="h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]" />
+                </Tooltip>
               </div>
             </PanelSection>
 
@@ -6757,8 +6764,8 @@ function SelectionPanel({
                 <BarBtn title="Align right" active={el.align === 'right'} onClick={() => onEl({ align: 'right' })}>
                   <HAlignRightIcon className="h-5 w-5" />
                 </BarBtn>
-                {/* Vertical alignment — only meaningful inside a Fit-to-box frame. */}
-                {isFit && (
+                {/* Vertical alignment — meaningful inside any fixed frame (Wrap or Fit). */}
+                {(isFit || isWrap) && (
                   <>
                     <span className="mx-1 h-6 w-px bg-[var(--border)]" />
                     <BarBtn title="Align top" active={(el.vAlign ?? 'middle') === 'top'} onClick={() => onEl({ vAlign: 'top' })}>

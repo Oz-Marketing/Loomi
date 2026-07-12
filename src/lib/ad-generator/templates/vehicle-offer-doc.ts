@@ -34,7 +34,9 @@ export const vehicleOfferDoc: TemplateDoc = {
     { id: 'offerTerms', type: 'text', binding: { kind: 'field', key: '_offerTerms' }, fontWeight: 500, color: '#475569' },
     { id: 'expiration', type: 'text', binding: { kind: 'field', key: 'expiration' }, fontWeight: 700, color: '#ffffff', bg: 'brand', radius: 999, padding: 14, align: 'center' },
     { id: 'vehicle', type: 'image', binding: { kind: 'field', key: 'vehicleImageUrl' }, fit: 'contain' },
-    { id: 'disclaimer', type: 'text', binding: { kind: 'field', key: 'disclaimer' }, fontWeight: 400, color: '#94a3b8', lineHeight: 1.3 },
+    // Wrap: a fixed frame that wraps the fine print at a stable, legible size
+    // (not auto-scaled) — the designer sizes the box to the disclaimer's length.
+    { id: 'disclaimer', type: 'text', binding: { kind: 'field', key: 'disclaimer' }, fontWeight: 400, color: '#94a3b8', lineHeight: 1.3, wrap: true },
   ],
   layouts: {
     square: {

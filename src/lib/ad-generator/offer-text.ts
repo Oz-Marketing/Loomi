@@ -143,10 +143,9 @@ export function assembleOffer(data: AdData, prefix = ''): OfferBlock | null {
         value: plain(g('aprRate')) ?? PLACEHOLDER,
         currency: '',
         percent: '%',
-        terms: joinTerms([
-          term != null ? `for ${term} months` : null,
-          g('financialInstitution') ? `through ${g('financialInstitution')}` : null,
-        ]),
+        // Just the financing term — the financial institution still rides in the
+        // disclaimer, but the on-image terms line stays clean.
+        terms: joinTerms([term != null ? `for ${term} months` : null]),
       };
     }
     case 'discount': {
@@ -158,10 +157,8 @@ export function assembleOffer(data: AdData, prefix = ''): OfferBlock | null {
         value: plain(g('discountAmount')) ?? PLACEHOLDER,
         currency: '$',
         percent: '',
-        terms: joinTerms([
-          msrp ? (cashBack ? `MSRP ${msrp}` : `Off MSRP ${msrp}`) : null,
-          g('discountSource') || null,
-        ]),
+        // Just the MSRP reference (the discount source rides in the disclaimer).
+        terms: joinTerms([msrp ? `MSRP of ${msrp}` : null]),
       };
     }
     case 'sales_price': {
@@ -172,7 +169,7 @@ export function assembleOffer(data: AdData, prefix = ''): OfferBlock | null {
         value: plain(g('salePrice')) ?? PLACEHOLDER,
         currency: '$',
         percent: '',
-        terms: joinTerms([msrp ? `MSRP ${msrp}` : null]),
+        terms: joinTerms([msrp ? `MSRP of ${msrp}` : null]),
       };
     }
   }

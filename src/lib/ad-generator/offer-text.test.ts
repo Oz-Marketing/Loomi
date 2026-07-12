@@ -31,21 +31,21 @@ describe('assembleOffer', () => {
     expect(o?.value).toBe('1.9');
     expect(o?.currency).toBe('');
     expect(o?.percent).toBe('%');
-    expect(o?.terms).toBe('for 60 months · through Toyota Financial');
+    expect(o?.terms).toBe('for 60 months'); // just the term — institution rides in the disclaimer
   });
 
   it('handles discount Off-MSRP vs Cash Back styles', () => {
     const off = assembleOffer({ offerType: 'discount', discountAmount: '3000', msrp: '42000', discountLabelStyle: 'off_msrp' });
-    expect(off).toEqual({ label: 'OFF MSRP', main: '$3,000', value: '3,000', currency: '$', percent: '', terms: 'Off MSRP $42,000' });
+    expect(off).toEqual({ label: 'OFF MSRP', main: '$3,000', value: '3,000', currency: '$', percent: '', terms: 'MSRP of $42,000' });
 
     const cash = assembleOffer({ offerType: 'discount', discountAmount: '3000', msrp: '42000', discountLabelStyle: 'cash_back' });
-    expect(cash?.label).toBe('CASH BACK');
-    expect(cash?.terms).toBe('MSRP $42,000');
+    expect(cash?.label).toBe('CASH BACK'); // label still distinguishes; terms are just the MSRP
+    expect(cash?.terms).toBe('MSRP of $42,000');
   });
 
   it('assembles a sales-price offer', () => {
     const o = assembleOffer({ offerType: 'sales_price', salePrice: '28995', msrp: '34000' });
-    expect(o).toEqual({ label: 'SALES PRICE', main: '$28,995', value: '28,995', currency: '$', percent: '', terms: 'MSRP $34,000' });
+    expect(o).toEqual({ label: 'SALES PRICE', main: '$28,995', value: '28,995', currency: '$', percent: '', terms: 'MSRP of $34,000' });
   });
 
   it('lets offerLabel override the default label', () => {

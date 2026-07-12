@@ -810,6 +810,10 @@ export default function AdBuilderPage() {
   // so it can be open at the same time as the element/block settings panel on the
   // right. It shares the left slot with Insert/Layers (one at a time).
   const [fieldsOpen, setFieldsOpen] = useState(false);
+  // A field to focus (expand + scroll to) in the Fields panel — set when a
+  // {{token}} is clicked in an element's content box. `nonce` re-triggers the
+  // focus even when the same field is clicked twice.
+  const [focusField, setFocusField] = useState<{ key: string; nonce: number } | null>(null);
   // Left rail: which panel (Elements / Layers / Industries / Sizes) is open as a
   // flyout. null = collapsed to just the icons.
   const [leftPanel, setLeftPanel] = useState<'insert' | 'layers' | null>(null);
@@ -1633,6 +1637,25 @@ export default function AdBuilderPage() {
     }
     return null;
   }, []);
+
+  // Clicking a {{token}} in an element's content box opens the Fields panel and
+  // focuses that field. A computed offer token (`_offer*`) has no field of its
+  // own → send the user to the offer-type control that drives what it shows.
+  const jumpToField = useCallback(
+    (tokenKey: string) => {
+      const target = doc.fields.some((f) => f.key === tokenKey)
+        ? tokenKey
+        : tokenKey.startsWith('_o2_')
+          ? 'o2_offerType'
+          : tokenKey.startsWith('_')
+            ? 'offerType'
+            : tokenKey;
+      setLeftPanel(null);
+      setFieldsOpen(true);
+      setFocusField((f) => ({ key: target, nonce: (f?.nonce ?? 0) + 1 }));
+    },
+    [doc.fields],
+  );
 
   const startTextEdit = useCallback(
     (elId: string) => {
@@ -4670,6 +4693,7 @@ export default function AdBuilderPage() {
                   content={selectionContent}
                   contentSources={contentSources}
                   onContentChange={setSelectedContent}
+                  onJumpToField={jumpToField}
                   accountKey={accountKey ?? undefined}
                   onEl={updEl}
                   onBox={(patch) => setBox(size.id, selected.id, { ...selectedBox, ...patch }, `box:${selected.id}:${Object.keys(patch).sort().join(',')}`)}
@@ -4721,6 +4745,7 @@ export default function AdBuilderPage() {
                   fields={doc.fields}
                   fieldGroups={currentGroups(doc)}
                   defaults={doc.defaults}
+                  focusField={focusField}
                   accountKey={accountKey ?? undefined}
                   brandLogos={brandLogos}
                   onClose={() => setFieldsOpen(false)}
@@ -5689,6 +5714,7 @@ function FieldsSidebar({
   fields,
   fieldGroups,
   defaults,
+  focusField,
   accountKey,
   brandLogos,
   onClose,
@@ -5715,6 +5741,9 @@ function FieldsSidebar({
   /** Ordered, designer-defined group names (may include empty groups). */
   fieldGroups: string[];
   defaults: Record<string, string>;
+  /** Set (with a fresh nonce) to expand + scroll to a field — e.g. from a
+   *  {{token}} click in the element content box. */
+  focusField: { key: string; nonce: number } | null;
   accountKey?: string;
   brandLogos: { key: string; label: string; url: string }[];
   /** Reusable field-set presets — names only; apply seeds fields, save upserts. */
@@ -5748,6 +5777,26 @@ function FieldsSidebar({
   const [expanded, setExpanded] = useState<number | null>(null);
   const [openGroups, setOpenGroups] = useState<Set<string>>(() => new Set());
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null);
+  // Jump to a field on request (a {{token}} click in the content box): open its
+  // group, expand it, and scroll it into view. Keyed on `focusField` identity
+  // (a fresh object per request, so re-clicking the same field re-fires).
+  useEffect(() => {
+    if (!focusField) return;
+    const idx = fields.findIndex((f) => f.key === focusField.key);
+    if (idx < 0) return;
+    setExpanded(idx);
+    setOpenGroups((s) => {
+      const grp = fields[idx].group?.trim() || DEFAULT_GROUP;
+      return s.has(grp) ? s : new Set(s).add(grp);
+    });
+    const raf = requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-flip-key="f:${CSS.escape(focusField.key)}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusField]);
   const [renameDraft, setRenameDraft] = useState('');
   // Preview mode — swap the editor for a live client-form mock of these fields.
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -6124,12 +6173,16 @@ function TokenTextArea({
   onChange,
   placeholder,
   options = [],
+  onTokenClick,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   /** Field tokens offered by a `{{` autocomplete (value `field:<key>`). */
   options?: SearchableSelectOption[];
+  /** Clicking inside a `{{token}}` calls this with the token key — the caller
+   *  jumps to that field in the Fields panel. */
+  onTokenClick?: (key: string) => void;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const backRef = useRef<HTMLDivElement>(null);
@@ -6247,7 +6300,22 @@ function TokenTextArea({
           setAcOpen(true);
           setAcIdx(0);
         }}
-        onClick={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+        onClick={(e) => {
+          const pos = (e.target as HTMLTextAreaElement).selectionStart ?? 0;
+          setCaret(pos);
+          // Clicking inside a {{token}} jumps to its field. Scan the value for the
+          // token whose range contains the caret.
+          if (onTokenClick) {
+            const re = /\{\{\s*([\w.]+)\s*\}\}/g;
+            let m: RegExpExecArray | null;
+            while ((m = re.exec(value))) {
+              if (pos > m.index && pos < m.index + m[0].length) {
+                onTokenClick(m[1]);
+                break;
+              }
+            }
+          }
+        }}
         onKeyUp={(e) => { if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End') setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0); }}
         onKeyDown={(e) => {
           if (!showAc) return;
@@ -6530,6 +6598,7 @@ function SelectionPanel({
   content,
   contentSources,
   onContentChange,
+  onJumpToField,
   accountKey,
   onEl,
   onBox,
@@ -6553,6 +6622,8 @@ function SelectionPanel({
   content: { mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly'; value: string; note?: string } | null;
   contentSources: SearchableSelectOption[];
   onContentChange: (value: string) => void;
+  /** Clicking a {{token}} in the content box opens the Fields panel at that field. */
+  onJumpToField: (key: string) => void;
   accountKey?: string;
   onEl: (patch: Partial<DocElement>) => void;
   onBox: (patch: Partial<DocLayoutBox>) => void;
@@ -6660,7 +6731,7 @@ function SelectionPanel({
               <>
                 {/* Variable-aware text: {{field}} tokens render as purple pills;
                     typing {{ opens an autocomplete, or use the variable icon. */}
-                <TokenTextArea value={content.value} onChange={onContentChange} options={insertableVars} placeholder="Type text — add {{variables}} with the icon →" />
+                <TokenTextArea value={content.value} onChange={onContentChange} options={insertableVars} onTokenClick={onJumpToField} placeholder="Type text — add {{variables}} with the icon →" />
               </>
             )}
             {content.mode === 'text-readonly' && (

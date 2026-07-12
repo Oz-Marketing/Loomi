@@ -248,6 +248,23 @@ const OFFER_TOKENS_O2: { key: string; label: string }[] = [
   { key: '_o2_offerTerms', label: 'Offer 2 terms' },
 ];
 
+// Per-offer-type accent color + short label — drives the color-coded preview
+// tabs on the canvas action bar (each tab tinted to its offer type).
+const OFFER_TYPE_COLOR: Record<string, string> = {
+  lease: '#3b82f6', // blue
+  apr: '#8b5cf6', // violet
+  discount: '#f59e0b', // amber
+  sales_price: '#10b981', // emerald
+  custom: '#64748b', // slate
+};
+const OFFER_TYPE_SHORT: Record<string, string> = {
+  lease: 'Lease',
+  apr: 'APR',
+  discount: 'Discount',
+  sales_price: 'Sale price',
+  custom: 'Custom',
+};
+
 
 function bindingToSourceValue(b: Binding | undefined): string {
   if (!b || b.kind === 'static') return 'static';
@@ -992,6 +1009,19 @@ export default function AdBuilderPage() {
       ),
     [doc.elements],
   );
+
+  // The offer types this design actually distinguishes — the union of every
+  // element's `Show for` set. If nothing is gated (elements only bind computed
+  // offer tokens, which adapt to any type), offer all of them. In canonical
+  // order, for the color-coded preview tabs.
+  const usedOfferTypes = useMemo(() => {
+    const set = new Set<string>();
+    for (const el of doc.elements) {
+      if (el.visibleWhen?.field === 'offerType') for (const v of el.visibleWhen.in) set.add(v);
+    }
+    if (set.size === 0 && usesOffer) OFFER_TYPES.forEach((t) => set.add(t.value));
+    return OFFER_TYPES.filter((t) => set.has(t.value));
+  }, [doc.elements, usesOffer]);
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
 
@@ -3798,22 +3828,31 @@ export default function AdBuilderPage() {
               {doc.make && compliance && compliance.length > 0 && (
                 <ComplianceChip make={doc.make} compliance={compliance} missing={complianceMissing} onInsert={insertComplianceField} />
               )}
-              {usesOffer && (
+              {usesOffer && usedOfferTypes.length > 0 && (
                 <div className="flex items-center gap-1.5">
                   <span className="text-[11px] font-medium text-[var(--muted-foreground)]">Preview</span>
-                  <select
-                    value={String(previewData.offerType ?? 'lease')}
-                    onChange={(e) => writeFieldValue('offerType', e.target.value)}
-                    title="Preview offer type — flips which offer block shows and how the computed offer text reads"
-                    aria-label="Preview offer type"
-                    className="h-8 rounded-lg border border-[var(--border)] bg-[var(--background)] px-2 text-xs font-medium text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                  >
-                    {OFFER_TYPES.map((t) => (
-                      <option key={t.value} value={t.value}>
-                        {t.label}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
+                    {usedOfferTypes.map((t) => {
+                      const color = OFFER_TYPE_COLOR[t.value] ?? '#64748b';
+                      const active = String(previewData.offerType ?? 'lease') === t.value;
+                      return (
+                        <button
+                          key={t.value}
+                          type="button"
+                          onClick={() => writeFieldValue('offerType', t.value)}
+                          title={`Preview as ${t.label}`}
+                          aria-pressed={active}
+                          className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                            active ? '' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                          }`}
+                          style={active ? { backgroundColor: `${color}1f`, color } : undefined}
+                        >
+                          <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
+                          {OFFER_TYPE_SHORT[t.value] ?? t.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>

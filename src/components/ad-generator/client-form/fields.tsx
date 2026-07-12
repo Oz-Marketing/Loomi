@@ -149,6 +149,7 @@ type DisclaimerTemplateOption = {
 export function DisclaimerField({
   field,
   renderData,
+  make,
   value,
   onChange,
   readOnly = false,
@@ -156,6 +157,9 @@ export function DisclaimerField({
 }: {
   field: FieldSpec;
   renderData: AdData;
+  /** OEM/make (vehicle make → account OEM) so make-specific disclaimer
+   *  templates (e.g. Subaru, Kia) surface in the picker alongside the globals. */
+  make?: string;
   value: string;
   onChange: (v: string) => void;
   /** Clients can't override the disclaimer — it still auto-fills, but shows
@@ -172,9 +176,11 @@ export function DisclaimerField({
   // Set when the user picks a template to override an OEM offer's disclaimer.
   const [override, setOverride] = useState(false);
 
+  const makeParam = (make || renderData._vehMake || '').trim();
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/ad-generator/disclaimer-templates?offerType=${encodeURIComponent(offerType)}`)
+    const q = `offerType=${encodeURIComponent(offerType)}${makeParam ? `&make=${encodeURIComponent(makeParam)}` : ''}`;
+    fetch(`/api/ad-generator/disclaimer-templates?${q}`)
       .then((r) => (r.ok ? r.json() : { templates: [] }))
       .then((d: { templates?: DisclaimerTemplateOption[] }) => {
         if (!cancelled) setTemplates(d.templates ?? []);
@@ -185,7 +191,7 @@ export function DisclaimerField({
     return () => {
       cancelled = true;
     };
-  }, [offerType]);
+  }, [offerType, makeParam]);
 
   const tmpl = templates.find((t) => t.id === selectedId);
   // A selected MarketCheck OEM offer stashes its authoritative fine print in

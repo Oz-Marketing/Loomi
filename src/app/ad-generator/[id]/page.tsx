@@ -779,6 +779,7 @@ export default function AdGeneratorPage() {
                           key={f.key}
                           field={f}
                           renderData={renderData}
+                          make={oemMake}
                           value={data.disclaimer ?? ''}
                           onChange={(v) => set('disclaimer', v)}
                           readOnly={!isManager}

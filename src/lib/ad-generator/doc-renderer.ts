@@ -384,8 +384,15 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
     pos +
     `display:flex;flex-direction:column;justify-content:${vItems};align-items:${items};` +
     common +
-    'white-space:pre-wrap;overflow:hidden;';
-  return `<div${idAttr} data-fit style="${dim}${fx}${styles}">${value}</div>`;
+    'overflow:hidden;';
+  // The value lives in a `text-box`-trimmed inner box so the FRAME hugs the
+  // glyph ink (cap height → alphabetic baseline), not the font's line box — this
+  // kills the ascent/descent "leading" gap above and below the text (most
+  // visible on big numbers like a price). It's inline-block + max-width:100% so
+  // it still wraps at the frame width AND shrink-wraps to the ink for the fit to
+  // measure. The fit script/parent measure THIS node, not a Range.
+  const inner = `<div data-fit-inner style="display:inline-block;max-width:100%;white-space:pre-wrap;text-box:trim-both cap alphabetic;">${value}</div>`;
+  return `<div${idAttr} data-fit style="${dim}${fx}${styles}">${inner}</div>`;
 }
 
 /** Render a TemplateDoc + data at a given size into a full HTML document. */
@@ -471,13 +478,19 @@ const FIT_SCRIPT = `(function(){
       var availW=el.clientWidth-parseFloat(cs.paddingLeft||0)-parseFloat(cs.paddingRight||0);
       var availH=el.clientHeight-parseFloat(cs.paddingTop||0)-parseFloat(cs.paddingBottom||0);
       if(availW<=0||availH<=0)return;
+      // Measure the trimmed inner box so the fit fills the frame with GLYPH INK,
+      // not the taller line box; fall back to a Range if the inner is absent.
+      var inner=el.querySelector('[data-fit-inner]');
       var lo=1, hi=Math.max(2,availH*2);
       for(var i=0;i<18;i++){
         var mid=(lo+hi)/2;
         el.style.fontSize=mid+'px';
-        var r=document.createRange(); r.selectNodeContents(el);
-        var rect=r.getBoundingClientRect();
-        if(rect.width<=availW+0.5 && rect.height<=availH+0.5) lo=mid; else hi=mid;
+        var w, h;
+        // width via scrollWidth (unbreakable text overflows the max-width cap),
+        // height via the trimmed box rect.
+        if(inner){ w=inner.scrollWidth; h=inner.getBoundingClientRect().height; }
+        else { var r=document.createRange(); r.selectNodeContents(el); var rr=r.getBoundingClientRect(); w=rr.width; h=rr.height; }
+        if(w<=availW+0.5 && h<=availH+0.5) lo=mid; else hi=mid;
       }
       el.style.fontSize=lo+'px';
     }catch(e){}

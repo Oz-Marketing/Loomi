@@ -493,14 +493,26 @@ function fitTextNode(node: HTMLElement) {
   const availW = node.clientWidth - parseFloat(cs.paddingLeft || '0') - parseFloat(cs.paddingRight || '0');
   const availH = node.clientHeight - parseFloat(cs.paddingTop || '0') - parseFloat(cs.paddingBottom || '0');
   if (availW <= 0 || availH <= 0) return;
+  // Measure the `text-box`-trimmed inner box (see doc-renderer) so the fit fills
+  // the frame with glyph ink, not the taller line box. During inline editing the
+  // inner is replaced by raw text — fall back to a Range then.
+  const inner = node.querySelector('[data-fit-inner]') as HTMLElement | null;
+  // width via scrollWidth (true content width — an unbreakable number overflows
+  // the max-width cap, so getBoundingClientRect would under-report it); height
+  // via the trimmed box rect. Editing replaces the inner → Range fallback.
+  const measure = (): { width: number; height: number } => {
+    if (inner) return { width: inner.scrollWidth, height: inner.getBoundingClientRect().height };
+    const r = node.ownerDocument.createRange();
+    r.selectNodeContents(node);
+    const rr = r.getBoundingClientRect();
+    return { width: rr.width, height: rr.height };
+  };
   let lo = 1;
   let hi = Math.max(2, availH * 2);
   for (let i = 0; i < 18; i++) {
     const mid = (lo + hi) / 2;
     node.style.fontSize = `${mid}px`;
-    const r = node.ownerDocument.createRange();
-    r.selectNodeContents(node);
-    const rect = r.getBoundingClientRect();
+    const rect = measure();
     if (rect.width <= availW + 0.5 && rect.height <= availH + 0.5) lo = mid;
     else hi = mid;
   }
@@ -4590,6 +4602,8 @@ export default function AdBuilderPage() {
                   onElAll={patchSelectedElements}
                   onBoxAll={patchSelectedBoxes}
                   onBumpSize={bumpSelectedFontSize}
+                  onAlign={alignSelected}
+                  onDistribute={distributeSelected}
                   onDuplicate={() => duplicateElements(selectedIds)}
                   onSaveAsBlock={saveSelectionAsBlock}
                   onDelete={deleteSelected}
@@ -6204,6 +6218,8 @@ function MultiSelectPanel({
   onElAll,
   onBoxAll,
   onBumpSize,
+  onAlign,
+  onDistribute,
   onDuplicate,
   onSaveAsBlock,
   onDelete,
@@ -6216,6 +6232,10 @@ function MultiSelectPanel({
   onElAll: (patch: Partial<DocElement>) => void;
   onBoxAll: (patch: Partial<DocLayoutBox>) => void;
   onBumpSize: (delta: number) => void;
+  /** Position-align the whole selection to a shared edge/center. */
+  onAlign: (edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') => void;
+  /** Evenly distribute the selection along an axis (needs 3+). */
+  onDistribute: (axis: 'h' | 'v') => void;
   onDuplicate: () => void;
   onSaveAsBlock: () => void;
   onDelete: () => void;
@@ -6237,6 +6257,34 @@ function MultiSelectPanel({
       </div>
 
       <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
+        {/* Position align / distribute — applies to any 2+ selection (all element
+            types), mirroring the right-click menu. */}
+        <PanelSection title="Arrange">
+          <div className="flex items-center gap-1">
+            {(['left', 'hcenter', 'right', 'top', 'vmiddle', 'bottom'] as const).map((edge) => (
+              <button
+                key={edge}
+                type="button"
+                onClick={() => onAlign(edge)}
+                title={`Align ${edge.replace('hcenter', 'center').replace('vmiddle', 'middle')}`}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+              >
+                <AlignIcon edge={edge} />
+              </button>
+            ))}
+            {elements.length >= 3 && (
+              <>
+                <span className="mx-0.5 h-5 w-px bg-[var(--border)]" />
+                <button type="button" onClick={() => onDistribute('h')} title="Distribute horizontally" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
+                  <AlignIcon edge="dist-h" />
+                </button>
+                <button type="button" onClick={() => onDistribute('v')} title="Distribute vertically" className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]">
+                  <AlignIcon edge="dist-v" />
+                </button>
+              </>
+            )}
+          </div>
+        </PanelSection>
         {textEls.length > 0 ? (
           <>
             <PanelSection title={`Font · ${textEls.length} text ${textEls.length === 1 ? 'box' : 'boxes'}`}>

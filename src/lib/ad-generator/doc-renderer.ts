@@ -380,9 +380,15 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   // (horizontal) + `vAlign` (vertical). Text can't gap away from or collide with
   // neighbours as the value changes.
   const vItems = el.vAlign === 'top' ? 'flex-start' : el.vAlign === 'bottom' ? 'flex-end' : 'center';
+  // A hair of breathing room so the trimmed ink (cap-height/baseline) doesn't
+  // clip glyphs that slightly overshoot those edges — ascenders, digit tops.
+  // Scales with the box (border-box, so it insets rather than grows the frame);
+  // skipped when the element sets its own padding.
+  const fitPad = paddingCss(el) ? '' : `padding:${Math.max(1, Math.round(Math.min(box.w * width, box.h * height) * 0.05))}px;`;
   const styles =
     pos +
     `display:flex;flex-direction:column;justify-content:${vItems};align-items:${items};` +
+    fitPad +
     common +
     'overflow:hidden;';
   // The value lives in a `text-box`-trimmed inner box so the FRAME hugs the

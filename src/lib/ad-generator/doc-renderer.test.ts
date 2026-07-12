@@ -381,11 +381,26 @@ describe('renderDoc', () => {
     expect(renderDoc(doc, {}, SIZE, { preview: true })).toContain('price');
   });
 
-  it('keeps hidden elements (dimmed) in preview but drops them on export', () => {
+  it('drops eye-hidden elements from BOTH preview and export (not just dimmed)', () => {
     expect(renderDoc(doc, {}, SIZE)).not.toContain('SHOULD-NOT-APPEAR'); // export omits hidden
     const prev = renderDoc(doc, {}, SIZE, { preview: true });
-    expect(prev).toContain('SHOULD-NOT-APPEAR'); // preview keeps it…
-    expect(prev).toContain('opacity:0.35'); // …dimmed
+    expect(prev).not.toContain('SHOULD-NOT-APPEAR'); // hiding a layer removes it from the canvas too
+  });
+
+  it('keeps a visibleWhen-gated element dimmed in preview but omits it on export', () => {
+    const gated: TemplateDoc = {
+      ...doc,
+      elements: [
+        ...doc.elements.filter((e) => e.id !== 'gone'),
+        { id: 'apronly', type: 'text', binding: { kind: 'static', value: 'APR-BADGE' }, visibleWhen: { field: 'offerType', in: ['apr'] } },
+      ],
+      layouts: { square: { ...doc.layouts.square, apronly: { x: 0, y: 0, w: 0.2, h: 0.1 } } },
+    };
+    // Wrong offer type → gated element is dimmed in preview, gone on export.
+    const prev = renderDoc(gated, { offerType: 'lease' }, SIZE, { preview: true });
+    expect(prev).toContain('APR-BADGE');
+    expect(prev).toContain('opacity:0.35');
+    expect(renderDoc(gated, { offerType: 'lease' }, SIZE)).not.toContain('APR-BADGE');
   });
 
   it('tags each element with data-el-id (for live drag in the builder)', () => {

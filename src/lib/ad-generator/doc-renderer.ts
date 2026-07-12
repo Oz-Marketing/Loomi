@@ -233,9 +233,11 @@ function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: Ren
   if (condHidden && !ctx.preview) return '';
   // data-el-id lets the builder find + move this node live during a drag.
   const idAttr = ` data-el-id="${esc(el.id)}"`;
-  // In the builder, a hidden element is dimmed/blurred (still visible so it can
-  // be selected) rather than removed; on export it's omitted.
-  const dim = ctx.preview && (box.hidden || condHidden) ? 'opacity:0.35;filter:blur(1.5px);' : '';
+  // A `visibleWhen`-gated element (wrong offer type) is dimmed/blurred in the
+  // builder so the designer can still see + edit it; it's omitted on export.
+  // An EYE-hidden element (`box.hidden`) is removed from the artboard entirely
+  // (see the render-loop filter) — never dimmed — so it reads as truly hidden.
+  const dim = ctx.preview && condHidden ? 'opacity:0.35;filter:blur(1.5px);' : '';
   // Element-level compositing: opacity (any type) + blend mode. When dimmed in
   // preview, the dim opacity wins so "hidden" stays legible; blend still applies.
   const opacityFx = el.opacity != null && el.opacity < 100 ? `opacity:${clamp01(el.opacity / 100)};` : '';
@@ -423,13 +425,14 @@ export function renderDoc(doc: TemplateDoc, data: AdData, size: AdSize, opts?: {
   const layout = doc.layouts[size.id] ?? {};
   const body = doc.elements
     .map((el) => ({ el, box: layout[el.id] }))
-    // Keep hidden elements in PREVIEW (dimmed); drop them on export. Elements
+    // Eye-hidden elements are removed from the artboard in BOTH preview and
+    // export — hiding a layer takes it off the canvas, not just dims it. Elements
     // dragged fully off the artboard are "detached" (a canvas-only parking spot
     // in the builder) — never part of the rendered ad, so drop them here too.
     .filter(
       (x): x is { el: DocElement; box: DocLayoutBox } =>
         Boolean(x.box) &&
-        (ctx.preview || !x.box!.hidden) &&
+        !x.box!.hidden &&
         !isBoxDetached(x.box!),
     )
     .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0))

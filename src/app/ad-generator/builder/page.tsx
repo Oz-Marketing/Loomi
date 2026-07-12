@@ -4442,7 +4442,14 @@ export default function AdBuilderPage() {
                                   : detached
                                     ? 'ring-1 ring-dashed ring-amber-500/70 group-hover:ring-amber-500'
                                     : box.hidden
-                                      ? 'ring-1 ring-dashed ring-[var(--muted-foreground)]/45 group-hover:ring-[var(--muted-foreground)]/70'
+                                      // A hidden layer is off the artboard entirely: no
+                                      // persistent marker by default (hover reveals a faint
+                                      // ring so it's still selectable). In Outlines mode —
+                                      // where the point is to see every element's box — it
+                                      // shows a faint dashed ring like the rest.
+                                      ? showOutlines
+                                        ? 'ring-1 ring-dashed ring-[var(--muted-foreground)]/40 group-hover:ring-[var(--muted-foreground)]/70'
+                                        : 'group-hover:ring-1 group-hover:ring-dashed group-hover:ring-[var(--muted-foreground)]/70'
                                       : showOutlines
                                         ? 'ring-[1.5px] ring-dashed ring-[var(--primary)]/55 group-hover:ring-[var(--primary)]/90'
                                         : 'group-hover:ring-[1.5px] group-hover:ring-[var(--primary)]/70'

@@ -91,6 +91,7 @@ import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-m
 import { enrichOfferFields, OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
 import { vehicleOffer } from '@/lib/ad-generator/templates/vehicle-offer';
+import { SYSTEM_FIELDS } from '@/lib/ad-generator/system-fields';
 import { requiredFieldsFor, FIELD_LABELS, type OemOfferRule } from '@/lib/ad-generator/compliance';
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, pruneEmptyGroups, type LayerNode } from '@/lib/ad-generator/layer-tree';
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon, CropIcon } from '@/components/ad-generator/builder-icons';
@@ -816,6 +817,10 @@ export default function AdBuilderPage() {
   // so it can be open at the same time as the element/block settings panel on the
   // right. It shares the left slot with Insert/Layers (one at a time).
   const [fieldsOpen, setFieldsOpen] = useState(false);
+  // The old per-template field AUTHORING panel is retired from the default flow
+  // (fields are a fixed system schema now). Kept behind an advanced escape hatch
+  // for power users; opened from the Preview-data panel's footer.
+  const [schemaEditorOpen, setSchemaEditorOpen] = useState(false);
   // A field to focus (expand + scroll to) in the Fields panel — set when a
   // {{token}} is clicked in an element's content box. `nonce` re-triggers the
   // focus even when the same field is clicked twice.
@@ -1497,11 +1502,13 @@ export default function AdBuilderPage() {
     return { mode: 'text-edit', value: text };
   }, [selected, previewData]);
 
-  // "Shows" options for the selected element's Content source picker — its
-  // template fields + computed offer tokens + brand data (see buildContentSources).
+  // "Shows" options for the selected element's Content source picker — the fixed
+  // SYSTEM fields + computed offer tokens + brand data (see buildContentSources).
+  // Sourced from the system schema, not doc.fields: designers bind to system
+  // fields, they don't author their own.
   const contentSources = useMemo<SearchableSelectOption[]>(
-    () => (selected ? buildContentSources(selected, doc.fields) : []),
-    [selected, doc.fields],
+    () => (selected ? buildContentSources(selected, SYSTEM_FIELDS) : []),
+    [selected],
   );
 
   // Write the selected element's content back to its source: static → the literal,
@@ -3815,16 +3822,17 @@ export default function AdBuilderPage() {
                 the user saved themselves. */}
             <RailButton label="Blocks" Icon={Squares2X2Icon} active={leftPanel === 'blocks'} onClick={() => { setLeftPanel((p) => (p === 'blocks' ? null : 'blocks')); setFieldsOpen(false); }} />
             <RailButton label="Layers" Icon={LayersIcon} active={leftPanel === 'layers'} onClick={() => { setLeftPanel((p) => (p === 'layers' ? null : 'layers')); setFieldsOpen(false); }} />
-            {/* Fields — the form that drives the ad. Left-docked (shares the left
-                slot with Insert/Layers); coexists with the right settings panel. */}
+            {/* Preview data — sample values for the fixed system fields, so the
+                designer can see the design filled in + flip the offer type.
+                Left-docked (shares the left slot with Insert/Blocks/Layers). */}
             <RailButton
-              label="Fields"
+              label="Preview data"
               Icon={Bars3BottomLeftIcon}
               active={fieldsOpen}
               onClick={() =>
                 setFieldsOpen((v) => {
                   const next = !v;
-                  if (next) setLeftPanel(null); // Fields takes the left slot from Insert/Layers
+                  if (next) setLeftPanel(null); // takes the left slot from Insert/Layers
                   return next;
                 })
               }
@@ -4785,9 +4793,24 @@ export default function AdBuilderPage() {
                 />
               )}
 
-              {/* Template Fields — left-docked inside the canvas (mirrors the
-                  right settings panel), so both can be open at once. */}
+              {/* Preview data — the fixed system fields with just a value each, so
+                  the designer can see their design filled in and flip the offer
+                  type. No field authoring (that's a fixed schema now); the old
+                  editor is one click away for power users. */}
               {fieldsOpen && (
+                <PreviewDataPanel
+                  fields={SYSTEM_FIELDS}
+                  data={previewData}
+                  focusField={focusField}
+                  onChange={writeFieldValue}
+                  onClose={() => setFieldsOpen(false)}
+                  onOpenSchemaEditor={() => { setFieldsOpen(false); setSchemaEditorOpen(true); }}
+                />
+              )}
+
+              {/* Advanced: the retired per-template field authoring panel. Reached
+                  only from the Preview-data footer — not part of the default flow. */}
+              {schemaEditorOpen && (
                 <FieldsSidebar
                   fields={doc.fields}
                   fieldGroups={currentGroups(doc)}
@@ -4795,7 +4818,7 @@ export default function AdBuilderPage() {
                   focusField={focusField}
                   accountKey={accountKey ?? undefined}
                   brandLogos={brandLogos}
-                  onClose={() => setFieldsOpen(false)}
+                  onClose={() => setSchemaEditorOpen(false)}
                   onAdd={addField}
                   onUpdate={updateFieldAt}
                   onRename={renameFieldKeyAt}
@@ -5753,6 +5776,107 @@ function GroupHeaderMenu({
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+/** The value input for one system field in the Preview-data panel. */
+function PreviewFieldInput({ field, value, onChange }: { field: FieldSpec; value: string; onChange: (v: string) => void }) {
+  const cls =
+    'w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]';
+  if (field.type === 'select') {
+    return (
+      <select value={value} onChange={(e) => onChange(e.target.value)} className={cls}>
+        {(field.options ?? []).map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    );
+  }
+  if (field.type === 'textarea') {
+    return <textarea value={value} onChange={(e) => onChange(e.target.value)} rows={3} placeholder={field.placeholder} className={`${cls} resize-none`} />;
+  }
+  return <input type="text" value={value} onChange={(e) => onChange(e.target.value)} placeholder={field.placeholder} className={cls} />;
+}
+
+/**
+ * Preview-data panel — the replacement for the old field-authoring sidebar. The
+ * schema is FIXED now (see system-fields.ts), so this just lets the designer set
+ * sample VALUES to see the design filled in, and flip the offer type to preview
+ * each offer block. No add / delete / rename / type / group management. The old
+ * authoring editor is one click away for power users (`onOpenSchemaEditor`).
+ */
+function PreviewDataPanel({
+  fields,
+  data,
+  focusField,
+  onChange,
+  onClose,
+  onOpenSchemaEditor,
+}: {
+  fields: FieldSpec[];
+  data: AdData;
+  focusField: { key: string; nonce: number } | null;
+  onChange: (key: string, value: string) => void;
+  onClose: () => void;
+  onOpenSchemaEditor: () => void;
+}) {
+  // Only the fields relevant to the current offer type (visibleWhen gating), in
+  // schema order, grouped into their form sections.
+  const groups = useMemo(() => {
+    const out: { name: string; fields: FieldSpec[] }[] = [];
+    for (const f of fields) {
+      if (!isFieldVisible(f, data)) continue;
+      const name = f.group?.trim() || DEFAULT_GROUP;
+      let grp = out.find((g) => g.name === name);
+      if (!grp) out.push((grp = { name, fields: [] }));
+      grp.fields.push(f);
+    }
+    return out;
+  }, [fields, data]);
+
+  // Jump to a field on request (a {{token}} click in the content box).
+  useEffect(() => {
+    if (!focusField) return;
+    const raf = requestAnimationFrame(() => {
+      document.querySelector(`[data-preview-field="${CSS.escape(focusField.key)}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [focusField]);
+
+  return (
+    <div data-adgen-panel className="absolute left-4 top-4 bottom-4 z-[70] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl">
+      <div className="flex items-start justify-between gap-2 border-b border-[var(--border)] p-4">
+        <div className="min-w-0">
+          <h2 className="text-sm font-bold text-[var(--foreground)]">Preview data</h2>
+          <p className="text-xs leading-snug text-[var(--muted-foreground)]">Sample values so you can see your design filled in — flip the offer type to preview each block. Bind elements to these system fields from the element&apos;s Value picker.</p>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Close" className="shrink-0 rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
+          <XMarkIcon className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-4">
+        {groups.map((g) => (
+          <div key={g.name} className="mb-4 last:mb-0">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{g.name}</div>
+            <div className="flex flex-col gap-2.5">
+              {g.fields.map((f) => (
+                <label key={f.key} data-preview-field={f.key} className="flex flex-col gap-1">
+                  <span className="text-[11px] font-medium text-[var(--foreground)]">{f.label || f.key}</span>
+                  <PreviewFieldInput field={f} value={data[f.key] ?? ''} onChange={(v) => onChange(f.key, v)} />
+                </label>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="border-t border-[var(--border)] p-2.5 text-center">
+        <button type="button" onClick={onOpenSchemaEditor} className="text-[11px] text-[var(--muted-foreground)] underline-offset-2 transition-colors hover:text-[var(--foreground)] hover:underline">
+          Advanced: edit field schema
+        </button>
+      </div>
     </div>
   );
 }

@@ -2,6 +2,7 @@ import type { AdTemplate } from './types';
 import type { TemplateDoc } from './doc-types';
 import { renderDoc } from './doc-renderer';
 import { enrichOfferFields } from './offer-text';
+import { SYSTEM_FIELDS, SYSTEM_FIELD_DEFAULTS } from './system-fields';
 
 /**
  * Adapt a data-driven TemplateDoc into the AdTemplate shape the generator
@@ -44,10 +45,13 @@ export function blankTemplateDoc(
     id,
     name,
     sizes: list,
-    fields: [],
+    // Every doc carries the fixed system-field schema — designers bind elements
+    // to these rather than authoring their own. Canonical defaults make the
+    // canvas read real immediately.
+    fields: SYSTEM_FIELDS,
     background: { color: '#ffffff' },
     elements: [],
     layouts,
-    defaults: {},
+    defaults: { ...SYSTEM_FIELD_DEFAULTS },
   };
 }

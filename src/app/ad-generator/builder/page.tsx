@@ -6532,7 +6532,7 @@ function SelectionPanel({
       className={`absolute bottom-4 top-4 z-[70] flex w-72 max-w-[calc(100vw-2rem)] flex-col overflow-y-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] shadow-2xl backdrop-blur-2xl transition-[transform,opacity] duration-200 ease-out ${shifted ? 'right-[360px]' : 'right-4'} ${visible ? '' : 'pointer-events-none'}`}
       style={{ transform: visible ? 'translateX(0)' : 'translateX(340px)', opacity: visible ? 1 : 0 }}
     >
-      <div className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5">
+      <div className="sticky top-0 z-10 flex items-center justify-between gap-2 border-b border-[var(--border)] bg-[var(--card-strong)] px-3 py-2.5 backdrop-blur-2xl">
         <div className="flex min-w-0 items-center gap-2">
           <input
             value={el.name ?? ''}

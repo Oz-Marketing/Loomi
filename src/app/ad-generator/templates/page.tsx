@@ -348,7 +348,7 @@ function TemplateForm({
           taRef={bodyRef}
           value={draft.body}
           onChange={(v) => setDraft({ ...draft, body: v })}
-          placeholder="{{apr_rate}}% APR for {{apr_term}} months with approved credit. See dealer for details."
+          placeholder="{{apr_rate}} APR for {{apr_term}} months with approved credit. See dealer for details."
         />
         <p className="mb-1.5 mt-2 text-[11px] font-medium text-[var(--muted-foreground)]">
           Click to insert a token <span className="font-normal">— it fills from the offer at render time:</span>

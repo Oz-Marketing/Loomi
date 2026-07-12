@@ -26,7 +26,8 @@ describe('buildTokenValues', () => {
 
   it('omits empty fields entirely (so their tokens stay visible)', () => {
     const v = buildTokenValues({ offerType: 'apr', aprRate: '1.9' });
-    expect(v.apr_rate).toBe('1.9');
+    // apr_rate carries its own percent sign (templates write `{apr_rate} APR`).
+    expect(v.apr_rate).toBe('1.9%');
     expect(v).not.toHaveProperty('msrp');
   });
 });
@@ -45,8 +46,10 @@ describe('composeDisclaimer', () => {
 
   it('prefers a provided template body over the default', () => {
     const out = composeDisclaimer(
+      // apr_rate already carries its %, so the template writes `{apr_rate}` (no
+      // literal % — that would double it).
       { offerType: 'apr', aprRate: '0.9', aprTerm: '48' },
-      '{apr_rate}% for {apr_term} mo. — special.',
+      '{apr_rate} for {apr_term} mo. — special.',
     );
     expect(out).toContain('0.9% for 48 mo. — special.');
   });

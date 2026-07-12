@@ -3724,7 +3724,7 @@ export default function AdBuilderPage() {
             // doesn't swallow clicks — otherwise clicking below an open panel
             // lands "inside" the rail and never triggers the outside-close. The
             // cards re-enable pointer events.
-            <div className="pointer-events-none absolute inset-y-0 left-full z-30 ml-2 flex w-[320px] flex-col gap-4 overflow-y-auto pb-1 pr-1">
+            <div className="pointer-events-none absolute bottom-4 left-full top-[66px] z-30 ml-[33px] flex w-[320px] flex-col gap-4 overflow-y-auto pb-1 pr-1">
           {/* Insert — element palette. Click a tile to drop it on the canvas. */}
           {leftPanel === 'insert' && (
           <section className="pointer-events-auto rounded-2xl border border-[var(--border)] bg-[var(--card-strong)] p-4 shadow-2xl backdrop-blur-2xl">

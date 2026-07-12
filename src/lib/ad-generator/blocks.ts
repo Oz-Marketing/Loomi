@@ -30,6 +30,10 @@ export interface BlockPayload {
   requiredFields: FieldSpec[];
   /** Starter defaults for `requiredFields`, keyed by field key. */
   requiredDefaults: AdData;
+  /** Element groups the block's elements belong to (+ their ancestor groups),
+   *  re-created with FRESH ids on insert so a saved group stays grouped. Absent
+   *  on blocks saved before this was added — treated as an empty list. */
+  groups?: NonNullable<TemplateDoc['groups']>;
 }
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -86,7 +90,19 @@ export function buildBlockPayload(
     if (doc.defaults[f.key] != null) requiredDefaults[f.key] = doc.defaults[f.key];
   }
 
-  return { version: BLOCK_PAYLOAD_VERSION, sourceSize, elements, boxes, offerKit, requiredFields, requiredDefaults };
+  // Capture the groups the selection belongs to, walking up each element's
+  // groupId → parentId chain so nested grouping is preserved on insert.
+  const groupIds = new Set<string>();
+  for (const el of elements) {
+    let gid = el.groupId;
+    while (gid && !groupIds.has(gid)) {
+      groupIds.add(gid);
+      gid = doc.groups?.find((g) => g.id === gid)?.parentId;
+    }
+  }
+  const groups = (doc.groups ?? []).filter((g) => groupIds.has(g.id));
+
+  return { version: BLOCK_PAYLOAD_VERSION, sourceSize, elements, boxes, offerKit, requiredFields, requiredDefaults, groups };
 }
 
 /** Merge missing fields + defaults into a doc (never overwrites existing). */
@@ -115,16 +131,31 @@ export function insertBlockIntoDoc(
 ): { doc: TemplateDoc; newIds: string[] } {
   const OFFSET = 0.03;
   const idMap = new Map<string, string>();
+  // Re-create the block's groups with FRESH ids so a saved group stays grouped
+  // without colliding with the target doc's group ids.
+  const groupIdMap = new Map<string, string>();
+  for (const g of payload.groups ?? []) groupIdMap.set(g.id, makeId('group'));
+
   const newElements: DocElement[] = payload.elements.map((el) => {
     const id = makeId(el.type);
     idMap.set(el.id, id);
     const clone = structuredClone(el);
     clone.id = id;
-    // A block is self-contained; drop group membership so it doesn't reference
-    // a group that doesn't exist in the target doc.
-    delete clone.groupId;
+    // Remap group membership to the freshly-created group. Drop it only if the
+    // group wasn't captured (older block, or a partial selection).
+    if (clone.groupId) {
+      const remapped = groupIdMap.get(clone.groupId);
+      if (remapped) clone.groupId = remapped;
+      else delete clone.groupId;
+    }
     return clone;
   });
+
+  const newGroups: NonNullable<TemplateDoc['groups']> = (payload.groups ?? []).map((g) => ({
+    ...g,
+    id: groupIdMap.get(g.id)!,
+    parentId: g.parentId ? groupIdMap.get(g.parentId) : undefined,
+  }));
 
   const layouts: TemplateDoc['layouts'] = { ...doc.layouts };
   for (const size of doc.sizes) {
@@ -148,7 +179,12 @@ export function insertBlockIntoDoc(
     layouts[sid] = next;
   }
 
-  let next: TemplateDoc = { ...doc, elements: [...doc.elements, ...newElements], layouts };
+  let next: TemplateDoc = {
+    ...doc,
+    elements: [...doc.elements, ...newElements],
+    layouts,
+    ...(newGroups.length ? { groups: [...(doc.groups ?? []), ...newGroups] } : {}),
+  };
   if (payload.offerKit) next = addFieldKit(next, payload.offerKit);
   if (payload.requiredFields.length) next = mergeFields(next, payload.requiredFields, payload.requiredDefaults);
 

@@ -105,13 +105,51 @@ describe('insertBlockIntoDoc', () => {
     expect(next.fields.length).toBeGreaterThan(3);
   });
 
-  it('drops group membership so it does not dangle in the target', () => {
+  it('drops a DANGLING group ref (groupId with no group def)', () => {
     const doc = makeDoc();
-    doc.elements[0].groupId = 'g-old';
+    doc.elements[0].groupId = 'g-old'; // no matching entry in doc.groups
     const payload = buildBlockPayload(doc, ['text-main'], 's1')!;
+    expect(payload.groups).toEqual([]); // nothing captured
     let n = 0;
     const { doc: next, newIds } = insertBlockIntoDoc(makeDoc(), payload, (t) => `${t}-y${n++}`);
     const inserted = next.elements.find((e) => e.id === newIds[0])!;
     expect(inserted.groupId).toBeUndefined();
+  });
+
+  it('preserves grouping — re-creates the captured group with a fresh id', () => {
+    const doc = makeDoc();
+    doc.groups = [{ id: 'g1', name: 'Offer' }];
+    doc.elements[0].groupId = 'g1'; // text-main
+    doc.elements[1].groupId = 'g1'; // text-label
+    const payload = buildBlockPayload(doc, ['text-main', 'text-label'], 's1')!;
+    expect(payload.groups).toEqual([{ id: 'g1', name: 'Offer' }]);
+
+    let n = 0;
+    const { doc: next, newIds } = insertBlockIntoDoc(makeDoc(), payload, (t) => `${t}-z${n++}`);
+    const inserted = next.elements.filter((e) => newIds.includes(e.id));
+    const gids = new Set(inserted.map((e) => e.groupId));
+    expect(gids.size).toBe(1); // both inserted elements share ONE group
+    const newGid = [...gids][0]!;
+    expect(newGid).not.toBe('g1'); // fresh id, not the source group's
+    expect(next.groups?.find((g) => g.id === newGid)?.name).toBe('Offer');
+  });
+
+  it('preserves NESTED grouping — captures + remaps ancestor groups', () => {
+    const doc = makeDoc();
+    doc.groups = [
+      { id: 'outer', name: 'Outer' },
+      { id: 'inner', name: 'Inner', parentId: 'outer' },
+    ];
+    doc.elements[0].groupId = 'inner';
+    const payload = buildBlockPayload(doc, ['text-main'], 's1')!;
+    // both the inner group AND its ancestor are captured
+    expect(new Set(payload.groups!.map((g) => g.id))).toEqual(new Set(['inner', 'outer']));
+
+    let n = 0;
+    const { doc: next, newIds } = insertBlockIntoDoc(makeDoc(), payload, (t) => `${t}-w${n++}`);
+    const inner = next.groups!.find((g) => g.name === 'Inner')!;
+    const outer = next.groups!.find((g) => g.name === 'Outer')!;
+    expect(inner.parentId).toBe(outer.id); // nesting remapped to the new outer id
+    expect(next.elements.find((e) => e.id === newIds[0])!.groupId).toBe(inner.id);
   });
 });

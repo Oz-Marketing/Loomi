@@ -6404,6 +6404,10 @@ function SelectionPanel({
   const sizingMode: 'hug' | 'fit' = el.autoSize ? 'hug' : 'fit';
   const isHug = el.type === 'text' && sizingMode === 'hug';
   const isFit = el.type === 'text' && sizingMode === 'fit';
+  // Font-size input keeps a local draft string while focused so a multi-digit
+  // value (e.g. "12") isn't snapped to the min (4) on the first keystroke.
+  // Commits (clamp + apply) on blur / Enter; live-applies only when in range.
+  const [fontDraft, setFontDraft] = useState<string | null>(null);
   const applyFontSize = (next: number) => {
     const n = clamp(Math.round(next), 4, 400);
     if (isHug && fontSize > 0) {
@@ -6622,10 +6626,23 @@ function SelectionPanel({
                     <input
                       type="number"
                       aria-label="Font size"
-                      value={fontSize}
+                      value={fontDraft ?? fontSize}
+                      onFocus={() => setFontDraft(String(fontSize))}
                       onChange={(e) => {
-                        const n = Number(e.target.value);
-                        if (!Number.isNaN(n)) applyFontSize(n);
+                        const raw = e.target.value;
+                        setFontDraft(raw);
+                        // Live-preview only when the typed value is already in
+                        // range, so partial entries like "1" don't snap to 4.
+                        const n = Number(raw);
+                        if (raw !== '' && Number.isFinite(n) && n >= 4 && n <= 400) applyFontSize(n);
+                      }}
+                      onBlur={() => {
+                        const n = Number(fontDraft);
+                        if (fontDraft !== null && fontDraft !== '' && Number.isFinite(n)) applyFontSize(n);
+                        setFontDraft(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') e.currentTarget.blur();
                       }}
                       className="w-full min-w-0 rounded-md border border-[var(--border)] bg-[var(--background)] px-1 py-1.5 text-center text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
                     />

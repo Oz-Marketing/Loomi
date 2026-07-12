@@ -3429,12 +3429,27 @@ export default function AdBuilderPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedIds, size.id, deleteElement, setDoc, clearSelection]);
 
-  // ⌘Z / ⌘⇧Z undo-redo + ⌘G / ⌘⇧G group/ungroup — global, but defer to the
-  // browser inside text fields.
+  // ⌘Z / ⌘⇧Z undo-redo + ⌘G / ⌘⇧G group/ungroup, plus the bare M (margins) / O
+  // (outlines) view-guide toggles — global, but defer to the browser inside text
+  // fields.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       const t = e.target;
       if (t instanceof HTMLElement && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      // Unmodified single-key view guides.
+      if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+        const bare = e.key.toLowerCase();
+        if (bare === 'm') {
+          e.preventDefault();
+          toggleMargins();
+          return;
+        }
+        if (bare === 'o') {
+          e.preventDefault();
+          setShowOutlines((v) => !v);
+          return;
+        }
+      }
       if (!(e.metaKey || e.ctrlKey)) return;
       const key = e.key.toLowerCase();
       if (key === 'z') {
@@ -3764,13 +3779,13 @@ export default function AdBuilderPage() {
             <div className="my-0.5 h-px w-6 bg-[var(--border)]" />
             {/* View guides — element outlines + safe-area margins (moved off the
                 canvas header so all the view controls sit on the rail). */}
-            <RailButton label="Outlines" Icon={OutlinesIcon} active={showOutlines} onClick={() => setShowOutlines((v) => !v)} activeClassName="text-blue-500" />
+            <RailButton label="Outlines" hint="O" Icon={OutlinesIcon} active={showOutlines} onClick={() => setShowOutlines((v) => !v)} activeClassName="text-blue-500" />
             {/* Margins — click toggles the guide; the size/unit popup shows on
                 hover ONLY while active (the `pl-2` keeps a hover bridge to it).
                 The tooltip is suppressed only while active, so it can't cover the
                 popup — when inactive, hovering shows the normal tooltip. */}
             <div className="group relative">
-              <RailButton label="Margins" Icon={MarginsIcon} active={showSafe} onClick={toggleMargins} activeClassName="text-green-500" noTooltip={showSafe} />
+              <RailButton label="Margins" hint="M" Icon={MarginsIcon} active={showSafe} onClick={toggleMargins} activeClassName="text-green-500" noTooltip={showSafe} />
               <div className={`pointer-events-none absolute left-full top-0 z-40 pl-2 opacity-0 transition-opacity ${showSafe ? 'group-hover:pointer-events-auto group-hover:opacity-100' : ''}`}>
                 <div className="flex items-center gap-1 rounded-xl border border-[var(--border)] bg-[var(--card-strong)] p-1.5 shadow-md backdrop-blur-2xl">
                   <input
@@ -7308,7 +7323,7 @@ function PanelSection({ title, children }: { title: string; children: React.Reac
 }
 
 /** An icon button in the left rail — opens its panel as a flyout. */
-function RailButton({ label, Icon, active, onClick, primary, activeClassName, noTooltip }: { label: string; Icon: React.ComponentType<{ className?: string }>; active: boolean; onClick: () => void; primary?: boolean; activeClassName?: string; noTooltip?: boolean }) {
+function RailButton({ label, Icon, active, onClick, primary, activeClassName, noTooltip, hint }: { label: string; Icon: React.ComponentType<{ className?: string }>; active: boolean; onClick: () => void; primary?: boolean; activeClassName?: string; noTooltip?: boolean; hint?: string }) {
   // `primary` = the marquee action (Insert): solid brand fill so it stands out
   // from the secondary rail buttons, regardless of open/closed state.
   // `activeClassName` overrides the active style (e.g. an icon-only color for the
@@ -7330,7 +7345,7 @@ function RailButton({ label, Icon, active, onClick, primary, activeClassName, no
       <Icon className="h-5 w-5" />
     </button>
   );
-  return noTooltip ? btn : <SidebarTooltip label={label}>{btn}</SidebarTooltip>;
+  return noTooltip ? btn : <SidebarTooltip label={label} hint={hint}>{btn}</SidebarTooltip>;
 }
 
 /** Renders a detached element's actual content in the (unclipped) canvas
@@ -8371,6 +8386,13 @@ function ShortcutsModal({ onClose }: { onClose: () => void }) {
         ['⇧ Click', 'Add to selection'],
         ['Drag empty', 'Marquee select'],
         ['Double-click', 'Edit text'],
+      ],
+    },
+    {
+      title: 'View',
+      rows: [
+        ['M', 'Toggle margins'],
+        ['O', 'Toggle outlines'],
       ],
     },
   ];

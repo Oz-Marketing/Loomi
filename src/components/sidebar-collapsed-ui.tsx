@@ -39,9 +39,12 @@ type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
  */
 export function SidebarTooltip({
   label,
+  hint,
   children,
 }: {
   label: string;
+  /** Optional keyboard shortcut shown as a small key badge after the label. */
+  hint?: string;
   children: React.ReactNode;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -71,10 +74,15 @@ export function SidebarTooltip({
         createPortal(
           <span
             role="tooltip"
-            className="pointer-events-none fixed z-[200] px-2 py-1 rounded-md bg-[var(--foreground)] text-[var(--background)] text-xs font-medium whitespace-nowrap shadow-md"
+            className="pointer-events-none fixed z-[200] flex items-center gap-1.5 px-2 py-1 rounded-md bg-[var(--foreground)] text-[var(--background)] text-xs font-medium whitespace-nowrap shadow-md"
             style={{ top: pos.top, left: pos.left, transform: 'translateY(-50%)' }}
           >
             {label}
+            {hint && (
+              <kbd className="rounded border border-[var(--background)]/30 bg-[var(--background)]/15 px-1 py-px font-mono text-[10px] leading-none">
+                {hint}
+              </kbd>
+            )}
           </span>,
           document.body,
         )}

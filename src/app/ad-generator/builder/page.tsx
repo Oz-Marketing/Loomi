@@ -99,7 +99,7 @@ import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
 import { isFieldVisible, isClientField, type FieldSpec, type FieldType, type AdData, type AdSize } from '@/lib/ad-generator/types';
-import { buildBlockPayload, insertBlockIntoDoc, type BlockPayload } from '@/lib/ad-generator/blocks';
+import { buildBlockPayload, insertBlockIntoDoc, BLOCK_PAYLOAD_VERSION, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
@@ -232,6 +232,27 @@ const OFFER_TOKENS_O2: { key: string; label: string }[] = [
   { key: '_o2_offerPercent', label: 'Offer 2 % symbol' },
   { key: '_o2_offerTerms', label: 'Offer 2 terms' },
 ];
+
+// One-click "insert offer block": the switchable amount block (label + $ + number
+// + % + terms) lifted from the Vehicle Offer starter, packaged as a block payload.
+// Inserting it re-seeds the single-offer FIELD KIT (`offerKit: 'single'`) — so the
+// offerType question + per-type fields exist, the `_offer*` tokens resolve, AND
+// they show up in the {{ }} variable picker. This is how a from-scratch template
+// gets the offer engine without hunting for magic token names.
+const OFFER_BLOCK_ELEMENT_IDS = ['offerLabel', 'offerCurrency', 'offerValue', 'offerPercent', 'offerTerms'] as const;
+const OFFER_BLOCK_PAYLOAD: BlockPayload = {
+  version: BLOCK_PAYLOAD_VERSION,
+  sourceSize: { w: 1080, h: 1080 },
+  elements: OFFER_BLOCK_ELEMENT_IDS.map((id) => singleOfferDoc.elements.find((e) => e.id === id))
+    .filter((e): e is DocElement => !!e)
+    .map((e) => structuredClone(e)),
+  boxes: Object.fromEntries(
+    OFFER_BLOCK_ELEMENT_IDS.map((id) => [id, singleOfferDoc.layouts.square?.[id]]).filter(([, b]) => b),
+  ) as Record<string, DocLayoutBox>,
+  offerKit: 'single',
+  requiredFields: [],
+  requiredDefaults: {},
+};
 
 function bindingToSourceValue(b: Binding | undefined): string {
   if (!b || b.kind === 'static') return 'static';
@@ -3744,6 +3765,23 @@ export default function AdBuilderPage() {
               <Squares2X2Icon className="h-3.5 w-3.5" />
               Blocks
             </h2>
+            {/* Built-in offer block — one click drops the switchable amount block
+                AND wires up the offer field kit, so the offer engine + `_offer*`
+                tokens are ready without any manual setup. Automotive templates. */}
+            {templateIsAutomotive && (
+              <button
+                type="button"
+                onClick={() => insertBlock(OFFER_BLOCK_PAYLOAD)}
+                title="Drops the label + $ + number + % + terms block and adds the offer fields — it reformats itself for lease / APR / cash / discount."
+                className="mb-3 flex w-full items-start gap-2 rounded-lg border border-[var(--primary)]/40 bg-[var(--primary)]/5 px-3 py-2 text-left transition-colors hover:bg-[var(--primary)]/10"
+              >
+                <Squares2X2Icon className="mt-0.5 h-4 w-4 shrink-0 text-[var(--primary)]" />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-[var(--primary)]">Vehicle offer block</span>
+                  <span className="block text-[10px] leading-snug text-[var(--muted-foreground)]">Adds the offer fields + a block that reformats for lease / APR / cash / discount.</span>
+                </span>
+              </button>
+            )}
             {blocks.length === 0 ? (
               <p className="text-[11px] leading-snug text-[var(--muted-foreground)]">
                 Select elements on the canvas, then <span className="text-[var(--foreground)]">Save as block</span> (right-click or the multi-select panel) to reuse them here.

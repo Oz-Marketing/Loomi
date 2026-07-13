@@ -1010,30 +1010,9 @@ export default function AdBuilderPage() {
     ].filter((v): v is { key: string; label: string; url: string } => Boolean(v));
   }, [accountData?.logos]);
 
-  const previewData = useMemo(() => {
-    const base = enrichOfferFields({
-      ...vehicleOfferPreviewData,
-      // The account's Brand-default font — a low-priority fallback so
-      // "Brand default" text renders in it, while an explicit template/ad font
-      // (doc.defaults / adData) still overrides.
-      ...(brandDefaultFont ? { fontFamily: brandDefaultFont } : {}),
-      ...doc.defaults, // designer-set default / preview values for fields
-      ...(adData ?? {}), // ad mode: the ad's real content
-      ...(effectiveFontCss ? { fontFaceCss: effectiveFontCss } : {}),
-      ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
-      ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
-      ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
-    });
-    // Load only the Google families this doc actually uses into the canvas iframe.
-    const googleUrl = googleFontsCssUrl(
-      usedGoogleFontFamilies(doc.elements, typeof base.fontFamily === 'string' ? base.fontFamily : undefined),
-    );
-    return googleUrl ? { ...base, googleFontsUrl: googleUrl } : base;
-  }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData]);
-
   // Whether the design actually uses offers — an element gated by offer type, or
   // bound to (or typing) a computed `_offer*` token. Gates the canvas-bar offer-
-  // type preview switcher so it only shows when flipping the type changes anything.
+  // type preview tabs so they only show when flipping the type changes anything.
   const usesOffer = useMemo(() => doc.elements.some(isOfferElement), [doc.elements]);
 
   // The offer types this design shows — the union, over every OFFER element, of
@@ -1049,6 +1028,34 @@ export default function AdBuilderPage() {
     }
     return OFFER_TYPES.filter((t) => set.has(t.value));
   }, [doc.elements]);
+
+  const previewData = useMemo(() => {
+    const merged: AdData = {
+      ...vehicleOfferPreviewData,
+      // The account's Brand-default font — a low-priority fallback so
+      // "Brand default" text renders in it, while an explicit template/ad font
+      // (doc.defaults / adData) still overrides.
+      ...(brandDefaultFont ? { fontFamily: brandDefaultFont } : {}),
+      ...doc.defaults, // designer-set default / preview values for fields
+      ...(adData ?? {}), // ad mode: the ad's real content
+      ...(effectiveFontCss ? { fontFaceCss: effectiveFontCss } : {}),
+      ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
+      ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
+      ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
+    };
+    // Preview the first offer type the design actually uses when the stored
+    // default isn't one of them — so a block gated to a single type shows
+    // un-dimmed (and its tab reads active) without the designer clicking first.
+    if (usedOfferTypes.length && !usedOfferTypes.some((t) => t.value === merged.offerType)) {
+      merged.offerType = usedOfferTypes[0].value;
+    }
+    const base = enrichOfferFields(merged);
+    // Load only the Google families this doc actually uses into the canvas iframe.
+    const googleUrl = googleFontsCssUrl(
+      usedGoogleFontFamilies(doc.elements, typeof base.fontFamily === 'string' ? base.fontFamily : undefined),
+    );
+    return googleUrl ? { ...base, googleFontsUrl: googleUrl } : base;
+  }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData, usedOfferTypes]);
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
 

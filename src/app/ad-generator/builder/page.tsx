@@ -82,7 +82,6 @@ import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
 import { enrichOfferFields, OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
-import { vehicleOffer } from '@/lib/ad-generator/templates/vehicle-offer';
 import { SYSTEM_FIELDS } from '@/lib/ad-generator/system-fields';
 import { requiredFieldsFor, FIELD_LABELS, type OemOfferRule } from '@/lib/ad-generator/compliance';
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, pruneEmptyGroups, type LayerNode } from '@/lib/ad-generator/layer-tree';
@@ -91,7 +90,7 @@ import { VAlignTopIcon, VAlignMiddleIcon, VAlignBottomIcon, HAlignLeftIcon, HAli
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
-import { isFieldVisible, type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
+import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
 import { buildBlockPayload, insertBlockIntoDoc, type BlockPayload } from '@/lib/ad-generator/blocks';
 import { SearchableSelect, type SearchableSelectOption } from '@/components/flows/builder/SearchableSelect';
 
@@ -265,6 +264,46 @@ const OFFER_TYPE_SHORT: Record<string, string> = {
   custom: 'Custom',
 };
 
+// Which offer-input field each computed offer token surfaces, per offer type —
+// so binding an element to `_offerValue`/`_offerTerms`/… counts as *showing*
+// those required fields on the ad. Label / $ / % tokens surface no data field.
+const OFFER_TOKEN_FIELDS: Record<string, Record<string, string[]>> = {
+  lease: { _offerMain: ['monthlyPayment'], _offerValue: ['monthlyPayment'], _offerTerms: ['leaseTerm', 'dueAtSigning'] },
+  apr: { _offerMain: ['aprRate'], _offerValue: ['aprRate'], _offerTerms: ['aprTerm'] },
+  discount: { _offerMain: ['discountAmount'], _offerValue: ['discountAmount'], _offerTerms: ['msrp'] },
+  sales_price: { _offerMain: ['salePrice'], _offerValue: ['salePrice'], _offerTerms: ['msrp'] },
+  custom: {},
+};
+// The headline amount per offer type — must be shown as its own element / offer
+// token (a disclaimer alone doesn't count as surfacing it).
+const PRIMARY_OFFER_FIELD: Record<string, string> = {
+  lease: 'monthlyPayment',
+  apr: 'aprRate',
+  discount: 'discountAmount',
+  sales_price: 'salePrice',
+};
+
+/** The field keys an element actually renders — a direct field binding, or the
+ *  `{{tokens}}` inside typed static content. Used to tell whether a required OEM
+ *  field is surfaced on the artboard. */
+function elementFieldRefs(el: DocElement): string[] {
+  const b = el.binding;
+  if (b?.kind === 'field') return [b.key];
+  if (b?.kind === 'static') return (b.value.match(/\{\{\s*([\w.]+)\s*\}\}/g) ?? []).map((m) => m.replace(/[{}\s]/g, ''));
+  return [];
+}
+
+/** Whether an element is part of an OFFER — gated by offer type, or bound to /
+ *  typing a computed offer token. Drives the offer-type preview tabs + the
+ *  "uses offer" gate. */
+function isOfferElement(el: DocElement): boolean {
+  if (el.visibleWhen?.field === 'offerType') return true;
+  const b = el.binding;
+  if (b?.kind === 'field' && (b.key.startsWith('_offer') || b.key.startsWith('_o2_'))) return true;
+  if (b?.kind === 'static' && /\{\{\s*(_(?:o2_)?offer|offerType)/i.test(b.value)) return true;
+  return false;
+}
+
 
 function bindingToSourceValue(b: Binding | undefined): string {
   if (!b || b.kind === 'static') return 'static';
@@ -335,8 +374,6 @@ function buildContentSources(el: DocElement, fields: FieldSpec[]): SearchableSel
 // Make/OEM options for the template-settings picker — the shared EVOX make list,
 // with a blank "None" so a template can be untagged.
 const MAKE_OPTIONS: FontSelectOption[] = [{ value: '', label: 'None' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
-// Canonical field spec per key — the source for the compliance "insert" action.
-const FIELD_SPEC_BY_KEY: Record<string, FieldSpec> = Object.fromEntries(vehicleOffer.fields.map((f) => [f.key, f]));
 const WEIGHT_OPTIONS: FontSelectOption[] = [
   { value: '300', label: 'Light' },
   { value: '400', label: 'Regular' },
@@ -686,43 +723,55 @@ export default function AdBuilderPage() {
   // "all vehicle-offer accounts" default (which includes Automotive).
   const templateIsAutomotive = (doc.industries ?? []).length === 0 || (doc.industries ?? []).includes('Automotive');
   // Compliance vs. the tagged make's OEM rule: per offer type, which required
-  // fields are missing (absent, or not shown for that offer type). Surfaced as a
-  // chip on the canvas action bar. Null when the template has no make.
+  // fields are NOT surfaced on the artboard for that offer type — i.e. no element
+  // (visible for that type) renders the field directly, via a computed offer
+  // token, or via a disclaimer element (which carries the fine-print fields). The
+  // field schema is fixed now, so this checks the DESIGN, not field presence.
+  // Surfaced as a chip on the action bar; null when the template has no make.
   const compliance = useMemo(() => {
     if (!doc.make) return null;
     return OFFER_TYPES.map((t) => {
-      const missing = requiredFieldsFor(t.value, oemRule).filter((k) => {
-        const spec = doc.fields.find((f) => f.key === k);
-        return !spec || !isFieldVisible(spec, { offerType: t.value });
-      });
-      return { type: t, missing };
+      const required = requiredFieldsFor(t.value, oemRule);
+      if (required.length === 0) return { type: t, missing: [] };
+      const surfaced = new Set<string>();
+      let hasDisclaimer = false;
+      for (const el of doc.elements) {
+        const vw = el.visibleWhen;
+        if (vw?.field === 'offerType' && !vw.in.includes(t.value)) continue; // not shown for this type
+        for (const key of elementFieldRefs(el)) {
+          if (key === 'disclaimer') { hasDisclaimer = true; surfaced.add('disclaimer'); }
+          else if (/^_(?:o2_)?offer/.test(key)) {
+            for (const f of OFFER_TOKEN_FIELDS[t.value]?.[key.replace(/^_o2_/, '_')] ?? []) surfaced.add(f);
+          } else surfaced.add(key);
+        }
+      }
+      // A disclaimer element discloses the fine-print legal fields — everything
+      // the OEM disclaimer composes — except the headline amount, which must be
+      // shown on its own (via the offer block or a direct binding).
+      if (hasDisclaimer) for (const k of required) if (k !== PRIMARY_OFFER_FIELD[t.value]) surfaced.add(k);
+      return { type: t, missing: required.filter((k) => !surfaced.has(k)) };
     }).filter((r) => requiredFieldsFor(r.type.value, oemRule).length > 0);
-  }, [doc.make, doc.fields, oemRule]);
+  }, [doc.make, doc.elements, oemRule]);
   const complianceMissing = compliance ? compliance.reduce((n, r) => n + r.missing.length, 0) : 0;
-  // Compliance "insert": add the required field to the template (making it visible
-  // for that offer type, so the warning clears) and drop a text element bound to it
-  // onto the artboard so the designer can place it.
+  // Compliance "insert": drop a text element bound to the missing field onto the
+  // artboard, shown for that offer type — so the ad now surfaces it and the
+  // warning clears. The field itself already exists (fixed schema); this is
+  // purely a placement helper.
   const insertComplianceField = (key: string, offerType: string) => {
     const id = `text-${rid()}`;
     setDoc((prev) => {
-      const base = prev.fields.find((f) => f.key === key) ?? FIELD_SPEC_BY_KEY[key];
-      // Ensure the field is present + shown for this offer type.
-      const ensured =
-        base && base.visibleWhen?.field === 'offerType' && !base.visibleWhen.in.includes(offerType)
-          ? { ...base, visibleWhen: { ...base.visibleWhen, in: [...base.visibleWhen.in, offerType] } }
-          : base;
-      const fields = ensured
-        ? prev.fields.some((f) => f.key === key)
-          ? prev.fields.map((f) => (f.key === key ? ensured : f))
-          : [...prev.fields, ensured]
-        : prev.fields;
-      const el: DocElement = { ...makeDefaultElement(id, 'text'), binding: { kind: 'field', key }, wrap: true };
+      const el: DocElement = {
+        ...makeDefaultElement(id, 'text'),
+        binding: { kind: 'field', key },
+        visibleWhen: { field: 'offerType', in: [offerType] },
+        wrap: true,
+      };
       const layouts = { ...prev.layouts };
       for (const sid of Object.keys(prev.layouts)) {
         const zs = Object.values(prev.layouts[sid]).map((b) => b.z ?? 0);
         layouts[sid] = { ...prev.layouts[sid], [id]: { x: 0.06, y: 0.06, w: 0.3, h: 0.08, z: (zs.length ? Math.max(...zs) : 0) + 1 } };
       }
-      return { ...prev, fields, elements: [...prev.elements, el], layouts };
+      return { ...prev, elements: [...prev.elements, el], layouts };
     });
     setSelectedIds([id]);
     toast.success(`Added ${FIELD_LABELS[key] ?? key}`);
@@ -993,29 +1042,21 @@ export default function AdBuilderPage() {
   // Whether the design actually uses offers — an element gated by offer type, or
   // bound to (or typing) a computed `_offer*` token. Gates the canvas-bar offer-
   // type preview switcher so it only shows when flipping the type changes anything.
-  const usesOffer = useMemo(
-    () =>
-      doc.elements.some(
-        (el) =>
-          el.visibleWhen?.field === 'offerType' ||
-          (el.binding?.kind === 'field' && (el.binding.key.startsWith('_offer') || el.binding.key.startsWith('_o2_'))) ||
-          (el.binding?.kind === 'static' && /\{\{\s*(_(?:o2_)?offer|offerType)/i.test(el.binding.value)),
-      ),
-    [doc.elements],
-  );
+  const usesOffer = useMemo(() => doc.elements.some(isOfferElement), [doc.elements]);
 
-  // The offer types this design actually distinguishes — the union of every
-  // element's `Show for` set. If nothing is gated (elements only bind computed
-  // offer tokens, which adapt to any type), offer all of them. In canonical
-  // order, for the color-coded preview tabs.
+  // The offer types this design shows — the union, over every OFFER element, of
+  // its `Show for` set (or ALL types when that element isn't gated, since it then
+  // shows for every type). So an ungated `{{_offerValue}}` keeps every tab even
+  // if a sibling symbol is gated to one type. Canonical order; drives the tabs.
   const usedOfferTypes = useMemo(() => {
     const set = new Set<string>();
     for (const el of doc.elements) {
+      if (!isOfferElement(el)) continue;
       if (el.visibleWhen?.field === 'offerType') for (const v of el.visibleWhen.in) set.add(v);
+      else for (const t of OFFER_TYPES) set.add(t.value); // ungated offer element → shown for all types
     }
-    if (set.size === 0 && usesOffer) OFFER_TYPES.forEach((t) => set.add(t.value));
     return OFFER_TYPES.filter((t) => set.has(t.value));
-  }, [doc.elements, usesOffer]);
+  }, [doc.elements]);
 
   const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
 
@@ -4658,7 +4699,7 @@ function ComplianceChip({
             </span>
           </div>
           <p className="mb-2 text-[10px] leading-snug text-[var(--muted-foreground)]">
-            Required by the {make} OEM rule per offer type. Missing fields block export of that offer type until added to the template&apos;s fields.
+            Required by the {make} OEM rule per offer type. A field counts as covered when it&apos;s shown on the artboard — directly, via the offer block, or in a disclaimer. Anything still missing must appear before that offer type can export.
           </p>
           <div className="space-y-1">
             {compliance.map(({ type, missing: m }) => (
@@ -4678,7 +4719,7 @@ function ComplianceChip({
                         key={k}
                         type="button"
                         onClick={() => onInsert(k, type.value)}
-                        title={`Insert “${FIELD_LABELS[k] ?? k}” — adds the field + drops it on the artboard`}
+                        title={`Add “${FIELD_LABELS[k] ?? k}” to the artboard (shown for ${type.label})`}
                         className="inline-flex items-center gap-0.5 rounded bg-amber-500/10 px-1 py-0.5 text-amber-600 transition-colors hover:bg-amber-500/25 dark:text-amber-400"
                       >
                         <PlusIcon className="h-2.5 w-2.5" strokeWidth={2.5} />

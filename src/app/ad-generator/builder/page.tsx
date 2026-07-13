@@ -195,14 +195,6 @@ const WEBSAFE_FONTS = [
   'Courier New',
   'Lucida Console',
 ];
-// Computed offer LABEL fields (`_offerLabel`, `_o2_offerLabel`) map to a
-// free-text override field the offer engine honors — so double-clicking the
-// rendered label edits the override (writes here) instead of the derived value.
-const OFFER_LABEL_OVERRIDE: Record<string, string> = {
-  _offerLabel: 'offerLabel',
-  _o2_offerLabel: 'o2_offerLabel',
-};
-
 // `_offerValue`/`_o2_offerValue` are COMPUTED from exactly one source field per
 // offer type — so an inline artboard edit of the big number can write straight
 // back to that field (lease→monthlyPayment, apr→aprRate, …). Maps the computed
@@ -230,8 +222,10 @@ function offerValueSourceKey(computedKey: string, offerType: string): string | n
 // field, a computed offer value, brand data, or a static literal — so a
 // from-scratch layout can be wired to the offer engine (no code template needed).
 // Options are encoded as `static` | `field:<key>` | `brand:<key>` strings.
+// Computed offer tokens are DATA only (numbers + the terms line the numbers
+// build). The offer LABEL — "APR", "PER MONTH LEASE", "SALES PRICE" — is
+// editorial text the designer types statically per offer type, NOT computed.
 const OFFER_TOKENS: { key: string; label: string }[] = [
-  { key: '_offerLabel', label: 'Offer label' },
   { key: '_offerMain', label: 'Offer amount' },
   { key: '_offerValue', label: 'Offer number (no symbol)' },
   { key: '_offerCurrency', label: 'Offer $ symbol' },
@@ -239,7 +233,6 @@ const OFFER_TOKENS: { key: string; label: string }[] = [
   { key: '_offerTerms', label: 'Offer terms' },
 ];
 const OFFER_TOKENS_O2: { key: string; label: string }[] = [
-  { key: '_o2_offerLabel', label: 'Offer 2 label' },
   { key: '_o2_offerMain', label: 'Offer 2 amount' },
   { key: '_o2_offerValue', label: 'Offer 2 number (no symbol)' },
   { key: '_o2_offerCurrency', label: 'Offer 2 $ symbol' },
@@ -344,7 +337,6 @@ function buildContentSources(el: DocElement, fields: FieldSpec[]): SearchableSel
     if (hasOffer) {
       const offer1Tokens = hasO2
         ? [
-            { key: '_offerLabel', label: 'Offer 1 label' },
             { key: '_offerMain', label: 'Offer 1 amount' },
             { key: '_offerValue', label: 'Offer 1 number (no symbol)' },
             { key: '_offerCurrency', label: 'Offer 1 $ symbol' },
@@ -1367,7 +1359,7 @@ export default function AdBuilderPage() {
   // Right-click context menu (canvas + layers), positioned at the cursor.
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   // Inline text editing: double-click a text element to edit its value on-canvas.
-  const [editingText, setEditingText] = useState<{ id: string; value: string } | null>(null);
+  const [editingText, setEditingText] = useState<{ id: string; value: string; initial: string } | null>(null);
   // Background panning: natural size of the selected bg image + the live pan
   // preview (the full image, with its off-canvas "bleed" shown while dragging).
   const [bgNatural, setBgNatural] = useState<{ w: number; h: number } | null>(null);
@@ -1640,16 +1632,14 @@ export default function AdBuilderPage() {
   // ── inline text editing (double-click a text element) ──
   // Editable when the element binds to a STATIC literal or a plain FIELD.
   // Computed `_offer*` text is derived from the offer inputs so it's read-only —
-  // EXCEPT the offer LABEL, which has a free-text override field (`offerLabel` /
-  // `o2_offerLabel`); editing that label inline writes the override (see
-  // enrichOfferFields). Brand-bound text stays read-only.
+  // EXCEPT the offer VALUE (big number), which maps back to its source number
+  // field. Brand-bound text stays read-only.
   const textEditTarget = useCallback((el: DocElement | null | undefined): 'static' | 'field' | null => {
     if (!el || el.type !== 'text' || el.locked || !el.binding) return null;
     if (el.binding.kind === 'static') return 'static';
     if (el.binding.kind === 'field') {
       const key = el.binding.key;
       if (!key.startsWith('_')) return 'field';
-      if (key in OFFER_LABEL_OVERRIDE) return 'field'; // editable via its override field
       if (key in OFFER_VALUE_PREFIX) return 'field'; // maps to the offer's source number field
     }
     return null;
@@ -1671,7 +1661,7 @@ export default function AdBuilderPage() {
             ? el.binding!.value
             : String(previewData[(el.binding as { key: string }).key] ?? '');
       setSelectedIds([elId]);
-      setEditingText({ id: elId, value: cur });
+      setEditingText({ id: elId, value: cur, initial: cur });
     },
     [doc.elements, previewData, textEditTarget],
   );
@@ -1695,6 +1685,11 @@ export default function AdBuilderPage() {
     // the current typed value.
     setEditingText((cur) => {
       if (!cur) return null;
+      // No-op edits (double-click a computed box, click out without typing) must
+      // NOT write — otherwise the resolved value gets pinned as an override (e.g.
+      // an offer label meant to be per-type gets frozen to whatever type was
+      // previewing). Only commit a genuine change.
+      if (cur.value === cur.initial) return null;
       const el = doc.elements.find((e) => e.id === cur.id);
       const b = el?.binding;
       const tokenKey = pureFieldTokenKey(el);
@@ -1702,7 +1697,7 @@ export default function AdBuilderPage() {
         // Pure `{{field}}` box: save the typed value to the field and KEEP the
         // token binding intact, so the box stays a live variable that now
         // resolves to the new value (e.g. 499 → 599).
-        writeFieldValue(OFFER_LABEL_OVERRIDE[tokenKey] ?? tokenKey, cur.value);
+        writeFieldValue(tokenKey, cur.value);
       } else if (b?.kind === 'static') {
         setElement(cur.id, { binding: { kind: 'static', value: cur.value } });
       } else if (b?.kind === 'field') {
@@ -1714,7 +1709,7 @@ export default function AdBuilderPage() {
         const prefix = OFFER_VALUE_PREFIX[b.key];
         const valueKey =
           prefix != null ? offerValueSourceKey(b.key, String(previewData[`${prefix}offerType`] ?? '')) : null;
-        writeFieldValue(valueKey ?? OFFER_LABEL_OVERRIDE[b.key] ?? b.key, cur.value);
+        writeFieldValue(valueKey ?? b.key, cur.value);
       }
       // The auto-size boxes re-hug on the next canvas write via syncAutoBoxes —
       // the reliable point to measure (after the iframe reflects the new value).

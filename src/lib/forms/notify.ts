@@ -19,6 +19,49 @@ export class LeadNotificationError extends Error {
   }
 }
 
+/**
+ * Split a stored comma-separated `Form.notificationEmail` value into
+ * clean, de-duplicated addresses. Shared with the settings PATCH
+ * validation in `@/lib/services/forms` so parsing can't drift between
+ * what's accepted at write time and what's sent to at submit time.
+ */
+export function parseNotificationEmails(value: string | null | undefined): string[] {
+  return [
+    ...new Set(
+      (value || '')
+        .split(',')
+        .map((addr) => addr.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+/**
+ * Deliver to each recipient independently — one bad address (typo'd
+ * domain, provider 4xx) must not block the remaining recipients. Throws
+ * only when every send failed, so a total outage still surfaces in the
+ * caller's log while a partial failure just logs the addresses missed.
+ */
+async function deliverToEach(
+  recipients: string[],
+  send: (rcpt: string) => Promise<unknown>,
+): Promise<void> {
+  const failed: string[] = [];
+  for (const rcpt of recipients) {
+    try {
+      await send(rcpt);
+    } catch (err) {
+      failed.push(rcpt);
+      console.error(`[forms/notify] lead notification send failed for ${rcpt}`, err);
+    }
+  }
+  if (failed.length > 0 && failed.length === recipients.length) {
+    throw new LeadNotificationError(
+      `Lead notification failed for all recipients (${failed.join(', ')})`,
+    );
+  }
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
@@ -68,10 +111,7 @@ export async function sendLeadNotificationEmail(args: {
   submission: FormSubmission;
 }): Promise<void> {
   const { form, submission } = args;
-  const recipients = (form.notificationEmail || '')
-    .split(',')
-    .map((addr) => addr.trim())
-    .filter(Boolean);
+  const recipients = parseNotificationEmails(form.notificationEmail);
   if (recipients.length === 0 || !form.accountKey) return;
 
   const accountKey = form.accountKey;
@@ -88,8 +128,8 @@ export async function sendLeadNotificationEmail(args: {
 
   const sg = await resolveSendGridConfig(accountKey);
   if (sg && senderEmail) {
-    for (const rcpt of recipients) {
-      await sendEmailViaSendGrid({
+    await deliverToEach(recipients, (rcpt) =>
+      sendEmailViaSendGrid({
         apiKey: sg.apiKey,
         from: { email: senderEmail, name: senderName || undefined },
         replyTo: account?.replyToEmail ? { email: account.replyToEmail } : undefined,
@@ -98,8 +138,8 @@ export async function sendLeadNotificationEmail(args: {
         text,
         html,
         categories: ['form-lead-notification'],
-      });
-    }
+      }),
+    );
     return;
   }
 
@@ -121,14 +161,14 @@ export async function sendLeadNotificationEmail(args: {
     auth: { user: smtpUser, pass: smtpPass },
   });
 
-  for (const rcpt of recipients) {
-    await transporter.sendMail({
+  await deliverToEach(recipients, (rcpt) =>
+    transporter.sendMail({
       from: formatFrom(smtpFrom, senderName),
       to: rcpt,
       ...(account?.replyToEmail ? { replyTo: account.replyToEmail } : {}),
       subject,
       text,
       html,
-    });
-  }
+    }),
+  );
 }

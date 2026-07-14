@@ -7,6 +7,7 @@ import {
   type FormTemplate,
 } from '@/lib/forms/types';
 import { isValidSlug, slugify } from '@/lib/forms/schemas';
+import { parseNotificationEmails } from '@/lib/forms/notify';
 
 export type FormStatus = 'draft' | 'published';
 
@@ -559,13 +560,14 @@ export async function updateForm(
     if (patch.notificationEmail !== null && typeof patch.notificationEmail !== 'string') {
       throw new FormServiceError('notificationEmail must be a string or null');
     }
-    const raw = typeof patch.notificationEmail === 'string' ? patch.notificationEmail : '';
-    const addresses = raw
-      .split(',')
-      .map((addr) => addr.trim())
-      .filter(Boolean);
-    if (addresses.some((addr) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr))) {
-      throw new FormServiceError('notificationEmail must be a valid email address');
+    const addresses = parseNotificationEmails(
+      typeof patch.notificationEmail === 'string' ? patch.notificationEmail : '',
+    );
+    // Name the offending address — with a comma-separated list, a bare
+    // "must be valid" toast leaves the user guessing which one to fix.
+    const invalid = addresses.find((addr) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr));
+    if (invalid) {
+      throw new FormServiceError(`notificationEmail contains an invalid address: ${invalid}`);
     }
     data.notificationEmail = addresses.join(', ') || null;
   }

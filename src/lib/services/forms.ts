@@ -7,6 +7,7 @@ import {
   type FormTemplate,
 } from '@/lib/forms/types';
 import { isValidSlug, slugify } from '@/lib/forms/schemas';
+import { parseNotificationEmails } from '@/lib/forms/notify';
 
 export type FormStatus = 'draft' | 'published';
 
@@ -66,6 +67,9 @@ export interface FormDetail extends FormSummary {
   /** Per-form lead source stamped onto Contact.source on submit. Empty
    *  string when unset — submissions then fall back to `Loomi - {name}`. */
   leadSource: string;
+  /** Comma-separated email address(es) notified on each new submission.
+   *  Empty string when unset — no lead notification email is sent. */
+  notificationEmail: string;
   /** Recommended embed snippet (script tag with auto-resizing iframe). */
   embedSnippet: string;
   /** All embed variants — UI shows both with their own copy buttons. */
@@ -199,6 +203,7 @@ function toDetail(row: {
   redirectUrl: string | null;
   successMessage: string | null;
   leadSource: string | null;
+  notificationEmail: string | null;
   listId: string | null;
   forwardToCrm: boolean;
   submissionCount: number;
@@ -215,6 +220,7 @@ function toDetail(row: {
     redirectUrl: row.redirectUrl ?? '',
     successMessage: row.successMessage ?? DEFAULT_SUCCESS_MESSAGE,
     leadSource: row.leadSource ?? '',
+    notificationEmail: row.notificationEmail ?? '',
     embedSnippet: snippets.script,
     embedSnippets: snippets,
   };
@@ -509,6 +515,7 @@ export async function updateForm(
     redirectUrl?: unknown;
     successMessage?: unknown;
     leadSource?: unknown;
+    notificationEmail?: unknown;
     listId?: unknown;
     forwardToCrm?: unknown;
     category?: unknown;
@@ -601,6 +608,22 @@ export async function updateForm(
     const value = typeof patch.leadSource === 'string' ? patch.leadSource.trim() : '';
     // Blank clears the override → submissions fall back to `Loomi - {name}`.
     data.leadSource = value || null;
+  }
+
+  if (patch.notificationEmail !== undefined) {
+    if (patch.notificationEmail !== null && typeof patch.notificationEmail !== 'string') {
+      throw new FormServiceError('notificationEmail must be a string or null');
+    }
+    const addresses = parseNotificationEmails(
+      typeof patch.notificationEmail === 'string' ? patch.notificationEmail : '',
+    );
+    // Name the offending address — with a comma-separated list, a bare
+    // "must be valid" toast leaves the user guessing which one to fix.
+    const invalid = addresses.find((addr) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(addr));
+    if (invalid) {
+      throw new FormServiceError(`notificationEmail contains an invalid address: ${invalid}`);
+    }
+    data.notificationEmail = addresses.join(', ') || null;
   }
 
   if (patch.listId !== undefined) {

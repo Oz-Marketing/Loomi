@@ -37,6 +37,7 @@ export function FormSettingsForm() {
     redirectUrl: form.redirectUrl,
     successMessage: form.successMessage,
     leadSource: form.leadSource,
+    notificationEmail: form.notificationEmail,
     listId: form.listId,
     forwardToCrm: form.forwardToCrm,
   });
@@ -52,6 +53,7 @@ export function FormSettingsForm() {
       redirectUrl: form.redirectUrl,
       successMessage: form.successMessage,
       leadSource: form.leadSource,
+      notificationEmail: form.notificationEmail,
       listId: form.listId,
       forwardToCrm: form.forwardToCrm,
     });
@@ -85,6 +87,7 @@ export function FormSettingsForm() {
         redirectUrl: form.redirectUrl,
         successMessage: form.successMessage,
         leadSource: form.leadSource,
+        notificationEmail: form.notificationEmail,
         listId: form.listId,
         forwardToCrm: form.forwardToCrm,
       });
@@ -299,6 +302,26 @@ export function FormSettingsForm() {
                   }`}
                 />
               </button>
+            </label>
+
+            <label className="block">
+              <span className="text-sm font-medium">Lead notification email</span>
+              <input
+                type="text"
+                value={draft.notificationEmail}
+                onChange={(e) => setDraft((d) => ({ ...d, notificationEmail: e.target.value }))}
+                onBlur={() => {
+                  if (draft.notificationEmail !== form.notificationEmail) {
+                    void patch('notificationEmail', draft.notificationEmail);
+                  }
+                }}
+                placeholder="sales@example.com, manager@example.com"
+                className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--input)] px-3 py-2 text-sm outline-none focus:border-[var(--primary)]"
+              />
+              <span className="mt-1 block text-xs text-[var(--muted-foreground)]">
+                Sends an email here every time this form gets a new submission.
+                Separate multiple addresses with commas. Leave blank to disable.
+              </span>
             </label>
           </div>
         </section>

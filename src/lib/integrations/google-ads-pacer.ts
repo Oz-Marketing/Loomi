@@ -27,7 +27,12 @@ import {
 } from '@/lib/ad-pacer/google-pacer-calc';
 import type { PacerAd } from '@/lib/ad-pacer/types';
 import { prisma } from '@/lib/prisma';
-import { getOrCreatePlan } from '@/lib/meta-ads-pacer';
+import {
+  getOrCreatePlan,
+  dailySpendSyncWindow,
+  writeDailySpendSeries,
+  type DailySpendWriteRow,
+} from '@/lib/meta-ads-pacer';
 import { randomUUID } from 'node:crypto';
 import type { Prisma } from '@prisma/client';
 
@@ -173,6 +178,67 @@ export async function fetchCampaignSpend(
 }
 
 /**
+ * Campaign spend ($) per day over [sinceIso, untilIso] (segments.date), for
+ * the pacing-health engine's daily spend series. Returns campaignId →
+ * ordered {date, spend} rows.
+ */
+export async function fetchCampaignDailySpend(
+  cfg: GoogleAdsConfig,
+  customerId: string,
+  sinceIso: string,
+  untilIso: string,
+): Promise<Map<string, { date: string; spend: number }[]>> {
+  const rows = await gaql(
+    cfg,
+    customerId,
+    `SELECT campaign.id, segments.date, metrics.cost_micros
+     FROM campaign
+     WHERE segments.date BETWEEN '${sinceIso}' AND '${untilIso}'
+       AND campaign.status != 'REMOVED'
+     ORDER BY segments.date ASC`,
+  );
+  const byCampaign = new Map<string, { date: string; spend: number }[]>();
+  for (const r of rows) {
+    const id = r.campaign?.id;
+    const date = r.segments?.date;
+    if (!id || !date) continue;
+    const list = byCampaign.get(id) ?? [];
+    list.push({ date, spend: microsToUnits(r.metrics?.costMicros) });
+    byCampaign.set(id, list);
+  }
+  return byCampaign;
+}
+
+/**
+ * Campaign ids that restrict days/dayparts via an ad schedule. Post
+ * June 2026, scheduled campaigns pace the full monthly cap into active days,
+ * so calendar-day pacing math misreads them — the sync badges them via
+ * googleHasAdSchedule. Best-effort: a failure returns an empty set and the
+ * flags are simply left as they were.
+ */
+export async function fetchAdScheduleCampaignIds(
+  cfg: GoogleAdsConfig,
+  customerId: string,
+): Promise<Set<string> | null> {
+  try {
+    const rows = await gaql(
+      cfg,
+      customerId,
+      `SELECT campaign.id FROM ad_schedule_view
+       WHERE campaign.status != 'REMOVED'`,
+    );
+    const ids = new Set<string>();
+    for (const r of rows) {
+      const id = r.campaign?.id;
+      if (id) ids.add(id);
+    }
+    return ids;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * §9 — daily-budget change history within [sinceIso, untilIso], keyed by budget
  * resource name, as rate segments for `computeProratedCeiling`. Each amount
  * change becomes a {date, dailyRate} boundary; the segment array is seeded at
@@ -298,16 +364,19 @@ export async function syncPeriodFromGoogle(
   // whole month, not just the elapsed-to-`until` window.
   const monthEnd = monthEndIso(period);
 
-  const [campaigns, periodSpend, runSpend, rateSegments] = await Promise.all([
-    importGoogleCampaigns(cfg, customerId),
-    fetchCampaignSpend(cfg, customerId, since, until),
-    fetchCampaignSpend(cfg, customerId, RUN_SPEND_SINCE, until).catch(
-      () => new Map<string, number>(),
-    ),
-    fetchBudgetRateSegments(cfg, customerId, since, monthEnd).catch(
-      () => new Map<string, BudgetRateSegment[]>(),
-    ),
-  ]);
+  const [campaigns, periodSpend, runSpend, rateSegments, scheduledIds] =
+    await Promise.all([
+      importGoogleCampaigns(cfg, customerId),
+      fetchCampaignSpend(cfg, customerId, since, until),
+      fetchCampaignSpend(cfg, customerId, RUN_SPEND_SINCE, until).catch(
+        () => new Map<string, number>(),
+      ),
+      fetchBudgetRateSegments(cfg, customerId, since, monthEnd).catch(
+        () => new Map<string, BudgetRateSegment[]>(),
+      ),
+      // Ad-schedule (day-parting) badge — null on failure = leave flags alone.
+      fetchAdScheduleCampaignIds(cfg, customerId),
+    ]);
   const byId = new Map(campaigns.map((c) => [c.id, c]));
   const byName = new Map(campaigns.map((c) => [c.name.toLowerCase(), c]));
 
@@ -356,6 +425,9 @@ export async function syncPeriodFromGoogle(
           googlePrimaryStatus: camp.primaryStatus,
           googleBudgetConstrained: camp.budgetConstrained,
           googleAdsDisapproved: camp.adsDisapproved,
+          ...(scheduledIds != null
+            ? { googleHasAdSchedule: scheduledIds.has(camp.id) }
+            : {}),
           googleProratedCeiling: ceiling != null ? ceiling.toFixed(2) : null,
           pacerActual: spend.toFixed(2),
           pacerRunSpend: (runSpend.get(camp.id) ?? 0).toFixed(2),
@@ -375,6 +447,37 @@ export async function syncPeriodFromGoogle(
     });
   }
   if (ops.length > 0) await prisma.$transaction(ops);
+
+  // Daily spend series (pacing-health engine): per-day cost for every linked
+  // campaign — 90-day backfill on the first sync, a short trailing window
+  // after. Best-effort: never aborts the month sync.
+  try {
+    const linked = results.filter((r) => r.matched && r.googleCampaignId);
+    if (linked.length > 0) {
+      const window = await dailySpendSyncWindow(plan.id, 'google', todayIso);
+      const daily = await fetchCampaignDailySpend(
+        cfg,
+        customerId,
+        window.since,
+        window.until,
+      );
+      const budgetByCampaign = new Map(
+        campaigns.map((c) => [c.id, c.dailyBudget] as const),
+      );
+      const linkedIds = new Set(linked.map((r) => r.googleCampaignId as string));
+      const rows: DailySpendWriteRow[] = [];
+      for (const [campaignId, points] of daily) {
+        if (!linkedIds.has(campaignId)) continue;
+        const dailyBudget = budgetByCampaign.get(campaignId) ?? null;
+        for (const p of points) {
+          rows.push({ objectId: campaignId, date: p.date, spend: p.spend, dailyBudget });
+        }
+      }
+      if (rows.length > 0) await writeDailySpendSeries(plan.id, 'google', window, rows);
+    }
+  } catch {
+    // Series sync is additive — the cards fall back gracefully.
+  }
 
   return {
     ok: true,

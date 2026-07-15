@@ -120,6 +120,15 @@ export interface PacerAd {
   // §9 monthly ceiling ($) — server-computed, reprorated across mid-month budget
   // changes (change_event); falls back to current daily × 30.4. Null for total.
   googleProratedCeiling?: string | null;
+  // The campaign restricts days/dayparts via an ad schedule (synced). Post
+  // June 2026 such campaigns concentrate the monthly cap into active days, so
+  // calendar-day pacing math misreads them — badged for now.
+  googleHasAdSchedule?: boolean | null;
+  // Rolling-window slice of the synced per-day spend for this ad's linked
+  // platform object (server-attached, last ~8 days). Feeds the pacing-health
+  // engine's rolling 7-day window + the today-so-far readout. Empty until the
+  // first series sync.
+  dailySpend?: { date: string; spend: number; dailyBudget: number | null }[];
   // Per-ad alert mute (Change 9): silences pacing-family alerts for this ad.
   alertsMuted: boolean;
   designNotes: DesignNote[];
@@ -148,6 +157,10 @@ export interface PacerPlan {
   // Resolved IANA zone for pacing math (Meta ad-account zone → stored zone →
   // DEFAULT_TIME_ZONE). Always present; the server resolves it.
   timeZone: string;
+  // Per-account Meta single-day budget flexibility (0.25–0.75) for the
+  // recommendation engine's shortfall boundary. Server-derived from the spend
+  // series (else the account setting, else the default).
+  overageAllowance?: number;
   // Live-vs-frozen month model. A frozen month is a closed-month immutable
   // snapshot: read-only, no autosave/sync until an admin reopens. `reopened` =
   // a closed month unlocked for correction (snapshot preserved) until re-frozen.

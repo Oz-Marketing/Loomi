@@ -32,6 +32,13 @@ import { fmtPeriodLong } from '@/lib/ad-pacer/period';
 import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
 import { buildGooglePacingCard } from '@/lib/ad-pacer/google-pacer-calc';
 import {
+  computeMetaPacingHealth,
+  buildMetaRecommendation,
+  type PacingHealth,
+} from '@/lib/ad-pacer/pacing-engine';
+import { OVERAGE_ALLOWANCE_DEFAULT } from '@/lib/ad-pacer/constants';
+import { zonedTodayIso } from '@/lib/timezone';
+import {
   GooglePacingBadges,
   GoogleDailyMetricBoxes,
   GooglePacingInsight,
@@ -42,6 +49,60 @@ import { usePacerReadOnly } from './pacer-read-only';
 import { Tooltip } from './Tooltip';
 import { DollarInput, Field, readonlyClass, labelClass } from './inputs';
 import { MetricBox } from './metrics';
+
+/**
+ * Pacing Health — the gate the recommendation box reads first: "is the ad
+ * spending the budget it was given." Meta measures a rolling 7-day window vs
+ * the daily budget; Google measures month-to-date vs expected-to-date on the
+ * way to the monthly ceiling. The quiet "today: $X so far" line is a
+ * break-detection breadcrumb only (did it break today, or soft all week?) —
+ * it feeds no calculation and deliberately gets no pill or verdict of its own.
+ */
+function PacingHealthBox({
+  health,
+  spendToday,
+  mode,
+}: {
+  health: PacingHealth | null;
+  spendToday: number | null;
+  mode: 'meta' | 'google';
+}) {
+  const ratio = health?.pacingRatio ?? null;
+  const verdict = health?.verdict ?? null;
+  const color =
+    verdict === 'healthy'
+      ? COLORS.success
+      : verdict === 'soft'
+        ? COLORS.warn
+        : verdict === 'low'
+          ? COLORS.error
+          : undefined;
+  const verdictLabel =
+    verdict === 'healthy'
+      ? 'delivering'
+      : verdict === 'soft'
+        ? 'light — watch it'
+        : 'underdelivering';
+  const windowLabel =
+    mode === 'google'
+      ? 'month-to-date vs ceiling pace'
+      : health
+        ? `last ${fmtDaysNum(Math.min(health.windowDays, 7))}d vs daily budget`
+        : '';
+  return (
+    <MetricBox
+      label="Pacing Health"
+      value={ratio != null ? `${Math.round(ratio * 100)}%` : '—'}
+      sub={
+        verdict
+          ? `${verdictLabel} · ${windowLabel}`
+          : 'needs synced spend history'
+      }
+      detail={spendToday != null ? `today: ${fmt(spendToday)} so far` : undefined}
+      color={color}
+    />
+  );
+}
 
 // ─── PacerRow + PacerCompletedSummary (appended below) ─────────────────────
 export function PacerRow({
@@ -64,6 +125,7 @@ export function PacerRow({
   pushLabel = 'Push',
   pushIcon,
   statusMismatch,
+  overageAllowance,
 }: {
   ad: PacerAd;
   index: number;
@@ -108,6 +170,9 @@ export function PacerRow({
   pushIcon?: ReactNode;
   /** Optional platform status-mismatch warning rendered below the inputs. */
   statusMismatch?: ReactNode;
+  /** Per-account Meta single-day flexibility (0.25–0.75) for the
+   *  recommendation engine's shortfall boundary (server-derived). */
+  overageAllowance?: number;
 }) {
   const isLifetime = ad.budgetType === 'Lifetime';
   const typeColor = budgetTypeColor(ad.budgetType);
@@ -151,18 +216,61 @@ export function PacerRow({
   // "Now" = the current instant; the day boundary that bounds the recommended
   // daily is resolved in the account's timezone inside buildPacerCalc. Captured
   // per ad/timezone change so the row's numbers stay stable between renders.
+  const nowMs = useMemo(() => Date.now(), [ad, timeZone]); // eslint-disable-line react-hooks/exhaustive-deps
   const calc = useMemo(
-    () => buildPacerCalc(ad, Date.now(), timeZone),
-    [ad, timeZone],
+    () => buildPacerCalc(ad, nowMs, timeZone),
+    [ad, nowMs, timeZone],
   );
-  // §5 Google branch — the per-campaign ceiling card (monthly ceiling, rec daily
-  // RATE, budget-limited vs disapproved). Only built for Google lines; Meta lines
-  // render the existing remaining-budget framing untouched.
+  // §5 Google branch — the per-campaign ceiling card (monthly ceiling, the
+  // four-state recommendation, budget-limited vs disapproved). Only built for
+  // Google lines; Meta lines render their own engine below.
   const isGoogle = ad.platform === 'google';
   const gCard = useMemo(
-    () => (isGoogle ? buildGooglePacingCard(ad, Date.now(), timeZone) : null),
-    [isGoogle, ad, timeZone],
+    () => (isGoogle ? buildGooglePacingCard(ad, nowMs, timeZone) : null),
+    [isGoogle, ad, nowMs, timeZone],
   );
+  // Pacing health (the gate: "is the ad spending the budget it was given") +
+  // the four-state recommendation for Meta daily lines. Google's equivalents
+  // ride on gCard.recommendation.
+  const metaHealth = useMemo(
+    () =>
+      !isGoogle && ad.budgetType !== 'Lifetime'
+        ? computeMetaPacingHealth({
+            dailyBudget: num(ad.pacerDailyBudget) ?? 0,
+            // The ACTUAL go-live (Meta's real start ?? planner live date ??
+            // flight start) — never the planned start, which would compute a
+            // false underspend on a late launch.
+            liveDateIso: ad.metaStartDate ?? ad.liveDate ?? ad.flightStart,
+            series: ad.dailySpend ?? [],
+            cumulativeSpend: num(ad.pacerRunSpend) ?? num(ad.pacerActual),
+            nowMs,
+            timeZone,
+          })
+        : null,
+    [isGoogle, ad, nowMs, timeZone],
+  );
+  const metaRec = useMemo(
+    () =>
+      !isGoogle && ad.budgetType !== 'Lifetime'
+        ? buildMetaRecommendation({
+            target: calc.budget,
+            actualSpend: calc.spent,
+            daysRemaining: calc.daysLeft,
+            totalDays: calcDays(calc.effectiveStart, calc.effectiveEnd),
+            dailyBudget: calc.dailyBudget,
+            health: metaHealth,
+            overageAllowance: overageAllowance ?? OVERAGE_ALLOWANCE_DEFAULT,
+          })
+        : null,
+    [isGoogle, ad.budgetType, calc, metaHealth, overageAllowance],
+  );
+  // Spend so far today from the synced series — a diagnostic breadcrumb shown
+  // quietly under the health box, never a decision input.
+  const spendToday = useMemo(() => {
+    const today = zonedTodayIso(nowMs, timeZone);
+    const row = (ad.dailySpend ?? []).find((p) => p.date === today);
+    return row ? row.spend : null;
+  }, [ad, nowMs, timeZone]);
   // The date being paced TO — the Meta/planned end clamped to the pacing
   // month (Change 4). Drives the "until …" labels and the completed banner.
   const effectiveEnd = calc.effectiveEnd;
@@ -865,7 +973,15 @@ export function PacerRow({
         </div>
       ) : (
         <>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+      <div className={`grid grid-cols-2 ${isLifetime ? 'md:grid-cols-4' : 'md:grid-cols-5'} gap-2`}>
+        {/* Question 1 first — delivery health gates everything downstream. */}
+        {!isLifetime && (
+          <PacingHealthBox
+            health={isGoogle ? gCard?.recommendation?.health ?? null : metaHealth}
+            spendToday={spendToday}
+            mode={isGoogle ? 'google' : 'meta'}
+          />
+        )}
         {isLifetime ? (
           // Lifetime ads: Meta distributes the budget across the flight however
           // it wants, so there's nothing to pace day-to-day. Two scopes, switched
@@ -977,15 +1093,22 @@ export function PacerRow({
             label="Projected Spend"
             value={
               calc.hasDates && !calc.endsBeforeToday
-                ? fmt(calc.projected)
+                ? fmt(isGoogle && gCard ? gCard.projected : calc.projected)
                 : '—'
             }
+            // Google: run-rate based and capped at the monthly ceiling —
+            // Google never bills past daily × 30.4, so the linear Meta-style
+            // extrapolation would show a figure Google will not charge.
             sub={
               !calc.hasDates
                 ? 'set today + end dates'
                 : calc.endsBeforeToday
                   ? 'end is before today'
-                  : `spend + ${fmt(calc.dailyBudget)}/d × ${fmtDaysNum(calc.daysLeft)}d`
+                  : isGoogle && gCard?.recommendation
+                    ? gCard.projected >= gCard.monthlyCeiling - 0.005
+                      ? 'run rate, capped at the monthly ceiling'
+                      : `spend + ${fmt(gCard.recommendation.health.runRate ?? calc.dailyBudget)}/d run rate × ${fmtDaysNum(calc.daysLeft)}d`
+                    : `spend + ${fmt(calc.dailyBudget)}/d × ${fmtDaysNum(calc.daysLeft)}d`
             }
           />
         )}
@@ -1030,39 +1153,102 @@ export function PacerRow({
               : undefined
           }
         />
-        <MetricBox
-          label="Rec. Daily Adjustment"
-          value={
-            calc.budget > 0 && calc.daysLeft > 0
-              ? fmt(calc.recDaily)
-              : '—'
+        {(() => {
+          // The four-state recommendation box: only `adjust` hands over a
+          // number to type. On-track suppresses it; delivery-low and shortfall
+          // replace a misleading number with the honest thing (raising the
+          // budget on a broken ad does nothing, and no daily rate can spend
+          // dollars there's no time to spend).
+          if (metaRec == null || calc.daysLeft <= 0) {
+            // Engine doesn't apply (no target / no daily budget / window
+            // closed) — the legacy remaining ÷ days box, unchanged.
+            return (
+              <MetricBox
+                label="Rec. Daily Adjustment"
+                value={
+                  calc.budget > 0 && calc.daysLeft > 0 ? fmt(calc.recDaily) : '—'
+                }
+                sub={
+                  calc.budget <= 0
+                    ? 'set Target Spend'
+                    : calc.daysLeft <= 0
+                      ? 'no days remaining'
+                      : calc.daysLeft >= 1
+                        ? `${fmt(calc.remaining)} remaining ÷ ${fmtDaysBasisPhrase(calc.daysLeft)} left`
+                        : `${fmt(calc.remaining)} remaining ÷ 1 day (final day)`
+                }
+                detail={
+                  calc.budget > 0 && calc.daysLeft > 0 && calc.dailyBudget <= 0
+                    ? 'No daily budget synced — set this as the daily rate'
+                    : undefined
+                }
+              />
+            );
           }
-          // First line: the formula — remaining budget ÷ remaining days — since
-          // that's exactly what the recommendation is (recDaily = remaining /
-          // max(daysLeft, 1)). The divisor floors at 1 on the final day so the
-          // tail can't blow up, labeled so the "1 day" is understood.
-          sub={
-            calc.budget <= 0
-              ? 'set Target Spend'
-              : calc.daysLeft <= 0
-                ? 'no days remaining'
-                : calc.daysLeft >= 1
-                  ? `${fmt(calc.remaining)} remaining ÷ ${fmtDaysBasisPhrase(calc.daysLeft)} left`
-                  : `${fmt(calc.remaining)} remaining ÷ 1 day (final day)`
+          switch (metaRec.state) {
+            case 'on_track':
+              return (
+                <MetricBox
+                  label="Rec. Daily Adjustment"
+                  value="No change"
+                  sub="on track — leave it alone"
+                  detail={
+                    metaRec.healthKnown
+                      ? undefined
+                      : 'assumes full delivery — spend history syncs daily'
+                  }
+                  color={COLORS.success}
+                />
+              );
+            case 'adjust':
+              return (
+                <MetricBox
+                  label="Rec. Daily Adjustment"
+                  value={fmt(calc.recDaily)}
+                  // The formula — remaining ÷ remaining days (divisor floors at
+                  // 1 on the final day so the tail can't blow up).
+                  sub={
+                    calc.daysLeft >= 1
+                      ? `${fmt(calc.remaining)} remaining ÷ ${fmtDaysBasisPhrase(calc.daysLeft)} left`
+                      : `${fmt(calc.remaining)} remaining ÷ 1 day (final day)`
+                  }
+                  detail={
+                    (isOnTrack
+                      ? 'Set it, then leave it'
+                      : dailyDelta > 0
+                        ? `Add ${fmt(Math.abs(dailyDelta))} to current Daily Budget`
+                        : `Reduce current Daily Budget by ${fmt(Math.abs(dailyDelta))}`) +
+                    (metaRec.largeJump ? ' — large jump, stage it and monitor' : '')
+                  }
+                  color={recColor}
+                />
+              );
+            case 'delivery_low':
+              return (
+                <MetricBox
+                  label="Rec. Daily Adjustment"
+                  value="Diagnose delivery"
+                  sub={
+                    metaHealth?.pacingRatio != null
+                      ? `spending ${Math.round(metaHealth.pacingRatio * 100)}% of its budget`
+                      : 'underdelivering'
+                  }
+                  detail="Don't add budget — check audience, bids, creative, feed"
+                  color={COLORS.error}
+                />
+              );
+            case 'shortfall':
+              return (
+                <MetricBox
+                  label="Rec. Daily Adjustment"
+                  value={`Short ~${fmt(metaRec.gap)}`}
+                  sub={`${fmt(Math.max(0, metaRec.remainingBudget))} left · ~${fmt(metaRec.maxSpendable)} spendable`}
+                  detail="Reallocate the unspendable budget, or accept the miss"
+                  color={COLORS.error}
+                />
+              );
           }
-          // Second line (below the formula): the plain-language action — how
-          // much to add to / cut from the current daily budget to hit the rec.
-          detail={
-            calc.budget > 0 && calc.daysLeft > 0
-              ? isOnTrack
-                ? 'On track — no change needed'
-                : dailyDelta > 0
-                  ? `Add ${fmt(Math.abs(dailyDelta))} to current Daily Budget`
-                  : `Reduce current Daily Budget by ${fmt(Math.abs(dailyDelta))}`
-              : undefined
-          }
-          color={recColor}
-        />
+        })()}
         </>
         ))}
       </div>
@@ -1105,6 +1291,76 @@ export function PacerRow({
               settles when the run completes.
             </p>
           );
+        }
+        // The four-state engine speaks: on-track suppresses, adjust hands over
+        // the rate, delivery-low says diagnose (never raise), shortfall states
+        // the honest gap. Falls back to the projection bands without a target.
+        if (metaRec != null) {
+          switch (metaRec.state) {
+            case 'delivery_low':
+              return (
+                <p
+                  className="m-0 text-[11px] leading-relaxed"
+                  style={{ color: COLORS.error }}
+                >
+                  Underdelivering — spending{' '}
+                  {metaHealth?.pacingRatio != null
+                    ? `${Math.round(metaHealth.pacingRatio * 100)}%`
+                    : 'a fraction'}{' '}
+                  of its budget over the last week. Raising the budget
+                  won&apos;t help; check audience size, bid/cost caps, creative
+                  rejection, and feed freshness, then re-evaluate.
+                </p>
+              );
+            case 'shortfall':
+              return (
+                <p
+                  className="m-0 text-[11px] leading-relaxed"
+                  style={{ color: COLORS.error }}
+                >
+                  Can&apos;t catch up: {fmt(Math.max(0, metaRec.remainingBudget))}{' '}
+                  remains but only ~{fmt(metaRec.maxSpendable)} is spendable at
+                  the demonstrated rate by {fmtDate(effectiveEnd)}. Reallocate
+                  to a campaign that can absorb it, or accept the miss.
+                </p>
+              );
+            case 'adjust':
+              return metaRec.direction === 'trim' ? (
+                <p
+                  className="m-0 text-[11px] leading-relaxed"
+                  style={{ color: COLORS.warn }}
+                >
+                  Projected to overspend by{' '}
+                  {fmt(Math.max(0, metaRec.projectedRunrate - calc.budget))} by{' '}
+                  {fmtDate(effectiveEnd)}. Lower the daily budget to{' '}
+                  {fmt(calc.recDaily)} to stay on target
+                  {metaRec.largeJump ? ' — a large change, monitor it' : ''}.
+                </p>
+              ) : (
+                <p
+                  className="m-0 text-[11px] leading-relaxed"
+                  style={{ color: COLORS.lifetime }}
+                >
+                  On pace to underspend by{' '}
+                  {fmt(Math.max(0, calc.budget - metaRec.projectedRunrate))} —
+                  setting the daily budget to {fmt(calc.recDaily)} uses the
+                  full target by {fmtDate(effectiveEnd)}
+                  {metaRec.largeJump
+                    ? ' (a large jump — stage it and monitor)'
+                    : ''}
+                  .
+                </p>
+              );
+            case 'on_track':
+              return (
+                <p
+                  className="m-0 text-[11px] leading-relaxed"
+                  style={{ color: COLORS.success }}
+                >
+                  On track for {fmtDate(effectiveEnd)} — no change needed.
+                </p>
+              );
+          }
         }
         const overspendThreshold = calc.budget * 1.05;
         const underspendThreshold = calc.budget * 0.95;

@@ -517,6 +517,7 @@ export function BudgetPacerPanel({
             ad={ad}
             index={plan.ads.findIndex((a) => a.id === ad.id)}
             timeZone={plan.timeZone}
+            overageAllowance={plan.overageAllowance}
             onActualChange={(v) => updateAd({ ...ad, pacerActual: v })}
             onDailyBudgetChange={(v) => updateAd({ ...ad, pacerDailyBudget: v })}
             expanded={expandedIds.has(ad.id)}

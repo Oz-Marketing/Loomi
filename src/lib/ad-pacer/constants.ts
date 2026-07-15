@@ -160,3 +160,43 @@ export const USER_DEPT_FILTERS = {
 
 /** Activity-log uploads cap at 25 MB to mirror the API limit. */
 export const PACER_ACTIVITY_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
+// ─── Pacing-health / recommendation engine tunables ─────────────────────────
+// Shared by the Meta and Google recommendation engines (pacing-engine.ts).
+// Exposed here rather than hard-coded so the bands can be calibrated against
+// real account behavior without touching calc code.
+
+/** Rolling health window (days) for Meta pacing health. */
+export const HEALTH_WINDOW_DAYS = 7;
+/** Pacing ratio at/above which delivery is "healthy" (spending its budget). */
+export const HEALTH_HEALTHY_THRESHOLD = 0.9;
+/** Pacing ratio below which delivery is "low" — the delivery-low/limited gate. */
+export const HEALTH_LOW_THRESHOLD = 0.75;
+/** Below this many fractional days of history the health verdict is withheld —
+ *  a few hours of a partial day is exactly the single-day noise the 7-day
+ *  window exists to avoid. */
+export const HEALTH_MIN_DAYS = 0.5;
+/** Base on-track band (± of target). Tightens as the period runs out. */
+export const ON_TRACK_TOLERANCE = 0.05;
+/** The tightened floor the on-track band never shrinks below near period end. */
+export const ON_TRACK_TOLERANCE_FLOOR = 0.02;
+/** Largest single budget raise recommended in one move (re-triggers learning
+ *  beyond this); also the large-jump flag threshold. */
+export const RAISE_STEP_CAP = 0.2;
+/** Meta single-day flexibility (overage) bounds: accounts are on either the
+ *  25% or 75% rollout, so the empirically derived value is clamped to [.25,.75]. */
+export const OVERAGE_ALLOWANCE_MIN = 0.25;
+export const OVERAGE_ALLOWANCE_MAX = 0.75;
+/** Fallback when neither the spend series nor an account setting reveals the
+ *  account's flexibility (newer accounts are on 75%). */
+export const OVERAGE_ALLOWANCE_DEFAULT = 0.75;
+/** Days of nonzero spend history required before trusting the empirically
+ *  derived overage (a young ad may never have run hot enough to reveal it). */
+export const OVERAGE_MIN_HISTORY_DAYS = 14;
+/** Google: monthly charging limit multiplier (30.4 = 365/12). A Google
+ *  constant, not a judgment knob — exposed so a future platform change is a
+ *  config edit. */
+export const MONTH_DAYS_MULTIPLIER = 30.4;
+/** Google: fixed single-day spending limit multiple of the average daily
+ *  budget (2× for all accounts — unlike Meta's per-account overage). */
+export const GOOGLE_DAILY_MULTIPLIER = 2;

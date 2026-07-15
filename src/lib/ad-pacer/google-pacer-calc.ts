@@ -13,6 +13,12 @@ import {
   isEligibleForLivePacing,
   isLifetimeInProgress,
 } from './pacer-calc';
+import { MONTH_DAYS_MULTIPLIER } from './constants';
+import {
+  buildGoogleRecommendation,
+  type GoogleRecommendation,
+} from './pacing-engine';
+import { monthBoundsIso, zonedMidnightMs } from '@/lib/timezone';
 
 export type GoogleChannelGroup =
   | 'Search'
@@ -146,7 +152,7 @@ export interface GoogleDailyRollup {
   eligibleCount: number;
 }
 
-const DAYS_PER_MONTH = 30.4;
+const DAYS_PER_MONTH = MONTH_DAYS_MULTIPLIER; // 30.4 — see constants.ts
 
 /**
  * §8 account daily roll-up: "daily set" vs "daily needed". The gap is the signal
@@ -288,31 +294,45 @@ export interface GooglePacingCard {
   daysRemaining: number;
   /** §5 the real cap on a daily campaign: daily × 30.4, reprorated (§9). */
   monthlyCeiling: number;
-  /** §5 target rate so its 30.4 ceiling clears the allocation: target / 30.4. */
+  /** The catch-up rate ($/day): (target − actual) ÷ remaining calendar days.
+   *  Google paces the remainder of the month to new_daily × remaining
+   *  calendar days, so this — not target ÷ 30.4 — lands the month on target. */
   recommendedDaily: number;
-  /** Month-end projection of served spend. */
+  /** Month-end projection of served spend: min(actual + run_rate × days
+   *  remaining, monthly ceiling) — Google will not bill past the ceiling, so
+   *  the old linear daily × calendar-days extrapolation overshot the cap. */
   projected: number;
   status: GooglePacingStatus;
+  /** The four-state recommendation engine result (Daily campaigns with a
+   *  target only; null for Total budgets / unallocated lines). Carries the
+   *  month-to-date pacing health, the catch-up rate, and shortfall math. */
+  recommendation: GoogleRecommendation | null;
   /** §5 BUDGET_CONSTRAINED — at cap with headroom (raise budget). */
   budgetLimited: boolean;
   /** §5 an ad is disapproved — fix the ads, never raise the budget. */
   disapproved: boolean;
   /** True when the current rate's ceiling can't clear the allocation (raise it). */
   ceilingShortOfTarget: boolean;
+  /** Campaign restricts days/dayparts via an ad schedule — post June 2026 it
+   *  paces the full monthly cap into active days, so calendar-day math can
+   *  misread it. Badged; active-day pacing is a follow-up. */
+  hasAdSchedule: boolean;
 }
 
 const ONTRACK_FLOOR = 0.9; // §5 wide band — absorbs Google's 2× daily swings
 
 /**
  * §5 — the four-metric Google pacing card for one campaign line: monthly
- * ceiling, days remaining, projected, and the recommended daily rate, plus a
- * pace-adjusted status. The on-track band is deliberately WIDE: a campaign can
- * spend up to 2× its daily rate on a busy day, so the status keys off the
- * MONTHLY projection — short of target → under; projected above the ceiling →
- * over (running hot) — never a single high day. Budget-limited and disapproved
- * are surfaced separately because they need opposite fixes (raise budget vs fix
- * ads). Total-budget campaigns pace to their own end date, so variance is near
- * zero by design — an under there signals an interruption, not a pacing miss.
+ * ceiling, days remaining, projected, and the recommended daily (catch-up)
+ * rate, plus a pace-adjusted status. The monthly ceiling (daily × 30.4) is the
+ * attainment anchor — Google itself paces to it — so over/under keys off
+ * ceiling vs TARGET plus month-to-date delivery health, never a single high
+ * day (Google may spend up to 2× the daily on one day) and never projection
+ * vs ceiling (a ~2% calendar artifact no rate change can fix). Budget-limited
+ * and disapproved are surfaced separately because they need opposite fixes
+ * (raise budget vs fix ads). Total-budget campaigns pace to their own end
+ * date, so variance is near zero by design — an under there signals an
+ * interruption, not a pacing miss.
  */
 export function buildGooglePacingCard(
   ad: PacerAd,
@@ -326,11 +346,62 @@ export function buildGooglePacingCard(
   const dailyBudget = calc.dailyBudget;
   // Ceiling: prefer the server-reprorated value (§9); else current daily × 30.4.
   const ceiling = num(ad.googleProratedCeiling) ?? dailyBudget * DAYS_PER_MONTH;
-  const recommendedDaily = target > 0 ? target / DAYS_PER_MONTH : 0;
   const ceilingShortOfTarget = pacingType === 'Daily' && ceiling > 0 && ceiling < target;
 
   const budgetLimited = !!ad.googleBudgetConstrained;
   const disapproved = !!ad.googleAdsDisapproved;
+
+  // Fractional calendar days the campaign has been eligible this month
+  // (effective start → now, account TZ) — the health denominator.
+  const bounds = ad.period ? monthBoundsIso(ad.period) : null;
+  const daysInMonth =
+    bounds != null
+      ? Math.round(
+          (Date.parse(`${bounds.end}T00:00:00Z`) -
+            Date.parse(`${bounds.start}T00:00:00Z`)) /
+            86_400_000,
+        ) + 1
+      : DAYS_PER_MONTH;
+  let daysElapsed = 0;
+  const startMatch = calc.effectiveStart
+    ? /^(\d{4})-(\d{2})-(\d{2})$/.exec(calc.effectiveStart)
+    : null;
+  if (startMatch) {
+    const startMs = zonedMidnightMs(
+      Number(startMatch[1]),
+      Number(startMatch[2]),
+      Number(startMatch[3]),
+      timeZone,
+    );
+    daysElapsed = Math.max(0, (nowMs - startMs) / 86_400_000);
+  }
+
+  // The four-state engine — Daily campaigns only (a Total budget paces to its
+  // own end date; Google won't exceed it, so the daily-rate machinery doesn't
+  // apply).
+  const recommendation =
+    pacingType === 'Daily' && target > 0 && !calc.endsBeforeToday
+      ? buildGoogleRecommendation({
+          target,
+          actualSpend: actual,
+          dailyBudget,
+          monthlyCeiling: ceiling,
+          daysElapsed,
+          daysRemaining: calc.daysLeft,
+          daysInMonth,
+        })
+      : null;
+
+  // Projection: for a daily campaign, run-rate based and capped at the
+  // ceiling (Google never bills past it). Total budgets keep the linear
+  // projection (they pace to their own flight, not a monthly cap).
+  const projected = recommendation?.projectedSpend ?? calc.projected;
+  // Catch-up rate, not target/30.4 — see the field doc.
+  const recommendedDaily =
+    recommendation?.requiredRate ??
+    (target > 0 && calc.daysLeft > 0
+      ? Math.max(0, target - actual) / Math.max(calc.daysLeft, 1)
+      : 0);
 
   let status: GooglePacingStatus;
   if (target <= 0) {
@@ -340,11 +411,19 @@ export function buildGooglePacingCard(
     // so variance is near zero by design. Only a real shortfall (interruption)
     // shows as under; otherwise on-track. Never "over".
     status = calc.projected < target * ONTRACK_FLOOR ? 'under' : 'on-track';
+  } else if (recommendation) {
+    // Daily: over/under keys off CEILING vs TARGET (the attainment anchor) +
+    // delivery health — never projection vs ceiling, which is a ~2% artifact
+    // of 31 calendar days vs the 30.4 multiplier that no rate change can fix.
+    status =
+      recommendation.state === 'on_track'
+        ? 'on-track'
+        : recommendation.state === 'adjust' &&
+            recommendation.direction === 'trim'
+          ? 'over'
+          : 'under';
   } else {
-    // Daily: alert on the monthly projection, not a single 2× day.
-    if (calc.projected > ceiling && ceiling > 0) status = 'over';
-    else if (calc.projected < target * ONTRACK_FLOOR) status = 'under';
-    else status = 'on-track';
+    status = projected < target * ONTRACK_FLOOR ? 'under' : 'on-track';
   }
 
   return {
@@ -360,11 +439,13 @@ export function buildGooglePacingCard(
     daysRemaining: calc.daysLeft,
     monthlyCeiling: ceiling,
     recommendedDaily,
-    projected: calc.projected,
+    projected,
     status,
+    recommendation,
     budgetLimited,
     disapproved,
     ceilingShortOfTarget,
+    hasAdSchedule: !!ad.googleHasAdSchedule,
   };
 }
 

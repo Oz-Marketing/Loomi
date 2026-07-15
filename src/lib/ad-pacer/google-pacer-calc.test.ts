@@ -248,19 +248,61 @@ describe('computeProratedCeiling (§9)', () => {
 });
 
 describe('buildGooglePacingCard (§5 ceiling card + status)', () => {
-  it('on-track daily campaign: ceiling = daily × 30.4, rec = target / 30.4', () => {
+  it('daily campaign: ceiling = daily × 30.4, rec = the CATCH-UP rate', () => {
     const card = buildGooglePacingCard(gAd({}), NOW, TZ);
     expect(card.pacingType).toBe('Daily');
     expect(card.shared).toBe(false);
     expect(card.monthlyCeiling).toBeCloseTo(50 * 30.4);
-    expect(card.recommendedDaily).toBeCloseTo(1000 / 30.4);
+    // (target − actual) ÷ remaining calendar days — (1000 − 300) / 15.5 —
+    // NOT target / 30.4 (only correct at the very start of the month).
+    expect(card.recommendedDaily).toBeCloseTo(700 / 15.5, 2);
+    // $300 in 14.5 days is a ~$20.7/day run rate against a $1,520 ceiling —
+    // the campaign can't spend its budget, so it reads delivery-limited/under
+    // (the old projection-vs-target band hid this).
+    expect(card.recommendation?.state).toBe('delivery_limited');
+    expect(card.status).toBe('under');
+  });
+
+  it('on-track daily campaign: ceiling matches target and it is delivering', () => {
+    // Ceiling 33 × 30.4 = 1003.20 ≈ target 1000; delivering to expected-to-date.
+    const card = buildGooglePacingCard(
+      gAd({ pacerDailyBudget: '33', pacerActual: '485' }),
+      NOW,
+      TZ,
+    );
+    expect(card.recommendation?.state).toBe('on_track');
     expect(card.status).toBe('on-track');
   });
 
-  it('prefers the server-reprorated ceiling and flags over when projection exceeds it', () => {
-    const card = buildGooglePacingCard(gAd({ googleProratedCeiling: '500' }), NOW, TZ);
-    expect(card.monthlyCeiling).toBeCloseTo(500);
+  it('over-funded + delivering → trim to the catch-up rate, reads over', () => {
+    // Ceiling 1520 well above target 1000, spend tracking the ceiling pace.
+    const card = buildGooglePacingCard(gAd({ pacerActual: '735' }), NOW, TZ);
+    expect(card.recommendation?.state).toBe('adjust');
+    expect(card.recommendation?.direction).toBe('trim');
     expect(card.status).toBe('over');
+  });
+
+  it('prefers the server-reprorated ceiling; a ceiling under target reads under (raise), not "over"', () => {
+    const card = buildGooglePacingCard(
+      gAd({ googleProratedCeiling: '500', pacerDailyBudget: '40' }),
+      NOW,
+      TZ,
+    );
+    expect(card.monthlyCeiling).toBeCloseTo(500);
+    // Old logic flagged "over" because the linear projection exceeded the
+    // ceiling — an artifact, per spec §5. The real signal is ceiling ($500)
+    // vs target ($1000): underfunded → raise to the catch-up rate
+    // ((1000 − 300) / 15.5 ≈ $45.16 > current $40).
+    expect(card.recommendation?.state).toBe('adjust');
+    expect(card.recommendation?.direction).toBe('raise');
+    expect(card.status).toBe('under');
+  });
+
+  it('caps the projection at the monthly ceiling (Google never bills past it)', () => {
+    // Delivering at/above ceiling pace: linear extrapolation would exceed the
+    // ceiling; the card must not show a figure Google will not charge.
+    const card = buildGooglePacingCard(gAd({ pacerActual: '760' }), NOW, TZ);
+    expect(card.projected).toBeLessThanOrEqual(card.monthlyCeiling + 0.005);
   });
 
   it('disapproved underspender → under + disapproved flag (fix ads, not budget)', () => {

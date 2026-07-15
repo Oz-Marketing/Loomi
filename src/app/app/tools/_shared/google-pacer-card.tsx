@@ -6,7 +6,7 @@
 // buildGooglePacingCard (pure, unit-tested); these are render-only.
 
 import { COLORS } from '@/lib/ad-pacer/constants';
-import { fmt, fmtDate, fmtDaysLeft } from '@/lib/ad-pacer/helpers';
+import { fmt, fmtDate, fmtDaysLeft, fmtDaysNum } from '@/lib/ad-pacer/helpers';
 import type { GooglePacingCard } from '@/lib/ad-pacer/google-pacer-calc';
 import { MetricBox } from './metrics';
 
@@ -22,8 +22,9 @@ function Chip({ bg, color, children }: { bg: string; color: string; children: Re
 }
 
 /** §2/§5 badges for the expanded card header: Daily/Total pacing type, the
- *  shared-budget badge (only when genuinely shared), and the budget-limited /
- *  disapproved delivery chips (opposite remedies). */
+ *  shared-budget badge (only when genuinely shared), the budget-limited /
+ *  disapproved delivery chips (opposite remedies), and the ad-schedule badge
+ *  (day-parted campaigns pace differently since June 2026). */
 export function GooglePacingBadges({ card }: { card: GooglePacingCard }) {
   return (
     <>
@@ -33,6 +34,11 @@ export function GooglePacingBadges({ card }: { card: GooglePacingCard }) {
       {card.shared && (
         <Chip bg="rgba(125,184,232,0.16)" color="#7db8e8">
           Shared{card.sharedCount ? ` ×${card.sharedCount}` : ''}
+        </Chip>
+      )}
+      {card.hasAdSchedule && (
+        <Chip bg="rgba(250,204,21,0.16)" color="#facc15">
+          Ad schedule
         </Chip>
       )}
       {card.budgetLimited && (
@@ -49,10 +55,12 @@ export function GooglePacingBadges({ card }: { card: GooglePacingCard }) {
   );
 }
 
-/** §5 the three Google daily metric boxes that replace Meta's Remaining Budget +
- *  Rec Daily Adjustment: Days Remaining, Monthly Ceiling (daily × 30.4), and the
- *  recommended daily RATE (target ÷ 30.4). Rendered beside the shared Projected
- *  box inside PacerRow's metric grid. */
+/** §5 the Google daily metric boxes that replace Meta's Remaining Budget +
+ *  Rec Daily Adjustment: Days Remaining, Monthly Ceiling (daily × 30.4), and
+ *  the recommendation box — the four-state engine's output. Only `adjust`
+ *  hands over a number to type; on-track suppresses it, and delivery-limited /
+ *  shortfall replace a misleading number with the honest thing. Rendered
+ *  beside the shared Pacing Health + Projected boxes in PacerRow's grid. */
 export function GoogleDailyMetricBoxes({
   card,
   hasDates,
@@ -62,18 +70,54 @@ export function GoogleDailyMetricBoxes({
   hasDates: boolean;
   effectiveEnd: string | null;
 }) {
+  const rec = card.recommendation;
   // Never recommend raising the budget on a disapproved campaign — the rate is
   // sized right, the ads can't serve (§5). Surface "fix ads" instead of a bump.
-  const recDetail = card.disapproved
-    ? 'Ads disapproved — fix the ads, not the budget'
-    : card.ceilingShortOfTarget
-      ? `Raise daily to ${fmt(card.recommendedDaily)} — current ceiling falls short`
-      : 'Ceiling clears the target';
-  const recColor = card.disapproved
-    ? COLORS.error
-    : card.ceilingShortOfTarget
-      ? COLORS.warn
-      : COLORS.success;
+  let recValue = card.target > 0 ? fmt(card.recommendedDaily) : '—';
+  let recSub: string | undefined =
+    card.target > 0 ? 'catch-up rate over remaining days' : 'set Target Spend';
+  let recDetail: string | undefined;
+  let recColor: string | undefined;
+  if (card.disapproved) {
+    recValue = 'Fix ads';
+    recSub = 'ads disapproved';
+    recDetail = 'Budget is sized right — disapproved ads are blocking delivery';
+    recColor = COLORS.error;
+  } else if (rec) {
+    switch (rec.state) {
+      case 'on_track':
+        recValue = 'No change';
+        recSub = 'ceiling matches target, delivering';
+        recDetail = 'Leave it — Google paces to the monthly ceiling';
+        recColor = COLORS.success;
+        break;
+      case 'adjust':
+        recValue = fmt(rec.requiredRate);
+        recSub = `${fmt(Math.max(0, rec.remainingBudget))} left ÷ ${fmtDaysNum(card.daysRemaining)}d — catch-up rate`;
+        recDetail =
+          rec.direction === 'trim'
+            ? `Lower the daily from ${fmt(card.dailyBudget)} to land on target${rec.largeJump ? ' — large change, monitor it' : ''}`
+            : `Raise the daily from ${fmt(card.dailyBudget)} to land on target${rec.largeJump ? ' — large jump, stage it and monitor' : ''}`;
+        recColor = rec.direction === 'trim' ? COLORS.lifetime : COLORS.warn;
+        break;
+      case 'delivery_limited':
+        recValue = 'Diagnose delivery';
+        recSub =
+          rec.health.pacingRatio != null
+            ? `spending ${(rec.health.pacingRatio * 100).toFixed(0)}% of ceiling pace`
+            : 'underdelivering';
+        recDetail =
+          'Raising the daily won’t help — check search volume, bids, ad rank, schedule';
+        recColor = COLORS.error;
+        break;
+      case 'shortfall':
+        recValue = `Short ~${fmt(rec.gap)}`;
+        recSub = `${fmt(Math.max(0, rec.remainingBudget))} left · ~${fmt(rec.recoverableMax)} max billable`;
+        recDetail = 'Reallocate the unspendable budget, or accept the miss';
+        recColor = COLORS.error;
+        break;
+    }
+  }
   return (
     <>
       <MetricBox
@@ -85,13 +129,13 @@ export function GoogleDailyMetricBoxes({
         label="Monthly Ceiling"
         value={card.monthlyCeiling > 0 ? fmt(card.monthlyCeiling) : '—'}
         sub={`${fmt(card.dailyBudget)}/day × 30.4`}
-        detail="The real cap — daily budgets are averages, not hard caps"
+        detail="The real cap — Google bills at most daily × 30.4 per calendar month"
         color={card.ceilingShortOfTarget ? COLORS.warn : COLORS.success}
       />
       <MetricBox
         label="Rec. Daily Rate"
-        value={card.target > 0 ? fmt(card.recommendedDaily) : '—'}
-        sub={card.target > 0 ? `${fmt(card.target)} target ÷ 30.4` : 'set Target Spend'}
+        value={card.target > 0 ? recValue : '—'}
+        sub={recSub}
         detail={recDetail}
         color={recColor}
       />
@@ -99,9 +143,10 @@ export function GoogleDailyMetricBoxes({
   );
 }
 
-/** §5 the pacing footnote — budget-limited and disapproved get OPPOSITE advice;
- *  a daily campaign over its ceiling is running hot; otherwise the on-track note
- *  reminds that 2× daily swings are normal and the ceiling is the real cap. */
+/** §5/§7 the pacing footnote — budget-limited and disapproved keep their
+ *  OPPOSITE advice; otherwise the four-state engine speaks: on-track
+ *  suppresses, adjust hands over the catch-up rate, delivery-limited says
+ *  diagnose (never raise), shortfall states the honest gap. */
 export function GooglePacingInsight({
   card,
   effectiveEnd,
@@ -135,28 +180,63 @@ export function GooglePacingInsight({
       </p>
     );
   }
+  const rec = card.recommendation;
+  if (rec) {
+    switch (rec.state) {
+      case 'delivery_limited':
+        return (
+          <p className="m-0 text-[11px] leading-relaxed" style={{ color: COLORS.error }}>
+            Spending{' '}
+            {rec.health.pacingRatio != null
+              ? `${(rec.health.pacingRatio * 100).toFixed(0)}%`
+              : 'well short'}{' '}
+            of the pace needed to reach its {fmt(rec.effectiveCeiling)} ceiling — the campaign
+            can&apos;t spend its current budget, so raising the daily does nothing. Check search
+            volume, bids, ad rank/quality, and the schedule.
+          </p>
+        );
+      case 'shortfall':
+        return (
+          <p className="m-0 text-[11px] leading-relaxed" style={{ color: COLORS.error }}>
+            Can&apos;t recover: {fmt(Math.max(0, rec.remainingBudget))} remains but at most ~
+            {fmt(rec.recoverableMax)} can still bill (2× the daily) by {endLabel} — short ~
+            {fmt(rec.gap)}. Reallocate to a campaign that can absorb it, or accept the miss.
+          </p>
+        );
+      case 'adjust':
+        if (rec.direction === 'trim') {
+          return (
+            <p className="m-0 text-[11px] leading-relaxed" style={{ color: COLORS.warn }}>
+              The {fmt(rec.effectiveCeiling)} ceiling overshoots the {fmt(card.target)} target —
+              Google will pace toward it. Set the daily to {fmt(rec.requiredRate)} to land the
+              month on target by {endLabel}.
+            </p>
+          );
+        }
+        return (
+          <p className="m-0 text-[11px] leading-relaxed" style={{ color: COLORS.lifetime }}>
+            The current rate&apos;s ceiling ({fmt(rec.effectiveCeiling)}) falls short of the{' '}
+            {fmt(card.target)} target. Set the daily to {fmt(rec.requiredRate)} — the catch-up
+            rate over the remaining days
+            {rec.largeJump ? ' (a large jump — stage it and monitor)' : ''}.
+          </p>
+        );
+      case 'on_track':
+        return (
+          <p className="m-0 text-[11px] leading-relaxed" style={{ color: COLORS.success }}>
+            On track — the monthly ceiling matches the target and delivery is healthy. Single-day
+            swings up to 2× the daily are normal; the {fmt(rec.effectiveCeiling)} ceiling is the
+            real cap.
+          </p>
+        );
+    }
+  }
   if (card.ceilingShortOfTarget) {
     return (
       <p className="m-0 text-[11px] leading-relaxed" style={{ color: COLORS.warn }}>
         The current rate&apos;s ceiling ({fmt(card.monthlyCeiling)}) falls short of the{' '}
-        {fmt(card.target)} target. Raise the daily rate to {fmt(card.recommendedDaily)} so its 30.4
-        ceiling clears the allocation.
-      </p>
-    );
-  }
-  if (card.status === 'over') {
-    return (
-      <p className="m-0 text-[11px] leading-relaxed" style={{ color: COLORS.warn }}>
-        Projected {fmt(card.projected)} is above the {fmt(card.monthlyCeiling)} ceiling — running
-        hot. Lower the daily rate to bring the month-end projection back under the cap by {endLabel}.
-      </p>
-    );
-  }
-  if (card.status === 'under') {
-    return (
-      <p className="m-0 text-[11px] leading-relaxed" style={{ color: COLORS.lifetime }}>
-        Trending short of the {fmt(card.target)} target. Bumping the daily rate toward{' '}
-        {fmt(card.recommendedDaily)} pulls the month-end projection up to plan.
+        {fmt(card.target)} target. Raise the daily rate to {fmt(card.recommendedDaily)} to close
+        the gap.
       </p>
     );
   }

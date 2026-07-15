@@ -22,6 +22,11 @@ import {
   isValidTimeZone,
   zonedTodayIso,
 } from '@/lib/timezone';
+import {
+  dailySpendSyncWindow,
+  writeDailySpendSeries,
+  type DailySpendWriteRow,
+} from '@/lib/meta-ads-pacer';
 
 const GRAPH_BASE = 'https://graph.facebook.com';
 
@@ -297,6 +302,46 @@ export async function fetchAdSetRunSpend(
     const spend = Number(row.spend ?? 0);
     if (!Number.isFinite(spend)) continue;
     map.set(row.adset_id, (map.get(row.adset_id) ?? 0) + spend);
+  }
+  return map;
+}
+
+interface MetaAdSetDailyInsightRow {
+  adset_id?: string;
+  spend?: string;
+  date_start?: string; // YYYY-MM-DD, the day bucket
+}
+
+/**
+ * Returns adSetId → per-day spend rows over [since, until]
+ * (time_increment=1). Feeds the pacing-health engine's rolling 7-day window
+ * and the empirical overage-allowance derivation — synced into
+ * MetaAdsPacerDailySpend rather than recomputed on every card render.
+ */
+export async function fetchAdSetDailySpend(
+  cfg: MetaConfig,
+  adAccountId: string,
+  since: string,
+  until: string,
+): Promise<Map<string, { date: string; spend: number }[]>> {
+  const rows = await metaGraphFetchAll<MetaAdSetDailyInsightRow>(
+    cfg,
+    `${adAccountId}/insights`,
+    {
+      level: 'adset',
+      fields: 'adset_id,spend',
+      time_range: JSON.stringify({ since, until }),
+      time_increment: 1,
+    },
+  );
+  const map = new Map<string, { date: string; spend: number }[]>();
+  for (const row of rows) {
+    if (!row.adset_id || !row.date_start) continue;
+    const spend = Number(row.spend ?? 0);
+    if (!Number.isFinite(spend)) continue;
+    const list = map.get(row.adset_id) ?? [];
+    list.push({ date: row.date_start, spend });
+    map.set(row.adset_id, list);
   }
   return map;
 }
@@ -1049,6 +1094,46 @@ export async function syncPeriodFromMeta(
   }
 
   if (ops.length > 0) await prisma.$transaction(ops);
+
+  // Daily spend series (pacing-health engine): per-day spend for every linked
+  // ad set — 90-day backfill on the first sync, a short trailing window after.
+  // Best-effort: a failure here must not abort an otherwise-good month sync.
+  if (plan && !future) {
+    try {
+      const linkedIds = new Set(
+        results.filter((r) => r.matched && r.adSetId).map((r) => r.adSetId as string),
+      );
+      if (linkedIds.size > 0) {
+        const window = await dailySpendSyncWindow(plan.id, 'meta', todayIso);
+        const daily = await fetchAdSetDailySpend(
+          cfg,
+          adAccountId,
+          window.since,
+          window.until,
+        );
+        // Budget-in-effect: the CURRENT daily budget — exact for today's row,
+        // an approximation for backfilled history (Meta has no per-day budget
+        // history). Feeds only the overage derivation.
+        const budgetByAdSet = new Map(
+          adSets.map((s) => {
+            const dollars = s.daily_budget != null ? Number(s.daily_budget) / 100 : NaN;
+            return [s.id, Number.isFinite(dollars) ? dollars : null] as const;
+          }),
+        );
+        const rows: DailySpendWriteRow[] = [];
+        for (const [adSetId, points] of daily) {
+          if (!linkedIds.has(adSetId)) continue;
+          const dailyBudget = budgetByAdSet.get(adSetId) ?? null;
+          for (const p of points) {
+            rows.push({ objectId: adSetId, date: p.date, spend: p.spend, dailyBudget });
+          }
+        }
+        if (rows.length > 0) await writeDailySpendSeries(plan.id, 'meta', window, rows);
+      }
+    } catch {
+      // Series sync is additive — the cards fall back to "needs series".
+    }
+  }
 
   return {
     ok: true,

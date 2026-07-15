@@ -23,6 +23,8 @@ import {
   classifyAdVariance,
   computeSplitRunSettlement,
 } from '@/lib/ad-pacer/pacer-calc';
+import { deriveOverageAllowance } from '@/lib/ad-pacer/pacing-engine';
+import { OVERAGE_ALLOWANCE_DEFAULT } from '@/lib/ad-pacer/constants';
 import { writeAudit } from '@/lib/meta-ads-audit';
 
 function attachUrl<T extends { attachmentKey: string | null }>(entry: T): T & { attachmentUrl: string | null } {
@@ -198,7 +200,7 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
   // (Account.markup) and resolved pacing timezone alongside the period data.
   // The calculator needs markup to translate Client Budget inputs into actual
   // spend; the Pacer needs the timezone for its time-left math.
-  const [budget, ads, plan, globalDefaultMarkup] = await Promise.all([
+  const [budget, ads, plan, globalDefaultMarkup, dailySpendRows] = await Promise.all([
     prisma.metaAdsPacerPeriodBudget.findUnique({
       where: { planId_period: { planId, period } },
     }),
@@ -214,11 +216,24 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
       where: { id: planId },
       select: {
         account: {
-          select: { markup: true, metaTimezone: true, timezone: true },
+          select: {
+            markup: true,
+            metaTimezone: true,
+            timezone: true,
+            pacerOverageAllowance: true,
+          },
         },
       },
     }),
     getGlobalDefaultMarkup(),
+    // Synced per-day spend (pacing-health engine): the whole retained series —
+    // the per-ad rolling window needs the last ~8 days, the account overage
+    // derivation the full history.
+    prisma.metaAdsPacerDailySpend.findMany({
+      where: { planId },
+      select: { platform: true, objectId: true, date: true, spend: true, dailyBudget: true },
+      orderBy: { date: 'asc' },
+    }),
   ]);
   // Resolve tz + "now" once so each ad can carry a §3 lifetime-in-progress flag
   // computed against the account's clock (the same predicate the over/under
@@ -228,6 +243,36 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
     plan?.account?.timezone,
   );
   const nowMs = Date.now();
+  const todayIso = zonedTodayIso(nowMs, tz);
+
+  // Per-object series slices for the cards' rolling health window (the last 8
+  // dates cover the 7-day window plus today), keyed "platform:objectId".
+  const windowStart = addDaysIso(todayIso, -7);
+  const seriesByObject = new Map<
+    string,
+    { date: string; spend: number; dailyBudget: number | null }[]
+  >();
+  // The account's Meta overage allowance derives from the FULL history across
+  // every synced ad set (highest single-day spend ÷ that day's budget).
+  const metaOveragePoints: { date: string; spend: number; dailyBudget: number | null }[] = [];
+  for (const r of dailySpendRows) {
+    const point = {
+      date: r.date,
+      spend: Number(r.spend) || 0,
+      dailyBudget: r.dailyBudget != null ? Number(r.dailyBudget) : null,
+    };
+    if (r.platform !== 'google') metaOveragePoints.push(point);
+    if (r.date < windowStart) continue;
+    const key = `${r.platform}:${r.objectId}`;
+    const list = seriesByObject.get(key) ?? [];
+    list.push(point);
+    seriesByObject.set(key, list);
+  }
+  const overageAllowance = deriveOverageAllowance(metaOveragePoints, {
+    todayIso,
+    fallback: plan?.account?.pacerOverageAllowance ?? OVERAGE_ALLOWANCE_DEFAULT,
+  });
+
   return {
     // Account budget goals are per-platform: Google reads its own columns, Meta
     // (and legacy/unspecified) reads the original pair.
@@ -247,6 +292,10 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
     markup: accountMarginSetting(plan?.account?.markup ?? null, globalDefaultMarkup),
     // Meta zone if cached, else a valid hand-entered zone, else the default.
     timeZone: tz,
+    // Per-account Meta single-day flexibility (0.25–0.75) for the shortfall
+    // feasibility boundary — derived from the spend series, else the account
+    // setting, else the default.
+    overageAllowance,
     ads: ads.map((ad) => ({
       ...ad,
       // §3: lifetime ad still running — the Over/Under view excludes it from the
@@ -256,6 +305,14 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
       // from plan (real vs cross-month timing). Computed here so the Pacer card,
       // the Over/Under page, and reconciliation all agree (§0.4).
       variance: classifyAdVariance(ad, period, nowMs, tz),
+      // Rolling-window slice of the synced per-day spend for this ad's linked
+      // platform object — the pacing-health engine's data dependency.
+      dailySpend:
+        seriesByObject.get(
+          ad.platform === 'google'
+            ? `google:${ad.googleCampaignId ?? ''}`
+            : `meta:${ad.metaObjectId ?? ''}`,
+        ) ?? [],
       activityLog: ad.activityLog.map(attachUrl),
     })),
   };
@@ -264,6 +321,89 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
 /** Add the attachment URL to an activity entry before returning it to the client. */
 export function decorateActivityEntry<T extends { attachmentKey: string | null }>(entry: T) {
   return attachUrl(entry);
+}
+
+// ─── Daily spend series (pacing-health engine) ──────────────────────────────
+
+/** First sync pulls this much history — enough for the empirical overage
+ *  derivation to catch a hot catch-up day, not just the health window. */
+export const DAILY_SPEND_BACKFILL_DAYS = 90;
+/** Subsequent syncs re-pull a short trailing window (late-arriving spend
+ *  adjustments + any gap since the last sync). */
+export const DAILY_SPEND_INCREMENTAL_DAYS = 10;
+/** Rows older than this are pruned on sync. */
+export const DAILY_SPEND_RETENTION_DAYS = 120;
+
+/** Date-only day arithmetic on YYYY-MM-DD strings (UTC math, no TZ shift). */
+export function addDaysIso(iso: string, n: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
+/**
+ * The [since, until] window a sync should pull per-day spend for: a 90-day
+ * backfill the first time a plan+platform syncs (no series rows yet), a short
+ * trailing window after that.
+ */
+export async function dailySpendSyncWindow(
+  planId: string,
+  platform: PacerPlatform,
+  todayIso: string,
+): Promise<{ since: string; until: string }> {
+  const existing = await prisma.metaAdsPacerDailySpend.findFirst({
+    where: { planId, platform },
+    select: { id: true },
+  });
+  const days = existing ? DAILY_SPEND_INCREMENTAL_DAYS : DAILY_SPEND_BACKFILL_DAYS;
+  return { since: addDaysIso(todayIso, -(days - 1)), until: todayIso };
+}
+
+export interface DailySpendWriteRow {
+  objectId: string; // Meta ad-set id / Google campaign id
+  date: string; // YYYY-MM-DD
+  spend: number; // $
+  dailyBudget: number | null; // $ in effect (current budget at sync time)
+}
+
+/**
+ * Replace the synced window's series rows for the given objects and prune
+ * history past retention. Delete-then-createMany (2 statements) rather than
+ * row-by-row upserts — a 90-day backfill across an account's ad sets is a few
+ * thousand rows.
+ */
+export async function writeDailySpendSeries(
+  planId: string,
+  platform: PacerPlatform,
+  window: { since: string; until: string },
+  rows: DailySpendWriteRow[],
+): Promise<void> {
+  const objectIds = Array.from(new Set(rows.map((r) => r.objectId)));
+  await prisma.$transaction([
+    prisma.metaAdsPacerDailySpend.deleteMany({
+      where: {
+        planId,
+        platform,
+        OR: [
+          {
+            objectId: { in: objectIds },
+            date: { gte: window.since, lte: window.until },
+          },
+          { date: { lt: addDaysIso(window.until, -(DAILY_SPEND_RETENTION_DAYS - 1)) } },
+        ],
+      },
+    }),
+    prisma.metaAdsPacerDailySpend.createMany({
+      data: rows.map((r) => ({
+        planId,
+        platform,
+        objectId: r.objectId,
+        date: r.date,
+        spend: r.spend.toFixed(2),
+        dailyBudget: r.dailyBudget != null ? r.dailyBudget.toFixed(2) : null,
+      })),
+      skipDuplicates: true,
+    }),
+  ]);
 }
 
 // ─── Live-vs-frozen month model (Change 5) ─────────────────────────────────

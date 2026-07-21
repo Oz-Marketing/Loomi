@@ -38,9 +38,11 @@ export async function POST(
   const { slug } = await context.params;
 
   // Resolve the form first. We don't reuse the admin getForm() because
-  // this path is unauthenticated — go straight to Prisma.
+  // this path is unauthenticated — go straight to Prisma. Any live
+  // (non-template) form accepts submissions; sub-account forms have no
+  // draft gate. Templates are never submittable.
   const form = await prisma.form.findUnique({ where: { slug } });
-  if (!form || form.status !== 'published') {
+  if (!form || form.isTemplate) {
     return jsonResponse({ ok: false, error: 'Form not found' }, { status: 404 });
   }
 

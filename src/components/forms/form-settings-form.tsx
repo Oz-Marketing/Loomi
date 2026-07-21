@@ -178,44 +178,6 @@ export function FormSettingsForm() {
               </span>
             </label>
 
-            <label className="flex items-center justify-between rounded-xl border border-[var(--border)] px-3 py-3">
-              <span>
-                <span className="flex items-center gap-2 text-sm font-medium">
-                  Status
-                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-                    draft.status === 'published'
-                      ? 'bg-emerald-500/15 text-emerald-400'
-                      : 'bg-zinc-500/15 text-zinc-400'
-                  }`}>
-                    {draft.status === 'published' ? 'Published' : 'Draft'}
-                  </span>
-                </span>
-                <span className="block text-xs text-[var(--muted-foreground)]">
-                   Turning the form on will make the form live. Switching the form off will make it unavailable.
-                </span>
-              </span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={draft.status === 'published'}
-                onClick={() => {
-                  const status = draft.status === 'published' ? 'draft' : 'published';
-                  setDraft((d) => ({ ...d, status }));
-                  void patch('status', status);
-                }}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  draft.status === 'published'
-                    ? 'bg-green-500'
-                    : 'bg-[var(--muted)] border border-[var(--border)]'
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    draft.status === 'published' ? 'translate-x-6' : 'translate-x-1'
-                  }`}
-                />
-              </button>
-            </label>
           </div>
         </section>
       )}

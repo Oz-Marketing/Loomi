@@ -4,7 +4,6 @@ import * as React from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import useSWR from 'swr';
-import { toast } from 'sonner';
 import {
   ArrowLeftIcon,
   ArrowTopRightOnSquareIcon,
@@ -50,7 +49,6 @@ const fetcher = async (url: string) => {
 export function FormOverview() {
   const { form, setForm } = useFormDetail();
   const subHref = useSubaccountHref();
-  const [publishing, setPublishing] = React.useState(false);
   const [activeTab, setActiveTab] = React.useState<DetailTab>('overview');
   const [embedOpen, setEmbedOpen] = React.useState(false);
 
@@ -88,28 +86,6 @@ export function FormOverview() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.id]);
 
-  const togglePublish = async () => {
-    if (publishing) return;
-    setPublishing(true);
-    const nextStatus = form.status === 'published' ? 'draft' : 'published';
-    const res = await fetch(`/api/forms/${form.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextStatus }),
-    });
-    setPublishing(false);
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      toast.error(body.error || 'Could not update status.');
-      return;
-    }
-    const body = (await res.json()) as { form: typeof form };
-    setForm(body.form);
-    toast.success(nextStatus === 'published' ? 'Form published.' : 'Form moved to draft.');
-  };
-
-  const published = form.status === 'published';
-
   return (
     <div className="space-y-5">
       {/* Sticky header */}
@@ -125,25 +101,9 @@ export function FormOverview() {
             </Link>
             <DocumentTextIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />
             <div className="min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-2xl font-bold truncate">
-                  {form.name || 'Untitled form'}
-                </h2>
-                <span
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${
-                    published
-                      ? 'bg-emerald-500/10 text-emerald-400'
-                      : 'bg-zinc-500/10 text-zinc-300'
-                  }`}
-                >
-                  {published ? (
-                    <CheckCircleIcon className="w-3 h-3" />
-                  ) : (
-                    <DocumentTextIcon className="w-3 h-3" />
-                  )}
-                  {form.status}
-                </span>
-              </div>
+              <h2 className="text-2xl font-bold truncate">
+                {form.name || 'Untitled form'}
+              </h2>
               <p className="text-[var(--muted-foreground)] mt-1 text-sm truncate font-mono">
                 /f/{form.slug}
               </p>
@@ -151,28 +111,16 @@ export function FormOverview() {
           </div>
 
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            <div className="flex items-center gap-2 mr-1">
-              <span className="text-xs text-[var(--muted-foreground)]">
-                {published ? 'Published' : 'Draft'}
-              </span>
-              <PublishSwitch
-                active={published}
-                updating={publishing}
-                onToggle={() => void togglePublish()}
-              />
-            </div>
-            {published && (
-              <a
-                href={`/f/${form.slug}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
-                title="Open live form in new tab"
-              >
-                <ArrowTopRightOnSquareIcon className="w-4 h-4" />
-                Preview
-              </a>
-            )}
+            <a
+              href={`/f/${form.slug}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 h-10 text-sm rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--primary)] hover:bg-[var(--muted)] transition-colors"
+              title="Open live form in new tab"
+            >
+              <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+              Preview
+            </a>
             <button
               type="button"
               onClick={() => setEmbedOpen(true)}
@@ -252,8 +200,6 @@ function OverviewBody() {
   }, [submissionsPayload]);
   const lastSubmissionAt = submissionsPayload?.submissions?.[0]?.createdAt ?? null;
 
-  const published = form.status === 'published';
-
   void setForm;
 
   return (
@@ -289,15 +235,11 @@ function OverviewBody() {
         />
         <StatCard
           label="Status"
-          value={published ? 'Live' : 'Draft'}
+          value="Live"
           Icon={CheckCircleIcon}
-          bgColor={published ? 'bg-emerald-500/15' : 'bg-zinc-500/15'}
-          iconColor={published ? 'text-emerald-300' : 'text-zinc-400'}
-          hint={
-            published
-              ? 'Accepting submissions'
-              : 'Submissions paused until published'
-          }
+          bgColor="bg-emerald-500/15"
+          iconColor="text-emerald-300"
+          hint="Accepting submissions"
         />
       </div>
 
@@ -394,7 +336,6 @@ function EmbedPopup({ onClose }: { onClose: () => void }) {
                 <li><strong>Iframe</strong> — fixed height. Use when the host page strips <code>&lt;script&gt;</code> tags.</li>
                 <li><strong>Direct link</strong> — share the hosted form URL anywhere.</li>
               </ol>
-              <p>The form must be <strong>Published</strong> for visitors to submit.</p>
             </HelpTip>
           </div>
           <button
@@ -522,39 +463,6 @@ function StatCard({
         </p>
       )}
     </div>
-  );
-}
-
-// ── Publish switch ───────────────────────────────────────────────
-
-function PublishSwitch({
-  active,
-  updating,
-  onToggle,
-}: {
-  active: boolean;
-  updating: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={active}
-      disabled={updating}
-      onClick={onToggle}
-      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${
-        active
-          ? 'bg-emerald-500'
-          : 'bg-[var(--muted)] border border-[var(--border)]'
-      }`}
-    >
-      <span
-        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-          active ? 'translate-x-6' : 'translate-x-1'
-        }`}
-      />
-    </button>
   );
 }
 

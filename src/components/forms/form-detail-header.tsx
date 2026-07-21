@@ -33,7 +33,6 @@ export function FormDetailHeader() {
 
   const [editingTitle, setEditingTitle] = React.useState(false);
   const [titleDraft, setTitleDraft] = React.useState(form.name);
-  const [publishing, setPublishing] = React.useState(false);
 
   React.useEffect(() => {
     if (!editingTitle) setTitleDraft(form.name);
@@ -61,28 +60,7 @@ export function FormDetailHeader() {
     setForm(body.form);
   };
 
-  const togglePublish = async () => {
-    if (publishing) return;
-    setPublishing(true);
-    const nextStatus = form.status === 'published' ? 'draft' : 'published';
-    const res = await fetch(`/api/forms/${form.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextStatus }),
-    });
-    setPublishing(false);
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      toast.error(body.error || 'Could not update status.');
-      return;
-    }
-    const body = (await res.json()) as { form: typeof form };
-    setForm(body.form);
-    toast.success(nextStatus === 'published' ? 'Form published.' : 'Form moved to draft.');
-  };
-
   const autoSaveDescriptor = describeSaveStatus(saveStatus, savedAt);
-  const published = form.status === 'published';
   const publicUrl = `/f/${form.slug}`;
 
   return (
@@ -98,15 +76,6 @@ export function FormDetailHeader() {
           <ArrowLeftIcon className="w-4 h-4" />
           Back
         </button>
-        <span
-          className={`inline-flex items-center rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${
-            published
-              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
-              : 'border-zinc-500/30 bg-zinc-500/10 text-zinc-300'
-          }`}
-        >
-          {form.status}
-        </span>
         <span
           className={`inline-flex items-center gap-1.5 text-xs font-medium ${autoSaveDescriptor.toneClass}`}
         >
@@ -157,19 +126,17 @@ export function FormDetailHeader() {
         </div>
       </div>
 
-      {/* RIGHT — open live · settings cog · publish */}
+      {/* RIGHT — open live · settings cog */}
       <div className="flex items-center justify-end gap-2 min-w-0">
-        {published && (
-          <a
-            href={publicUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            title="Open live form"
-            className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--muted)] hover:bg-[var(--accent)] text-[var(--foreground)] transition-colors"
-          >
-            <ArrowTopRightOnSquareIcon className="w-4 h-4" />
-          </a>
-        )}
+        <a
+          href={publicUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Open live form"
+          className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--muted)] hover:bg-[var(--accent)] text-[var(--foreground)] transition-colors"
+        >
+          <ArrowTopRightOnSquareIcon className="w-4 h-4" />
+        </a>
         <button
           type="button"
           onClick={openSettings}
@@ -178,14 +145,6 @@ export function FormDetailHeader() {
           className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-[var(--muted)] hover:bg-[var(--accent)] text-[var(--foreground)] transition-colors"
         >
           <Cog6ToothIcon className="w-4 h-4" />
-        </button>
-        <button
-          type="button"
-          onClick={() => void togglePublish()}
-          disabled={publishing}
-          className="flex items-center gap-2 px-5 py-2 rounded-lg text-sm font-medium bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
-        >
-          {published ? 'Move to Draft' : 'Publish'}
         </button>
       </div>
     </div>

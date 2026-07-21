@@ -8,16 +8,12 @@ interface FormsListProps {
   forms: FormSummary[];
   loading?: boolean;
   accountNames?: Record<string, string>;
-  /** Plumbed through to FormCard so the inline publish toggle can fire. */
-  onTogglePublish?: (form: FormSummary, next: 'published' | 'draft') => void;
   onDelete?: (form: FormSummary) => void;
   /** Save a live form's design as a reusable template (live-form view only). */
   onSaveAsTemplate?: (form: FormSummary) => void;
-  /** Deploy a template into sub-account(s) as live draft forms (template view only). */
+  /** Deploy a template into sub-account(s) as live forms (template view only). */
   onDeploy?: (form: FormSummary) => void;
-  /** IDs whose publish toggle should render as in-flight. */
-  publishingIds?: string[];
-  /** 'template' renders template cards (click → editor, no publish meta). */
+  /** 'template' renders template cards (click → editor, no live-form meta). */
   variant?: 'form' | 'template';
   /** Override the empty-state copy (e.g. for the Templates gallery). */
   emptyState?: { title: string; subtitle: string };
@@ -27,11 +23,9 @@ export function FormsList({
   forms,
   loading,
   accountNames,
-  onTogglePublish,
   onDelete,
   onSaveAsTemplate,
   onDeploy,
-  publishingIds,
   variant = 'form',
   emptyState,
 }: FormsListProps) {
@@ -73,11 +67,9 @@ export function FormsList({
           form={form}
           variant={variant}
           accountName={accountNames?.[form.accountKey]}
-          onTogglePublish={onTogglePublish}
           onDelete={onDelete}
           onSaveAsTemplate={onSaveAsTemplate}
           onDeploy={onDeploy}
-          isPublishUpdating={publishingIds?.includes(form.id) ?? false}
         />
       ))}
     </div>

@@ -319,14 +319,21 @@ export async function createForm(input: {
 
   const slug = await ensureUniqueSlug(slugify(name) || 'untitled-form');
   const schema = (input.schema ?? emptyFormTemplate()) as unknown as Prisma.InputJsonValue;
+  const isTemplate = input.isTemplate ?? false;
+  // Sub-account forms are live the moment they're created — there is no
+  // publish step; exposure is controlled by whether the URL is shared/
+  // embedded. Templates keep the draft→published lifecycle (draft = still
+  // authoring, published = available in the deploy picker).
+  const status = isTemplate ? 'draft' : 'published';
   const created = await prisma.form.create({
     data: {
       accountKey: input.accountKey,
       name,
       slug,
-      status: 'draft',
+      status,
+      publishedAt: isTemplate ? null : new Date(),
       schema,
-      isTemplate: input.isTemplate ?? false,
+      isTemplate,
       successMessage: DEFAULT_SUCCESS_MESSAGE,
       createdByUserId: input.createdByUserId ?? null,
     },
@@ -405,10 +412,10 @@ export async function copyFormTemplateToAccount(input: {
 }
 
 /**
- * Deploy a form template into one or more sub-accounts as live draft
- * forms (isTemplate=false, status=draft). Unlike {@link copyFormTemplateToAccount}
- * — which lands an account-scoped *template* — this produces ready-to-edit
- * live forms, so account staff can publish straight away.
+ * Deploy a form template into one or more sub-accounts as live forms
+ * (isTemplate=false). Unlike {@link copyFormTemplateToAccount} — which
+ * lands an account-scoped *template* — this produces ready-to-use live
+ * forms (created published; no publish step needed).
  *
  * Each clone is a fully detached copy: the schema JSON is deep-copied and
  * no parent-template link is stored, so editing the source template later
@@ -488,7 +495,9 @@ export async function getForm(
 
 export async function getPublishedFormBySlug(slug: string): Promise<FormDetail | null> {
   const row = await prisma.form.findUnique({ where: { slug } });
-  if (!row || row.status !== 'published' || row.isTemplate) return null;
+  // Any live (non-template) form is served — sub-account forms no longer
+  // have a draft gate. Templates are never publicly served.
+  if (!row || row.isTemplate) return null;
   return toDetail(row);
 }
 
@@ -500,7 +509,9 @@ export async function getPublishedFormBySlug(slug: string): Promise<FormDetail |
  */
 export async function getPublishedFormById(id: string): Promise<FormDetail | null> {
   const row = await prisma.form.findUnique({ where: { id } });
-  if (!row || row.status !== 'published' || row.isTemplate) return null;
+  // Any live (non-template) form renders in landing-page embeds — no
+  // draft gate. Templates are never publicly served.
+  if (!row || row.isTemplate) return null;
   return toDetail(row);
 }
 

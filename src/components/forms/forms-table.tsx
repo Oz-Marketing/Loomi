@@ -51,10 +51,6 @@ interface FormsTableProps {
   >;
   /** Hide the Sub-Account column when the list is already account-scoped. */
   showAccountColumn: boolean;
-  /** When set, renders a publish toggle in its own column (sub-account view).
-   *  Hidden in admin view since publishing happens on the form's overview. */
-  onTogglePublish?: (form: FormsTableRow, nextStatus: 'published' | 'draft') => void;
-  updatingFormIds?: string[];
   emptyState: { title: string; subtitle: string };
   /** Wires the checkbox column + BulkActionDock. */
   bulkActions?: (ctx: BulkActionContext) => BulkActionDockItem[];
@@ -72,7 +68,6 @@ interface FormsTableProps {
 
 type SortKey =
   | 'name'
-  | 'status'
   | 'submissionCount'
   | 'updatedAt'
   | 'createdAt'
@@ -97,11 +92,6 @@ function formatRelativeDate(iso?: string): string {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-const STATUS_STYLES: Record<string, string> = {
-  draft: 'bg-zinc-500/15 text-zinc-400',
-  published: 'bg-green-500/15 text-green-400',
-};
-
 // ── Main ──
 
 export function FormsTable({
@@ -109,8 +99,6 @@ export function FormsTable({
   loading = false,
   accountMeta,
   showAccountColumn,
-  onTogglePublish,
-  updatingFormIds = [],
   emptyState,
   bulkActions,
   onRowEdit,
@@ -173,7 +161,7 @@ export function FormsTable({
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     } else {
       setSortKey(key);
-      setSortDir(key === 'name' || key === 'dealer' || key === 'status' ? 'asc' : 'desc');
+      setSortDir(key === 'name' || key === 'dealer' ? 'asc' : 'desc');
     }
   };
 
@@ -291,20 +279,6 @@ export function FormsTable({
                   />
                   {showAccountColumn && (
                     <SortHeader
-                      label="Status"
-                      sortKey="status"
-                      currentKey={sortKey}
-                      dir={sortDir}
-                      onSort={handleSort}
-                    />
-                  )}
-                  {!showAccountColumn && (
-                    <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider w-32">
-                      Publish
-                    </th>
-                  )}
-                  {showAccountColumn && (
-                    <SortHeader
                       label="Sub-Account"
                       sortKey="dealer"
                       currentKey={sortKey}
@@ -346,8 +320,6 @@ export function FormsTable({
                     form={form}
                     showAccountColumn={showAccountColumn}
                     accountMeta={accountMeta}
-                    onTogglePublish={onTogglePublish}
-                    isUpdating={updatingFormIds.includes(form.id)}
                     selectable={bulkEnabled}
                     isSelected={selectedIds.has(form.id)}
                     onToggleSelect={() => toggleRowSelection(form.id)}
@@ -450,8 +422,6 @@ function FormRow({
   form,
   showAccountColumn,
   accountMeta,
-  onTogglePublish,
-  isUpdating,
   selectable,
   isSelected,
   onToggleSelect,
@@ -461,8 +431,6 @@ function FormRow({
   form: FormsTableRow;
   showAccountColumn: boolean;
   accountMeta: FormsTableProps['accountMeta'];
-  onTogglePublish?: FormsTableProps['onTogglePublish'];
-  isUpdating: boolean;
   selectable: boolean;
   isSelected: boolean;
   onToggleSelect: () => void;
@@ -471,8 +439,6 @@ function FormRow({
 }) {
   const router = useRouter();
   const subHref = useSubaccountHref();
-  const published = form.status === 'published';
-  const statusClass = STATUS_STYLES[form.status] || 'bg-zinc-500/15 text-zinc-400';
   const meta = form.accountKey ? accountMeta[form.accountKey] : undefined;
   const hasRowActions = !!onEdit || !!onDelete;
 
@@ -506,42 +472,6 @@ function FormRow({
           </div>
         </div>
       </td>
-
-      {showAccountColumn && (
-        <td className="px-3 py-2">
-          <span
-            className={`inline-flex items-center text-[10px] uppercase tracking-wider font-medium px-2 py-0.5 rounded-full ${statusClass}`}
-          >
-            {form.status}
-          </span>
-        </td>
-      )}
-
-      {!showAccountColumn && (
-        <td className="px-3 py-2">
-          {onTogglePublish && (
-            <button
-              type="button"
-              disabled={isUpdating}
-              onClick={(e) => {
-                e.stopPropagation();
-                onTogglePublish(form, published ? 'draft' : 'published');
-              }}
-              role="switch"
-              aria-checked={published}
-              title={published ? 'Move to draft' : 'Publish form'}
-              className={`relative w-9 h-5 rounded-full transition-colors disabled:opacity-50 ${
-                published ? 'bg-emerald-500' : 'bg-[var(--muted-foreground)]/30'
-              }`}
-            >
-              <span
-                className="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-[left] duration-150 ease-out"
-                style={{ left: published ? '18px' : '2px' }}
-              />
-            </button>
-          )}
-        </td>
-      )}
 
       {showAccountColumn && (
         <td className="px-3 py-2">
@@ -714,8 +644,6 @@ function pickSortValue(
   switch (key) {
     case 'name':
       return (form.name || '').toLowerCase();
-    case 'status':
-      return form.status;
     case 'submissionCount':
       return form.submissionCount;
     case 'dealer': {

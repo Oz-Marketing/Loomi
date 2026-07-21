@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import useSWR from 'swr';
 import { toast } from 'sonner';
-import { PlayIcon, PauseIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { TrashIcon } from '@heroicons/react/24/outline';
 import { AdminOnly } from '@/components/route-guard';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
@@ -19,7 +19,6 @@ import {
 import { useListView } from '@/components/view-switcher';
 import { ListToolbar } from '@/components/list-toolbar';
 import type { BulkActionDockItem } from '@/components/bulk-action-dock';
-import type { StatusFilterValue } from '@/components/status-filter';
 import type { FormSummary } from '@/lib/services/forms';
 
 const fetcher = async (url: string) => {
@@ -34,11 +33,10 @@ export default function FormsPage() {
   const subHref = useSubaccountHref();
   const { confirm } = useLoomiDialog();
   const [view, setView] = useListView('loomi.forms.view', 'cards');
-  // Unified toolbar state — search + status filter drive both views.
-  // Forms don't have an "archived" status today (just draft / published),
-  // so we surface only those values in the StatusFilter.
+  // Unified toolbar state — search drives both views. Sub-account forms
+  // are always live (no draft/published status), so there's no status
+  // filter.
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<StatusFilterValue>('all');
 
   const query = accountKey ? `?accountKey=${encodeURIComponent(accountKey)}` : '';
   const { data, isLoading, error, mutate } = useSWR<{
@@ -81,39 +79,12 @@ export default function FormsPage() {
   const visibleForms = useMemo(() => {
     const q = search.trim().toLowerCase();
     return forms.filter((f) => {
-      if (statusFilter === 'draft' && f.status !== 'draft') return false;
-      if (statusFilter === 'published' && f.status !== 'published') return false;
-      // Forms have no archived state today; treat 'archived' as empty.
-      if (statusFilter === 'archived') return false;
       if (!q) return true;
-      return `${f.name} ${f.slug} ${f.status}`.toLowerCase().includes(q);
+      return `${f.name} ${f.slug}`.toLowerCase().includes(q);
     });
-  }, [forms, search, statusFilter]);
+  }, [forms, search]);
 
   // ── Single-row action handlers (used by the table's 3-dot menu) ──
-
-  // Tracks which form's publish toggle is mid-flight so the card /
-  // table row can render a disabled state without rerendering the rest.
-  const [publishingIds, setPublishingIds] = useState<string[]>([]);
-
-  const handleTogglePublish = async (
-    form: { id: string },
-    nextStatus: 'published' | 'draft',
-  ) => {
-    setPublishingIds((prev) => [...prev, form.id]);
-    const res = await fetch(`/api/forms/${form.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status: nextStatus }),
-    });
-    setPublishingIds((prev) => prev.filter((id) => id !== form.id));
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      toast.error(body.error || 'Could not update status.');
-      return;
-    }
-    await mutate();
-  };
 
   const handleRowEdit = (form: FormsTableRow) => {
     router.push(subHref(`/websites/forms/${form.id}/edit`));
@@ -150,10 +121,10 @@ export default function FormsPage() {
     await mutate();
   };
 
-  // ── Bulk-action helpers (publish/draft/delete) ──
+  // ── Bulk-action helpers (delete) ──
 
   const runBulk = async (
-    label: 'publish' | 'draft' | 'delete',
+    label: 'delete',
     ids: string[],
     fetchFor: (id: string) => Promise<Response>,
     clearSelection: () => void,
@@ -170,51 +141,17 @@ export default function FormsPage() {
       }
     }
     if (failed === 0) {
-      toast.success(`${succeeded} ${succeeded === 1 ? 'form' : 'forms'} ${label}${label === 'delete' ? 'd' : 'ed'}`);
+      toast.success(`${succeeded} ${succeeded === 1 ? 'form' : 'forms'} ${label}d`);
     } else if (succeeded === 0) {
       toast.error(`Failed to ${label} ${failed} ${failed === 1 ? 'form' : 'forms'}`);
     } else {
-      toast.error(`${succeeded} ${label}${label === 'delete' ? 'd' : 'ed'}, ${failed} failed`);
+      toast.error(`${succeeded} ${label}d, ${failed} failed`);
     }
     await mutate();
     clearSelection();
   };
 
   const buildBulkActions = (ctx: BulkActionContext): BulkActionDockItem[] => [
-    {
-      id: 'publish',
-      label: 'Publish',
-      icon: <PlayIcon className="w-3.5 h-3.5" />,
-      onClick: () =>
-        void runBulk(
-          'publish',
-          ctx.selectedIds,
-          (id) =>
-            fetch(`/api/forms/${id}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ status: 'published' }),
-            }),
-          ctx.clearSelection,
-        ),
-    },
-    {
-      id: 'draft',
-      label: 'Move to Draft',
-      icon: <PauseIcon className="w-3.5 h-3.5" />,
-      onClick: () =>
-        void runBulk(
-          'draft',
-          ctx.selectedIds,
-          (id) =>
-            fetch(`/api/forms/${id}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ status: 'draft' }),
-            }),
-          ctx.clearSelection,
-        ),
-    },
     {
       id: 'delete',
       label: 'Delete',
@@ -259,13 +196,6 @@ export default function FormsPage() {
           search={search}
           onSearchChange={setSearch}
           searchPlaceholder="Search forms…"
-          status={statusFilter}
-          onStatusChange={setStatusFilter}
-          statusOptions={[
-            { value: 'all', label: 'All' },
-            { value: 'draft', label: 'Draft' },
-            { value: 'published', label: 'Published' },
-          ]}
         />
       )}
 
@@ -278,7 +208,6 @@ export default function FormsPage() {
           forms={visibleForms}
           loading={isLoading}
           accountNames={accountNames}
-          onTogglePublish={(form, next) => void handleTogglePublish(form, next)}
           onDelete={(form) =>
             void handleRowDelete({
               id: form.id,
@@ -292,7 +221,6 @@ export default function FormsPage() {
             })
           }
           onSaveAsTemplate={(form) => void handleSaveAsTemplate(form)}
-          publishingIds={publishingIds}
         />
       ) : (
         <FormsTable
@@ -300,8 +228,6 @@ export default function FormsPage() {
           loading={isLoading}
           accountMeta={accountMeta}
           showAccountColumn={showAccountColumn}
-          onTogglePublish={handleTogglePublish}
-          updatingFormIds={publishingIds}
           emptyState={{
             title: 'No forms yet',
             subtitle:

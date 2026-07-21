@@ -19,18 +19,15 @@ import { FormPreviewThumbnail } from '@/components/forms/form-preview-thumbnail'
 interface FormCardProps {
   form: FormSummary;
   accountName?: string;
-  onTogglePublish?: (form: FormSummary, next: 'published' | 'draft') => void;
   onDelete?: (form: FormSummary) => void;
   /** Save this live form's design as a reusable template (forms only). */
   onSaveAsTemplate?: (form: FormSummary) => void;
-  /** Deploy this template into sub-account(s) as live draft forms (templates only). */
+  /** Deploy this template into sub-account(s) as live forms (templates only). */
   onDeploy?: (form: FormSummary) => void;
-  /** Soft-disable the toggle while a PATCH is mid-flight. */
-  isPublishUpdating?: boolean;
   /**
    * 'template' renders the card for the Templates gallery: the whole card
-   * links straight to the editor and the live-form meta (publish toggle,
-   * status pill, public slug, submission count) is hidden.
+   * links straight to the editor and the live-form meta (public slug,
+   * submission count) is hidden.
    */
   variant?: 'form' | 'template';
 }
@@ -52,24 +49,21 @@ function formatRelativeDate(dateStr: string): string {
 /**
  * Form card. Mirrors the email template card shape: a live preview
  * thumbnail at the top, a meta strip at the bottom with name +
- * publish toggle + 3-dot menu.
+ * 3-dot menu.
  *
- * The whole card is a link to the form's overview; the toggle and
- * menu stop propagation so they don't follow the link.
+ * The whole card is a link to the form's overview; the menu stops
+ * propagation so it doesn't follow the link.
  */
 export function FormCard({
   form,
   accountName,
-  onTogglePublish,
   onDelete,
   onSaveAsTemplate,
   onDeploy,
-  isPublishUpdating = false,
   variant = 'form',
 }: FormCardProps) {
   const subHref = useSubaccountHref();
   const isTemplate = variant === 'template';
-  const published = form.status === 'published';
   const editHref = subHref(`/websites/forms/${form.id}/edit`);
   // Template cards jump straight into the editor; live forms open the overview.
   const cardHref = isTemplate ? editHref : subHref(`/websites/forms/${form.id}`);
@@ -88,20 +82,6 @@ export function FormCard({
           through to the absolute Link underneath. */}
       <div className="relative pointer-events-none">
         <FormPreviewThumbnail template={form.schema} height={200} />
-
-        {/* Status pill — bottom-left corner of the preview so it doesn't
-            clash with the meta strip below. Live forms only. */}
-        {!isTemplate && (
-          <span
-            className={`absolute bottom-2.5 left-2.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium capitalize backdrop-blur-sm ${
-              published
-                ? 'bg-emerald-500/90 text-white'
-                : 'bg-black/40 text-zinc-100'
-            }`}
-          >
-            {form.status}
-          </span>
-        )}
       </div>
 
       {/* Meta strip — non-interactive areas pass clicks through to
@@ -123,13 +103,6 @@ export function FormCard({
           </div>
 
           <div className="flex items-center gap-1 flex-shrink-0 pointer-events-auto">
-            {!isTemplate && onTogglePublish && (
-              <PublishSwitch
-                active={published}
-                disabled={isPublishUpdating}
-                onToggle={(next) => onTogglePublish(form, next)}
-              />
-            )}
             <CardMenu
               form={form}
               editHref={editHref}
@@ -166,42 +139,6 @@ export function FormCard({
         </div>
       </div>
     </div>
-  );
-}
-
-// ── Publish switch ──────────────────────────────────────────────
-
-function PublishSwitch({
-  active,
-  disabled,
-  onToggle,
-}: {
-  active: boolean;
-  disabled: boolean;
-  onToggle: (next: 'published' | 'draft') => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={active}
-      aria-label={active ? 'Move to draft' : 'Publish form'}
-      title={active ? 'Move to draft' : 'Publish form'}
-      disabled={disabled}
-      onClick={(e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        onToggle(active ? 'draft' : 'published');
-      }}
-      className={`relative inline-flex w-8 h-[18px] rounded-full transition-colors disabled:opacity-50 ${
-        active ? 'bg-emerald-500' : 'bg-[var(--muted-foreground)]/30'
-      }`}
-    >
-      <span
-        className="absolute top-[2px] w-3.5 h-3.5 rounded-full bg-white shadow transition-[left] duration-150 ease-out"
-        style={{ left: active ? '16px' : '2px' }}
-      />
-    </button>
   );
 }
 
@@ -244,8 +181,6 @@ function CardMenu({
     };
   }, [open]);
 
-  const published = form.status === 'published';
-
   return (
     <div ref={ref} className="relative">
       <button
@@ -275,7 +210,7 @@ function CardMenu({
             <PencilSquareIcon className="w-3.5 h-3.5" />
             {editLabel}
           </Link>
-          {showLiveLink && published && (
+          {showLiveLink && (
             <a
               href={`/f/${form.slug}`}
               target="_blank"

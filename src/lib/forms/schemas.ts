@@ -106,6 +106,14 @@ const FIELD_WIDTH_OPTIONS = [
   { label: 'Half', value: 'half' },
 ];
 
+// Per-breakpoint visibility toggles — appended to every visible block so
+// users can hide a block on one device. Stored as base props (booleans);
+// the renderer turns them into display:none media rules (responsive.ts).
+const VISIBILITY_PROPS: PropSchema[] = [
+  { key: 'hideOnMobile', label: 'Hide on mobile', type: 'toggle', default: false, half: true, group: 'layout' },
+  { key: 'hideOnDesktop', label: 'Hide on desktop', type: 'toggle', default: false, half: true, group: 'layout' },
+];
+
 // Shared field-style defaults — applied to every input block so the
 // "input" half of the form has a single source of truth.
 const FIELD_STYLE_PROPS: PropSchema[] = [
@@ -130,6 +138,7 @@ const LABEL_PROPS: PropSchema[] = [
   { key: 'labelFontSize', label: 'Label Size', type: 'number', default: 14, half: true, group: 'label-style' },
   { key: 'labelFontWeight', label: 'Label Weight', type: 'select', options: FONT_WEIGHT_OPTIONS, default: 600, group: 'label-style' },
   { key: 'marginBottom', label: 'Margin Bottom', type: 'number', default: 16, group: 'spacing' },
+  ...VISIBILITY_PROPS,
 ];
 
 // ── Layout schemas (parity with email) ──
@@ -503,6 +512,18 @@ export const ALL_BLOCK_SCHEMAS: BlockSchema[] = [
   DIVIDER_SCHEMA,
   SPACER_SCHEMA,
 ];
+
+// Ensure every *visible* block exposes the hide-on-device toggles. Field
+// blocks already get them via LABEL_PROPS; this adds them to the layout +
+// CTA blocks. Hidden fields are never rendered, so they're skipped. The
+// guard keeps it idempotent and avoids double-adding to fields.
+// (BLOCK_SCHEMAS and ALL_BLOCK_SCHEMAS share the same object refs.)
+for (const schema of ALL_BLOCK_SCHEMAS) {
+  if (schema.type === 'field_hidden') continue;
+  if (!schema.props.some((p) => p.key === 'hideOnMobile')) {
+    schema.props = [...schema.props, ...VISIBILITY_PROPS];
+  }
+}
 
 export function getBlockSchema(type: FormBlockType): BlockSchema | undefined {
   return BLOCK_SCHEMAS[type];

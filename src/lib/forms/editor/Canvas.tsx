@@ -127,6 +127,7 @@ export function Canvas({ previewWidth = 'desktop', zoom = 100, previewValues }: 
           transition: 'max-width 150ms ease, transform 120ms ease',
         }}
       >
+        <PreviewDeviceContext.Provider value={previewWidth}>
         <PreviewSubstitutionContext.Provider value={ctxValue}>
           <SortableContext items={blockIds} strategy={verticalListSortingStrategy}>
             {template.blocks.length === 0 ? (
@@ -151,6 +152,7 @@ export function Canvas({ previewWidth = 'desktop', zoom = 100, previewValues }: 
             )}
           </SortableContext>
         </PreviewSubstitutionContext.Provider>
+        </PreviewDeviceContext.Provider>
       </div>
     </div>
   );
@@ -164,11 +166,17 @@ const PreviewSubstitutionContext = React.createContext<PreviewSubstitutionContex
   previewValues: null,
 });
 
+// The canvas fakes mobile by constraining width, so @media queries never
+// fire here. To preview mobile overrides we merge the block's `mobile` bag
+// over its base props when the device is 'mobile'.
+const PreviewDeviceContext = React.createContext<PreviewWidth>('desktop');
+
 // ── Block rendering inside the editor canvas ──
 
 function RenderedBlock({ block, settings }: { block: Block; settings: FormTemplate['settings'] }) {
   const Component = BLOCK_COMPONENTS[block.type] as React.ComponentType<any> | undefined;
   const { previewValues } = React.useContext(PreviewSubstitutionContext);
+  const device = React.useContext(PreviewDeviceContext);
   if (!Component) {
     return (
       <div style={{ padding: 12, color: '#900', fontFamily: 'monospace', fontSize: 12 }}>
@@ -177,7 +185,11 @@ function RenderedBlock({ block, settings }: { block: Block; settings: FormTempla
     );
   }
 
-  const props = previewValues ? substituteProps(block.props, previewValues) : block.props;
+  const base = previewValues ? substituteProps(block.props, previewValues) : block.props;
+  const props =
+    device === 'mobile' && block.mobile && Object.keys(block.mobile).length > 0
+      ? { ...base, ...block.mobile }
+      : base;
 
   if (block.type === 'section') {
     const children = block.children ?? [];

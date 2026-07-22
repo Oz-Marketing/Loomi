@@ -4,6 +4,9 @@ import * as React from 'react';
 import type { Block, FormTemplate, FormBlockType } from '../types';
 import { getDefaultProps } from '../schemas';
 
+/** Which breakpoint the editor is currently previewing / editing for. */
+export type PreviewDevice = 'desktop' | 'mobile';
+
 /** Shape of the editor's shared state. */
 interface EditorState {
   template: FormTemplate;
@@ -12,6 +15,9 @@ interface EditorState {
   /** Account scope — drives the media-library picker scope used by
    *  the Image block's property control. Null for global context. */
   accountKey: string | null;
+  /** Active editing breakpoint. Mobile-view edits to responsive props
+   *  write to the block's `mobile` bag instead of its base props. */
+  previewDevice: PreviewDevice;
 }
 
 /**
@@ -27,7 +33,11 @@ export interface BlockPosition {
 interface EditorActions {
   selectBlock: (id: string | null) => void;
   setHovered: (id: string | null) => void;
+  setPreviewDevice: (device: PreviewDevice) => void;
   updateBlockProps: (id: string, props: Record<string, unknown>) => void;
+  /** Write per-breakpoint (mobile) overrides. A value of `undefined`
+   *  clears that key (reverts it to the desktop/base value). */
+  updateBlockMobileProps: (id: string, props: Record<string, unknown>) => void;
   updateSettings: (settings: Partial<FormTemplate['settings']>) => void;
   updateTitle: (title: string) => void;
   insertBlock: (type: FormBlockType, position: BlockPosition) => void;
@@ -75,6 +85,7 @@ interface ProviderProps {
 export function EditorProvider({ template, onChange, accountKey = null, children }: ProviderProps) {
   const [selectedId, setSelectedId] = React.useState<string | null>(null);
   const [hoveredId, setHoveredId] = React.useState<string | null>(null);
+  const [previewDevice, setPreviewDevice] = React.useState<PreviewDevice>('desktop');
 
   const update = React.useCallback(
     (updater: (current: FormTemplate) => FormTemplate) => {
@@ -90,6 +101,29 @@ export function EditorProvider({ template, onChange, accountKey = null, children
         blocks: mapBlocks(t.blocks, (b) =>
           b.id === id ? { ...b, props: { ...b.props, ...props } } : b,
         ),
+      }));
+    },
+    [update],
+  );
+
+  const updateBlockMobileProps = React.useCallback(
+    (id: string, props: Record<string, unknown>) => {
+      update((t) => ({
+        ...t,
+        blocks: mapBlocks(t.blocks, (b) => {
+          if (b.id !== id) return b;
+          // Merge, then drop keys explicitly cleared (undefined) so a block
+          // with no live overrides carries no `mobile` bag at all.
+          const merged: Record<string, unknown> = { ...(b.mobile ?? {}) };
+          for (const [key, value] of Object.entries(props)) {
+            if (value === undefined) delete merged[key];
+            else merged[key] = value;
+          }
+          const next = { ...b };
+          if (Object.keys(merged).length > 0) next.mobile = merged;
+          else delete next.mobile;
+          return next;
+        }),
       }));
     },
     [update],
@@ -190,9 +224,12 @@ export function EditorProvider({ template, onChange, accountKey = null, children
     selectedId,
     hoveredId,
     accountKey,
+    previewDevice,
     selectBlock: setSelectedId,
     setHovered: setHoveredId,
+    setPreviewDevice,
     updateBlockProps,
+    updateBlockMobileProps,
     updateSettings,
     updateTitle,
     insertBlock,
@@ -283,6 +320,7 @@ function deepCloneBlock(block: Block): Block {
     ...block,
     id: generateId(),
     props: { ...block.props },
+    mobile: block.mobile ? { ...block.mobile } : undefined,
     children: block.children?.map(deepCloneBlock),
   };
 }

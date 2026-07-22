@@ -10,6 +10,11 @@
 import * as React from 'react';
 import type { Block, FormTemplate } from './types';
 import { BLOCK_COMPONENTS } from './components';
+import {
+  blockHasResponsive,
+  blockResponsiveClass,
+  buildBlockResponsiveCss,
+} from './responsive';
 
 interface RenderOptions {
   /**
@@ -73,14 +78,30 @@ function RenderedBlock({ block }: { block: Block }) {
   const errors = React.useContext(FieldErrorContext);
   const fieldError = errors[String(block.props.name ?? block.id)];
 
+  // Per-breakpoint overrides + hide toggles compile to a scoped <style>
+  // and a class attached to the block's root element. Absent when the
+  // block has no responsive rules (the common case) — zero overhead.
+  const responsiveClass = blockHasResponsive(block)
+    ? blockResponsiveClass(block.id)
+    : undefined;
+  const responsiveCss = responsiveClass
+    ? buildBlockResponsiveCss(responsiveClass, block)
+    : null;
+  const styleTag = responsiveCss ? (
+    <style dangerouslySetInnerHTML={{ __html: responsiveCss }} />
+  ) : null;
+
   if (block.type === 'section' || block.type === 'columns') {
     const children = block.children ?? [];
     return (
-      <Component {...block.props}>
-        {children.map((child) => (
-          <RenderedBlock key={child.id} block={child} />
-        ))}
-      </Component>
+      <>
+        {styleTag}
+        <Component {...block.props} className={responsiveClass}>
+          {children.map((child) => (
+            <RenderedBlock key={child.id} block={child} />
+          ))}
+        </Component>
+      </>
     );
   }
 
@@ -99,7 +120,8 @@ function RenderedBlock({ block }: { block: Block }) {
   if (block.type.startsWith('field_') && fieldError) {
     return (
       <>
-        <Component {...block.props} />
+        {styleTag}
+        <Component {...block.props} className={responsiveClass} />
         <div
           role="alert"
           style={{
@@ -115,5 +137,10 @@ function RenderedBlock({ block }: { block: Block }) {
     );
   }
 
-  return <Component {...block.props} />;
+  return (
+    <>
+      {styleTag}
+      <Component {...block.props} className={responsiveClass} />
+    </>
+  );
 }

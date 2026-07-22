@@ -15,6 +15,8 @@ export interface HeadingProps {
   marginBottom?: number;
   marginLeft?: number;
   textTransform?: 'none' | 'uppercase' | 'lowercase' | 'capitalize';
+  /** Responsive/hide class injected by the renderer (see responsive.ts). */
+  className?: string;
 }
 
 const DEFAULT_SIZES: Record<number, number> = { 1: 32, 2: 26, 3: 22, 4: 18, 5: 16, 6: 14 };
@@ -34,12 +36,14 @@ export const HeadingBlock: React.FC<HeadingProps> = ({
   marginBottom = 16,
   marginLeft = 0,
   textTransform = 'none',
+  className,
 }) => {
   const Tag = (`h${level}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6');
   const size = fontSize ?? DEFAULT_SIZES[level] ?? 22;
 
   return (
     <Tag
+      className={className}
       style={{
         margin: `${marginTop}px ${marginRight}px ${marginBottom}px ${marginLeft}px`,
         color,

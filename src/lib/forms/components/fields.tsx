@@ -39,6 +39,8 @@ interface BaseFieldProps {
   inputPaddingX?: number;
   inputFontSize?: number;
   inputFontFamily?: string;
+  /** Responsive/hide class injected by the renderer (see responsive.ts). */
+  className?: string;
 }
 
 interface OptionSpec {
@@ -59,10 +61,12 @@ function FieldShell({
   labelFontWeight = 600,
   labelFontFamily,
   htmlFor,
+  className,
   children,
 }: BaseFieldProps & { htmlFor?: string; children: React.ReactNode }) {
   return (
     <div
+      className={className}
       style={{
         marginBottom: `${marginBottom}px`,
         width: width === 'half' ? '50%' : '100%',
@@ -320,6 +324,7 @@ export const FieldConsent: React.FC<FieldConsentProps> = (props) => {
   const id = props.name || 'consent';
   return (
     <div
+      className={props.className}
       style={{
         marginBottom: `${props.marginBottom ?? 16}px`,
         display: 'flex',
@@ -408,6 +413,8 @@ export interface SubmitButtonProps {
   fontFamily?: string;
   textTransform?: 'none' | 'uppercase' | 'lowercase' | 'capitalize';
   letterSpacing?: number | string;
+  /** Responsive/hide class injected by the renderer (see responsive.ts). */
+  className?: string;
 }
 
 export const SubmitButton: React.FC<SubmitButtonProps> = ({
@@ -426,9 +433,10 @@ export const SubmitButton: React.FC<SubmitButtonProps> = ({
   fontFamily,
   textTransform = 'none',
   letterSpacing,
+  className,
 }) => {
   return (
-    <div style={{ textAlign: align }}>
+    <div className={className} style={{ textAlign: align }}>
       <button
         type="submit"
         style={{

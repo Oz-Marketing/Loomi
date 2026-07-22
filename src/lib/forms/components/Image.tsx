@@ -14,6 +14,8 @@ export interface ImageBlockProps {
   borderRadiusBottomRight?: number;
   borderRadiusBottomLeft?: number;
   maxWidth?: number | string;
+  /** Responsive/hide class injected by the renderer (see responsive.ts). */
+  className?: string;
 }
 
 const PLACEHOLDER =
@@ -32,6 +34,7 @@ export const ImageBlock: React.FC<ImageBlockProps> = ({
   borderRadiusBottomRight,
   borderRadiusBottomLeft,
   maxWidth = '100%',
+  className,
 }) => {
   const tl = borderRadiusTopLeft ?? borderRadius;
   const tr = borderRadiusTopRight ?? borderRadius;
@@ -55,7 +58,7 @@ export const ImageBlock: React.FC<ImageBlockProps> = ({
   );
 
   return (
-    <div style={{ textAlign: align, lineHeight: 0 }}>
+    <div className={className} style={{ textAlign: align, lineHeight: 0 }}>
       {linkUrl ? (
         <a href={linkUrl} rel="noopener noreferrer">
           {img}

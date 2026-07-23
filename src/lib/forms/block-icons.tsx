@@ -17,6 +17,7 @@ import {
   EyeSlashIcon,
   ListBulletIcon,
   MinusIcon,
+  PaperClipIcon,
   PencilSquareIcon,
   PhoneIcon,
   PhotoIcon,
@@ -41,6 +42,7 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   'list-bullet': ListBulletIcon,
   'shield-check': ShieldCheckIcon,
   'eye-slash': EyeSlashIcon,
+  'paper-clip': PaperClipIcon,
   // CTA
   'cursor-arrow': CursorArrowRaysIcon,
   // Layout

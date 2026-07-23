@@ -11,6 +11,8 @@ import nodemailer from 'nodemailer';
 import type { Form, FormSubmission } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { resolveSendGridConfig, sendEmailViaSendGrid } from '@/lib/sending/sendgrid';
+import type { FileValue } from './types';
+import { isFileValue } from './types';
 
 export class LeadNotificationError extends Error {
   constructor(message: string) {
@@ -69,10 +71,30 @@ function escapeHtml(value: string): string {
     .replace(/>/g, '&gt;');
 }
 
+/** Collect any file value(s) from a stored submission entry. */
+function asFileValues(value: unknown): FileValue[] {
+  if (isFileValue(value)) return [value];
+  if (Array.isArray(value) && value.every(isFileValue)) return value as FileValue[];
+  return [];
+}
+
 function formatValue(value: unknown): string {
+  const files = asFileValues(value);
+  if (files.length > 0) return files.map((f) => `${f.name} (${f.url})`).join(', ');
   if (Array.isArray(value)) return value.join(', ');
   if (value === null || value === undefined || value === '') return '—';
   return String(value);
+}
+
+/** HTML cell body — renders uploaded files as clickable links. */
+function formatValueHtml(value: unknown): string {
+  const files = asFileValues(value);
+  if (files.length > 0) {
+    return files
+      .map((f) => `<a href="${escapeHtml(f.url)}">${escapeHtml(f.name)}</a>`)
+      .join('<br>');
+  }
+  return escapeHtml(formatValue(value));
 }
 
 function buildHtml(form: Form, submission: FormSubmission): string {
@@ -80,7 +102,7 @@ function buildHtml(form: Form, submission: FormSubmission): string {
   const rows = Object.entries(data)
     .map(
       ([key, value]) =>
-        `<tr><td style="padding:4px 12px 4px 0;color:#666;font-family:sans-serif;font-size:13px;vertical-align:top;white-space:nowrap">${escapeHtml(key)}</td><td style="padding:4px 0;font-family:sans-serif;font-size:13px">${escapeHtml(formatValue(value))}</td></tr>`,
+        `<tr><td style="padding:4px 12px 4px 0;color:#666;font-family:sans-serif;font-size:13px;vertical-align:top;white-space:nowrap">${escapeHtml(key)}</td><td style="padding:4px 0;font-family:sans-serif;font-size:13px">${formatValueHtml(value)}</td></tr>`,
     )
     .join('');
   return `<div style="font-family:sans-serif">

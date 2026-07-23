@@ -29,8 +29,32 @@ export type FormBlockType =
   | 'field_radio'
   | 'field_consent'
   | 'field_hidden'
+  | 'field_file'
   // CTA
   | 'submit_button';
+
+/**
+ * Stored representation of an uploaded file in `FormSubmission.data`.
+ * A `field_file` submission holds an array of these (one per file);
+ * the binary lives in object storage, this is just the pointer + meta.
+ */
+export interface FileValue {
+  url: string;
+  name: string;
+  size: number;
+  type: string;
+}
+
+/** Narrow an arbitrary submission value to a single {@link FileValue}. */
+export function isFileValue(value: unknown): value is FileValue {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    typeof (value as FileValue).url === 'string' &&
+    typeof (value as FileValue).name === 'string'
+  );
+}
 
 export interface Block {
   id: string;

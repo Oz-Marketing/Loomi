@@ -22,6 +22,7 @@ import {
   FieldHidden,
   SubmitButton,
 } from './fields';
+import { FieldFile } from './FieldFileInput';
 
 export const BLOCK_COMPONENTS = {
   section: SectionBlock,
@@ -40,6 +41,7 @@ export const BLOCK_COMPONENTS = {
   field_radio: FieldRadio,
   field_consent: FieldConsent,
   field_hidden: FieldHidden,
+  field_file: FieldFile,
   submit_button: SubmitButton,
 } as const satisfies Record<FormBlockType, React.ComponentType<any>>;
 
@@ -60,5 +62,6 @@ export {
   FieldRadio,
   FieldConsent,
   FieldHidden,
+  FieldFile,
   SubmitButton,
 };

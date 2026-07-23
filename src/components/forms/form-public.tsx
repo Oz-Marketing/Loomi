@@ -3,6 +3,7 @@
 import * as React from 'react';
 import type { FormTemplate } from '@/lib/forms/types';
 import { FormRenderer } from '@/lib/forms/render';
+import { FormInteractiveContext } from '@/lib/forms/components/FieldFileInput';
 
 interface FormPublicProps {
   slug: string;
@@ -370,7 +371,11 @@ export function FormPublic({
           }}
         />
 
-        <FormRenderer template={template} options={{ errors: fieldErrors }} />
+        {/* Enable file-field uploads only on the live public form —
+            preview surfaces (editor, overview, thumbnail) stay inert. */}
+        <FormInteractiveContext.Provider value={true}>
+          <FormRenderer template={template} options={{ errors: fieldErrors }} />
+        </FormInteractiveContext.Provider>
 
         {turnstileSiteKey && (
           <div

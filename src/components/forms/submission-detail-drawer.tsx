@@ -10,8 +10,8 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import type { FormSubmissionRow } from '@/lib/services/forms';
-import type { Block, FormTemplate } from '@/lib/forms/types';
-import { collectFieldBlocks, getFieldName } from '@/lib/forms/types';
+import type { Block, FormTemplate, FileValue } from '@/lib/forms/types';
+import { collectFieldBlocks, getFieldName, isFileValue } from '@/lib/forms/types';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 
 interface SubmissionDetailDrawerProps {
@@ -256,15 +256,49 @@ function pickLabel(block: Block): string {
   return block.id;
 }
 
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function FileLink({ file }: { file: FileValue }) {
+  return (
+    <a
+      href={file.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-[var(--primary)] hover:underline break-all"
+    >
+      <ArrowTopRightOnSquareIcon className="w-3.5 h-3.5 shrink-0" />
+      <span>{file.name}</span>
+      {file.size > 0 && (
+        <span className="text-[var(--muted-foreground)]/70">({formatFileSize(file.size)})</span>
+      )}
+    </a>
+  );
+}
+
 function renderValue(value: unknown): React.ReactNode {
   if (value === null || value === undefined || value === '') {
     return <span className="text-[var(--muted-foreground)]/70 italic">empty</span>;
   }
   if (value === true) return 'Yes';
   if (value === false) return 'No';
+  // Uploaded file(s): render as clickable download links.
+  if (isFileValue(value)) return <FileLink file={value} />;
   if (Array.isArray(value)) {
     if (value.length === 0) {
       return <span className="text-[var(--muted-foreground)]/70 italic">empty</span>;
+    }
+    if (value.every(isFileValue)) {
+      return (
+        <div className="flex flex-col gap-1">
+          {(value as FileValue[]).map((f, i) => (
+            <FileLink key={i} file={f} />
+          ))}
+        </div>
+      );
     }
     return value.map((v) => String(v)).join(', ');
   }

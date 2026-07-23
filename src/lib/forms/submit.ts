@@ -6,10 +6,13 @@
  * is a thin wrapper around `submitForm` so the orchestration is testable
  * in isolation.
  */
+import { randomUUID } from 'node:crypto';
 import type { Form, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { parseFormTemplate } from './types';
-import { validateSubmission, FormValidationError } from './validate';
+import type { FileValue } from './types';
+import { validateSubmission, FormValidationError, type FieldValue } from './validate';
+import { isS3Configured, uploadToS3, s3PublicUrl } from '@/lib/s3';
 import { enrollContactForFormSubmission } from '@/lib/services/loomi-flows';
 import { enqueueFormSubmissionCrmLeads } from '@/lib/integrations/crm/dispatch';
 import { sendLeadNotificationEmail } from './notify';
@@ -109,6 +112,13 @@ export async function submitForm(args: {
   // Validate first — throws FormValidationError on bad input.
   const { values, identifiers } = validateSubmission(template, rawData);
 
+  // Upload any file-field values to object storage and swap the File
+  // objects for stored {url,name,size,type} pointers. Runs after
+  // validation (incl. size/type checks) so we never push bytes for a
+  // submission that's going to be rejected. No-op when the form has no
+  // file fields.
+  await uploadSubmissionFiles(values, { accountKey, formId: form.id });
+
   // Upsert the Contact if we have an identifier. Anonymous submissions
   // (no email + no phone) still get stored, just without a contact link.
   const contactId = await upsertContactFromSubmission({
@@ -201,6 +211,63 @@ export async function submitForm(args: {
 }
 
 // ── Internal helpers ──────────────────────────────────────────────
+
+/**
+ * Sanitize a user-supplied filename for use in an S3 object key. Strips
+ * any path components, collapses unsafe characters, and bounds the length
+ * so a hostile name can't build a weird key. The original filename is
+ * still preserved verbatim in the stored FileValue for display.
+ */
+function sanitizeFilename(name: string): string {
+  const base = name.split(/[\\/]/).pop() || 'file';
+  const cleaned = base.replace(/[^\w.\-]+/g, '_').replace(/_{2,}/g, '_');
+  return cleaned.slice(-120) || 'file';
+}
+
+/**
+ * Walk the validated values, upload any File objects to object storage,
+ * and replace them in-place with the persisted {@link FileValue} pointers.
+ * File-field values are always arrays (see validate.ts), so a stored file
+ * field is always a `FileValue[]`.
+ *
+ * Throws `FormSubmitError` (503) if the form collected a file but object
+ * storage isn't configured — mirrors the logo/avatar upload behavior.
+ */
+async function uploadSubmissionFiles(
+  values: Record<string, FieldValue>,
+  ctx: { accountKey: string; formId: string },
+): Promise<void> {
+  for (const [name, value] of Object.entries(values)) {
+    const files: File[] = Array.isArray(value)
+      ? value.filter((v): v is File => v instanceof File)
+      : value instanceof File
+        ? [value]
+        : [];
+    if (files.length === 0) continue;
+
+    if (!isS3Configured()) {
+      throw new FormSubmitError(
+        'File uploads are temporarily unavailable. Please try again later.',
+        503,
+      );
+    }
+
+    const uploaded: FileValue[] = [];
+    for (const file of files) {
+      const buffer = Buffer.from(await file.arrayBuffer());
+      const contentType = file.type || 'application/octet-stream';
+      const key = `form-uploads/${ctx.accountKey}/${ctx.formId}/${randomUUID()}-${sanitizeFilename(file.name)}`;
+      await uploadToS3(key, buffer, contentType);
+      uploaded.push({
+        url: s3PublicUrl(key),
+        name: file.name,
+        size: file.size,
+        type: contentType,
+      });
+    }
+    values[name] = uploaded;
+  }
+}
 
 async function upsertContactFromSubmission(args: {
   accountKey: string;

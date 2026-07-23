@@ -6,8 +6,15 @@
  * max length, allowed select/radio values). Errors are keyed by field
  * name so the public form can surface them inline.
  */
-import type { Block, FormTemplate } from './types';
+import type { Block, FormTemplate, FileValue } from './types';
 import { collectFieldBlocks, getFieldName } from './types';
+import {
+  MAX_FILE_SIZE_BYTES,
+  MAX_FILE_SIZE_MB,
+  MAX_FILES_PER_FIELD,
+  ALLOWED_FILE_TYPES_LABEL,
+  isAllowedFileType,
+} from './file-upload';
 
 /** Maximum length per text/textarea field — guards against payload bombs. */
 const MAX_TEXT_LENGTH = 10_000;
@@ -16,7 +23,18 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // + Twilio accept varied formats. Stricter normalization happens later.
 const PHONE_REGEX = /^[^\d]*(?:\d[^\d]*){7,}$/;
 
-export type FieldValue = string | string[] | boolean | null;
+// `File` / `File[]` are transient: `field_file` validation returns the
+// raw File objects, which the submit pipeline uploads to object storage
+// and replaces with `FileValue` metadata before anything is persisted.
+export type FieldValue =
+  | string
+  | string[]
+  | boolean
+  | File
+  | File[]
+  | FileValue
+  | FileValue[]
+  | null;
 
 export interface ValidatedSubmission {
   /** Sanitized values keyed by field name (the public submit body). */
@@ -131,6 +149,36 @@ function validateField(
   rawValue: unknown,
   required: boolean,
 ): FieldValidationResult {
+  // File uploads arrive as File objects (single or array), not strings,
+  // so they're handled before the string-oriented `hasValue` logic below.
+  if (block.type === 'field_file') {
+    const files: File[] = Array.isArray(rawValue)
+      ? rawValue.filter((v): v is File => v instanceof File)
+      : rawValue instanceof File
+        ? [rawValue]
+        : [];
+
+    if (files.length === 0) {
+      if (required) return { value: null, error: 'This field is required.' };
+      return { value: [], error: null };
+    }
+    if (files.length > MAX_FILES_PER_FIELD) {
+      return { value: null, error: `Upload at most ${MAX_FILES_PER_FIELD} files.` };
+    }
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE_BYTES) {
+        return { value: null, error: `Each file must be ${MAX_FILE_SIZE_MB}MB or smaller.` };
+      }
+      if (!isAllowedFileType(file.type, file.name)) {
+        return {
+          value: null,
+          error: `"${file.name}" isn't a supported file type. Accepted: ${ALLOWED_FILE_TYPES_LABEL}.`,
+        };
+      }
+    }
+    return { value: files, error: null };
+  }
+
   // Coerce arrays (checkbox groups submit as multi-value form fields).
   const isArrayField = block.type === 'field_checkbox';
   const hasValue = isArrayField

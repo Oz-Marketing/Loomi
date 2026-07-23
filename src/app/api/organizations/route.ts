@@ -15,6 +15,7 @@ function serializeOrg(org: OrgWithAccounts) {
     name: org.name,
     logos: org.logos,
     branding: org.branding,
+    primaryAccountKey: org.primaryAccountKey,
     accountKeys: org.accounts.map((a) => a.key),
     accounts: org.accounts.map((a) => ({ key: a.key, slug: a.slug, dealer: a.dealer })),
   };

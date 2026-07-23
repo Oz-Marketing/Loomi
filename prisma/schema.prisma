@@ -109,6 +109,12 @@ model Organization {
   // Account.logos / Account.branding. Null = no org-level override.
   logos     String?
   branding  String?
+  // The org's "house" sub-account — where its OWN operating work lives (e.g.
+  // YAG's corporate branding campaigns, distinct from any dealership). An org
+  // both operates as an entity (via this primary account) AND rolls up all its
+  // sub-accounts. References Account.key; must be one of this org's children.
+  // Null = no primary designated yet (org behaves as a pure roll-up).
+  primaryAccountKey String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

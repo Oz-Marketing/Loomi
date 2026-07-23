@@ -95,7 +95,10 @@ export interface OrganizationData {
   name: string;
   logos?: string | null;
   branding?: string | null;
-  /** Child rooftop account keys under this organization. */
+  /** The org's primary ("house") sub-account key — where its own operating
+   *  work lives. null = no primary designated yet. */
+  primaryAccountKey?: string | null;
+  /** Child sub-account keys under this organization. */
   accountKeys: string[];
 }
 
@@ -353,12 +356,21 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const isAdmin = account.mode === 'admin';
   const isAccount = account.mode === 'account';
   const isOrg = account.mode === 'org';
-  const accountKey = account.mode === 'account' ? account.accountKey : null;
-  const accountData = accountKey ? accounts[accountKey] || null : null;
   const organizationId = account.mode === 'org' ? account.organizationId : null;
   const organizationData = organizationId
     ? Object.values(organizations).find((o) => o.id === organizationId) || null
     : null;
+  // The operating account. In org mode this resolves to the org's primary
+  // ("house") sub-account, so operational pages (campaigns, flows, media, …)
+  // that read `accountKey` operate the org's own work. Roll-up pages branch on
+  // `isOrg` first, so they still aggregate across all sub-accounts.
+  const accountKey =
+    account.mode === 'account'
+      ? account.accountKey
+      : account.mode === 'org'
+        ? organizationData?.primaryAccountKey ?? null
+        : null;
+  const accountData = accountKey ? accounts[accountKey] || null : null;
 
   // Client-side analog of the server's getAccountScope: the account keys the
   // current selection fans out to. Org mode restricts to the org's children

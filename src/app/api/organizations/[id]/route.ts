@@ -40,6 +40,7 @@ export async function GET(
     name: org.name,
     logos: org.logos,
     branding: org.branding,
+    primaryAccountKey: org.primaryAccountKey,
     accountKeys: org.accounts.map((a) => a.key),
     accounts: org.accounts.map((a) => ({ key: a.key, slug: a.slug, dealer: a.dealer })),
   });
@@ -68,6 +69,7 @@ export async function PATCH(
     slug?: string;
     logos?: string | null;
     branding?: string | null;
+    primaryAccountKey?: string | null;
     accountKeys?: unknown;
   };
 
@@ -85,12 +87,27 @@ export async function PATCH(
       const keys = body.accountKeys.filter((k): k is string => typeof k === 'string');
       await orgService.setOrganizationAccounts(id, keys);
     }
+    // Primary ("house") account: must be one of the org's current children.
+    // Empty string / null clears it.
+    if (body.primaryAccountKey !== undefined) {
+      const current = await orgService.getOrganization(id);
+      const memberKeys = new Set(current!.accounts.map((a) => a.key));
+      const desired = body.primaryAccountKey?.trim() || null;
+      if (desired && !memberKeys.has(desired)) {
+        return NextResponse.json(
+          { error: 'Primary account must be one of the organization’s sub-accounts' },
+          { status: 400 },
+        );
+      }
+      await orgService.updateOrganization(id, { primaryAccountKey: desired });
+    }
     const updated = await orgService.getOrganization(id);
     return NextResponse.json({
       id: updated!.id,
       key: updated!.key,
       slug: updated!.slug,
       name: updated!.name,
+      primaryAccountKey: updated!.primaryAccountKey,
       accountKeys: updated!.accounts.map((a) => a.key),
     });
   } catch (err) {

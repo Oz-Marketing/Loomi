@@ -103,6 +103,7 @@ export async function updateOrganization(
     slug: string;
     logos: string | null;
     branding: string | null;
+    primaryAccountKey: string | null;
   }>,
 ) {
   return prisma.organization.update({ where: { id }, data });
@@ -120,18 +121,31 @@ export async function deleteOrganization(id: string) {
  * in the list are (re)attached, moving them from any prior org.
  */
 export async function setOrganizationAccounts(orgId: string, accountKeys: string[]) {
-  return prisma.$transaction([
+  const result = await prisma.$transaction([
     // Detach rooftops that are no longer members.
     prisma.account.updateMany({
       where: { organizationId: orgId, key: { notIn: accountKeys } },
       data: { organizationId: null },
     }),
-    // Attach the requested rooftops (idempotent; moves them from any other org).
+    // Attach the requested sub-accounts (idempotent; moves them from any other org).
     prisma.account.updateMany({
       where: { key: { in: accountKeys } },
       data: { organizationId: orgId },
     }),
   ]);
+  // If the org's primary ("house") account was detached, clear the pointer so
+  // it never dangles at a sub-account that no longer belongs to the org.
+  const org = await prisma.organization.findUnique({
+    where: { id: orgId },
+    select: { primaryAccountKey: true },
+  });
+  if (org?.primaryAccountKey && !accountKeys.includes(org.primaryAccountKey)) {
+    await prisma.organization.update({
+      where: { id: orgId },
+      data: { primaryAccountKey: null },
+    });
+  }
+  return result;
 }
 
 /**

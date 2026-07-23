@@ -18,7 +18,6 @@ import {
   MoonIcon,
   Cog6ToothIcon,
   ArrowTopRightOnSquareIcon,
-  ChartBarSquareIcon,
   ChevronDownIcon,
   ChatBubbleLeftRightIcon,
   ListBulletIcon,
@@ -39,7 +38,7 @@ import { SurfaceSwitch } from '@/components/surface-switch';
 import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav';
 import { AppLogo } from '@/components/app-logo';
 import { SidebarFrame } from '@/components/sidebar-frame';
-import { accountKeyToSlug, isSubaccountRoute, stripSubaccountPrefix } from '@/lib/account-slugs';
+import { accountKeyToSlug, isSubaccountRoute, isOrgRoute, stripSubaccountPrefix, orgSlugFor } from '@/lib/account-slugs';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -139,7 +138,8 @@ const contactsNav: NavItem = {
 };
 
 const dashboardNav: NavItem = { href: '/dashboard', label: 'Dashboard', icon: Squares2X2Icon };
-const reportingLink: NavCrosslink = { crosslink: 'reporting', label: 'Reporting', icon: ChartBarSquareIcon };
+// Reporting is now a peer surface in the bottom toggle (Studio · Reporting ·
+// Projects), not an in-nav crosslink — see SurfaceSwitch.
 
 // Admin nav — grouped Klaviyo-style with labeled dividers. The cross-host
 // Reporting link sits in the top group; Ad Planning & Pacing under "Tools".
@@ -147,7 +147,6 @@ const adminNavItems: NavEntry[] = [
   dashboardNav,
   campaignBuilderNav,
   templatesNav,
-  reportingLink,
   { divider: true },
   contactsNav,
   emailSmsNav,
@@ -166,6 +165,51 @@ const subaccountAdminNavItems: NavEntry[] = adminNavItems;
 // dashboard + templates (Settings lives in the footer). Everything operational
 // belongs to organizations & sub-accounts.
 const agencyNavItems: NavEntry[] = [dashboardNav, templatesNav];
+
+/** Pre-resolve a nav item (+ children) to absolute hrefs under `pfx`. */
+function absResolve(entry: NavItem, pfx: string): NavItem {
+  return {
+    ...entry,
+    href: `${pfx}${entry.href}`,
+    absolute: true,
+    children: entry.children?.map((c) => ({ ...c, href: `${pfx}${c.href}`, absolute: true })),
+  };
+}
+
+/**
+ * Organization nav. An org both rolls up its sub-accounts AND operates as an
+ * entity via its primary ("house") sub-account:
+ *   - Roll-up / manage pages live at /org/<slug> (dashboard, contacts union,
+ *     templates, reporting).
+ *   - The full studio suite operates the primary sub-account, so those items
+ *     deep-link into /subaccount/<primarySlug>. Shown only once a primary is
+ *     designated (Settings → Organization → Primary sub-account).
+ */
+function buildOrgNav(
+  orgSlug: string,
+  primarySlug: string | null,
+  primaryDealer: string | null,
+): NavEntry[] {
+  const orgPfx = `/org/${orgSlug}`;
+  const orgContactsLeaf: NavItem = { href: '/contacts', label: 'Contacts', icon: UserGroupIcon };
+  const rollup: NavEntry[] = [
+    absResolve(dashboardNav, orgPfx),
+    absResolve(orgContactsLeaf, orgPfx),
+    absResolve(templatesNav, orgPfx),
+  ];
+  if (!primarySlug) return rollup;
+  const opPfx = `/subaccount/${primarySlug}`;
+  return [
+    ...rollup,
+    { divider: true, label: primaryDealer ? `${primaryDealer} (house account)` : 'House account' },
+    absResolve(campaignBuilderNav, opPfx),
+    absResolve(emailSmsNav, opPfx),
+    absResolve(websitesNav, opPfx),
+    absResolve(flowsNavItem, opPfx),
+    { ...adGeneratorNav, absolute: true },
+    absResolve(mediaNav, opPfx),
+  ];
+}
 
 // Client users: while the platform is still being rolled out to accounts, a
 // client's entire experience is the Ad Generator — they fill in a designer-built
@@ -187,7 +231,7 @@ function groupContainsPath(item: NavItem, prefix: string, normalizedPath: string
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { userRole, isAdmin, isAccount, accountKey, accounts } = useAccount();
+  const { userRole, isAdmin, isAccount, isOrg, organizationData, accountKey, accounts } = useAccount();
   const { theme, toggleTheme } = useTheme();
   const { collapsed } = useSidebarCollapse();
 
@@ -212,13 +256,25 @@ export function Sidebar() {
   const isClientRole = userRole === 'client';
   const slug = accountKey ? accountKeyToSlug(accountKey, accounts) : null;
   const inSubaccountRoute = isSubaccountRoute(pathname);
+  const inOrgRoute = isOrgRoute(pathname);
+
+  // Org scope: roll-up/manage pages live at /org/<slug>; the org's OWN studio
+  // work operates its primary ("house") sub-account, so operational items are
+  // pre-resolved to /subaccount/<primarySlug>. (Absolute so the prefix loop
+  // below leaves them untouched.)
+  const orgSlug = organizationData ? orgSlugFor(organizationData) : null;
+  const orgPrimaryKey = organizationData?.primaryAccountKey ?? null;
+  const orgPrimarySlug = orgPrimaryKey ? accountKeyToSlug(orgPrimaryKey, accounts) : null;
+  const orgPrimaryDealer = orgPrimaryKey ? accounts[orgPrimaryKey]?.dealer ?? orgPrimaryKey : null;
 
   let navItems: NavEntry[];
   let prefix = '';
 
-  if (isAdmin && !inSubaccountRoute) {
+  if (isAdmin && !inSubaccountRoute && !inOrgRoute) {
     // Agency View: trimmed to the platform-management essentials.
     navItems = agencyNavItems;
+  } else if ((isOrg || inOrgRoute) && orgSlug) {
+    navItems = buildOrgNav(orgSlug, orgPrimarySlug, orgPrimaryDealer);
   } else if (slug) {
     prefix = `/subaccount/${slug}`;
     navItems = isClientRole ? subaccountClientNavItems : subaccountAdminNavItems;

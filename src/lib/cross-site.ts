@@ -117,6 +117,28 @@ export function getAppUrl(path: string = ''): string | null {
   return null;
 }
 
+/**
+ * Absolute URL of the Reporting surface, computed from the current host.
+ *
+ *   studio.loomilm.com → https://reporting.loomilm.com
+ *   localhost:3000     → http://reporting.localhost:3000
+ */
+export function getReportingUrl(path: string = ''): string | null {
+  if (typeof window === 'undefined') return null;
+  const { protocol, host } = window.location;
+  const p = path === '' ? '' : path.startsWith('/') ? path : `/${path}`;
+  for (const prefix of ['studio.', 'app.']) {
+    if (host.startsWith(prefix)) {
+      return `${protocol}//reporting.${host.slice(prefix.length)}${p}`;
+    }
+  }
+  if (host.startsWith('reporting.')) return `${protocol}//${host}${p}`;
+  if (host === 'localhost' || host.startsWith('localhost:')) {
+    return `${protocol}//reporting.${host}${p}`;
+  }
+  return null;
+}
+
 /** Which surface we are currently on. */
 export function getCurrentSurface(): 'studio' | 'reporting' | 'app' | null {
   if (typeof window === 'undefined') return null;
@@ -127,5 +149,10 @@ export function getCurrentSurface(): 'studio' | 'reporting' | 'app' | null {
   const appHost = (window as unknown as { __LOOMI_APP_HOST__?: string }).__LOOMI_APP_HOST__;
   if (appHost && host.toLowerCase() === appHost.toLowerCase()) return 'app';
   if (host.startsWith('app.')) return 'app';
+  // Local dev serves every surface on the bare host, so fall back to the path
+  // prefix. (Prod's reporting.* / app.* subdomains are already matched above;
+  // the studio surface never serves a /reporting path, so this is dev-only.)
+  const path = window.location.pathname;
+  if (path === '/reporting' || path.startsWith('/reporting/')) return 'reporting';
   return 'studio';
 }

@@ -34,13 +34,15 @@ function parseLogos(raw: string | null | undefined): LogoSet {
 }
 
 export function OrganizationSettingsTab() {
-  const { organizationId, organizationData, refreshOrganizations } = useAccount();
+  const { organizationId, organizationData, accounts, refreshOrganizations } = useAccount();
   const { markClean } = useUnsavedChanges();
 
   const [name, setName] = useState('');
   const [savedName, setSavedName] = useState('');
   const [logos, setLogos] = useState<LogoSet>({ light: '', dark: '', white: '', black: '' });
   const [savedLogosSig, setSavedLogosSig] = useState('');
+  const [primary, setPrimary] = useState('');
+  const [savedPrimary, setSavedPrimary] = useState('');
   const [saving, setSaving] = useState(false);
   const [titleActionsEl, setTitleActionsEl] = useState<HTMLElement | null>(null);
 
@@ -55,6 +57,8 @@ export function OrganizationSettingsTab() {
       const parsed = parseLogos(organizationData.logos);
       setLogos(parsed);
       setSavedLogosSig(JSON.stringify(parsed));
+      setPrimary(organizationData.primaryAccountKey ?? '');
+      setSavedPrimary(organizationData.primaryAccountKey ?? '');
     }
   }, [organizationData]);
 
@@ -66,9 +70,13 @@ export function OrganizationSettingsTab() {
     );
   }
 
+  // The org's own sub-accounts, for the primary ("house") account picker.
+  const memberKeys = organizationData.accountKeys;
+
   const nameDirty = name.trim().length > 0 && name.trim() !== savedName;
   const logosDirty = JSON.stringify(logos) !== savedLogosSig;
-  const dirty = nameDirty || logosDirty;
+  const primaryDirty = primary !== savedPrimary;
+  const dirty = nameDirty || logosDirty || primaryDirty;
 
   const save = async () => {
     setSaving(true);
@@ -84,11 +92,16 @@ export function OrganizationSettingsTab() {
       const r = await fetch(`/api/organizations/${organizationId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), logos: JSON.stringify(logosPayload) }),
+        body: JSON.stringify({
+          name: name.trim(),
+          logos: JSON.stringify(logosPayload),
+          primaryAccountKey: primary || null,
+        }),
       });
       if (!r.ok) throw new Error(String(r.status));
       setSavedName(name.trim());
       setSavedLogosSig(JSON.stringify(logos));
+      setSavedPrimary(primary);
       markClean();
       await refreshOrganizations();
       toast.success('Organization saved!');
@@ -117,6 +130,19 @@ export function OrganizationSettingsTab() {
           <div>
             <label className={labelClass}>Organization Name</label>
             <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
+          </div>
+          <div>
+            <label className={labelClass}>Primary sub-account</label>
+            <select value={primary} onChange={(e) => setPrimary(e.target.value)} className={inputClass}>
+              <option value="">None (roll-up only)</option>
+              {memberKeys.map((key) => (
+                <option key={key} value={key}>{accounts[key]?.dealer || key}</option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-[11px] text-[var(--muted-foreground)]">
+              The &ldquo;house&rdquo; sub-account this organization operates from — its own campaigns, contacts,
+              and flows live here, separate from the other sub-accounts it rolls up.
+            </p>
           </div>
           <p className="text-[11px] text-[var(--muted-foreground)]">
             Manage this organization&apos;s sub-accounts in the Sub-Accounts tab.

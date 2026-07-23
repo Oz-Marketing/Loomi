@@ -3,6 +3,7 @@ import { requireAuth, requireRole } from '@/lib/api-auth';
 import { ELEVATED_ROLES } from '@/lib/auth';
 import { normalizeOems } from '@/lib/oems';
 import * as accountService from '@/lib/services/accounts';
+import * as orgService from '@/lib/services/organizations';
 import { normalizeAccountInputAliases } from '@/lib/account-field-aliases';
 import { normalizeAccountOutputPayload } from '@/lib/account-output';
 import { getIndustryDefaults } from '@/data/industry-defaults';
@@ -65,6 +66,7 @@ export async function POST(req: NextRequest) {
       website,
       timezone,
       accountRepId,
+      organizationId,
     } = payload as {
       key?: string;
       dealer?: string;
@@ -83,6 +85,7 @@ export async function POST(req: NextRequest) {
       website?: string;
       timezone?: string;
       accountRepId?: string;
+      organizationId?: string;
     };
     if (!key || !dealer) {
       return NextResponse.json({ error: 'Missing key and dealer' }, { status: 400 });
@@ -126,6 +129,13 @@ export async function POST(req: NextRequest) {
     if (website) accountData.website = website;
     if (timezone) accountData.timezone = timezone;
     if (accountRepId) accountData.accountRepId = accountRepId;
+
+    // Onboarding "group" path: attach to a parent organization if given (and it
+    // exists). Invalid ids are ignored rather than failing the account create.
+    if (typeof organizationId === 'string' && organizationId.trim()) {
+      const org = await orgService.getOrganization(organizationId.trim());
+      if (org) accountData.organizationId = org.id;
+    }
 
     // Auto-populate custom values from industry template when category matches
     if (!accountData.customValues && accountData.category) {

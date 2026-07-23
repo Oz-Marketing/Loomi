@@ -103,6 +103,9 @@ export async function createAccount(data: {
   customFonts?: string;
   customValues?: string;
   accountRepId?: string;
+  // Parent organization (Phase 3 onboarding): set when this account is created
+  // as part of a group.
+  organizationId?: string | null;
 }) {
   const slug = data.slug || await generateUniqueSlug(data.dealer, data.city);
   return prisma.account.create({ data: { ...data, slug } });

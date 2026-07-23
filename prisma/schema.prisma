@@ -21,6 +21,11 @@ model User {
   role        String    @default("client") // developer | super_admin | admin | client
   department  String? // "Design" | "Account Management" | "Development" | "Leadership" | "Marketing" | "Sales" | "Operations"
   accountKeys String    @default("[]") // JSON array of assigned account keys
+  // JSON array of assigned Organization keys. An org grant expands to every
+  // child account's key at session-build time (see lib/auth.ts), so an
+  // org-scoped user transparently gains access to all rooftops under it
+  // without listing each accountKey individually.
+  orgKeys     String    @default("[]")
   lastLoginAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -81,6 +86,35 @@ model DashboardLayoutPreference {
 
   @@unique([userId, role, mode, scopeKey])
   @@index([userId, updatedAt])
+}
+
+// ─────────────────────────────────────────────────────
+// Organizations (parent grouping over sub-accounts)
+//
+// An Organization groups multiple sub-accounts (rooftops) under one client
+// umbrella — e.g. "Young Automotive Group" over its 20+ dealership accounts.
+// The relationship is a single level (org → account); accounts carry a
+// nullable organizationId, so standalone sub-accounts with no parent behave
+// exactly as before. Reporting/contacts roll up by unioning child accounts
+// (aggregation); org-authored resources cascade down (inheritance, Phase 2).
+// ─────────────────────────────────────────────────────
+
+model Organization {
+  id        String   @id @default(cuid())
+  key       String   @unique // stable machine key, e.g. "youngAutomotiveGroup"
+  slug      String?  @unique // URL-safe kebab-case: "young-automotive-group"
+  name      String // display name, e.g. "Young Automotive Group"
+  // Optional org-level branding used by Phase 2 inheritance (logos + brand
+  // kit authored once and cascaded to child rooftops). JSON, same shape as
+  // Account.logos / Account.branding. Null = no org-level override.
+  logos     String?
+  branding  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts  Account[]
+  // Org-owned resources authored once and inherited by child rooftops (Phase 2).
+  templates Template[]
 }
 
 // ─────────────────────────────────────────────────────
@@ -185,6 +219,11 @@ model Account {
   metaTimezone              String?
   accountRepId              String?
   accountRep                User?     @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
+  // Parent Organization (nullable). null = standalone sub-account with no org
+  // umbrella. onDelete: SetNull so removing an org detaches its rooftops
+  // rather than cascading a destructive delete of live account data.
+  organizationId            String?
+  organization              Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
   // Marker for the one-time bootstrap that seeds Loomi's six lifecycle
   // audiences (service overdue, lease ending, etc.) into automotive
   // accounts. Set once on first visit to /contacts/segments. Powersports
@@ -215,6 +254,7 @@ model Account {
   tasks                    Task[]
 
   @@index([accountRepId])
+  @@index([organizationId])
 }
 
 // ─────────────────────────────────────────────────────
@@ -224,10 +264,16 @@ model Account {
 model Template {
   id                String    @id @default(cuid())
   slug              String    @unique // "service-reminder", "modern-dark"
-  // null = shared library template, non-null = owned by a specific subaccount
-  // (created in / cloned to that subaccount). Subaccount-owned templates are
-  // only visible inside their subaccount.
+  // Ownership is a three-way split (Phase 2 org inheritance):
+  //   accountKey set                        → owned by that sub-account (only
+  //                                            visible inside it).
+  //   accountKey null, organizationId null  → shared Loomi library template.
+  //   accountKey null, organizationId set   → ORG-owned: authored once at the
+  //                                            organization and inherited by
+  //                                            every child rooftop (read-only
+  //                                            there until cloned).
   accountKey        String?
+  organizationId    String?
   title             String // "Service Reminder", "Modern Dark"
   type              String // "lifecycle" | "design"
   category          String? // "service", "sales", "loyalty", etc.
@@ -244,12 +290,14 @@ model Template {
   createdByUser   User?                   @relation("TemplateCreatedBy", fields: [createdByUserId], references: [id])
   updatedByUser   User?                   @relation("TemplateUpdatedBy", fields: [updatedByUserId], references: [id])
   publishedByUser User?                   @relation("TemplatePublishedBy", fields: [publishedByUserId], references: [id])
+  organization    Organization?           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   versions        TemplateVersion[]
   tags            TemplateTagAssignment[]
   emails          AccountEmail[]
 
   @@index([published])
   @@index([accountKey])
+  @@index([organizationId])
 }
 
 model TemplateVersion {

@@ -11,6 +11,7 @@
 // the event but don't update recipient state.
 
 import { prisma } from '@/lib/prisma';
+import { getOrgSiblingAccountKeys } from '@/lib/services/organizations';
 
 /** Shape of a single entry in SendGrid's Event Webhook batch. */
 export interface SendGridEvent {
@@ -194,21 +195,28 @@ async function persistSuppression(
   reason: string,
   ev: SendGridEvent,
 ): Promise<void> {
-  await prisma.emailSuppression.upsert({
-    where: { accountKey_email: { accountKey, email } },
-    create: {
-      accountKey,
-      email,
-      reason,
-      source: 'sendgrid',
-      raw: JSON.stringify({ type: ev.type, reason: ev.reason, url: ev.url }),
-    },
-    update: {
-      // If an earlier suppression existed (e.g. soft bounce upgraded to
-      // hard bounce + spam report), refresh the reason but keep the
-      // original createdAt so the suppression-age UX stays accurate.
-      reason,
-      raw: JSON.stringify({ type: ev.type, reason: ev.reason, url: ev.url }),
-    },
-  });
+  const rawJson = JSON.stringify({ type: ev.type, reason: ev.reason, url: ev.url });
+  // Org-wide cascade: a bounce / spam report / unsubscribe for an address is
+  // authoritative for the whole organization, so mirror the suppression onto
+  // every sibling rooftop. Standalone accounts get siblingKeys = [] → one write.
+  const siblingKeys = await getOrgSiblingAccountKeys(accountKey);
+  for (const key of [accountKey, ...siblingKeys]) {
+    await prisma.emailSuppression.upsert({
+      where: { accountKey_email: { accountKey: key, email } },
+      create: {
+        accountKey: key,
+        email,
+        reason,
+        source: 'sendgrid',
+        raw: rawJson,
+      },
+      update: {
+        // If an earlier suppression existed (e.g. soft bounce upgraded to
+        // hard bounce + spam report), refresh the reason but keep the
+        // original createdAt so the suppression-age UX stays accurate.
+        reason,
+        raw: rawJson,
+      },
+    });
+  }
 }

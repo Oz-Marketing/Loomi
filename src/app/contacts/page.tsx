@@ -141,10 +141,15 @@ function mergeContactsByIdentity(
 }
 
 export default function ContactsPage() {
-  const { isAdmin, accountKey, accounts } = useAccount();
+  const { isAdmin, isOrg, accountKey, accounts, scopedAccountKeys } = useAccount();
 
+  // Admin and org modes both use the fan-out/union view. Org mode restricts
+  // the fan-out to the organization's child rooftops (scopedAccountKeys).
   if (isAdmin) {
     return <AdminContactsView />;
+  }
+  if (isOrg) {
+    return <AdminContactsView restrictKeys={scopedAccountKeys} />;
   }
 
   const assignedKeys = Object.keys(accounts);
@@ -213,7 +218,7 @@ function useContactFilters(rawContacts: Contact[], initialAccountFilter = '') {
 
 // ── Admin View ──
 
-function AdminContactsView() {
+function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
   const { accounts: accountMap } = useAccount();
   const subHref = useSubaccountHref();
   const searchParams = useSearchParams();
@@ -225,20 +230,29 @@ function AdminContactsView() {
   const [refreshTick, setRefreshTick] = useState(0);
   const [showAddModal, setShowAddModal] = useState(false);
 
-  const availableAccounts = useMemo(
-    () =>
-      Object.entries(accountMap)
-        .map(([key, account]) => ({
-          key,
-          dealer: account.dealer || key,
-          storefrontImage: account.storefrontImage,
-          logos: account.logos,
-          city: account.city,
-          state: account.state,
-        }))
-        .sort((a, b) => a.dealer.localeCompare(b.dealer)),
-    [accountMap],
-  );
+  // When restrictKeys is provided (org roll-up mode), limit the fan-out to
+  // those rooftops. `null` signature = unrestricted (admin); an empty-but-
+  // present signature = org with no rooftops → show nothing. A stable string
+  // signature keeps the memo from re-running when array identity changes but
+  // contents don't.
+  const restrictSignature = restrictKeys ? [...restrictKeys].sort().join('|') : null;
+  const availableAccounts = useMemo(() => {
+    const allowed =
+      restrictSignature === null
+        ? null
+        : new Set(restrictSignature ? restrictSignature.split('|') : []);
+    return Object.entries(accountMap)
+      .filter(([key]) => !allowed || allowed.has(key))
+      .map(([key, account]) => ({
+        key,
+        dealer: account.dealer || key,
+        storefrontImage: account.storefrontImage,
+        logos: account.logos,
+        city: account.city,
+        state: account.state,
+      }))
+      .sort((a, b) => a.dealer.localeCompare(b.dealer));
+  }, [accountMap, restrictSignature]);
 
   const accountOptions = availableAccounts;
 

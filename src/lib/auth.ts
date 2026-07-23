@@ -2,6 +2,7 @@ import { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import bcryptjs from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
+import { resolveOrgAccountKeys } from '@/lib/services/organizations';
 
 // Re-export client-safe role types/constants so server code can import from either file
 export type { UserRole } from '@/lib/roles';
@@ -18,6 +19,10 @@ declare module 'next-auth' {
       avatarUrl: string | null;
       role: UserRole;
       accountKeys: string[];
+      // Organization keys the user is granted directly. Distinct from
+      // accountKeys (which already includes every rooftop these orgs expand
+      // to); used by the client to offer org-mode in the switcher.
+      orgKeys: string[];
       originalUserId?: string | null;
     };
   }
@@ -30,6 +35,7 @@ declare module 'next-auth' {
     avatarUrl: string | null;
     role: UserRole;
     accountKeys: string[];
+    orgKeys: string[];
   }
 }
 
@@ -40,6 +46,8 @@ declare module 'next-auth/jwt' {
     avatarUrl: string | null;
     role: UserRole;
     accountKeys: string[];
+    // Org grants held by the user (raw, before expansion into accountKeys).
+    orgKeys: string[];
     defaultAccountSlug?: string | null;
     originalUserId?: string;
     _roleCheckedAt?: number;
@@ -158,6 +166,7 @@ export const authOptions: NextAuthOptions = {
         }
 
         const accountKeys = parseStoredAccountKeys(user.accountKeys);
+        const orgKeys = parseStoredAccountKeys(user.orgKeys);
         return {
           id: user.id,
           name: user.name,
@@ -166,6 +175,7 @@ export const authOptions: NextAuthOptions = {
           avatarUrl: user.avatarUrl,
           role: user.role as UserRole,
           accountKeys,
+          orgKeys,
         };
       },
     }),
@@ -185,6 +195,7 @@ export const authOptions: NextAuthOptions = {
         token.role = user.role;
         const accountKeys = Array.isArray(user.accountKeys) ? user.accountKeys : [];
         token.accountKeys = accountKeys;
+        token.orgKeys = Array.isArray(user.orgKeys) ? user.orgKeys : [];
         if (user.role === 'client' && accountKeys.length > 0) {
           token.defaultAccountSlug = await getDefaultAccountSlug(accountKeys);
         }
@@ -213,13 +224,16 @@ export const authOptions: NextAuthOptions = {
         if (s.accountKeys !== undefined) {
           token.accountKeys = Array.isArray(s.accountKeys) ? (s.accountKeys as string[]) : [];
         }
+        if (s.orgKeys !== undefined) {
+          token.orgKeys = Array.isArray(s.orgKeys) ? (s.orgKeys as string[]) : [];
+        }
 
         // Start impersonation — overwrite token with target user data
         if (s.impersonateAs) {
           const imp = s.impersonateAs as {
             id: string; name: string; email: string;
             title: string | null; avatarUrl: string | null; role: UserRole;
-            accountKeys?: string[]; originalUserId: string;
+            accountKeys?: string[]; orgKeys?: string[]; originalUserId: string;
           };
           const accountKeys = Array.isArray(imp.accountKeys) ? imp.accountKeys : [];
           token.id = imp.id;
@@ -229,6 +243,7 @@ export const authOptions: NextAuthOptions = {
           token.avatarUrl = imp.avatarUrl;
           token.role = imp.role;
           token.accountKeys = accountKeys;
+          token.orgKeys = Array.isArray(imp.orgKeys) ? imp.orgKeys : [];
           token.originalUserId = imp.originalUserId;
         }
 
@@ -237,7 +252,7 @@ export const authOptions: NextAuthOptions = {
           const rev = s.revertImpersonation as {
             id: string; name: string; email: string;
             title: string | null; avatarUrl: string | null; role: UserRole;
-            accountKeys?: string[];
+            accountKeys?: string[]; orgKeys?: string[];
           };
           const accountKeys = Array.isArray(rev.accountKeys) ? rev.accountKeys : [];
           token.id = rev.id;
@@ -247,6 +262,7 @@ export const authOptions: NextAuthOptions = {
           token.avatarUrl = rev.avatarUrl;
           token.role = rev.role;
           token.accountKeys = accountKeys;
+          token.orgKeys = Array.isArray(rev.orgKeys) ? rev.orgKeys : [];
           delete token.originalUserId;
         }
       }
@@ -260,12 +276,13 @@ export const authOptions: NextAuthOptions = {
         try {
           const freshUser = await prisma.user.findUnique({
             where: { id: token.id },
-            select: { role: true, accountKeys: true },
+            select: { role: true, accountKeys: true, orgKeys: true },
           });
           if (freshUser) {
             token.role = freshUser.role as UserRole;
             const freshKeys = parseStoredAccountKeys(freshUser.accountKeys);
             token.accountKeys = freshKeys;
+            token.orgKeys = parseStoredAccountKeys(freshUser.orgKeys);
             if (freshUser.role === 'client' && freshKeys.length > 0) {
               token.defaultAccountSlug = await getDefaultAccountSlug(freshKeys);
             }
@@ -277,6 +294,27 @@ export const authOptions: NextAuthOptions = {
 
       if (!Array.isArray(token.accountKeys)) {
         token.accountKeys = [];
+      }
+      if (!Array.isArray(token.orgKeys)) {
+        token.orgKeys = [];
+      }
+
+      // Expand org grants into per-account access. A user assigned to an
+      // Organization transparently gains access to every rooftop under it, so
+      // all existing accountKey-scoped auth/queries keep working unchanged.
+      // Skipped for elevated roles (they already see everything) and when the
+      // user holds no org grants.
+      if (
+        token.orgKeys.length > 0 &&
+        token.role !== 'developer' &&
+        token.role !== 'super_admin'
+      ) {
+        const orgChildKeys = await resolveOrgAccountKeys(token.orgKeys);
+        if (orgChildKeys.length > 0) {
+          token.accountKeys = Array.from(
+            new Set([...token.accountKeys, ...orgChildKeys]),
+          );
+        }
       }
 
       // Admins / super-admins with no explicit account assignments get full access.
@@ -294,6 +332,7 @@ export const authOptions: NextAuthOptions = {
       session.user.avatarUrl = token.avatarUrl ?? null;
       session.user.role = token.role;
       session.user.accountKeys = token.accountKeys;
+      session.user.orgKeys = token.orgKeys ?? [];
       session.user.originalUserId = token.originalUserId ?? null;
       return session;
     },

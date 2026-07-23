@@ -9,10 +9,15 @@ interface TemplateListOptions {
   // Filter by ownership. When provided, only templates owned by this
   // subaccount are returned (and `scope` is ignored).
   accountKey?: string;
-  // When `accountKey` is not provided, controls global scope:
-  //   - 'library' (default): only shared library templates (accountKey IS NULL)
+  // Org-owned templates (Phase 2 inheritance). When provided, returns only
+  // templates authored at this organization (accountKey IS NULL, organizationId
+  // = this). Ignored when `accountKey` is set.
+  organizationId?: string;
+  // When `accountKey`/`organizationId` are not provided, controls global scope:
+  //   - 'library' (default): shared Loomi library only (accountKey IS NULL AND
+  //     organizationId IS NULL — org-owned templates are NOT library templates)
   //   - 'subaccount': only subaccount-owned templates (accountKey IS NOT NULL)
-  //   - 'all': no scope filter — both library and subaccount-owned templates
+  //   - 'all': no scope filter
   scope?: TemplateScope;
 }
 
@@ -21,16 +26,25 @@ function buildWhere(options: TemplateListOptions = {}) {
     type?: string;
     published?: boolean;
     accountKey?: string | null | { not: null };
+    organizationId?: string | null;
   } = {};
   if (options.type) where.type = options.type;
   if (options.publishedOnly) where.published = true;
   if (options.accountKey) {
     where.accountKey = options.accountKey;
+  } else if (options.organizationId) {
+    where.organizationId = options.organizationId;
   } else {
     const scope = options.scope ?? 'library';
-    if (scope === 'library') where.accountKey = null;
-    else if (scope === 'subaccount') where.accountKey = { not: null };
-    // 'all' → no accountKey filter
+    if (scope === 'library') {
+      // Library = neither sub-account- nor org-owned. Excluding org-owned here
+      // is what keeps inherited templates out of the global library list.
+      where.accountKey = null;
+      where.organizationId = null;
+    } else if (scope === 'subaccount') {
+      where.accountKey = { not: null };
+    }
+    // 'all' → no ownership filter
   }
   return Object.keys(where).length > 0 ? where : undefined;
 }
@@ -45,6 +59,7 @@ export async function getTemplates(typeOrOptions?: string | TemplateListOptions)
       id: true,
       slug: true,
       accountKey: true,
+      organizationId: true,
       title: true,
       type: true,
       category: true,
@@ -76,6 +91,7 @@ export async function getTemplatesWithContent(typeOrOptions?: string | TemplateL
       id: true,
       slug: true,
       accountKey: true,
+      organizationId: true,
       title: true,
       content: true,
       type: true,
@@ -115,8 +131,57 @@ export async function createTemplate(data: {
   preheader?: string;
   createdByUserId?: string;
   accountKey?: string | null;
+  // Set (with accountKey null) to author an org-owned template that every
+  // child rooftop inherits.
+  organizationId?: string | null;
 }) {
   return prisma.template.create({ data });
+}
+
+/**
+ * The templates a sub-account effectively sees: its own, plus any templates
+ * authored at its parent organization (inherited, read-only until cloned).
+ * Library templates are intentionally excluded — those are listed separately.
+ */
+export async function getEffectiveTemplatesForAccount(
+  accountKey: string,
+  opts: { type?: string } = {},
+) {
+  const account = await prisma.account.findUnique({
+    where: { key: accountKey },
+    select: { organizationId: true },
+  });
+  const orgId = account?.organizationId ?? null;
+
+  const where = {
+    ...(opts.type ? { type: opts.type } : {}),
+    OR: [{ accountKey }, ...(orgId ? [{ organizationId: orgId }] : [])],
+  };
+
+  // Content is always selected so this composes with getTemplatesWithContent's
+  // shape (both feed the same API response mapping).
+  return prisma.template.findMany({
+    where,
+    orderBy: { updatedAt: 'desc' },
+    select: {
+      id: true,
+      slug: true,
+      accountKey: true,
+      organizationId: true,
+      title: true,
+      content: true,
+      type: true,
+      category: true,
+      preheader: true,
+      published: true,
+      publishedAt: true,
+      createdAt: true,
+      updatedAt: true,
+      createdByUser: { select: { id: true, name: true, avatarUrl: true } },
+      updatedByUser: { select: { id: true, name: true, avatarUrl: true } },
+      publishedByUser: { select: { id: true, name: true, avatarUrl: true } },
+    },
+  });
 }
 
 export async function updateTemplate(

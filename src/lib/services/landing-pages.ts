@@ -212,9 +212,14 @@ export async function listLandingPages(
 export async function listLandingPageTemplates(
   accountKey?: string | null,
   includeAll = false,
+  organizationId?: string | null,
 ): Promise<LandingPageSummary[]> {
   let where: Record<string, unknown>;
-  if (accountKey) {
+  if (organizationId) {
+    // Org-authoring view: the templates this organization owns (and cascades
+    // to its sub-accounts).
+    where = { isTemplate: true, organizationId };
+  } else if (accountKey) {
     // A sub-account's effective template set = its own templates + any
     // authored by its parent organization (author-once inheritance).
     const account = await prisma.account.findUnique({

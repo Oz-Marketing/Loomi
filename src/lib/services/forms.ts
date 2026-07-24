@@ -243,6 +243,9 @@ export async function listForms(options?: {
   /** 'system' → only account-less system/library templates (accountKey
    *  null). Otherwise scoped to accountKey/accountKeys as usual. */
   scope?: 'system';
+  /** When set (with isTemplate), list the templates OWNED by this org —
+   *  the org-authoring view. Mutually exclusive with accountKey. */
+  organizationId?: string | null;
 }): Promise<{ forms: FormSummary[]; page: number; pageSize: number; total: number }> {
   const page = clampPage(options?.page);
   const pageSize = clampPageSize(options?.pageSize);
@@ -252,6 +255,10 @@ export async function listForms(options?: {
     // System/library templates are neither account- nor org-owned. Excluding
     // org-owned here keeps inherited templates out of the global library list.
     where = { isTemplate, accountKey: null, organizationId: null };
+  } else if (isTemplate && options?.organizationId) {
+    // Org-authoring view: the templates this organization owns (and cascades
+    // to its sub-accounts).
+    where = { isTemplate, organizationId: options.organizationId };
   } else if (isTemplate && options?.accountKey) {
     // Effective template set for a sub-account: its own templates PLUS any
     // authored at its parent organization (Phase 2 inheritance).

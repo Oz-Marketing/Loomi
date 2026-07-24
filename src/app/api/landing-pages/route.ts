@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   canAccessAccount,
+  canAccessOrg,
   forbidden,
   getAccountScope,
   requireRole,
@@ -30,8 +31,11 @@ export async function GET(req: NextRequest) {
   if (req.nextUrl.searchParams.get('isTemplate') === 'true') {
     const accountKey = req.nextUrl.searchParams.get('accountKey')?.trim() || null;
     if (accountKey && !canAccessAccount(scope, accountKey)) return forbidden();
-    const includeAll = !accountKey && scope === null;
-    const pages = await listLandingPageTemplates(accountKey, includeAll);
+    // ?organizationId=<id> → templates this org owns (org-authoring view).
+    const organizationId = req.nextUrl.searchParams.get('organizationId')?.trim() || null;
+    if (organizationId && !(await canAccessOrg(session!, organizationId))) return forbidden();
+    const includeAll = !accountKey && !organizationId && scope === null;
+    const pages = await listLandingPageTemplates(accountKey, includeAll, organizationId);
     return NextResponse.json({ pages });
   }
 
@@ -61,6 +65,9 @@ export async function POST(req: NextRequest) {
 
   const scope = getAccountScope(session!);
   if (accountKey && !canAccessAccount(scope, accountKey)) return forbidden();
+  // Org-owned template: verify the session may author for this org.
+  const orgOwned = !accountKey && isTemplate && organizationId;
+  if (orgOwned && !(await canAccessOrg(session!, organizationId))) return forbidden();
 
   // Resolve the schema from one of two source kinds:
   //   1. Built-in preset by id ("blank" / "lead-capture" / etc.)
@@ -109,7 +116,7 @@ export async function POST(req: NextRequest) {
       accountKey: accountKey || null,
       // Org-owned template: account-less, tagged to the org so its
       // sub-accounts inherit it.
-      organizationId: !accountKey && isTemplate ? organizationId : null,
+      organizationId: orgOwned ? organizationId : null,
       name,
       schema,
       isTemplate,

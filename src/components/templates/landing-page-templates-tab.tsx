@@ -36,7 +36,15 @@ const fetcher = async (url: string) => {
  * sub-account sees only its own. "Use template" spins up a live LP from the
  * template's schema.
  */
-export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string }) {
+export function LandingPageTemplatesTab({
+  accountKey,
+  organizationId,
+  orgLabel,
+}: {
+  accountKey?: string;
+  organizationId?: string;
+  orgLabel?: string;
+}) {
   const router = useRouter();
   const subHref = useSubaccountHref();
   const { accounts } = useAccount();
@@ -49,8 +57,13 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
   const [creating, setCreating] = useState(false);
   const [usingId, setUsingId] = useState<string | null>(null);
 
+  const listQuery = organizationId
+    ? `&organizationId=${encodeURIComponent(organizationId)}`
+    : accountKey
+      ? `&accountKey=${encodeURIComponent(accountKey)}`
+      : '';
   const { data, isLoading, error, mutate } = useSWR<{ pages: LandingPageSummary[] }>(
-    `/api/landing-pages?isTemplate=true${accountKey ? `&accountKey=${encodeURIComponent(accountKey)}` : ''}`,
+    `/api/landing-pages?isTemplate=true${listQuery}`,
     fetcher,
   );
   const { data: taxData } = useSWR<{ categories?: string[]; tags?: string[] }>('/api/template-taxonomy', fetcher);
@@ -80,7 +93,12 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
       const res = await fetch('/api/landing-pages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Untitled template', isTemplate: true, templateId: 'blank', ...(accountKey ? { accountKey } : {}) }),
+        body: JSON.stringify({
+          name: 'Untitled template',
+          isTemplate: true,
+          templateId: 'blank',
+          ...(organizationId ? { organizationId } : accountKey ? { accountKey } : {}),
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
@@ -202,6 +220,13 @@ export function LandingPageTemplatesTab({ accountKey }: { accountKey?: string })
   return (
     <>
       {header}
+      {organizationId && (
+        <div className="mb-4 rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 px-4 py-2.5 text-xs text-[var(--muted-foreground)]">
+          You&rsquo;re authoring for{' '}
+          <span className="font-medium text-[var(--foreground)]">{orgLabel ?? 'this organization'}</span>. New
+          templates here are shared with every sub-account in the organization.
+        </div>
+      )}
       <TemplateLibraryShell
         resultCount={filtered.length}
         rail={

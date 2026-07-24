@@ -17,6 +17,14 @@ import {
   effMarkupOf,
   sourceColor,
 } from '@/lib/ad-pacer/helpers';
+import {
+  poolAds,
+  computePoolMeter,
+  splitToCents,
+  DEFAULT_SPEC,
+  type AdAllocSpec,
+  type AllocationMode,
+} from '@/lib/ad-pacer/budget-calc';
 import { CompactStat } from './metrics';
 import { DollarInput, inputClass } from './inputs';
 import { Tooltip } from './Tooltip';
@@ -33,98 +41,9 @@ import { Tooltip } from './Tooltip';
  * field. If any ad in the source already has an allocation, prompts before
  * overwriting.
  */
-type AllocationMode = 'even' | 'amount' | 'percent' | 'off' | 'client';
-
-interface AdAllocSpec {
-  mode: AllocationMode;
-  amount: string; // when mode === 'amount'
-  percent: string; // when mode === 'percent'
-  // when mode === 'client': the gross/billable amount the user types.
-  // computeAllocations multiplies it by the effective markup to produce
-  // the actual-spend value written on Apply.
-  clientAmount: string;
-  included: boolean; // when false the row is ignored — its current allocation stays put
-}
-
-const DEFAULT_SPEC: AdAllocSpec = {
-  mode: 'even',
-  amount: '',
-  percent: '',
-  clientAmount: '',
-  included: true,
-};
-
-/**
- * Builds the per-ad allocation map for the Budget Calculator.
- *
- * Priority order per row:
- *   1. Status "Off" / "Completed Run" → locked; allocation snaps to
- *      `pacerActual` (the Pacer page's tracked spend). Its unspent
- *      portion (alloc − pacerActual) feeds the redistribution pool.
- *   2. Mode "off" → same lock behavior (explicit user choice).
- *   3. Mode "amount" → explicit actual-spend dollar value.
- *   4. Mode "client" → gross/billable dollars × `markup` = actual spend.
- *      Used when the rep is given a client-facing number instead of the
- *      internal actual-spend number.
- *   5. Mode "percent" → percentage of `pool`. In mid-flight the pool is
- *      Remaining-to-Split (Initial − Locked Spend − Excluded Preserved);
- *      in setup mode the pool is just the Total Budget.
- *   6. Mode "even" → skipped here; user must click Spread to convert it
- *      to amount mode at that moment.
- * Excluded rows (`included === false`) are left out entirely — the parent
- * preserves their existing allocation on Apply.
- */
-/**
- * Split `total` dollars into `n` parts that sum back to `total` EXACTLY to the
- * cent (12a). Equal shares, with leftover cents handed to the first rows — so
- * "distribute evenly" never leaves a phantom remainder from rounding each row
- * independently. Operates in integer cents; rounds only at the very end.
- */
-function splitToCents(total: number, n: number): number[] {
-  if (n <= 0) return [];
-  const cents = Math.round(total * 100);
-  const base = Math.trunc(cents / n);
-  let remainder = cents - base * n; // 0..n-1 leftover cents
-  return Array.from({ length: n }, () => {
-    const extra = remainder > 0 ? 1 : 0;
-    if (remainder > 0) remainder -= 1;
-    return (base + extra) / 100;
-  });
-}
-
-function computeAllocations(
-  ads: PacerAd[],
-  pool: number,
-  markup: number,
-  specs: Record<string, AdAllocSpec>,
-): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const ad of ads) {
-    const spec = specs[ad.id] ?? DEFAULT_SPEC;
-    if (!spec.included) continue;
-
-    const statusDonor =
-      ad.adStatus === 'Off' || ad.adStatus === 'Completed Run';
-    if (statusDonor) {
-      out[ad.id] = num(ad.pacerActual) ?? 0;
-      continue;
-    }
-
-    if (spec.mode === 'off') {
-      out[ad.id] = num(ad.pacerActual) ?? 0;
-    } else if (spec.mode === 'amount') {
-      out[ad.id] = num(spec.amount) ?? 0;
-    } else if (spec.mode === 'client') {
-      const gross = num(spec.clientAmount) ?? 0;
-      out[ad.id] = gross * markup;
-    } else if (spec.mode === 'percent') {
-      const pct = num(spec.percent) ?? 0;
-      out[ad.id] = (pool * pct) / 100;
-    }
-    // even mode: skipped — user must click Spread to assign values.
-  }
-  return out;
-}
+// Allocation types + math (splitToCents, computeAllocations, poolAds,
+// computePoolMeter) live in @/lib/ad-pacer/budget-calc — a pure, unit-tested
+// module so the meter accounting is verified independently of this UI.
 
 export function BudgetCalculatorModal({
   plan,
@@ -233,63 +152,35 @@ export function BudgetCalculatorModal({
   const isDonor = (a: PacerAd) =>
     a.adStatus === 'Off' || a.adStatus === 'Completed Run';
 
-  // Source pool summary. sourceAds already carries each split ad's per-source
-  // portion (projected, qualified id), so these sums cover split ads with no
-  // separate handling.
-  // * Initially Allocated = source-portion allocations at modal open (the ad
-  //   isn't mutated until Apply, so the live value equals the opening value).
-  // * Locked Spend        = Σ pacerActual for status-locked ads (Off/Completed).
-  // * Excluded Preserved  = Σ existing allocation for unchecked rows.
-  // * Remaining to Split  = Mid-flight: Initial − Locked − Excluded; Setup mode:
-  //   just the Total Budget.
-  const initiallyAllocated = sourceAds.reduce(
-    (s, a) => s + (num(a.allocation) ?? 0),
-    0,
+  // Account-global pool meter for the current source, from the pure, unit-
+  // tested module. poolAds(plan, source) is the same set the rows below render
+  // (pure-source ads + each split ad's source portion), so `allocations` is
+  // keyed identically. The meter fixes Setup-mode Unallocated to count
+  // locked/unchecked ads as committed against the ceiling; Mid-flight parity
+  // (re-plan Initial − Locked − Preserved) is unchanged. `remainingToSplit`
+  // maps to the meter's anchor (ceiling in Setup, the redistribution pool in
+  // Mid-flight); `stillToAllocate` is the true Unallocated.
+  const meterAds = useMemo(() => poolAds(plan, source), [plan, source]);
+  const meter = useMemo(
+    () =>
+      computePoolMeter(
+        source,
+        meterAds,
+        specs,
+        calcMode,
+        effectiveMarkup,
+        totalBudget,
+      ),
+    [source, meterAds, specs, calcMode, effectiveMarkup, totalBudget],
   );
-  const lockedSpend =
-    calcMode === 'midflight'
-      ? sourceAds.reduce(
-          (s, a) => (isDonor(a) ? s + (num(a.pacerActual) ?? 0) : s),
-          0,
-        )
-      : 0;
-  const excludedPreserved =
-    calcMode === 'midflight'
-      ? sourceAds.reduce((s, a) => {
-          const spec = specs[a.id] ?? DEFAULT_SPEC;
-          return spec.included ? s : s + (num(a.allocation) ?? 0);
-        }, 0)
-      : 0;
-  const remainingToSplit =
-    calcMode === 'midflight'
-      ? Math.max(0, initiallyAllocated - lockedSpend - excludedPreserved)
-      : totalBudget;
-
-  // Allocations — uses remainingToSplit (not totalBudget) as the base for
-  // percent-mode rows, so "Set 75%" means 75% of the redistribution pool
-  // the user is actually distributing, not 75% of the gross ceiling.
-  // effectiveMarkup (declared above) powers the Client Budget mode.
-  const allocations = useMemo(
-    () => computeAllocations(sourceAds, remainingToSplit, effectiveMarkup, specs),
-    [sourceAds, remainingToSplit, effectiveMarkup, specs],
-  );
-
-  // Active-row commitments — what the user has explicitly typed for
-  // receivers (amount/percent/off). Donor rows are auto-locked via
-  // status and already reflected in lockedSpend. Excluded rows preserve
-  // their existing allocation. Even-mode receiver rows skip here — they
-  // only get a value once the user clicks Spread.
-  const enteredSoFar = sourceAds.reduce((s, a) => {
-    const spec = specs[a.id] ?? DEFAULT_SPEC;
-    if (!spec.included) return s;
-    if (isDonor(a)) return s;
-    const v = allocations[a.id];
-    return v == null ? s : s + v;
-  }, 0);
-  const stillToAllocate = remainingToSplit - enteredSoFar;
-  const overAllocated = stillToAllocate < -0.005;
-  // overBudget reuses the same semantic as before so the existing Apply
-  // guard ("can't apply when over") still kicks in.
+  const allocations = meter.allocations;
+  const initiallyAllocated = meter.initial;
+  const lockedSpend = meter.lockedSpend;
+  const excludedPreserved = meter.preserved;
+  const remainingToSplit = meter.anchor;
+  const enteredSoFar = meter.entered;
+  const stillToAllocate = meter.unallocated;
+  const overAllocated = meter.overAllocated;
   const overBudget = overAllocated;
 
   // Spread state — only included, non-donor, even-mode rows are

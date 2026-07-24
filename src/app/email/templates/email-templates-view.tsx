@@ -386,21 +386,27 @@ function EmbeddedHeaderActions({
 export function EmailTemplatesPanel({
   campaignDraftQuery,
   accountKey,
+  organizationId,
+  orgLabel,
   canManage,
   isClient,
 }: {
   campaignDraftQuery: string;
   accountKey?: string;
   accountLabel?: string;
+  organizationId?: string;
+  orgLabel?: string;
   canManage: boolean;
   isClient: boolean;
 }) {
   if (canManage) {
     return (
       <ManagementView
-        key={`mgmt-${accountKey ?? 'admin'}`}
+        key={`mgmt-${organizationId ? `org-${organizationId}` : accountKey ?? 'admin'}`}
         campaignDraftQuery={campaignDraftQuery}
         accountKey={accountKey}
+        organizationId={organizationId}
+        orgLabel={orgLabel}
         embedded
       />
     );
@@ -425,18 +431,24 @@ export function EmailTemplatesPanel({
 function ManagementView({
   campaignDraftQuery,
   accountKey,
+  organizationId,
+  orgLabel,
   embedded,
 }: {
   campaignDraftQuery: string;
   // When set, scopes the view to this subaccount's templates (no publish UI).
   accountKey?: string;
+  // When set (org mode), scopes the view to the org's own templates, and new
+  // templates are authored as org-owned (inherited by every sub-account).
+  organizationId?: string;
+  orgLabel?: string;
   // When true, the parent renders the page header so this view hides its own.
   embedded?: boolean;
 }) {
   const router = useRouter();
   const { confirm } = useLoomiDialog();
   const { accounts } = useAccount();
-  const scoped = Boolean(accountKey);
+  const scoped = Boolean(accountKey || organizationId);
   // key → dealer name, for the shared rail's Subaccount facet + card scope badge.
   const accountLabels = useMemo(
     () => Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.dealer || k])),
@@ -468,14 +480,16 @@ function ManagementView({
       // Admin (no accountKey): the WHOLE library — shared templates + every
       // subaccount's own (scope=all, management-only). Restricted admins can't
       // request cross-tenant scope, so fall back to the shared library.
-      const listUrl = accountKey
-        ? `/api/templates?accountKey=${encodeURIComponent(accountKey)}`
-        : '/api/templates?scope=all';
+      const listUrl = organizationId
+        ? `/api/templates?organizationId=${encodeURIComponent(organizationId)}`
+        : accountKey
+          ? `/api/templates?accountKey=${encodeURIComponent(accountKey)}`
+          : '/api/templates?scope=all';
       const [tResRaw, tagRes] = await Promise.all([
         fetch(listUrl),
         fetch('/api/template-tags'),
       ]);
-      const tRes = !tResRaw.ok && !accountKey ? await fetch('/api/templates') : tResRaw;
+      const tRes = !tResRaw.ok && !accountKey && !organizationId ? await fetch('/api/templates') : tResRaw;
       const tData = await tRes.json();
       const tagResult = await tagRes.json();
       setTemplates(Array.isArray(tData) ? tData : []);
@@ -489,7 +503,7 @@ function ManagementView({
   // Refetch when the account scope changes — the unified /templates page
   // can mount this view before the sub-account context has resolved from
   // the URL, so the initial accountKey may be undefined and then settle.
-  useEffect(() => { loadTemplates(); }, [accountKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadTemplates(); }, [accountKey, organizationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!showOverflowMenu) return;
@@ -644,7 +658,7 @@ function ManagementView({
         body: JSON.stringify({
           design: defaultName,
           mode,
-          ...(accountKey ? { accountKey } : {}),
+          ...(organizationId ? { organizationId } : accountKey ? { accountKey } : {}),
         }),
       });
       const data = await res.json();
@@ -874,6 +888,13 @@ function ManagementView({
 
   return (
     <div>
+      {organizationId && (
+        <div className="mb-4 rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 px-4 py-2.5 text-xs text-[var(--muted-foreground)]">
+          You&rsquo;re authoring for{' '}
+          <span className="font-medium text-[var(--foreground)]">{orgLabel ?? 'this organization'}</span>. New
+          templates here are shared with every sub-account in the organization.
+        </div>
+      )}
       {/* Sticky header — page title + primary actions. Hidden when embedded
           (parent component already renders a header above tabs). */}
       {!embedded && (

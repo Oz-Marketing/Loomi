@@ -141,6 +141,8 @@ function TemplatesPageInner() {
             campaignDraftQuery={campaignDraftQuery}
             accountKey={scopedAccountKey}
             accountLabel={accountLabel}
+            organizationId={scopedOrgId}
+            orgLabel={orgLabel}
             canManage={canManage}
             isClient={isClient}
           />

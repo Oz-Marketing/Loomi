@@ -47,6 +47,7 @@ import PrimaryButton from '@/components/primary-button';
 interface TemplateEntry {
   design: string;
   accountKey?: string | null;
+  organizationId?: string | null;
   name: string;
   editorType?: 'code' | 'visual' | string | null;
   category?: string | null;
@@ -447,7 +448,11 @@ function ManagementView({
 }) {
   const router = useRouter();
   const { confirm } = useLoomiDialog();
-  const { accounts } = useAccount();
+  const { accounts, organizations } = useAccount();
+  const orgLabels = useMemo(
+    () => Object.fromEntries(Object.values(organizations).map((o) => [o.id, o.name])),
+    [organizations],
+  );
   const scoped = Boolean(accountKey || organizationId);
   // key → dealer name, for the shared rail's Subaccount facet + card scope badge.
   const accountLabels = useMemo(
@@ -1083,7 +1088,13 @@ function ManagementView({
                 preview={<TemplatePreview design={t.design} height={180} />}
                 name={t.name || formatDesign(t.design)}
                 status={scoped ? undefined : isPublished ? 'published' : 'draft'}
-                scope={scoped ? undefined : { label: t.accountKey ? accountLabels[t.accountKey] ?? t.accountKey : 'All accounts', kind: t.accountKey ? 'account' : 'global' }}
+                scope={
+                  scoped
+                    ? undefined
+                    : t.organizationId
+                      ? { label: orgLabels[t.organizationId] ?? 'Organization', kind: 'org' as const }
+                      : { label: t.accountKey ? accountLabels[t.accountKey] ?? t.accountKey : 'All accounts', kind: t.accountKey ? 'account' : 'global' }
+                }
                 badges={
                   <span className="inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--muted)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
                     {templateTypeLabel}

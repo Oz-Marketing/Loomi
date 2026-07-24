@@ -48,7 +48,11 @@ export function FormTemplatesTab({
 }) {
   const router = useRouter();
   const subHref = useSubaccountHref();
-  const { accounts } = useAccount();
+  const { accounts, organizations } = useAccount();
+  const orgLabels = useMemo(
+    () => Object.fromEntries(Object.values(organizations).map((o) => [o.id, o.name])),
+    [organizations],
+  );
   const { confirm } = useLoomiDialog();
   // Deploy is an admin-only action — pushing a global template into
   // sub-accounts only makes sense from the unscoped library view.
@@ -226,7 +230,13 @@ export function FormTemplatesTab({
                 preview={<FormPreviewThumbnail template={form.schema} height={160} />}
                 name={form.name || 'Untitled template'}
                 status={form.status}
-                scope={!accountKey ? { label: form.accountKey ? accounts[form.accountKey]?.dealer ?? form.accountKey : 'All accounts', kind: form.accountKey ? 'account' : 'global' } : undefined}
+                scope={
+                  !accountKey
+                    ? form.organizationId
+                      ? { label: orgLabels[form.organizationId] ?? 'Organization', kind: 'org' as const }
+                      : { label: form.accountKey ? accounts[form.accountKey]?.dealer ?? form.accountKey : 'All accounts', kind: form.accountKey ? 'account' : 'global' }
+                    : undefined
+                }
                 category={form.category}
                 tags={form.tags}
                 taxonomy={taxonomy}

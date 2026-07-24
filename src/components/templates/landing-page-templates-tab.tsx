@@ -47,12 +47,16 @@ export function LandingPageTemplatesTab({
 }) {
   const router = useRouter();
   const subHref = useSubaccountHref();
-  const { accounts } = useAccount();
+  const { accounts, organizations } = useAccount();
   const { confirm } = useLoomiDialog();
   // key → dealer name, for the shared rail's Subaccount facet + card scope badge.
   const accountLabels = useMemo(
     () => Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.dealer || k])),
     [accounts],
+  );
+  const orgLabels = useMemo(
+    () => Object.fromEntries(Object.values(organizations).map((o) => [o.id, o.name])),
+    [organizations],
   );
   const [creating, setCreating] = useState(false);
   const [usingId, setUsingId] = useState<string | null>(null);
@@ -255,7 +259,13 @@ export function LandingPageTemplatesTab({
                 preview={<LandingPagePreviewThumbnail template={t.schema} height={160} />}
                 name={t.name || 'Untitled template'}
                 status={t.status === 'published' ? 'published' : 'draft'}
-                scope={!accountKey ? { label: t.accountKey ? accountLabels[t.accountKey] ?? t.accountKey : 'All accounts', kind: t.accountKey ? 'account' : 'global' } : undefined}
+                scope={
+                  !accountKey
+                    ? t.organizationId
+                      ? { label: orgLabels[t.organizationId] ?? 'Organization', kind: 'org' as const }
+                      : { label: t.accountKey ? accountLabels[t.accountKey] ?? t.accountKey : 'All accounts', kind: t.accountKey ? 'account' : 'global' }
+                    : undefined
+                }
                 category={t.category}
                 tags={t.tags}
                 taxonomy={taxonomy}

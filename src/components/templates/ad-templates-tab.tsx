@@ -74,10 +74,14 @@ export function AdTemplatesTab({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { accountData, accounts } = useAccount();
+  const { accountData, accounts, organizations } = useAccount();
   // Human name for a template's scope: its account's dealer name, or "All
   // accounts" for a global (unscoped) template.
   const scopeName = (key: string | null) => (key ? accounts[key]?.dealer ?? key : null);
+  const orgLabels = useMemo(
+    () => Object.fromEntries(Object.values(organizations).map((o) => [o.id, o.name])),
+    [organizations],
+  );
   // key → dealer name, for the shared rail's Subaccount facet labels.
   const accountLabels = useMemo(
     () => Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.dealer || k])),
@@ -406,7 +410,11 @@ export function AdTemplatesTab({
                     preview={<AdPreviewThumb template={template} data={t.doc?.defaults ?? {}} branding={branding} height={150} />}
                     name={t.name}
                     status={t.status === 'published' ? 'published' : 'draft'}
-                    scope={{ label: scopeName(t.accountKey) ?? 'All accounts', kind: t.accountKey ? 'account' : 'global' }}
+                    scope={
+                      t.organizationId
+                        ? { label: orgLabels[t.organizationId] ?? 'Organization', kind: 'org' as const }
+                        : { label: scopeName(t.accountKey) ?? 'All accounts', kind: t.accountKey ? 'account' : 'global' }
+                    }
                     category={t.category}
                     tags={t.tags ?? []}
                     taxonomy={taxonomy}

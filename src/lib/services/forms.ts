@@ -24,6 +24,8 @@ export class FormServiceError extends Error {
 export interface FormSummary {
   id: string;
   accountKey: string;
+  /** Set for an org-owned template (account-less, inherited by sub-accounts). */
+  organizationId: string | null;
   name: string;
   slug: string;
   status: FormStatus;
@@ -150,6 +152,7 @@ function parseJsonObject(value: Prisma.JsonValue): Record<string, unknown> {
 function toSummary(row: {
   id: string;
   accountKey: string | null;
+  organizationId?: string | null;
   name: string;
   slug: string;
   status: string;
@@ -171,6 +174,7 @@ function toSummary(row: {
     // existing string consumers keep working; the requesting view knows
     // the scope it asked for.
     accountKey: row.accountKey ?? '',
+    organizationId: row.organizationId ?? null,
     name: row.name,
     slug: row.slug,
     status: row.status === 'published' ? 'published' : 'draft',

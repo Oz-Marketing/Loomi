@@ -25,6 +25,8 @@ export interface LandingPageSummary {
   id: string;
   /** '' for an account-less system/library template. */
   accountKey: string;
+  /** Set for an org-owned template (account-less, inherited by sub-accounts). */
+  organizationId: string | null;
   name: string;
   slug: string;
   status: LandingPageStatus;
@@ -72,6 +74,7 @@ export interface LandingPageDetail extends LandingPageSummary {
 interface LandingPageRow {
   id: string;
   accountKey: string | null;
+  organizationId?: string | null;
   name: string;
   slug: string;
   status: string;
@@ -133,6 +136,7 @@ function toSummary(row: LandingPageRow): LandingPageSummary {
   return {
     id: row.id,
     accountKey: row.accountKey ?? '',
+    organizationId: row.organizationId ?? null,
     name: row.name,
     slug: row.slug,
     status: (row.status as LandingPageStatus) ?? 'draft',

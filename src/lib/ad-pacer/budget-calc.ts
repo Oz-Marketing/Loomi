@@ -23,6 +23,13 @@ export interface AdAllocSpec {
   percent: string; // when mode === 'percent'
   clientAmount: string; // when mode === 'client' — gross; × markup = actual
   included: boolean; // false = locked / leave-as-is (still counts as committed)
+  /**
+   * Setup + Split only: the split ad's TOTAL budget the user typed (§4a). Held
+   * on the `::base` portion spec; the base `amount` is the base slice and the
+   * derived Added (Total − Base) is written to the `::added` spec. Ignored for
+   * every other row.
+   */
+  total?: string;
 }
 
 export const DEFAULT_SPEC: AdAllocSpec = {

@@ -103,8 +103,13 @@ export function BudgetCalculatorModal({
       for (const ad of plan.ads) {
         if (ad.budgetSource === 'split') {
           const c = adContribution(ad);
-          if (c.baseAllocation > 0) seed[`${ad.id}::base`] = amountSpec(c.baseAllocation);
-          if (c.addedAllocation > 0) seed[`${ad.id}::added`] = amountSpec(c.addedAllocation);
+          // §4a Setup+Split entry: the base spec also carries the ad's TOTAL so
+          // the Total input has a value; Added derives from Total − Base.
+          seed[`${ad.id}::base`] = {
+            ...amountSpec(c.baseAllocation),
+            total: (c.baseAllocation + c.addedAllocation).toFixed(2),
+          };
+          seed[`${ad.id}::added`] = amountSpec(c.addedAllocation);
           continue;
         }
         const existing = num(ad.allocation);
@@ -289,19 +294,56 @@ export function BudgetCalculatorModal({
     // Text edits (amount/percent/client) coalesce into one undo step per field;
     // discrete field changes (mode, checkbox) each get their own snapshot.
     const textField = Object.keys(patch).find(
-      (k) => k === 'amount' || k === 'percent' || k === 'clientAmount',
+      (k) => k === 'amount' || k === 'percent' || k === 'clientAmount' || k === 'total',
     );
     pushSnapshot(textField ? `${adId}:${textField}` : null);
     setSpecs((prev) => ({
       ...prev,
+      // Spread the full previous spec so fields the patch doesn't touch (e.g.
+      // the split `total`) survive.
       [adId]: {
-        mode: prev[adId]?.mode ?? 'even',
-        amount: prev[adId]?.amount ?? '',
-        percent: prev[adId]?.percent ?? '',
-        clientAmount: prev[adId]?.clientAmount ?? '',
-        included: prev[adId]?.included ?? true,
+        ...DEFAULT_SPEC,
+        ...prev[adId],
         ...patch,
       },
+    }));
+  };
+
+  // §4a Setup+Split entry: the `::base` spec carries the ad's TOTAL (spec.total)
+  // and its BASE slice (spec.amount); Added derives as Total − Base (never
+  // negative) and is written to the `::added` spec so the pool meters read clean
+  // per-pool portions. Total + Base are the only inputs; Added gives.
+  const splitTotalOf = (id: string) => specs[`${id}::base`]?.total ?? '';
+  const splitBaseOf = (id: string) => specs[`${id}::base`]?.amount ?? '';
+  const splitAddedOf = (id: string) =>
+    Math.max(0, (num(splitTotalOf(id)) ?? 0) - (num(splitBaseOf(id)) ?? 0));
+  const splitBaseExceedsTotal = (id: string) =>
+    (num(splitBaseOf(id)) ?? 0) > (num(splitTotalOf(id)) ?? 0) + 0.005;
+  // Write the derived Added without its own undo snapshot (the Total/Base edit
+  // that triggered it already pushed one), so one undo reverts the whole edit.
+  const writeSplitAdded = (id: string, addedNum: number) =>
+    setSpecs((prev) => ({
+      ...prev,
+      [`${id}::added`]: {
+        ...(prev[`${id}::added`] ?? DEFAULT_SPEC),
+        mode: 'amount',
+        amount: Math.max(0, addedNum).toFixed(2),
+      },
+    }));
+  const setSplitTotal = (id: string, raw: string) => {
+    updateSpec(`${id}::base`, { mode: 'amount', total: raw });
+    writeSplitAdded(id, (num(raw) ?? 0) - (num(splitBaseOf(id)) ?? 0));
+  };
+  const setSplitBase = (id: string, raw: string) => {
+    updateSpec(`${id}::base`, { mode: 'amount', amount: raw });
+    writeSplitAdded(id, (num(splitTotalOf(id)) ?? 0) - (num(raw) ?? 0));
+  };
+  const toggleSplitIncluded = (id: string, val: boolean) => {
+    pushSnapshot(null);
+    setSpecs((prev) => ({
+      ...prev,
+      [`${id}::base`]: { ...(prev[`${id}::base`] ?? DEFAULT_SPEC), included: val },
+      [`${id}::added`]: { ...(prev[`${id}::added`] ?? DEFAULT_SPEC), included: val },
     }));
   };
 
@@ -482,6 +524,103 @@ export function BudgetCalculatorModal({
     );
   };
 
+  // §4a — a split ad in Setup: one row with Total + Base inputs and the derived
+  // Added (Total − Base, never negative) shown read-only. The base slice feeds
+  // the base meter, the derived Added feeds the added meter.
+  const renderSplitSetupRow = (ad: PacerAd) => {
+    const included = (specs[`${ad.id}::base`] ?? DEFAULT_SPEC).included;
+    const added = splitAddedOf(ad.id);
+    const exceeds = splitBaseExceedsTotal(ad.id);
+    return (
+      <div
+        key={ad.id}
+        className={`grid grid-cols-1 md:grid-cols-[28px_1fr_116px_116px_92px] gap-2 items-center rounded-lg border bg-[var(--card)] px-3 py-2 ${
+          included ? 'border-[var(--border)]' : 'border-[var(--border)] opacity-60'
+        }`}
+      >
+        <Tooltip
+          label={
+            included
+              ? 'Uncheck to leave this ad untouched on Apply'
+              : 'This ad keeps its current allocation on Apply'
+          }
+        >
+          <label className="flex items-center justify-center cursor-pointer">
+            <input
+              type="checkbox"
+              checked={included}
+              onChange={(e) => toggleSplitIncluded(ad.id, e.target.checked)}
+              className="w-4 h-4 accent-[var(--primary)]"
+            />
+          </label>
+        </Tooltip>
+        <div className="min-w-0">
+          <div className="text-xs font-semibold text-[var(--foreground)] truncate">
+            {ad.name || 'Untitled Ad'}
+          </div>
+          <div className="text-[10px]" style={{ color: sourceColor('split') }}>
+            Split — Total ÷ Base (Added derives)
+          </div>
+        </div>
+        {included ? (
+          <>
+            <div>
+              <span className="block text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-1">
+                Total
+              </span>
+              <DollarInput
+                value={splitTotalOf(ad.id)}
+                onChange={(v) => setSplitTotal(ad.id, v)}
+                placeholder="0.00"
+              />
+            </div>
+            <div>
+              <span
+                className="block text-[9px] font-semibold uppercase tracking-wider mb-1"
+                style={{ color: COLORS.base }}
+              >
+                Base
+              </span>
+              <DollarInput
+                value={splitBaseOf(ad.id)}
+                onChange={(v) => setSplitBase(ad.id, v)}
+                placeholder="0.00"
+              />
+            </div>
+            <div className="text-right">
+              <span
+                className="block text-[9px] font-semibold uppercase tracking-wider mb-1"
+                style={{ color: COLORS.added }}
+              >
+                Added
+              </span>
+              <div
+                className="text-sm font-bold tabular-nums"
+                style={{ color: exceeds ? COLORS.error : COLORS.added }}
+              >
+                {fmt(added)}
+              </div>
+              {exceeds && (
+                <div className="text-[9px]" style={{ color: COLORS.error }}>
+                  base &gt; total
+                </div>
+              )}
+            </div>
+          </>
+        ) : (
+          <div className="md:col-span-3 text-right text-[10px] text-[var(--muted-foreground)] italic px-2 py-1.5">
+            left as-is
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const splitSetup = view === 'split' && calcMode === 'setup';
+  const listAds = splitSetup
+    ? plan.ads.filter((a) => a.budgetSource === 'split')
+    : viewRows;
+
   if (typeof document === 'undefined') return null;
   return createPortal(
     <div
@@ -595,14 +734,16 @@ export function BudgetCalculatorModal({
 
         {/* Ad list */}
         <div className="themed-scrollbar overflow-y-auto -mx-2 px-2 flex-1 min-h-0">
-          {viewRows.length === 0 ? (
+          {listAds.length === 0 ? (
             <div className="rounded-lg border border-dashed border-[var(--border)] py-8 text-center text-xs text-[var(--muted-foreground)]">
               No {view === 'base' ? 'Base' : view === 'added' ? 'Added' : 'Split'} ads
               in this period yet.
             </div>
           ) : (
             <div className="space-y-2">
-              {viewRows.map((ad) => {
+              {listAds.map((ad) => {
+                // §4a Setup+Split: the Total+Base row (Added derives).
+                if (splitSetup) return renderSplitSetupRow(ad);
                 const spec = specs[ad.id] ?? DEFAULT_SPEC;
                 const allocated = allocations[ad.id] ?? 0;
                 const currentAllocation = num(ad.allocation) ?? 0;

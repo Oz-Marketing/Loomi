@@ -20,6 +20,7 @@ import {
 import { CompactStat } from './metrics';
 import { DollarInput, inputClass } from './inputs';
 import { Tooltip } from './Tooltip';
+import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 
 // ─── Budget Calculator modal (+ allocation helpers, appended below) ─────────
 /**
@@ -793,24 +794,24 @@ export function BudgetCalculatorModal({
                       </div>
                       </Tooltip>
                     ) : (
-                      <select
+                      <SearchableSelect
                         value={spec.mode}
                         disabled={!spec.included}
-                        onChange={(e) =>
-                          updateSpec(ad.id, {
-                            mode: e.target.value as AllocationMode,
-                          })
+                        onChange={(v) =>
+                          updateSpec(ad.id, { mode: v as AllocationMode })
                         }
-                        className={`${inputClass} text-[11px] py-1.5 disabled:opacity-50`}
-                      >
-                        <option value="even">Distribute evenly</option>
-                        <option value="amount">Set amount</option>
-                        <option value="client">Client Budget (gross)</option>
-                        <option value="percent">Set %</option>
-                        {calcMode === 'midflight' && (
-                          <option value="off">Off — lock at spent</option>
-                        )}
-                      </select>
+                        options={[
+                          { value: 'even', label: 'Distribute evenly' },
+                          { value: 'amount', label: 'Set amount' },
+                          { value: 'client', label: 'Client Budget (gross)' },
+                          { value: 'percent', label: 'Set %' },
+                          ...(calcMode === 'midflight'
+                            ? [{ value: 'off', label: 'Off — lock at spent' }]
+                            : []),
+                        ]}
+                        className="text-[11px]"
+                        popoverClassName="[&_button]:text-[11px] [&_button]:py-1.5"
+                      />
                     )}
                     <div>
                       {adIsDonor ? (

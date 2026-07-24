@@ -187,7 +187,9 @@ export function BudgetCalculatorModal({
   );
 
   // Spread state per pool: included, non-donor, even-mode rows share that
-  // pool's Unallocated. Mid-flight gates on a donor freeing budget.
+  // pool's Unallocated. Spread is available whenever that pool has unallocated
+  // budget and at least one even row to absorb it — no donor required (a pool
+  // can be rebalanced even if nothing was turned Off in it).
   const spreadFor = (pool: Pool) => {
     const m = meterOf(pool);
     const evenRows = (pool === 'base' ? baseAds : addedAds).filter((r) => {
@@ -195,8 +197,7 @@ export function BudgetCalculatorModal({
       return !isDonor(r) && spec.included && spec.mode === 'even';
     });
     const spreadPool = Math.max(0, m.unallocated);
-    const gateOk = calcMode !== 'midflight' || m.lockedSpend > 0;
-    const canSpread = evenRows.length > 0 && spreadPool > 0.005 && gateOk;
+    const canSpread = evenRows.length > 0 && spreadPool > 0.005;
     // §5c/§5d: the SAME floor-aware split powers the preview and the commit, so
     // the preview never shows a number the commit won't honor. `perEven` is a
     // single figure only when no floor binds (the common case); otherwise the
@@ -491,6 +492,15 @@ export function BudgetCalculatorModal({
       spec.mode === 'amount' &&
       spec.amount.trim() !== '' &&
       (num(spec.amount) ?? 0) < portionSpent - 0.005;
+    // Resolved per-pool contribution (what actually feeds the meter + Total).
+    // `floored` = the spent floor bumped it above what was typed (incl. an empty
+    // input on an ad that's already spent) — the invisible-$X-appearing case.
+    const resolved = allocations[id];
+    const floored =
+      spec.included &&
+      spec.mode === 'amount' &&
+      resolved != null &&
+      resolved > (num(spec.amount) ?? 0) + 0.005;
     return (
       <div className="min-w-0">
         <span
@@ -587,6 +597,14 @@ export function BudgetCalculatorModal({
                 </div>
               )}
             </div>
+            {spec.mode !== 'even' && resolved != null && (
+              <div className="text-[10px] text-right mt-1" style={{ color: accent }}>
+                → {fmt(resolved)}
+                {floored && (
+                  <span className="text-[var(--muted-foreground)]"> · min spent</span>
+                )}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -633,8 +651,18 @@ export function BudgetCalculatorModal({
           <div className="text-[10px]" style={{ color: sourceColor('split') }}>
             Split · {ad.budgetType}
           </div>
+          {/* Current plan (before this edit) so the reallocation has context. */}
+          <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
+            Allocated{' '}
+            <span className="font-semibold text-[var(--foreground)] tabular-nums">
+              {fmt(c.baseAllocation + c.addedAllocation)}
+            </span>{' '}
+            <span style={{ color: COLORS.base }}>B {fmt(c.baseAllocation)}</span>
+            {' · '}
+            <span style={{ color: COLORS.added }}>A {fmt(c.addedAllocation)}</span>
+          </div>
           {calcMode === 'midflight' && (
-            <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
+            <div className="text-[10px] text-[var(--muted-foreground)]">
               Spent{' '}
               <span className="font-semibold text-[var(--foreground)] tabular-nums">
                 {fmt(c.baseSpent + c.addedSpent)}

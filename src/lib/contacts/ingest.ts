@@ -74,6 +74,13 @@ export interface IngestContactInput {
   source?: string | null;
   tags?: string[] | null;
   customFields?: Record<string, string> | null;
+  /**
+   * Channel suppression. Sent only by sources that carry real consent
+   * data (e.g. dealer opt-out flags). Merged into the existing dnd, so a
+   * suppression from one feed is never silently cleared by a feed that
+   * omits it. Loomi's send engine must honor this before email/SMS.
+   */
+  dnd?: { email?: boolean; sms?: boolean } | null;
   firstName?: string | null;
   lastName?: string | null;
   fullName?: string | null;
@@ -143,6 +150,7 @@ interface NormalisedContact {
   customFields: Record<string, string>;
   strings: Partial<Record<StringField, string>>;
   dates: Partial<Record<DateField, Date>>;
+  dnd: { email?: boolean; sms?: boolean } | null;
 }
 
 /**
@@ -192,12 +200,58 @@ function normalise(
 
   const source = coerceString(input.source) ?? defaultSource ?? null;
 
-  return { email, phone, source, tags, customFields, strings, dates };
+  let dnd: { email?: boolean; sms?: boolean } | null = null;
+  if (input.dnd && typeof input.dnd === 'object') {
+    const d: { email?: boolean; sms?: boolean } = {};
+    if (typeof input.dnd.email === 'boolean') d.email = input.dnd.email;
+    if (typeof input.dnd.sms === 'boolean') d.sms = input.dnd.sms;
+    if (Object.keys(d).length > 0) dnd = d;
+  }
+
+  return { email, phone, source, tags, customFields, strings, dates, dnd };
 }
 
 /** Read an existing contact's tags Json column as a string[]. */
 function existingTags(value: unknown): string[] {
   return Array.isArray(value) ? (value.filter((t) => typeof t === 'string') as string[]) : [];
+}
+
+/** Read an existing contact's dnd Json column as an object. */
+function existingDnd(value: unknown): Record<string, boolean> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, boolean>)
+    : {};
+}
+
+/**
+ * Enforce suppression at the level the send worker actually checks:
+ * EmailSuppression / SmsSuppression rows (the Contact.dnd JSON is only a
+ * UI convenience). We upsert a row for each channel the source marked
+ * opted-out. We intentionally do NOT delete on a `false` flag — an
+ * opt-out is a sticky compliance signal, and skipping the per-row delete
+ * keeps the backfill fast (the vast majority of contacts aren't
+ * suppressed). Manual re-opt-in is handled by the suppression UI.
+ */
+async function applyCrmSuppression(
+  accountKey: string,
+  email: string | null,
+  phone: string | null,
+  dnd: { email?: boolean; sms?: boolean },
+): Promise<void> {
+  if (dnd.email === true && email) {
+    await prisma.emailSuppression.upsert({
+      where: { accountKey_email: { accountKey, email } },
+      update: { reason: 'crm-optout', source: 'oz-reports' },
+      create: { accountKey, email, reason: 'crm-optout', source: 'oz-reports' },
+    });
+  }
+  if (dnd.sms === true && phone) {
+    await prisma.smsSuppression.upsert({
+      where: { accountKey_phone: { accountKey, phone } },
+      update: { reason: 'crm-optout', source: 'oz-reports' },
+      create: { accountKey, phone, reason: 'crm-optout', source: 'oz-reports' },
+    });
+  }
 }
 
 /** Read an existing contact's customFields Json column as an object. */
@@ -246,6 +300,9 @@ export async function ingestContacts({
             ...(row.source ? { source: row.source } : {}),
             tags: Array.from(new Set([...existingTags(existing.tags), ...row.tags])),
             customFields: { ...existingCustomFields(existing.customFields), ...row.customFields },
+            // Merge suppression so a prior opt-out is never cleared by a feed
+            // that omits dnd. Only written when this row carried consent data.
+            ...(row.dnd ? { dnd: { ...existingDnd(existing.dnd), ...row.dnd } } : {}),
           },
         });
         updated += 1;
@@ -260,11 +317,18 @@ export async function ingestContacts({
             tags: row.tags,
             customFields:
               Object.keys(row.customFields).length > 0 ? row.customFields : undefined,
+            ...(row.dnd ? { dnd: row.dnd } : {}),
             ...row.strings,
             ...row.dates,
           },
         });
         created += 1;
+      }
+
+      // Write the suppression rows the send worker enforces on. Runs for
+      // both create and update; only channels flagged opted-out are written.
+      if (row.dnd) {
+        await applyCrmSuppression(accountKey, row.email, row.phone, row.dnd);
       }
     } catch (err) {
       skipped += 1;
@@ -288,14 +352,14 @@ async function findExisting(accountKey: string, email: string | null, phone: str
   if (email) {
     const byEmail = await prisma.contact.findUnique({
       where: { accountKey_email: { accountKey, email } },
-      select: { id: true, tags: true, customFields: true },
+      select: { id: true, tags: true, customFields: true, dnd: true },
     });
     if (byEmail) return byEmail;
   }
   if (phone) {
     const byPhone = await prisma.contact.findUnique({
       where: { accountKey_phone: { accountKey, phone } },
-      select: { id: true, tags: true, customFields: true },
+      select: { id: true, tags: true, customFields: true, dnd: true },
     });
     if (byPhone) return byPhone;
   }

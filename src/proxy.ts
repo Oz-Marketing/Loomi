@@ -241,6 +241,10 @@ export async function proxy(request: NextRequest) {
     // NextAuth session, so they must skip the session gate here or the proxy
     // 401s them before the route's own secret check can run.
     pathname.startsWith('/api/internal/') ||
+    // Machine-to-machine CRM contact ingestion (Oz Reports bridge). Auths with
+    // the OZ_INGEST_SECRET bearer token in the route handler itself — no
+    // NextAuth session — so it must skip the session gate like /api/internal/.
+    pathname.startsWith('/api/ingest/') ||
     // Public form submission endpoint — accepts cross-origin POSTs from forms
     // embedded on customer sites (iframe / JS snippet), so it must skip the
     // session gate just like the public /f/ form page below.

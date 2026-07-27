@@ -189,10 +189,11 @@ function buildOrgNav(
   primaryDealer: string | null,
 ): NavEntry[] {
   const orgPfx = `/org/${orgSlug}`;
-  const orgContactsLeaf: NavItem = { href: '/contacts', label: 'Contacts', icon: UserGroupIcon };
+  // Same Audiences group as a sub-account: All Contacts / Lists / Segments all
+  // exist at org scope now, rolled up across the org's rooftops.
   const rollup: NavEntry[] = [
     absResolve(dashboardNav, orgPfx),
-    absResolve(orgContactsLeaf, orgPfx),
+    absResolve(contactsNav, orgPfx),
     absResolve(templatesNav, orgPfx),
   ];
   if (!primarySlug) return rollup;

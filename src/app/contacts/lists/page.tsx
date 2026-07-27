@@ -14,7 +14,7 @@ import {
   TrashIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
-import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import { useScopedHref } from '@/hooks/use-scoped-href';
 import { useAccount } from '@/contexts/account-context';
 import { stashPendingImportFile } from '@/lib/contacts/pending-import';
 import { toast } from '@/lib/toast';
@@ -54,8 +54,10 @@ function formatDate(iso: string): string {
 
 export default function ListsPage() {
   const router = useRouter();
-  const subHref = useSubaccountHref();
-  const { isAccount, accountKey, accounts, userRole } = useAccount();
+  // Org-aware: keeps links inside /org/<slug> on the org roll-up instead of
+  // bouncing into the org's house sub-account.
+  const subHref = useScopedHref();
+  const { isAccount, isOrg, accountKey, accounts, scopedAccountKeys, userRole } = useAccount();
 
   const [lists, setLists] = useState<ListSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -95,12 +97,18 @@ export default function ListsPage() {
   const canPickAccount = !isAccount && (userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin');
   const dealerForKey = (key: string) => accounts[key]?.dealer || key;
 
-  // Narrow to the active subaccount when inside a subaccount route.
-  // Admin all-accounts view sees every list with the dealer name.
+  // Narrow to the active subaccount when inside a subaccount route. Org mode
+  // rolls up, but only across that org's rooftops — the API scopes by the
+  // user's role/assignments, not by the selected org, so without this an org
+  // view would surface other orgs' lists. Admin sees every list.
   const accountFiltered = useMemo(() => {
     if (isAccount && accountKey) return lists.filter((l) => l.accountKey === accountKey);
+    if (isOrg) {
+      const allowed = new Set(scopedAccountKeys);
+      return lists.filter((l) => allowed.has(l.accountKey));
+    }
     return lists;
-  }, [lists, isAccount, accountKey]);
+  }, [lists, isAccount, isOrg, accountKey, scopedAccountKeys]);
 
   const filteredAndSorted = useMemo(() => {
     const q = search.trim().toLowerCase();

@@ -15,7 +15,7 @@ import {
   TrashIcon,
   UsersIcon,
 } from '@heroicons/react/24/outline';
-import { useSubaccountHref } from '@/hooks/use-subaccount-href';
+import { useScopedHref } from '@/hooks/use-scoped-href';
 import { useAccount } from '@/contexts/account-context';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import { evaluateFilter } from '@/lib/smart-list-engine';
@@ -60,8 +60,8 @@ function describeFilter(definition: FilterDefinition | null): string {
 
 export default function SegmentsPage() {
   const router = useRouter();
-  const { isAccount, accountKey, accounts, accountData } = useAccount();
-  const subHref = useSubaccountHref();
+  const { isAccount, isOrg, accountKey, accounts, scopedAccountKeys, accountData } = useAccount();
+  const subHref = useScopedHref();
   // Match SegmentEditor: pull custom fields when scoped to a single
   // sub-account; the org-wide / aggregate view falls back to built-ins.
   const { fields } = useFilterableFields(isAccount ? accountKey : null);
@@ -163,14 +163,26 @@ export default function SegmentsPage() {
 
   // ── Search filtering ─────────────────────────────────────────────
   const visibleSavedSegments = useMemo(() => {
+    // Scope before search. /api/audiences returns everything the USER may see
+    // (by role/assignment), which isn't the same as the currently-selected
+    // scope — so an org roll-up would otherwise surface other orgs' segments.
+    // Segments with no accountKey are shared/global and always show.
+    let scoped = savedSegments;
+    if (isAccount && accountKey) {
+      scoped = savedSegments.filter((s) => !s.accountKey || s.accountKey === accountKey);
+    } else if (isOrg) {
+      const allowed = new Set(scopedAccountKeys);
+      scoped = savedSegments.filter((s) => !s.accountKey || allowed.has(s.accountKey));
+    }
+
     const q = search.trim().toLowerCase();
-    if (!q) return savedSegments;
-    return savedSegments.filter(
+    if (!q) return scoped;
+    return scoped.filter(
       (s) =>
         s.name.toLowerCase().includes(q) ||
         (s.description || '').toLowerCase().includes(q),
     );
-  }, [savedSegments, search]);
+  }, [savedSegments, search, isAccount, isOrg, accountKey, scopedAccountKeys]);
 
   // ── Actions ──────────────────────────────────────────────────────
   async function handleDelete(segment: SavedSegment) {

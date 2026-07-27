@@ -16,10 +16,9 @@ import {
   ArrowRightIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
-import { orgSlugFor } from '@/lib/account-slugs';
 
 export function AgencyDashboard() {
-  const { organizations, accounts, userName } = useAccount();
+  const { accounts, userName } = useAccount();
   const [templateCount, setTemplateCount] = useState<number | null>(null);
 
   useEffect(() => {
@@ -31,17 +30,26 @@ export function AgencyDashboard() {
     return () => { cancelled = true; };
   }, []);
 
-  const orgList = useMemo(
-    () => Object.values(organizations).sort((a, b) => a.name.localeCompare(b.name)),
-    [organizations],
-  );
-  const orgCount = orgList.length;
+  // Groups = accounts with rooftops beneath them (the hierarchy that replaced
+  // Organizations). A group is a normal Account, so it links to its own
+  // sub-account dashboard.
+  const groupList = useMemo(() => {
+    const childCount = new Map<string, number>();
+    for (const a of Object.values(accounts)) {
+      if (a.parentAccountKey) childCount.set(a.parentAccountKey, (childCount.get(a.parentAccountKey) ?? 0) + 1);
+    }
+    return Object.entries(accounts)
+      .filter(([key]) => (childCount.get(key) ?? 0) > 0)
+      .map(([key, a]) => ({ key, name: a.dealer || key, slug: a.slug || key, count: childCount.get(key) ?? 0 }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [accounts]);
+  const orgCount = groupList.length;
   const accountCount = Object.keys(accounts).length;
-  // Sub-accounts not attached to any org (standalone clients).
-  const standaloneCount = Object.values(accounts).filter((a) => !a.organizationId).length;
+  // Top-level accounts — not grouped beneath a parent.
+  const standaloneCount = Object.values(accounts).filter((a) => !a.parentAccountKey).length;
 
   const stats: { label: string; value: string; href: string; icon: React.ComponentType<{ className?: string }> }[] = [
-    { label: 'Organizations', value: String(orgCount), href: '/settings/organizations', icon: BuildingOffice2Icon },
+    { label: 'Groups', value: String(orgCount), href: '/settings/subaccounts', icon: BuildingOffice2Icon },
     { label: 'Sub-Accounts', value: String(accountCount), href: '/settings/subaccounts', icon: BuildingStorefrontIcon },
     { label: 'Library Templates', value: templateCount === null ? '—' : String(templateCount), href: '/templates', icon: BookOpenIcon },
   ];
@@ -77,24 +85,24 @@ export function AgencyDashboard() {
         ))}
       </div>
 
-      {/* Organizations overview */}
+      {/* Groups overview */}
       <section className="glass-section-card rounded-2xl border border-[var(--border)] p-5 mt-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-[var(--foreground)]">Organizations</h2>
-          <Link href="/settings/organizations" className="text-xs font-medium text-[var(--primary)] hover:underline">
+          <h2 className="text-sm font-semibold text-[var(--foreground)]">Groups</h2>
+          <Link href="/settings/subaccounts" className="text-xs font-medium text-[var(--primary)] hover:underline">
             Manage →
           </Link>
         </div>
-        {orgList.length === 0 ? (
+        {groupList.length === 0 ? (
           <p className="text-sm text-[var(--muted-foreground)] py-6 text-center">
-            No organizations yet. Create one in Settings → Organizations, or promote a sub-account into a group.
+            No groups yet. Open a sub-account&apos;s settings and set its Parent Account to group it under another.
           </p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {orgList.map((org) => (
+            {groupList.map((org) => (
               <Link
-                key={org.id}
-                href={`/org/${orgSlugFor(org)}/dashboard`}
+                key={org.key}
+                href={`/subaccount/${org.slug}/dashboard`}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-xl border border-[var(--border)] hover:bg-[var(--muted)] transition-colors"
               >
                 <div className="w-8 h-8 rounded-md bg-[var(--primary)]/15 flex items-center justify-center flex-shrink-0">
@@ -103,7 +111,7 @@ export function AgencyDashboard() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-[var(--foreground)] truncate">{org.name}</p>
                   <p className="text-[11px] text-[var(--muted-foreground)]">
-                    {org.accountKeys.length} sub-account{org.accountKeys.length === 1 ? '' : 's'}
+                    {org.count} rooftop{org.count === 1 ? '' : 's'}
                   </p>
                 </div>
               </Link>

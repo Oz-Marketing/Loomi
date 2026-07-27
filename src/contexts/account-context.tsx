@@ -339,16 +339,12 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    fetch('/api/organizations')
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`/api/organizations ${r.status}`);
-        return (await r.json()) as Record<string, OrganizationData>;
-      })
-      .then((data) => {
-        setOrganizations(data);
-        setOrganizationsLoaded(true);
-      })
-      .catch(() => setOrganizationsLoaded(true));
+    // Organizations are retired — the account hierarchy (parentAccountKey)
+    // replaced them and the /api/organizations endpoint is gone. The map stays
+    // (empty) so the few remaining readers keep compiling until they're
+    // removed with the model itself.
+    setOrganizations({});
+    setOrganizationsLoaded(true);
   }, [status, userRole]);
 
   // Recover from a stale org scope. The active-scope cookie is shared across
@@ -384,15 +380,8 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     );
   };
 
-  const refreshOrganizations = useCallback(async () => {
-    if (userRole === 'client') return;
-    try {
-      const r = await fetch('/api/organizations');
-      if (!r.ok) return;
-      const data: Record<string, OrganizationData> = await r.json();
-      setOrganizations(data);
-    } catch {}
-  }, [userRole]);
+  // No-op: organizations are retired (see the loader above).
+  const refreshOrganizations = useCallback(async () => {}, []);
 
   const refreshAccounts = useCallback(async () => {
     try {

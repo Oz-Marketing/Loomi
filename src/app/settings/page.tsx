@@ -22,8 +22,6 @@ import { IndustriesTab } from '@/components/settings/industries-tab';
 import { DefaultMarkupTab } from '@/components/settings/default-markup-tab';
 import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
 import { TeamsTab } from '@/components/settings/teams-tab';
-import { OrganizationsTab } from '@/components/settings/organizations-tab';
-import { OrganizationSettingsTab } from '@/components/settings/organization-settings-tab';
 import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
 import { useSettingsTabs, type SettingsTabKey } from '@/components/settings/use-settings-tabs';
 import { useIndustries } from '@/lib/hooks/use-industries';
@@ -130,8 +128,6 @@ export default function SettingsPage() {
           restrictKeys={isOrg ? scopedAccountKeys : undefined}
         />
       )}
-      {activeTab === 'organizations' && isElevated && isAdmin && <OrganizationsTab />}
-      {activeTab === 'organization' && isOrg && <OrganizationSettingsTab />}
       {activeTab === 'subaccount' && <AccountSettingsTab />}
       {activeTab === 'integrations' && hasAdminAccess && isAccount && <IntegrationsTab />}
       {activeTab === 'contact-fields' && hasAdminAccess && isAccount && <CustomFieldsTab />}

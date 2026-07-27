@@ -72,7 +72,7 @@ export function AccountsList({
   void _listPath;
   const router = useRouter();
   const { confirm } = useLoomiDialog();
-  const { userRole, organizations, refreshOrganizations } = useAccount();
+  const { userRole, organizations } = useAccount();
   const canManageAccounts = userRole === 'developer' || userRole === 'super_admin';
   const orgList = useMemo(
     () => Object.values(organizations).sort((a, b) => a.name.localeCompare(b.name)),
@@ -102,7 +102,7 @@ export function AccountsList({
   // Promote-to-organization state (row action in the Agency View list).
   const [promoteKey, setPromoteKey] = useState<string | null>(null);
   const [promoteName, setPromoteName] = useState('');
-  const [promoting, setPromoting] = useState(false);
+  const [promoting] = useState(false);
 
   // Users for account rep picker (fetched when creation modal opens)
   const [repUsers, setRepUsers] = useState<UserPickerUser[]>([]);
@@ -147,29 +147,12 @@ export function AccountsList({
    *  or part of an org), then redirect to the detail page. */
   const handleCreateManual = async () => {
     if (!newKey.trim() || !newDealer.trim() || creating) return;
-    // Guard the org sub-choices so we don't create a groupless "group".
-    if (newOrgChoice === 'existing' && !newOrgId) { toast.error('Pick an organization'); return; }
-    if (newOrgChoice === 'new' && !newOrgName.trim()) { toast.error('Name the new organization'); return; }
     setCreating(true);
     try {
-      // Resolve the parent org first (create it if this is a brand-new group).
-      let organizationId: string | undefined;
-      if (newOrgChoice === 'existing') {
-        organizationId = newOrgId;
-      } else if (newOrgChoice === 'new') {
-        const orgKey = toCamelCaseSlug(newOrgName);
-        const orgRes = await fetch('/api/organizations', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key: orgKey, name: newOrgName.trim() }),
-        });
-        const orgData = await orgRes.json();
-        if (!orgRes.ok) { toast.error(orgData.error || 'Failed to create organization'); setCreating(false); return; }
-        organizationId = orgData.id;
-      }
-
       const hasBrands = industryHasBrands(newCategory);
       const selectedOems = hasBrands ? newOems : [];
+      // Grouping is no longer set at creation: an account is created standalone,
+      // then grouped by setting its Parent Account in sub-account settings.
       const accountBody: Record<string, unknown> = {
         key: newKey.trim(),
         dealer: newDealer.trim(),
@@ -177,7 +160,6 @@ export function AccountsList({
         oems: selectedOems.length > 0 ? selectedOems : undefined,
         oem: selectedOems[0] || undefined,
         accountRepId: newRepId || undefined,
-        organizationId,
       };
 
       const res = await fetch('/api/accounts', {
@@ -188,20 +170,8 @@ export function AccountsList({
       const data = await res.json();
       if (!res.ok) { toast.error(data.error || 'Failed to create'); setCreating(false); return; }
 
-      // For a brand-new organization, the founding account is its primary
-      // ("house") account so the org operates a studio, not just a roll-up.
-      if (newOrgChoice === 'new' && organizationId) {
-        await fetch(`/api/organizations/${organizationId}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ primaryAccountKey: newKey.trim() }),
-        }).catch(() => {/* non-fatal: primary can be set later in org settings */});
-      }
-
       toast.success('Sub-account created!');
-      if (organizationId) await refreshOrganizations();
       resetCreate();
-      // Redirect to the new account's detail page
       router.push(`${detailBasePath}/${newKey.trim()}`);
     } catch {
       toast.error('Failed to create sub-account');
@@ -216,33 +186,11 @@ export function AccountsList({
     setPromoteName(`${accounts?.[key]?.dealer || key} Group`);
   };
   const doPromote = async () => {
-    if (!promoteKey || !promoteName.trim() || promoting) return;
-    setPromoting(true);
-    try {
-      // One atomic create: the account becomes the org's sole member AND its
-      // primary ("house") account, so the org operates its studio immediately.
-      const orgKey = toCamelCaseSlug(promoteName);
-      const orgRes = await fetch('/api/organizations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          key: orgKey,
-          name: promoteName.trim(),
-          accountKeys: [promoteKey],
-          primaryAccountKey: promoteKey,
-        }),
-      });
-      const org = await orgRes.json();
-      if (!orgRes.ok) { toast.error(org.error || 'Failed to create organization'); setPromoting(false); return; }
-      toast.success(`Promoted to ${promoteName.trim()}`);
-      setPromoteKey(null);
-      await refreshOrganizations();
-      const acc = await fetch('/api/accounts').then((r) => r.json());
-      setAccounts(acc);
-    } catch {
-      toast.error('Failed to promote to organization');
-    }
-    setPromoting(false);
+    // Promote-to-organization is retired: grouping is now done by setting a
+    // sub-account's Parent Account in its settings, which is a plain account
+    // update rather than creating a second kind of entity.
+    toast.error('Set the Parent Account in sub-account settings to group accounts.');
+    setPromoteKey(null);
   };
 
 

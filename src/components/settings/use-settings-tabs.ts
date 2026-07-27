@@ -13,15 +13,12 @@ import {
   BriefcaseIcon,
   CalculatorIcon,
   PuzzlePieceIcon,
-  BuildingOffice2Icon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useCurrentSurface } from '@/lib/hooks/use-current-surface';
 
 export type SettingsTabKey =
   | 'subaccounts'
-  | 'organizations'
-  | 'organization'
   | 'subaccount'
   | 'users'
   | 'teams'
@@ -63,14 +60,12 @@ export function useSettingsTabs(): SettingsTab[] {
   //   • Notifications/Appearance are personal and show everywhere.
 
   // ── Organization tier ──
-  if (hasAdminAccess && isOrg) tabs.push({ key: 'organization', label: 'Organization', titleLabel: 'Organization Settings', icon: BuildingOffice2Icon });
 
   // ── Sub-Accounts directory — the whole fleet in Agency View, scoped to the
   //    org in Organization mode. ──
   if (hasAdminAccess && (isAdmin || isOrg)) tabs.push({ key: 'subaccounts', label: 'Sub-Accounts', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
 
   // ── Agency-only directories ──
-  if (isElevated && isAdmin) tabs.push({ key: 'organizations', label: 'Organizations', titleLabel: 'Organizations', icon: BuildingOffice2Icon });
 
   // ── Sub-account tier ──
   if (isAccount) tabs.push({ key: 'subaccount', label: 'Sub-Account', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });

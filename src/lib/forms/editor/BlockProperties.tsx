@@ -3,7 +3,6 @@
 import * as React from 'react';
 import { useEditor, findBlock } from './EditorContext';
 import { BLOCK_SCHEMAS as componentSchemas, type PropSchema } from '../schemas';
-import { RESPONSIVE_PROP_KEYS } from '../responsive';
 import { FieldOptionsEditor } from './FieldOptionsEditor';
 import {
   ChevronLeftIcon,
@@ -12,8 +11,6 @@ import {
   PhotoIcon,
   Squares2X2Icon,
   ComputerDesktopIcon,
-  DevicePhoneMobileIcon,
-  ArrowUturnLeftIcon,
 } from '@heroicons/react/24/outline';
 import { MediaPickerModal } from '@/components/media-picker-modal';
 import {
@@ -51,17 +48,9 @@ const GROUP_TO_TAB: Record<string, TabKey> = {
 };
 
 export function BlockProperties() {
-  const {
-    template,
-    selectedId,
-    selectBlock,
-    updateBlockProps,
-    updateBlockMobileProps,
-    previewDevice,
-  } = useEditor();
+  const { template, selectedId, selectBlock, updateBlockProps } = useEditor();
   const selectedBlock = selectedId ? findBlock(template.blocks, selectedId) : null;
   const [activeTab, setActiveTab] = React.useState<TabKey>('content');
-  const isMobile = previewDevice === 'mobile';
 
   if (!selectedBlock) return null;
 
@@ -95,55 +84,20 @@ export function BlockProperties() {
   const effectiveTab = propsByTab.has(activeTab) ? activeTab : visibleTabs[0]?.key || 'content';
   const propsForTab = propsByTab.get(effectiveTab) || [];
 
-  // In Mobile view, edits to responsive props write to the block's
-  // `mobile` override bag; everything else (and all Desktop edits) writes
-  // to the shared base props.
-  const writeProps = (payload: Record<string, unknown>, allResponsive = false) => {
-    if (isMobile && (allResponsive || Object.keys(payload).every((k) => RESPONSIVE_PROP_KEYS.has(k)))) {
-      updateBlockMobileProps(selectedBlock.id, payload);
-    } else {
-      updateBlockProps(selectedBlock.id, payload);
-    }
-  };
-
   const handleChange = (key: string, value: unknown) => {
-    if (isMobile && RESPONSIVE_PROP_KEYS.has(key)) {
-      updateBlockMobileProps(selectedBlock.id, { [key]: value });
-    } else {
-      updateBlockProps(selectedBlock.id, { [key]: value });
-    }
+    updateBlockProps(selectedBlock.id, { [key]: value });
   };
 
   const handleSpacingChange = (
     prefix: 'padding' | 'margin',
     sides: { top: number; right: number; bottom: number; left: number },
   ) => {
-    writeProps(
-      {
-        [`${prefix}Top`]: sides.top,
-        [`${prefix}Right`]: sides.right,
-        [`${prefix}Bottom`]: sides.bottom,
-        [`${prefix}Left`]: sides.left,
-      },
-      true,
-    );
-  };
-
-  // Effective value for a prop in the current device: a mobile override
-  // when present, otherwise the base value.
-  const getValue = (key: string): unknown => {
-    if (isMobile && RESPONSIVE_PROP_KEYS.has(key) && selectedBlock.mobile && key in selectedBlock.mobile) {
-      return selectedBlock.mobile[key];
-    }
-    return selectedBlock.props[key];
-  };
-
-  // Clear a mobile override, reverting the prop to its desktop value.
-  const resetMobileKeys = (keys: string[]) => {
-    updateBlockMobileProps(
-      selectedBlock.id,
-      Object.fromEntries(keys.map((k) => [k, undefined])),
-    );
+    updateBlockProps(selectedBlock.id, {
+      [`${prefix}Top`]: sides.top,
+      [`${prefix}Right`]: sides.right,
+      [`${prefix}Bottom`]: sides.bottom,
+      [`${prefix}Left`]: sides.left,
+    });
   };
 
   const handleCornerChange = (corners: { tl: number; tr: number; br: number; bl: number }) => {
@@ -198,9 +152,6 @@ export function BlockProperties() {
           props={propsForTab}
           block={selectedBlock}
           schema={schema}
-          isMobile={isMobile}
-          getValue={getValue}
-          onResetMobile={resetMobileKeys}
           onChange={handleChange}
           onSpacingChange={handleSpacingChange}
           onCornerChange={handleCornerChange}
@@ -234,21 +185,12 @@ const OPTIONS_FIELD_TYPES = new Set(['field_select', 'field_radio', 'field_check
 
 // ── Property group rendering — Elementor-style with section header bars ─
 
-/** Per-control device state — drives the desktop/mobile indicator + reset. */
-interface DeviceInfo {
-  isMobile: boolean;
-  responsive: boolean;
-  overridden: boolean;
-  onReset?: () => void;
-}
-
-function PropertyGroupHeader({ name, device }: { name: string; device?: DeviceInfo }) {
+function PropertyGroupHeader({ name }: { name: string }) {
   return (
-    <div className="px-4 pt-5 pb-2.5 border-t border-[var(--border)] flex items-center gap-1.5">
+    <div className="px-4 pt-5 pb-2.5 border-t border-[var(--border)]">
       <h4 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--foreground)]">
         {name}
       </h4>
-      {device && <DeviceIndicator device={device} />}
     </div>
   );
 }
@@ -257,11 +199,8 @@ function PropertyGroupHeader({ name, device }: { name: string; device?: DeviceIn
 
 interface PropertyListProps {
   props: PropSchema[];
-  block: { id: string; type: string; props: Record<string, unknown>; mobile?: Record<string, unknown> };
+  block: { id: string; type: string; props: Record<string, unknown> };
   schema: { props: PropSchema[] };
-  isMobile: boolean;
-  getValue: (key: string) => unknown;
-  onResetMobile: (keys: string[]) => void;
   onChange: (key: string, value: unknown) => void;
   onSpacingChange: (
     prefix: 'padding' | 'margin',
@@ -277,7 +216,7 @@ const CORNER_KEYS = [
   'borderRadiusBottomLeft',
 ];
 
-function PropertyList({ props, block, schema, isMobile, getValue, onResetMobile, onChange, onSpacingChange, onCornerChange }: PropertyListProps) {
+function PropertyList({ props, block, schema, onChange, onSpacingChange, onCornerChange }: PropertyListProps) {
   const spacingPrefixes = detectSpacingGroups(schema.props);
   const hasCornerGroup = CORNER_KEYS.every((k) => schema.props.some((p) => p.key === k));
 
@@ -309,24 +248,14 @@ function PropertyList({ props, block, schema, isMobile, getValue, onResetMobile,
         <div key={groupName}>
           <PropertyGroupHeader name={prettyGroupName(groupName)} />
           <div className="px-4 py-3 space-y-3">
-            {groupProps.map((prop) => {
-              const responsive = RESPONSIVE_PROP_KEYS.has(prop.key);
-              const overridden = isMobile && responsive && !!block.mobile && prop.key in block.mobile;
-              return (
-                <PropertyField
-                  key={prop.key}
-                  prop={prop}
-                  value={getValue(prop.key)}
-                  onChange={(v) => onChange(prop.key, v)}
-                  device={{
-                    isMobile,
-                    responsive,
-                    overridden,
-                    onReset: overridden ? () => onResetMobile([prop.key]) : undefined,
-                  }}
-                />
-              );
-            })}
+            {groupProps.map((prop) => (
+              <PropertyField
+                key={prop.key}
+                prop={prop}
+                value={block.props[prop.key]}
+                onChange={(v) => onChange(prop.key, v)}
+              />
+            ))}
           </div>
         </div>
       ))}
@@ -337,10 +266,10 @@ function PropertyList({ props, block, schema, isMobile, getValue, onResetMobile,
           <div className="px-4 py-3">
             <CornerBox
               values={{
-                tl: Number(getValue('borderRadiusTopLeft') ?? block.props.borderRadius) || 0,
-                tr: Number(getValue('borderRadiusTopRight') ?? block.props.borderRadius) || 0,
-                br: Number(getValue('borderRadiusBottomRight') ?? block.props.borderRadius) || 0,
-                bl: Number(getValue('borderRadiusBottomLeft') ?? block.props.borderRadius) || 0,
+                tl: Number(block.props.borderRadiusTopLeft ?? block.props.borderRadius) || 0,
+                tr: Number(block.props.borderRadiusTopRight ?? block.props.borderRadius) || 0,
+                br: Number(block.props.borderRadiusBottomRight ?? block.props.borderRadius) || 0,
+                bl: Number(block.props.borderRadiusBottomLeft ?? block.props.borderRadius) || 0,
               }}
               onChange={onCornerChange}
             />
@@ -348,30 +277,23 @@ function PropertyList({ props, block, schema, isMobile, getValue, onResetMobile,
         </div>
       )}
 
-      {spacingInTab.map((prefix) => {
-        const sideKeys = ['Top', 'Right', 'Bottom', 'Left'].map((s) => `${prefix}${s}`);
-        const overridden = isMobile && !!block.mobile && sideKeys.some((k) => k in block.mobile!);
-        return (
-          <div key={prefix}>
-            <PropertyGroupHeader
-              name={prefix === 'padding' ? 'Padding' : 'Margin'}
-              device={{ isMobile, responsive: true, overridden, onReset: overridden ? () => onResetMobile(sideKeys) : undefined }}
+      {spacingInTab.map((prefix) => (
+        <div key={prefix}>
+          <PropertyGroupHeader name={prefix === 'padding' ? 'Padding' : 'Margin'} />
+          <div className="px-4 py-3">
+            <SpacingBox
+              values={{
+                top: Number(block.props[`${prefix}Top`]) || 0,
+                right: Number(block.props[`${prefix}Right`]) || 0,
+                bottom: Number(block.props[`${prefix}Bottom`]) || 0,
+                left: Number(block.props[`${prefix}Left`]) || 0,
+              }}
+              sides={detectSpacingSides(schema.props, prefix)}
+              onChange={(sides) => onSpacingChange(prefix as 'padding' | 'margin', sides)}
             />
-            <div className="px-4 py-3">
-              <SpacingBox
-                values={{
-                  top: Number(getValue(`${prefix}Top`)) || 0,
-                  right: Number(getValue(`${prefix}Right`)) || 0,
-                  bottom: Number(getValue(`${prefix}Bottom`)) || 0,
-                  left: Number(getValue(`${prefix}Left`)) || 0,
-                }}
-                sides={detectSpacingSides(schema.props, prefix)}
-                onChange={(sides) => onSpacingChange(prefix as 'padding' | 'margin', sides)}
-              />
-            </div>
           </div>
-        );
-      })}
+        </div>
+      ))}
     </>
   );
 }
@@ -429,12 +351,10 @@ function PropertyField({
   prop,
   value,
   onChange,
-  device,
 }: {
   prop: PropSchema;
   value: unknown;
   onChange: (v: unknown) => void;
-  device?: DeviceInfo;
 }) {
   const stringValue = value == null ? '' : String(value);
 
@@ -473,7 +393,7 @@ function PropertyField({
   if (inline) {
     return (
       <div className="flex items-center justify-between gap-3 py-0.5">
-        <Label prop={prop} device={device} />
+        <Label prop={prop} />
         <div className="flex-shrink-0 w-[58%]">{control}</div>
       </div>
     );
@@ -481,17 +401,17 @@ function PropertyField({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <Label prop={prop} device={device} />
+      <Label prop={prop} />
       {control}
     </div>
   );
 }
 
-function Label({ prop, device }: { prop: PropSchema; device?: DeviceInfo }) {
+function Label({ prop }: { prop: PropSchema }) {
   return (
     <div className="flex items-center gap-1.5 min-w-0">
       <span className="text-[12px] font-medium text-[var(--foreground)] truncate">{prop.label}</span>
-      <DeviceIndicator device={device} />
+      <DeviceIndicator />
     </div>
   );
 }
@@ -619,56 +539,17 @@ function PropertyInput({
 }
 
 /**
- * Device indicator next to a property label (Elementor pattern). For props
- * that can differ per breakpoint it shows which device the current edit
- * targets — a monitor on Desktop, a phone on Mobile — and, when a Mobile
- * override is active, highlights it with a one-click reset back to the
- * Desktop value. Non-responsive props always show the monitor to signal
- * "this applies to every device."
+ * Small computer-monitor icon next to property labels — Elementor pattern.
+ * Currently visual-only (indicates "this prop applies to Desktop view"); future
+ * iterations will wire it up to switch the prop into per-device override mode.
  */
-function DeviceIndicator({ device }: { device?: DeviceInfo }) {
-  if (!device || !device.responsive) {
-    return (
-      <span
-        title={device ? 'Applies to all devices' : 'Editing for Desktop'}
-        className="inline-flex items-center text-[var(--muted-foreground)]/60 cursor-default"
-      >
-        <ComputerDesktopIcon className="w-3.5 h-3.5" />
-      </span>
-    );
-  }
-
-  if (!device.isMobile) {
-    return (
-      <span
-        title="Editing for Desktop — can be overridden on Mobile"
-        className="inline-flex items-center text-[var(--muted-foreground)]/60 cursor-default"
-      >
-        <ComputerDesktopIcon className="w-3.5 h-3.5" />
-      </span>
-    );
-  }
-
+function DeviceIndicator() {
   return (
-    <span className="inline-flex items-center gap-0.5">
-      <span
-        title={device.overridden ? 'Mobile override active' : 'Editing for Mobile'}
-        className={`inline-flex items-center ${
-          device.overridden ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)]/60'
-        }`}
-      >
-        <DevicePhoneMobileIcon className="w-3.5 h-3.5" />
-      </span>
-      {device.overridden && device.onReset && (
-        <button
-          type="button"
-          onClick={device.onReset}
-          title="Reset to desktop value"
-          className="inline-flex items-center text-[var(--muted-foreground)]/60 hover:text-[var(--foreground)] transition-colors"
-        >
-          <ArrowUturnLeftIcon className="w-3 h-3" />
-        </button>
-      )}
+    <span
+      title="Editing for Desktop"
+      className="inline-flex items-center text-[var(--muted-foreground)]/60 hover:text-[var(--foreground)] transition-colors cursor-default"
+    >
+      <ComputerDesktopIcon className="w-3.5 h-3.5" />
     </span>
   );
 }

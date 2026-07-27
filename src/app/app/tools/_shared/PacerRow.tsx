@@ -34,11 +34,7 @@ import { buildGooglePacingCard } from '@/lib/ad-pacer/google-pacer-calc';
 import {
   computeMetaPacingHealth,
   buildMetaRecommendation,
-  budgetRampStatus,
-  buildHealthHoverRows,
   type PacingHealth,
-  type BudgetChange,
-  type HealthHoverDay,
 } from '@/lib/ad-pacer/pacing-engine';
 import { OVERAGE_ALLOWANCE_DEFAULT } from '@/lib/ad-pacer/constants';
 import { zonedTodayIso } from '@/lib/timezone';
@@ -55,156 +51,26 @@ import { DollarInput, Field, readonlyClass, labelClass } from './inputs';
 import { MetricBox } from './metrics';
 
 /**
- * Bar color for a day's delivery ratio (spend ÷ that-day's-budget): green when
- * it delivered most of its budget, amber when it fell short — so the short
- * post-raise bars read as "ramping," visually distinct from the healthy
- * pre-raise ones. Keyed to the same low-health threshold the verdict uses.
- */
-function hoverBarColor(ratio: number | null): string {
-  if (ratio == null) return COLORS.warn;
-  return ratio >= 0.75 ? COLORS.success : COLORS.warn;
-}
-
-/**
- * M4 — the per-day breakdown behind the pacing-health %. One row per window
- * day: spend paired with the budget in effect that day (the load-bearing
- * column) and a proportional bar (spend ÷ that-day's-budget). A labeled divider
- * marks a mid-window budget raise so the short bars read as the raise, not a
- * delivery cliff. Reads the stored series only — no live API call on hover.
- */
-function HealthHoverPanel({
-  rows,
-  change,
-  dailyBudget,
-  windowSpend,
-  windowDays,
-  ratio,
-}: {
-  rows: HealthHoverDay[];
-  change: BudgetChange | null;
-  dailyBudget: number;
-  windowSpend: number;
-  windowDays: number;
-  ratio: number | null;
-}) {
-  // The pre-change days' average delivery — the evidence for "the low % is the
-  // raise, not a delivery problem." Only computed when a change sits in-window.
-  const preRows = change ? rows.filter((r) => r.date < change.date && r.ratio != null) : [];
-  const preAvg =
-    preRows.length > 0
-      ? preRows.reduce((s, r) => s + (r.ratio ?? 0), 0) / preRows.length
-      : null;
-  const changeInWindow = change != null && rows.some((r) => r.date >= change.date);
-  return (
-    <div className="text-left" style={{ width: 292 }}>
-      {/* Header — the headline calc, so the hover shows its own math. */}
-      <div className="flex items-baseline justify-between">
-        <span className="text-[11px] text-[var(--muted-foreground)]">Daily spend</span>
-        <span className="text-[11px] text-[var(--muted-foreground)]">vs budget that day</span>
-      </div>
-      <div className="mt-0.5 mb-2 flex items-baseline gap-1.5">
-        <span
-          className="text-[15px] font-semibold"
-          style={{ color: ratio != null && ratio < 0.75 ? COLORS.warn : COLORS.success }}
-        >
-          {ratio != null ? `${Math.round(ratio * 100)}%` : '—'}
-        </span>
-        <span className="text-[10px] text-[var(--muted-foreground)]">
-          {fmt(windowSpend)} ÷ ({fmt(dailyBudget)} × {fmtDaysNum(windowDays)}d)
-        </span>
-      </div>
-
-      <div className="flex flex-col gap-[5px]">
-        {rows.map((r, i) => {
-          const prev = rows[i - 1];
-          const showDivider =
-            changeInWindow &&
-            change != null &&
-            r.date >= change.date &&
-            (!prev || prev.date < change.date);
-          return (
-            <div key={r.date} className="flex flex-col gap-[5px]">
-              {showDivider && (
-                <div className="my-0.5 flex items-center gap-1.5">
-                  <div className="h-px flex-1 border-t border-dashed border-[var(--border)]" />
-                  <span className="whitespace-nowrap text-[9.5px] text-[var(--muted-foreground)]">
-                    Budget {change.newBudget >= change.prevBudget ? 'raised' : 'lowered'} ·{' '}
-                    {fmt(change.prevBudget)} → {fmt(change.newBudget)}
-                  </span>
-                  <div className="h-px flex-1 border-t border-dashed border-[var(--border)]" />
-                </div>
-              )}
-              <div className="grid grid-cols-[44px_1fr_78px] items-center gap-2">
-                <span className="text-[10px] text-[var(--muted-foreground)]">
-                  {fmtDate(r.date)}
-                </span>
-                <span className="h-[11px] overflow-hidden rounded-[3px] bg-[var(--muted)]">
-                  <span
-                    className="block h-full rounded-[3px]"
-                    style={{
-                      width: `${Math.min(1, Math.max(0, r.ratio ?? 0)) * 100}%`,
-                      background: hoverBarColor(r.ratio),
-                    }}
-                  />
-                </span>
-                <span className="text-right text-[10px] text-[var(--muted-foreground)]">
-                  {r.isToday
-                    ? `${fmt(r.spend)} · so far`
-                    : `${fmt(r.spend)} / ${r.budget != null ? fmt(r.budget) : '—'}`}
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Footer — one sentence tying it together. */}
-      {changeInWindow && preAvg != null && (
-        <div className="mt-2 border-t border-[var(--border)] pt-1.5 text-[10px] leading-relaxed text-[var(--muted-foreground)]">
-          Pre-raise days delivered ~{Math.round(preAvg * 100)}% of their budget — the low % is
-          the raise, not a delivery problem.
-        </div>
-      )}
-    </div>
-  );
-}
-
-/**
  * Pacing Health — the gate the recommendation box reads first: "is the ad
  * spending the budget it was given." Meta measures a rolling 7-day window vs
  * the daily budget; Google measures month-to-date vs expected-to-date on the
  * way to the monthly ceiling. The quiet "today: $X so far" line is a
  * break-detection breadcrumb only (did it break today, or soft all week?) —
  * it feeds no calculation and deliberately gets no pill or verdict of its own.
- *
- * M2: right after a budget raise the rolling window is still mostly pre-raise
- * (low-budget) spend, so the % reads artificially low. While the window still
- * straddles the change (`ramp.ramping`) the sub reads "ramping since {date}"
- * and the color softens to amber, so the number isn't mistaken for a delivery
- * fault. Once the window is fully post-change the annotation drops on its own.
- * M4: on Meta, hovering the box shows the per-day breakdown (HealthHoverPanel).
  */
 function PacingHealthBox({
   health,
   spendToday,
   mode,
-  ramp,
-  hoverRows,
-  dailyBudget,
 }: {
   health: PacingHealth | null;
   spendToday: number | null;
   mode: 'meta' | 'google';
-  ramp?: { change: BudgetChange | null; ramping: boolean };
-  hoverRows?: HealthHoverDay[];
-  dailyBudget?: number | null;
 }) {
   const ratio = health?.pacingRatio ?? null;
   const verdict = health?.verdict ?? null;
-  const ramping = !!ramp?.ramping && ramp.change != null;
-  const color = ramping
-    ? COLORS.warn
-    : verdict === 'healthy'
+  const color =
+    verdict === 'healthy'
       ? COLORS.success
       : verdict === 'soft'
         ? COLORS.warn
@@ -223,51 +89,19 @@ function PacingHealthBox({
       : health
         ? `last ${fmtDaysNum(Math.min(health.windowDays, 7))}d vs daily budget`
         : '';
-  const sub = !health
-    ? 'needs synced spend history'
-    : ramping && ramp?.change
-      ? `ramping since ${fmtDate(ramp.change.date)} — reading still settling`
-      : verdict
-        ? `${verdictLabel} · ${windowLabel}`
-        : 'needs synced spend history';
-  const box = (
+  return (
     <MetricBox
       label="Pacing Health"
       value={ratio != null ? `${Math.round(ratio * 100)}%` : '—'}
-      sub={sub}
+      sub={
+        verdict
+          ? `${verdictLabel} · ${windowLabel}`
+          : 'needs synced spend history'
+      }
       detail={spendToday != null ? `today: ${fmt(spendToday)} so far` : undefined}
       color={color}
     />
   );
-  // M4 hover — Meta daily lines with a synced window only.
-  if (
-    mode === 'meta' &&
-    health &&
-    hoverRows &&
-    hoverRows.length > 0 &&
-    dailyBudget != null &&
-    dailyBudget > 0
-  ) {
-    return (
-      <Tooltip
-        placement="bottom"
-        className="w-full [&>*:first-child]:w-full"
-        label={
-          <HealthHoverPanel
-            rows={hoverRows}
-            change={ramp?.change ?? null}
-            dailyBudget={dailyBudget}
-            windowSpend={health.windowSpend}
-            windowDays={health.windowDays}
-            ratio={ratio}
-          />
-        }
-      >
-        {box}
-      </Tooltip>
-    );
-  }
-  return box;
 }
 
 // ─── PacerRow + PacerCompletedSummary (appended below) ─────────────────────
@@ -411,10 +245,6 @@ export function PacerRow({
             cumulativeSpend: num(ad.pacerRunSpend) ?? num(ad.pacerActual),
             nowMs,
             timeZone,
-            // Data edge: anchor the health window's end to the last sync, not
-            // now() — a stale sync must not deflate the reading with unsynced
-            // budgeted days. Null (never synced) falls back to now().
-            syncedAtMs: ad.pacerSyncedAt ? Date.parse(ad.pacerSyncedAt) : null,
           })
         : null,
     [isGoogle, ad, nowMs, timeZone],
@@ -441,23 +271,6 @@ export function PacerRow({
     const row = (ad.dailySpend ?? []).find((p) => p.date === today);
     return row ? row.spend : null;
   }, [ad, nowMs, timeZone]);
-  // M2/M4: the most recent budget step-change + the per-day hover rows, both
-  // read from the preserved snapshot series (no live API call). ramping drives
-  // the "still settling" annotation; the rows power the hover breakdown.
-  const metaRamp = useMemo(
-    () =>
-      !isGoogle && ad.budgetType !== 'Lifetime'
-        ? budgetRampStatus(ad.dailySpend ?? [], zonedTodayIso(nowMs, timeZone))
-        : undefined,
-    [isGoogle, ad.budgetType, ad.dailySpend, nowMs, timeZone],
-  );
-  const metaHoverRows = useMemo(
-    () =>
-      !isGoogle && ad.budgetType !== 'Lifetime'
-        ? buildHealthHoverRows(ad.dailySpend ?? [], zonedTodayIso(nowMs, timeZone))
-        : undefined,
-    [isGoogle, ad.budgetType, ad.dailySpend, nowMs, timeZone],
-  );
   // The date being paced TO — the Meta/planned end clamped to the pacing
   // month (Change 4). Drives the "until …" labels and the completed banner.
   const effectiveEnd = calc.effectiveEnd;
@@ -1167,9 +980,6 @@ export function PacerRow({
             health={isGoogle ? gCard?.recommendation?.health ?? null : metaHealth}
             spendToday={spendToday}
             mode={isGoogle ? 'google' : 'meta'}
-            ramp={metaRamp}
-            hoverRows={metaHoverRows}
-            dailyBudget={calc.dailyBudget}
           />
         )}
         {isLifetime ? (
@@ -1344,12 +1154,11 @@ export function PacerRow({
           }
         />
         {(() => {
-          // M1 — REC. DAILY ADJUSTMENT is pure arithmetic, computed live and
-          // stateless: the catch-up rate that lands on target from where we
-          // stand (calc.recDaily = remaining ÷ days left). It never says
-          // "diagnose" or "impossible" — whether that number is realistic is
-          // the Pacing Health badge's job, not this box's. Two outcomes only:
-          // the number already ≈ current daily → "No change"; else show it.
+          // The four-state recommendation box: only `adjust` hands over a
+          // number to type. On-track suppresses it; delivery-low and shortfall
+          // replace a misleading number with the honest thing (raising the
+          // budget on a broken ad does nothing, and no daily rate can spend
+          // dollars there's no time to spend).
           if (metaRec == null || calc.daysLeft <= 0) {
             // Engine doesn't apply (no target / no daily budget / window
             // closed) — the legacy remaining ÷ days box, unchanged.
@@ -1376,44 +1185,69 @@ export function PacerRow({
               />
             );
           }
-          // Within rounding of the current daily → nothing to type.
-          if (isOnTrack) {
-            return (
-              <MetricBox
-                label="Rec. Daily Adjustment"
-                value="No change"
-                sub="on track to spend it"
-                detail={
-                  metaRec.healthKnown
-                    ? undefined
-                    : 'assumes full delivery — spend history syncs daily'
-                }
-                color={COLORS.success}
-              />
-            );
+          switch (metaRec.state) {
+            case 'on_track':
+              return (
+                <MetricBox
+                  label="Rec. Daily Adjustment"
+                  value="No change"
+                  sub="on track — leave it alone"
+                  detail={
+                    metaRec.healthKnown
+                      ? undefined
+                      : 'assumes full delivery — spend history syncs daily'
+                  }
+                  color={COLORS.success}
+                />
+              );
+            case 'adjust':
+              return (
+                <MetricBox
+                  label="Rec. Daily Adjustment"
+                  value={fmt(calc.recDaily)}
+                  // The formula — remaining ÷ remaining days (divisor floors at
+                  // 1 on the final day so the tail can't blow up).
+                  sub={
+                    calc.daysLeft >= 1
+                      ? `${fmt(calc.remaining)} remaining ÷ ${fmtDaysBasisPhrase(calc.daysLeft)} left`
+                      : `${fmt(calc.remaining)} remaining ÷ 1 day (final day)`
+                  }
+                  detail={
+                    (isOnTrack
+                      ? 'Set it, then leave it'
+                      : dailyDelta > 0
+                        ? `Add ${fmt(Math.abs(dailyDelta))} to current Daily Budget`
+                        : `Reduce current Daily Budget by ${fmt(Math.abs(dailyDelta))}`) +
+                    (metaRec.largeJump ? ' — large jump, stage it and monitor' : '')
+                  }
+                  color={recColor}
+                />
+              );
+            case 'delivery_low':
+              return (
+                <MetricBox
+                  label="Rec. Daily Adjustment"
+                  value="Diagnose delivery"
+                  sub={
+                    metaHealth?.pacingRatio != null
+                      ? `spending ${Math.round(metaHealth.pacingRatio * 100)}% of its budget`
+                      : 'underdelivering'
+                  }
+                  detail="Don't add budget — check audience, bids, creative, feed"
+                  color={COLORS.error}
+                />
+              );
+            case 'shortfall':
+              return (
+                <MetricBox
+                  label="Rec. Daily Adjustment"
+                  value={`Short ~${fmt(metaRec.gap)}`}
+                  sub={`${fmt(Math.max(0, metaRec.remainingBudget))} left · ~${fmt(metaRec.maxSpendable)} spendable`}
+                  detail="Reallocate the unspendable budget, or accept the miss"
+                  color={COLORS.error}
+                />
+              );
           }
-          // Otherwise hand over the catch-up rate (raise or trim). A big single
-          // move is flagged to stage + monitor, but the number still shows.
-          return (
-            <MetricBox
-              label="Rec. Daily Adjustment"
-              value={fmt(calc.recDaily)}
-              // remaining ÷ remaining days (divisor floors at 1 on the final
-              // day so the tail can't blow up).
-              sub={
-                calc.daysLeft >= 1
-                  ? `${fmt(calc.remaining)} remaining ÷ ${fmtDaysBasisPhrase(calc.daysLeft)} left`
-                  : `${fmt(calc.remaining)} remaining ÷ 1 day (final day)`
-              }
-              detail={
-                (dailyDelta > 0
-                  ? `Add ${fmt(Math.abs(dailyDelta))} to current Daily Budget`
-                  : `Reduce current Daily Budget by ${fmt(Math.abs(dailyDelta))}`) +
-                (metaRec.largeJump ? ' — large jump, stage it and monitor' : '')
-              }
-              color={recColor}
-            />
-          );
         })()}
         </>
         ))}
@@ -1458,31 +1292,13 @@ export function PacerRow({
             </p>
           );
         }
-        // The state descriptor speaks (the rec box already showed the number):
-        // on-track reassures, adjust explains the raise/trim, delivery-low says
-        // a bigger budget won't fix a delivery problem. Falls back to the plain
-        // projection bands without a target.
+        // The four-state engine speaks: on-track suppresses, adjust hands over
+        // the rate, delivery-low says diagnose (never raise), shortfall states
+        // the honest gap. Falls back to the projection bands without a target.
         if (metaRec != null) {
           switch (metaRec.state) {
             case 'delivery_low':
-              // M2: during a ramp the low % is the recent raise, not a delivery
-              // fault — say "settling," not "underdelivering," so the reading
-              // isn't misread. The annotation drops once the window is clean.
-              return metaRamp?.ramping && metaRamp.change ? (
-                <p
-                  className="m-0 text-[11px] leading-relaxed"
-                  style={{ color: COLORS.warn }}
-                >
-                  Recently raised ({fmt(metaRamp.change.prevBudget)} →{' '}
-                  {fmt(metaRamp.change.newBudget)} on {fmtDate(metaRamp.change.date)}) — the
-                  last 7 days still include pre-raise days, so the{' '}
-                  {metaHealth?.pacingRatio != null
-                    ? `${Math.round(metaHealth.pacingRatio * 100)}%`
-                    : 'low'}{' '}
-                  reading is still settling. Let it ramp about a week, then re-read; if
-                  it&apos;s still low on clean data, check audience, bids, creative, and feed.
-                </p>
-              ) : (
+              return (
                 <p
                   className="m-0 text-[11px] leading-relaxed"
                   style={{ color: COLORS.error }}
@@ -1494,6 +1310,18 @@ export function PacerRow({
                   of its budget over the last week. Raising the budget
                   won&apos;t help; check audience size, bid/cost caps, creative
                   rejection, and feed freshness, then re-evaluate.
+                </p>
+              );
+            case 'shortfall':
+              return (
+                <p
+                  className="m-0 text-[11px] leading-relaxed"
+                  style={{ color: COLORS.error }}
+                >
+                  Can&apos;t catch up: {fmt(Math.max(0, metaRec.remainingBudget))}{' '}
+                  remains but only ~{fmt(metaRec.maxSpendable)} is spendable at
+                  the demonstrated rate by {fmtDate(effectiveEnd)}. Reallocate
+                  to a campaign that can absorb it, or accept the miss.
                 </p>
               );
             case 'adjust':

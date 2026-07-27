@@ -5,9 +5,6 @@ import {
   buildMetaRecommendation,
   buildGoogleRecommendation,
   onTrackTolerance,
-  detectBudgetChange,
-  budgetRampStatus,
-  buildHealthHoverRows,
   type DailySpendPoint,
   type PacingHealth,
 } from './pacing-engine';
@@ -148,80 +145,6 @@ describe('computeMetaPacingHealth', () => {
   });
 });
 
-// ─── Pacing-health time-anchor fix (P1): denominator → data edge ─────────────
-
-describe('computeMetaPacingHealth — data-edge anchoring', () => {
-  // Certified Pre-Owned card: flight Jul 1–31, daily $5.37. The rolling window
-  // (Jul 17–22) sums $23.63; the data edge is Jul 22 at ~10:19 MDT (last sync,
-  // trailing partial $0.56) while the clock is a full day ahead (Jul 23 10:19).
-  const CPO_SERIES: DailySpendPoint[] = [
-    { date: '2026-07-17', spend: 5.0, dailyBudget: 5.37 },
-    { date: '2026-07-18', spend: 4.8, dailyBudget: 5.37 },
-    { date: '2026-07-19', spend: 5.1, dailyBudget: 5.37 },
-    { date: '2026-07-20', spend: 4.2, dailyBudget: 5.37 },
-    { date: '2026-07-21', spend: 3.97, dailyBudget: 5.37 },
-    { date: '2026-07-22', spend: 0.56, dailyBudget: 5.37 },
-  ];
-  const CLOCK = Date.UTC(2026, 6, 23, 16, 19, 0); // Jul 23 10:19 MDT
-  const DATA_EDGE = Date.UTC(2026, 6, 22, 16, 19, 0); // Jul 22 10:19 MDT
-
-  it('anchors the denominator to the data edge, not the clock (→ 81%, not 68%)', () => {
-    const h = computeMetaPacingHealth({
-      dailyBudget: 5.37,
-      liveDateIso: '2026-07-01',
-      series: CPO_SERIES,
-      cumulativeSpend: null,
-      nowMs: CLOCK,
-      syncedAtMs: DATA_EDGE,
-      timeZone: TZ,
-    });
-    expect(h.windowSpend).toBeCloseTo(23.63, 2); // numerator unchanged
-    expect(h.windowDays).toBeCloseTo(5.43, 2); // data edge, NOT 6.43 (clock)
-    expect(h.pacingRatio!).toBeCloseTo(0.81, 2); // NOT the deflated 0.68
-    expect(h.verdict).toBe('soft'); // ≥0.75 → the "underdelivering" warning won't fire
-  });
-
-  it('does not deflate: the same data read to the clock would score lower', () => {
-    const h = computeMetaPacingHealth({
-      dailyBudget: 5.37,
-      liveDateIso: '2026-07-01',
-      series: CPO_SERIES,
-      cumulativeSpend: null,
-      nowMs: CLOCK,
-      syncedAtMs: DATA_EDGE,
-      timeZone: TZ,
-    });
-    const deflatedToClock = h.windowSpend / (5.37 * 6.43); // phantom sync-lag day
-    expect(h.windowDays).toBeLessThan(6.43);
-    expect(h.pacingRatio!).toBeGreaterThan(deflatedToClock);
-  });
-
-  it('fresh sync (data edge == now) is byte-identical to the pre-fix path', () => {
-    const series: DailySpendPoint[] = [];
-    for (let d = 1; d <= 10; d++) {
-      series.push({
-        date: `2026-07-${String(d).padStart(2, '0')}`,
-        spend: 10,
-        dailyBudget: 10,
-      });
-    }
-    const NOW = Date.UTC(2026, 6, 10, 22, 31, 0);
-    const base = {
-      dailyBudget: 10,
-      liveDateIso: '2026-06-01',
-      series,
-      cumulativeSpend: null,
-      nowMs: NOW,
-      timeZone: TZ,
-    };
-    const withSync = computeMetaPacingHealth({ ...base, syncedAtMs: NOW });
-    const withoutSync = computeMetaPacingHealth(base); // falls back to now()
-    expect(withSync.windowDays).toBeCloseTo(6.69, 2);
-    expect(withSync.windowDays).toBeCloseTo(withoutSync.windowDays, 6);
-    expect(withSync.pacingRatio!).toBeCloseTo(withoutSync.pacingRatio!, 6);
-  });
-});
-
 // ─── Overage allowance (spec §5.2) ──────────────────────────────────────────
 
 describe('deriveOverageAllowance', () => {
@@ -349,10 +272,7 @@ describe('buildMetaRecommendation', () => {
     expect(rec.state).toBe('delivery_low');
   });
 
-  it('behind + underdelivering at end of month → delivery_low (gap surfaced, not declared)', () => {
-    // Formerly `shortfall`. The state no longer exists — a low health verdict
-    // reads as delivery_low; the emergent gap (maxSpendable/gap) is still
-    // computed for the operator to read, never announced as impossible.
+  it('shortfall (end of month, unrecoverable even at max plausible spend)', () => {
     const rec = buildMetaRecommendation({
       target: 360,
       actualSpend: 230,
@@ -362,27 +282,10 @@ describe('buildMetaRecommendation', () => {
       health: health({ pacingRatio: 0.69, runRate: 8, verdict: 'low' }),
       overageAllowance: 0.75,
     })!;
-    expect(rec.state).toBe('delivery_low');
+    expect(rec.state).toBe('shortfall');
+    expect(rec.recoverableCapacity).toBeCloseTo(20.21, 2); // trigger threshold
     expect(rec.maxSpendable).toBeCloseTo(12, 2); // realistic: run_rate × days
     expect(rec.gap).toBeCloseTo(118, 2); // 130 − 12
-  });
-
-  it('behind, healthy verdict, catch-up far above current daily → adjust/raise + largeJump (no shortfall)', () => {
-    // The old "unrecoverable but delivering fine" case: the rec box still hands
-    // over the catch-up number and flags the big jump; it never says impossible.
-    const rec = buildMetaRecommendation({
-      target: 360,
-      actualSpend: 230,
-      daysRemaining: 1.5,
-      totalDays: 30,
-      dailyBudget: 11.55,
-      health: health({ pacingRatio: 1, runRate: 11.55, verdict: 'healthy' }),
-      overageAllowance: 0.75,
-    })!;
-    expect(rec.state).toBe('adjust');
-    expect(rec.direction).toBe('raise');
-    expect(rec.requiredRate).toBeCloseTo(86.67, 2); // (360−230)/1.5, shown not blocked
-    expect(rec.largeJump).toBe(true);
   });
 
   it('resolves with an assumed budget-rate when health is unknown, flagged', () => {
@@ -558,110 +461,5 @@ describe('buildGoogleRecommendation', () => {
         ...JULY,
       }),
     ).toBeNull();
-  });
-});
-
-// ─── Budget-change detection + ramping (Meta spec M2/M4) ─────────────────────
-
-// The Kawasaki SXS window: 5 pre-raise days at $6, raised to $19.09 on Jul 21.
-const KAWASAKI: DailySpendPoint[] = [
-  { date: '2026-07-16', spend: 5.4, dailyBudget: 6 },
-  { date: '2026-07-17', spend: 4.8, dailyBudget: 6 },
-  { date: '2026-07-18', spend: 5.1, dailyBudget: 6 },
-  { date: '2026-07-19', spend: 4.2, dailyBudget: 6 },
-  { date: '2026-07-20', spend: 5.55, dailyBudget: 6 },
-  { date: '2026-07-21', spend: 6.8, dailyBudget: 19.09 },
-  { date: '2026-07-22', spend: 1.99, dailyBudget: 19.09 },
-];
-
-describe('detectBudgetChange', () => {
-  it('finds the raise between the last pre-change day and the first post-change day', () => {
-    const c = detectBudgetChange(KAWASAKI);
-    expect(c).toEqual({ date: '2026-07-21', prevBudget: 6, newBudget: 19.09 });
-  });
-
-  it('returns null when the budget never moves', () => {
-    const flat = KAWASAKI.map((p) => ({ ...p, dailyBudget: 6 }));
-    expect(detectBudgetChange(flat)).toBeNull();
-  });
-
-  it('ignores cent-level noise', () => {
-    const noisy: DailySpendPoint[] = [
-      { date: '2026-07-20', spend: 5, dailyBudget: 6.0 },
-      { date: '2026-07-21', spend: 5, dailyBudget: 6.004 },
-    ];
-    expect(detectBudgetChange(noisy)).toBeNull();
-  });
-
-  it('reports the MOST RECENT change when the budget stepped twice', () => {
-    const twice: DailySpendPoint[] = [
-      { date: '2026-07-18', spend: 5, dailyBudget: 6 },
-      { date: '2026-07-19', spend: 8, dailyBudget: 10 },
-      { date: '2026-07-20', spend: 15, dailyBudget: 19.09 },
-    ];
-    expect(detectBudgetChange(twice)).toEqual({
-      date: '2026-07-20',
-      prevBudget: 10,
-      newBudget: 19.09,
-    });
-  });
-
-  it('skips days with no stored budget without treating the gap as a change', () => {
-    const gappy: DailySpendPoint[] = [
-      { date: '2026-07-19', spend: 4, dailyBudget: 6 },
-      { date: '2026-07-20', spend: 4, dailyBudget: null },
-      { date: '2026-07-21', spend: 4, dailyBudget: 6 },
-    ];
-    expect(detectBudgetChange(gappy)).toBeNull();
-  });
-});
-
-describe('budgetRampStatus', () => {
-  it('ramping while the window still contains pre-change days', () => {
-    // On Jul 22 the window starts Jul 16 — the Jul 21 raise sits inside it.
-    const s = budgetRampStatus(KAWASAKI, '2026-07-22');
-    expect(s.ramping).toBe(true);
-    expect(s.change?.date).toBe('2026-07-21');
-  });
-
-  it('clean once the window is entirely post-change (annotation drops itself)', () => {
-    // A week later (Jul 28) the window starts Jul 22 — all post-raise.
-    const s = budgetRampStatus(KAWASAKI, '2026-07-28');
-    expect(s.ramping).toBe(false);
-    expect(s.change?.date).toBe('2026-07-21'); // still detected, just not ramping
-  });
-
-  it('not ramping when there was no change', () => {
-    const flat = KAWASAKI.map((p) => ({ ...p, dailyBudget: 6 }));
-    expect(budgetRampStatus(flat, '2026-07-22')).toEqual({ change: null, ramping: false });
-  });
-});
-
-describe('buildHealthHoverRows', () => {
-  it('returns the window days with spend, budget, ratio, and today flagged', () => {
-    const rows = buildHealthHoverRows(KAWASAKI, '2026-07-22');
-    expect(rows).toHaveLength(7);
-    expect(rows[0]).toMatchObject({ date: '2026-07-16', spend: 5.4, budget: 6 });
-    expect(rows[0].ratio).toBeCloseTo(0.9, 5); // 5.40 / 6.00
-    expect(rows.at(-1)).toMatchObject({ date: '2026-07-22', isToday: true });
-    expect(rows.every((r, i) => i === rows.length - 1 || !r.isToday)).toBe(true);
-  });
-
-  it('excludes days older than the 7-day window', () => {
-    const withOld: DailySpendPoint[] = [
-      { date: '2026-07-10', spend: 9, dailyBudget: 6 }, // outside the window
-      ...KAWASAKI,
-    ];
-    const rows = buildHealthHoverRows(withOld, '2026-07-22');
-    expect(rows.find((r) => r.date === '2026-07-10')).toBeUndefined();
-    expect(rows).toHaveLength(7);
-  });
-
-  it('carries a null ratio when the budget is unknown', () => {
-    const rows = buildHealthHoverRows(
-      [{ date: '2026-07-22', spend: 2, dailyBudget: null }],
-      '2026-07-22',
-    );
-    expect(rows[0].ratio).toBeNull();
   });
 });

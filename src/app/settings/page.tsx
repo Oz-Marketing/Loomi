@@ -196,12 +196,42 @@ function AccountSettingsTab() {
   const [logoDark, setLogoDark] = useState('');
   const [logoWhite, setLogoWhite] = useState('');
   const [logoBlack, setLogoBlack] = useState('');
+  const [parentAccountKey, setParentAccountKey] = useState('');
   const [saving, setSaving] = useState(false);
   // Portal target for the Save button — lives in the settings title bar.
   const [titleActionsEl, setTitleActionsEl] = useState<HTMLElement | null>(null);
   useEffect(() => {
     setTitleActionsEl(document.getElementById('settings-title-actions'));
   }, []);
+
+  // Selectable parents: every account except this one and anything already
+  // beneath it. Excluding descendants means the UI can't even offer a cycle —
+  // the API rejects one too, but this keeps it out of the dropdown.
+  const parentOptions = useMemo(() => {
+    if (!accountKey) return [];
+    const descendants = new Set<string>([accountKey]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const [k, a] of Object.entries(accounts)) {
+        if (!descendants.has(k) && a.parentAccountKey && descendants.has(a.parentAccountKey)) {
+          descendants.add(k);
+          grew = true;
+        }
+      }
+    }
+    return Object.entries(accounts)
+      .filter(([k]) => !descendants.has(k))
+      .map(([k, a]) => ({ key: k, label: a.dealer || k }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [accounts, accountKey]);
+
+  // How many accounts roll up to this one — shown so the effect of grouping is
+  // visible without leaving the page.
+  const rooftopCount = useMemo(
+    () => (accountKey ? Object.values(accounts).filter((a) => a.parentAccountKey === accountKey).length : 0),
+    [accounts, accountKey],
+  );
 
   const snapshotRef = useRef<Record<string, string> | null>(null);
 
@@ -213,6 +243,7 @@ function AccountSettingsTab() {
       setDealer(accountData.dealer || '');
       setCategory(accountData.category || '');
       setOems(getAccountOems(accountData));
+      setParentAccountKey(accountData.parentAccountKey || '');
       setLogoLight(own?.light || '');
       setLogoDark(own?.dark || '');
       setLogoWhite(own?.white || '');
@@ -258,6 +289,7 @@ function AccountSettingsTab() {
         dealer,
         category,
         oems: selectedOems,
+        parentAccountKey: parentAccountKey || null,
         logos: {
           light: logoLight,
           dark: logoDark,
@@ -326,6 +358,27 @@ function AccountSettingsTab() {
                   <option value={category}>{category}</option>
                 )}
               </select>
+            </div>
+
+            <div>
+              <label className={labelClass}>Parent Account</label>
+              <select
+                value={parentAccountKey}
+                onChange={(e) => setParentAccountKey(e.target.value)}
+                className={inputClass}
+              >
+                <option value="">None — top-level account</option>
+                {parentOptions.map((o) => (
+                  <option key={o.key} value={o.key}>{o.label}</option>
+                ))}
+              </select>
+              <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
+                {rooftopCount > 0
+                  ? `${rooftopCount} account${rooftopCount === 1 ? '' : 's'} roll up to this one. `
+                  : ''}
+                Grouping rolls this account's contacts up to its parent, and inherits the parent's
+                brand kit and templates.
+              </p>
             </div>
 
             {showBrandsSelector && (

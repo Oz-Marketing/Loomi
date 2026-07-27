@@ -201,3 +201,27 @@ export async function expandAccountKeysWithDescendants(keys: string[]): Promise<
   }
   return [...out];
 }
+
+/**
+ * The account's ancestors, nearest first — its parent, then grandparent, etc.
+ *
+ * Powers "author once, inherit down": a rooftop sees templates/forms/landing
+ * pages owned by its group account. Replaces the Organization-based
+ * inheritance, where group-owned records were marked accountKey=null +
+ * organizationId; the migration reassigns those to the group ACCOUNT, so
+ * inheritance is now simply "mine + my ancestors'".
+ */
+export async function getAncestorAccountKeys(accountKey: string): Promise<string[]> {
+  const all = await prisma.account.findMany({ select: { key: true, parentAccountKey: true } });
+  const parentOf = new Map(all.map((a) => [a.key, a.parentAccountKey]));
+
+  const chain: string[] = [];
+  const seen = new Set<string>([accountKey]);
+  let cursor = parentOf.get(accountKey) ?? null;
+  while (cursor && !seen.has(cursor)) {
+    seen.add(cursor); // guards a malformed parent cycle
+    chain.push(cursor);
+    cursor = parentOf.get(cursor) ?? null;
+  }
+  return chain;
+}

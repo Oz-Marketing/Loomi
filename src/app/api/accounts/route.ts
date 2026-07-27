@@ -70,12 +70,25 @@ export async function GET() {
     // fills any gap. We expose the resolved set as `logos`/`branding` (so every
     // display consumer inherits for free) and the account's raw values as
     // `ownLogos`/`ownBranding` (so edit forms don't persist inherited values).
-    const orgBrand: Record<string, { logos: Record<string, string> | null; branding: OrgBranding | null }> = {};
-    if (accounts.some((a) => a.organizationId)) {
-      for (const org of await orgService.getOrganizations()) {
-        orgBrand[org.id] = { logos: parseLogos(org.logos), branding: parseBranding(org.branding) };
+    // Inheritance follows the ACCOUNT HIERARCHY (parentAccountKey), not the
+    // retired Organization layer: a rooftop inherits from its group account,
+    // which may itself inherit from a parent. We walk the whole chain rather
+    // than one level, so a three-tier setup fills gaps from the nearest
+    // ancestor that defines a value.
+    const byKey = new Map(accounts.map((a) => [a.key, a]));
+    const ancestorsOf = (startKey: string): typeof accounts => {
+      const chain: typeof accounts = [];
+      const seen = new Set<string>([startKey]);
+      let cursor = byKey.get(startKey)?.parentAccountKey ?? null;
+      while (cursor && !seen.has(cursor)) {
+        seen.add(cursor); // guards a malformed parent cycle
+        const next = byKey.get(cursor);
+        if (!next) break; // parent not visible to this user
+        chain.push(next);
+        cursor = next.parentAccountKey ?? null;
       }
-    }
+      return chain;
+    };
 
     // Return as key-indexed account map: { [accountKey]: accountData }
     const result: Record<string, Record<string, unknown>> = {};
@@ -92,18 +105,24 @@ export async function GET() {
       // objects. Keep the raw own values, then resolve against the parent org.
       data.ownLogos = data.logos ?? null;
       data.ownBranding = data.branding ?? null;
-      const parent = account.organizationId ? orgBrand[account.organizationId] : undefined;
-      if (parent?.logos) {
-        const own = (data.logos as Record<string, string> | undefined) ?? {};
-        data.logos = {
-          light: own.light || parent.logos.light || '',
-          dark: own.dark || parent.logos.dark || '',
-          ...((own.white || parent.logos.white) ? { white: own.white || parent.logos.white } : {}),
-          ...((own.black || parent.logos.black) ? { black: own.black || parent.logos.black } : {}),
-        };
-      }
-      if (parent?.branding) {
-        data.branding = mergeBranding(parent.branding, data.branding as OrgBranding | undefined);
+
+      // Nearest ancestor wins over more distant ones; the account's own value
+      // always wins over all of them.
+      for (const ancestor of ancestorsOf(key)) {
+        const inheritedLogos = parseLogos(ancestor.logos);
+        if (inheritedLogos) {
+          const own = (data.logos as Record<string, string> | undefined) ?? {};
+          data.logos = {
+            light: own.light || inheritedLogos.light || '',
+            dark: own.dark || inheritedLogos.dark || '',
+            ...((own.white || inheritedLogos.white) ? { white: own.white || inheritedLogos.white } : {}),
+            ...((own.black || inheritedLogos.black) ? { black: own.black || inheritedLogos.black } : {}),
+          };
+        }
+        const inheritedBranding = parseBranding(ancestor.branding);
+        if (inheritedBranding) {
+          data.branding = mergeBranding(inheritedBranding, data.branding as OrgBranding | undefined);
+        }
       }
       result[key] = data;
     }

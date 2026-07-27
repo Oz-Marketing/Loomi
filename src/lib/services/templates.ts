@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma';
+import { getAncestorAccountKeys } from '@/lib/services/accounts';
 import { createVersion } from './template-versions';
 
 type TemplateScope = 'library' | 'subaccount' | 'all';
@@ -139,9 +140,14 @@ export async function createTemplate(data: {
 }
 
 /**
- * The templates a sub-account effectively sees: its own, plus any templates
- * authored at its parent organization (inherited, read-only until cloned).
- * Library templates are intentionally excluded — those are listed separately.
+ * The templates a sub-account effectively sees: its own, plus any authored by
+ * an ancestor account (inherited, read-only until cloned). Library templates
+ * are intentionally excluded — those are listed separately.
+ *
+ * Inheritance follows the account hierarchy. Group-authored templates are
+ * simply owned by the group ACCOUNT, so "mine + my ancestors'" covers it; the
+ * legacy organizationId match is kept so anything not yet migrated still
+ * resolves.
  */
 export async function getEffectiveTemplatesForAccount(
   accountKey: string,
@@ -152,10 +158,15 @@ export async function getEffectiveTemplatesForAccount(
     select: { organizationId: true },
   });
   const orgId = account?.organizationId ?? null;
+  const ancestorKeys = await getAncestorAccountKeys(accountKey);
 
   const where = {
     ...(opts.type ? { type: opts.type } : {}),
-    OR: [{ accountKey }, ...(orgId ? [{ organizationId: orgId }] : [])],
+    OR: [
+      { accountKey },
+      ...(ancestorKeys.length > 0 ? [{ accountKey: { in: ancestorKeys } }] : []),
+      ...(orgId ? [{ organizationId: orgId }] : []),
+    ],
   };
 
   // Content is always selected so this composes with getTemplatesWithContent's

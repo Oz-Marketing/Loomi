@@ -245,6 +245,7 @@ model Account {
   contacts                 Contact[]
   contactLists             ContactList[]
   contactCustomFields      ContactCustomField[]
+  contactEvents            ContactEvent[]
   loomiFlows               LoomiFlow[]
   forms                    Form[]
   crmDestinations          CrmDestination[]
@@ -477,6 +478,7 @@ model Contact {
 
   listMemberships ContactListMembership[]
   formSubmissions FormSubmission[]
+  events          ContactEvent[]
 
   @@unique([accountKey, email])
   @@unique([accountKey, phone])
@@ -496,6 +498,51 @@ model Contact {
   // queries — the filter engine never needs the full `jsonb_ops` operator
   // set, and dropping it shrinks the index significantly.
   @@index([customFields(ops: JsonbPathOps)], type: Gin)
+}
+
+// ─────────────────────────────────────────────────────
+// Contact events — the per-visit / per-deal history that the Contact row
+// itself collapses (the CRM bridge upserts one Contact with latest values).
+// Each row is one service appointment or one vehicle purchase, so the contact
+// page can render a timeline and a multi-vehicle "garage". Idempotent on
+// `idempotencyKey` (source RO/deal id) so re-pushes update instead of duplicate.
+// ─────────────────────────────────────────────────────
+
+model ContactEvent {
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  // Nullable so an event can land before its contact is linked; the ingest
+  // links by (accountKey, email/phone) and backfills contactId when possible.
+  contactId String?
+  contact   Contact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  type      String // 'service' | 'sale'
+  eventDate DateTime?
+  amount    Float? // repair-order total or deal price
+
+  // Vehicle snapshot at the time of the event (a contact may span several).
+  vehicleYear    String?
+  vehicleMake    String?
+  vehicleModel   String?
+  vehicleVin     String?
+  vehicleMileage String?
+
+  sourceCrm String? // cdk | tekion | vinsolutions | powersports
+  reference String? // RO number / deal number (human-facing)
+  details   Json? // full extra fields (deal terms, RO breakdown, etc.)
+
+  // Stable per source record (e.g. "cdk:svc:{dealer}:{ro}") so re-ingest is an
+  // update, and the one-time backfill is safe to re-run.
+  idempotencyKey String @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([accountKey, contactId, eventDate])
+  @@index([contactId, type])
+  @@index([contactId, vehicleVin])
 }
 
 // ─────────────────────────────────────────────────────

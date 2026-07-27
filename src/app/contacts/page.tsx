@@ -225,6 +225,9 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
   const requestedAccount = searchParams.get('account') || '';
 
   const [contacts, setContacts] = useState<Contact[]>([]);
+  // Sum of each fetched account's true server-side total (data.meta.total),
+  // which can exceed the loaded rows (capped at MAX_FETCH_ALL per account).
+  const [serverTotal, setServerTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
@@ -289,6 +292,7 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
     // listContactsForAccount, which is plenty for an agency tenant).
     const nextContacts: Contact[] = [];
     const failures: string[] = [];
+    let totalSum = 0;
     for (let i = 0; i < accountKeysToFetch.length; i += ADMIN_CONTACTS_FETCH_CONCURRENCY) {
       const chunk = accountKeysToFetch.slice(i, i + ADMIN_CONTACTS_FETCH_CONCURRENCY);
       const settled = await Promise.allSettled(
@@ -304,6 +308,7 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
             key,
             dealer: accountMap[key]?.dealer || key,
             contacts: data.contacts || [],
+            total: data.meta?.total ?? (data.contacts?.length || 0),
           };
         }),
       );
@@ -314,6 +319,7 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
           continue;
         }
 
+        totalSum += result.value.total;
         for (const contact of result.value.contacts) {
           nextContacts.push({
             ...contact,
@@ -323,6 +329,7 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
         }
       }
     }
+    setServerTotal(totalSum);
 
     // Dedupe contacts that exist in multiple sub-accounts (one shopper
     // signed up at multiple rooftops). Merge their sub-account
@@ -392,7 +399,7 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
         search={filters.search}
         onSearchChange={filters.setSearch}
         hasAccountFilter={filters.accountFilters.length > 1}
-        totalCount={contacts.length}
+        totalCount={serverTotal}
         filteredCount={filters.filtered.length}
         loading={loading}
         onRefresh={() => {
@@ -430,6 +437,10 @@ function AccountContactsView({
   const searchParams = useSearchParams();
   const requestedAccount = searchParams.get('account') || '';
   const [contacts, setContacts] = useState<Contact[]>([]);
+  // True server-side row count for the account (data.meta.total), which can
+  // exceed the loaded list (capped at MAX_FETCH_ALL). Drives the "loaded /
+  // total" count so the toolbar never implies the account has only 5,000.
+  const [serverTotal, setServerTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -459,9 +470,11 @@ function AccountContactsView({
         _accountKey: accountKey,
       }));
       setContacts(all);
+      setServerTotal(data.meta?.total ?? all.length);
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : 'Failed to fetch contacts');
       setContacts([]);
+      setServerTotal(0);
     }
     setLoading(false);
   }, [accountKey]);
@@ -516,7 +529,7 @@ function AccountContactsView({
         search={filters.search}
         onSearchChange={filters.setSearch}
         hasAccountFilter={false}
-        totalCount={contacts.length}
+        totalCount={serverTotal}
         filteredCount={filters.filtered.length}
         loading={loading}
         onRefresh={fetchData}

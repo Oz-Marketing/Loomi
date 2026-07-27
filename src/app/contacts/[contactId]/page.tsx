@@ -2,6 +2,8 @@
 
 import Link from 'next/link';
 import { useParams, useSearchParams } from 'next/navigation';
+import { VehicleCard, type GarageVehicle } from '@/components/contacts/vehicle-card';
+import { ContactHistory, type ContactEventDto } from '@/components/contacts/contact-history';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
@@ -265,6 +267,10 @@ export default function ContactDetailPage() {
   const [messagesLoading, setMessagesLoading] = useState(true);
   const [messagesError, setMessagesError] = useState<string | null>(null);
 
+  const [events, setEvents] = useState<ContactEventDto[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(true);
+  const [eventsError, setEventsError] = useState<string | null>(null);
+
   const [dndSaving, setDndSaving] = useState(false);
   const [dndError, setDndError] = useState<string | null>(null);
   const [dndSuccess, setDndSuccess] = useState<string | null>(null);
@@ -319,11 +325,32 @@ export default function ContactDetailPage() {
           setMessagesError(null);
         }
         setMessagesLoading(false);
+
+        // Service/purchase history — powers the timeline + the garage's
+        // vehicle list. Non-fatal: the rest of the page renders without it.
+        try {
+          const eventsRes = await fetch(
+            `/api/contacts/${encodeURIComponent(contactId)}/events?accountKey=${encodeURIComponent(accountKey)}`,
+          );
+          const eventsData = await eventsRes.json().catch(() => ({}));
+          if (!active) return;
+          if (!eventsRes.ok) {
+            setEventsError(eventsData.error || 'Failed to fetch history');
+            setEvents([]);
+          } else {
+            setEvents(Array.isArray(eventsData.events) ? eventsData.events : []);
+            setEventsError(null);
+          }
+        } catch {
+          if (active) setEvents([]);
+        }
+        if (active) setEventsLoading(false);
       } catch (err) {
         if (!active) return;
         setContactError(err instanceof Error ? err.message : 'Failed to fetch contact');
         setContactLoading(false);
         setMessagesLoading(false);
+        setEventsLoading(false);
       }
     }
 
@@ -337,6 +364,71 @@ export default function ContactDetailPage() {
     if (!contact) return '';
     return contact.fullName || `${contact.firstName} ${contact.lastName}`.trim() || 'Unknown Contact';
   }, [contact]);
+
+  /**
+   * The contact's garage: the vehicle on the contact row (the CRM's latest)
+   * plus every distinct vehicle seen across their service/purchase history.
+   * Keyed by VIN when present, else year+make+model, so the same car serviced
+   * five times shows once — carrying its most recent mileage/service date.
+   */
+  const garage = useMemo<GarageVehicle[]>(() => {
+    const byKey = new Map<string, GarageVehicle>();
+    const keyFor = (v: { vin?: string | null; year?: string | null; make?: string | null; model?: string | null }) =>
+      (v.vin || '').trim().toUpperCase() ||
+      [v.year, v.make, v.model].filter(Boolean).join(' ').toLowerCase();
+
+    if (contact && (contact.vehicleMake || contact.vehicleModel || contact.vehicleYear || contact.vehicleVin)) {
+      const primary: GarageVehicle = {
+        year: contact.vehicleYear,
+        make: contact.vehicleMake,
+        model: contact.vehicleModel,
+        vin: contact.vehicleVin,
+        mileage: contact.vehicleMileage,
+        color: typeof contact.customFields?.color === 'string' ? contact.customFields.color : undefined,
+        lastServiceDate: contact.lastServiceDate,
+        purchaseDate: contact.purchaseDate,
+      };
+      const k = keyFor(primary);
+      if (k) byKey.set(k, primary);
+    }
+
+    // Events arrive newest-first, so the first sighting of a vehicle already
+    // carries its freshest mileage/dates; later (older) rows only fill gaps.
+    for (const e of events) {
+      // Events use vehicle*-prefixed columns; map them onto the garage shape
+      // before keying (a bare keyFor(e) would silently produce an empty key).
+      const k = keyFor({
+        vin: e.vehicleVin,
+        year: e.vehicleYear,
+        make: e.vehicleMake,
+        model: e.vehicleModel,
+      });
+      if (!k) continue;
+      const existing = byKey.get(k);
+      if (existing) {
+        if (!existing.mileage && e.vehicleMileage) existing.mileage = e.vehicleMileage;
+        if (!existing.vin && e.vehicleVin) existing.vin = e.vehicleVin;
+        if (e.type === 'service' && !existing.lastServiceDate && e.eventDate) {
+          existing.lastServiceDate = e.eventDate;
+        }
+        if (e.type === 'sale' && !existing.purchaseDate && e.eventDate) {
+          existing.purchaseDate = e.eventDate;
+        }
+        continue;
+      }
+      byKey.set(k, {
+        year: e.vehicleYear ?? undefined,
+        make: e.vehicleMake ?? undefined,
+        model: e.vehicleModel ?? undefined,
+        vin: e.vehicleVin ?? undefined,
+        mileage: e.vehicleMileage ?? undefined,
+        lastServiceDate: e.type === 'service' ? e.eventDate ?? undefined : undefined,
+        purchaseDate: e.type === 'sale' ? e.eventDate ?? undefined : undefined,
+      });
+    }
+
+    return [...byKey.values()];
+  }, [contact, events]);
 
   const addedDateLabel = useMemo(() => {
     if (!contact?.dateAdded) return '';
@@ -627,30 +719,6 @@ export default function ContactDetailPage() {
                   }}
                 />
                 <InlineEditableField
-                  label="Vehicle Make"
-                  type="text"
-                  fieldRef={{ kind: 'canonical', column: 'vehicleMake' }}
-                  displayValue={contact.vehicleMake || '—'}
-                  rawValue={contact.vehicleMake}
-                  onSave={(v) => patchContact({ kind: 'canonical', column: 'vehicleMake', value: v })}
-                />
-                <InlineEditableField
-                  label="Vehicle Model"
-                  type="text"
-                  fieldRef={{ kind: 'canonical', column: 'vehicleModel' }}
-                  displayValue={contact.vehicleModel || '—'}
-                  rawValue={contact.vehicleModel}
-                  onSave={(v) => patchContact({ kind: 'canonical', column: 'vehicleModel', value: v })}
-                />
-                <InlineEditableField
-                  label="Vehicle Year"
-                  type="text"
-                  fieldRef={{ kind: 'canonical', column: 'vehicleYear' }}
-                  displayValue={contact.vehicleYear || '—'}
-                  rawValue={contact.vehicleYear}
-                  onSave={(v) => patchContact({ kind: 'canonical', column: 'vehicleYear', value: v })}
-                />
-                <InlineEditableField
                   label="Source"
                   type="text"
                   fieldRef={{ kind: 'canonical', column: 'source' }}
@@ -673,6 +741,24 @@ export default function ContactDetailPage() {
                 />
               </div>
             </section>
+
+            {/* Garage — the contact's vehicle(s), with the EVOX jellybean for
+                the selected one. Renders only for automotive contacts (those
+                with vehicle data on the row or in their history). */}
+            {garage.length > 0 && (
+              <VehicleCard
+                vehicles={garage}
+                leaseEndDate={contact.leaseEndDate}
+                warrantyEndDate={contact.warrantyEndDate}
+                dealType={typeof contact.customFields?.deal_type === 'string' ? contact.customFields.deal_type : ''}
+              />
+            )}
+
+            {/* Service + purchase timeline (hidden for non-automotive
+                contacts with no history at all). */}
+            {(garage.length > 0 || events.length > 0) && (
+              <ContactHistory events={events} loading={eventsLoading} error={eventsError} />
+            )}
 
             {/* Suppression (replaces 7-channel DND grid) */}
             <section className="glass-card rounded-xl p-4 border border-[var(--border)]/70">

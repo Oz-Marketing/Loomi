@@ -24,6 +24,7 @@ import { prisma } from '@/lib/prisma';
 import {
   createField,
   listBlueprints,
+  deployBlueprintToAccounts,
   CustomFieldValidationError,
 } from '@/lib/services/contact-custom-fields';
 import {
@@ -48,6 +49,7 @@ const BLUEPRINTS: Array<{
   description?: string;
   options?: Array<{ value: string; label: string }>;
   csvAliases?: string[];
+  category?: string;
   sortOrder: number;
 }> = [
   {
@@ -112,6 +114,47 @@ const BLUEPRINTS: Array<{
     csvAliases: ['tradein', 'trade in inquiry', 'tradeininquiry'],
     sortOrder: 80,
   },
+
+  // ── Deal & Financial (from sales_data / ps_sales_data via the Oz bridge) ──
+  { key: 'sale_type', label: 'Sale Type', type: 'text', category: 'Deal & Financial', csvAliases: ['saletype', 'sale type'], sortOrder: 100 },
+  { key: 'new_used', label: 'New / Used', type: 'select', options: [{ value: 'New', label: 'New' }, { value: 'Used', label: 'Used' }], category: 'Deal & Financial', csvAliases: ['newused', 'new used', 'condition'], sortOrder: 110 },
+  { key: 'out_the_door_price', label: 'Out-the-Door Price', type: 'number', category: 'Deal & Financial', csvAliases: ['outthedoor', 'out the door', 'otd'], sortOrder: 120 },
+  { key: 'unit_sold_price', label: 'Unit Sold Price', type: 'number', category: 'Deal & Financial', csvAliases: ['unitsoldprice', 'sold price'], sortOrder: 130 },
+  { key: 'msrp', label: 'MSRP', type: 'number', category: 'Deal & Financial', csvAliases: ['msrp'], sortOrder: 140 },
+  { key: 'amount_financed', label: 'Amount Financed', type: 'number', category: 'Deal & Financial', csvAliases: ['amtfinanced', 'amount financed'], sortOrder: 150 },
+  { key: 'apr', label: 'APR', type: 'number', category: 'Deal & Financial', csvAliases: ['apr'], sortOrder: 160 },
+  { key: 'rate', label: 'Rate', type: 'number', category: 'Deal & Financial', csvAliases: ['rate'], sortOrder: 170 },
+  { key: 'loan_term_months', label: 'Loan Term (months)', type: 'number', category: 'Deal & Financial', csvAliases: ['term', 'loan term'], sortOrder: 180 },
+  { key: 'payment', label: 'Payment', type: 'number', category: 'Deal & Financial', csvAliases: ['payment'], sortOrder: 190 },
+  { key: 'down_payment', label: 'Down Payment', type: 'number', category: 'Deal & Financial', csvAliases: ['totaldownpayment', 'down payment'], sortOrder: 200 },
+  { key: 'trade_in', label: 'Trade-In', type: 'text', category: 'Deal & Financial', csvAliases: ['tradeall', 'trade in'], sortOrder: 210 },
+  { key: 'trade_acv', label: 'Trade ACV', type: 'number', description: 'Actual cash value of the trade-in.', category: 'Deal & Financial', csvAliases: ['tradeacv', 'acv'], sortOrder: 220 },
+  { key: 'lienholder', label: 'Lienholder', type: 'text', category: 'Deal & Financial', csvAliases: ['lienholder'], sortOrder: 230 },
+  { key: 'unit_class', label: 'Unit Class', type: 'text', category: 'Deal & Financial', csvAliases: ['class', 'unit class'], sortOrder: 240 },
+  { key: 'unit_type', label: 'Unit Type', type: 'text', description: 'Powersports unit category (ATV, UTV, Motorcycle, etc.).', category: 'Deal & Financial', csvAliases: ['unittype', 'unit type'], sortOrder: 250 },
+  { key: 'color', label: 'Color', type: 'text', category: 'Deal & Financial', csvAliases: ['color'], sortOrder: 260 },
+  { key: 'stock_number', label: 'Stock Number', type: 'text', category: 'Deal & Financial', csvAliases: ['stocknumber', 'stock number', 'stock'], sortOrder: 270 },
+
+  // ── Service (from service_data / ps_service_data) ──
+  { key: 'prior_service_date', label: 'Prior Service Date', type: 'date', description: 'The visit before the most recent one.', category: 'Service', csvAliases: ['lastservicedate', 'prior service date'], sortOrder: 300 },
+  { key: 'ro_customer_pay', label: 'RO Customer Pay', type: 'number', description: 'Customer-paid amount on the repair order.', category: 'Service', csvAliases: ['rosalecp', 'customer pay'], sortOrder: 310 },
+  { key: 'ro_warranty_pay', label: 'RO Warranty Pay', type: 'number', category: 'Service', csvAliases: ['rosalewp', 'warranty pay'], sortOrder: 320 },
+  { key: 'ro_internal_pay', label: 'RO Internal Pay', type: 'number', category: 'Service', csvAliases: ['rosaleip', 'internal pay'], sortOrder: 330 },
+  { key: 'service_amount', label: 'Service Amount', type: 'number', description: 'Total owed on the service order (powersports).', category: 'Service', csvAliases: ['totalowed', 'service amount'], sortOrder: 340 },
+  { key: 'brand', label: 'Brand', type: 'text', category: 'Service', csvAliases: ['brand'], sortOrder: 350 },
+
+  // ── Lead Attribution (from leads_individual) ──
+  { key: 'lead_source', label: 'Lead Source', type: 'text', category: 'Lead Attribution', csvAliases: ['leadsource', 'lead source'], sortOrder: 400 },
+  { key: 'lead_status', label: 'Lead Status', type: 'text', category: 'Lead Attribution', csvAliases: ['leadstatus', 'lead status'], sortOrder: 410 },
+  { key: 'lead_category', label: 'Lead Category', type: 'text', category: 'Lead Attribution', csvAliases: ['leadcategory', 'lead category', 'lead type'], sortOrder: 420 },
+  { key: 'gclid', label: 'Google Click ID (gclid)', type: 'text', category: 'Lead Attribution', csvAliases: ['gclid'], sortOrder: 430 },
+  { key: 'fbclid', label: 'Facebook Click ID (fbclid)', type: 'text', category: 'Lead Attribution', csvAliases: ['fbclid'], sortOrder: 440 },
+
+  // ── Profile / Source ──
+  { key: 'company', label: 'Company', type: 'text', category: 'Profile', csvAliases: ['company', 'namecompany', 'companyname'], sortOrder: 500 },
+  { key: 'customer_type', label: 'Customer Type', type: 'text', category: 'Profile', csvAliases: ['customertype', 'customer type'], sortOrder: 510 },
+  { key: 'category', label: 'Service Category', type: 'text', category: 'Profile', csvAliases: [], sortOrder: 520 },
+  { key: 'crm', label: 'Source CRM', type: 'select', options: [{ value: 'cdk', label: 'CDK' }, { value: 'tekion', label: 'Tekion' }, { value: 'vinsolutions', label: 'VinSolutions' }, { value: 'powersports', label: 'Powersports' }], category: 'Profile', csvAliases: ['crm', 'data_source'], sortOrder: 530 },
 ];
 
 async function seedBlueprints(): Promise<void> {
@@ -125,7 +168,7 @@ async function seedBlueprints(): Promise<void> {
       await createField({
         accountKey: null,
         industryTag: 'Automotive',
-        category: 'Automotive',
+        category: bp.category ?? 'Automotive',
         key: bp.key,
         label: bp.label,
         type: bp.type,
@@ -142,6 +185,29 @@ async function seedBlueprints(): Promise<void> {
         throw err;
       }
     }
+  }
+}
+
+/**
+ * Deploy the Automotive blueprints to every vehicle-dealer account.
+ * apply-industry only matches Account.category === 'Automotive', which would
+ * skip the Powersports rooftops — they get the same CRM data, so we deploy to
+ * both categories explicitly. Idempotent per (blueprint, account).
+ */
+async function deployBlueprintsToDealers(): Promise<void> {
+  const blueprints = (await listBlueprints()).filter((b) => b.industryTag === 'Automotive');
+  const dealers = await prisma.account.findMany({
+    where: { category: { in: ['Automotive', 'Powersports'] } },
+    select: { key: true },
+  });
+  const accountKeys = dealers.map((d) => d.key);
+  if (accountKeys.length === 0 || blueprints.length === 0) {
+    console.log('  · no dealer accounts or blueprints to deploy — skipped');
+    return;
+  }
+  for (const bp of blueprints) {
+    const result = await deployBlueprintToAccounts(bp.id, accountKeys);
+    console.log(`  ✓ deployed ${bp.key} → ${result.deployed} accounts (${result.skipped} already had it)`);
   }
 }
 
@@ -1041,8 +1107,16 @@ async function main(): Promise<void> {
     dryRun();
     return;
   }
-  console.log('Seeding YAG Automotive custom-field blueprints…');
+  console.log('Seeding Automotive custom-field blueprints…');
   await seedBlueprints();
+  console.log('\nDeploying blueprints to dealer accounts…');
+  await deployBlueprintsToDealers();
+  // --fields-only sets up custom fields WITHOUT seeding the YAG flow
+  // templates (safe to run in prod just to provision the field set).
+  if (process.argv.includes('--fields-only')) {
+    console.log('\nDone (fields only).');
+    return;
+  }
   console.log('\nSeeding YAG flow templates…');
   for (const def of buildFlows()) {
     await upsertFlow(def);

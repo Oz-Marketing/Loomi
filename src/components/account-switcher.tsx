@@ -407,7 +407,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
           </p>
           {childCounts[key] > 0 ? (
             <p className="text-[10px] text-[var(--muted-foreground)] truncate leading-tight">
-              {childCounts[key]} rooftop{childCounts[key] === 1 ? '' : 's'}
+              {childCounts[key]} sub-account{childCounts[key] === 1 ? '' : 's'}
               {getAccountAddress(accountData) ? ` · ${getAccountAddress(accountData)}` : ''}
             </p>
           ) : (

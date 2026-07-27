@@ -225,3 +225,53 @@ export async function getAncestorAccountKeys(accountKey: string): Promise<string
   }
   return chain;
 }
+
+/**
+ * Every OTHER account grouped with `accountKey` — the set a suppression must
+ * cascade to, so an opt-out at one rooftop silences the whole group.
+ *
+ * Walks to the top of the tree, then takes every descendant of that root, minus
+ * self. Deliberately NOT the `self + descendants` set a roll-up view uses: a
+ * rooftop's opt-out must also reach its PARENT and its SIBLINGS. Under-
+ * propagating here is a compliance failure, so this is intentionally the wider
+ * set. A standalone account (no parent, no children) cascades to nothing.
+ */
+export async function getRelatedAccountKeys(accountKey: string): Promise<string[]> {
+  const all = await prisma.account.findMany({ select: { key: true, parentAccountKey: true } });
+  if (!all.some((a) => a.key === accountKey)) return [];
+
+  const parentOf = new Map(all.map((a) => [a.key, a.parentAccountKey]));
+  const childrenOf = new Map<string, string[]>();
+  for (const a of all) {
+    if (!a.parentAccountKey) continue;
+    const list = childrenOf.get(a.parentAccountKey) ?? [];
+    list.push(a.key);
+    childrenOf.set(a.parentAccountKey, list);
+  }
+
+  // Climb to the root of this account's tree.
+  let root = accountKey;
+  const climbed = new Set<string>([root]);
+  for (;;) {
+    const parent = parentOf.get(root) ?? null;
+    if (!parent || climbed.has(parent)) break; // null parent, or a malformed cycle
+    climbed.add(parent);
+    root = parent;
+  }
+
+  // Standalone: no parent above and nothing below — nothing to cascade to.
+  if (root === accountKey && (childrenOf.get(accountKey) ?? []).length === 0) return [];
+
+  const related = new Set<string>();
+  const stack = [root];
+  const seen = new Set<string>();
+  while (stack.length) {
+    const key = stack.pop()!;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    related.add(key);
+    for (const child of childrenOf.get(key) ?? []) stack.push(child);
+  }
+  related.delete(accountKey);
+  return [...related];
+}

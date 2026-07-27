@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { requireRole } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
-import { getRelatedAccountKeys } from '@/lib/services/organizations';
+import { getRelatedAccountKeys } from '@/lib/services/accounts';
 
 // PATCH /api/contacts/:id/suppression?accountKey=
 //

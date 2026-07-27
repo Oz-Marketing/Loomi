@@ -20,7 +20,7 @@ import { BlockProperties } from './BlockProperties';
 import { FormSettings } from './FormSettings';
 import { OutlinePanel } from './OutlinePanel';
 import { FormattingToolbar } from './FormattingToolbar';
-import { FormActionBar, type PreviewWidth } from './FormActionBar';
+import { FormActionBar } from './FormActionBar';
 import { Squares2X2Icon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import type { FormBlockType, FormTemplate } from '../types';
 
@@ -350,7 +350,9 @@ function DndShell(props: FormEditorShellProps) {
 }
 
 function CanvasArea(props: FormEditorShellProps) {
-  const [previewWidth, setPreviewWidth] = React.useState<PreviewWidth>('desktop');
+  // Device lives in the editor context so the property panel can key its
+  // read/write off the same value (mobile view edits responsive overrides).
+  const { previewDevice: previewWidth, setPreviewDevice: setPreviewWidth } = useEditor();
   const [zoom, setZoom] = React.useState(100);
   const [outlineOpen, setOutlineOpen] = React.useState(false);
 

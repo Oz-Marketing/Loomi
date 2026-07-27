@@ -35,6 +35,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { FlowIcon } from '@/components/icon-map';
 import { useAccount } from '@/contexts/account-context';
+import { AgencyDashboard } from '@/components/agency-dashboard';
 
 // ── Animated placeholder examples ──
 // Same typewriter cycle as the flow empty-state hero, but tuned for
@@ -188,7 +189,7 @@ function buildQuickLinks(prefix: string): QuickLink[] {
 export function StudioHome({ prefix = '' }: { prefix?: string }) {
   const { data: session } = useSession();
   const router = useRouter();
-  const { accountData, isAccount, accountKey } = useAccount();
+  const { accountData, isAccount, isAdmin, accountKey } = useAccount();
   const firstName = session?.user?.name?.split(' ')[0] ?? 'there';
   const accountLabel = isAccount && accountData?.dealer ? accountData.dealer : 'your accounts';
 
@@ -248,6 +249,12 @@ export function StudioHome({ prefix = '' }: { prefix?: string }) {
   };
 
   const quickLinks = buildQuickLinks(prefix);
+
+  // Agency View gets the platform-management overview, not the campaign builder
+  // (the agency doesn't run campaigns — organizations & sub-accounts do).
+  if (isAdmin) {
+    return <AgencyDashboard />;
+  }
 
   return (
     <div className="animate-fade-in-up">

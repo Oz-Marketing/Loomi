@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
@@ -141,10 +141,16 @@ function mergeContactsByIdentity(
 }
 
 export default function ContactsPage() {
-  const { isAdmin, accountKey, accounts } = useAccount();
+  const { isAdmin, isGroup, accountKey, accounts, scopedAccountKeys } = useAccount();
 
+  // Admin and group accounts both use the fan-out/union view. A group (an
+  // account with rooftops beneath it) restricts the fan-out to itself plus its
+  // descendants; a leaf account falls through to the single-account view.
   if (isAdmin) {
     return <AdminContactsView />;
+  }
+  if (isGroup) {
+    return <AdminContactsView restrictKeys={scopedAccountKeys} />;
   }
 
   const assignedKeys = Object.keys(accounts);
@@ -213,32 +219,44 @@ function useContactFilters(rawContacts: Contact[], initialAccountFilter = '') {
 
 // ── Admin View ──
 
-function AdminContactsView() {
+function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
   const { accounts: accountMap } = useAccount();
   const subHref = useSubaccountHref();
   const searchParams = useSearchParams();
   const requestedAccount = searchParams.get('account') || '';
 
   const [contacts, setContacts] = useState<Contact[]>([]);
+  // Sum of each fetched account's true server-side total (data.meta.total),
+  // which can exceed the loaded rows (capped at MAX_FETCH_ALL per account).
+  const [serverTotal, setServerTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [refreshTick, setRefreshTick] = useState(0);
   const [showAddModal, setShowAddModal] = useState(false);
 
-  const availableAccounts = useMemo(
-    () =>
-      Object.entries(accountMap)
-        .map(([key, account]) => ({
-          key,
-          dealer: account.dealer || key,
-          storefrontImage: account.storefrontImage,
-          logos: account.logos,
-          city: account.city,
-          state: account.state,
-        }))
-        .sort((a, b) => a.dealer.localeCompare(b.dealer)),
-    [accountMap],
-  );
+  // When restrictKeys is provided (org roll-up mode), limit the fan-out to
+  // those rooftops. `null` signature = unrestricted (admin); an empty-but-
+  // present signature = org with no rooftops → show nothing. A stable string
+  // signature keeps the memo from re-running when array identity changes but
+  // contents don't.
+  const restrictSignature = restrictKeys ? [...restrictKeys].sort().join('|') : null;
+  const availableAccounts = useMemo(() => {
+    const allowed =
+      restrictSignature === null
+        ? null
+        : new Set(restrictSignature ? restrictSignature.split('|') : []);
+    return Object.entries(accountMap)
+      .filter(([key]) => !allowed || allowed.has(key))
+      .map(([key, account]) => ({
+        key,
+        dealer: account.dealer || key,
+        storefrontImage: account.storefrontImage,
+        logos: account.logos,
+        city: account.city,
+        state: account.state,
+      }))
+      .sort((a, b) => a.dealer.localeCompare(b.dealer));
+  }, [accountMap, restrictSignature]);
 
   const accountOptions = availableAccounts;
 
@@ -255,7 +273,17 @@ function AdminContactsView() {
     return [...new Set(selectedKeys)];
   }, [availableAccounts, filters.accountFilters]);
 
+  // Guards against a slower, earlier fan-out overwriting a newer one. On first
+  // paint the scope hasn't resolved yet (context defaults to admin), so an
+  // unrestricted fetch across every account can be in flight when the scoped
+  // one starts — and being larger, it often lands last. Without this, a group
+  // account would show contacts from outside the group.
+  const fetchGenerationRef = useRef(0);
+
   const fetchData = useCallback(async () => {
+    const generation = ++fetchGenerationRef.current;
+    const isStale = () => generation !== fetchGenerationRef.current;
+
     if (accountKeysToFetch.length === 0) {
       setContacts([]);
       setFetchError('Select at least one sub-account to load contacts.');
@@ -275,6 +303,7 @@ function AdminContactsView() {
     // listContactsForAccount, which is plenty for an agency tenant).
     const nextContacts: Contact[] = [];
     const failures: string[] = [];
+    let totalSum = 0;
     for (let i = 0; i < accountKeysToFetch.length; i += ADMIN_CONTACTS_FETCH_CONCURRENCY) {
       const chunk = accountKeysToFetch.slice(i, i + ADMIN_CONTACTS_FETCH_CONCURRENCY);
       const settled = await Promise.allSettled(
@@ -290,6 +319,7 @@ function AdminContactsView() {
             key,
             dealer: accountMap[key]?.dealer || key,
             contacts: data.contacts || [],
+            total: data.meta?.total ?? (data.contacts?.length || 0),
           };
         }),
       );
@@ -300,6 +330,7 @@ function AdminContactsView() {
           continue;
         }
 
+        totalSum += result.value.total;
         for (const contact of result.value.contacts) {
           nextContacts.push({
             ...contact,
@@ -309,6 +340,11 @@ function AdminContactsView() {
         }
       }
     }
+    // A newer fan-out started while this one was in flight — drop these
+    // results rather than clobbering the newer (correctly-scoped) ones.
+    if (isStale()) return;
+
+    setServerTotal(totalSum);
 
     // Dedupe contacts that exist in multiple sub-accounts (one shopper
     // signed up at multiple rooftops). Merge their sub-account
@@ -378,7 +414,7 @@ function AdminContactsView() {
         search={filters.search}
         onSearchChange={filters.setSearch}
         hasAccountFilter={filters.accountFilters.length > 1}
-        totalCount={contacts.length}
+        totalCount={serverTotal}
         filteredCount={filters.filtered.length}
         loading={loading}
         onRefresh={() => {
@@ -416,6 +452,10 @@ function AccountContactsView({
   const searchParams = useSearchParams();
   const requestedAccount = searchParams.get('account') || '';
   const [contacts, setContacts] = useState<Contact[]>([]);
+  // True server-side row count for the account (data.meta.total), which can
+  // exceed the loaded list (capped at MAX_FETCH_ALL). Drives the "loaded /
+  // total" count so the toolbar never implies the account has only 5,000.
+  const [serverTotal, setServerTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -445,9 +485,11 @@ function AccountContactsView({
         _accountKey: accountKey,
       }));
       setContacts(all);
+      setServerTotal(data.meta?.total ?? all.length);
     } catch (err) {
       setFetchError(err instanceof Error ? err.message : 'Failed to fetch contacts');
       setContacts([]);
+      setServerTotal(0);
     }
     setLoading(false);
   }, [accountKey]);
@@ -502,7 +544,7 @@ function AccountContactsView({
         search={filters.search}
         onSearchChange={filters.setSearch}
         hasAccountFilter={false}
-        totalCount={contacts.length}
+        totalCount={serverTotal}
         filteredCount={filters.filtered.length}
         loading={loading}
         onRefresh={fetchData}

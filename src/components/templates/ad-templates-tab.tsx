@@ -40,6 +40,7 @@ type DocTemplate = {
   description: string | null;
   status: string;
   accountKey: string | null;
+  organizationId: string | null;
   category: string | null;
   tags: string[];
   updatedAt: string;
@@ -62,13 +63,25 @@ const fetcher = async (url: string) => {
  * the Ad Generator, exactly like email: library templates here, the account's
  * instances there.
  */
-export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
+export function AdTemplatesTab({
+  accountKey,
+  organizationId,
+  orgLabel,
+}: {
+  accountKey?: string;
+  organizationId?: string;
+  orgLabel?: string;
+}) {
   const router = useRouter();
   const pathname = usePathname();
-  const { accountData, accounts } = useAccount();
+  const { accountData, accounts, organizations } = useAccount();
   // Human name for a template's scope: its account's dealer name, or "All
   // accounts" for a global (unscoped) template.
   const scopeName = (key: string | null) => (key ? accounts[key]?.dealer ?? key : null);
+  const orgLabels = useMemo(
+    () => Object.fromEntries(Object.values(organizations).map((o) => [o.id, o.name])),
+    [organizations],
+  );
   // key → dealer name, for the shared rail's Subaccount facet labels.
   const accountLabels = useMemo(
     () => Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.dealer || k])),
@@ -77,10 +90,13 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
   const { confirm } = useLoomiDialog();
 
   const { data, isLoading, error, mutate } = useSWR<{ templates?: DocTemplate[] }>(
-    '/api/ad-generator/templates-doc?all=1',
+    organizationId
+      ? `/api/ad-generator/templates-doc?all=1&organizationId=${encodeURIComponent(organizationId)}`
+      : '/api/ad-generator/templates-doc?all=1',
     fetcher,
   );
-  // Scoping: at Admin (no account) you manage the WHOLE library — global
+  // Scoping: in Org mode you manage the org's own templates (inherited by every
+  // sub-account); at Admin (no account) you manage the WHOLE library — global
   // templates AND every subaccount's own (filter by scope via the rail's
   // Subaccount facet); inside a sub-account you see only that account's own.
   // Industry filter still applies.
@@ -88,9 +104,15 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
     () =>
       (data?.templates ?? [])
         .filter((t) => t.doc)
-        .filter((t) => (accountKey ? t.accountKey === accountKey : true))
+        .filter((t) =>
+          organizationId
+            ? t.organizationId === organizationId
+            : accountKey
+              ? t.accountKey === accountKey
+              : true,
+        )
         .filter((t) => templateInIndustry({ industries: t.doc!.industries }, accountData?.category)),
-    [data, accountKey, accountData?.category],
+    [data, accountKey, organizationId, accountData?.category],
   );
   const branding = useMemo(() => brandingFromAccount(accountData), [accountData]);
   // Shared taxonomy vocabulary (categories + tags across every template kind).
@@ -185,7 +207,12 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
       const res = await fetch('/api/ad-generator/templates-doc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, doc: { ...doc, name }, status: 'draft', ...(accountKey ? { accountKey } : {}) }),
+        body: JSON.stringify({
+          name,
+          doc: { ...doc, name },
+          status: 'draft',
+          ...(organizationId ? { organizationId } : accountKey ? { accountKey } : {}),
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
@@ -232,7 +259,13 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
       const res = await fetch('/api/ad-generator/templates-doc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `${t.name} (copy)`, description: t.description ?? undefined, doc: t.doc, status: 'draft', ...(accountKey ? { accountKey } : {}) }),
+        body: JSON.stringify({
+          name: `${t.name} (copy)`,
+          description: t.description ?? undefined,
+          doc: t.doc,
+          status: 'draft',
+          ...(organizationId ? { organizationId } : accountKey ? { accountKey } : {}),
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       toast.success(`Cloned "${t.name}"`);
@@ -325,6 +358,14 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
       {/* Create + ⋯ Manage tags in the page header (portaled), shared by all tabs. */}
       <TemplateHeaderActions onCreate={newTemplate} createLabel="New Ad Template" onTagsSaved={() => void mutate()} />
 
+      {organizationId && (
+        <div className="mb-4 rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 px-4 py-2.5 text-xs text-[var(--muted-foreground)]">
+          You&rsquo;re authoring for{' '}
+          <span className="font-medium text-[var(--foreground)]">{orgLabel ?? 'this organization'}</span>. New
+          templates here are shared with every sub-account in the organization.
+        </div>
+      )}
+
       {templates.length === 0 ? (
         <TemplateEmptyState
           icon={MegaphoneIcon}
@@ -369,7 +410,11 @@ export function AdTemplatesTab({ accountKey }: { accountKey?: string }) {
                     preview={<AdPreviewThumb template={template} data={t.doc?.defaults ?? {}} branding={branding} height={150} />}
                     name={t.name}
                     status={t.status === 'published' ? 'published' : 'draft'}
-                    scope={{ label: scopeName(t.accountKey) ?? 'All accounts', kind: t.accountKey ? 'account' : 'global' }}
+                    scope={
+                      t.organizationId
+                        ? { label: orgLabels[t.organizationId] ?? 'Organization', kind: 'org' as const }
+                        : { label: scopeName(t.accountKey) ?? 'All accounts', kind: t.accountKey ? 'account' : 'global' }
+                    }
                     category={t.category}
                     tags={t.tags ?? []}
                     taxonomy={taxonomy}

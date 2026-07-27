@@ -17,6 +17,8 @@ export interface TextProps {
   marginLeft?: number;
   /** When true, renders the text content as raw HTML (allows inline tags + merge tags). */
   allowHtml?: boolean;
+  /** Responsive/hide class injected by the renderer (see responsive.ts). */
+  className?: string;
 }
 
 export const TextBlock: React.FC<TextProps> = ({
@@ -34,6 +36,7 @@ export const TextBlock: React.FC<TextProps> = ({
   marginBottom = 16,
   marginLeft = 0,
   allowHtml = false,
+  className,
 }) => {
   const style: React.CSSProperties = {
     margin: `${marginTop}px ${marginRight}px ${marginBottom}px ${marginLeft}px`,
@@ -50,9 +53,9 @@ export const TextBlock: React.FC<TextProps> = ({
   if (allowHtml) {
     // Sanitize before injecting — allows links + inline formatting while
     // stripping scripts/handlers on the public /f page.
-    return <p style={style} dangerouslySetInnerHTML={{ __html: sanitizeInlineHtml(text) }} />;
+    return <p className={className} style={style} dangerouslySetInnerHTML={{ __html: sanitizeInlineHtml(text) }} />;
   }
-  return <p style={style}>{text}</p>;
+  return <p className={className} style={style}>{text}</p>;
 };
 
 export default TextBlock;

@@ -15,7 +15,7 @@
  * return [] so the generator simply falls back to code templates.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession, getAccountScope, requireRole } from '@/lib/api-auth';
+import { getAuthSession, getAccountScope, canAccessOrg, requireRole } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 
@@ -30,6 +30,7 @@ type Row = {
   status: string;
   isActive: boolean;
   accountKey: string | null;
+  organizationId: string | null;
   category: string | null;
   tags: string | null;
   updatedAt: Date;
@@ -37,6 +38,16 @@ type Row = {
   createdByEmail: string | null;
   createdByImage: string | null;
 };
+
+/** Distinct parent-org ids for a set of account keys (for picker inheritance). */
+async function orgIdsForAccounts(keys: string[]): Promise<string[]> {
+  if (!keys.length) return [];
+  const rows = await prisma.account.findMany({
+    where: { key: { in: keys } },
+    select: { organizationId: true },
+  });
+  return [...new Set(rows.map((r) => r.organizationId).filter((x): x is string => !!x))];
+}
 
 function parseTags(raw: string | null): string[] {
   if (!raw) return [];
@@ -67,6 +78,7 @@ function shape(r: Row) {
     status: r.status,
     isActive: r.isActive,
     accountKey: r.accountKey,
+    organizationId: r.organizationId,
     category: r.category,
     tags: parseTags(r.tags),
     updatedAt: r.updatedAt,
@@ -82,10 +94,19 @@ export async function GET(req: NextRequest) {
 
   // Admin: full list (incl. drafts) for the builder's Load.
   if (req.nextUrl.searchParams.get('all') === '1') {
-    const { error } = await requireRole('developer', 'super_admin', 'admin');
+    const { session, error } = await requireRole('developer', 'super_admin', 'admin');
     if (error) return error;
+    // ?organizationId=<id> → the org-authoring view: only that org's own
+    // templates (access-gated). Otherwise the whole library.
+    const organizationId = req.nextUrl.searchParams.get('organizationId')?.trim() || null;
+    if (organizationId && !(await canAccessOrg(session!, organizationId))) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
     try {
-      const rows = (await prisma.adTemplateDoc.findMany({ orderBy: { updatedAt: 'desc' } })) as Row[];
+      const rows = (await prisma.adTemplateDoc.findMany({
+        ...(organizationId ? { where: { organizationId } } : {}),
+        orderBy: { updatedAt: 'desc' },
+      })) as Row[];
       return NextResponse.json({ templates: rows.map(shape) });
     } catch (err) {
       console.warn('[api/ad-generator/templates-doc] all → []:', err);
@@ -107,23 +128,34 @@ export async function GET(req: NextRequest) {
     if (session.user.role === 'client') {
       const keys = getAccountScope(session) ?? [];
       const allowed = accountKey ? (keys.includes(accountKey) ? [accountKey] : []) : keys;
+      // Inherit templates authored at each account's parent organization.
+      const orgIds = await orgIdsForAccounts(allowed);
       const rows = (await prisma.adTemplateDoc.findMany({
         where: {
           status: 'published',
           isActive: true,
-          OR: [{ accountKey: null }, ...(allowed.length ? [{ accountKey: { in: allowed } }] : [])],
+          OR: [
+            { accountKey: null, organizationId: null },
+            ...(allowed.length ? [{ accountKey: { in: allowed } }] : []),
+            ...(orgIds.length ? [{ organizationId: { in: orgIds } }] : []),
+          ],
         },
         orderBy: { name: 'asc' },
       })) as Row[];
       return NextResponse.json({ templates: rows.map(shape).filter((t) => t.doc) });
     }
 
-    // Admins+: global templates + the active account's own (when passed).
+    // Admins+: global templates + the active account's own + inherited org-owned.
+    const orgIds = accountKey ? await orgIdsForAccounts([accountKey]) : [];
     const rows = (await prisma.adTemplateDoc.findMany({
       where: {
         status: 'published',
         isActive: true,
-        OR: [{ accountKey: null }, ...(accountKey ? [{ accountKey }] : [])],
+        OR: [
+          { accountKey: null, organizationId: null },
+          ...(accountKey ? [{ accountKey }] : []),
+          ...(orgIds.length ? [{ organizationId: { in: orgIds } }] : []),
+        ],
       },
       orderBy: { name: 'asc' },
     })) as Row[];
@@ -141,7 +173,7 @@ export async function POST(req: NextRequest) {
   if (error) return error;
   const session = await getAuthSession();
 
-  let body: { name?: string; description?: string; doc?: unknown; status?: string; accountKey?: string | null };
+  let body: { name?: string; description?: string; doc?: unknown; status?: string; accountKey?: string | null; organizationId?: string | null };
   try {
     body = await req.json();
   } catch {
@@ -154,6 +186,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'doc must be a TemplateDoc object' }, { status: 400 });
   }
   const status = body.status === 'published' ? 'published' : 'draft';
+  const accountKey = typeof body.accountKey === 'string' && body.accountKey.trim() ? body.accountKey.trim() : null;
+  // Org-owned template: account-less, tagged to the org so its sub-accounts
+  // inherit it. Verify the session may author for this org.
+  const organizationId = !accountKey && typeof body.organizationId === 'string' && body.organizationId.trim()
+    ? body.organizationId.trim()
+    : null;
+  if (organizationId && !(await canAccessOrg(session!, organizationId))) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
 
   const u = session?.user as { name?: string | null; email?: string | null; image?: string | null } | undefined;
   try {
@@ -163,7 +204,8 @@ export async function POST(req: NextRequest) {
         description: body.description?.trim() || null,
         doc: JSON.stringify(doc),
         status,
-        accountKey: typeof body.accountKey === 'string' && body.accountKey.trim() ? body.accountKey.trim() : null,
+        accountKey,
+        organizationId,
         // Shared taxonomy — read off the doc (the builder stores category/tags there)
         // so the columns stay in sync for library filtering.
         category: typeof (doc as { category?: unknown }).category === 'string' ? (doc as { category: string }).category.trim() || null : null,

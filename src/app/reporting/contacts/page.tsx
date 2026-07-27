@@ -17,16 +17,30 @@ interface Contact {
   [key: string]: unknown;
 }
 
+/** Dedup key so a person present in multiple rooftops counts once at org level. */
+function contactDedupeKey(c: Contact): string {
+  const email = typeof c.email === 'string' ? c.email.trim().toLowerCase() : '';
+  const phone = typeof c.phone === 'string' ? c.phone.replace(/\D/g, '') : '';
+  return email || phone || (typeof c.id === 'string' ? c.id : JSON.stringify(c));
+}
+
 export default function ReportingContactsPage() {
-  const { account } = useAccount();
+  const { account, isOrg, scopedAccountKeys } = useAccount();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const accountKey = account.mode === 'account' ? account.accountKey : null;
 
+  // Which rooftops feed this report: a single account, or every child rooftop
+  // of the active organization (org roll-up). A stable signature avoids
+  // re-running the fetch when the array identity changes but contents don't.
+  const keysToFetch = isOrg ? scopedAccountKeys : accountKey ? [accountKey] : [];
+  const keysSignature = keysToFetch.join('|');
+
   useEffect(() => {
-    if (!accountKey) {
+    const keys = keysSignature ? keysSignature.split('|') : [];
+    if (keys.length === 0) {
       setContacts([]);
       setTotalCount(0);
       setLoading(false);
@@ -34,19 +48,35 @@ export default function ReportingContactsPage() {
     }
     let cancelled = false;
     setLoading(true);
-    fetch(
-      `/api/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true&includeMessaging=true`,
+
+    Promise.all(
+      keys.map((key) =>
+        fetch(`/api/contacts?accountKey=${encodeURIComponent(key)}&all=true&includeMessaging=true`)
+          .then((r) => (r.ok ? r.json() : { contacts: [] }))
+          .then((data: { contacts?: Contact[] }) => data.contacts ?? [])
+          .catch(() => [] as Contact[]),
+      ),
     )
-      .then((r) => (r.ok ? r.json() : { contacts: [], total: 0 }))
-      .then((data: { contacts?: Contact[]; total?: number }) => {
+      .then((perAccount) => {
         if (cancelled) return;
-        setContacts(data.contacts ?? []);
-        setTotalCount(data.total ?? data.contacts?.length ?? 0);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setContacts([]);
-        setTotalCount(0);
+        // Union the rooftops, deduping a person shared across rooftops so org
+        // totals aren't inflated. Single-account mode has nothing to dedupe.
+        const merged = perAccount.flat();
+        if (keys.length === 1) {
+          setContacts(merged);
+          setTotalCount(merged.length);
+          return;
+        }
+        const seen = new Set<string>();
+        const deduped: Contact[] = [];
+        for (const c of merged) {
+          const k = contactDedupeKey(c);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          deduped.push(c);
+        }
+        setContacts(deduped);
+        setTotalCount(deduped.length);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -54,17 +84,24 @@ export default function ReportingContactsPage() {
     return () => {
       cancelled = true;
     };
-  }, [accountKey]);
+  }, [keysSignature]);
 
   const subtitle = useMemo(() => {
-    if (!accountKey) return 'Pick a sub-account in the sidebar to see contact reporting.';
+    if (keysToFetch.length === 0) {
+      return 'Pick a sub-account or organization in the sidebar to see contact reporting.';
+    }
+    if (isOrg) {
+      return `Organization roll-up across ${keysToFetch.length} sub-account${keysToFetch.length === 1 ? '' : 's'} — ${totalCount.toLocaleString()} unique contacts.`;
+    }
     return `Contact growth, lifecycle, and engagement — ${totalCount.toLocaleString()} total.`;
-  }, [accountKey, totalCount]);
+    // keysToFetch.length + isOrg + totalCount drive the copy.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keysSignature, isOrg, totalCount]);
 
   return (
     <>
       <PageHeader icon={UsersIcon} title="Contact reporting" subtitle={subtitle} />
-      {accountKey && (
+      {keysToFetch.length > 0 && (
         <ContactAnalytics
           contacts={contacts as never}
           totalCount={totalCount}

@@ -37,14 +37,26 @@ const fetcher = async (url: string) => {
  * are created from a live form via its "Save as template" action on
  * /websites/forms.
  */
-export function FormTemplatesTab({ accountKey }: { accountKey?: string }) {
+export function FormTemplatesTab({
+  accountKey,
+  organizationId,
+  orgLabel,
+}: {
+  accountKey?: string;
+  organizationId?: string;
+  orgLabel?: string;
+}) {
   const router = useRouter();
   const subHref = useSubaccountHref();
-  const { accounts } = useAccount();
+  const { accounts, organizations } = useAccount();
+  const orgLabels = useMemo(
+    () => Object.fromEntries(Object.values(organizations).map((o) => [o.id, o.name])),
+    [organizations],
+  );
   const { confirm } = useLoomiDialog();
   // Deploy is an admin-only action — pushing a global template into
   // sub-accounts only makes sense from the unscoped library view.
-  const canDeploy = !accountKey;
+  const canDeploy = !accountKey && !organizationId;
   const [deployTarget, setDeployTarget] = useState<FormSummary | null>(null);
   // key → dealer name, for the shared rail's Subaccount facet labels.
   const accountLabels = useMemo(
@@ -55,9 +67,11 @@ export function FormTemplatesTab({ accountKey }: { accountKey?: string }) {
   // Scoping: Admin (no account) → the WHOLE library (global + every subaccount's
   // own; filter by scope via the rail's Subaccount facet); inside a sub-account
   // → only that account's own templates.
-  const query = accountKey
-    ? `?isTemplate=true&accountKey=${encodeURIComponent(accountKey)}`
-    : '?isTemplate=true';
+  const query = organizationId
+    ? `?isTemplate=true&organizationId=${encodeURIComponent(organizationId)}`
+    : accountKey
+      ? `?isTemplate=true&accountKey=${encodeURIComponent(accountKey)}`
+      : '?isTemplate=true';
   const { data, isLoading, error, mutate } = useSWR<{ forms: FormSummary[] }>(`/api/forms${query}`, fetcher);
   const { data: taxData } = useSWR<{ categories?: string[]; tags?: string[] }>('/api/template-taxonomy', fetcher);
   const taxonomy = useMemo(
@@ -99,7 +113,11 @@ export function FormTemplatesTab({ accountKey }: { accountKey?: string }) {
       const res = await fetch('/api/forms', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Untitled template', isTemplate: true, ...(accountKey ? { accountKey } : {}) }),
+        body: JSON.stringify({
+          name: 'Untitled template',
+          isTemplate: true,
+          ...(organizationId ? { organizationId } : accountKey ? { accountKey } : {}),
+        }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
@@ -177,6 +195,13 @@ export function FormTemplatesTab({ accountKey }: { accountKey?: string }) {
   return (
     <>
       <TemplateHeaderActions onCreate={handleCreate} createLabel="New Form Template" onTagsSaved={() => void mutate()} />
+      {organizationId && (
+        <div className="mb-4 rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 px-4 py-2.5 text-xs text-[var(--muted-foreground)]">
+          You&rsquo;re authoring for{' '}
+          <span className="font-medium text-[var(--foreground)]">{orgLabel ?? 'this organization'}</span>. New
+          templates here are shared with every sub-account in the organization.
+        </div>
+      )}
       <TemplateLibraryShell
         resultCount={filtered.length}
         rail={
@@ -205,7 +230,13 @@ export function FormTemplatesTab({ accountKey }: { accountKey?: string }) {
                 preview={<FormPreviewThumbnail template={form.schema} height={160} />}
                 name={form.name || 'Untitled template'}
                 status={form.status}
-                scope={!accountKey ? { label: form.accountKey ? accounts[form.accountKey]?.dealer ?? form.accountKey : 'All accounts', kind: form.accountKey ? 'account' : 'global' } : undefined}
+                scope={
+                  !accountKey
+                    ? form.organizationId
+                      ? { label: orgLabels[form.organizationId] ?? 'Organization', kind: 'org' as const }
+                      : { label: form.accountKey ? accounts[form.accountKey]?.dealer ?? form.accountKey : 'All accounts', kind: form.accountKey ? 'account' : 'global' }
+                    : undefined
+                }
                 category={form.category}
                 tags={form.tags}
                 taxonomy={taxonomy}

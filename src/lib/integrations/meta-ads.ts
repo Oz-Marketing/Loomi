@@ -1111,9 +1111,12 @@ export async function syncPeriodFromMeta(
           window.since,
           window.until,
         );
-        // Budget-in-effect: the CURRENT daily budget — exact for today's row,
-        // an approximation for backfilled history (Meta has no per-day budget
-        // history). Feeds only the overage derivation.
+        // Budget-in-effect: the CURRENT daily budget — exact for today's row.
+        // Past days that were already synced keep their stored budget
+        // (writeDailySpendSeries → reconcileSeriesBudgets), so a raise doesn't
+        // rewrite pre-change history; only the first backfill approximates
+        // history with the current budget. Feeds the overage derivation and the
+        // pacing-health "ramping" annotation / budget-change divider.
         const budgetByAdSet = new Map(
           adSets.map((s) => {
             const dollars = s.daily_budget != null ? Number(s.daily_budget) / 100 : NaN;

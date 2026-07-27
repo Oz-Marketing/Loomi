@@ -20,6 +20,8 @@ export interface ColumnsProps {
   paddingRight?: number;
   /** Stack columns vertically on small screens (default true). */
   stackOnMobile?: boolean;
+  /** Responsive/hide class injected by the renderer (see responsive.ts). */
+  className?: string;
   children?: React.ReactNode;
 }
 
@@ -43,6 +45,7 @@ export const ColumnsBlock: React.FC<ColumnsProps> = ({
   paddingLeft = 16,
   paddingRight = 16,
   stackOnMobile = true,
+  className,
   children,
 }) => {
   const cols = React.Children.toArray(children).slice(0, columnCount);
@@ -68,6 +71,7 @@ export const ColumnsBlock: React.FC<ColumnsProps> = ({
       // the child `loomi-form-stack` class below — when stacking is off,
       // neither the row-flip nor the full-width children kick in.
       data-form-columns-row={stackOnMobile ? '' : undefined}
+      className={className}
       style={{
         backgroundColor: bgColor || 'transparent',
         border,

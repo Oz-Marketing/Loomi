@@ -52,7 +52,7 @@ export default function TemplatesPage() {
 
 function TemplatesPageInner() {
   const searchParams = useSearchParams();
-  const { userRole, account, accountKey, accountData } = useAccount();
+  const { userRole, account, accountKey, accountData, organizationId, organizationData } = useAccount();
   const campaignDraftQuery =
     searchParams.get('campaignDraft') === '1' ? '?campaignDraft=1' : '';
 
@@ -82,6 +82,11 @@ function TemplatesPageInner() {
 
   const scopedAccountKey =
     account.mode === 'account' && accountKey ? accountKey : undefined;
+  // In org mode, authoring is scoped to the organization: new templates are
+  // owned by the org and inherited by every sub-account.
+  const scopedOrgId =
+    account.mode === 'org' && organizationId ? organizationId : undefined;
+  const orgLabel = organizationData?.name ?? undefined;
   const accountLabel = accountData?.dealer ?? accountKey ?? undefined;
 
   const activeDef = tabs.find((t) => t.id === tab) ?? tabs[0];
@@ -136,15 +141,33 @@ function TemplatesPageInner() {
             campaignDraftQuery={campaignDraftQuery}
             accountKey={scopedAccountKey}
             accountLabel={accountLabel}
+            organizationId={scopedOrgId}
+            orgLabel={orgLabel}
             canManage={canManage}
             isClient={isClient}
           />
         )}
-        {tab === 'forms' && <FormTemplatesTab accountKey={scopedAccountKey} />}
-        {tab === 'landing-pages' && (
-          <LandingPageTemplatesTab accountKey={scopedAccountKey} />
+        {tab === 'forms' && (
+          <FormTemplatesTab
+            accountKey={scopedAccountKey}
+            organizationId={scopedOrgId}
+            orgLabel={orgLabel}
+          />
         )}
-        {tab === 'ads' && <AdTemplatesTab accountKey={scopedAccountKey} />}
+        {tab === 'landing-pages' && (
+          <LandingPageTemplatesTab
+            accountKey={scopedAccountKey}
+            organizationId={scopedOrgId}
+            orgLabel={orgLabel}
+          />
+        )}
+        {tab === 'ads' && (
+          <AdTemplatesTab
+            accountKey={scopedAccountKey}
+            organizationId={scopedOrgId}
+            orgLabel={orgLabel}
+          />
+        )}
       </div>
     </TemplatesHeaderActionsContext.Provider>
   );

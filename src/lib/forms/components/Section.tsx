@@ -25,6 +25,8 @@ export interface SectionProps {
   align?: 'left' | 'center' | 'right';
   gap?: number;
   minHeight?: number;
+  /** Responsive/hide class injected by the renderer (see responsive.ts). */
+  className?: string;
   children?: React.ReactNode;
 }
 
@@ -49,6 +51,7 @@ export const SectionBlock: React.FC<SectionProps> = ({
   align = 'left',
   gap = 0,
   minHeight,
+  className,
   children,
 }) => {
   const tl = borderRadiusTopLeft ?? borderRadius ?? 0;
@@ -79,7 +82,7 @@ export const SectionBlock: React.FC<SectionProps> = ({
       : null),
   };
 
-  return <div style={style}>{children}</div>;
+  return <div className={className} style={style}>{children}</div>;
 };
 
 export default SectionBlock;

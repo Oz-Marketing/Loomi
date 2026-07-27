@@ -17,6 +17,8 @@ import { EmptyState, RangeControls } from '../_components/shared';
 import { findReport, LIVE_REPORTS } from '../_components/reports-config';
 import { REPORT_COMPONENTS } from '../_components/report-components';
 import { useRange } from '../_components/range-context';
+import { OrgReportRollup } from '../../_components/org-report-rollup';
+import { ADS_ROLLUP_CONFIGS } from '../../_components/rollup-configs';
 
 export default function DigitalAdsReportPage() {
   const params = useParams();
@@ -24,10 +26,14 @@ export default function DigitalAdsReportPage() {
   const def = findReport(key);
   const Report = REPORT_COMPONENTS[key];
 
-  const { accountKey, accountData } = useAccount();
+  const { accountKey, accountData, isOrg, organizationData, scopedAccountKeys, accounts } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const range = useRange();
+  const rollupConfig = ADS_ROLLUP_CONFIGS[key];
+  const dealers = Object.fromEntries(
+    Object.entries(accounts).map(([k, a]) => [k, a.dealer || k]),
+  );
 
   if (!def || def.status !== 'live' || !Report) {
     return (
@@ -44,13 +50,18 @@ export default function DigitalAdsReportPage() {
   }
 
   const dealer = accountData?.dealer || 'all accounts';
+  const scopeLabel = isOrg
+    ? `${organizationData?.name ?? 'organization'} — ${scopedAccountKeys.length} sub-accounts`
+    : accountKey
+      ? dealer
+      : 'select an account';
 
   return (
     <>
       <PageHeader
         icon={ChartBarIcon}
         title={def.label}
-        subtitle={`${def.blurb} — ${accountKey ? dealer : 'select an account'}.`}
+        subtitle={`${def.blurb} — ${scopeLabel}.`}
       />
 
       {/* Sibling tabs + shared controls */}
@@ -86,11 +97,20 @@ export default function DigitalAdsReportPage() {
       </div>
 
       <div className="mt-8">
-        {!accountKey ? (
+        {isOrg && rollupConfig ? (
+          <OrgReportRollup
+            config={rollupConfig}
+            accountKeys={scopedAccountKeys}
+            dealers={dealers}
+            from={range.from}
+            to={range.to}
+            compareTo={range.compareTo}
+          />
+        ) : !accountKey ? (
           <EmptyState
             icon={ChartBarIcon}
             title="Pick an account"
-            body="Choose a sub-account from the top bar to see its performance."
+            body="Choose a sub-account or organization from the top bar to see performance."
           />
         ) : (
           <Report

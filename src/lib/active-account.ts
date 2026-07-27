@@ -10,7 +10,10 @@
  * existing `?account=<key>` cross-link param still hands the account off
  * between surfaces.
  *
- * Value is an account key, or ADMIN_VALUE for Admin mode.
+ * Value is one of:
+ *   - an account key            → account mode
+ *   - ADMIN_VALUE (`__admin__`) → Admin mode
+ *   - `org:<organizationId>`    → organization (roll-up) mode
  *
  * Client read/write live here. Server reads the cookie directly via
  * `next/headers` cookies() using ACTIVE_ACCOUNT_COOKIE (no `document` access),
@@ -19,6 +22,20 @@
 
 export const ACTIVE_ACCOUNT_COOKIE = 'loomi-active-account';
 export const ADMIN_VALUE = '__admin__';
+/** Prefix marking an organization (roll-up) selection in the cookie value. */
+export const ORG_PREFIX = 'org:';
+
+/** Encode an organization id into its cookie value. */
+export function encodeOrgValue(organizationId: string): string {
+  return `${ORG_PREFIX}${organizationId}`;
+}
+
+/** Return the organization id if `value` is an org selection, else null. */
+export function parseOrgValue(value: string | null | undefined): string | null {
+  if (!value || !value.startsWith(ORG_PREFIX)) return null;
+  const id = value.slice(ORG_PREFIX.length);
+  return id || null;
+}
 
 const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
 

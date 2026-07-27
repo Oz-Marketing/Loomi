@@ -23,9 +23,11 @@ import {
   type DateRangeKey,
 } from '../ads/_components/shared';
 import { Ga4Report } from './_components/ga4-report';
+import { OrgReportRollup } from '../_components/org-report-rollup';
+import { GA4_ROLLUP } from '../_components/rollup-configs';
 
 export default function ReportingWebsitesPage() {
-  const { accountKey, accountData } = useAccount();
+  const { accountKey, accountData, isOrg, organizationData, scopedAccountKeys, accounts } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
 
@@ -34,13 +36,19 @@ export default function ReportingWebsitesPage() {
   const { from, to } = resolveBounds(rangeKey, customRange);
 
   const dealer = accountData?.dealer || 'all accounts';
+  const scopeLabel = isOrg
+    ? `${organizationData?.name ?? 'organization'} — ${scopedAccountKeys.length} sub-accounts`
+    : accountKey
+      ? dealer
+      : 'select an account';
+  const dealers = Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.dealer || k]));
 
   return (
     <>
       <PageHeader
         icon={GlobeAltIcon}
         title="Website analytics"
-        subtitle={`Sessions, users, channels, and top pages from Google Analytics — ${accountKey ? dealer : 'select an account'}.`}
+        subtitle={`Sessions, users, channels, and top pages from Google Analytics — ${scopeLabel}.`}
       />
 
       <div className="mt-6 flex flex-wrap items-center justify-end gap-3">
@@ -56,11 +64,22 @@ export default function ReportingWebsitesPage() {
         />
       </div>
 
-      {!accountKey ? (
+      {isOrg ? (
+        <div className="mt-8">
+          <OrgReportRollup
+            config={GA4_ROLLUP}
+            accountKeys={scopedAccountKeys}
+            dealers={dealers}
+            from={from}
+            to={to}
+            compareTo="none"
+          />
+        </div>
+      ) : !accountKey ? (
         <EmptyState
           icon={ChartBarIcon}
           title="Pick an account"
-          body="Choose a sub-account from the top bar to see its website analytics."
+          body="Choose a sub-account or organization from the top bar to see website analytics."
         />
       ) : (
         <Ga4Report accountKey={accountKey} from={from} to={to} isDark={isDark} />

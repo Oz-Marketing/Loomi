@@ -5,9 +5,11 @@ import {
   Bars3BottomLeftIcon,
   Bars3Icon,
   Bars3BottomRightIcon,
+  DevicePhoneMobileIcon,
 } from '@heroicons/react/24/outline';
 import { useEditor, findBlock } from './EditorContext';
 import { ColorInput } from './PropertyControls';
+import { RESPONSIVE_PROP_KEYS } from '../responsive';
 
 const FONT_FAMILY_OPTIONS = [
   { label: 'System', value: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif' },
@@ -59,21 +61,39 @@ export const FORMATTING_PROP_KEYS = new Set([
 export const TOOLBAR_BLOCK_TYPES = new Set(['text', 'heading']);
 
 export function FormattingToolbar() {
-  const { template, selectedId, updateBlockProps } = useEditor();
+  const { template, selectedId, updateBlockProps, updateBlockMobileProps, previewDevice } = useEditor();
   const block = selectedId ? findBlock(template.blocks, selectedId) : null;
 
   if (!block || !TOOLBAR_BLOCK_TYPES.has(block.type)) return null;
 
   const props = block.props as Record<string, unknown>;
-  const set = (key: string, value: unknown) => updateBlockProps(block.id, { [key]: value });
+  const isMobile = previewDevice === 'mobile';
+
+  // Read the effective value for the active device: a mobile override when
+  // one is set for a responsive prop (font size / line height / alignment),
+  // otherwise the base value.
+  const val = (key: string): unknown =>
+    isMobile && RESPONSIVE_PROP_KEYS.has(key) && block.mobile && key in block.mobile
+      ? block.mobile[key]
+      : props[key];
+
+  // Mobile edits to responsive props write to the block's `mobile` bag;
+  // everything else writes to the shared base props.
+  const set = (key: string, value: unknown) => {
+    if (isMobile && RESPONSIVE_PROP_KEYS.has(key)) {
+      updateBlockMobileProps(block.id, { [key]: value });
+    } else {
+      updateBlockProps(block.id, { [key]: value });
+    }
+  };
 
   const fontFamily = String(props.fontFamily ?? '');
-  const fontSize = Number(props.fontSize ?? 16);
+  const fontSize = Number(val('fontSize') ?? 16);
   const fontWeight = String(props.fontWeight ?? '400');
   const color = String(props.color ?? '#1a1a1a');
-  const align = String(props.align ?? 'left');
+  const align = String(val('align') ?? 'left');
   const textTransform = String(props.textTransform ?? 'none');
-  const lineHeight = String(props.lineHeight ?? '');
+  const lineHeight = String(val('lineHeight') ?? '');
   const letterSpacing = props.letterSpacing == null ? '' : String(props.letterSpacing);
 
   return (
@@ -89,6 +109,23 @@ export function FormattingToolbar() {
         onMouseDown={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Mobile-edit badge — signals that font size / alignment / line
+            height edits here apply to the mobile breakpoint only. */}
+        {isMobile && (
+          <>
+            <ToolbarSection>
+              <span
+                className="flex items-center gap-1 pl-3 pr-1 h-9 text-[10px] font-semibold uppercase tracking-wide text-[var(--primary)]"
+                title="Editing mobile overrides — font size, line height & alignment apply to mobile only"
+              >
+                <DevicePhoneMobileIcon className="w-3.5 h-3.5" />
+                Mobile
+              </span>
+            </ToolbarSection>
+            <Divider />
+          </>
+        )}
+
         {/* Font family */}
         <ToolbarSection>
           <select

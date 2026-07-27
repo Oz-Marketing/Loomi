@@ -42,6 +42,8 @@ export interface SearchableSelectProps {
   className?: string;
   /** Tailwind class merged into the popover root — use to widen, etc. */
   popoverClassName?: string;
+  /** Non-interactive, dimmed trigger (won't open). */
+  disabled?: boolean;
 }
 
 export function SearchableSelect({
@@ -52,6 +54,7 @@ export function SearchableSelect({
   searchable,
   className,
   popoverClassName,
+  disabled = false,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -179,8 +182,9 @@ export function SearchableSelect({
       <button
         ref={triggerRef}
         type="button"
+        disabled={disabled}
         onClick={() => setOpen((o) => !o)}
-        className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs text-left hover:border-[var(--primary)] focus:outline-none focus:border-[var(--primary)] transition-colors ${className ?? ''}`}
+        className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] text-xs text-left hover:border-[var(--primary)] focus:outline-none focus:border-[var(--primary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-[var(--border)] ${className ?? ''}`}
       >
         <span className="flex flex-1 min-w-0 items-center gap-1.5">
           {selectedOption?.icon}

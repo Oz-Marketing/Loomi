@@ -36,6 +36,14 @@ export interface Block {
   id: string;
   type: FormBlockType;
   props: Record<string, unknown>;
+  /**
+   * Per-breakpoint overrides applied at the mobile breakpoint (≤500px).
+   * Holds only the subset of props that support responsive values (font
+   * size, spacing, alignment — see RESPONSIVE_PROP_KEYS in responsive.ts).
+   * Absent / empty = the block uses its base props at every width.
+   * Hide-on-mobile / hide-on-desktop live in `props` as booleans.
+   */
+  mobile?: Record<string, unknown>;
   /** Only used for `section` and `columns` blocks. */
   children?: Block[];
 }

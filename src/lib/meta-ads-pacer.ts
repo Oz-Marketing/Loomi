@@ -362,14 +362,66 @@ export interface DailySpendWriteRow {
   objectId: string; // Meta ad-set id / Google campaign id
   date: string; // YYYY-MM-DD
   spend: number; // $
-  dailyBudget: number | null; // $ in effect (current budget at sync time)
+  dailyBudget: number | null; // $ in effect — the CURRENT budget at sync time
+}
+
+/** Row shape createMany writes (spend/budget as stored decimal strings). */
+export interface DailySpendCreateRow {
+  objectId: string;
+  date: string;
+  spend: string;
+  dailyBudget: string | null;
+}
+
+/** Compound key for a series point: one object on one date. */
+export function dailySpendKey(objectId: string, date: string): string {
+  return `${objectId} ${date}`;
+}
+
+/**
+ * Decide each row's stored `dailyBudget`, PRESERVING a past day's
+ * already-stored budget over the incoming current-budget figure.
+ *
+ * Why: Meta/Google reporting returns only the CURRENT budget, not what a past
+ * day was set to. An incremental re-pull (the trailing ~10-day window) would
+ * otherwise stamp today's budget onto every day in that window and erase the
+ * pre-change value — which is exactly the signal the budget-change divider and
+ * the "ramping since {date}" annotation read. So for any day earlier than
+ * today (`until`) that already has a stored budget, keep it; only today's row
+ * (and days never captured before) take the incoming current budget. The first
+ * 90-day backfill sees no prior rows, so every day takes the current budget
+ * then — the best available approximation, unchanged from before.
+ *
+ * Pure (no DB) so the preservation rule is unit-tested directly.
+ */
+export function reconcileSeriesBudgets(
+  rows: DailySpendWriteRow[],
+  priorBudgetByKey: Map<string, string>,
+  until: string,
+): DailySpendCreateRow[] {
+  return rows.map((r) => {
+    const kept =
+      r.date < until
+        ? priorBudgetByKey.get(dailySpendKey(r.objectId, r.date))
+        : undefined;
+    const dailyBudget =
+      kept != null ? kept : r.dailyBudget != null ? r.dailyBudget.toFixed(2) : null;
+    return {
+      objectId: r.objectId,
+      date: r.date,
+      spend: r.spend.toFixed(2),
+      dailyBudget,
+    };
+  });
 }
 
 /**
  * Replace the synced window's series rows for the given objects and prune
  * history past retention. Delete-then-createMany (2 statements) rather than
  * row-by-row upserts — a 90-day backfill across an account's ad sets is a few
- * thousand rows.
+ * thousand rows. Historical budget-in-effect is preserved across the re-pull
+ * (see reconcileSeriesBudgets) so past days keep the budget they were synced
+ * with instead of being overwritten by today's.
  */
 export async function writeDailySpendSeries(
   planId: string,
@@ -378,6 +430,27 @@ export async function writeDailySpendSeries(
   rows: DailySpendWriteRow[],
 ): Promise<void> {
   const objectIds = Array.from(new Set(rows.map((r) => r.objectId)));
+
+  // Snapshot the budgets already stored for this window BEFORE the delete, so
+  // reconcileSeriesBudgets can keep each past day's real budget-in-effect.
+  const priorRows = await prisma.metaAdsPacerDailySpend.findMany({
+    where: {
+      planId,
+      platform,
+      objectId: { in: objectIds },
+      date: { gte: window.since, lte: window.until },
+      dailyBudget: { not: null },
+    },
+    select: { objectId: true, date: true, dailyBudget: true },
+  });
+  const priorBudgetByKey = new Map<string, string>();
+  for (const p of priorRows) {
+    if (p.dailyBudget != null) {
+      priorBudgetByKey.set(dailySpendKey(p.objectId, p.date), p.dailyBudget);
+    }
+  }
+  const createData = reconcileSeriesBudgets(rows, priorBudgetByKey, window.until);
+
   await prisma.$transaction([
     prisma.metaAdsPacerDailySpend.deleteMany({
       where: {
@@ -393,14 +466,7 @@ export async function writeDailySpendSeries(
       },
     }),
     prisma.metaAdsPacerDailySpend.createMany({
-      data: rows.map((r) => ({
-        planId,
-        platform,
-        objectId: r.objectId,
-        date: r.date,
-        spend: r.spend.toFixed(2),
-        dailyBudget: r.dailyBudget != null ? r.dailyBudget.toFixed(2) : null,
-      })),
+      data: createData.map((r) => ({ planId, platform, ...r })),
       skipDuplicates: true,
     }),
   ]);

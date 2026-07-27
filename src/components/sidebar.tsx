@@ -17,8 +17,6 @@ import {
   SunIcon,
   MoonIcon,
   Cog6ToothIcon,
-  ArrowTopRightOnSquareIcon,
-  ChartBarSquareIcon,
   ChevronDownIcon,
   ChatBubbleLeftRightIcon,
   ListBulletIcon,
@@ -32,14 +30,13 @@ import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { SidebarTooltip, SidebarPopout } from '@/components/sidebar-collapsed-ui';
-import { appendThemeParam, getOtherSurfaceUrl } from '@/lib/cross-site';
 import { FlowIcon } from '@/components/icon-map';
 import { AccountSwitcher } from '@/components/account-switcher';
 import { SurfaceSwitch } from '@/components/surface-switch';
 import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav';
 import { AppLogo } from '@/components/app-logo';
 import { SidebarFrame } from '@/components/sidebar-frame';
-import { accountKeyToSlug, isSubaccountRoute, stripSubaccountPrefix } from '@/lib/account-slugs';
+import { accountKeyToSlug, isSubaccountRoute, isOrgRoute, stripSubaccountPrefix, orgSlugFor } from '@/lib/account-slugs';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -62,10 +59,10 @@ interface NavItem {
 }
 
 // Top-level nav can also hold section dividers (optionally labeled, Klaviyo
-// "Advanced"-style) and the cross-host Reporting link (different host → <a>).
+// "Advanced"-style). Reporting is a peer surface in the bottom toggle now,
+// not an in-nav crosslink — see SurfaceSwitch.
 type NavDivider = { divider: true; label?: string };
-type NavCrosslink = { crosslink: 'reporting'; label: string; icon: IconComponent };
-type NavEntry = NavItem | NavDivider | NavCrosslink;
+type NavEntry = NavItem | NavDivider;
 
 // Ad Planning & Pacing (Meta/Google) moved to the App surface (app.loomilm.com).
 // Studio `/tools/*` now redirects there via the proxy; the nav entry lives in
@@ -139,7 +136,8 @@ const contactsNav: NavItem = {
 };
 
 const dashboardNav: NavItem = { href: '/dashboard', label: 'Dashboard', icon: Squares2X2Icon };
-const reportingLink: NavCrosslink = { crosslink: 'reporting', label: 'Reporting', icon: ChartBarSquareIcon };
+// Reporting is now a peer surface in the bottom toggle (Studio · Reporting ·
+// Projects), not an in-nav crosslink — see SurfaceSwitch.
 
 // Admin nav — grouped Klaviyo-style with labeled dividers. The cross-host
 // Reporting link sits in the top group; Ad Planning & Pacing under "Tools".
@@ -147,7 +145,6 @@ const adminNavItems: NavEntry[] = [
   dashboardNav,
   campaignBuilderNav,
   templatesNav,
-  reportingLink,
   { divider: true },
   contactsNav,
   emailSmsNav,
@@ -160,6 +157,58 @@ const adminNavItems: NavEntry[] = [
 // Admin viewing a sub-account uses the same structure (routes get prefixed at
 // render; absolute items — Reporting / Ad Generator / Tools — stay global).
 const subaccountAdminNavItems: NavEntry[] = adminNavItems;
+
+// Agency View — the platform-management tier. It doesn't run campaigns; it
+// owns the shared template library + settings. So its nav is just the agency
+// dashboard + templates (Settings lives in the footer). Everything operational
+// belongs to organizations & sub-accounts.
+const agencyNavItems: NavEntry[] = [dashboardNav, templatesNav];
+
+/** Pre-resolve a nav item (+ children) to absolute hrefs under `pfx`. */
+function absResolve(entry: NavItem, pfx: string): NavItem {
+  return {
+    ...entry,
+    href: `${pfx}${entry.href}`,
+    absolute: true,
+    children: entry.children?.map((c) => ({ ...c, href: `${pfx}${c.href}`, absolute: true })),
+  };
+}
+
+/**
+ * Organization nav. An org both rolls up its sub-accounts AND operates as an
+ * entity via its primary ("house") sub-account:
+ *   - Roll-up / manage pages live at /org/<slug> (dashboard, contacts union,
+ *     templates, reporting).
+ *   - The full studio suite operates the primary sub-account, so those items
+ *     deep-link into /subaccount/<primarySlug>. Shown only once a primary is
+ *     designated (Settings → Organization → Primary sub-account).
+ */
+function buildOrgNav(
+  orgSlug: string,
+  primarySlug: string | null,
+  primaryDealer: string | null,
+): NavEntry[] {
+  const orgPfx = `/org/${orgSlug}`;
+  // Same Audiences group as a sub-account: All Contacts / Lists / Segments all
+  // exist at org scope now, rolled up across the org's rooftops.
+  const rollup: NavEntry[] = [
+    absResolve(dashboardNav, orgPfx),
+    absResolve(contactsNav, orgPfx),
+    absResolve(templatesNav, orgPfx),
+  ];
+  if (!primarySlug) return rollup;
+  const opPfx = `/subaccount/${primarySlug}`;
+  return [
+    ...rollup,
+    { divider: true, label: primaryDealer ? `${primaryDealer} (house account)` : 'House account' },
+    absResolve(campaignBuilderNav, opPfx),
+    absResolve(emailSmsNav, opPfx),
+    absResolve(websitesNav, opPfx),
+    absResolve(flowsNavItem, opPfx),
+    { ...adGeneratorNav, absolute: true },
+    absResolve(mediaNav, opPfx),
+  ];
+}
 
 // Client users: while the platform is still being rolled out to accounts, a
 // client's entire experience is the Ad Generator — they fill in a designer-built
@@ -181,37 +230,35 @@ function groupContainsPath(item: NavItem, prefix: string, normalizedPath: string
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { userRole, isAdmin, isAccount, accountKey, accounts } = useAccount();
+  const { userRole, isAdmin, isAccount, isOrg, organizationData, accountKey, accounts } = useAccount();
   const { theme, toggleTheme } = useTheme();
   const { collapsed } = useSidebarCollapse();
 
-  // Cross-host link to the reporting surface. Resolves after hydration
-  // so we have access to `window.location.host`; account + theme are
-  // appended as query params so reporting lands on the same account
-  // with the same theme (cookie sharing doesn't work in dev).
-  const [reportingHref, setReportingHref] = useState<string | null>(null);
   // Single-open accordion: at most one top-level group expanded at a time.
   const [openGroupKey, setOpenGroupKey] = useState<string | null>(null);
-  const accountForCrossLink = useAccount().account;
-  useEffect(() => {
-    let url = getOtherSurfaceUrl('/');
-    if (!url) return;
-    if (accountForCrossLink.mode === 'account' && accountForCrossLink.accountKey) {
-      url += `?account=${encodeURIComponent(accountForCrossLink.accountKey)}`;
-    }
-    url = appendThemeParam(url, theme);
-    setReportingHref(url);
-  }, [accountForCrossLink, theme]);
 
   const isClientRole = userRole === 'client';
   const slug = accountKey ? accountKeyToSlug(accountKey, accounts) : null;
   const inSubaccountRoute = isSubaccountRoute(pathname);
+  const inOrgRoute = isOrgRoute(pathname);
+
+  // Org scope: roll-up/manage pages live at /org/<slug>; the org's OWN studio
+  // work operates its primary ("house") sub-account, so operational items are
+  // pre-resolved to /subaccount/<primarySlug>. (Absolute so the prefix loop
+  // below leaves them untouched.)
+  const orgSlug = organizationData ? orgSlugFor(organizationData) : null;
+  const orgPrimaryKey = organizationData?.primaryAccountKey ?? null;
+  const orgPrimarySlug = orgPrimaryKey ? accountKeyToSlug(orgPrimaryKey, accounts) : null;
+  const orgPrimaryDealer = orgPrimaryKey ? accounts[orgPrimaryKey]?.dealer ?? orgPrimaryKey : null;
 
   let navItems: NavEntry[];
   let prefix = '';
 
-  if (isAdmin && !inSubaccountRoute) {
-    navItems = adminNavItems;
+  if (isAdmin && !inSubaccountRoute && !inOrgRoute) {
+    // Agency View: trimmed to the platform-management essentials.
+    navItems = agencyNavItems;
+  } else if ((isOrg || inOrgRoute) && orgSlug) {
+    navItems = buildOrgNav(orgSlug, orgPrimarySlug, orgPrimaryDealer);
   } else if (slug) {
     prefix = `/subaccount/${slug}`;
     navItems = isClientRole ? subaccountClientNavItems : subaccountAdminNavItems;
@@ -221,7 +268,7 @@ export function Sidebar() {
 
   // Resolve nav item hrefs with the prefix (skip for absolute items)
   const resolvedNavItems: NavEntry[] = navItems.map((entry) => {
-    if ('divider' in entry || 'crosslink' in entry) return entry;
+    if ('divider' in entry) return entry;
     return {
       ...entry,
       href: prefix && !entry.absolute ? `${prefix}${entry.href}` : entry.href,
@@ -237,7 +284,7 @@ export function Sidebar() {
   // Auto-open the top-level group that contains the current route.
   let activeGroupKey: string | null = null;
   for (const entry of resolvedNavItems) {
-    if ('divider' in entry || 'crosslink' in entry) continue;
+    if ('divider' in entry) continue;
     if (entry.children?.length && groupContainsPath(entry, prefix, normalizedPath)) {
       activeGroupKey = entry.label;
       break;
@@ -338,32 +385,6 @@ export function Sidebar() {
               </p>
             ) : (
               <div key={`sep-${i}`} className="h-8" />
-            );
-          }
-          if ('crosslink' in entry) {
-            if (!reportingHref) return null;
-            const CrossIcon = entry.icon;
-            const crossLink = (
-              <a
-                key={`cross-${i}`}
-                href={reportingHref}
-                className={`flex items-center ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'} py-2 rounded-xl text-sm font-normal transition-all duration-200 text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)] hover:bg-[var(--sidebar-muted)]`}
-              >
-                <CrossIcon className="w-5 h-5" />
-                {!collapsed && (
-                  <>
-                    <span className="flex-1 text-left">{entry.label}</span>
-                    <ArrowTopRightOnSquareIcon className="w-3 h-3 text-[var(--sidebar-muted-foreground)]/70" />
-                  </>
-                )}
-              </a>
-            );
-            return collapsed ? (
-              <SidebarTooltip key={`cross-${i}`} label={entry.label}>
-                {crossLink}
-              </SidebarTooltip>
-            ) : (
-              crossLink
             );
           }
           const item = entry;

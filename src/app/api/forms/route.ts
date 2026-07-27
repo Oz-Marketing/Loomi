@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
   canAccessAccount,
+  canAccessOrg,
   forbidden,
   getAccountScope,
   requireRole,
@@ -24,12 +25,17 @@ export async function GET(req: NextRequest) {
   const isTemplate = req.nextUrl.searchParams.get('isTemplate') === 'true';
   // ?scope=system → the global, account-less template library.
   const systemScope = req.nextUrl.searchParams.get('scope') === 'system';
+  // ?organizationId=<id> → templates this org owns (org-authoring view).
+  const organizationId = req.nextUrl.searchParams.get('organizationId')?.trim() || null;
+  if (organizationId && !(await canAccessOrg(session!, organizationId))) return forbidden();
+
   const result = await listForms({
     accountKeys: accountKey ? null : scope,
     accountKey,
     page,
     pageSize,
     isTemplate,
+    ...(organizationId ? { organizationId } : {}),
     ...(systemScope ? { scope: 'system' as const } : {}),
   });
 
@@ -47,9 +53,13 @@ export async function POST(req: NextRequest) {
       ? body.accountKey.trim()
       : null;
   const isTemplate = body?.isTemplate === true;
+  const organizationId =
+    typeof body?.organizationId === 'string' && body.organizationId.trim()
+      ? body.organizationId.trim()
+      : null;
   if (!name) return NextResponse.json({ error: 'name is required' }, { status: 400 });
-  // Live forms and sub-account templates need an account. Only a
-  // system/library template (admin-curated) may be account-less.
+  // Live forms and sub-account templates need an account. Only a system/library
+  // or org-owned template may be account-less.
   if (!accountKey && !isTemplate) {
     return NextResponse.json({ error: 'accountKey is required' }, { status: 400 });
   }
@@ -58,10 +68,15 @@ export async function POST(req: NextRequest) {
     const scope = getAccountScope(session!);
     if (!canAccessAccount(scope, accountKey)) return forbidden();
   }
+  // Org-owned template: verify the session may author for this org.
+  const orgOwned = !accountKey && isTemplate && organizationId;
+  if (orgOwned && !(await canAccessOrg(session!, organizationId))) return forbidden();
 
   try {
     const form = await createForm({
       accountKey,
+      // Org-owned template: account-less, tagged to the org.
+      organizationId: orgOwned ? organizationId : null,
       name,
       isTemplate,
       createdByUserId: session!.user.id,

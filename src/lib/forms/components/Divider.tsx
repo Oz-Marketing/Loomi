@@ -8,6 +8,8 @@ export interface DividerProps {
   marginBottom?: number;
   width?: string | number;
   align?: 'left' | 'center' | 'right';
+  /** Responsive/hide class injected by the renderer (see responsive.ts). */
+  className?: string;
 }
 
 export const DividerBlock: React.FC<DividerProps> = ({
@@ -18,6 +20,7 @@ export const DividerBlock: React.FC<DividerProps> = ({
   marginBottom = 16,
   width = '100%',
   align = 'center',
+  className,
 }) => {
   const widthValue = typeof width === 'number' ? `${width}px` : width;
   const marginLeft = align === 'left' ? 0 : align === 'right' ? 'auto' : 'auto';
@@ -25,6 +28,7 @@ export const DividerBlock: React.FC<DividerProps> = ({
 
   return (
     <hr
+      className={className}
       style={{
         border: 0,
         borderTop: `${thickness}px ${style} ${color}`,

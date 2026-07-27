@@ -13,12 +13,15 @@ import {
   BriefcaseIcon,
   CalculatorIcon,
   PuzzlePieceIcon,
+  BuildingOffice2Icon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useCurrentSurface } from '@/lib/hooks/use-current-surface';
 
 export type SettingsTabKey =
   | 'subaccounts'
+  | 'organizations'
+  | 'organization'
   | 'subaccount'
   | 'users'
   | 'teams'
@@ -44,7 +47,7 @@ export type SettingsTab = {
  * sidebar's settings nav so both stay in sync.
  */
 export function useSettingsTabs(): SettingsTab[] {
-  const { isAdmin, isAccount, userRole } = useAccount();
+  const { isAdmin, isAccount, isOrg, userRole } = useAccount();
   const surface = useCurrentSurface();
   const isApp = surface === 'app';
   const hasAdminAccess = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
@@ -52,11 +55,30 @@ export function useSettingsTabs(): SettingsTab[] {
   const isElevated = userRole === 'developer' || userRole === 'super_admin';
 
   const tabs: SettingsTab[] = [];
-  // Order: Sub-Accounts → Users → Teams → Field Blueprints → rest.
-  if (hasAdminAccess && isAdmin) tabs.push({ key: 'subaccounts', label: 'Sub-Accounts', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
+  // Settings are tiered by the active scope (see the agency/org/sub-account
+  // taxonomy):
+  //   • AGENCY VIEW (isAdmin): platform config + top-level directories.
+  //   • ORGANIZATION (isOrg): the org profile + its sub-accounts.
+  //   • SUB-ACCOUNT (isAccount): that location's own settings.
+  //   • Notifications/Appearance are personal and show everywhere.
+
+  // ── Organization tier ──
+  if (hasAdminAccess && isOrg) tabs.push({ key: 'organization', label: 'Organization', titleLabel: 'Organization Settings', icon: BuildingOffice2Icon });
+
+  // ── Sub-Accounts directory — the whole fleet in Agency View, scoped to the
+  //    org in Organization mode. ──
+  if (hasAdminAccess && (isAdmin || isOrg)) tabs.push({ key: 'subaccounts', label: 'Sub-Accounts', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
+
+  // ── Agency-only directories ──
+  if (isElevated && isAdmin) tabs.push({ key: 'organizations', label: 'Organizations', titleLabel: 'Organizations', icon: BuildingOffice2Icon });
+
+  // ── Sub-account tier ──
   if (isAccount) tabs.push({ key: 'subaccount', label: 'Sub-Account', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
-  if (hasAdminAccess) tabs.push({ key: 'users', label: 'Users', titleLabel: 'User Settings', icon: UsersIcon });
-  if (hasAdminAccess) tabs.push({ key: 'teams', label: 'Teams', titleLabel: 'Teams', icon: UserGroupIcon });
+
+  // ── Agency directory: the global user + team roster (not scoped, so it lives
+  //    only in Agency View). ──
+  if (hasAdminAccess && isAdmin) tabs.push({ key: 'users', label: 'Users', titleLabel: 'User Settings', icon: UsersIcon });
+  if (hasAdminAccess && isAdmin) tabs.push({ key: 'teams', label: 'Teams', titleLabel: 'Teams', icon: UserGroupIcon });
   if (hasAdminAccess && isAccount) tabs.push({ key: 'integrations', label: 'Integrations', titleLabel: 'Integrations', icon: PuzzlePieceIcon });
   // Custom Fields are a Studio concern — hidden on the App surface.
   if (hasAdminAccess && isAccount && !isApp) tabs.push({ key: 'contact-fields', label: 'Custom Fields', titleLabel: 'Contact Custom Fields', icon: TagIcon });

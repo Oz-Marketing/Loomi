@@ -22,6 +22,8 @@ import { IndustriesTab } from '@/components/settings/industries-tab';
 import { DefaultMarkupTab } from '@/components/settings/default-markup-tab';
 import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
 import { TeamsTab } from '@/components/settings/teams-tab';
+import { OrganizationsTab } from '@/components/settings/organizations-tab';
+import { OrganizationSettingsTab } from '@/components/settings/organization-settings-tab';
 import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
 import { useSettingsTabs, type SettingsTabKey } from '@/components/settings/use-settings-tabs';
 import { useIndustries } from '@/lib/hooks/use-industries';
@@ -29,7 +31,7 @@ import { useIndustries } from '@/lib/hooks/use-industries';
 type Tab = SettingsTabKey;
 
 export default function SettingsPage() {
-  const { isAdmin, isAccount, userRole, accountKey, accountData } = useAccount();
+  const { isAdmin, isAccount, isOrg, initialized, userRole, accountKey, accountData, scopedAccountKeys } = useAccount();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -51,16 +53,32 @@ export default function SettingsPage() {
     : defaultTab;
 
   // Enforce canonical route per tab so browser history/back works correctly.
+  // Wait for `initialized` — before the active scope resolves from the cookie,
+  // the tab set reflects the default 'admin' mode, so redirecting here would
+  // bounce a deep link like /settings/organization to the wrong tab.
   useEffect(() => {
-    if (tabs.length === 0) return;
+    if (!initialized || tabs.length === 0) return;
     if (!routeTab || !tabs.some(t => t.key === routeTab)) {
       router.replace(defaultTabPath, { scroll: false });
     }
-  }, [routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, userRole]);
+  }, [initialized, routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, isOrg, userRole]);
 
   const activeTabObj = tabs.find((t) => t.key === activeTab);
   const TitleIcon = activeTabObj?.icon ?? CogIcon;
   const titleText = activeTabObj?.titleLabel ?? 'Settings';
+
+  // Until the scope resolves, the tab set (and thus activeTab) reflects the
+  // default mode — hold a light placeholder so a deep-linked tab doesn't flash
+  // the wrong content before settling. This only runs on the first cold load.
+  if (!initialized) {
+    return (
+      <div className="animate-fade-in-up pt-4">
+        <div className="h-8 w-48 rounded-lg bg-[var(--muted)] animate-pulse" />
+        <div className="mt-6 h-px bg-[var(--border)]" />
+        <div className="mt-6 h-64 rounded-xl bg-[var(--muted)] animate-pulse" />
+      </div>
+    );
+  }
 
   return (
     // Full-width: the settings tabs live in the sidebar (SettingsNav) now, so
@@ -105,7 +123,15 @@ export default function SettingsPage() {
 
       <div className="border-b border-[var(--border)] mb-6" />
 
-      {activeTab === 'subaccounts' && <AccountsList listPath="/settings/subaccounts" detailBasePath="/settings/subaccounts" />}
+      {activeTab === 'subaccounts' && (
+        <AccountsList
+          listPath="/settings/subaccounts"
+          detailBasePath="/settings/subaccounts"
+          restrictKeys={isOrg ? scopedAccountKeys : undefined}
+        />
+      )}
+      {activeTab === 'organizations' && isElevated && isAdmin && <OrganizationsTab />}
+      {activeTab === 'organization' && isOrg && <OrganizationSettingsTab />}
       {activeTab === 'subaccount' && <AccountSettingsTab />}
       {activeTab === 'integrations' && hasAdminAccess && isAccount && <IntegrationsTab />}
       {activeTab === 'contact-fields' && hasAdminAccess && isAccount && <CustomFieldsTab />}
@@ -146,8 +172,13 @@ function AccountSettingsTab() {
   const {
     accountKey,
     accountData,
+    organizations,
     refreshAccounts,
   } = useAccount();
+  // Name of the parent org (if any) — for the "inherits the org brand kit" hint.
+  const parentOrgName = accountData?.organizationId
+    ? Object.values(organizations).find((o) => o.id === accountData.organizationId)?.name ?? null
+    : null;
   const { markClean } = useUnsavedChanges();
   const categorySuggestions = useIndustries();
 
@@ -169,21 +200,24 @@ function AccountSettingsTab() {
 
   useEffect(() => {
     if (accountData) {
+      // Edit the account's OWN logos (not the org-inherited resolved set), so
+      // saving never persists inherited values back onto the sub-account.
+      const own = accountData.ownLogos ?? accountData.logos;
       setDealer(accountData.dealer || '');
       setCategory(accountData.category || '');
       setOems(getAccountOems(accountData));
-      setLogoLight(accountData.logos?.light || '');
-      setLogoDark(accountData.logos?.dark || '');
-      setLogoWhite(accountData.logos?.white || '');
-      setLogoBlack(accountData.logos?.black || '');
+      setLogoLight(own?.light || '');
+      setLogoDark(own?.dark || '');
+      setLogoWhite(own?.white || '');
+      setLogoBlack(own?.black || '');
       snapshotRef.current = {
         dealer: accountData.dealer || '',
         category: accountData.category || '',
         oems: JSON.stringify(getAccountOems(accountData)),
-        logoLight: accountData.logos?.light || '',
-        logoDark: accountData.logos?.dark || '',
-        logoWhite: accountData.logos?.white || '',
-        logoBlack: accountData.logos?.black || '',
+        logoLight: own?.light || '',
+        logoDark: own?.dark || '',
+        logoWhite: own?.white || '',
+        logoBlack: own?.black || '',
       };
     }
   }, [accountData]);
@@ -305,6 +339,11 @@ function AccountSettingsTab() {
 
       <section className={sectionCardClass}>
         <h3 className={sectionHeadingClass}>Logos</h3>
+        {parentOrgName && (
+          <p className="text-[11px] text-[var(--muted-foreground)] -mt-2 mb-3">
+            Leave a slot empty to inherit <span className="font-medium text-[var(--foreground)]">{parentOrgName}</span>&apos;s brand kit.
+          </p>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
             { label: 'Light Logo URL', value: logoLight, setter: setLogoLight },

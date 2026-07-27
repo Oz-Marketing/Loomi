@@ -10,6 +10,7 @@ import {
   ShieldCheckIcon,
   CheckIcon,
   CogIcon,
+  BuildingOffice2Icon,
 } from '@heroicons/react/24/outline';
 import { useAccount, type AccountData } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
@@ -20,7 +21,7 @@ import { formatAccountCityState, resolveAccountCity, resolveAccountState } from 
 import {
   accountKeyToSlug,
   subaccountPath,
-  stripSubaccountPrefix,
+  stripScopePrefix,
 } from '@/lib/account-slugs';
 
 interface AccountSwitcherProps {
@@ -118,7 +119,7 @@ function recordRecentSubaccount(storageKey: string, accountKey: string): RecentS
 }
 
 function resolveAdminPath(pathname: string): string {
-  const strippedPath = stripSubaccountPrefix(pathname);
+  const strippedPath = stripScopePrefix(pathname);
   const segments = strippedPath.split('/').filter(Boolean);
 
   if (segments.length === 0 || segments[0] === 'dashboard') {
@@ -143,7 +144,7 @@ function resolveAdminPath(pathname: string): string {
 }
 
 function resolveSubaccountPath(pathname: string, slug: string): string {
-  const strippedPath = stripSubaccountPrefix(pathname);
+  const strippedPath = stripScopePrefix(pathname);
   const segments = strippedPath.split('/').filter(Boolean);
 
   if (segments.length === 0 || segments[0] === 'dashboard') {
@@ -185,7 +186,15 @@ function resolveAccountCityStateLabel(accountData: AccountData): string | null {
 }
 
 export function AccountSwitcher({ onSwitch, compact = false, openUp = false, settingsHref }: AccountSwitcherProps) {
-  const { account, setAccount, accounts, accountsLoaded, userRole, userEmail } = useAccount();
+  const {
+    account,
+    setAccount,
+    accounts,
+    accountsLoaded,
+    organizations,
+    userRole,
+    userEmail,
+  } = useAccount();
   const { confirmNavigation } = useUnsavedChanges();
   const router = useRouter();
   const pathname = usePathname();
@@ -199,8 +208,14 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
 
   const canSwitchToAdmin = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
   const isAdmin = account.mode === 'admin';
+  const isOrg = account.mode === 'org';
+  const currentOrgId = account.mode === 'org' ? account.organizationId : null;
+  const currentOrg = currentOrgId
+    ? Object.values(organizations).find((o) => o.id === currentOrgId) ?? null
+    : null;
   const currentKey = account.mode === 'account' ? account.accountKey : null;
   const currentAccount = currentKey ? accounts[currentKey] : null;
+  const orgList = Object.values(organizations).sort((a, b) => a.name.localeCompare(b.name));
   const recentStorageKey = getRecentSubaccountsStorageKey(userEmail);
 
   // Position dropdown when opening. In compact mode (collapsed sidebar)
@@ -244,7 +259,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  // Focus search when opened
+  // Focus search when opened.
   useEffect(() => {
     if (open) setTimeout(() => searchRef.current?.focus(), 50);
   }, [open]);
@@ -281,7 +296,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   }, [currentKey, recentStorageKey]);
 
   const handleSelect = (key: string | '__admin__') => {
-    const destinationLabel = key === '__admin__' ? 'Admin Account' : (accounts[key]?.dealer || key);
+    const destinationLabel = key === '__admin__' ? 'Agency View' : (accounts[key]?.dealer || key);
     confirmNavigation(() => {
       // The reporting AND app surfaces don't use the studio `/subaccount/<slug>/*`
       // URL structure — their pages read the active account from context/cookie
@@ -319,7 +334,29 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     }, destinationLabel);
   };
 
+
+  // The org whose sub-accounts the list is scoped to — organizations own their
+  // sub-accounts, so we never mix them into one flat pool. Org mode → the
+  // selected org. Account mode → the active account's parent org (so you stay
+  // within that org and can hop between its siblings). Admin, or a standalone
+  // account with no org → null = show every sub-account (the god view).
+  const activeOrgId = isOrg
+    ? currentOrgId
+    : currentKey
+      ? accounts[currentKey]?.organizationId ?? null
+      : null;
+  const activeOrg = activeOrgId
+    ? Object.values(organizations).find((o) => o.id === activeOrgId) ?? null
+    : null;
+  // Historically the list was narrowed to the active org so you never saw a
+  // mixed pool. With groups modelled as accounts, the group and its rooftops
+  // are all selectable peers, so narrowing would hide the very accounts you
+  // switch between. Kept as a no-op rather than removed, so the call sites and
+  // the (still-used) activeOrg label logic stay intact during the transition.
+  const inActiveOrg = (_accountData: AccountData) => true;
+
   const filteredAccounts = Object.entries(accounts).filter(([key, accountData]) => {
+    if (!inActiveOrg(accountData)) return false;
     if (!search) return true;
     const q = search.toLowerCase();
     const cityStateLabel = resolveAccountCityStateLabel(accountData)?.toLowerCase() || '';
@@ -331,14 +368,16 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
       cityStateLabel.includes(q)
     );
   });
-  const recentAccounts = !search
-    ? recentAccountKeys
-      .map((key) => {
-        const accountData = accounts[key];
-        return accountData ? ([key, accountData] as const) : null;
-      })
-      .filter((entry): entry is readonly [string, AccountData] => Boolean(entry))
-    : [];
+  // Recently viewed is hidden while searching (the filtered list below covers
+  // it) and is scoped to the active org so it doesn't surface other orgs'
+  // sub-accounts.
+  const recentAccounts = recentAccountKeys
+    .map((key) => {
+      const accountData = accounts[key];
+      return accountData ? ([key, accountData] as const) : null;
+    })
+    .filter((entry): entry is readonly [string, AccountData] => Boolean(entry))
+    .filter(([, accountData]) => inActiveOrg(accountData));
 
   const getAccountAddress = (accountData: AccountData) => resolveAccountCityStateLabel(accountData);
   const renderAccountOption = (key: string, accountData: AccountData, itemKey: string = key) => {
@@ -410,14 +449,20 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     <div className="w-7 h-7 rounded-md bg-[var(--primary)]/15 flex items-center justify-center flex-shrink-0">
       <ShieldCheckIcon className="w-3.5 h-3.5 text-[var(--primary)]" />
     </div>
+  ) : isOrg ? (
+    <div className="w-7 h-7 rounded-md bg-[var(--primary)]/15 flex items-center justify-center flex-shrink-0">
+      <BuildingOffice2Icon className="w-4 h-4 text-[var(--primary)]" />
+    </div>
   ) : currentAccount ? (
     <AccountSwitcherAvatar account={currentAccount} accountKey={currentKey} />
   ) : (
     <div className="w-7 h-7 rounded-md bg-[var(--sidebar-muted)] flex-shrink-0" />
   );
   const triggerLabel = isAdmin
-    ? 'Admin Account'
-    : currentAccount?.dealer || currentKey || 'Select sub-account';
+    ? 'Agency View'
+    : isOrg
+      ? currentOrg?.name || 'Organization'
+      : currentAccount?.dealer || currentKey || 'Select sub-account';
 
   return (
     <>
@@ -464,7 +509,22 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
           className="fixed z-[200] w-72 rounded-xl glass-dropdown overflow-hidden animate-fade-in-up"
           style={{ top: pos.top, bottom: pos.bottom, left: pos.left }}
         >
-          {/* Search */}
+          {/* Admin option */}
+          {canSwitchToAdmin && !isAdmin && (
+            <div className="px-3 py-2 border-b border-[var(--border)]">
+              <button
+                onClick={() => handleSelect('__admin__')}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--primary)] hover:opacity-80 transition-opacity"
+              >
+                <ArrowLeftIcon className="w-3.5 h-3.5" />
+                Back to Agency View
+              </button>
+            </div>
+          )}
+
+          {/* Search — universal filter for BOTH the organizations and
+              sub-account lists, so it scales to many orgs. Placed high so it's
+              the first thing you reach when the lists are long. */}
           <div className="p-1.5 border-b border-[var(--border)]">
             <div className="relative">
               <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--muted-foreground)]" />
@@ -473,45 +533,57 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
                 type="text"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="Search sub-accounts..."
+                placeholder={orgList.length > 0 ? 'Search organizations & sub-accounts...' : 'Search sub-accounts...'}
                 className="w-full pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
               />
             </div>
           </div>
 
-          {/* Admin option */}
-          {canSwitchToAdmin && !isAdmin && !search && (
-            <div className="px-3 py-2 border-b border-[var(--border)]">
-              <button
-                onClick={() => handleSelect('__admin__')}
-                className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--primary)] hover:opacity-80 transition-opacity"
-              >
-                <ArrowLeftIcon className="w-3.5 h-3.5" />
-                Back to Admin Account
-              </button>
-            </div>
-          )}
+          {/* Scope tier — Organizations are a top-level scope, so they're
+              always visible and one-click (selecting one enters roll-up mode
+              across its sub-accounts; switching orgs is just clicking another).
+              Filtered by the search above and bounded so many orgs scroll in
+              place rather than burying the sub-account list. Hidden while a
+              search matches no orgs. */}
+          {/* Organizations are no longer a separate scope. A group (Young
+              Automotive Group) is an Account with rooftops beneath it, so it
+              appears in the sub-account list below like any other account —
+              selecting it gives the normal account nav plus a roll-up across
+              its children. */}
 
+          {/* Recently viewed — quick shortcuts under the search; hidden while
+              searching so the results below read cleanly. Small matched label. */}
           {!search && recentAccounts.length > 0 && (
             <div className="p-1 border-b border-[var(--border)]">
-              <p className="px-2.5 pt-1.5 pb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              <p className="px-2.5 pt-1 pb-0.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
                 Recently viewed
               </p>
               {recentAccounts.map(([key, accountData]) => renderAccountOption(key, accountData, `recent-${key}`))}
             </div>
           )}
 
-          {/* Account list */}
-          <div className="max-h-[320px] overflow-y-auto p-1">
-            {!accountsLoaded ? (
-              <p className="text-xs text-[var(--muted-foreground)] text-center py-4">Loading...</p>
-            ) : filteredAccounts.length === 0 ? (
-              <p className="text-xs text-[var(--muted-foreground)] text-center py-4">
-                {search ? 'No sub-accounts match your search' : 'No sub-accounts available'}
-              </p>
-            ) : (
-              filteredAccounts.map(([key, accountData]) => renderAccountOption(key, accountData))
-            )}
+          {/* Sub-accounts — scoped to the active org (never a mixed pool),
+              filtered by search. Label matches "Recently viewed" and names the
+              org when scoped so the shorter list is self-explanatory. */}
+          <div className="p-1">
+            <p className="px-2.5 pt-1 pb-0.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              Sub-accounts
+            </p>
+            <div className="max-h-[280px] overflow-y-auto">
+              {!accountsLoaded ? (
+                <p className="text-xs text-[var(--muted-foreground)] text-center py-4">Loading...</p>
+              ) : filteredAccounts.length === 0 ? (
+                <p className="text-xs text-[var(--muted-foreground)] text-center py-4">
+                  {search
+                    ? 'No sub-accounts match your search'
+                    : activeOrg
+                      ? 'No sub-accounts in this organization yet'
+                      : 'No sub-accounts available'}
+                </p>
+              ) : (
+                filteredAccounts.map(([key, accountData]) => renderAccountOption(key, accountData))
+              )}
+            </div>
           </div>
 
           {settingsHref && (

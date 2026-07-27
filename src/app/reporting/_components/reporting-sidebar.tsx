@@ -17,6 +17,7 @@ import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { SidebarFrame } from '@/components/sidebar-frame';
 import { AccountSwitcher } from '@/components/account-switcher';
+import { SurfaceSwitch } from '@/components/surface-switch';
 import { MetaBrandIcon, GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
 import { DIGITAL_ADS_REPORTS } from '../ads/_components/reports-config';
 
@@ -144,7 +145,12 @@ export function ReportingSidebar() {
       }
       account={collapsed ? <AccountSwitcher compact /> : <AccountSwitcher />}
       bottom={
-        <div className={`${collapsed ? 'p-2' : 'px-2 py-2'}`}>
+        <>
+          {/* Quick switch between Studio · Reporting · Projects. */}
+          <div className="px-2 pb-1">
+            <SurfaceSwitch collapsed={collapsed} />
+          </div>
+          <div className={`${collapsed ? 'p-2' : 'px-2 py-2'}`}>
           {(() => {
             const settingsLink = (
               <Link
@@ -161,7 +167,8 @@ export function ReportingSidebar() {
             );
             return collapsed ? <SidebarTooltip label="Settings">{settingsLink}</SidebarTooltip> : settingsLink;
           })()}
-        </div>
+          </div>
+        </>
       }
     >
       {NAV.map((item) =>

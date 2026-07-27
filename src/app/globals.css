@@ -814,7 +814,13 @@ button.glass-card:hover,
 
   border: 1px solid var(--border);
   border-radius: 0.75rem;
-  overflow: hidden;
+  /* Wide data tables (min-w on the <table>) must scroll horizontally. A plain
+     `overflow: hidden` here silently beat the `overflow-x-auto` utility on the
+     wrappers, so the table just clipped. overflow-y stays hidden, which is what
+     the rounded-corner clipping actually needs — vertical scrolling is owned by
+     an ancestor container. */
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .account-avatar-stack .account-avatar-stack-item {

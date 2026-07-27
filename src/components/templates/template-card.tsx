@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   EllipsisVerticalIcon,
   BuildingStorefrontIcon,
+  BuildingOffice2Icon,
   GlobeAltIcon,
   FolderIcon,
   PlusIcon,
@@ -45,8 +46,8 @@ export interface TemplateCardProps {
   preview: ReactNode;
   name: string;
   status?: TemplateCardStatus;
-  /** Optional scope line (account name / "All accounts"). */
-  scope?: { label: string; kind: 'account' | 'global' };
+  /** Optional scope line (account name / org name / "All accounts"). */
+  scope?: { label: string; kind: 'account' | 'org' | 'global' };
   category?: string | null;
   tags?: string[];
   /** Shared vocabulary powering the category/tag popovers. */
@@ -291,6 +292,8 @@ export function TemplateCard({
           <span className="mt-1 flex items-center gap-1 text-[11px] text-[var(--muted-foreground)]">
             {scope.kind === 'account' ? (
               <BuildingStorefrontIcon className="h-3.5 w-3.5 flex-shrink-0" />
+            ) : scope.kind === 'org' ? (
+              <BuildingOffice2Icon className="h-3.5 w-3.5 flex-shrink-0" />
             ) : (
               <GlobeAltIcon className="h-3.5 w-3.5 flex-shrink-0" />
             )}

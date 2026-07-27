@@ -544,6 +544,8 @@ export function AdPlannerPanel({
                   ...(u.splitBaseAmount != null
                     ? { splitBaseAmount: u.splitBaseAmount.toFixed(2) }
                     : {}),
+                  // Calc-local "Off — lock at spent" flips the planner status too.
+                  ...(u.adStatus != null ? { adStatus: u.adStatus } : {}),
                 };
               }),
             });

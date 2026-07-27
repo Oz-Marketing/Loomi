@@ -12,7 +12,7 @@ import {
   CogIcon,
   BuildingOffice2Icon,
 } from '@heroicons/react/24/outline';
-import { useAccount, type AccountData, type OrganizationData } from '@/contexts/account-context';
+import { useAccount, type AccountData } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { AccountAvatar } from '@/components/account-avatar';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
@@ -22,9 +22,6 @@ import {
   accountKeyToSlug,
   subaccountPath,
   stripScopePrefix,
-  orgPath,
-  orgSlugFor,
-  ORG_ROUTE_ROOTS,
 } from '@/lib/account-slugs';
 
 interface AccountSwitcherProps {
@@ -144,15 +141,6 @@ function resolveAdminPath(pathname: string): string {
   // never bounce to the dashboard. The page reads the active account from
   // context, so only the data refreshes.
   return strippedPath || '/dashboard';
-}
-
-/** Map the current page to the equivalent `/org/<slug>` route. Org is a
- *  read/manage scope, so unsupported (account-level) pages fall back to the
- *  org dashboard rather than 404. */
-function resolveOrgPath(pathname: string, slug: string): string {
-  const root = stripScopePrefix(pathname).split('/').filter(Boolean)[0];
-  if (root && ORG_ROUTE_ROOTS.has(root)) return orgPath(slug, root);
-  return orgPath(slug, 'dashboard');
 }
 
 function resolveSubaccountPath(pathname: string, slug: string): string {
@@ -346,34 +334,6 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     }, destinationLabel);
   };
 
-  const handleSelectOrg = (org: OrganizationData) => {
-    confirmNavigation(() => {
-      // Studio uses URL-based org scope (`/org/<slug>/…`) — navigating there is
-      // a real load and the org layout hydrates context from the slug. The
-      // reporting/app surfaces have no per-scope routes, so they flip context +
-      // refresh (the shared cookie carries the scope across surfaces).
-      const surface = getCurrentSurface();
-      const contextOnly = surface === 'reporting' || surface === 'app';
-      if (contextOnly) {
-        setAccount({ mode: 'org', organizationId: org.id });
-        router.refresh();
-      } else {
-        router.push(resolveOrgPath(pathname, orgSlugFor(org)));
-      }
-      setOpen(false);
-      setSearch('');
-      onSwitch?.();
-    }, org.name);
-  };
-
-  // The single search field is a universal filter — it scopes BOTH the
-  // organizations list and the sub-account list, so a client with dozens of
-  // orgs can type to find one instead of scrolling.
-  const filteredOrgs = orgList.filter((org) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return org.name.toLowerCase().includes(q) || org.key.toLowerCase().includes(q);
-  });
 
   // The org whose sub-accounts the list is scoped to — organizations own their
   // sub-accounts, so we never mix them into one flat pool. Org mode → the
@@ -388,8 +348,12 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   const activeOrg = activeOrgId
     ? Object.values(organizations).find((o) => o.id === activeOrgId) ?? null
     : null;
-  const inActiveOrg = (accountData: AccountData) =>
-    !activeOrgId || accountData.organizationId === activeOrgId;
+  // Historically the list was narrowed to the active org so you never saw a
+  // mixed pool. With groups modelled as accounts, the group and its rooftops
+  // are all selectable peers, so narrowing would hide the very accounts you
+  // switch between. Kept as a no-op rather than removed, so the call sites and
+  // the (still-used) activeOrg label logic stay intact during the transition.
+  const inActiveOrg = (_accountData: AccountData) => true;
 
   const filteredAccounts = Object.entries(accounts).filter(([key, accountData]) => {
     if (!inActiveOrg(accountData)) return false;
@@ -437,31 +401,6 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
               {getAccountAddress(accountData)}
             </p>
           )}
-        </div>
-        {selected && <CheckIcon className="w-3.5 h-3.5 text-[var(--primary)] flex-shrink-0" />}
-      </button>
-    );
-  };
-
-  const renderOrgOption = (org: OrganizationData) => {
-    const selected = currentOrgId === org.id;
-    const count = org.accountKeys.length;
-    return (
-      <button
-        key={`org-${org.id}`}
-        onClick={() => handleSelectOrg(org)}
-        className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors ${
-          selected ? 'bg-[var(--primary)]/10' : 'hover:bg-[var(--muted)]'
-        }`}
-      >
-        <div className="w-7 h-7 rounded-md bg-[var(--primary)]/15 flex items-center justify-center flex-shrink-0">
-          <BuildingOffice2Icon className="w-4 h-4 text-[var(--primary)]" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium text-[var(--foreground)] truncate">{org.name}</p>
-          <p className="text-[10px] text-[var(--muted-foreground)] truncate leading-tight">
-            Organization · {count} sub-account{count === 1 ? '' : 's'}
-          </p>
         </div>
         {selected && <CheckIcon className="w-3.5 h-3.5 text-[var(--primary)] flex-shrink-0" />}
       </button>
@@ -606,16 +545,11 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
               Filtered by the search above and bounded so many orgs scroll in
               place rather than burying the sub-account list. Hidden while a
               search matches no orgs. */}
-          {filteredOrgs.length > 0 && (
-            <div className="p-1 border-b border-[var(--border)]">
-              <p className="px-2.5 pt-1 pb-0.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                Organizations{!search && orgList.length > 4 ? ` · ${orgList.length}` : ''}
-              </p>
-              <div className="max-h-56 overflow-y-auto">
-                {filteredOrgs.map((org) => renderOrgOption(org))}
-              </div>
-            </div>
-          )}
+          {/* Organizations are no longer a separate scope. A group (Young
+              Automotive Group) is an Account with rooftops beneath it, so it
+              appears in the sub-account list below like any other account —
+              selecting it gives the normal account nav plus a roll-up across
+              its children. */}
 
           {/* Recently viewed — quick shortcuts under the search; hidden while
               searching so the results below read cleanly. Small matched label. */}

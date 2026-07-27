@@ -232,6 +232,22 @@ model Account {
   // rather than cascading a destructive delete of live account data.
   organizationId            String?
   organization              Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  // ── Account hierarchy (replaces the separate Organization concept) ──
+  // A group like Young Automotive Group is BOTH a marketing entity (it sends
+  // its own email/SMS/ads) and a parent that rolls up rooftops. Modelling the
+  // group as its own Account with children captures both, so there's no
+  // "org mode" that has to borrow a child account to do its own work.
+  //
+  // Additive for now: `organizationId` still drives the live UI. The migration
+  // backfills these, then the org-based paths get retired.
+  //
+  // SetNull on delete so removing a parent detaches children rather than
+  // cascading a destructive delete of live account data.
+  parentAccountKey          String?
+  parent                    Account?  @relation("AccountHierarchy", fields: [parentAccountKey], references: [key], onDelete: SetNull)
+  children                  Account[] @relation("AccountHierarchy")
+
   // Marker for the one-time bootstrap that seeds Loomi's six lifecycle
   // audiences (service overdue, lease ending, etc.) into automotive
   // accounts. Set once on first visit to /contacts/segments. Powersports
@@ -264,6 +280,7 @@ model Account {
 
   @@index([accountRepId])
   @@index([organizationId])
+  @@index([parentAccountKey])
 }
 
 // ─────────────────────────────────────────────────────

@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { getAncestorAccountKeys } from '@/lib/services/accounts';
 import {
   emptyLandingPageTemplate,
   isHtmlLandingPageTemplate,
@@ -231,9 +232,17 @@ export async function listLandingPageTemplates(
       select: { organizationId: true },
     });
     const orgId = account?.organizationId ?? null;
+    // Inheritance follows the account hierarchy: a rooftop sees its own landing
+    // pages plus any authored by an ancestor account. The legacy organizationId
+    // match is kept so anything not yet migrated still resolves.
+    const ancestorKeys = await getAncestorAccountKeys(accountKey);
     where = {
       isTemplate: true,
-      OR: [{ accountKey }, ...(orgId ? [{ organizationId: orgId }] : [])],
+      OR: [
+        { accountKey },
+        ...(ancestorKeys.length > 0 ? [{ accountKey: { in: ancestorKeys } }] : []),
+        ...(orgId ? [{ organizationId: orgId }] : []),
+      ],
     };
   } else if (includeAll) {
     where = { isTemplate: true };

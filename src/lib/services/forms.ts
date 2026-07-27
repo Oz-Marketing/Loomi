@@ -1,5 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { getAncestorAccountKeys } from '@/lib/services/accounts';
 import {
   emptyFormTemplate,
   isV1FormTemplate,
@@ -271,9 +272,17 @@ export async function listForms(options?: {
       select: { organizationId: true },
     });
     const orgId = account?.organizationId ?? null;
+    // Inheritance follows the account hierarchy: a rooftop sees its own forms
+    // plus any authored by an ancestor account. The legacy organizationId match
+    // is kept so anything not yet migrated still resolves.
+    const ancestorKeys = await getAncestorAccountKeys(options.accountKey);
     where = {
       isTemplate,
-      OR: [{ accountKey: options.accountKey }, ...(orgId ? [{ organizationId: orgId }] : [])],
+      OR: [
+        { accountKey: options.accountKey },
+        ...(ancestorKeys.length > 0 ? [{ accountKey: { in: ancestorKeys } }] : []),
+        ...(orgId ? [{ organizationId: orgId }] : []),
+      ],
     };
   } else {
     where = {

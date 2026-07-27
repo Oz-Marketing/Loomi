@@ -74,6 +74,34 @@ export async function PATCH(
       }
     }
 
+    // Parent account — the grouping relationship that replaced Organizations.
+    // Validated rather than allowlisted as a plain string: a bad value here
+    // would corrupt every roll-up, inheritance chain and suppression cascade.
+    if ('parentAccountKey' in body) {
+      const raw = body.parentAccountKey;
+      const parentKey = raw === null || raw === undefined || raw === '' ? null : String(raw);
+
+      if (parentKey) {
+        if (parentKey === key) {
+          return NextResponse.json({ error: 'An account cannot be its own parent' }, { status: 400 });
+        }
+        const parent = await accountService.getAccount(parentKey);
+        if (!parent) {
+          return NextResponse.json({ error: `Unknown parent account: ${parentKey}` }, { status: 400 });
+        }
+        // Walk up from the proposed parent; if we reach this account, the edit
+        // would create a cycle (A→B→A), which would hang every tree walk.
+        const ancestors = await accountService.getAncestorAccountKeys(parentKey);
+        if (ancestors.includes(key)) {
+          return NextResponse.json(
+            { error: `That would create a loop — ${parentKey} is already beneath ${key}` },
+            { status: 400 },
+          );
+        }
+      }
+      updatePayload.parentAccountKey = parentKey;
+    }
+
     // Account rep (nullable foreign key — not a simple string field)
     if ('accountRepId' in body) {
       updatePayload.accountRepId = body.accountRepId

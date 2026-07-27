@@ -172,13 +172,20 @@ function AccountSettingsTab() {
   const {
     accountKey,
     accountData,
+    accounts,
     organizations,
     refreshAccounts,
   } = useAccount();
-  // Name of the parent org (if any) — for the "inherits the org brand kit" hint.
-  const parentOrgName = accountData?.organizationId
-    ? Object.values(organizations).find((o) => o.id === accountData.organizationId)?.name ?? null
-    : null;
+  // Name of the parent ACCOUNT (if any) — for the "inherits the brand kit"
+  // hint. Follows the hierarchy that replaced Organizations; falls back to the
+  // legacy org name so accounts not yet migrated still show a hint.
+  const parentOrgName =
+    (accountData?.parentAccountKey
+      ? accounts[accountData.parentAccountKey]?.dealer ?? accountData.parentAccountKey
+      : null) ??
+    (accountData?.organizationId
+      ? Object.values(organizations).find((o) => o.id === accountData.organizationId)?.name ?? null
+      : null);
   const { markClean } = useUnsavedChanges();
   const categorySuggestions = useIndustries();
 

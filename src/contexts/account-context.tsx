@@ -345,6 +345,20 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       .catch(() => setOrganizationsLoaded(true));
   }, [status, userRole]);
 
+  // Recover from a stale org scope. The active-scope cookie is shared across
+  // studio/app/reporting and stores `org:<id>`; once an organization is deleted
+  // — or once Organization is retired entirely — that id resolves to nothing and
+  // the user is stranded in a mode with no accountKey and no data. Fall back to
+  // admin (and let the normal cookie write correct it) instead.
+  useEffect(() => {
+    if (!organizationsLoaded) return;
+    if (account.mode !== 'org') return;
+    const stillExists = Object.values(organizations).some((o) => o.id === account.organizationId);
+    if (!stillExists) {
+      setAccountState({ mode: 'admin' });
+    }
+  }, [organizationsLoaded, organizations, account]);
+
   const setAccount = (newAccount: AccountType) => {
     // Account role users cannot switch to admin or org mode
     if (userRole === 'client' && newAccount.mode !== 'account') return;

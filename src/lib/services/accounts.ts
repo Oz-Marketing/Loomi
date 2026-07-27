@@ -166,3 +166,38 @@ export async function getAllAccountKeys() {
   const accounts = await prisma.account.findMany({ select: { key: true } });
   return excludeInternal(accounts).map((a) => a.key);
 }
+
+/**
+ * Expand account grants down the hierarchy: granting a group account (e.g.
+ * `youngAutomotiveGroup`) implies access to every rooftop beneath it, so all
+ * the existing accountKey-scoped queries keep working unchanged.
+ *
+ * This is the hierarchy analogue of resolveOrgAccountKeys, and replaces it as
+ * Organization is retired. Returns the input keys plus all descendants.
+ */
+export async function expandAccountKeysWithDescendants(keys: string[]): Promise<string[]> {
+  if (keys.length === 0) return [];
+  const all = await prisma.account.findMany({
+    select: { key: true, parentAccountKey: true },
+  });
+
+  const childrenOf = new Map<string, string[]>();
+  for (const a of all) {
+    if (!a.parentAccountKey) continue;
+    const list = childrenOf.get(a.parentAccountKey) ?? [];
+    list.push(a.key);
+    childrenOf.set(a.parentAccountKey, list);
+  }
+
+  const out = new Set<string>(keys);
+  const stack = [...keys];
+  while (stack.length) {
+    const key = stack.pop()!;
+    for (const child of childrenOf.get(key) ?? []) {
+      if (out.has(child)) continue; // also guards a malformed parent cycle
+      out.add(child);
+      stack.push(child);
+    }
+  }
+  return [...out];
+}

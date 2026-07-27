@@ -109,10 +109,90 @@ export async function updateOrganization(
   return prisma.organization.update({ where: { id }, data });
 }
 
+/**
+ * Resolve the account that should inherit an org's owned resources: the
+ * account sharing the org's key (the group account under the new hierarchy),
+ * else the designated primary/"house" account. Null when neither exists.
+ */
+async function resolveOrgOwnerAccountKey(org: {
+  key: string;
+  primaryAccountKey: string | null;
+}): Promise<string | null> {
+  const sameKey = await prisma.account.findUnique({
+    where: { key: org.key },
+    select: { key: true },
+  });
+  if (sameKey) return sameKey.key;
+  if (org.primaryAccountKey) {
+    const primary = await prisma.account.findUnique({
+      where: { key: org.primaryAccountKey },
+      select: { key: true },
+    });
+    if (primary) return primary.key;
+  }
+  return null;
+}
+
+export class OrganizationHasOwnedResourcesError extends Error {
+  constructor(
+    message: string,
+    readonly counts: { templates: number; forms: number; landingPages: number; adTemplates: number },
+  ) {
+    super(message);
+    this.name = 'OrganizationHasOwnedResourcesError';
+  }
+}
+
+/**
+ * Delete an organization, reassigning anything it owns first.
+ *
+ * Account.organizationId is onDelete: SetNull, so rooftops merely detach. But
+ * Template / Form / LandingPage declare onDelete: **Cascade** — deleting the org
+ * row would DESTROY every org-authored template, form and landing page. So we
+ * hand those to the org's account (its same-key group account, else its house
+ * account) inside one transaction before removing the org.
+ *
+ * If the org owns resources and no account can inherit them, we refuse rather
+ * than either destroying them (cascade) or orphaning them into the shared Loomi
+ * library (which would expose them to every account). Caller must reassign or
+ * designate a primary account first.
+ */
 export async function deleteOrganization(id: string) {
-  // Account.organizationId is onDelete: SetNull, so child rooftops are
-  // detached (not deleted) when the org is removed.
-  return prisma.organization.delete({ where: { id } });
+  const org = await prisma.organization.findUnique({
+    where: { id },
+    select: { id: true, key: true, primaryAccountKey: true },
+  });
+  if (!org) return null;
+
+  const [templates, forms, landingPages, adTemplates] = await Promise.all([
+    prisma.template.count({ where: { organizationId: id } }),
+    prisma.form.count({ where: { organizationId: id } }),
+    prisma.landingPage.count({ where: { organizationId: id } }),
+    prisma.adTemplateDoc.count({ where: { organizationId: id } }),
+  ]);
+  const owned = templates + forms + landingPages + adTemplates;
+
+  if (owned === 0) {
+    return prisma.organization.delete({ where: { id } });
+  }
+
+  const ownerKey = await resolveOrgOwnerAccountKey(org);
+  if (!ownerKey) {
+    throw new OrganizationHasOwnedResourcesError(
+      `Organization "${org.key}" owns ${owned} resource(s) and has no account to inherit them. ` +
+        'Designate a primary sub-account (or create an account with the org key), then delete again.',
+      { templates, forms, landingPages, adTemplates },
+    );
+  }
+
+  const reassign = { accountKey: ownerKey, organizationId: null };
+  return prisma.$transaction(async (tx) => {
+    await tx.template.updateMany({ where: { organizationId: id }, data: reassign });
+    await tx.form.updateMany({ where: { organizationId: id }, data: reassign });
+    await tx.landingPage.updateMany({ where: { organizationId: id }, data: reassign });
+    await tx.adTemplateDoc.updateMany({ where: { organizationId: id }, data: reassign });
+    return tx.organization.delete({ where: { id } });
+  });
 }
 
 /**
@@ -177,14 +257,76 @@ export async function getOrgChildKeys(orgId: string): Promise<string[]> {
  * one rooftop propagates to every other rooftop in the group.
  */
 export async function getOrgSiblingAccountKeys(accountKey: string): Promise<string[]> {
+  return getRelatedAccountKeys(accountKey);
+}
+
+/**
+ * Every OTHER account grouped with `accountKey` — the set a suppression must
+ * cascade to, so an opt-out at one rooftop silences the whole group.
+ *
+ * Unions two groupings, because we're mid-migration from Organization to the
+ * Account hierarchy and an account may be described by either (or both):
+ *   - org membership   — same organizationId
+ *   - account hierarchy — same tree: walk up to the root via parentAccountKey,
+ *     then take every descendant of that root
+ *
+ * Note this is deliberately NOT the `self + descendants` set a roll-up view
+ * uses. A rooftop's suppression must also reach its PARENT and its siblings,
+ * not just accounts beneath it — under-propagating here is a compliance
+ * failure, so we take the wider union.
+ */
+export async function getRelatedAccountKeys(accountKey: string): Promise<string[]> {
   const account = await prisma.account.findUnique({
     where: { key: accountKey },
-    select: { organizationId: true },
+    select: { organizationId: true, parentAccountKey: true },
   });
-  if (!account?.organizationId) return [];
-  const siblings = await prisma.account.findMany({
-    where: { organizationId: account.organizationId, key: { not: accountKey } },
-    select: { key: true },
+  if (!account) return [];
+
+  const related = new Set<string>();
+
+  // 1) Legacy: same organization.
+  if (account.organizationId) {
+    const orgMembers = await prisma.account.findMany({
+      where: { organizationId: account.organizationId },
+      select: { key: true },
+    });
+    for (const a of orgMembers) related.add(a.key);
+  }
+
+  // 2) Hierarchy: find this account's root, then everything under it.
+  const all = await prisma.account.findMany({
+    select: { key: true, parentAccountKey: true },
   });
-  return siblings.map((a) => a.key);
+  const parentOf = new Map(all.map((a) => [a.key, a.parentAccountKey]));
+
+  let root = accountKey;
+  const climbed = new Set<string>([root]);
+  for (;;) {
+    const parent = parentOf.get(root) ?? null;
+    if (!parent || climbed.has(parent)) break; // null parent, or a malformed cycle
+    climbed.add(parent);
+    root = parent;
+  }
+
+  if (root !== accountKey || all.some((a) => a.parentAccountKey === accountKey)) {
+    const childrenOf = new Map<string, string[]>();
+    for (const a of all) {
+      if (!a.parentAccountKey) continue;
+      const list = childrenOf.get(a.parentAccountKey) ?? [];
+      list.push(a.key);
+      childrenOf.set(a.parentAccountKey, list);
+    }
+    const stack = [root];
+    const seen = new Set<string>();
+    while (stack.length) {
+      const key = stack.pop()!;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      related.add(key);
+      for (const child of childrenOf.get(key) ?? []) stack.push(child);
+    }
+  }
+
+  related.delete(accountKey);
+  return [...related];
 }

@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { requireRole } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
-import { getOrgSiblingAccountKeys } from '@/lib/services/organizations';
+import { getRelatedAccountKeys } from '@/lib/services/organizations';
 
 // PATCH /api/contacts/:id/suppression?accountKey=
 //
@@ -97,7 +97,7 @@ export async function PATCH(req: NextRequest, { params }: RouteContext) {
   // authoritative suppression rows onto all sibling rooftops (and reflect the
   // dnd flag on any sibling contact sharing this email/phone so the UI agrees).
   // Standalone accounts (no org) get siblingKeys = [] and behave as before.
-  const siblingKeys = await getOrgSiblingAccountKeys(accountKey);
+  const siblingKeys = await getRelatedAccountKeys(accountKey);
   const suppressionKeys = [accountKey, ...siblingKeys];
 
   // Suppression table writes happen in transaction with the contact

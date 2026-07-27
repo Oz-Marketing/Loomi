@@ -11,7 +11,7 @@
 // the event but don't update recipient state.
 
 import { prisma } from '@/lib/prisma';
-import { getOrgSiblingAccountKeys } from '@/lib/services/organizations';
+import { getRelatedAccountKeys } from '@/lib/services/organizations';
 
 /** Shape of a single entry in SendGrid's Event Webhook batch. */
 export interface SendGridEvent {
@@ -199,7 +199,7 @@ async function persistSuppression(
   // Org-wide cascade: a bounce / spam report / unsubscribe for an address is
   // authoritative for the whole organization, so mirror the suppression onto
   // every sibling rooftop. Standalone accounts get siblingKeys = [] → one write.
-  const siblingKeys = await getOrgSiblingAccountKeys(accountKey);
+  const siblingKeys = await getRelatedAccountKeys(accountKey);
   for (const key of [accountKey, ...siblingKeys]) {
     await prisma.emailSuppression.upsert({
       where: { accountKey_email: { accountKey: key, email } },

@@ -12,7 +12,7 @@
 // from future batches.
 
 import { prisma } from '@/lib/prisma';
-import { getOrgSiblingAccountKeys } from '@/lib/services/organizations';
+import { getRelatedAccountKeys } from '@/lib/services/organizations';
 
 /** Status callback payload shape — Twilio sends these as form data. */
 export interface TwilioStatusCallbackPayload {
@@ -179,7 +179,7 @@ async function persistSmsSuppression(
   // Org-wide cascade: a STOP / undelivered signal for a phone is authoritative
   // for the whole organization, so mirror the suppression onto every sibling
   // rooftop. Standalone accounts (no org) get siblingKeys = [] → single write.
-  const siblingKeys = await getOrgSiblingAccountKeys(accountKey);
+  const siblingKeys = await getRelatedAccountKeys(accountKey);
   for (const key of [accountKey, ...siblingKeys]) {
     await prisma.smsSuppression.upsert({
       where: { accountKey_phone: { accountKey: key, phone } },

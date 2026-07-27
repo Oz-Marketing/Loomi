@@ -3,6 +3,7 @@ import CredentialsProvider from 'next-auth/providers/credentials';
 import bcryptjs from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
 import { resolveOrgAccountKeys } from '@/lib/services/organizations';
+import { expandAccountKeysWithDescendants } from '@/lib/services/accounts';
 
 // Re-export client-safe role types/constants so server code can import from either file
 export type { UserRole } from '@/lib/roles';
@@ -314,6 +315,22 @@ export const authOptions: NextAuthOptions = {
           token.accountKeys = Array.from(
             new Set([...token.accountKeys, ...orgChildKeys]),
           );
+        }
+      }
+
+      // Hierarchy analogue of the org expansion above, and its replacement as
+      // Organization is retired: a grant on a group account (e.g.
+      // `youngAutomotiveGroup`) implies its rooftops. Runs for every
+      // non-elevated user with grants — including those with no org at all —
+      // so access survives the migration off organizationId.
+      if (
+        token.accountKeys.length > 0 &&
+        token.role !== 'developer' &&
+        token.role !== 'super_admin'
+      ) {
+        const withDescendants = await expandAccountKeysWithDescendants(token.accountKeys);
+        if (withDescendants.length > token.accountKeys.length) {
+          token.accountKeys = withDescendants;
         }
       }
 

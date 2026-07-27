@@ -57,7 +57,7 @@ export default function ListsPage() {
   // Org-aware: keeps links inside /org/<slug> on the org roll-up instead of
   // bouncing into the org's house sub-account.
   const subHref = useScopedHref();
-  const { isAccount, isOrg, accountKey, accounts, scopedAccountKeys, userRole } = useAccount();
+  const { isAccount, isGroup, accountKey, accounts, scopedAccountKeys, userRole } = useAccount();
 
   const [lists, setLists] = useState<ListSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -97,18 +97,22 @@ export default function ListsPage() {
   const canPickAccount = !isAccount && (userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin');
   const dealerForKey = (key: string) => accounts[key]?.dealer || key;
 
-  // Narrow to the active subaccount when inside a subaccount route. Org mode
-  // rolls up, but only across that org's rooftops — the API scopes by the
-  // user's role/assignments, not by the selected org, so without this an org
-  // view would surface other orgs' lists. Admin sees every list.
+  // A group account rolls up itself + its rooftops; a leaf account narrows to
+  // just itself; admin sees everything. Group is checked FIRST because a group
+  // is also `isAccount` — the single-account branch would otherwise win and the
+  // roll-up would never happen.
+  //
+  // The scoping itself matters: /api/contacts/lists scopes by the USER's
+  // role/assignments, not the active selection, so without this filter a group
+  // would surface lists belonging to accounts outside it.
   const accountFiltered = useMemo(() => {
-    if (isAccount && accountKey) return lists.filter((l) => l.accountKey === accountKey);
-    if (isOrg) {
+    if (isGroup) {
       const allowed = new Set(scopedAccountKeys);
       return lists.filter((l) => allowed.has(l.accountKey));
     }
+    if (isAccount && accountKey) return lists.filter((l) => l.accountKey === accountKey);
     return lists;
-  }, [lists, isAccount, isOrg, accountKey, scopedAccountKeys]);
+  }, [lists, isAccount, isGroup, accountKey, scopedAccountKeys]);
 
   const filteredAndSorted = useMemo(() => {
     const q = search.trim().toLowerCase();

@@ -100,6 +100,13 @@ export interface AccountData {
   replyToEmail?: string | null;
   /** Parent organization id, or null for a standalone sub-account. */
   organizationId?: string | null;
+  /**
+   * Parent account key, or null for a top-level account. This is the
+   * hierarchy that replaces the separate Organization concept: a group
+   * (e.g. Young Automotive Group) is just an Account whose rooftops point
+   * at it, so it can both send its own campaigns and roll up its children.
+   */
+  parentAccountKey?: string | null;
 }
 
 /** An organization (parent grouping) as seen by the switcher. */
@@ -147,11 +154,19 @@ interface AccountContextValue {
    * The account keys implied by the current selection — the client-side analog
    * of the server's getAccountScope. Powers roll-up views that fan out across
    * accounts (contacts, reporting):
-   *   - account mode → just the active account
-   *   - org mode     → the org's child rooftops (that the user can see)
+   *   - account mode → the active account PLUS any accounts beneath it in the
+   *                    hierarchy (a group rolls up its rooftops; a leaf account
+   *                    resolves to just itself)
+   *   - org mode     → the org's child rooftops (legacy; being retired)
    *   - admin mode   → every account the user can see
    */
   scopedAccountKeys: string[];
+  /**
+   * True when the active account has accounts beneath it — i.e. it's a group
+   * (Young Automotive Group) rather than a single rooftop. Roll-up pages use
+   * this to decide whether to aggregate; it replaces `isOrg`.
+   */
+  isGroup: boolean;
   /** Active organization id, or null when not in org mode. */
   organizationId: string | null;
   /** Active organization's data, or null when not in org mode. */
@@ -387,12 +402,44 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         : null;
   const accountData = accountKey ? accounts[accountKey] || null : null;
 
+  // parentAccountKey → child keys, built once per accounts map. This is the
+  // hierarchy that replaces Organization: a group account's rooftops point at
+  // it, so a roll-up is "self + everything beneath me".
+  const childrenByParent = useMemo<Record<string, string[]>>(() => {
+    const map: Record<string, string[]> = {};
+    for (const [key, data] of Object.entries(accounts)) {
+      const parent = data.parentAccountKey;
+      if (!parent) continue;
+      (map[parent] ??= []).push(key);
+    }
+    return map;
+  }, [accounts]);
+
+  /** The account plus every account beneath it. Depth-first, cycle-safe. */
+  const descendantsOf = useCallback(
+    (rootKey: string): string[] => {
+      const out: string[] = [];
+      const seen = new Set<string>();
+      const stack = [rootKey];
+      while (stack.length) {
+        const key = stack.pop()!;
+        if (seen.has(key)) continue; // guards a malformed parent cycle
+        seen.add(key);
+        if (accounts[key]) out.push(key);
+        for (const child of childrenByParent[key] ?? []) stack.push(child);
+      }
+      return out;
+    },
+    [accounts, childrenByParent],
+  );
+
   // Client-side analog of the server's getAccountScope: the account keys the
-  // current selection fans out to. Org mode restricts to the org's children
-  // that are actually visible in the accounts map.
+  // current selection fans out to.
   const scopedAccountKeys = useMemo<string[]>(() => {
     if (account.mode === 'account') {
-      return account.accountKey ? [account.accountKey] : [];
+      // Self + descendants, so selecting a group rolls up its rooftops while a
+      // leaf account still resolves to just itself.
+      return account.accountKey ? descendantsOf(account.accountKey) : [];
     }
     if (account.mode === 'org') {
       const org = Object.values(organizations).find((o) => o.id === account.organizationId);
@@ -400,7 +447,15 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     }
     // admin
     return Object.keys(accounts);
-  }, [account, organizations, accounts]);
+  }, [account, organizations, accounts, descendantsOf]);
+
+  // A group is an account with anything beneath it. Roll-up pages branch on
+  // this instead of `isOrg`.
+  const isGroup = useMemo<boolean>(() => {
+    if (account.mode === 'org') return true; // legacy path, still a roll-up
+    if (account.mode !== 'account' || !account.accountKey) return false;
+    return (childrenByParent[account.accountKey] ?? []).length > 0;
+  }, [account, childrenByParent]);
 
   // Don't render until the very first session is resolved.
   // After initialization, keep rendering children during session refreshes
@@ -423,6 +478,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         initialized,
         refreshAccounts,
         scopedAccountKeys,
+        isGroup,
         organizationId,
         organizationData,
         organizations,

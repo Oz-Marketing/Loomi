@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
@@ -141,14 +141,15 @@ function mergeContactsByIdentity(
 }
 
 export default function ContactsPage() {
-  const { isAdmin, isOrg, accountKey, accounts, scopedAccountKeys } = useAccount();
+  const { isAdmin, isGroup, accountKey, accounts, scopedAccountKeys } = useAccount();
 
-  // Admin and org modes both use the fan-out/union view. Org mode restricts
-  // the fan-out to the organization's child rooftops (scopedAccountKeys).
+  // Admin and group accounts both use the fan-out/union view. A group (an
+  // account with rooftops beneath it) restricts the fan-out to itself plus its
+  // descendants; a leaf account falls through to the single-account view.
   if (isAdmin) {
     return <AdminContactsView />;
   }
-  if (isOrg) {
+  if (isGroup) {
     return <AdminContactsView restrictKeys={scopedAccountKeys} />;
   }
 
@@ -272,7 +273,17 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
     return [...new Set(selectedKeys)];
   }, [availableAccounts, filters.accountFilters]);
 
+  // Guards against a slower, earlier fan-out overwriting a newer one. On first
+  // paint the scope hasn't resolved yet (context defaults to admin), so an
+  // unrestricted fetch across every account can be in flight when the scoped
+  // one starts — and being larger, it often lands last. Without this, a group
+  // account would show contacts from outside the group.
+  const fetchGenerationRef = useRef(0);
+
   const fetchData = useCallback(async () => {
+    const generation = ++fetchGenerationRef.current;
+    const isStale = () => generation !== fetchGenerationRef.current;
+
     if (accountKeysToFetch.length === 0) {
       setContacts([]);
       setFetchError('Select at least one sub-account to load contacts.');
@@ -329,6 +340,10 @@ function AdminContactsView({ restrictKeys }: { restrictKeys?: string[] } = {}) {
         }
       }
     }
+    // A newer fan-out started while this one was in flight — drop these
+    // results rather than clobbering the newer (correctly-scoped) ones.
+    if (isStale()) return;
+
     setServerTotal(totalSum);
 
     // Dedupe contacts that exist in multiple sub-accounts (one shopper

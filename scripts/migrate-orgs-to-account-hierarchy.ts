@@ -10,7 +10,13 @@
  *
  * For each Organization this resolves a PARENT account, then plans:
  *   1. children  → set Account.parentAccountKey = parent.key
- *   2. org-owned Templates / Forms / LandingPages → reassign to the parent
+ *   2. org-owned Templates / Forms / LandingPages / AdTemplateDocs →
+ *      reassign to the parent (accountKey = parent, organizationId = null)
+ *
+ * ⚠ ORDERING: Template / Form / LandingPage declare `onDelete: Cascade` on the
+ * organization relation, so DELETING an Organization row before this script has
+ * reassigned its resources DESTROYS them. Always run this to completion (and
+ * verify `org-owned: none`) before removing any Organization.
  *
  * Parent resolution, in order:
  *   a. an Account whose key already equals the org key   (ideal — no new rows)
@@ -37,6 +43,7 @@ type Plan = {
   templates: number;
   forms: number;
   landingPages: number;
+  adTemplates: number;
   warnings: string[];
 };
 
@@ -110,10 +117,11 @@ async function main() {
       }
     }
 
-    const [templates, forms, landingPages] = await Promise.all([
+    const [templates, forms, landingPages, adTemplates] = await Promise.all([
       prisma.template.count({ where: { organizationId: org.id } }),
       prisma.form.count({ where: { organizationId: org.id } }),
       prisma.landingPage.count({ where: { organizationId: org.id } }),
+      prisma.adTemplateDoc.count({ where: { organizationId: org.id } }),
     ]);
 
     plans.push({
@@ -126,6 +134,7 @@ async function main() {
       templates,
       forms,
       landingPages,
+      adTemplates,
       warnings,
     });
   }
@@ -141,9 +150,9 @@ async function main() {
       `   children       : ${p.children.length ? p.children.join(', ') : '(none to link)'}` +
         (p.alreadyLinked.length ? `   [already linked: ${p.alreadyLinked.length}]` : ''),
     );
-    const owned = p.templates + p.forms + p.landingPages;
+    const owned = p.templates + p.forms + p.landingPages + p.adTemplates;
     console.log(
-      `   org-owned      : ${owned === 0 ? 'none' : `${p.templates} template(s), ${p.forms} form(s), ${p.landingPages} landing page(s) → reassign to parent`}`,
+      `   org-owned      : ${owned === 0 ? 'none' : `${p.templates} template(s), ${p.forms} form(s), ${p.landingPages} landing page(s), ${p.adTemplates} ad template(s) → reassign to parent`}`,
     );
     for (const w of p.warnings) console.log(`   ⚠ ${w}`);
     console.log('');
@@ -179,12 +188,13 @@ async function main() {
     }
     const org = orgs.find((o) => o.key === p.org)!;
     const reassign = { accountKey: p.parentKey, organizationId: null };
-    const [t, f, l] = await Promise.all([
+    const [t, f, l, a] = await Promise.all([
       prisma.template.updateMany({ where: { organizationId: org.id }, data: reassign }),
       prisma.form.updateMany({ where: { organizationId: org.id }, data: reassign }),
       prisma.landingPage.updateMany({ where: { organizationId: org.id }, data: reassign }),
+      prisma.adTemplateDoc.updateMany({ where: { organizationId: org.id }, data: reassign }),
     ]);
-    moved += t.count + f.count + l.count;
+    moved += t.count + f.count + l.count + a.count;
   }
   console.log(`\nDone. Linked ${linked} child account(s); reassigned ${moved} org-owned record(s).\n`);
 }

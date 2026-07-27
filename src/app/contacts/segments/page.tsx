@@ -60,7 +60,7 @@ function describeFilter(definition: FilterDefinition | null): string {
 
 export default function SegmentsPage() {
   const router = useRouter();
-  const { isAccount, isOrg, accountKey, accounts, scopedAccountKeys, accountData } = useAccount();
+  const { isAccount, isGroup, accountKey, accounts, scopedAccountKeys, accountData } = useAccount();
   const subHref = useScopedHref();
   // Match SegmentEditor: pull custom fields when scoped to a single
   // sub-account; the org-wide / aggregate view falls back to built-ins.
@@ -165,14 +165,17 @@ export default function SegmentsPage() {
   const visibleSavedSegments = useMemo(() => {
     // Scope before search. /api/audiences returns everything the USER may see
     // (by role/assignment), which isn't the same as the currently-selected
-    // scope — so an org roll-up would otherwise surface other orgs' segments.
+    // scope — so a roll-up would otherwise surface segments from outside it.
     // Segments with no accountKey are shared/global and always show.
+    //
+    // Group is checked FIRST: a group account is also `isAccount`, so the
+    // single-account branch would otherwise win and never roll up.
     let scoped = savedSegments;
-    if (isAccount && accountKey) {
-      scoped = savedSegments.filter((s) => !s.accountKey || s.accountKey === accountKey);
-    } else if (isOrg) {
+    if (isGroup) {
       const allowed = new Set(scopedAccountKeys);
       scoped = savedSegments.filter((s) => !s.accountKey || allowed.has(s.accountKey));
+    } else if (isAccount && accountKey) {
+      scoped = savedSegments.filter((s) => !s.accountKey || s.accountKey === accountKey);
     }
 
     const q = search.trim().toLowerCase();
@@ -182,7 +185,7 @@ export default function SegmentsPage() {
         s.name.toLowerCase().includes(q) ||
         (s.description || '').toLowerCase().includes(q),
     );
-  }, [savedSegments, search, isAccount, isOrg, accountKey, scopedAccountKeys]);
+  }, [savedSegments, search, isAccount, isGroup, accountKey, scopedAccountKeys]);
 
   // ── Actions ──────────────────────────────────────────────────────
   async function handleDelete(segment: SavedSegment) {

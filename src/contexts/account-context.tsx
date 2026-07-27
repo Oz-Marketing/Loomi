@@ -167,6 +167,12 @@ interface AccountContextValue {
    * this to decide whether to aggregate; it replaces `isOrg`.
    */
   isGroup: boolean;
+  /**
+   * How many accounts sit beneath each account, keyed by account key. Only
+   * parents appear. Lets the switcher label a group ("40 rooftops") so a group
+   * is visually distinguishable from a plain sub-account in the same list.
+   */
+  childCounts: Record<string, number>;
   /** Active organization id, or null when not in org mode. */
   organizationId: string | null;
   /** Active organization's data, or null when not in org mode. */
@@ -471,6 +477,19 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     return (childrenByParent[account.accountKey] ?? []).length > 0;
   }, [account, childrenByParent]);
 
+  // Descendant count per parent — a group's full subtree, not just its direct
+  // children, so a label reads the way a human would count rooftops.
+  const childCounts = useMemo<Record<string, number>>(() => {
+    const out: Record<string, number> = {};
+    for (const parentKey of Object.keys(childrenByParent)) {
+      if (!accounts[parentKey]) continue; // parent not visible to this user
+      // descendantsOf includes the root itself; the group isn't its own rooftop.
+      const n = descendantsOf(parentKey).length - 1;
+      if (n > 0) out[parentKey] = n;
+    }
+    return out;
+  }, [childrenByParent, accounts, descendantsOf]);
+
   // Don't render until the very first session is resolved.
   // After initialization, keep rendering children during session refreshes
   // to avoid unmounting the entire app and losing page-level state.
@@ -493,6 +512,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         refreshAccounts,
         scopedAccountKeys,
         isGroup,
+        childCounts,
         organizationId,
         organizationData,
         organizations,

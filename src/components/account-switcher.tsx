@@ -191,6 +191,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     setAccount,
     accounts,
     accountsLoaded,
+    childCounts,
     organizations,
     userRole,
     userEmail,
@@ -393,13 +394,28 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
       >
         <AccountSwitcherAvatar account={accountData} accountKey={key} />
         <div className="flex-1 min-w-0">
-          <p className="text-xs font-medium text-[var(--foreground)] truncate">
-            {accountData.dealer || key}
+          <p className="flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)]">
+            <span className="truncate">{accountData.dealer || key}</span>
+            {/* Groups sit in the same list as plain rooftops now that org mode
+                is gone, so without this badge there's no way to tell that
+                selecting this account rolls up 40 others. */}
+            {childCounts[key] > 0 && (
+              <span className="flex-shrink-0 rounded-full border border-[var(--primary)]/40 bg-[var(--primary)]/10 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-[var(--primary)]">
+                Group
+              </span>
+            )}
           </p>
-          {getAccountAddress(accountData) && (
+          {childCounts[key] > 0 ? (
             <p className="text-[10px] text-[var(--muted-foreground)] truncate leading-tight">
-              {getAccountAddress(accountData)}
+              {childCounts[key]} rooftop{childCounts[key] === 1 ? '' : 's'}
+              {getAccountAddress(accountData) ? ` · ${getAccountAddress(accountData)}` : ''}
             </p>
+          ) : (
+            getAccountAddress(accountData) && (
+              <p className="text-[10px] text-[var(--muted-foreground)] truncate leading-tight">
+                {getAccountAddress(accountData)}
+              </p>
+            )
           )}
         </div>
         {selected && <CheckIcon className="w-3.5 h-3.5 text-[var(--primary)] flex-shrink-0" />}

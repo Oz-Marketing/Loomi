@@ -25,6 +25,14 @@ import {
   DocumentTextIcon,
   RectangleStackIcon,
   PaperAirplaneIcon,
+  BuildingStorefrontIcon,
+  UsersIcon,
+  SparklesIcon,
+  BriefcaseIcon,
+  CalculatorIcon,
+  BellAlertIcon,
+  BellIcon,
+  SwatchIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useTheme } from '@/contexts/theme-context';
@@ -158,11 +166,44 @@ const adminNavItems: NavEntry[] = [
 // render; absolute items — Reporting / Ad Generator / Tools — stay global).
 const subaccountAdminNavItems: NavEntry[] = adminNavItems;
 
-// Agency View — the platform-management tier. It doesn't run campaigns; it
-// owns the shared template library + settings. So its nav is just the agency
-// dashboard + templates (Settings lives in the footer). Everything operational
-// belongs to organizations & sub-accounts.
-const agencyNavItems: NavEntry[] = [dashboardNav, templatesNav];
+// Agency View — the platform-management tier. It doesn't run campaigns, so
+// there's nothing operational to show; with only Dashboard + Templates the rail
+// read as empty while the actual work (sub-accounts, users, platform config)
+// sat buried behind a Settings link. Those are surfaced here instead, split
+// into MANAGE (things you act on) and CONFIGURE (things you set once), so the
+// list is scannable rather than ten flat rows.
+//
+// Role-gated to mirror use-settings-tabs: plain admins don't see the elevated
+// (developer / super_admin) configuration items.
+function buildAgencyNav(userRole: string | null): NavEntry[] {
+  const hasAdminAccess = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
+  const isElevated = userRole === 'developer' || userRole === 'super_admin';
+  const abs = (href: string, label: string, icon: IconComponent): NavItem => ({ href, label, icon, absolute: true });
+
+  const items: NavEntry[] = [dashboardNav, templatesNav];
+
+  const manage: NavEntry[] = [];
+  if (hasAdminAccess) {
+    manage.push(abs('/settings/subaccounts', 'Sub-Accounts', BuildingStorefrontIcon));
+    manage.push(abs('/settings/users', 'Users', UsersIcon));
+    manage.push(abs('/settings/teams', 'Teams', UserGroupIcon));
+    manage.push(abs('/settings/contact-field-blueprints', 'Field Blueprints', Squares2X2Icon));
+    manage.push(abs('/settings/knowledge', 'Knowledge Base', SparklesIcon));
+  }
+  if (manage.length > 0) items.push({ divider: true, label: 'Manage' }, ...manage);
+
+  const configure: NavEntry[] = [];
+  if (isElevated) {
+    configure.push(abs('/settings/industries', 'Industries', BriefcaseIcon));
+    configure.push(abs('/settings/markup', 'Markup', CalculatorIcon));
+    configure.push(abs('/settings/alerts', 'Alerts', BellAlertIcon));
+  }
+  configure.push(abs('/settings/notifications', 'Notifications', BellIcon));
+  configure.push(abs('/settings/appearance', 'Appearance', SwatchIcon));
+  items.push({ divider: true, label: 'Configure' }, ...configure);
+
+  return items;
+}
 
 /** Pre-resolve a nav item (+ children) to absolute hrefs under `pfx`. */
 function absResolve(entry: NavItem, pfx: string): NavItem {
@@ -253,10 +294,14 @@ export function Sidebar() {
 
   let navItems: NavEntry[];
   let prefix = '';
+  // Agency View now lists the settings destinations itself, so the rail must
+  // NOT flip to SettingsNav when you open one — the nav would swap out from
+  // under the link you just clicked.
+  const isAgencyView = isAdmin && !inSubaccountRoute && !inOrgRoute;
 
-  if (isAdmin && !inSubaccountRoute && !inOrgRoute) {
-    // Agency View: trimmed to the platform-management essentials.
-    navItems = agencyNavItems;
+  if (isAgencyView) {
+    // Agency View: platform management, surfaced inline instead of behind Settings.
+    navItems = buildAgencyNav(userRole);
   } else if ((isOrg || inOrgRoute) && orgSlug) {
     navItems = buildOrgNav(orgSlug, orgPrimarySlug, orgPrimaryDealer);
   } else if (slug) {
@@ -368,7 +413,7 @@ export function Sidebar() {
         </>
       }
     >
-      {isSettingsPath(normalizedPath) ? (
+      {isSettingsPath(normalizedPath) && !isAgencyView ? (
         <SettingsNav backHref="/dashboard" backLabel="Back to Studio" collapsed={collapsed} />
       ) : (
         resolvedNavItems.map((entry, i) => {

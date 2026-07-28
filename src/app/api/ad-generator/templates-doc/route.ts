@@ -15,7 +15,7 @@
  * return [] so the generator simply falls back to code templates.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuthSession, getAccountScope, canAccessOrg, requireRole } from '@/lib/api-auth';
+import { getAuthSession, getAccountScope, requireRole } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 
@@ -94,14 +94,11 @@ export async function GET(req: NextRequest) {
 
   // Admin: full list (incl. drafts) for the builder's Load.
   if (req.nextUrl.searchParams.get('all') === '1') {
-    const { session, error } = await requireRole('developer', 'super_admin', 'admin');
+    const { error } = await requireRole('developer', 'super_admin', 'admin');
     if (error) return error;
     // ?organizationId=<id> → the org-authoring view: only that org's own
     // templates (access-gated). Otherwise the whole library.
     const organizationId = req.nextUrl.searchParams.get('organizationId')?.trim() || null;
-    if (organizationId && !(await canAccessOrg(session!, organizationId))) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
     try {
       const rows = (await prisma.adTemplateDoc.findMany({
         ...(organizationId ? { where: { organizationId } } : {}),
@@ -192,9 +189,6 @@ export async function POST(req: NextRequest) {
   const organizationId = !accountKey && typeof body.organizationId === 'string' && body.organizationId.trim()
     ? body.organizationId.trim()
     : null;
-  if (organizationId && !(await canAccessOrg(session!, organizationId))) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
 
   const u = session?.user as { name?: string | null; email?: string | null; image?: string | null } | undefined;
   try {

@@ -9,7 +9,6 @@ import {
   XMarkIcon,
   TrashIcon,
   MagnifyingGlassIcon,
-  BuildingOffice2Icon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -99,10 +98,6 @@ export function AccountsList({
   const [newOrgId, setNewOrgId] = useState('');
   const [newOrgName, setNewOrgName] = useState('');
 
-  // Promote-to-organization state (row action in the Agency View list).
-  const [promoteKey, setPromoteKey] = useState<string | null>(null);
-  const [promoteName, setPromoteName] = useState('');
-  const [promoting] = useState(false);
 
   // Users for account rep picker (fetched when creation modal opens)
   const [repUsers, setRepUsers] = useState<UserPickerUser[]>([]);
@@ -179,19 +174,6 @@ export function AccountsList({
     setCreating(false);
   };
 
-  /** Promote a standalone account into a new organization (it becomes the
-   *  org's first sub-account). For clients that grow into a group. */
-  const openPromote = (key: string) => {
-    setPromoteKey(key);
-    setPromoteName(`${accounts?.[key]?.dealer || key} Group`);
-  };
-  const doPromote = async () => {
-    // Promote-to-organization is retired: grouping is now done by setting a
-    // sub-account's Parent Account in its settings, which is a plain account
-    // update rather than creating a second kind of entity.
-    toast.error('Set the Parent Account in sub-account settings to group accounts.');
-    setPromoteKey(null);
-  };
 
 
   const handleDelete = async (key: string) => {
@@ -511,47 +493,6 @@ export function AccountsList({
         document.body,
       )}
 
-      {/* ─── Promote to Organization Modal ─── */}
-      {promoteKey && createPortal(
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-overlay-in">
-          <div className="glass-modal w-full max-w-md mx-4">
-            <div className="p-6">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-8 h-8 rounded-md bg-[var(--primary)]/15 flex items-center justify-center flex-shrink-0">
-                  <BuildingOffice2Icon className="w-4 h-4 text-[var(--primary)]" />
-                </div>
-                <h3 className="text-lg font-semibold flex-1">Promote to organization</h3>
-                <button onClick={() => setPromoteKey(null)} className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]">
-                  <XMarkIcon className="w-5 h-5" />
-                </button>
-              </div>
-              <p className="text-xs text-[var(--muted-foreground)] mb-4">
-                Creates a new organization with <span className="font-medium text-[var(--foreground)]">{accounts?.[promoteKey]?.dealer || promoteKey}</span> as its first sub-account. You can add more sub-accounts afterward.
-              </p>
-              <label className="text-xs text-[var(--muted-foreground)] mb-1 block">Organization name</label>
-              <input
-                type="text"
-                value={promoteName}
-                onChange={(e) => setPromoteName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') doPromote(); }}
-                className="w-full bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm"
-                autoFocus
-              />
-              <div className="flex items-center gap-2 mt-4">
-                <button
-                  onClick={doPromote}
-                  disabled={!promoteName.trim() || promoting}
-                  className="flex-1 px-4 py-2.5 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50"
-                >
-                  {promoting ? 'Promoting...' : 'Promote to organization'}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )}
-
       {/* ─── Account Table ─── */}
       {sortedEntries.length === 0 ? (
         <div className="text-center py-16 text-[var(--muted-foreground)]">
@@ -657,16 +598,6 @@ export function AccountsList({
                     {canManageAccounts && (
                       <td className="px-3 py-2 align-middle">
                         <div className="flex items-center justify-end gap-0.5">
-                          {/* Promote a standalone account into a new org (Agency View only). */}
-                          {!restrictKeys && !account.organizationId && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); openPromote(key); }}
-                              className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--primary)] hover:bg-[var(--primary)]/10 transition-colors"
-                              title="Promote to organization"
-                            >
-                              <BuildingOffice2Icon className="w-4 h-4" />
-                            </button>
-                          )}
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDelete(key); }}
                             className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-red-400 hover:bg-red-500/10 transition-colors"

@@ -6,21 +6,7 @@ import { parseTemplate } from '@/lib/template-parser';
 import { serializeTemplate } from '@/lib/template-serializer';
 import { getStarterTemplate } from '@/lib/template-starters';
 import * as templateService from '@/lib/services/templates';
-import * as orgService from '@/lib/services/organizations';
 import { isVisualEditableTemplate, parseV2Template } from '@/lib/email/types';
-
-/** True when the session can read/author templates for the given organization. */
-async function canAccessOrg(
-  orgId: string,
-  unrestricted: boolean,
-  userAccountKeys: string[],
-): Promise<boolean> {
-  if (unrestricted) return true;
-  // Scoped users have their org grants expanded to child accountKeys at
-  // session build, so org access = sharing any child rooftop.
-  const childKeys = await orgService.getOrgChildKeys(orgId);
-  return childKeys.some((k) => userAccountKeys.includes(k));
-}
 
 function extractFrontmatterTitle(content: string): string | undefined {
   const v2 = parseV2Template(content);
@@ -105,9 +91,6 @@ export async function GET(req: NextRequest) {
       type: type || undefined,
     });
   } else if (organizationIdParam) {
-    if (!(await canAccessOrg(organizationIdParam, unrestricted, userAccountKeys))) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-    }
     templates = await templateService.getTemplatesWithContent({
       type: type || undefined,
       publishedOnly,
@@ -212,7 +195,7 @@ export async function POST(req: NextRequest) {
   if (error) return error;
 
   try {
-    const { design, type: templateType, mode, accountKey, organizationId } = await req.json();
+    const { design, type: templateType, mode, accountKey } = await req.json();
 
     if (!design) {
       return NextResponse.json({ error: 'Missing design name' }, { status: 400 });
@@ -230,13 +213,6 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
       resolvedAccountKey = key;
-    } else if (typeof organizationId === 'string' && organizationId.trim()) {
-      // Org-owned template (Phase 2): inherited by every child rooftop.
-      const orgId = organizationId.trim();
-      if (!(await canAccessOrg(orgId, unrestricted, userAccountKeys))) {
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-      }
-      resolvedOrgId = orgId;
     }
 
     const safeSlug = design

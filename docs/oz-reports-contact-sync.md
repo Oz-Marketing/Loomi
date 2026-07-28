@@ -38,7 +38,7 @@ overlap, or run twice by hand.
 |---|---|---|---|
 | `leads` | hourly, :07 | `pushleads` | 2 days |
 | `nightly` | 03:30 MT | `pushcustomers`, `pushcustomersps`, `pushevents`, `pusheventsps`, `pushleads` | controller defaults — service 7d, sales 45d — plus 3d leads catch-up |
-| `sweep` | Sunday 02:00 MT | all five, `?all=1` | full history |
+| `sweep` | Sunday 02:00 MT | all five, `?all=1`, **one dealer per request** | full history |
 
 Why three and not one:
 
@@ -57,6 +57,27 @@ Why three and not one:
 
 The nightly deliberately repeats leads with a 3-day window: if the hourly job is
 wedged, leads still land within a day instead of waiting for Sunday.
+
+### Why the sweep fans out per dealer
+
+38 rooftops are mapped (25 automotive, 13 powersports, all in `loomi_set = 0`).
+The incremental jobs batch every dealer into one request per endpoint safely,
+because their windows are days wide. A full sweep can't: ingest upserts
+contact-by-contact, so all-time sales + service across 38 rooftops in a single
+request would hit the timeout and be killed **mid-run, every Sunday**, having
+silently done partial work.
+
+So `sweep` first asks each endpoint which accounts it covers — a `?dry_run=1&days=1`
+call, cheap because a 1-day window builds almost no payload, but the response
+still names every mapped dealer — then walks them one request at a time with
+`?all=1&dealer=KEY`. Bounded work per request, failures attributable to a single
+rooftop, and progress visible in the log as it goes.
+
+Budget hours, not minutes, for a sweep, and note the hourly leads job logs
+`SKIP another sync holds the lock` while one is running. That's intentional (one
+sync at a time keeps load off the MySQL box); Sunday's leads are covered by the
+nightly 3-day catch-up. `SWEEP_MAX_TIME` (default 3600) is the per-dealer
+ceiling, separate from `CURL_MAX_TIME` for incremental runs.
 
 ## Install (Oz Reports host, cPanel UI only)
 
@@ -93,9 +114,10 @@ are enough. Everything runs as the cPanel account that owns the Oz Reports site
     GROUP BY loomi_set, dealer_type;
    ```
 
-   If every row says `loomi_set = 0`, the defaults are right and you can skip
-   step 4. If any other value appears, it must be listed in `SETS` or those
-   rooftops never sync.
+   As of 2026-07-28 this returns `0 / Automotive / 25` and `0 / Powersports / 13`
+   — everything in set `0`, so the defaults are right and step 4 is unnecessary.
+   If any other `loomi_set` value ever appears, it must be listed in `SETS` or
+   those rooftops silently never sync.
 
 4. **Optional config file.** Only needed to override a default. File Manager →
    **Settings** → tick *Show Hidden Files (dotfiles)*, then in the home
@@ -250,7 +272,8 @@ status line alone would report success on a half-broken run.
 | `HTTP 500` + "Base URL / Ingest Secret not configured" | `APIKeys.php` `Loomi` block empty on the server | Fill in `Ingest Secret` (and `Base URL`) on the server |
 | Batch errors: `HTTP 401` | Loomi rotated `OZ_INGEST_SECRET` | Re-sync the secret on both sides |
 | Batch errors: `Unknown accountKey: X` | `dealer_map.loomi_account_key` doesn't match a Loomi `Account.key` | Correct the mapping row |
-| `curl exited 28` | Request exceeded `CURL_MAX_TIME` | Raise it, or split the run with `SETS` / `from`+`to` chunks |
+| `curl exited 28` | Request exceeded `CURL_MAX_TIME` (or `SWEEP_MAX_TIME`) | Raise it in `~/.loomi-sync.env`, or narrow the run with `from`+`to` chunks |
+| `dealer discovery failed — cannot chunk the sweep` | The `?dry_run=1&days=1` probe didn't return 200 | Same causes as any other failure above — check the log for the probe response; the sweep refuses to run rather than fire one unbounded request |
 | Health check: `never-synced` | Cron not installed, or that account has never been pushed | Install the crontab; check the account's `loomi_set` is in `SETS` |
 | Health check: `stale` for one account only | Its dealer row was unmapped or its make filter excludes everything | Check `dealer_map` for that rooftop |
 | Health check: `stale` for everything | Cron disabled, host moved, or secret rotated | Check `~/loomi-sync/logs/status-*.json` and the day's log |

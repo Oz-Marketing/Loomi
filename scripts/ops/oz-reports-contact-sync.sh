@@ -20,12 +20,15 @@
 #             plus a 3-day leads catch-up so leads still land if the hourly
 #             job is wedged. Uses the controller's default windows
 #             (service 7d / sales 45d).
-#   sweep     Weekly. Every endpoint with ?all=1 — full history. This is the
-#             only run that repairs edits to OLD records: the incremental
+#   sweep     Weekly. Every endpoint with ?all=1 — full history, fanned out
+#             ONE DEALER PER REQUEST (38 rooftops of all-time history in a
+#             single request would be killed by the timeout mid-run). This is
+#             the only run that repairs edits to OLD records: the incremental
 #             windows filter on event date (closedate / contractdate /
 #             lead_time), not on a last-modified column, so a phone-number
 #             change or opt-out flip on a two-year-old purchase is invisible
 #             to them. Ingest is an idempotent merge, so this is safe.
+#             Expect hours, not minutes. Pass dealer=KEY to sweep just one.
 #
 # Extra query (optional 2nd arg) is appended to every request, e.g.
 #   oz-reports-contact-sync.sh nightly dry_run=1
@@ -62,9 +65,12 @@ LOG_DIR="${LOG_DIR:-$HOME/loomi-sync/logs}"
 LOG_RETENTION_DAYS="${LOG_RETENTION_DAYS:-30}"
 LOCK_DIR="${LOCK_DIR:-$HOME/.loomi-sync.lock}"
 STALE_LOCK_HOURS="${STALE_LOCK_HOURS:-6}"
-# Per-request ceiling. A full sweep of a big rooftop's whole history can run
-# for many minutes inside one request; 30 min is generous but bounded.
+# Per-request ceiling. Incremental windows are small; 30 min is generous.
 CURL_MAX_TIME="${CURL_MAX_TIME:-1800}"
+# Sweeps run one dealer at a time (see run_sweep) but a single rooftop's whole
+# sales+service history is still tens of thousands of contact-by-contact
+# upserts, so give each dealer its own hour.
+SWEEP_MAX_TIME="${SWEEP_MAX_TIME:-3600}"
 # Leave empty to auto-detect (see detect_php). cron on cPanel runs with a
 # minimal PATH that often lacks php even though the host is a PHP host.
 PHP_BIN="${PHP_BIN:-}"
@@ -96,13 +102,12 @@ case "$JOB" in
     )
     ;;
   sweep)
-    PLAN=(
-      "pushcustomers|all=1"
-      "pushcustomersps|all=1"
-      "pushleads|all=1"
-      "pushevents|all=1"
-      "pusheventsps|all=1"
-    )
+    # Endpoint list only — the sweep does NOT use PLAN. It fans out per dealer
+    # (run_sweep) because one request covering all 38 mapped rooftops' full
+    # history would never finish inside a sane timeout.
+    SWEEP_ENDPOINTS="pushcustomers pushcustomersps pushleads pushevents pusheventsps"
+    PLAN=()
+    CURL_MAX_TIME="$SWEEP_MAX_TIME"
     ;;
   *)
     echo "ERROR: unknown or missing job: '${JOB}'" >&2
@@ -115,6 +120,7 @@ mkdir -p "$LOG_DIR" || { echo "ERROR: cannot create log dir $LOG_DIR" >&2; exit 
 LOG_FILE="${LOG_DIR}/sync-$(date '+%Y-%m-%d').log"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/loomi-sync.XXXXXX")" || exit 1
 BODY="${TMP_DIR}/response.json"
+DISCOVER_BODY="${TMP_DIR}/discover.json"
 PARSER="${TMP_DIR}/summarize.php"
 
 FAILURES=()
@@ -364,6 +370,65 @@ run_call() {
   esac
 }
 
+# ─────────────────────────────────────────────────────────────
+# Sweep — full history, one dealer per request.
+#
+# The incremental jobs can safely batch every dealer into one request because
+# their windows are days wide. A full sweep cannot: 38 mapped rooftops of
+# all-time sales + service is tens of thousands of contact-by-contact upserts
+# per dealer, so a single request would be killed mid-run by the timeout —
+# every Sunday, having silently done partial work.
+#
+# So discover the dealers each endpoint is mapped to, then walk them one at a
+# time. Bounded work per request, failures attributable to a rooftop, and
+# progress visible in the log as it goes.
+# ─────────────────────────────────────────────────────────────
+
+# Ask an endpoint which accounts it covers, using a deliberately cheap dry run
+# (a 1-day window builds almost no payload, but the response still names every
+# mapped dealer — the controller creates each dealer's summary bucket before it
+# checks for emptiness). Parsed with grep so this works with no PHP CLI.
+discover_dealers() {
+  local endpoint="$1" set="$2" url http
+  url="${OZ_BASE}/loomi/${endpoint}/${set}?dry_run=1&days=1"
+
+  http=$(curl -sS \
+    --max-time 300 --retry 2 --retry-delay 15 --retry-connrefused \
+    -o "$DISCOVER_BODY" -w '%{http_code}' \
+    "$url" 2>>"$LOG_FILE")
+
+  [ "$http" != "200" ] && return 1
+  grep -o '"account":"[^"]*"' "$DISCOVER_BODY" | sed 's/.*:"//; s/"$//' | sort -u
+}
+
+run_sweep() {
+  local endpoint set keys key count
+
+  for endpoint in $SWEEP_ENDPOINTS; do
+    for set in $SETS; do
+      # An operator-pinned dealer wins — `sweep dealer=youngHonda` should sweep
+      # exactly that rooftop, not rediscover all of them.
+      if printf '%s' "$EXTRA_QUERY" | grep -q 'dealer='; then
+        run_call "$endpoint" "all=1" "$set"
+        continue
+      fi
+
+      if ! keys="$(discover_dealers "$endpoint" "$set")" || [ -z "$keys" ]; then
+        HARD_FAIL=1
+        fail "${endpoint}/${set}: dealer discovery failed — cannot chunk the sweep (check the log for the dry-run response)"
+        continue
+      fi
+
+      count=$(printf '%s\n' "$keys" | wc -l | tr -d ' ')
+      log "${endpoint}/${set}: sweeping ${count} dealer(s), one request each"
+
+      for key in $keys; do
+        run_call "$endpoint" "all=1&dealer=${key}" "$set"
+      done
+    done
+  done
+}
+
 # Machine-readable last-run marker, so a human (or another check) can see
 # when this job last completed without grepping logs.
 write_status() {
@@ -400,13 +465,17 @@ if [ -z "$RESOLVED_PHP" ]; then
   log "WARN no PHP CLI found — using the coarse fallback summarizer. Set PHP_BIN in ${CONFIG_FILE} to restore per-dealer detail."
 fi
 
-for entry in "${PLAN[@]}"; do
-  endpoint="${entry%%|*}"
-  query="${entry#*|}"
-  for set in $SETS; do
-    run_call "$endpoint" "$query" "$set"
+if [ "$JOB" = "sweep" ]; then
+  run_sweep
+else
+  for entry in "${PLAN[@]}"; do
+    endpoint="${entry%%|*}"
+    query="${entry#*|}"
+    for set in $SETS; do
+      run_call "$endpoint" "$query" "$set"
+    done
   done
-done
+fi
 
 if [ "$HARD_FAIL" -ne 0 ]; then
   EXIT_CODE=1

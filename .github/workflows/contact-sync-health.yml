@@ -59,6 +59,7 @@ jobs:
           checked=$(jq -r '.accountsChecked' /tmp/health.json)
           stale=$(jq -r '.staleCount' /tmp/health.json)
           never=$(jq -r '.neverSyncedCount' /tmp/health.json)
+          runs=$(jq -r '.runsAllTime' /tmp/health.json)
 
           {
             echo "### CRM contact sync"
@@ -67,12 +68,22 @@ jobs:
             echo "|---|---|---|---|---|---|"
             jq -r '"| \(.accountsChecked) | \(.staleCount) | \(.neverSyncedCount) | \(.totals24h.rows) | \(.totals24h.created) | \(.totals24h.updated) |"' /tmp/health.json
             echo
-            if [ "${stale}" != "0" ] || [ "${never}" != "0" ]; then
-              echo "#### Problems"
+            if [ "${stale}" != "0" ]; then
+              echo "#### Stale — these stopped receiving batches"
               echo
-              echo "| account | dealer | status | hours since last run | contacts |"
-              echo "|---|---|---|---|---|"
-              jq -r '.problems[] | "| \(.accountKey) | \(.dealer // "—") | \(.status) | \(.hoursSinceLastRun // "never") | \(.contactCount) |"' /tmp/health.json
+              echo "| account | dealer | hours since last run | contacts |"
+              echo "|---|---|---|---|"
+              jq -r '.problems[] | "| \(.accountKey) | \(.dealer // "—") | \(.hoursSinceLastRun // "never") | \(.contactCount) |"' /tmp/health.json
+              echo
+            fi
+            if [ "${never}" != "0" ]; then
+              echo "<details><summary>Never synced (${never}) — expected for feed-less parent accounts</summary>"
+              echo
+              echo "| account | dealer | contacts |"
+              echo "|---|---|---|"
+              jq -r '.warnings[] | "| \(.accountKey) | \(.dealer // "—") | \(.contactCount) |"' /tmp/health.json
+              echo
+              echo "</details>"
             fi
           } >> "${GITHUB_STEP_SUMMARY}"
 
@@ -80,15 +91,27 @@ jobs:
           jq -r '.accounts[] | "\(.status)\t\(.accountKey)\thours=\(.hoursSinceLastRun // "never")\tcontacts=\(.contactCount)\t24h_rows=\(.last24h.rows)"' \
             /tmp/health.json
 
+          # never-synced accounts are a warning, not a failure: several YAG
+          # accounts are parent entities with no CRM feed, so they never
+          # produce a heartbeat and would otherwise fail this job daily.
+          if [ "${never}" != "0" ]; then
+            echo "::warning::${never} account(s) have never received a batch — expected for feed-less parent accounts, but check the summary if that number grows."
+          fi
+
           if [ "${healthy}" = "true" ]; then
-            echo "All ${checked} account(s) synced within the freshness window."
+            echo "All ${checked} account(s) with an active feed synced within the freshness window."
             exit 0
           fi
 
           if [ "${checked}" = "0" ]; then
-            echo "::error::No accounts have ever received a CRM ingest batch — is the Oz Reports cron installed? (scripts/ops/oz-reports-contact-sync.sh)"
+            echo "::error::No accounts found at all — either an empty database or the ingest routes have never been hit."
             exit 1
           fi
 
-          echo "::error::Contact sync is stale: ${stale} stale, ${never} never-synced of ${checked} account(s). See the run summary and docs/oz-reports-contact-sync.md."
+          if [ "${runs}" = "0" ]; then
+            echo "::error::No account has EVER received a CRM ingest batch — is the Oz Reports cron installed? See docs/oz-reports-contact-sync.md."
+            exit 1
+          fi
+
+          echo "::error::Contact sync is stale for ${stale} of ${checked} account(s). See the run summary and docs/oz-reports-contact-sync.md."
           exit 1

@@ -73,7 +73,8 @@ export async function GET(req: NextRequest) {
   const since24h = new Date(now.getTime() - 24 * 3_600_000);
 
   try {
-    const [runsByAccount, runsByAccountKind, recentRuns, contactsByAccount] = await Promise.all([
+    const [runsAllTime, runsByAccount, runsByAccountKind, recentRuns, contactsByAccount] = await Promise.all([
+      prisma.ingestRun.count(),
       prisma.ingestRun.groupBy({
         by: ['accountKey'],
         _max: { startedAt: true },
@@ -155,10 +156,18 @@ export async function GET(req: NextRequest) {
     const stale = accounts.filter((a) => a.status === 'stale');
     const neverSynced = accounts.filter((a) => a.status === 'never-synced');
 
-    // Nothing discovered at all means no account has ever received a CRM
-    // batch — either a brand-new database or a pipeline that has never run.
-    // Either way it is not a clean bill of health.
-    const healthy = accounts.length > 0 && stale.length === 0 && neverSynced.length === 0;
+    // `never-synced` is a WARNING, not a failure. Several YAG accounts are
+    // parent/holding entities with no rooftop CRM feed of their own
+    // (youngAutomotiveGroup, youngCollisionCenter, youngCommercialFleet,
+    // youngPowersports) — the bridge skips the POST when a dealer has no rows
+    // in the window, so they legitimately never produce a heartbeat. Failing
+    // on them would mean a false alarm every single day, which is how a
+    // monitor gets muted and stops being a monitor.
+    //
+    // A pipeline that has NEVER run anywhere is still a failure — that's the
+    // runsAllTime check, which catches "the cron was never installed" without
+    // needing per-account noise.
+    const healthy = accounts.length > 0 && stale.length === 0 && runsAllTime > 0;
 
     // Self-maintaining retention. Cheap (indexed on startedAt) and keeps this
     // append-only log from needing a separate cron of its own.
@@ -176,6 +185,7 @@ export async function GET(req: NextRequest) {
       maxAgeHours,
       healthy,
       accountsChecked: accounts.length,
+      runsAllTime,
       staleCount: stale.length,
       neverSyncedCount: neverSynced.length,
       totals24h: {
@@ -185,11 +195,19 @@ export async function GET(req: NextRequest) {
         updated: accounts.reduce((sum, a) => sum + a.last24h.updated, 0),
         issues: accounts.reduce((sum, a) => sum + a.last24h.issues, 0),
       },
-      problems: [...neverSynced, ...stale].map((a) => ({
+      // problems = the failing set. warnings = accounts that have simply never
+      // pushed, which is expected for feed-less parent accounts.
+      problems: stale.map((a) => ({
         accountKey: a.accountKey,
         dealer: a.dealer,
         status: a.status,
         hoursSinceLastRun: a.hoursSinceLastRun,
+        contactCount: a.contactCount,
+      })),
+      warnings: neverSynced.map((a) => ({
+        accountKey: a.accountKey,
+        dealer: a.dealer,
+        status: a.status,
         contactCount: a.contactCount,
       })),
       accounts,

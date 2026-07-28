@@ -213,6 +213,26 @@ untouched, so `updatedAt` alone cannot tell "quiet Sunday" from "cron deleted
 three weeks ago". Every accepted batch writes an `IngestRun` row even when it
 changed nothing, so **no rows means no sync**.
 
+### stale fails, never-synced only warns
+
+Four mapped accounts have no CRM feed of their own — `youngAutomotiveGroup`,
+`youngCollisionCenter`, `youngCommercialFleet`, `youngPowersports` all return
+`candidates: 0`. The bridge skips the POST when a dealer has no rows in the
+window, so these never produce a heartbeat and sit permanently at
+`never-synced`. That's expected, so it's reported as a **warning**; failing on
+it would mean a red run every single day, which is how a monitor gets muted and
+stops being a monitor.
+
+The failure conditions are:
+
+- **any account `stale`** — it was receiving batches and stopped. This is the
+  real signal.
+- **`runsAllTime === 0`** — no account has *ever* received a batch, i.e. the
+  cron was never installed or has never once succeeded.
+
+If the `never-synced` count starts climbing past those four, that's worth a
+look — it means a newly-mapped rooftop isn't pushing.
+
 By hand:
 
 ```
@@ -274,7 +294,8 @@ status line alone would report success on a half-broken run.
 | Batch errors: `Unknown accountKey: X` | `dealer_map.loomi_account_key` doesn't match a Loomi `Account.key` | Correct the mapping row |
 | `curl exited 28` | Request exceeded `CURL_MAX_TIME` (or `SWEEP_MAX_TIME`) | Raise it in `~/.loomi-sync.env`, or narrow the run with `from`+`to` chunks |
 | `dealer discovery failed — cannot chunk the sweep` | The `?dry_run=1&days=1` probe didn't return 200 | Same causes as any other failure above — check the log for the probe response; the sweep refuses to run rather than fire one unbounded request |
-| Health check: `never-synced` | Cron not installed, or that account has never been pushed | Install the crontab; check the account's `loomi_set` is in `SETS` |
+| Health check: `never-synced` (warning) | That account has no CRM feed — expected for the four parent accounts | Nothing, unless the count grows; then check the rooftop's `loomi_set` and `loomi_account_key` |
+| Health check: `runsAllTime: 0` | Cron not installed, or has never once succeeded | Install the crontab (steps 6–8) |
 | Health check: `stale` for one account only | Its dealer row was unmapped or its make filter excludes everything | Check `dealer_map` for that rooftop |
 | Health check: `stale` for everything | Cron disabled, host moved, or secret rotated | Check `~/loomi-sync/logs/status-*.json` and the day's log |
 | Sync log shows `SKIP another sync holds the lock` repeatedly | A long sweep is still running, or a run died holding the lock | Locks older than `STALE_LOCK_HOURS` (6) are broken automatically and warn |

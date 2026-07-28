@@ -58,8 +58,12 @@ async function callHealth(query = ''): Promise<{
     healthy: boolean;
     maxAgeHours: number;
     accountsChecked: number;
+    runsAllTime: number;
+    staleCount: number;
+    neverSyncedCount: number;
     accounts: HealthAccount[];
     problems: { accountKey: string; status: string }[];
+    warnings: { accountKey: string; status: string }[];
     pruned: number;
   };
 }> {
@@ -286,14 +290,21 @@ describe.skipIf(!RUN)('ingest run log + contact-sync health', () => {
     expect(n.hoursSinceLastRun).toBeNull();
     expect(n.contactCount).toBe(1);
 
-    // Both problem accounts are surfaced in the compact alert list.
+    // A stale account is a FAILURE — it was syncing and stopped.
     const flagged = body.problems.map((p) => p.accountKey);
     expect(flagged).toContain(stale);
-    expect(flagged).toContain(never);
     expect(flagged).not.toContain(fresh);
 
-    // healthy is global, and this database holds other accounts — assert only
-    // that our own problems are enough to sink it.
+    // A never-synced account is only a WARNING. Several YAG accounts are
+    // parent entities with no CRM feed of their own: the bridge skips the POST
+    // when a dealer has no rows, so they never produce a heartbeat. Failing on
+    // them would alarm every day, which is how a monitor gets ignored.
+    const warned = body.warnings.map((w) => w.accountKey);
+    expect(warned).toContain(never);
+    expect(flagged).not.toContain(never);
+
+    // healthy is global, and this database may hold other accounts — assert
+    // only that our own stale account is enough to sink it.
     expect(body.healthy).toBe(false);
   });
 
@@ -301,8 +312,22 @@ describe.skipIf(!RUN)('ingest run log + contact-sync health', () => {
     // Same data, 96h window: the 3-day-old account is no longer stale.
     const { body } = await callHealth('&maxAgeHours=96');
     expect(find(body.accounts, stale).status).toBe('ok');
-    // A missing run is never excused by a wider window.
+    expect(body.problems.map((p) => p.accountKey)).not.toContain(stale);
+    // A missing run is never excused by a wider window — but it stays a
+    // warning rather than becoming a failure.
     expect(find(body.accounts, never).status).toBe('never-synced');
+    expect(body.warnings.map((w) => w.accountKey)).toContain(never);
+  });
+
+  it('a feed-less account alone does not make the check unhealthy', async () => {
+    // Reproduces the four zero-candidate YAG parent accounts: contacts on file,
+    // no runs, ever. With no stale accounts and runs existing somewhere, the
+    // check must stay green.
+    const { body } = await callHealth('&maxAgeHours=96');
+    expect(body.neverSyncedCount).toBeGreaterThan(0);
+    expect(body.runsAllTime).toBeGreaterThan(0);
+    expect(body.staleCount).toBe(0);
+    expect(body.healthy).toBe(true);
   });
 
   it('does not prune when retention is disabled', async () => {

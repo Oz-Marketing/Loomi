@@ -81,9 +81,18 @@ jobs:
 
             mkdir -p "$RELEASES_DIR" "$SHARED_DIR" "$SHARED_AVATARS_DIR" "$INCOMING_DIR"
 
-            # Ensure nginx allows uploads up to 10MB (default is 1MB)
-            if [ ! -f /etc/nginx/conf.d/client-max-body-size.conf ]; then
-              echo 'client_max_body_size 10m;' > /etc/nginx/conf.d/client-max-body-size.conf
+            # Ensure nginx allows uploads up to 30MB (default is 1MB).
+            # App-side caps are 25MB (media library, contact-list import,
+            # form file uploads); nginx needs headroom above that for
+            # multipart overhead, or an oversized body is rejected at the
+            # proxy with an HTML 413 the app never sees.
+            # Compare contents, not just existence — the old `[ ! -f ]`
+            # guard meant already-provisioned hosts kept their original
+            # value forever and changes here never took effect.
+            NGINX_BODY_CONF=/etc/nginx/conf.d/client-max-body-size.conf
+            DESIRED_BODY_CONF='client_max_body_size 30m;'
+            if [ "$(cat "$NGINX_BODY_CONF" 2>/dev/null)" != "$DESIRED_BODY_CONF" ]; then
+              echo "$DESIRED_BODY_CONF" > "$NGINX_BODY_CONF"
               nginx -t && systemctl reload nginx
             fi
 

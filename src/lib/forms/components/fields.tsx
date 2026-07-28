@@ -17,7 +17,7 @@ import { sanitizeInlineHtml } from '../sanitize-inline';
 
 // ── Shared types ──────────────────────────────────────────────────
 
-interface BaseFieldProps {
+export interface BaseFieldProps {
   label?: string;
   helpText?: string;
   required?: boolean;
@@ -50,7 +50,7 @@ interface OptionSpec {
 
 // ── FieldShell — label + slot + help text ─────────────────────────
 
-function FieldShell({
+export function FieldShell({
   label,
   helpText,
   required,
@@ -110,7 +110,7 @@ function FieldShell({
   );
 }
 
-function inputStyle(props: BaseFieldProps): React.CSSProperties {
+export function inputStyle(props: BaseFieldProps): React.CSSProperties {
   const {
     inputBgColor = '#ffffff',
     inputTextColor = '#1a1a1a',
@@ -209,6 +209,16 @@ export const FieldTextarea: React.FC<FieldTextareaProps> = (props) => {
     </FieldShell>
   );
 };
+
+// ── File upload ───────────────────────────────────────────────────
+// The interactive file field (drag-and-drop, per-file removal) lives in
+// its own client component — see ./FieldFileInput. It's registered in the
+// block-component map there.
+
+export interface FieldFileProps extends BaseFieldProps {
+  /** Allow selecting more than one file at once. */
+  multiple?: boolean;
+}
 
 // ── Choice fields ─────────────────────────────────────────────────
 

@@ -167,11 +167,23 @@ async function readBody(req: NextRequest): Promise<Record<string, unknown>> {
   }
   // form-data or url-encoded — collect into a plain object.
   // Multi-value fields (checkbox groups) come through as repeated
-  // entries; collapse them into arrays.
+  // entries; collapse them into arrays. File entries (from field_file
+  // inputs) are kept as File objects so the submit pipeline can upload
+  // them — the validation + upload steps downstream handle them.
   const formData = await req.formData();
   const out: Record<string, unknown> = {};
   for (const key of new Set(formData.keys())) {
-    const values = formData.getAll(key).map((v) => (typeof v === 'string' ? v : String(v)));
+    const values = formData.getAll(key).filter((v) => {
+      // Drop empty file inputs — an unfilled <input type="file"> still
+      // sends a zero-byte File with an empty filename. Treat that as
+      // "no value" so required validation fires correctly.
+      if (typeof v !== 'string') {
+        const f = v as File;
+        return !(f.size === 0 && !f.name);
+      }
+      return true;
+    });
+    if (values.length === 0) continue;
     out[key] = values.length === 1 ? values[0] : values;
   }
   return out;

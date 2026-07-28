@@ -11,6 +11,7 @@
  */
 
 import type { FormBlockType } from './types';
+import { MAX_FILE_SIZE_MB, ALLOWED_FILE_TYPES_LABEL } from './file-upload';
 
 export type FieldType =
   | 'text'
@@ -331,6 +332,28 @@ export const FIELD_TEXTAREA_SCHEMA: BlockSchema = {
   ],
 };
 
+export const FIELD_FILE_SCHEMA: BlockSchema = {
+  type: 'field_file',
+  label: 'File Upload',
+  icon: 'paper-clip',
+  description: `Upload files (max ${MAX_FILE_SIZE_MB}MB each).`,
+  category: 'field',
+  defaults: {
+    label: 'Upload a file',
+    helpText: `Accepted: ${ALLOWED_FILE_TYPES_LABEL}. Max ${MAX_FILE_SIZE_MB}MB per file.`,
+    required: false,
+    width: 'full',
+    name: '',
+    multiple: true,
+    marginBottom: 16,
+  },
+  props: [
+    ...LABEL_PROPS,
+    { key: 'multiple', label: 'Allow multiple files', type: 'toggle', default: true, group: 'content' },
+    ...FIELD_STYLE_PROPS,
+  ],
+};
+
 export const FIELD_SELECT_SCHEMA: BlockSchema = {
   type: 'field_select',
   label: 'Dropdown',
@@ -486,6 +509,7 @@ export const BLOCK_SCHEMAS: Record<FormBlockType, BlockSchema> = {
   field_radio: FIELD_RADIO_SCHEMA,
   field_consent: FIELD_CONSENT_SCHEMA,
   field_hidden: FIELD_HIDDEN_SCHEMA,
+  field_file: FIELD_FILE_SCHEMA,
   submit_button: SUBMIT_BUTTON_SCHEMA,
 };
 
@@ -499,6 +523,7 @@ export const ALL_BLOCK_SCHEMAS: BlockSchema[] = [
   FIELD_SELECT_SCHEMA,
   FIELD_CHECKBOX_SCHEMA,
   FIELD_RADIO_SCHEMA,
+  FIELD_FILE_SCHEMA,
   FIELD_CONSENT_SCHEMA,
   FIELD_HIDDEN_SCHEMA,
   // CTA

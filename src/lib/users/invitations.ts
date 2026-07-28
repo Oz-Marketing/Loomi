@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import bcryptjs from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
 import { sendUserInviteEmail } from '@/lib/users/invite-email';
+import { normalizePassword, validatePassword } from '@/lib/users/password-policy';
 
 const DEFAULT_INVITE_TTL_HOURS = 72;
 
@@ -25,16 +26,12 @@ function generateInviteToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
-function normalizePassword(password: string): string {
-  return password.trim();
-}
-
+/**
+ * Kept as a named export so existing call sites read as invite-specific, but the
+ * rule itself lives in `password-policy` alongside the reset flow's copy.
+ */
 export function validateInvitePassword(password: string): string | null {
-  const normalized = normalizePassword(password);
-  if (normalized.length < 10) {
-    return 'Password must be at least 10 characters.';
-  }
-  return null;
+  return validatePassword(password);
 }
 
 export async function issueAndSendUserInvite(input: {

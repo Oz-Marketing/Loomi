@@ -58,6 +58,11 @@ export function AiBubble() {
   const isFullScreen =
     pathname.startsWith('/preview') ||
     pathname.startsWith('/login') ||
+    // The other unauthenticated auth pages — same reasoning as /login: there's
+    // no session for Iris to act on, so the FAB is dead weight.
+    pathname.startsWith('/forgot-password') ||
+    pathname.startsWith('/reset-password') ||
+    pathname.startsWith('/onboarding') ||
     // Public hosted forms — no app chrome, no AI affordance.
     pathname.startsWith('/f/');
 

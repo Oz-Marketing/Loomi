@@ -40,6 +40,15 @@
   /* Background — dark mode: solid, no gradient art. */
   --gradient-bg: #070112;
 
+  /* The FLATTENED colour of the content card's body — i.e. what
+     `--card` (rgba(24,24,27,.62)) actually resolves to once composited over
+     `--gradient-bg`. The docked page header paints with this so it reads as
+     the same surface it pins to rather than a brighter bar, then ramps to the
+     `-clear` variant (same RGB, zero alpha) so scrolled content dissolves
+     instead of sliding under a hard edge. Keep the two in sync. */
+  --content-fade: #120f18;
+  --content-fade-clear: rgba(18, 15, 24, 0);
+
   /* Liquid glass sidebar — dark */
   --sidebar-bg: rgba(12, 12, 20, 0.7);
   --sidebar-foreground: #fafafa;
@@ -142,6 +151,12 @@
       #f1f0f5 85%,
       #f4f5f9 100%
     );
+
+  /* Flattened content-card body — see the dark-mode note above. 62% white over
+     the light gradient lands at ~rgb(250,249,252); the docked header used to
+     go PURE white here, which read as a distinctly brighter bar. */
+  --content-fade: #faf9fc;
+  --content-fade-clear: rgba(250, 249, 252, 0);
 
   /* Liquid glass sidebar — light */
   --sidebar-bg: rgba(255, 255, 255, 0.58);
@@ -424,16 +439,11 @@ body {
 /* `.pad-on-scroll` is a legacy alias kept so existing call sites don't need
    sweeping — it intentionally adds nothing now. */
 
-/* Stuck (page scrolled): go opaque so scrolled content can't show through,
-   add a bottom divider + shadow, and compact the top padding so the docked
-   bar reads tight (it's generous at rest, above). */
+/* Stuck (page scrolled): compact the top padding so the docked bar reads tight
+   (it's generous at rest, above). No divider, no shadow, no brighter fill —
+   the ::after below is the entire treatment. */
 [data-scrolled='true'] .page-sticky-header {
   padding-top: 0.625rem;
-  /* Opaque so scrolled content can't show through; tuned to read as the
-     content card it pins to. */
-  background: #120f18;
-  border-bottom-color: var(--border);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.28);
 }
 
 @media (min-width: 768px) {
@@ -442,9 +452,31 @@ body {
   }
 }
 
-[data-theme='light'] [data-scrolled='true'] .page-sticky-header {
-  background: rgb(255, 255, 255);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+/* The docked header's backdrop — the macOS treatment. It paints the content
+   card's OWN body colour (`--content-fade`) behind the title, then ramps that
+   colour to zero alpha over the 2rem below the bar, so rows scrolling up
+   dissolve into the surface instead of disappearing under a hard divider.
+   Nothing here contrasts with the card, so the bar never reads as a separate
+   chrome strip.
+   Mechanics: `.page-sticky-header` is `position: sticky; z-index: 30`, which
+   establishes a stacking context — so `z-index: -1` puts this layer behind the
+   header's own text while still painting above the scrolling content, which
+   lives in the ancestor stacking context. */
+[data-scrolled='true'] .page-sticky-header::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(100% + 2rem);
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    var(--content-fade) 0,
+    var(--content-fade) calc(100% - 2rem),
+    var(--content-fade-clear) 100%
+  );
 }
 
 /* The dashboard greeting collapses once the header docks — it's a one-time
@@ -523,6 +555,518 @@ body {
   );
   border-radius: 1px;
   pointer-events: none;
+}
+
+/* ── Surface switch ──
+   The Studio · Reporting · Projects segmented control pinned to the bottom of
+   every sidebar. A recessed pill track holds three segments; the active one is
+   an indigo→violet gradient pill carrying icon + label, the other two collapse
+   to icon-only taps. The track's inset shadow + the pill's outer glow are what
+   make it read as a physical switch rather than three buttons in a row. */
+.surface-switch {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.1875rem;
+  border-radius: 9999px;
+  border: 1px solid var(--sidebar-border-soft);
+  background: rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.32);
+}
+
+[data-theme='light'] .surface-switch {
+  background: rgba(15, 23, 42, 0.05);
+  box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.07);
+}
+
+/* Each segment sits inside a SidebarTooltip wrapper div, so the WRAPPER is the
+   flex item the track lays out — the slot classes size it and the seg fills it.
+   Inactive slots stay icon-width; the active one takes the slack so its label
+   has room. */
+.surface-switch-slot {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.surface-switch-slot-active {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.surface-switch-seg {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  border-radius: 9999px;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--sidebar-muted-foreground);
+  transition: color 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
+}
+
+.surface-switch-seg:not(.surface-switch-seg-active):hover {
+  color: var(--sidebar-foreground);
+  background: rgba(255, 255, 255, 0.09);
+  transform: translateY(-1px);
+}
+
+[data-theme='light'] .surface-switch-seg:not(.surface-switch-seg-active):hover {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.surface-switch-seg-active {
+  color: #ffffff;
+  background-image: linear-gradient(135deg, #6366f1 0%, #7c6cf5 48%, #8b5cf6 100%);
+  box-shadow:
+    0 3px 10px rgba(99, 102, 241, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.26);
+}
+
+/* Collapsed rail — the sidebar is icon-width, so the inactive surfaces stack
+   vertically as plain icon taps inside a matching recessed track. */
+.surface-switch-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.1875rem;
+  border-radius: 9999px;
+  border: 1px solid var(--sidebar-border-soft);
+  background: rgba(0, 0, 0, 0.28);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.32);
+}
+
+[data-theme='light'] .surface-switch-rail {
+  background: rgba(15, 23, 42, 0.05);
+  box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.07);
+}
+
+.surface-switch-rail-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  padding: 0.5rem;
+  color: var(--sidebar-muted-foreground);
+  transition: color 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
+}
+
+.surface-switch-rail-item:hover {
+  color: var(--sidebar-foreground);
+  background: rgba(255, 255, 255, 0.09);
+  transform: scale(1.06);
+}
+
+[data-theme='light'] .surface-switch-rail-item:hover {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .surface-switch-seg,
+  .surface-switch-rail-item {
+    transition: color 0.18s ease, background-color 0.18s ease !important;
+  }
+  .surface-switch-seg:hover,
+  .surface-switch-rail-item:hover {
+    transform: none !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   AUTH PAGES — login, forgot password, reset password
+   ═══════════════════════════════════════════════════════
+
+   The unauthenticated surface. It borrows the app's vocabulary — drifting
+   colour orbs (the aurora technique from the AI hero, retuned from the rainbow
+   AI signature to Loomi's indigo/violet primary so it reads as brand, not
+   assistant), heavy frosted glass, the same gradient pill as the active
+   SurfaceSwitch segment — so signing in already looks like the product behind
+   it. Shared by all three auth pages, which is why it lives here rather than in
+   any one page component. */
+
+.auth-shell {
+  position: relative;
+  display: flex;
+  /* Fill the viewport no matter who wraps us. `<body>` is `display: flex`, and
+     only the studio host's AppShell wraps /login in a `flex-1` div — the
+     reporting and app surfaces render it bare (LayoutShell short-circuits for
+     those hosts), where a default `flex: 0 1 auto` would shrink the shell to its
+     content width and strand the card in the left half of the screen. Owning the
+     sizing here keeps all three surfaces identical. */
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 100vh;
+  /* Small-viewport unit so mobile browser chrome can't clip the card. */
+  min-height: 100svh;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: 1.5rem 1rem;
+}
+
+/* Ambient backdrop. Inset NEGATIVELY so the blurred orb edges are always
+   off-screen — a blurred circle inside the viewport shows a visible seam. */
+.auth-orbs {
+  position: absolute;
+  inset: -15%;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.auth-orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  /* Dark mode: `screen` makes the orbs ADD light to the near-black page rather
+     than sit on it as flat paint. Light mode reverts to normal blending, where
+     screen would blow the pastels out to white. */
+  mix-blend-mode: screen;
+  will-change: transform;
+}
+
+[data-theme='light'] .auth-orb {
+  mix-blend-mode: normal;
+  filter: blur(80px);
+}
+
+/* Three orbs, reusing the aurora drift keyframes at slower tempos — this is a
+   backdrop someone stares at while typing a password, so it should be barely
+   perceptible motion. */
+.auth-orb-1 {
+  width: 48%;
+  height: 58%;
+  left: -6%;
+  top: -10%;
+  background: radial-gradient(circle, #6366f1 0%, transparent 70%);
+  opacity: 0.5;
+  animation: iris-blob-drift-1 26s ease-in-out infinite;
+}
+.auth-orb-2 {
+  width: 44%;
+  height: 52%;
+  right: -8%;
+  top: 4%;
+  background: radial-gradient(circle, #8b5cf6 0%, transparent 70%);
+  opacity: 0.42;
+  animation: iris-blob-drift-2 31s ease-in-out infinite;
+}
+.auth-orb-3 {
+  width: 52%;
+  height: 50%;
+  left: 20%;
+  bottom: -16%;
+  background: radial-gradient(circle, #38bdf8 0%, transparent 70%);
+  opacity: 0.3;
+  animation: iris-blob-drift-3 35s ease-in-out infinite;
+}
+
+[data-theme='light'] .auth-orb-1 {
+  background: radial-gradient(circle, #c7d2fe 0%, transparent 70%);
+  opacity: 0.95;
+}
+[data-theme='light'] .auth-orb-2 {
+  background: radial-gradient(circle, #ddd6fe 0%, transparent 70%);
+  opacity: 0.9;
+}
+[data-theme='light'] .auth-orb-3 {
+  background: radial-gradient(circle, #bae6fd 0%, transparent 70%);
+  opacity: 0.72;
+}
+
+.auth-content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+}
+
+/* ── The card ── */
+@keyframes auth-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.auth-card {
+  position: relative;
+  border-radius: 1.25rem;
+  background: rgba(16, 14, 24, 0.74);
+  backdrop-filter: blur(40px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow:
+    0 32px 80px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
+  animation: auth-card-in 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+[data-theme='light'] .auth-card {
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(255, 255, 255, 0.9);
+  box-shadow:
+    0 32px 80px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+/* Top-edge sheen — same trick as .glass-panel::before. */
+.auth-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16%;
+  right: 16%;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.22) 50%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+/* ── Hero column (desktop only) ── */
+.auth-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid rgba(99, 102, 241, 0.34);
+  background: rgba(99, 102, 241, 0.13);
+  padding: 0.3125rem 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: #c7d2fe;
+}
+
+[data-theme='light'] .auth-eyebrow {
+  color: #4338ca;
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.auth-hero-title {
+  /* Fluid so the headline never wraps mid-phrase between lg and 2xl. */
+  font-size: clamp(2.125rem, 3.4vw, 3.25rem);
+  line-height: 1.06;
+  letter-spacing: -0.025em;
+  font-weight: 750;
+}
+
+/* The second clause of the headline picks up the brand gradient. */
+.auth-hero-accent {
+  background-image: linear-gradient(115deg, #818cf8 0%, #a78bfa 45%, #38bdf8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+[data-theme='light'] .auth-hero-accent {
+  background-image: linear-gradient(115deg, #4f46e5 0%, #7c3aed 45%, #0284c7 100%);
+}
+
+.auth-feature-icon {
+  display: flex;
+  height: 2.25rem;
+  width: 2.25rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(99, 102, 241, 0.28);
+  background: rgba(99, 102, 241, 0.14);
+  color: #a5b4fc;
+}
+
+[data-theme='light'] .auth-feature-icon {
+  color: #4f46e5;
+  background: rgba(99, 102, 241, 0.1);
+}
+
+/* ── Form controls ── */
+.auth-input {
+  display: block;
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.6875rem 0.875rem;
+  font-size: 0.875rem;
+  color: var(--foreground);
+  outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease;
+}
+
+[data-theme='light'] .auth-input {
+  background: rgba(255, 255, 255, 0.75);
+}
+
+.auth-input::placeholder {
+  color: var(--muted-foreground);
+}
+
+.auth-input:focus {
+  border-color: rgba(99, 102, 241, 0.75);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+
+[data-theme='light'] .auth-input:focus {
+  background: #ffffff;
+}
+
+/* Same gradient as the active SurfaceSwitch segment, so the primary action
+   reads as one system across the app. */
+.auth-submit {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.75rem;
+  padding: 0.6875rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #ffffff;
+  background-image: linear-gradient(135deg, #6366f1 0%, #7c6cf5 48%, #8b5cf6 100%);
+  box-shadow:
+    0 8px 22px rgba(99, 102, 241, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.24);
+  transition: box-shadow 0.2s ease, filter 0.2s ease;
+}
+
+.auth-submit:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow:
+    0 10px 28px rgba(99, 102, 241, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.auth-submit:disabled {
+  opacity: 0.55;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.auth-sso {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--foreground);
+  transition: background-color 0.18s ease, border-color 0.18s ease,
+    transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.auth-sso:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.22);
+  transform: translateY(-1px);
+}
+
+.auth-sso:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+[data-theme='light'] .auth-sso {
+  background: #ffffff;
+}
+
+[data-theme='light'] .auth-sso:hover:not(:disabled) {
+  border-color: rgba(15, 23, 42, 0.18);
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1 1 0;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── Inline banners ── */
+.auth-alert,
+.auth-notice {
+  border-radius: 0.75rem;
+  border: 1px solid transparent;
+  padding: 0.625rem 0.875rem;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.auth-alert {
+  border-color: rgba(239, 68, 68, 0.34);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+}
+
+[data-theme='light'] .auth-alert {
+  border-color: rgba(220, 38, 38, 0.28);
+  background: rgba(220, 38, 38, 0.07);
+  color: #b91c1c;
+}
+
+.auth-notice {
+  border-color: rgba(16, 185, 129, 0.34);
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+
+[data-theme='light'] .auth-notice {
+  border-color: rgba(5, 150, 105, 0.28);
+  background: rgba(5, 150, 105, 0.07);
+  color: #047857;
+}
+
+.auth-link {
+  color: var(--primary);
+  font-weight: 600;
+  transition: opacity 0.15s ease;
+}
+
+.auth-link:hover {
+  opacity: 0.78;
+  text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-orb {
+    animation: none !important;
+  }
+  .auth-card {
+    animation: none !important;
+  }
+  .auth-sso:hover:not(:disabled) {
+    transform: none !important;
+  }
 }
 
 /* ── Shared form input (Projects + general use) ── */

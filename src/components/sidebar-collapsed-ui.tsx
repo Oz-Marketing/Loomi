@@ -40,11 +40,19 @@ type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 export function SidebarTooltip({
   label,
   hint,
+  className,
   children,
 }: {
   label: string;
   /** Optional keyboard shortcut shown as a small key badge after the label. */
   hint?: string;
+  /**
+   * Applied to the wrapper div around the trigger. The wrapper is the real
+   * layout box (the trigger is its child), so a caller laying the trigger out
+   * inside a flex row — e.g. the SurfaceSwitch segments — has to size the
+   * wrapper, not the trigger.
+   */
+  className?: string;
   children: React.ReactNode;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -64,6 +72,7 @@ export function SidebarTooltip({
     <>
       <div
         ref={ref}
+        className={className}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >

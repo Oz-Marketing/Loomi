@@ -53,15 +53,19 @@ export function SurfaceSwitch({ collapsed = false }: { collapsed?: boolean }) {
   if (collapsed) {
     // Rail: the inactive surfaces as icon links, stacked (one tap to switch).
     return (
-      <div className="flex flex-col items-center gap-1">
+      <div className="surface-switch-rail">
         {items
           .filter((it) => it.key !== active && it.href)
           .map((it) => (
-            <SidebarTooltip key={it.key} label={`Switch to ${it.label}`}>
+            <SidebarTooltip
+              key={it.key}
+              label={`Switch to ${it.label}`}
+              className="surface-switch-slot"
+            >
               <a
                 href={it.href ?? '#'}
                 aria-label={`Switch to ${it.label}`}
-                className="flex items-center justify-center rounded-xl px-2 py-2 text-[var(--sidebar-muted-foreground)] transition hover:bg-[var(--sidebar-muted)] hover:text-[var(--sidebar-foreground)]"
+                className="surface-switch-rail-item"
               >
                 <it.icon className="h-5 w-5" />
               </a>
@@ -71,21 +75,25 @@ export function SurfaceSwitch({ collapsed = false }: { collapsed?: boolean }) {
     );
   }
 
-  // Icon-only segments with tooltips — three text labels don't fit the sidebar
-  // width, and the active segment's highlight + tooltip keep it clear.
+  // Only the active segment carries its label — three text labels don't fit the
+  // sidebar width. The inactive two collapse to icons, with tooltips naming the
+  // surface they'd take you to. Styling lives in `.surface-switch*`
+  // (globals.css) so the gradient pill + recessed track stay in one place.
   return (
-    <div className="flex items-center gap-0.5 rounded-xl border border-[var(--sidebar-border)] bg-[var(--sidebar-muted)]/40 p-0.5">
+    <div className="surface-switch">
       {items.map((it) => {
         const isActive = it.key === active;
-        const base =
-          'flex flex-1 items-center justify-center rounded-lg py-1.5 text-xs font-medium transition';
         if (isActive) {
           return (
-            <SidebarTooltip key={it.key} label={it.label}>
+            <SidebarTooltip
+              key={it.key}
+              label={it.label}
+              className="surface-switch-slot surface-switch-slot-active"
+            >
               <span
                 aria-current="page"
                 aria-label={it.label}
-                className={`${base} gap-1.5 bg-[var(--background)] text-[var(--sidebar-foreground)] shadow-sm`}
+                className="surface-switch-seg surface-switch-seg-active"
               >
                 <it.icon className="h-4 w-4 flex-shrink-0" />
                 <span className="truncate">{it.label}</span>
@@ -94,11 +102,15 @@ export function SurfaceSwitch({ collapsed = false }: { collapsed?: boolean }) {
           );
         }
         return (
-          <SidebarTooltip key={it.key} label={`Switch to ${it.label}`}>
+          <SidebarTooltip
+            key={it.key}
+            label={`Switch to ${it.label}`}
+            className="surface-switch-slot"
+          >
             <a
               href={it.href ?? '#'}
               aria-label={`Switch to ${it.label}`}
-              className={`${base} text-[var(--sidebar-muted-foreground)] hover:text-[var(--sidebar-foreground)]`}
+              className="surface-switch-seg"
             >
               <it.icon className="h-4 w-4 flex-shrink-0" />
             </a>

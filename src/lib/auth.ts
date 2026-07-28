@@ -1,5 +1,6 @@
 import { NextAuthOptions } from 'next-auth';
 import CredentialsProvider from 'next-auth/providers/credentials';
+import GoogleProvider from 'next-auth/providers/google';
 import bcryptjs from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
 import { resolveOrgAccountKeys } from '@/lib/services/organizations';
@@ -86,6 +87,85 @@ function parseStoredAccountKeys(raw: string): string[] {
   }
 }
 
+// ── Google SSO ──
+//
+// Oz signs in with Google Workspace, and YAG staff will too. It's an
+// ALTERNATIVE way to authenticate an existing Loomi user, never a way to create
+// one: accounts are still provisioned by invite (see lib/users/invitations.ts),
+// and `signIn` below rejects any Google identity without a matching User row —
+// so roles, accountKeys, and org grants keep coming from our own tables.
+//
+// The provider is only registered when both env vars are present, so
+// environments without Google credentials boot normally with
+// credentials-only sign-in (and the login page hides the button — it reads the
+// live provider list from NextAuth).
+//
+// Microsoft/Entra is a planned second provider; it drops in the same way.
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+export const googleSsoConfigured = Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
+
+/** The DB columns needed to build a session — shared by both providers. */
+const AUTH_USER_SELECT = {
+  id: true,
+  name: true,
+  title: true,
+  email: true,
+  avatarUrl: true,
+  role: true,
+  accountKeys: true,
+  orgKeys: true,
+} as const;
+
+type AuthUserRow = {
+  id: string;
+  name: string;
+  title: string | null;
+  email: string;
+  avatarUrl: string | null;
+  role: string;
+  accountKeys: string;
+  orgKeys: string;
+};
+
+/**
+ * Case-insensitive email lookup. The users API stores addresses lower-cased,
+ * but Google hands back whatever casing the profile carries and legacy rows may
+ * be mixed-case, so neither side can be trusted to match exactly.
+ */
+async function findAuthUserByEmail(rawEmail: string): Promise<AuthUserRow | null> {
+  const email = rawEmail.trim();
+  if (!email) return null;
+  return prisma.user.findFirst({
+    where: { email: { equals: email, mode: 'insensitive' } },
+    select: AUTH_USER_SELECT,
+  });
+}
+
+function toSessionUser(row: AuthUserRow) {
+  return {
+    id: row.id,
+    name: row.name,
+    title: row.title ?? null,
+    email: row.email,
+    avatarUrl: row.avatarUrl,
+    role: row.role as UserRole,
+    accountKeys: parseStoredAccountKeys(row.accountKeys),
+    orgKeys: parseStoredAccountKeys(row.orgKeys),
+  };
+}
+
+async function recordLogin(userId: string): Promise<void> {
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { lastLoginAt: new Date() },
+    });
+  } catch {
+    // Do not block sign-in if audit metadata update fails.
+  }
+}
+
 // Cross-subdomain session sharing.
 //
 // In prod (`https://` NEXTAUTH_URL) we scope NextAuth cookies to `.loomilm.com`
@@ -98,6 +178,12 @@ function parseStoredAccountKeys(raw: string): string[] {
 // secure flag; sessions are scoped to whichever localhost host you signed in
 // on. Cross-subdomain testing locally (e.g. localhost ↔ reporting.localhost)
 // requires logging in on each — rare in practice.
+//
+// Don't try to fix that by scoping the cookie to `localhost`: Chromium treats
+// `localhost` as a public suffix and drops any cookie carrying that domain, so
+// `*.localhost` siblings still never see it (tested). Sharing one dev session
+// across surfaces needs a REGISTRABLE wildcard-to-127.0.0.1 parent domain
+// (lvh.me and friends) plus the matching *_HOST vars the proxy reads.
 const useSecureCookies = process.env.NEXTAUTH_URL?.startsWith('https://') ?? false;
 const cookiePrefix = useSecureCookies ? '__Secure-' : '';
 const cookieDomain = useSecureCookies ? '.loomilm.com' : undefined;
@@ -156,49 +242,86 @@ export const authOptions: NextAuthOptions = {
         const isValid = await bcryptjs.compare(credentials.password, user.password);
         if (!isValid) return null;
 
-        const loginTimestamp = new Date();
-        try {
-          await prisma.user.update({
-            where: { id: user.id },
-            data: { lastLoginAt: loginTimestamp },
-          });
-        } catch {
-          // Do not block sign-in if audit metadata update fails.
-        }
+        await recordLogin(user.id);
 
-        const accountKeys = parseStoredAccountKeys(user.accountKeys);
-        const orgKeys = parseStoredAccountKeys(user.orgKeys);
-        return {
-          id: user.id,
-          name: user.name,
-          title: user.title ?? null,
-          email: user.email,
-          avatarUrl: user.avatarUrl,
-          role: user.role as UserRole,
-          accountKeys,
-          orgKeys,
-        };
+        return toSessionUser(user);
       },
     }),
+    ...(googleSsoConfigured
+      ? [
+          GoogleProvider({
+            clientId: GOOGLE_CLIENT_ID!,
+            clientSecret: GOOGLE_CLIENT_SECRET!,
+            authorization: {
+              // Always show the chooser — Workspace users routinely have a
+              // personal account signed in alongside their work one.
+              params: { prompt: 'select_account' },
+            },
+          }),
+        ]
+      : []),
   ],
   session: {
     strategy: 'jwt',
   },
   pages: {
     signIn: '/login',
+    // Send OAuth failures back to the sign-in form (with ?error=<code>) rather
+    // than NextAuth's unstyled default error page.
+    error: '/login',
   },
   callbacks: {
-    async jwt({ token, user, trigger, session }) {
+    /**
+     * Only runs as a gate for OAuth — the credentials provider does its own
+     * checking in `authorize`. A Google identity is admitted only when the
+     * address is Google-verified AND already belongs to a Loomi user; returning
+     * a URL string bounces the browser there with a code the login page renders.
+     */
+    async signIn({ account, profile, user }) {
+      if (!account || account.provider === 'credentials') return true;
+
+      const emailVerified = (profile as { email_verified?: boolean } | undefined)
+        ?.email_verified;
+      const email = (profile?.email ?? user?.email ?? '').trim();
+
+      if (!email || emailVerified === false) {
+        return '/login?error=OAuthUnverifiedEmail';
+      }
+
+      const existing = await findAuthUserByEmail(email);
+      if (!existing) return '/login?error=OAuthNoAccount';
+
+      await recordLogin(existing.id);
+      return true;
+    },
+
+    async jwt({ token, user, account, trigger, session }) {
       if (user) {
-        token.id = user.id;
-        token.title = user.title ?? null;
-        token.avatarUrl = user.avatarUrl;
-        token.role = user.role;
-        const accountKeys = Array.isArray(user.accountKeys) ? user.accountKeys : [];
-        token.accountKeys = accountKeys;
-        token.orgKeys = Array.isArray(user.orgKeys) ? user.orgKeys : [];
-        if (user.role === 'client' && accountKeys.length > 0) {
-          token.defaultAccountSlug = await getDefaultAccountSlug(accountKeys);
+        // OAuth hands us a provider profile (its `id` is the Google `sub`), not
+        // a Loomi user row — so re-resolve against our own tables and seed the
+        // token from there. `signIn` above already proved a match exists; if the
+        // row somehow vanished between the two, fall through and let the token
+        // stay unseeded rather than trusting provider data.
+        const isOAuth = account ? account.provider !== 'credentials' : false;
+        const seed = isOAuth
+          ? await findAuthUserByEmail(user.email ?? '').then((row) =>
+              row ? toSessionUser(row) : null,
+            )
+          : user;
+
+        if (seed) {
+          token.id = seed.id;
+          token.name = seed.name;
+          token.email = seed.email;
+          token.title = seed.title ?? null;
+          token.avatarUrl = seed.avatarUrl;
+          token.role = seed.role;
+          const accountKeys = Array.isArray(seed.accountKeys) ? seed.accountKeys : [];
+          token.accountKeys = accountKeys;
+          token.orgKeys = Array.isArray(seed.orgKeys) ? seed.orgKeys : [];
+          if (seed.role === 'client' && accountKeys.length > 0) {
+            token.defaultAccountSlug = await getDefaultAccountSlug(accountKeys);
+          }
         }
       }
 

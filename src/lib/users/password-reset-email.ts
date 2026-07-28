@@ -3,25 +3,26 @@ import { escapeHtml, sendTransactionalEmail } from '@/lib/users/transactional-em
 const APP_LOGO_LIGHT_URL =
   'https://storage.googleapis.com/msgsndr/CVpny6EUSHRxlXfqAFb7/media/6995362fd614c941e221bb2e.png';
 
-function renderInviteEmailHtml(input: {
+/**
+ * Password-reset email. Deliberately the same chrome as the invite email
+ * (`invite-email.ts`) so account-lifecycle mail reads as one family — light
+ * logo on a light shell, dark gradient hairline around a white card.
+ */
+function renderPasswordResetEmailHtml(input: {
   recipientName: string;
-  invitedByName: string;
-  inviteUrl: string;
+  resetUrl: string;
   expiresAtLabel: string;
-  role: string;
 }): string {
   const recipientName = escapeHtml(input.recipientName);
-  const invitedByName = escapeHtml(input.invitedByName);
-  const inviteUrl = escapeHtml(input.inviteUrl);
+  const resetUrl = escapeHtml(input.resetUrl);
   const expiresAtLabel = escapeHtml(input.expiresAtLabel);
-  const role = escapeHtml(input.role);
 
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Loomi Studio Invite</title>
+    <title>Reset your Loomi Studio password</title>
   </head>
   <body style="margin:0;padding:0;background:#eff3f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#0f172a;">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#eff3f9;padding:28px 12px;">
@@ -38,26 +39,26 @@ function renderInviteEmailHtml(input: {
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-radius:17px;background:#ffffff;">
                   <tr>
                     <td style="padding:34px 34px 10px 34px;">
-                      <p style="margin:0 0 12px 0;font-size:12px;line-height:1.4;letter-spacing:0.08em;text-transform:uppercase;color:#2563eb;font-weight:700;">
-                        Team Access Invite
+                      <p style="margin:0 0 12px 0;font-size:12px;line-height:1.4;letter-spacing:0.08em;text-transform:uppercase;color:#4f46e5;font-weight:700;">
+                        Password Reset
                       </p>
                       <h1 style="margin:0 0 14px 0;font-size:28px;line-height:1.15;color:#0f172a;font-weight:750;">
-                        You are invited to Loomi Studio
+                        Reset your password
                       </h1>
                       <p style="margin:0 0 18px 0;font-size:15px;line-height:1.65;color:#334155;">
-                        Hi ${recipientName}, ${invitedByName} added you as a <strong style="color:#0f172a;">${role}</strong>. Use the secure link below to create your password and activate your account.
+                        Hi ${recipientName}, we received a request to reset the password for your Loomi Studio account. Use the secure link below to choose a new one.
                       </p>
                       <table role="presentation" cellspacing="0" cellpadding="0" style="margin:0 0 18px 0;">
                         <tr>
-                          <td align="center" style="border-radius:12px;background:#2563eb;">
-                            <a href="${inviteUrl}" style="display:inline-block;padding:13px 24px;font-size:14px;line-height:1;font-weight:700;color:#ffffff;text-decoration:none;">
-                              Create Your Password
+                          <td align="center" style="border-radius:12px;background:#4f46e5;">
+                            <a href="${resetUrl}" style="display:inline-block;padding:13px 24px;font-size:14px;line-height:1;font-weight:700;color:#ffffff;text-decoration:none;">
+                              Choose a New Password
                             </a>
                           </td>
                         </tr>
                       </table>
                       <p style="margin:0 0 2px 0;font-size:13px;line-height:1.5;color:#64748b;">
-                        This invitation expires on <strong style="color:#334155;">${expiresAtLabel}</strong>.
+                        This link expires on <strong style="color:#334155;">${expiresAtLabel}</strong> and can only be used once.
                       </p>
                     </td>
                   </tr>
@@ -68,11 +69,11 @@ function renderInviteEmailHtml(input: {
                           If the button does not work, copy and paste this URL into your browser:
                         </p>
                         <p style="margin:0;font-size:12px;line-height:1.45;word-break:break-all;">
-                          <a href="${inviteUrl}" style="color:#2563eb;text-decoration:none;">${inviteUrl}</a>
+                          <a href="${resetUrl}" style="color:#4f46e5;text-decoration:none;">${resetUrl}</a>
                         </p>
                       </div>
                       <p style="margin:16px 0 0 0;font-size:12px;line-height:1.5;color:#64748b;">
-                        If you did not expect this invite, you can safely ignore this email.
+                        If you did not request a password reset, you can safely ignore this email — your current password stays active.
                       </p>
                     </td>
                   </tr>
@@ -94,13 +95,11 @@ function renderInviteEmailHtml(input: {
 </html>`;
 }
 
-export async function sendUserInviteEmail(input: {
+export async function sendPasswordResetEmail(input: {
   to: string;
   recipientName: string;
-  invitedByName: string;
-  inviteUrl: string;
+  resetUrl: string;
   expiresAt: Date;
-  role: string;
 }): Promise<void> {
   const expiresAtLabel = input.expiresAt.toLocaleString('en-US', {
     year: 'numeric',
@@ -112,29 +111,28 @@ export async function sendUserInviteEmail(input: {
   });
 
   const safeRecipientName = input.recipientName.trim() || input.to;
-  const subject = 'You are invited to Loomi Studio';
-  const html = renderInviteEmailHtml({
+  const html = renderPasswordResetEmailHtml({
     recipientName: safeRecipientName,
-    invitedByName: input.invitedByName,
-    inviteUrl: input.inviteUrl,
+    resetUrl: input.resetUrl,
     expiresAtLabel,
-    role: input.role,
   });
   const text = [
     `Hi ${safeRecipientName},`,
     '',
-    `${input.invitedByName} invited you to Loomi Studio as a ${input.role}.`,
-    'Create your password using this secure link:',
-    input.inviteUrl,
+    'We received a request to reset your Loomi Studio password.',
+    'Choose a new password using this secure link:',
+    input.resetUrl,
     '',
-    `This invitation expires on ${expiresAtLabel}.`,
+    `This link expires on ${expiresAtLabel} and can only be used once.`,
+    '',
+    'If you did not request a password reset, you can safely ignore this email.',
   ].join('\n');
 
   await sendTransactionalEmail({
     to: input.to,
-    subject,
+    subject: 'Reset your Loomi Studio password',
     html,
     text,
-    purpose: 'Invite email',
+    purpose: 'Password reset email',
   });
 }

@@ -99,7 +99,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const isFullScreen =
     normalizedPath.startsWith('/preview')
     || normalizedPath.startsWith('/login')
-    || normalizedPath.startsWith('/onboarding');
+    || normalizedPath.startsWith('/onboarding')
+    || normalizedPath.startsWith('/forgot-password')
+    || normalizedPath.startsWith('/reset-password');
 
   // Template editor gets full-width layout (no sidebar)
   const isTemplateEditor = normalizedPath === '/templates/editor'

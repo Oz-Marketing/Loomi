@@ -30,8 +30,9 @@ model User {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  invites  UserInvite[]
-  accounts Account[] // accounts where this user is the rep
+  invites        UserInvite[]
+  passwordResets PasswordReset[]
+  accounts       Account[] // accounts where this user is the rep
 
   templatesCreated   Template[]                  @relation("TemplateCreatedBy")
   templatesUpdated   Template[]                  @relation("TemplateUpdatedBy")
@@ -67,6 +68,22 @@ model UserInvite {
   usedAt    DateTime?
   createdAt DateTime  @default(now())
   sentAt    DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+}
+
+// Self-service password reset. Same shape as UserInvite — only the sha256 hash
+// of the emailed token is stored, single-use, short-lived — but kept as its own
+// table so a reset can never be mistaken for (or consume) an onboarding invite.
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
 
   @@index([userId, createdAt])
   @@index([expiresAt])

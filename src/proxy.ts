@@ -156,6 +156,10 @@ function isGlobalAppPath(pathname: string): boolean {
     pathname === '/lp-sitemap.xml' ||
     pathname.startsWith('/login') ||
     pathname.startsWith('/logout') ||
+    // Unauthenticated account-recovery pages. Global like /login so a reset
+    // link still resolves if it's opened on a non-studio Loomi host.
+    pathname.startsWith('/forgot-password') ||
+    pathname.startsWith('/reset-password') ||
     // Asset paths mapped to /api/* via next.config.js rewrites — must
     // bypass host rewriting so the next.config rewrite applies cleanly.
     pathname.startsWith('/avatars/') ||
@@ -235,6 +239,9 @@ export async function proxy(request: NextRequest) {
   if (
     pathname.startsWith('/api/auth') ||
     pathname.startsWith('/api/onboarding/') ||
+    // Password reset — the emailed token IS the credential, so these run
+    // without a session (same rationale as /api/onboarding/).
+    pathname.startsWith('/api/password-reset/') ||
     pathname.startsWith('/api/webhooks/') ||
     // Internal job endpoints (cron-triggered) authenticate themselves with the
     // x-internal-job-secret header via requireInternalJobAuth — they have no
@@ -251,6 +258,8 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith('/api/f/') ||
     pathname.startsWith('/login') ||
     pathname.startsWith('/onboarding') ||
+    pathname.startsWith('/forgot-password') ||
+    pathname.startsWith('/reset-password') ||
     pathname.startsWith('/marketing') ||
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon') ||

@@ -375,12 +375,12 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
         <div className="flex-1 min-w-0">
           <p className="flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)]">
             <span className="truncate">{accountData.dealer || key}</span>
-            {/* Groups sit in the same list as plain rooftops now that org mode
-                is gone, so without this badge there's no way to tell that
-                selecting this account rolls up 40 others. */}
+            {/* Organizations sit in the same list as plain sub-accounts now
+                that org mode is gone, so without this badge there's no way to
+                tell that selecting this account rolls up 40 others. */}
             {childCounts[key] > 0 && (
               <span className="flex-shrink-0 rounded-full border border-[var(--primary)]/40 bg-[var(--primary)]/10 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-[var(--primary)]">
-                Group
+                Organization
               </span>
             )}
           </p>

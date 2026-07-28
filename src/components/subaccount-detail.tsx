@@ -54,6 +54,7 @@ import {
   resolveAccountWebsite,
 } from '@/lib/account-resolvers';
 import { useIndustries } from '@/lib/hooks/use-industries';
+import { organizationOptions, subAccountCount } from '@/lib/organization-options';
 
 const WEBSAFE_FONTS = [
   { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
@@ -158,7 +159,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   const searchParams = useSearchParams();
   const { confirm } = useLoomiDialog();
   const key = settingsMode ? (accountKeyProp || '') : (params.key as string);
-  const { refreshAccounts: refreshAccountList } = useAccount();
+  const { accounts, refreshAccounts: refreshAccountList } = useAccount();
   const { markClean } = useUnsavedChanges();
 
   const [activeTab, setActiveTab] = useState<DetailTab>('company');
@@ -184,6 +185,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   const [category, setCategory] = useState('General');
   const categorySuggestions = useIndustries();
   const [oems, setOems] = useState<string[]>([]);
+  const [parentAccountKey, setParentAccountKey] = useState('');
   const [storefrontImage, setStorefrontImage] = useState('');
   const [bizEmail, setBizEmail] = useState('');
   const [bizPhone, setBizPhone] = useState('');
@@ -250,6 +252,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     setDealer(accountData.dealer || '');
     setCategory(accountData.category || 'General');
     setOems(getAccountOems(accountData));
+    setParentAccountKey(accountData.parentAccountKey || '');
     // Business details from account-level fields.
     setBizEmail(resolveAccountEmail(accountData));
     setBizPhone(resolveAccountPhone(accountData));
@@ -305,6 +308,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
       dealer: a.dealer || '',
       category: a.category || 'General',
       oems: JSON.stringify(getAccountOems(a)),
+      parentAccountKey: a.parentAccountKey || '',
       bizEmail: resolveAccountEmail(a),
       bizPhone: resolveAccountPhone(a),
       bizPhoneSales: a.phoneSales || a.salesPhone || '',
@@ -332,13 +336,18 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     };
   }
 
+  const organizationChoices = useMemo(() => organizationOptions(accounts, key), [accounts, key]);
+  // Being an Organization is derived from OTHER accounts pointing here, so the
+  // page has to say so explicitly — nothing else on it would reveal it.
+  const ownSubAccountCount = useMemo(() => subAccountCount(accounts, key), [accounts, key]);
+
   const formSnapshotRef = useRef<Record<string, string> | null>(null);
 
   const hasFormChanges = useMemo(() => {
     const snap = formSnapshotRef.current;
     if (!snap) return false;
     const current: Record<string, string> = {
-      dealer, category, oems: JSON.stringify(oems),
+      dealer, category, oems: JSON.stringify(oems), parentAccountKey,
       bizEmail, bizPhone, bizPhoneSales, bizPhoneService, bizPhoneParts,
       bizAddress, bizCity, bizState, bizZip, bizWebsite, bizTimezone,
       accountRepId: accountRepId ?? '',
@@ -348,7 +357,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
     };
     return Object.keys(snap).some(k => snap[k] !== current[k]);
   }, [
-    dealer, category, oems, bizEmail, bizPhone, bizPhoneSales, bizPhoneService, bizPhoneParts,
+    dealer, category, oems, parentAccountKey,
+    bizEmail, bizPhone, bizPhoneSales, bizPhoneService, bizPhoneParts,
     bizAddress, bizCity, bizState, bizZip, bizWebsite, bizTimezone, accountRepId,
     logoLight, logoDark, logoWhite, logoBlack,
     brandPrimaryColor, brandSecondaryColor, brandAccentColor,
@@ -463,6 +473,8 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
         // Always send oems so PATCH can clear stale values when industry has no brands.
         oems: selectedOems,
         oem: selectedOems[0] || null,
+        // null (not undefined) so clearing the Organization actually detaches.
+        parentAccountKey: parentAccountKey || null,
         storefrontImage: storefrontImage.trim() || undefined,
         email: bizEmail || undefined,
         phone: bizPhone || undefined,
@@ -973,6 +985,36 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                       />
                     </div>
                   )}
+                </div>
+
+                <div>
+                  <label className={labelClass}>Organization</label>
+                  <select
+                    value={parentAccountKey}
+                    onChange={e => setParentAccountKey(e.target.value)}
+                    className={inputClass}
+                  >
+                    <option value="">None — standalone account</option>
+                    {organizationChoices.map(o => (
+                      <option key={o.key} value={o.key}>{o.label}</option>
+                    ))}
+                  </select>
+                  <p className="mt-1.5 text-[11px] leading-4 text-[var(--muted-foreground)]">
+                    The account this one belongs to. Its contacts roll up to that account, and it
+                    inherits that account&rsquo;s brand kit and templates. Setting this is what
+                    makes the parent an Organization — there is no separate promote step.
+                    {ownSubAccountCount > 0 && (
+                      <>
+                        {' '}
+                        <span className="font-medium text-[var(--foreground)]">
+                          This account is itself an Organization
+                        </span>{' '}
+                        — {ownSubAccountCount} sub-account{ownSubAccountCount === 1 ? '' : 's'} roll
+                        {ownSubAccountCount === 1 ? 's' : ''} up to it. To dissolve it, clear the
+                        Organization on each of those.
+                      </>
+                    )}
+                  </p>
                 </div>
 
                 <div>

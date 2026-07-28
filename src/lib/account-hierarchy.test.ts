@@ -3,6 +3,7 @@ import {
   ancestorKeys,
   expandWithDescendants,
   relatedKeys,
+  selectableParentKeys,
   type AccountEdge,
 } from './account-hierarchy';
 
@@ -110,6 +111,43 @@ describe('expandWithDescendants — access grants', () => {
       { key: 'b', parentAccountKey: 'a' },
     ];
     expect(sorted(expandWithDescendants(cyclic, ['a']))).toEqual(['a', 'b']);
+  });
+});
+
+describe('selectableParentKeys — the Organization dropdown', () => {
+  it('offers unrelated accounts', () => {
+    expect(sorted(selectableParentKeys(TREE, 'pjfCorp'))).toEqual(
+      sorted(['youngAutomotiveGroup', ...YAG_ROOFTOPS, 'someOtherDealer']),
+    );
+  });
+
+  it('never offers the account itself', () => {
+    for (const { key } of TREE) {
+      expect(selectableParentKeys(TREE, key)).not.toContain(key);
+    }
+  });
+
+  it('never offers a descendant — that would be a cycle', () => {
+    const offered = selectableParentKeys(TREE, 'youngAutomotiveGroup');
+    for (const rooftop of YAG_ROOFTOPS) expect(offered).not.toContain(rooftop);
+    expect(sorted(offered)).toEqual(sorted(['pjfCorp', 'someOtherDealer']));
+  });
+
+  it('excludes indirect descendants, not just direct children', () => {
+    const deep: AccountEdge[] = [
+      { key: 'holdco', parentAccountKey: null },
+      { key: 'regionWest', parentAccountKey: 'holdco' },
+      { key: 'westFord', parentAccountKey: 'regionWest' },
+      { key: 'unrelated', parentAccountKey: null },
+    ];
+    // westFord is a grandchild — still must not be offered as holdco's parent.
+    expect(selectableParentKeys(deep, 'holdco')).toEqual(['unrelated']);
+  });
+
+  it('still offers the current parent, so a sibling move is possible', () => {
+    // Moving yagFord from the group to someOtherDealer must stay available.
+    expect(selectableParentKeys(TREE, 'yagFord')).toContain('youngAutomotiveGroup');
+    expect(selectableParentKeys(TREE, 'yagFord')).toContain('someOtherDealer');
   });
 });
 

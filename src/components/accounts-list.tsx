@@ -137,7 +137,8 @@ export function AccountsList({
       const hasBrands = industryHasBrands(newCategory);
       const selectedOems = hasBrands ? newOems : [];
       // Grouping is no longer set at creation: an account is created standalone,
-      // then grouped by setting its Parent Account in sub-account settings.
+      // then placed under an Organization via the Organization field in
+      // sub-account settings.
       const accountBody: Record<string, unknown> = {
         key: newKey.trim(),
         dealer: newDealer.trim(),

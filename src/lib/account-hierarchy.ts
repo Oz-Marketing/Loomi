@@ -71,6 +71,18 @@ export function ancestorKeys(edges: AccountEdge[], accountKey: string): string[]
 }
 
 /**
+ * The accounts that may legally be picked as `accountKey`'s parent: everything
+ * except itself and anything already beneath it.
+ *
+ * Excluding descendants means the dropdown can't even offer a cycle. The API
+ * rejects one too — this just keeps the impossible choice off screen.
+ */
+export function selectableParentKeys(edges: AccountEdge[], accountKey: string): string[] {
+  const blocked = new Set<string>(expandWithDescendants(edges, [accountKey]));
+  return edges.map((a) => a.key).filter((k) => !blocked.has(k));
+}
+
+/**
  * Every OTHER account grouped with `accountKey` — the set a suppression must
  * cascade to, so an opt-out at one rooftop silences the whole group.
  *

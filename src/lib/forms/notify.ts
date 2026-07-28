@@ -11,8 +11,7 @@ import nodemailer from 'nodemailer';
 import type { Form, FormSubmission } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { resolveSendGridConfig, sendEmailViaSendGrid } from '@/lib/sending/sendgrid';
-import type { FileValue } from './types';
-import { isFileValue } from './types';
+import { asFileValues } from './types';
 
 export class LeadNotificationError extends Error {
   constructor(message: string) {
@@ -69,13 +68,6 @@ function escapeHtml(value: string): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
-}
-
-/** Collect any file value(s) from a stored submission entry. */
-function asFileValues(value: unknown): FileValue[] {
-  if (isFileValue(value)) return [value];
-  if (Array.isArray(value) && value.every(isFileValue)) return value as FileValue[];
-  return [];
 }
 
 function formatValue(value: unknown): string {

@@ -12,7 +12,7 @@
 // from future batches.
 
 import { prisma } from '@/lib/prisma';
-import { getRelatedAccountKeys } from '@/lib/services/organizations';
+import { getRelatedAccountKeys } from '@/lib/services/accounts';
 
 /** Status callback payload shape — Twilio sends these as form data. */
 export interface TwilioStatusCallbackPayload {

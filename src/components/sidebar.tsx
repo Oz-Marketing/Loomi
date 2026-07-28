@@ -44,7 +44,7 @@ import { SurfaceSwitch } from '@/components/surface-switch';
 import { SettingsNav, isSettingsPath } from '@/components/settings/settings-nav';
 import { AppLogo } from '@/components/app-logo';
 import { SidebarFrame } from '@/components/sidebar-frame';
-import { accountKeyToSlug, isSubaccountRoute, isOrgRoute, stripSubaccountPrefix, orgSlugFor } from '@/lib/account-slugs';
+import { accountKeyToSlug, isSubaccountRoute, stripSubaccountPrefix } from '@/lib/account-slugs';
 
 type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
@@ -205,16 +205,6 @@ function buildAgencyNav(userRole: string | null): NavEntry[] {
   return items;
 }
 
-/** Pre-resolve a nav item (+ children) to absolute hrefs under `pfx`. */
-function absResolve(entry: NavItem, pfx: string): NavItem {
-  return {
-    ...entry,
-    href: `${pfx}${entry.href}`,
-    absolute: true,
-    children: entry.children?.map((c) => ({ ...c, href: `${pfx}${c.href}`, absolute: true })),
-  };
-}
-
 /**
  * Organization nav. An org both rolls up its sub-accounts AND operates as an
  * entity via its primary ("house") sub-account:
@@ -224,33 +214,6 @@ function absResolve(entry: NavItem, pfx: string): NavItem {
  *     deep-link into /subaccount/<primarySlug>. Shown only once a primary is
  *     designated (Settings → Organization → Primary sub-account).
  */
-function buildOrgNav(
-  orgSlug: string,
-  primarySlug: string | null,
-  primaryDealer: string | null,
-): NavEntry[] {
-  const orgPfx = `/org/${orgSlug}`;
-  // Same Audiences group as a sub-account: All Contacts / Lists / Segments all
-  // exist at org scope now, rolled up across the org's rooftops.
-  const rollup: NavEntry[] = [
-    absResolve(dashboardNav, orgPfx),
-    absResolve(contactsNav, orgPfx),
-    absResolve(templatesNav, orgPfx),
-  ];
-  if (!primarySlug) return rollup;
-  const opPfx = `/subaccount/${primarySlug}`;
-  return [
-    ...rollup,
-    { divider: true, label: primaryDealer ? `${primaryDealer} (house account)` : 'House account' },
-    absResolve(campaignBuilderNav, opPfx),
-    absResolve(emailSmsNav, opPfx),
-    absResolve(websitesNav, opPfx),
-    absResolve(flowsNavItem, opPfx),
-    { ...adGeneratorNav, absolute: true },
-    absResolve(mediaNav, opPfx),
-  ];
-}
-
 // Client users: while the platform is still being rolled out to accounts, a
 // client's entire experience is the Ad Generator — they fill in a designer-built
 // template's offer + vehicle and export. Everything else stays hidden until
@@ -271,7 +234,7 @@ function groupContainsPath(item: NavItem, prefix: string, normalizedPath: string
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { userRole, isAdmin, isAccount, isOrg, organizationData, accountKey, accounts } = useAccount();
+  const { userRole, isAdmin, isAccount, accountKey, accounts } = useAccount();
   const { theme, toggleTheme } = useTheme();
   const { collapsed } = useSidebarCollapse();
 
@@ -281,29 +244,17 @@ export function Sidebar() {
   const isClientRole = userRole === 'client';
   const slug = accountKey ? accountKeyToSlug(accountKey, accounts) : null;
   const inSubaccountRoute = isSubaccountRoute(pathname);
-  const inOrgRoute = isOrgRoute(pathname);
-
-  // Org scope: roll-up/manage pages live at /org/<slug>; the org's OWN studio
-  // work operates its primary ("house") sub-account, so operational items are
-  // pre-resolved to /subaccount/<primarySlug>. (Absolute so the prefix loop
-  // below leaves them untouched.)
-  const orgSlug = organizationData ? orgSlugFor(organizationData) : null;
-  const orgPrimaryKey = organizationData?.primaryAccountKey ?? null;
-  const orgPrimarySlug = orgPrimaryKey ? accountKeyToSlug(orgPrimaryKey, accounts) : null;
-  const orgPrimaryDealer = orgPrimaryKey ? accounts[orgPrimaryKey]?.dealer ?? orgPrimaryKey : null;
 
   let navItems: NavEntry[];
   let prefix = '';
   // Agency View now lists the settings destinations itself, so the rail must
   // NOT flip to SettingsNav when you open one — the nav would swap out from
   // under the link you just clicked.
-  const isAgencyView = isAdmin && !inSubaccountRoute && !inOrgRoute;
+  const isAgencyView = isAdmin && !inSubaccountRoute;
 
   if (isAgencyView) {
     // Agency View: platform management, surfaced inline instead of behind Settings.
     navItems = buildAgencyNav(userRole);
-  } else if ((isOrg || inOrgRoute) && orgSlug) {
-    navItems = buildOrgNav(orgSlug, orgPrimarySlug, orgPrimaryDealer);
   } else if (slug) {
     prefix = `/subaccount/${slug}`;
     navItems = isClientRole ? subaccountClientNavItems : subaccountAdminNavItems;

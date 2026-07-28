@@ -21,11 +21,8 @@ model User {
   role        String    @default("client") // developer | super_admin | admin | client
   department  String? // "Design" | "Account Management" | "Development" | "Leadership" | "Marketing" | "Sales" | "Operations"
   accountKeys String    @default("[]") // JSON array of assigned account keys
-  // JSON array of assigned Organization keys. An org grant expands to every
-  // child account's key at session-build time (see lib/auth.ts), so an
   // org-scoped user transparently gains access to all rooftops under it
   // without listing each accountKey individually.
-  orgKeys     String    @default("[]")
   lastLoginAt DateTime?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -103,43 +100,6 @@ model DashboardLayoutPreference {
 
   @@unique([userId, role, mode, scopeKey])
   @@index([userId, updatedAt])
-}
-
-// ─────────────────────────────────────────────────────
-// Organizations (parent grouping over sub-accounts)
-//
-// An Organization groups multiple sub-accounts (rooftops) under one client
-// umbrella — e.g. "Young Automotive Group" over its 20+ dealership accounts.
-// The relationship is a single level (org → account); accounts carry a
-// nullable organizationId, so standalone sub-accounts with no parent behave
-// exactly as before. Reporting/contacts roll up by unioning child accounts
-// (aggregation); org-authored resources cascade down (inheritance, Phase 2).
-// ─────────────────────────────────────────────────────
-
-model Organization {
-  id        String   @id @default(cuid())
-  key       String   @unique // stable machine key, e.g. "youngAutomotiveGroup"
-  slug      String?  @unique // URL-safe kebab-case: "young-automotive-group"
-  name      String // display name, e.g. "Young Automotive Group"
-  // Optional org-level branding used by Phase 2 inheritance (logos + brand
-  // kit authored once and cascaded to child rooftops). JSON, same shape as
-  // Account.logos / Account.branding. Null = no org-level override.
-  logos     String?
-  branding  String?
-  // The org's "house" sub-account — where its OWN operating work lives (e.g.
-  // YAG's corporate branding campaigns, distinct from any dealership). An org
-  // both operates as an entity (via this primary account) AND rolls up all its
-  // sub-accounts. References Account.key; must be one of this org's children.
-  // Null = no primary designated yet (org behaves as a pure roll-up).
-  primaryAccountKey String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  accounts  Account[]
-  // Org-owned resources authored once and inherited by child rooftops (Phase 2).
-  templates    Template[]
-  forms        Form[]
-  landingPages LandingPage[]
 }
 
 // ─────────────────────────────────────────────────────
@@ -244,20 +204,12 @@ model Account {
   metaTimezone              String?
   accountRepId              String?
   accountRep                User?     @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
-  // Parent Organization (nullable). null = standalone sub-account with no org
-  // umbrella. onDelete: SetNull so removing an org detaches its rooftops
-  // rather than cascading a destructive delete of live account data.
-  organizationId            String?
-  organization              Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
-  // ── Account hierarchy (replaces the separate Organization concept) ──
+  // ── Account hierarchy ──
   // A group like Young Automotive Group is BOTH a marketing entity (it sends
   // its own email/SMS/ads) and a parent that rolls up rooftops. Modelling the
   // group as its own Account with children captures both, so there's no
   // "org mode" that has to borrow a child account to do its own work.
-  //
-  // Additive for now: `organizationId` still drives the live UI. The migration
-  // backfills these, then the org-based paths get retired.
   //
   // SetNull on delete so removing a parent detaches children rather than
   // cascading a destructive delete of live account data.
@@ -296,7 +248,6 @@ model Account {
   tasks                    Task[]
 
   @@index([accountRepId])
-  @@index([organizationId])
   @@index([parentAccountKey])
 }
 
@@ -310,13 +261,12 @@ model Template {
   // Ownership is a three-way split (Phase 2 org inheritance):
   //   accountKey set                        → owned by that sub-account (only
   //                                            visible inside it).
-  //   accountKey null, organizationId null  → shared Loomi library template.
-  //   accountKey null, organizationId set   → ORG-owned: authored once at the
+  //   accountKey null  → shared Loomi library template.
+  //   accountKey set   → owned by that account; its descendants inherit it.
   //                                            organization and inherited by
   //                                            every child rooftop (read-only
   //                                            there until cloned).
   accountKey        String?
-  organizationId    String?
   title             String // "Service Reminder", "Modern Dark"
   type              String // "lifecycle" | "design"
   category          String? // "service", "sales", "loyalty", etc.
@@ -333,14 +283,12 @@ model Template {
   createdByUser   User?                   @relation("TemplateCreatedBy", fields: [createdByUserId], references: [id])
   updatedByUser   User?                   @relation("TemplateUpdatedBy", fields: [updatedByUserId], references: [id])
   publishedByUser User?                   @relation("TemplatePublishedBy", fields: [publishedByUserId], references: [id])
-  organization    Organization?           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   versions        TemplateVersion[]
   tags            TemplateTagAssignment[]
   emails          AccountEmail[]
 
   @@index([published])
   @@index([accountKey])
-  @@index([organizationId])
 }
 
 model TemplateVersion {
@@ -901,11 +849,7 @@ model Form {
   // carry an accountKey.
   accountKey        String?
   account           Account?     @relation(fields: [accountKey], references: [key], onDelete: Cascade)
-  // Org-owned form TEMPLATE (isTemplate=true, accountKey null, organizationId
-  // set) — authored once at the org and inherited by every child sub-account
   // as a starting template (Phase 2 inheritance).
-  organizationId    String?
-  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name              String
   // Public URL slug — served at /f/[slug]. Globally unique so iframe
   // embeds resolve without an account prefix.
@@ -960,7 +904,6 @@ model Form {
   @@index([accountKey])
   @@index([accountKey, status])
   @@index([accountKey, isTemplate])
-  @@index([organizationId])
   @@index([campaignId])
 }
 
@@ -1121,8 +1064,6 @@ model LandingPage {
   account           Account?  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
   // Org-owned landing-page TEMPLATE (isTemplate=true) — authored at the org and
   // inherited by child sub-accounts (Phase 2 inheritance).
-  organizationId    String?
-  organization      Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   name              String
   // When true, this row is a reusable template (authored from the
   // Landing Pages tab of /templates), edited in place by the LP editor,
@@ -1188,7 +1129,6 @@ model LandingPage {
   @@index([accountKey])
   @@index([accountKey, status])
   @@index([accountKey, isTemplate])
-  @@index([organizationId])
   @@index([campaignId])
 }
 
@@ -2348,7 +2288,6 @@ model AdTemplateDoc {
   accountKey     String?
   // Org-owned template (author-once): account-less, tagged to an organization
   // so every sub-account in that org inherits it in the generator picker.
-  organizationId String?
   // Shared template taxonomy (same Category + Tags model email uses): a single
   // category string + a JSON string[] of tag names. Designers assign them so the
   // library filters consistently across every template kind.
@@ -2364,7 +2303,6 @@ model AdTemplateDoc {
 
   @@index([status, isActive])
   @@index([accountKey])
-  @@index([organizationId])
 }
 
 // A reusable "block": a saved cluster of builder elements (e.g. a Lease/APR

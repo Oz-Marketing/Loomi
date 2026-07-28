@@ -44,7 +44,7 @@ export type SettingsTab = {
  * sidebar's settings nav so both stay in sync.
  */
 export function useSettingsTabs(): SettingsTab[] {
-  const { isAdmin, isAccount, isOrg, userRole } = useAccount();
+  const { isAdmin, isAccount, isGroup, userRole } = useAccount();
   const surface = useCurrentSurface();
   const isApp = surface === 'app';
   const hasAdminAccess = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
@@ -55,7 +55,7 @@ export function useSettingsTabs(): SettingsTab[] {
   // Settings are tiered by the active scope (see the agency/org/sub-account
   // taxonomy):
   //   • AGENCY VIEW (isAdmin): platform config + top-level directories.
-  //   • ORGANIZATION (isOrg): the org profile + its sub-accounts.
+  //   • ORGANIZATION (isGroup): the org profile + its sub-accounts.
   //   • SUB-ACCOUNT (isAccount): that location's own settings.
   //   • Notifications/Appearance are personal and show everywhere.
 
@@ -63,7 +63,7 @@ export function useSettingsTabs(): SettingsTab[] {
 
   // ── Sub-Accounts directory — the whole fleet in Agency View, scoped to the
   //    org in Organization mode. ──
-  if (hasAdminAccess && (isAdmin || isOrg)) tabs.push({ key: 'subaccounts', label: 'Sub-Accounts', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
+  if (hasAdminAccess && (isAdmin || isGroup)) tabs.push({ key: 'subaccounts', label: 'Sub-Accounts', titleLabel: 'Sub-Account Settings', icon: BuildingStorefrontIcon });
 
   // ── Agency-only directories ──
 

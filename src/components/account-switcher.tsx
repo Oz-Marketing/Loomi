@@ -10,7 +10,6 @@ import {
   ShieldCheckIcon,
   CheckIcon,
   CogIcon,
-  BuildingOffice2Icon,
 } from '@heroicons/react/24/outline';
 import { useAccount, type AccountData } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
@@ -192,7 +191,6 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     accounts,
     accountsLoaded,
     childCounts,
-    organizations,
     userRole,
     userEmail,
   } = useAccount();
@@ -209,14 +207,8 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
 
   const canSwitchToAdmin = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
   const isAdmin = account.mode === 'admin';
-  const isOrg = account.mode === 'org';
-  const currentOrgId = account.mode === 'org' ? account.organizationId : null;
-  const currentOrg = currentOrgId
-    ? Object.values(organizations).find((o) => o.id === currentOrgId) ?? null
-    : null;
   const currentKey = account.mode === 'account' ? account.accountKey : null;
   const currentAccount = currentKey ? accounts[currentKey] : null;
-  const orgList = Object.values(organizations).sort((a, b) => a.name.localeCompare(b.name));
   const recentStorageKey = getRecentSubaccountsStorageKey(userEmail);
 
   // Position dropdown when opening. In compact mode (collapsed sidebar)
@@ -336,19 +328,6 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   };
 
 
-  // The org whose sub-accounts the list is scoped to — organizations own their
-  // sub-accounts, so we never mix them into one flat pool. Org mode → the
-  // selected org. Account mode → the active account's parent org (so you stay
-  // within that org and can hop between its siblings). Admin, or a standalone
-  // account with no org → null = show every sub-account (the god view).
-  const activeOrgId = isOrg
-    ? currentOrgId
-    : currentKey
-      ? accounts[currentKey]?.organizationId ?? null
-      : null;
-  const activeOrg = activeOrgId
-    ? Object.values(organizations).find((o) => o.id === activeOrgId) ?? null
-    : null;
   // Historically the list was narrowed to the active org so you never saw a
   // mixed pool. With groups modelled as accounts, the group and its rooftops
   // are all selectable peers, so narrowing would hide the very accounts you
@@ -396,12 +375,12 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
         <div className="flex-1 min-w-0">
           <p className="flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)]">
             <span className="truncate">{accountData.dealer || key}</span>
-            {/* Groups sit in the same list as plain rooftops now that org mode
-                is gone, so without this badge there's no way to tell that
-                selecting this account rolls up 40 others. */}
+            {/* Organizations sit in the same list as plain sub-accounts now
+                that org mode is gone, so without this badge there's no way to
+                tell that selecting this account rolls up 40 others. */}
             {childCounts[key] > 0 && (
               <span className="flex-shrink-0 rounded-full border border-[var(--primary)]/40 bg-[var(--primary)]/10 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wider text-[var(--primary)]">
-                Group
+                Organization
               </span>
             )}
           </p>
@@ -465,10 +444,6 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
     <div className="w-7 h-7 rounded-md bg-[var(--primary)]/15 flex items-center justify-center flex-shrink-0">
       <ShieldCheckIcon className="w-3.5 h-3.5 text-[var(--primary)]" />
     </div>
-  ) : isOrg ? (
-    <div className="w-7 h-7 rounded-md bg-[var(--primary)]/15 flex items-center justify-center flex-shrink-0">
-      <BuildingOffice2Icon className="w-4 h-4 text-[var(--primary)]" />
-    </div>
   ) : currentAccount ? (
     <AccountSwitcherAvatar account={currentAccount} accountKey={currentKey} />
   ) : (
@@ -476,9 +451,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
   );
   const triggerLabel = isAdmin
     ? 'Agency View'
-    : isOrg
-      ? currentOrg?.name || 'Organization'
-      : currentAccount?.dealer || currentKey || 'Select sub-account';
+    : currentAccount?.dealer || currentKey || 'Select sub-account';
 
   return (
     <>
@@ -549,7 +522,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
                 type="text"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder={orgList.length > 0 ? 'Search organizations & sub-accounts...' : 'Search sub-accounts...'}
+                placeholder="Search sub-accounts..."
                 className="w-full pl-8 pr-3 py-1.5 text-xs bg-[var(--input)] border border-[var(--border)] rounded-lg text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)]"
               />
             </div>
@@ -590,11 +563,7 @@ export function AccountSwitcher({ onSwitch, compact = false, openUp = false, set
                 <p className="text-xs text-[var(--muted-foreground)] text-center py-4">Loading...</p>
               ) : filteredAccounts.length === 0 ? (
                 <p className="text-xs text-[var(--muted-foreground)] text-center py-4">
-                  {search
-                    ? 'No sub-accounts match your search'
-                    : activeOrg
-                      ? 'No sub-accounts in this organization yet'
-                      : 'No sub-accounts available'}
+                  {search ? 'No sub-accounts match your search' : 'No sub-accounts available'}
                 </p>
               ) : (
                 filteredAccounts.map(([key, accountData]) => renderAccountOption(key, accountData))

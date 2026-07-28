@@ -39,24 +39,16 @@ const fetcher = async (url: string) => {
  */
 export function FormTemplatesTab({
   accountKey,
-  organizationId,
-  orgLabel,
 }: {
   accountKey?: string;
-  organizationId?: string;
-  orgLabel?: string;
 }) {
   const router = useRouter();
   const subHref = useSubaccountHref();
-  const { accounts, organizations } = useAccount();
-  const orgLabels = useMemo(
-    () => Object.fromEntries(Object.values(organizations).map((o) => [o.id, o.name])),
-    [organizations],
-  );
+  const { accounts } = useAccount();
   const { confirm } = useLoomiDialog();
   // Deploy is an admin-only action — pushing a global template into
   // sub-accounts only makes sense from the unscoped library view.
-  const canDeploy = !accountKey && !organizationId;
+  const canDeploy = !accountKey;
   const [deployTarget, setDeployTarget] = useState<FormSummary | null>(null);
   // key → dealer name, for the shared rail's Subaccount facet labels.
   const accountLabels = useMemo(
@@ -67,9 +59,7 @@ export function FormTemplatesTab({
   // Scoping: Admin (no account) → the WHOLE library (global + every subaccount's
   // own; filter by scope via the rail's Subaccount facet); inside a sub-account
   // → only that account's own templates.
-  const query = organizationId
-    ? `?isTemplate=true&organizationId=${encodeURIComponent(organizationId)}`
-    : accountKey
+  const query = accountKey
       ? `?isTemplate=true&accountKey=${encodeURIComponent(accountKey)}`
       : '?isTemplate=true';
   const { data, isLoading, error, mutate } = useSWR<{ forms: FormSummary[] }>(`/api/forms${query}`, fetcher);
@@ -116,7 +106,7 @@ export function FormTemplatesTab({
         body: JSON.stringify({
           name: 'Untitled template',
           isTemplate: true,
-          ...(organizationId ? { organizationId } : accountKey ? { accountKey } : {}),
+          ...(accountKey ? { accountKey } : {}),
         }),
       });
       const json = await res.json();
@@ -195,13 +185,6 @@ export function FormTemplatesTab({
   return (
     <>
       <TemplateHeaderActions onCreate={handleCreate} createLabel="New Form Template" onTagsSaved={() => void mutate()} />
-      {organizationId && (
-        <div className="mb-4 rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 px-4 py-2.5 text-xs text-[var(--muted-foreground)]">
-          You&rsquo;re authoring for{' '}
-          <span className="font-medium text-[var(--foreground)]">{orgLabel ?? 'this organization'}</span>. New
-          templates here are shared with every sub-account in the organization.
-        </div>
-      )}
       <TemplateLibraryShell
         resultCount={filtered.length}
         rail={
@@ -232,9 +215,7 @@ export function FormTemplatesTab({
                 status={form.status}
                 scope={
                   !accountKey
-                    ? form.organizationId
-                      ? { label: orgLabels[form.organizationId] ?? 'Organization', kind: 'org' as const }
-                      : { label: form.accountKey ? accounts[form.accountKey]?.dealer ?? form.accountKey : 'All accounts', kind: form.accountKey ? 'account' : 'global' }
+                    ? { label: form.accountKey ? accounts[form.accountKey]?.dealer ?? form.accountKey : 'All accounts', kind: form.accountKey ? 'account' : 'global' }
                     : undefined
                 }
                 category={form.category}

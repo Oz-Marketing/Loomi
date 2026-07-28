@@ -1,8 +1,6 @@
 import { getServerSession } from 'next-auth';
 import { NextResponse } from 'next/server';
 import { authOptions, type UserRole } from '@/lib/auth';
-import { hasUnrestrictedAccountAccess } from '@/lib/roles';
-import { getOrgChildKeys } from '@/lib/services/organizations';
 
 export async function getAuthSession() {
   return getServerSession(authOptions);
@@ -56,15 +54,3 @@ export function canAccessAccount(
   return !scope || scope.length === 0 || scope.includes(accountKey);
 }
 
-/** True when the session can read/author templates for the given organization.
- *  Unrestricted roles pass; scoped users pass when they share any of the org's
- *  child rooftops (org grants are expanded to child accountKeys at session build). */
-export async function canAccessOrg(
-  session: { user: { role: UserRole; accountKeys?: string[] } },
-  orgId: string,
-): Promise<boolean> {
-  const accountKeys = session.user.accountKeys ?? [];
-  if (hasUnrestrictedAccountAccess(session.user.role, accountKeys)) return true;
-  const childKeys = await getOrgChildKeys(orgId);
-  return childKeys.some((k) => accountKeys.includes(k));
-}

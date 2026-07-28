@@ -25,8 +25,6 @@ export class FormServiceError extends Error {
 export interface FormSummary {
   id: string;
   accountKey: string;
-  /** Set for an org-owned template (account-less, inherited by sub-accounts). */
-  organizationId: string | null;
   name: string;
   slug: string;
   status: FormStatus;
@@ -153,7 +151,6 @@ function parseJsonObject(value: Prisma.JsonValue): Record<string, unknown> {
 function toSummary(row: {
   id: string;
   accountKey: string | null;
-  organizationId?: string | null;
   name: string;
   slug: string;
   status: string;
@@ -175,7 +172,6 @@ function toSummary(row: {
     // existing string consumers keep working; the requesting view knows
     // the scope it asked for.
     accountKey: row.accountKey ?? '',
-    organizationId: row.organizationId ?? null,
     name: row.name,
     slug: row.slug,
     status: row.status === 'published' ? 'published' : 'draft',
@@ -248,40 +244,24 @@ export async function listForms(options?: {
   /** 'system' → only account-less system/library templates (accountKey
    *  null). Otherwise scoped to accountKey/accountKeys as usual. */
   scope?: 'system';
-  /** When set (with isTemplate), list the templates OWNED by this org —
-   *  the org-authoring view. Mutually exclusive with accountKey. */
-  organizationId?: string | null;
 }): Promise<{ forms: FormSummary[]; page: number; pageSize: number; total: number }> {
   const page = clampPage(options?.page);
   const pageSize = clampPageSize(options?.pageSize);
   const isTemplate = options?.isTemplate === true;
   let where: Record<string, unknown>;
   if (options?.scope === 'system') {
-    // System/library templates are neither account- nor org-owned. Excluding
-    // org-owned here keeps inherited templates out of the global library list.
-    where = { isTemplate, accountKey: null, organizationId: null };
-  } else if (isTemplate && options?.organizationId) {
-    // Org-authoring view: the templates this organization owns (and cascades
-    // to its sub-accounts).
-    where = { isTemplate, organizationId: options.organizationId };
+    // System/library templates have no owning account. Group-authored
+    // templates belong to the group ACCOUNT, so they stay out of this list.
+    where = { isTemplate, accountKey: null };
   } else if (isTemplate && options?.accountKey) {
-    // Effective template set for a sub-account: its own templates PLUS any
-    // authored at its parent organization (Phase 2 inheritance).
-    const account = await prisma.account.findUnique({
-      where: { key: options.accountKey },
-      select: { organizationId: true },
-    });
-    const orgId = account?.organizationId ?? null;
-    // Inheritance follows the account hierarchy: a rooftop sees its own forms
-    // plus any authored by an ancestor account. The legacy organizationId match
-    // is kept so anything not yet migrated still resolves.
+    // Effective template set for a sub-account: its own templates plus any
+    // authored by an ancestor (group) account.
     const ancestorKeys = await getAncestorAccountKeys(options.accountKey);
     where = {
       isTemplate,
       OR: [
         { accountKey: options.accountKey },
         ...(ancestorKeys.length > 0 ? [{ accountKey: { in: ancestorKeys } }] : []),
-        ...(orgId ? [{ organizationId: orgId }] : []),
       ],
     };
   } else {
@@ -338,9 +318,6 @@ export async function createForm(input: {
   schema?: FormTemplate;
   /** When true, the new row is a reusable template, not a live form. */
   isTemplate?: boolean;
-  /** Set (with accountKey null, isTemplate true) to author an org-owned
-   *  template inherited by the org's sub-accounts. */
-  organizationId?: string | null;
 }): Promise<FormDetail> {
   const name = input.name.trim();
   if (!name) throw new FormServiceError('name is required');
@@ -352,7 +329,7 @@ export async function createForm(input: {
     });
     if (!account) throw new FormServiceError('Account not found', 404);
   } else if (!input.isTemplate) {
-    // Only system / org templates may be account-less.
+    // Only system/library templates may be account-less.
     throw new FormServiceError('accountKey is required');
   }
 
@@ -367,7 +344,6 @@ export async function createForm(input: {
   const created = await prisma.form.create({
     data: {
       accountKey: input.accountKey,
-      organizationId: input.organizationId ?? null,
       name,
       slug,
       status,

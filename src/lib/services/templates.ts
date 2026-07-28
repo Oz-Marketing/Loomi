@@ -10,13 +10,10 @@ interface TemplateListOptions {
   // Filter by ownership. When provided, only templates owned by this
   // subaccount are returned (and `scope` is ignored).
   accountKey?: string;
-  // Org-owned templates (Phase 2 inheritance). When provided, returns only
-  // templates authored at this organization (accountKey IS NULL, organizationId
-  // = this). Ignored when `accountKey` is set.
-  organizationId?: string;
-  // When `accountKey`/`organizationId` are not provided, controls global scope:
-  //   - 'library' (default): shared Loomi library only (accountKey IS NULL AND
-  //     organizationId IS NULL — org-owned templates are NOT library templates)
+  // When `accountKey` is not provided, controls global scope:
+  //   - 'library' (default): shared Loomi library only (accountKey IS NULL —
+  //     group-authored templates are owned by the group ACCOUNT, so they are
+  //     never library templates)
   //   - 'subaccount': only subaccount-owned templates (accountKey IS NOT NULL)
   //   - 'all': no scope filter
   scope?: TemplateScope;
@@ -27,21 +24,15 @@ function buildWhere(options: TemplateListOptions = {}) {
     type?: string;
     published?: boolean;
     accountKey?: string | null | { not: null };
-    organizationId?: string | null;
   } = {};
   if (options.type) where.type = options.type;
   if (options.publishedOnly) where.published = true;
   if (options.accountKey) {
     where.accountKey = options.accountKey;
-  } else if (options.organizationId) {
-    where.organizationId = options.organizationId;
   } else {
     const scope = options.scope ?? 'library';
     if (scope === 'library') {
-      // Library = neither sub-account- nor org-owned. Excluding org-owned here
-      // is what keeps inherited templates out of the global library list.
       where.accountKey = null;
-      where.organizationId = null;
     } else if (scope === 'subaccount') {
       where.accountKey = { not: null };
     }
@@ -60,7 +51,6 @@ export async function getTemplates(typeOrOptions?: string | TemplateListOptions)
       id: true,
       slug: true,
       accountKey: true,
-      organizationId: true,
       title: true,
       type: true,
       category: true,
@@ -92,7 +82,6 @@ export async function getTemplatesWithContent(typeOrOptions?: string | TemplateL
       id: true,
       slug: true,
       accountKey: true,
-      organizationId: true,
       title: true,
       content: true,
       type: true,
@@ -131,10 +120,9 @@ export async function createTemplate(data: {
   category?: string;
   preheader?: string;
   createdByUserId?: string;
+  // Set to a group account to author a template every rooftop beneath it
+  // inherits; null keeps it in the shared Loomi library.
   accountKey?: string | null;
-  // Set (with accountKey null) to author an org-owned template that every
-  // child rooftop inherits.
-  organizationId?: string | null;
 }) {
   return prisma.template.create({ data });
 }
@@ -144,20 +132,13 @@ export async function createTemplate(data: {
  * an ancestor account (inherited, read-only until cloned). Library templates
  * are intentionally excluded — those are listed separately.
  *
- * Inheritance follows the account hierarchy. Group-authored templates are
- * simply owned by the group ACCOUNT, so "mine + my ancestors'" covers it; the
- * legacy organizationId match is kept so anything not yet migrated still
- * resolves.
+ * Inheritance follows the account hierarchy: group-authored templates are
+ * owned by the group ACCOUNT, so "mine + my ancestors'" covers it.
  */
 export async function getEffectiveTemplatesForAccount(
   accountKey: string,
   opts: { type?: string } = {},
 ) {
-  const account = await prisma.account.findUnique({
-    where: { key: accountKey },
-    select: { organizationId: true },
-  });
-  const orgId = account?.organizationId ?? null;
   const ancestorKeys = await getAncestorAccountKeys(accountKey);
 
   const where = {
@@ -165,7 +146,6 @@ export async function getEffectiveTemplatesForAccount(
     OR: [
       { accountKey },
       ...(ancestorKeys.length > 0 ? [{ accountKey: { in: ancestorKeys } }] : []),
-      ...(orgId ? [{ organizationId: orgId }] : []),
     ],
   };
 
@@ -178,7 +158,6 @@ export async function getEffectiveTemplatesForAccount(
       id: true,
       slug: true,
       accountKey: true,
-      organizationId: true,
       title: true,
       content: true,
       type: true,

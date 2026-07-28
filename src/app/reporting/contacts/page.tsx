@@ -25,7 +25,7 @@ function contactDedupeKey(c: Contact): string {
 }
 
 export default function ReportingContactsPage() {
-  const { account, isOrg, scopedAccountKeys } = useAccount();
+  const { account, isGroup, scopedAccountKeys } = useAccount();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -35,7 +35,7 @@ export default function ReportingContactsPage() {
   // Which rooftops feed this report: a single account, or every child rooftop
   // of the active organization (org roll-up). A stable signature avoids
   // re-running the fetch when the array identity changes but contents don't.
-  const keysToFetch = isOrg ? scopedAccountKeys : accountKey ? [accountKey] : [];
+  const keysToFetch = isGroup ? scopedAccountKeys : accountKey ? [accountKey] : [];
   const keysSignature = keysToFetch.join('|');
 
   useEffect(() => {
@@ -90,13 +90,13 @@ export default function ReportingContactsPage() {
     if (keysToFetch.length === 0) {
       return 'Pick a sub-account or organization in the sidebar to see contact reporting.';
     }
-    if (isOrg) {
+    if (isGroup) {
       return `Organization roll-up across ${keysToFetch.length} sub-account${keysToFetch.length === 1 ? '' : 's'} — ${totalCount.toLocaleString()} unique contacts.`;
     }
     return `Contact growth, lifecycle, and engagement — ${totalCount.toLocaleString()} total.`;
-    // keysToFetch.length + isOrg + totalCount drive the copy.
+    // keysToFetch.length + isGroup + totalCount drive the copy.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keysSignature, isOrg, totalCount]);
+  }, [keysSignature, isGroup, totalCount]);
 
   return (
     <>

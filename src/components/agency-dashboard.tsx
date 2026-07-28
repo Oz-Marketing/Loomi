@@ -30,9 +30,9 @@ export function AgencyDashboard() {
     return () => { cancelled = true; };
   }, []);
 
-  // Groups = accounts with rooftops beneath them (the hierarchy that replaced
-  // Organizations). A group is a normal Account, so it links to its own
-  // sub-account dashboard.
+  // An "Organization" is just an account with sub-accounts beneath it — the
+  // hierarchy is the only thing that makes it one. It's still a normal Account,
+  // so it links to its own sub-account dashboard.
   const groupList = useMemo(() => {
     const childCount = new Map<string, number>();
     for (const a of Object.values(accounts)) {
@@ -49,7 +49,7 @@ export function AgencyDashboard() {
   const standaloneCount = Object.values(accounts).filter((a) => !a.parentAccountKey).length;
 
   const stats: { label: string; value: string; href: string; icon: React.ComponentType<{ className?: string }> }[] = [
-    { label: 'Groups', value: String(orgCount), href: '/settings/subaccounts', icon: BuildingOffice2Icon },
+    { label: 'Organizations', value: String(orgCount), href: '/settings/subaccounts', icon: BuildingOffice2Icon },
     { label: 'Sub-Accounts', value: String(accountCount), href: '/settings/subaccounts', icon: BuildingStorefrontIcon },
     { label: 'Library Templates', value: templateCount === null ? '—' : String(templateCount), href: '/templates', icon: BookOpenIcon },
   ];
@@ -85,17 +85,18 @@ export function AgencyDashboard() {
         ))}
       </div>
 
-      {/* Groups overview */}
+      {/* Organizations overview */}
       <section className="glass-section-card rounded-2xl border border-[var(--border)] p-5 mt-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-[var(--foreground)]">Groups</h2>
+          <h2 className="text-sm font-semibold text-[var(--foreground)]">Organizations</h2>
           <Link href="/settings/subaccounts" className="text-xs font-medium text-[var(--primary)] hover:underline">
             Manage →
           </Link>
         </div>
         {groupList.length === 0 ? (
           <p className="text-sm text-[var(--muted-foreground)] py-6 text-center">
-            No groups yet. Open a sub-account&apos;s settings and set its Parent Account to group it under another.
+            No organizations yet. Open a sub-account&apos;s settings and set its
+            Organization to place it under another account.
           </p>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -111,7 +112,7 @@ export function AgencyDashboard() {
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium text-[var(--foreground)] truncate">{org.name}</p>
                   <p className="text-[11px] text-[var(--muted-foreground)]">
-                    {org.count} rooftop{org.count === 1 ? '' : 's'}
+                    {org.count} sub-account{org.count === 1 ? '' : 's'}
                   </p>
                 </div>
               </Link>

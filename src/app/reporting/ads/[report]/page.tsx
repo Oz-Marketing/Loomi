@@ -26,7 +26,7 @@ export default function DigitalAdsReportPage() {
   const def = findReport(key);
   const Report = REPORT_COMPONENTS[key];
 
-  const { accountKey, accountData, isOrg, organizationData, scopedAccountKeys, accounts } = useAccount();
+  const { accountKey, accountData, isGroup, scopedAccountKeys, accounts } = useAccount();
   const { theme } = useTheme();
   const isDark = theme === 'dark';
   const range = useRange();
@@ -50,8 +50,8 @@ export default function DigitalAdsReportPage() {
   }
 
   const dealer = accountData?.dealer || 'all accounts';
-  const scopeLabel = isOrg
-    ? `${organizationData?.name ?? 'organization'} — ${scopedAccountKeys.length} sub-accounts`
+  const scopeLabel = isGroup
+    ? `${accountData?.dealer ?? 'Group'} — ${scopedAccountKeys.length} accounts`
     : accountKey
       ? dealer
       : 'select an account';
@@ -97,7 +97,7 @@ export default function DigitalAdsReportPage() {
       </div>
 
       <div className="mt-8">
-        {isOrg && rollupConfig ? (
+        {isGroup && rollupConfig ? (
           <OrgReportRollup
             config={rollupConfig}
             accountKeys={scopedAccountKeys}

@@ -11,7 +11,7 @@
 // the event but don't update recipient state.
 
 import { prisma } from '@/lib/prisma';
-import { getRelatedAccountKeys } from '@/lib/services/organizations';
+import { getRelatedAccountKeys } from '@/lib/services/accounts';
 
 /** Shape of a single entry in SendGrid's Event Webhook batch. */
 export interface SendGridEvent {

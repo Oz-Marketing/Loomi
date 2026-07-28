@@ -24,12 +24,14 @@ import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
 import { TeamsTab } from '@/components/settings/teams-tab';
 import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
 import { useSettingsTabs, type SettingsTabKey } from '@/components/settings/use-settings-tabs';
+import { HelpTip } from '@/components/ui/help-tip';
 import { useIndustries } from '@/lib/hooks/use-industries';
+import { organizationOptions, subAccountCount } from '@/lib/organization-options';
 
 type Tab = SettingsTabKey;
 
 export default function SettingsPage() {
-  const { isAdmin, isAccount, isOrg, initialized, userRole, accountKey, accountData, scopedAccountKeys } = useAccount();
+  const { isAdmin, isAccount, isGroup, initialized, userRole, accountKey, accountData, scopedAccountKeys } = useAccount();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -59,7 +61,7 @@ export default function SettingsPage() {
     if (!routeTab || !tabs.some(t => t.key === routeTab)) {
       router.replace(defaultTabPath, { scroll: false });
     }
-  }, [initialized, routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, isOrg, userRole]);
+  }, [initialized, routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, isGroup, userRole]);
 
   const activeTabObj = tabs.find((t) => t.key === activeTab);
   const TitleIcon = activeTabObj?.icon ?? CogIcon;
@@ -125,7 +127,7 @@ export default function SettingsPage() {
         <AccountsList
           listPath="/settings/subaccounts"
           detailBasePath="/settings/subaccounts"
-          restrictKeys={isOrg ? scopedAccountKeys : undefined}
+          restrictKeys={isGroup ? scopedAccountKeys : undefined}
         />
       )}
       {activeTab === 'subaccount' && <AccountSettingsTab />}
@@ -169,7 +171,6 @@ function AccountSettingsTab() {
     accountKey,
     accountData,
     accounts,
-    organizations,
     refreshAccounts,
   } = useAccount();
   // Name of the parent ACCOUNT (if any) — for the "inherits the brand kit"
@@ -179,9 +180,7 @@ function AccountSettingsTab() {
     (accountData?.parentAccountKey
       ? accounts[accountData.parentAccountKey]?.dealer ?? accountData.parentAccountKey
       : null) ??
-    (accountData?.organizationId
-      ? Object.values(organizations).find((o) => o.id === accountData.organizationId)?.name ?? null
-      : null);
+    null;
   const { markClean } = useUnsavedChanges();
   const categorySuggestions = useIndustries();
 
@@ -200,34 +199,15 @@ function AccountSettingsTab() {
     setTitleActionsEl(document.getElementById('settings-title-actions'));
   }, []);
 
-  // Selectable parents: every account except this one and anything already
-  // beneath it. Excluding descendants means the UI can't even offer a cycle —
-  // the API rejects one too, but this keeps it out of the dropdown.
-  const parentOptions = useMemo(() => {
-    if (!accountKey) return [];
-    const descendants = new Set<string>([accountKey]);
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const [k, a] of Object.entries(accounts)) {
-        if (!descendants.has(k) && a.parentAccountKey && descendants.has(a.parentAccountKey)) {
-          descendants.add(k);
-          grew = true;
-        }
-      }
-    }
-    return Object.entries(accounts)
-      .filter(([k]) => !descendants.has(k))
-      .map(([k, a]) => ({ key: k, label: a.dealer || k }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [accounts, accountKey]);
-
-  // How many accounts roll up to this one — shown so the effect of grouping is
-  // visible without leaving the page.
-  const rooftopCount = useMemo(
-    () => (accountKey ? Object.values(accounts).filter((a) => a.parentAccountKey === accountKey).length : 0),
+  const parentOptions = useMemo(
+    () => organizationOptions(accounts, accountKey),
     [accounts, accountKey],
   );
+
+  // How many accounts roll up to this one. Surfaced because being an
+  // Organization is derived from OTHER accounts pointing here — without this
+  // the page gives no hint that it's a parent.
+  const rooftopCount = useMemo(() => subAccountCount(accounts, accountKey), [accounts, accountKey]);
 
   const snapshotRef = useRef<Record<string, string> | null>(null);
 
@@ -357,24 +337,38 @@ function AccountSettingsTab() {
             </div>
 
             <div>
-              <label className={labelClass}>Parent Account</label>
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <label className="text-xs font-medium text-[var(--muted-foreground)]">
+                  Organization
+                </label>
+                <HelpTip title="Organization">
+                  <p>
+                    The account this one belongs to. Its contacts roll up to that account, and it
+                    inherits that account&rsquo;s brand kit and templates.
+                  </p>
+                  <p>
+                    There is no separate promote step — an account becomes an Organization the
+                    moment another account points at it here. To dissolve one, set this field back
+                    to <strong>None</strong> on each of its sub-accounts.
+                  </p>
+                </HelpTip>
+              </div>
               <select
                 value={parentAccountKey}
                 onChange={(e) => setParentAccountKey(e.target.value)}
                 className={inputClass}
               >
-                <option value="">None — top-level account</option>
+                <option value="">None — standalone account</option>
                 {parentOptions.map((o) => (
                   <option key={o.key} value={o.key}>{o.label}</option>
                 ))}
               </select>
-              <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
-                {rooftopCount > 0
-                  ? `${rooftopCount} account${rooftopCount === 1 ? '' : 's'} roll up to this one. `
-                  : ''}
-                Grouping rolls this account's contacts up to its parent, and inherits the parent's
-                brand kit and templates.
-              </p>
+              {rooftopCount > 0 && (
+                <p className="mt-1.5 text-[11px] leading-4 text-[var(--muted-foreground)]">
+                  This account is itself an Organization — {rooftopCount} sub-account
+                  {rooftopCount === 1 ? '' : 's'} roll{rooftopCount === 1 ? 's' : ''} up to it.
+                </p>
+              )}
             </div>
 
             {showBrandsSelector && (

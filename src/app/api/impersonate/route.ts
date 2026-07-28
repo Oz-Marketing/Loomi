@@ -37,7 +37,6 @@ export async function POST(req: NextRequest) {
       avatarUrl: true,
       role: true,
       accountKeys: true,
-      orgKeys: true,
     },
   });
 
@@ -46,7 +45,6 @@ export async function POST(req: NextRequest) {
   }
 
   const accountKeys = parseAccountKeys(target.accountKeys);
-  const orgKeys = parseAccountKeys(target.orgKeys);
   return NextResponse.json({
     id: target.id,
     name: target.name,
@@ -55,7 +53,6 @@ export async function POST(req: NextRequest) {
     avatarUrl: target.avatarUrl,
     role: target.role as UserRole,
     accountKeys,
-    orgKeys,
     originalUserId: session!.user.id,
   });
 }
@@ -85,7 +82,6 @@ export async function DELETE() {
       avatarUrl: true,
       role: true,
       accountKeys: true,
-      orgKeys: true,
     },
   });
 
@@ -94,7 +90,6 @@ export async function DELETE() {
   }
 
   const accountKeys = parseAccountKeys(original.accountKeys);
-  const orgKeys = parseAccountKeys(original.orgKeys);
   return NextResponse.json({
     id: original.id,
     name: original.name,
@@ -103,6 +98,5 @@ export async function DELETE() {
     avatarUrl: original.avatarUrl,
     role: original.role as UserRole,
     accountKeys,
-    orgKeys,
   });
 }

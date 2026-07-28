@@ -9,7 +9,6 @@ import {
   XMarkIcon,
   TrashIcon,
   MagnifyingGlassIcon,
-  BuildingOffice2Icon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -72,12 +71,8 @@ export function AccountsList({
   void _listPath;
   const router = useRouter();
   const { confirm } = useLoomiDialog();
-  const { userRole, organizations } = useAccount();
+  const { userRole } = useAccount();
   const canManageAccounts = userRole === 'developer' || userRole === 'super_admin';
-  const orgList = useMemo(
-    () => Object.values(organizations).sort((a, b) => a.name.localeCompare(b.name)),
-    [organizations],
-  );
   const [accounts, setAccounts] = useState<Record<string, AccountData> | null>(null);
   const [search, setSearch] = useState('');
   const [sortField, setSortField] = useState<AccountSortField>('dealer');
@@ -95,14 +90,7 @@ export function AccountsList({
   const [creating, setCreating] = useState(false);
   // Onboarding "client type": standalone location, join an existing org, or
   // spin up a new one with this account as its first member.
-  const [newOrgChoice, setNewOrgChoice] = useState<'standalone' | 'existing' | 'new'>('standalone');
-  const [newOrgId, setNewOrgId] = useState('');
-  const [newOrgName, setNewOrgName] = useState('');
 
-  // Promote-to-organization state (row action in the Agency View list).
-  const [promoteKey, setPromoteKey] = useState<string | null>(null);
-  const [promoteName, setPromoteName] = useState('');
-  const [promoting] = useState(false);
 
   // Users for account rep picker (fetched when creation modal opens)
   const [repUsers, setRepUsers] = useState<UserPickerUser[]>([]);
@@ -137,9 +125,6 @@ export function AccountsList({
     setNewCategory('General');
     setNewOems([]);
     setNewRepId(null);
-    setNewOrgChoice('standalone');
-    setNewOrgId('');
-    setNewOrgName('');
     setCreating(false);
   };
 
@@ -152,7 +137,8 @@ export function AccountsList({
       const hasBrands = industryHasBrands(newCategory);
       const selectedOems = hasBrands ? newOems : [];
       // Grouping is no longer set at creation: an account is created standalone,
-      // then grouped by setting its Parent Account in sub-account settings.
+      // then placed under an Organization via the Organization field in
+      // sub-account settings.
       const accountBody: Record<string, unknown> = {
         key: newKey.trim(),
         dealer: newDealer.trim(),
@@ -179,19 +165,6 @@ export function AccountsList({
     setCreating(false);
   };
 
-  /** Promote a standalone account into a new organization (it becomes the
-   *  org's first sub-account). For clients that grow into a group. */
-  const openPromote = (key: string) => {
-    setPromoteKey(key);
-    setPromoteName(`${accounts?.[key]?.dealer || key} Group`);
-  };
-  const doPromote = async () => {
-    // Promote-to-organization is retired: grouping is now done by setting a
-    // sub-account's Parent Account in its settings, which is a plain account
-    // update rather than creating a second kind of entity.
-    toast.error('Set the Parent Account in sub-account settings to group accounts.');
-    setPromoteKey(null);
-  };
 
 
   const handleDelete = async (key: string) => {
@@ -403,58 +376,6 @@ export function AccountsList({
                     </div>
                   )}
 
-                  {/* Client type — standalone, or part of an organization. */}
-                  <div>
-                    <label className="text-xs text-[var(--muted-foreground)] mb-1 block">Client type</label>
-                    <div className="inline-flex w-full rounded-lg border border-[var(--border)] p-0.5">
-                      {([
-                        ['standalone', 'Single location'],
-                        ['existing', 'Add to organization'],
-                        ['new', 'New organization'],
-                      ] as const).map(([val, label]) => (
-                        <button
-                          key={val}
-                          type="button"
-                          onClick={() => setNewOrgChoice(val)}
-                          className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
-                            newOrgChoice === val
-                              ? 'bg-[var(--primary)] text-white'
-                              : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                          }`}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {newOrgChoice === 'existing' && (
-                      <select
-                        value={newOrgId}
-                        onChange={(e) => setNewOrgId(e.target.value)}
-                        className="mt-2 w-full bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm"
-                      >
-                        <option value="">Select an organization…</option>
-                        {orgList.map((o) => (
-                          <option key={o.id} value={o.id}>{o.name}</option>
-                        ))}
-                      </select>
-                    )}
-                    {newOrgChoice === 'existing' && orgList.length === 0 && (
-                      <p className="text-[10px] text-[var(--muted-foreground)] mt-1">
-                        No organizations yet — choose &quot;New organization&quot; to create one.
-                      </p>
-                    )}
-                    {newOrgChoice === 'new' && (
-                      <input
-                        type="text"
-                        value={newOrgName}
-                        onChange={(e) => setNewOrgName(e.target.value)}
-                        className="mt-2 w-full bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm"
-                        placeholder="Organization name (e.g. Young Automotive Group)"
-                      />
-                    )}
-                  </div>
-
                   {/* Account Rep picker */}
                   <div>
                     <label className="text-xs text-[var(--muted-foreground)] mb-1 block">Account Rep</label>
@@ -506,47 +427,6 @@ export function AccountsList({
                 </div>
               </div>
             )}
-          </div>
-        </div>,
-        document.body,
-      )}
-
-      {/* ─── Promote to Organization Modal ─── */}
-      {promoteKey && createPortal(
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-overlay-in">
-          <div className="glass-modal w-full max-w-md mx-4">
-            <div className="p-6">
-              <div className="flex items-center gap-3 mb-2">
-                <div className="w-8 h-8 rounded-md bg-[var(--primary)]/15 flex items-center justify-center flex-shrink-0">
-                  <BuildingOffice2Icon className="w-4 h-4 text-[var(--primary)]" />
-                </div>
-                <h3 className="text-lg font-semibold flex-1">Promote to organization</h3>
-                <button onClick={() => setPromoteKey(null)} className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]">
-                  <XMarkIcon className="w-5 h-5" />
-                </button>
-              </div>
-              <p className="text-xs text-[var(--muted-foreground)] mb-4">
-                Creates a new organization with <span className="font-medium text-[var(--foreground)]">{accounts?.[promoteKey]?.dealer || promoteKey}</span> as its first sub-account. You can add more sub-accounts afterward.
-              </p>
-              <label className="text-xs text-[var(--muted-foreground)] mb-1 block">Organization name</label>
-              <input
-                type="text"
-                value={promoteName}
-                onChange={(e) => setPromoteName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') doPromote(); }}
-                className="w-full bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm"
-                autoFocus
-              />
-              <div className="flex items-center gap-2 mt-4">
-                <button
-                  onClick={doPromote}
-                  disabled={!promoteName.trim() || promoting}
-                  className="flex-1 px-4 py-2.5 bg-[var(--primary)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50"
-                >
-                  {promoting ? 'Promoting...' : 'Promote to organization'}
-                </button>
-              </div>
-            </div>
           </div>
         </div>,
         document.body,
@@ -657,16 +537,6 @@ export function AccountsList({
                     {canManageAccounts && (
                       <td className="px-3 py-2 align-middle">
                         <div className="flex items-center justify-end gap-0.5">
-                          {/* Promote a standalone account into a new org (Agency View only). */}
-                          {!restrictKeys && !account.organizationId && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); openPromote(key); }}
-                              className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--primary)] hover:bg-[var(--primary)]/10 transition-colors"
-                              title="Promote to organization"
-                            >
-                              <BuildingOffice2Icon className="w-4 h-4" />
-                            </button>
-                          )}
                           <button
                             onClick={(e) => { e.stopPropagation(); handleDelete(key); }}
                             className="p-1.5 rounded-lg text-[var(--muted-foreground)] hover:text-red-400 hover:bg-red-500/10 transition-colors"

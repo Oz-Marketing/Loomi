@@ -1,4 +1,10 @@
 import { prisma } from '@/lib/prisma';
+import {
+  ancestorKeys,
+  expandWithDescendants,
+  relatedKeys,
+  type AccountEdge,
+} from '@/lib/account-hierarchy';
 
 const ACCOUNT_REP_SELECT = {
   id: true,
@@ -103,9 +109,8 @@ export async function createAccount(data: {
   customFonts?: string;
   customValues?: string;
   accountRepId?: string;
-  // Parent organization (Phase 3 onboarding): set when this account is created
-  // as part of a group.
-  organizationId?: string | null;
+  // Parent account (group) this rooftop belongs to, when created as part of one.
+  parentAccountKey?: string | null;
 }) {
   const slug = data.slug || await generateUniqueSlug(data.dealer, data.city);
   return prisma.account.create({ data: { ...data, slug } });
@@ -167,61 +172,40 @@ export async function getAllAccountKeys() {
   return excludeInternal(accounts).map((a) => a.key);
 }
 
+/** The whole parent/child edge list — one query, reused by the walks below. */
+function hierarchyEdges(): Promise<AccountEdge[]> {
+  return prisma.account.findMany({ select: { key: true, parentAccountKey: true } });
+}
+
 /**
  * Expand account grants down the hierarchy: granting a group account (e.g.
  * `youngAutomotiveGroup`) implies access to every rooftop beneath it, so all
  * the existing accountKey-scoped queries keep working unchanged.
  *
- * This is the hierarchy analogue of resolveOrgAccountKeys, and replaces it as
- * Organization is retired. Returns the input keys plus all descendants.
  */
 export async function expandAccountKeysWithDescendants(keys: string[]): Promise<string[]> {
   if (keys.length === 0) return [];
-  const all = await prisma.account.findMany({
-    select: { key: true, parentAccountKey: true },
-  });
-
-  const childrenOf = new Map<string, string[]>();
-  for (const a of all) {
-    if (!a.parentAccountKey) continue;
-    const list = childrenOf.get(a.parentAccountKey) ?? [];
-    list.push(a.key);
-    childrenOf.set(a.parentAccountKey, list);
-  }
-
-  const out = new Set<string>(keys);
-  const stack = [...keys];
-  while (stack.length) {
-    const key = stack.pop()!;
-    for (const child of childrenOf.get(key) ?? []) {
-      if (out.has(child)) continue; // also guards a malformed parent cycle
-      out.add(child);
-      stack.push(child);
-    }
-  }
-  return [...out];
+  return expandWithDescendants(await hierarchyEdges(), keys);
 }
 
 /**
  * The account's ancestors, nearest first — its parent, then grandparent, etc.
  *
  * Powers "author once, inherit down": a rooftop sees templates/forms/landing
- * pages owned by its group account. Replaces the Organization-based
- * inheritance, where group-owned records were marked accountKey=null +
- * organizationId; the migration reassigns those to the group ACCOUNT, so
- * inheritance is now simply "mine + my ancestors'".
+ * pages owned by its group account — inheritance is simply
+ * "mine + my ancestors'".
  */
 export async function getAncestorAccountKeys(accountKey: string): Promise<string[]> {
-  const all = await prisma.account.findMany({ select: { key: true, parentAccountKey: true } });
-  const parentOf = new Map(all.map((a) => [a.key, a.parentAccountKey]));
+  return ancestorKeys(await hierarchyEdges(), accountKey);
+}
 
-  const chain: string[] = [];
-  const seen = new Set<string>([accountKey]);
-  let cursor = parentOf.get(accountKey) ?? null;
-  while (cursor && !seen.has(cursor)) {
-    seen.add(cursor); // guards a malformed parent cycle
-    chain.push(cursor);
-    cursor = parentOf.get(cursor) ?? null;
-  }
-  return chain;
+/**
+ * Every OTHER account grouped with `accountKey` — the set a suppression must
+ * cascade to, so an opt-out at one rooftop silences the whole group.
+ *
+ * See `relatedKeys` in `lib/account-hierarchy.ts` for why this is deliberately
+ * wider than the roll-up set.
+ */
+export async function getRelatedAccountKeys(accountKey: string): Promise<string[]> {
+  return relatedKeys(await hierarchyEdges(), accountKey);
 }

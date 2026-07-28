@@ -13,7 +13,7 @@
  * Value is one of:
  *   - an account key            → account mode
  *   - ADMIN_VALUE (`__admin__`) → Admin mode
- *   - `org:<organizationId>`    → organization (roll-up) mode
+ *   - `org:<id>`                → LEGACY organization selection; ignored
  *
  * Client read/write live here. Server reads the cookie directly via
  * `next/headers` cookies() using ACTIVE_ACCOUNT_COOKIE (no `document` access),
@@ -22,15 +22,14 @@
 
 export const ACTIVE_ACCOUNT_COOKIE = 'loomi-active-account';
 export const ADMIN_VALUE = '__admin__';
-/** Prefix marking an organization (roll-up) selection in the cookie value. */
+/**
+ * Prefix marking a LEGACY organization selection. Organizations were replaced
+ * by the Account hierarchy; this stays only so a stale cookie in someone's
+ * browser is recognised and discarded instead of read as an account key.
+ */
 export const ORG_PREFIX = 'org:';
 
-/** Encode an organization id into its cookie value. */
-export function encodeOrgValue(organizationId: string): string {
-  return `${ORG_PREFIX}${organizationId}`;
-}
-
-/** Return the organization id if `value` is an org selection, else null. */
+/** True if `value` is a stale org selection left over from a previous session. */
 export function parseOrgValue(value: string | null | undefined): string | null {
   if (!value || !value.startsWith(ORG_PREFIX)) return null;
   const id = value.slice(ORG_PREFIX.length);

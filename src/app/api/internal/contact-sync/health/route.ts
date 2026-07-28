@@ -26,6 +26,11 @@ import { prisma } from '@/lib/prisma';
  *                    run plus slack for a long full sweep)
  *   retentionDays=N  IngestRun rows older than this are pruned (default 180,
  *                    0 disables). Keeps the log self-maintaining.
+ *   ignore=a,b,c     Account keys to leave out of the check entirely —
+ *                    rooftops deliberately parked out of the sync. Distinct
+ *                    from the never-synced warning: parked accounts aren't
+ *                    reported at all, so the warning list keeps meaning
+ *                    "unexpected".
  */
 
 const DEFAULT_MAX_AGE_HOURS = 30;
@@ -68,6 +73,10 @@ export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
   const maxAgeHours = positiveInt(params.get('maxAgeHours'), DEFAULT_MAX_AGE_HOURS);
   const retentionDays = positiveInt(params.get('retentionDays'), DEFAULT_RETENTION_DAYS);
+  const ignored = (params.get('ignore') || '')
+    .split(',')
+    .map((key) => key.trim())
+    .filter(Boolean);
 
   const now = new Date();
   const since24h = new Date(now.getTime() - 24 * 3_600_000);
@@ -101,12 +110,16 @@ export async function GET(req: NextRequest) {
       }),
     ]);
 
+    const ignoreSet = new Set(ignored);
     const accountKeys = Array.from(
       new Set([
         ...runsByAccount.map((r) => r.accountKey),
         ...contactsByAccount.map((c) => c.accountKey),
       ]),
-    ).sort();
+    )
+      // Parked rooftops — deliberately out of the sync, so out of the check.
+      .filter((key) => !ignoreSet.has(key))
+      .sort();
 
     const dealers = await prisma.account.findMany({
       where: { key: { in: accountKeys } },
@@ -185,6 +198,7 @@ export async function GET(req: NextRequest) {
       maxAgeHours,
       healthy,
       accountsChecked: accounts.length,
+      ignored,
       runsAllTime,
       staleCount: stale.length,
       neverSyncedCount: neverSynced.length,

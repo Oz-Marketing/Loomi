@@ -272,6 +272,44 @@ and `loomi_make_include`/`loomi_make_exclude` for shared-accounting stores), the
 backfill it once with `sweep dealer=<key>`. The regular crons pick it up after
 that.
 
+## Parking a rooftop (temporarily excluding it)
+
+Exclusion has to happen in `dealer_map`, **not** in the script. The hourly and
+nightly jobs push every mapped dealer in one request per endpoint, so the script
+has no per-dealer control there — only the sweep does, and only because it fans
+out deliberately.
+
+Park a rooftop by moving its row to a `loomi_set` that isn't in `SETS`. That
+preserves the mapping (unlike blanking `loomi_account_key`) so un-parking is a
+one-line change:
+
+```sql
+-- Park. 9 is a convention, not special — any value not listed in SETS works.
+UPDATE dealer_map SET loomi_set = 9
+ WHERE loomi_account_key IN ('youngGrizzlyHarleyDavidson', 'youngPowersportsOfMissoula');
+
+-- Un-park later.
+UPDATE dealer_map SET loomi_set = 0
+ WHERE loomi_account_key IN ('youngGrizzlyHarleyDavidson', 'youngPowersportsOfMissoula');
+```
+
+Then add the same keys to the `ignore=` list on the health endpoint in
+`.github/workflows/contact-sync-health.yml`, or the monitor will keep reporting
+them. **Remove them from `ignore=` the same day you un-park them** — an ignored
+account is an unmonitored account.
+
+Currently parked:
+
+| Account | Why |
+|---|---|
+| `youngGrizzlyHarleyDavidson` | Shares an accounting ID with Powersports Missoula — each was receiving the other's records |
+| `youngPowersportsOfMissoula` | Same shared-ID problem |
+| `youngTruckAndTrailerOfKaysville` | No CRM feed yet (never mapped in `dealer_map`) |
+| `youngTruckAndTrailerOfLogan` | No CRM feed yet (never mapped in `dealer_map`) |
+
+Note that parking stops *future* pushes; it does not remove contacts an earlier
+run already delivered.
+
 ## Exit codes
 
 | Code | Meaning |

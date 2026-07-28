@@ -58,6 +58,7 @@ async function callHealth(query = ''): Promise<{
     healthy: boolean;
     maxAgeHours: number;
     accountsChecked: number;
+    ignored: string[];
     runsAllTime: number;
     staleCount: number;
     neverSyncedCount: number;
@@ -328,6 +329,23 @@ describe.skipIf(!RUN)('ingest run log + contact-sync health', () => {
     expect(body.runsAllTime).toBeGreaterThan(0);
     expect(body.staleCount).toBe(0);
     expect(body.healthy).toBe(true);
+  });
+
+  it('drops ignored accounts from the check entirely', async () => {
+    // Parked rooftops (out of the sync on purpose) must not appear at all —
+    // not as problems, not as warnings. Otherwise the warning list stops
+    // meaning "unexpected" and gets skimmed past.
+    const { body } = await callHealth(`&maxAgeHours=30&ignore=${stale},${never}`);
+
+    expect(body.ignored).toEqual([stale, never]);
+    expect(body.accounts.map((a) => a.accountKey)).not.toContain(stale);
+    expect(body.accounts.map((a) => a.accountKey)).not.toContain(never);
+    expect(body.problems.map((p) => p.accountKey)).not.toContain(stale);
+    expect(body.warnings.map((w) => w.accountKey)).not.toContain(never);
+
+    // The accounts that are still in scope are unaffected.
+    expect(find(body.accounts, fresh).status).toBe('ok');
+    expect(find(body.accounts, bridged).status).toBe('ok');
   });
 
   it('does not prune when retention is disabled', async () => {

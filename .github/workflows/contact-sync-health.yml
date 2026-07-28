@@ -28,9 +28,16 @@ jobs:
       - name: Check contact sync freshness
         env:
           INTERNAL_JOB_SECRET: ${{ secrets.INTERNAL_JOB_SECRET }}
-          # 30h = one missed nightly run plus slack. Tighten once the cadence
-          # has proven itself; loosen if the weekly sweep regularly overruns.
-          ENDPOINT: https://studio.loomilm.com/api/internal/contact-sync/health?maxAgeHours=30
+          # maxAgeHours 30 = one missed nightly run plus slack. Tighten once the
+          # cadence has proven itself; loosen if the weekly sweep overruns.
+          #
+          # ignore = rooftops deliberately parked out of the sync (their
+          # dealer_map rows sit in an unused loomi_set). Grizzly HD and
+          # Powersports Missoula were pushing each other's records off a shared
+          # accounting ID; Truck & Trailer has no feed yet. Remove a key here
+          # the same day you un-park it in dealer_map, or it stops being
+          # monitored while it is live.
+          ENDPOINT: https://studio.loomilm.com/api/internal/contact-sync/health?maxAgeHours=30&ignore=youngGrizzlyHarleyDavidson,youngPowersportsOfMissoula,youngTruckAndTrailerOfKaysville,youngTruckAndTrailerOfLogan
         run: |
           set -euo pipefail
 

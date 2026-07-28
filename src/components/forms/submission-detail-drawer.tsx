@@ -12,6 +12,7 @@ import {
 import type { FormSubmissionRow } from '@/lib/services/forms';
 import type { Block, FormTemplate, FileValue } from '@/lib/forms/types';
 import { collectFieldBlocks, getFieldName, isFileValue } from '@/lib/forms/types';
+import { formFileUrl } from '@/lib/forms/file-links';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 
 interface SubmissionDetailDrawerProps {
@@ -263,9 +264,13 @@ function formatFileSize(bytes: number): string {
 }
 
 function FileLink({ file }: { file: FileValue }) {
+  // Prefer the key-based link: it authenticates with the staff session, so
+  // it keeps working after the emailed token in `file.url` has expired.
+  // Fall back to `url` for rows captured before uploads went private.
+  const href = file.key ? formFileUrl({ key: file.key }) : file.url;
   return (
     <a
-      href={file.url}
+      href={href}
       target="_blank"
       rel="noopener noreferrer"
       className="inline-flex items-center gap-1 text-[var(--primary)] hover:underline break-all"

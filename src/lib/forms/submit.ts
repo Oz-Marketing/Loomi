@@ -12,7 +12,9 @@ import { prisma } from '@/lib/prisma';
 import { parseFormTemplate } from './types';
 import type { FileValue } from './types';
 import { validateSubmission, FormValidationError, type FieldValue } from './validate';
-import { isS3Configured, uploadToS3, s3PublicUrl } from '@/lib/s3';
+import { isS3Configured, uploadToS3 } from '@/lib/s3';
+import { signFileKey } from './file-tokens';
+import { absoluteFormFileUrl } from './file-links';
 import { enrollContactForFormSubmission } from '@/lib/services/loomi-flows';
 import { enqueueFormSubmissionCrmLeads } from '@/lib/integrations/crm/dispatch';
 import { sendLeadNotificationEmail } from './notify';
@@ -257,9 +259,15 @@ async function uploadSubmissionFiles(
       const buffer = Buffer.from(await file.arrayBuffer());
       const contentType = file.type || 'application/octet-stream';
       const key = `form-uploads/${ctx.accountKey}/${ctx.formId}/${randomUUID()}-${sanitizeFilename(file.name)}`;
-      await uploadToS3(key, buffer, contentType);
+      // Lead PII — stored private and read back through /api/forms/files,
+      // never straight from the bucket.
+      await uploadToS3(key, buffer, contentType, { visibility: 'private' });
       uploaded.push({
-        url: s3PublicUrl(key),
+        // Absolute + signed: this URL is what lands in the lead
+        // notification email and the ADF comments a dealer opens in their
+        // CRM, where there's no Loomi session to authenticate with.
+        url: absoluteFormFileUrl(signFileKey(key)),
+        key,
         name: file.name,
         size: file.size,
         type: contentType,

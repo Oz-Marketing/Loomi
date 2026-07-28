@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { ingestContacts, type IngestContactInput } from '@/lib/contacts/ingest';
+import { recordIngestRun } from '@/lib/contacts/ingest-runs';
 
 // POST /api/ingest/contacts
 //
@@ -110,6 +111,19 @@ export async function POST(req: NextRequest) {
       `received=${summary.totalRows} created=${summary.created} ` +
       `updated=${summary.updated} skipped=${summary.skipped}`,
   );
+
+  // Heartbeat for the contact-sync health check. Written even when the
+  // batch changed nothing, so "no runs" unambiguously means "no sync".
+  await recordIngestRun({
+    accountKey,
+    kind: 'contacts',
+    source,
+    totalRows: summary.totalRows,
+    created: summary.created,
+    updated: summary.updated,
+    skipped: summary.skipped,
+    issueCount: summary.issues.length,
+  });
 
   return NextResponse.json(summary, { status: 200 });
 }

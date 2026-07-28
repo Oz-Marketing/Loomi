@@ -88,31 +88,52 @@ export function buildThumbnailKey(accountKey: string | null, assetId: string): s
   return `media/${prefix}/${assetId}/thumb.webp`;
 }
 
-/** Upload a buffer to S3. */
-export async function uploadToS3(key: string, body: Buffer, contentType: string): Promise<void> {
+/**
+ * Upload a buffer to S3.
+ *
+ * Defaults to a public-read ACL because most callers store persistent
+ * public media (logos, avatars, ad renders) served straight from the
+ * bucket. Pass `{ visibility: 'private' }` for anything that shouldn't be
+ * world-readable — e.g. form-submission uploads, which are lead PII and
+ * are served through a gated route instead (see lib/forms/file-tokens.ts).
+ */
+export async function uploadToS3(
+  key: string,
+  body: Buffer,
+  contentType: string,
+  opts: { visibility?: 'public' | 'private' } = {},
+): Promise<void> {
   const bucket = getBucket();
+  const isPrivate = opts.visibility === 'private';
   const putBase = {
     Bucket: bucket,
     Key: key,
     Body: body,
     ContentType: contentType,
-    CacheControl: 'public, max-age=31536000, immutable',
+    // Private objects are fetched through short-lived presigned URLs, so
+    // they must not be cached by shared caches as if they were public.
+    CacheControl: isPrivate ? 'private, no-store' : 'public, max-age=31536000, immutable',
   };
 
   // DO Spaces uploads are private by default; set public-read for persistent media URLs.
   const aclSetting = (process.env.S3_UPLOAD_ACL || 'public-read').trim().toLowerCase();
-  const wantsPublicRead = aclSetting === 'public-read';
+  const wantsPublicRead = !isPrivate && aclSetting === 'public-read';
+
+  // State `private` explicitly rather than just omitting the ACL: omitting
+  // it means "inherit the bucket default", and this bucket serves public
+  // media, so a silent inherit could leave a private object world-readable.
+  const acl = isPrivate ? 'private' : wantsPublicRead ? 'public-read' : undefined;
 
   try {
     await getClient().send(
-      new PutObjectCommand({
-        ...putBase,
-        ...(wantsPublicRead ? { ACL: 'public-read' } : {}),
-      }),
+      new PutObjectCommand({ ...putBase, ...(acl ? { ACL: acl } : {}) }),
     );
   } catch (err) {
-    // Some S3-compatible backends disable ACLs; retry once without ACL in that case.
-    if (wantsPublicRead && err instanceof S3ServiceException) {
+    // Some S3-compatible backends disable ACLs; retry once without ACL in
+    // that case. Object visibility is then governed by bucket policy — the
+    // deployment must keep the bucket non-public for private keys to stay
+    // private (see docs/form-upload-privacy.md).
+    if (acl && err instanceof S3ServiceException) {
       const code = `${err.name || ''} ${err.message || ''}`.toLowerCase();
       const aclUnsupported = code.includes('accesscontrollistnotsupported') || code.includes('acl');
       if (aclUnsupported) {

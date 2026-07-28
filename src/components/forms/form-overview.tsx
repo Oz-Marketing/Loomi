@@ -4,6 +4,7 @@ import * as React from 'react';
 import { createPortal } from 'react-dom';
 import Link from 'next/link';
 import useSWR from 'swr';
+import { toast } from 'sonner';
 import {
   ArrowLeftIcon,
   ArrowTopRightOnSquareIcon,
@@ -51,6 +52,66 @@ export function FormOverview() {
   const subHref = useSubaccountHref();
   const [activeTab, setActiveTab] = React.useState<DetailTab>('overview');
   const [embedOpen, setEmbedOpen] = React.useState(false);
+
+  // Inline name + slug editing, moved here from the Settings tab so the
+  // form's identity is edited right where it's displayed. Both PATCH the
+  // same endpoint the settings form used.
+  const [editingName, setEditingName] = React.useState(false);
+  const [nameDraft, setNameDraft] = React.useState(form.name);
+  const [editingSlug, setEditingSlug] = React.useState(false);
+  const [slugDraft, setSlugDraft] = React.useState(form.slug);
+
+  React.useEffect(() => {
+    if (!editingName) setNameDraft(form.name);
+  }, [form.name, editingName]);
+  React.useEffect(() => {
+    if (!editingSlug) setSlugDraft(form.slug);
+  }, [form.slug, editingSlug]);
+
+  const commitName = async () => {
+    setEditingName(false);
+    const next = nameDraft.trim();
+    if (!next || next === form.name) {
+      setNameDraft(form.name);
+      return;
+    }
+    const res = await fetch(`/api/forms/${form.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: next }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(body.error || 'Could not rename form.');
+      setNameDraft(form.name);
+      return;
+    }
+    setForm(body.form);
+  };
+
+  const commitSlug = async () => {
+    setEditingSlug(false);
+    const next = slugDraft.trim();
+    if (!next || next === form.slug) {
+      setSlugDraft(form.slug);
+      return;
+    }
+    const res = await fetch(`/api/forms/${form.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug: next }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast.error(body.error || 'Could not update slug.');
+      setSlugDraft(form.slug);
+      return;
+    }
+    setForm(body.form);
+    if (body.form.slug !== next) {
+      toast.success(`Slug adjusted to ${body.form.slug} to keep it unique.`);
+    }
+  };
 
   // Refetch fresh form data on every mount. Necessary because the
   // FormDetailProvider stays mounted across overview ↔ builder
@@ -101,12 +162,75 @@ export function FormOverview() {
             </Link>
             <DocumentTextIcon className="w-7 h-7 text-[var(--primary)] flex-shrink-0" />
             <div className="min-w-0">
-              <h2 className="text-2xl font-bold truncate">
-                {form.name || 'Untitled form'}
-              </h2>
-              <p className="text-[var(--muted-foreground)] mt-1 text-sm truncate font-mono">
-                /f/{form.slug}
-              </p>
+              {editingName ? (
+                <input
+                  type="text"
+                  value={nameDraft}
+                  onChange={(e) => setNameDraft(e.target.value)}
+                  autoFocus
+                  onBlur={() => void commitName()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') void commitName();
+                    else if (e.key === 'Escape') {
+                      setNameDraft(form.name);
+                      setEditingName(false);
+                    }
+                  }}
+                  className="w-full max-w-[28rem] rounded-lg border border-[var(--primary)] bg-[var(--input)] px-2 py-0.5 text-2xl font-bold text-[var(--foreground)] outline-none focus:ring-2 focus:ring-[var(--primary)]/20"
+                />
+              ) : (
+                <h2
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setEditingName(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setEditingName(true);
+                    }
+                  }}
+                  title="Click to rename"
+                  className="text-2xl font-bold truncate cursor-text rounded-md -mx-1.5 px-1.5 hover:bg-[var(--muted)] focus:outline-none focus:bg-[var(--muted)] transition-colors"
+                >
+                  {form.name || 'Untitled form'}
+                </h2>
+              )}
+              {editingSlug ? (
+                <span className="mt-1 flex items-center font-mono text-sm text-[var(--foreground)]">
+                  /f/
+                  <input
+                    type="text"
+                    value={slugDraft}
+                    onChange={(e) => setSlugDraft(e.target.value)}
+                    autoFocus
+                    onBlur={() => void commitSlug()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void commitSlug();
+                      else if (e.key === 'Escape') {
+                        setSlugDraft(form.slug);
+                        setEditingSlug(false);
+                      }
+                    }}
+                    className="ml-0.5 min-w-0 flex-1 max-w-[20rem] rounded-md border border-[var(--primary)] bg-[var(--input)] px-1.5 py-0.5 font-mono text-sm outline-none focus:ring-2 focus:ring-[var(--primary)]/20"
+                  />
+                </span>
+              ) : (
+                <p
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setEditingSlug(true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setEditingSlug(true);
+                    }
+                  }}
+                  title="Click to edit slug"
+                  className="text-[var(--muted-foreground)] mt-1 text-sm truncate font-mono cursor-text rounded-md -mx-1.5 px-1.5 hover:bg-[var(--muted)] hover:text-[var(--foreground)] focus:outline-none focus:bg-[var(--muted)] transition-colors"
+                >
+                  /f/{form.slug}
+                </p>
+              )}
             </div>
           </div>
 

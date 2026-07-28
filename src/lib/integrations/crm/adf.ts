@@ -13,6 +13,7 @@
  * captured data is lost.
  */
 import type { Contact, FormSubmission } from '@prisma/client';
+import { asFileValues } from '@/lib/forms/types';
 
 export interface AdfLeadInput {
   dealerName: string;
@@ -85,7 +86,15 @@ function buildComments(input: AdfLeadInput): string {
   const data = (input.submission.data as Record<string, unknown>) ?? {};
   const lines = [`Form: ${input.formName}`];
   for (const [key, value] of Object.entries(data)) {
-    const rendered = Array.isArray(value) ? value.join(', ') : String(value ?? '');
+    // Uploaded files are stored as FileValue objects, which would
+    // stringify to "[object Object]" and lose the URL the salesperson
+    // needs. Render them as "name (url)" pairs instead.
+    const files = asFileValues(value);
+    const rendered = files.length
+      ? files.map((f) => `${f.name} (${f.url})`).join(', ')
+      : Array.isArray(value)
+        ? value.join(', ')
+        : String(value ?? '');
     lines.push(`${key}: ${rendered}`);
   }
   const utm = [

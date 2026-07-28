@@ -29,8 +29,62 @@ export type FormBlockType =
   | 'field_radio'
   | 'field_consent'
   | 'field_hidden'
+  | 'field_file'
   // CTA
   | 'submit_button';
+
+/**
+ * Stored representation of an uploaded file in `FormSubmission.data`.
+ * A `field_file` submission holds an array of these (one per file);
+ * the binary lives in object storage, this is just the pointer + meta.
+ */
+export interface FileValue {
+  /**
+   * Ready-to-use link for recipients outside the app (lead notification
+   * email, ADF comments in a dealer CRM). Carries a signed token that
+   * expires — see lib/forms/file-tokens.ts.
+   */
+  url: string;
+  /**
+   * Object-storage key. Present on submissions captured once uploads moved
+   * to private storage; absent on any earlier row whose `url` pointed
+   * straight at the bucket. In-app surfaces prefer this, because a
+   * session-authenticated link never expires.
+   */
+  key?: string;
+  name: string;
+  size: number;
+  type: string;
+}
+
+/** Narrow an arbitrary submission value to a single {@link FileValue}. */
+export function isFileValue(value: unknown): value is FileValue {
+  return (
+    !!value &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    typeof (value as FileValue).url === 'string' &&
+    typeof (value as FileValue).name === 'string'
+  );
+}
+
+/**
+ * Collect any file value(s) from a stored submission entry — a stored
+ * `field_file` value is a `FileValue[]`, but tolerate a bare object too.
+ * Returns `[]` for every non-file value.
+ *
+ * Shared so every consumer that renders `submission.data` (the lead
+ * notification email, the ADF/CRM comments block, the admin drawer)
+ * formats uploads the same way. Anything that stringifies a raw value
+ * instead will render `[object Object]` and silently drop the file URL.
+ */
+export function asFileValues(value: unknown): FileValue[] {
+  if (isFileValue(value)) return [value];
+  if (Array.isArray(value) && value.length > 0 && value.every(isFileValue)) {
+    return value as FileValue[];
+  }
+  return [];
+}
 
 export interface Block {
   id: string;

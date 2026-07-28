@@ -162,6 +162,23 @@ describe.skipIf(!RUN)('ingest run log + contact-sync health', () => {
       }),
     );
     expect(res.status).toBe(200);
+    // Assert the OUTCOME, not just the heartbeat — a route that skipped every
+    // row would still write a run row, and that's exactly the failure the
+    // heartbeat is supposed to make visible rather than hide.
+    const summary = await res.json();
+    expect(summary.created).toBe(1);
+    expect(summary.skipped).toBe(0);
+    expect(summary.issues).toEqual([]);
+
+    // The event landed and linked to the contact created in the previous test.
+    const events = await prisma.contactEvent.findMany({
+      where: { accountKey: bridged },
+      select: { type: true, amount: true, contactId: true },
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('service');
+    expect(events[0].amount).toBeCloseTo(412.55);
+    expect(events[0].contactId).not.toBeNull();
 
     const runs = await prisma.ingestRun.findMany({
       where: { accountKey: bridged, kind: 'events' },

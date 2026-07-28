@@ -525,6 +525,153 @@ describe('computeMetaPacingHealth — daysLive', () => {
   });
 });
 
+// ─── Per-day-budget denominator: mid-window budget changes ──────────────────
+// The health % is spend ÷ what the ad was BUDGETED each day, not ÷ today's
+// budget applied retroactively. Without this, changing a budget mid-window
+// distorted the percentage and — through the run-rate projection — invented an
+// overspend warning on an ad that was on target.
+
+describe('computeMetaPacingHealth — per-day budget denominator', () => {
+  const NOW = Date.UTC(2026, 6, 10, 22, 31, 0); // Jul 10 2026, 16:31 MDT
+
+  it('is a no-op when the budget held steady: expected == dailyBudget × windowDays', () => {
+    const series: DailySpendPoint[] = [];
+    for (let d = 1; d <= 10; d++) {
+      series.push({
+        date: `2026-07-${String(d).padStart(2, '0')}`,
+        spend: 10,
+        dailyBudget: 10,
+      });
+    }
+    const h = computeMetaPacingHealth({
+      dailyBudget: 10,
+      liveDateIso: '2026-06-01',
+      series,
+      cumulativeSpend: null,
+      nowMs: NOW,
+      timeZone: TZ,
+    });
+    // The property that bounds this change's blast radius: every ad whose budget
+    // didn't move reads exactly as it did before.
+    expect(h.expected).toBeCloseTo(10 * h.windowDays, 6);
+    // And the identity the engine's projection relies on.
+    expect(10 * h.pacingRatio!).toBeCloseTo(h.runRate!, 6);
+  });
+
+  it('a mid-window budget CUT no longer reads as overdelivery', () => {
+    // Production Runs 2026: ~$68/day through Jul 27, cut to $53.42 on Jul 28.
+    // The ad spent exactly its budget every day — it never overdelivered.
+    const series: DailySpendPoint[] = [
+      { date: '2026-07-22', spend: 68, dailyBudget: 68 },
+      { date: '2026-07-23', spend: 68, dailyBudget: 68 },
+      { date: '2026-07-24', spend: 68, dailyBudget: 68 },
+      { date: '2026-07-25', spend: 68, dailyBudget: 68 },
+      { date: '2026-07-26', spend: 68, dailyBudget: 68 },
+      { date: '2026-07-27', spend: 68, dailyBudget: 68 },
+      { date: '2026-07-28', spend: 20.04, dailyBudget: 53.42 },
+    ];
+    const CUT_NOW = Date.UTC(2026, 6, 28, 19, 0, 0); // Jul 28 13:00 MDT
+    const h = computeMetaPacingHealth({
+      dailyBudget: 53.42,
+      liveDateIso: '2026-07-01',
+      series,
+      cumulativeSpend: null,
+      nowMs: CUT_NOW,
+      timeZone: TZ,
+    });
+    expect(h.windowDays).toBeCloseTo(6.5417, 3); // Jul 22 → Jul 28 13:00
+    expect(h.windowSpend).toBeCloseTo(428.04, 2);
+    // Denominator sums each day's own budget: 6 × $68 + $53.42 × 0.5417.
+    expect(h.expected).toBeCloseTo(6 * 68 + 53.42 * (13 / 24), 2);
+    // ~98%: delivering what it was told to. The OLD denominator
+    // ($53.42 × 6.5417 = $349.46) produced 122% — pure artifact of the cut.
+    expect(h.pacingRatio!).toBeCloseTo(0.98, 2);
+    expect(428.04 / (53.42 * h.windowDays)).toBeCloseTo(1.22, 2); // what it used to read
+    expect(h.verdict).toBe('healthy');
+  });
+
+  it('falls back to the current budget for days with no stored budget', () => {
+    // Pre-tool backfilled days carry no dailyBudget; those days behave as before.
+    const series: DailySpendPoint[] = [
+      { date: '2026-07-04', spend: 10, dailyBudget: null },
+      { date: '2026-07-05', spend: 10, dailyBudget: null },
+      { date: '2026-07-06', spend: 10, dailyBudget: 10 },
+      { date: '2026-07-07', spend: 10, dailyBudget: 10 },
+      { date: '2026-07-08', spend: 10, dailyBudget: 10 },
+      { date: '2026-07-09', spend: 10, dailyBudget: 10 },
+      { date: '2026-07-10', spend: 5, dailyBudget: 10 },
+    ];
+    const h = computeMetaPacingHealth({
+      dailyBudget: 10,
+      liveDateIso: '2026-06-01',
+      series,
+      cumulativeSpend: null,
+      nowMs: NOW,
+      timeZone: TZ,
+    });
+    expect(h.expected).toBeCloseTo(10 * h.windowDays, 6);
+  });
+});
+
+describe('projection basis after a budget change', () => {
+  // Same card as above, at the moment of the cut.
+  const CARD = {
+    target: 2021.25,
+    actualSpend: 1842.47,
+    daysRemaining: 3.4566,
+    totalDays: 31,
+    dailyBudget: 53.42,
+    overageAllowance: 0.75,
+    flightLengthDays: 31,
+  };
+  /** What the Projected Spend card shows — current daily × days left. */
+  const boxProjection =
+    CARD.actualSpend + CARD.dailyBudget * CARD.daysRemaining;
+
+  it('the corrected efficiency lands the ad on track, matching the Projected Spend card', () => {
+    const rec = buildMetaRecommendation({
+      ...CARD,
+      health: health({ pacingRatio: 0.98, runRate: 65.44, verdict: 'healthy' }),
+    })!;
+    // Within a couple of dollars of the box, instead of $39 away from it.
+    expect(Math.abs(rec.projectedRunrate - boxProjection)).toBeLessThan(5);
+    expect(rec.state).toBe('on_track');
+    expect(pacingDirection(rec, CARD.target)).toBe('on_target');
+  });
+
+  it('the old distorted ratio would have invented an overspend', () => {
+    // 122% — what the pre-fix denominator reported for this same ad.
+    const rec = buildMetaRecommendation({
+      ...CARD,
+      health: health({ pacingRatio: 1.22, verdict: 'healthy' }),
+    })!;
+    expect(rec.state).toBe('adjust');
+    expect(rec.direction).toBe('trim');
+    expect(rec.projectedRunrate - CARD.target).toBeGreaterThan(40);
+    expect(pacingDirection(rec, CARD.target)).toBe('over');
+  });
+
+  it('still catches genuine underdelivery — the projection drops below the box', () => {
+    // The property that must survive: an ad delivering half its budget projects
+    // materially under, even though the box (budget × days) says on target.
+    const rec = buildMetaRecommendation({
+      ...CARD,
+      health: healthAtRate(CARD.dailyBudget, CARD.dailyBudget * 0.5, {
+        verdict: 'low',
+      }),
+    })!;
+    expect(rec.projectedRunrate).toBeLessThan(boxProjection - 80);
+    expect(rec.state).toBe('delivery_low');
+    expect(pacingDirection(rec, CARD.target)).toBe('under');
+  });
+
+  it('no health data → efficiency 1.0, projection equals the box exactly', () => {
+    const rec = buildMetaRecommendation({ ...CARD, health: null })!;
+    expect(rec.projectedRunrate).toBeCloseTo(boxProjection, 6);
+    expect(rec.healthKnown).toBe(false);
+  });
+});
+
 // ─── Addendum §4: warm-up threshold + gate ──────────────────────────────────
 
 describe('warmupThresholdDays', () => {

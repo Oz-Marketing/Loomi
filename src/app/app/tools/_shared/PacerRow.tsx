@@ -76,14 +76,18 @@ function hoverBarColor(ratio: number | null): string {
 function HealthHoverPanel({
   rows,
   change,
-  dailyBudget,
+  expected,
   windowSpend,
   windowDays,
   ratio,
 }: {
   rows: HealthHoverDay[];
   change: BudgetChange | null;
-  dailyBudget: number;
+  /** Σ each day's own budget over the window — the real denominator. Shown as a
+   *  single figure rather than `budget × days`, which stopped being the actual
+   *  math once the denominator became per-day (and was misleading whenever the
+   *  budget changed mid-window — exactly when this hover matters most). */
+  expected: number;
   windowSpend: number;
   windowDays: number;
   ratio: number | null;
@@ -111,7 +115,8 @@ function HealthHoverPanel({
           {ratio != null ? `${Math.round(ratio * 100)}%` : '—'}
         </span>
         <span className="text-[10px] text-[var(--muted-foreground)]">
-          {fmt(windowSpend)} ÷ ({fmt(dailyBudget)} × {fmtDaysNum(windowDays)}d)
+          {fmt(windowSpend)} ÷ {fmt(expected)} budgeted over{' '}
+          {fmtDaysNum(windowDays)}d
         </span>
       </div>
 
@@ -159,11 +164,17 @@ function HealthHoverPanel({
         })}
       </div>
 
-      {/* Footer — one sentence tying it together. */}
-      {changeInWindow && preAvg != null && (
+      {/* Footer — one sentence tying it together. Deliberately factual, with no
+          claim that the headline % is distorted: the denominator now measures
+          each day against ITS OWN budget, so a mid-window change no longer skews
+          the reading and there's nothing to explain away. */}
+      {changeInWindow && preAvg != null && change != null && (
         <div className="mt-2 border-t border-[var(--border)] pt-1.5 text-[10px] leading-relaxed text-[var(--muted-foreground)]">
-          Pre-raise days delivered ~{Math.round(preAvg * 100)}% of their budget — the low % is
-          the raise, not a delivery problem.
+          Days before the change delivered ~{Math.round(preAvg * 100)}% of the budget
+          they were on
+          {change.newBudget > change.prevBudget
+            ? ' — post-raise days may still be scaling to the new budget.'
+            : '.'}
         </div>
       )}
     </div>
@@ -210,9 +221,17 @@ function PacingHealthBox({
   const ratio = health?.pacingRatio ?? null;
   const verdict = health?.verdict ?? null;
   const ramping = !!ramp?.ramping && ramp.change != null;
+  // Only a RAISE still warrants the "don't trust this yet" treatment, and for a
+  // real reason rather than a math one: Meta's delivery takes time to scale to a
+  // higher budget, so post-raise days genuinely underdeliver for a while. The
+  // measurement artifact that used to distort BOTH directions is gone — each day
+  // is now measured against its own budget — so a REDUCTION no longer needs the
+  // amber hedge, and its (accurate) reading gets its true verdict color.
+  const scalingUp =
+    ramping && ramp!.change!.newBudget > ramp!.change!.prevBudget;
   const color = warmup
     ? undefined
-    : ramping
+    : scalingUp
       ? COLORS.warn
       : verdict === 'healthy'
         ? COLORS.success
@@ -242,11 +261,14 @@ function PacingHealthBox({
       ? health.daysLive != null
         ? `too little history to judge · ${fmtDaysNum(health.daysLive)}d so far`
         : 'too little history to judge'
-      : ramping && ramp?.change
-        ? `ramping since ${fmtDate(ramp.change.date)} — reading still settling`
-        : verdict
-          ? `${verdictLabel} · ${windowLabel}`
-          : 'needs synced spend history';
+      : scalingUp && ramp?.change
+        ? `scaling to a higher budget since ${fmtDate(ramp.change.date)}`
+        : ramping && ramp?.change
+          ? // A reduction: note it as context, but the reading itself is sound.
+            `${verdictLabel} · budget lowered ${fmtDate(ramp.change.date)}`
+          : verdict
+            ? `${verdictLabel} · ${windowLabel}`
+            : 'needs synced spend history';
   const box = (
     <MetricBox
       label="Pacing Health"
@@ -273,7 +295,7 @@ function PacingHealthBox({
           <HealthHoverPanel
             rows={hoverRows}
             change={ramp?.change ?? null}
-            dailyBudget={dailyBudget}
+            expected={health.expected}
             windowSpend={health.windowSpend}
             windowDays={health.windowDays}
             ratio={ratio}
@@ -1540,22 +1562,27 @@ export function PacerRow({
                 </p>
               );
             case 'delivery_low':
-              // M2: during a ramp the low % is the recent raise, not a delivery
-              // fault — say "settling," not "underdelivering," so the reading
-              // isn't misread. The annotation drops once the window is clean.
-              return metaRamp?.ramping && metaRamp.change ? (
+              // A recent RAISE is still a real explanation for a low reading —
+              // Meta's delivery takes time to scale to a bigger budget — but the
+              // reason is delivery, not arithmetic: each day is now measured
+              // against its own budget, so the % is no longer "settling," it's
+              // accurately reporting that the new budget isn't being spent yet.
+              return metaRamp?.ramping &&
+                metaRamp.change &&
+                metaRamp.change.newBudget > metaRamp.change.prevBudget ? (
                 <p
                   className="m-0 text-[11px] leading-relaxed"
                   style={{ color: COLORS.warn }}
                 >
                   Recently raised ({fmt(metaRamp.change.prevBudget)} →{' '}
-                  {fmt(metaRamp.change.newBudget)} on {fmtDate(metaRamp.change.date)}) — the
-                  last 7 days still include pre-raise days, so the{' '}
+                  {fmt(metaRamp.change.newBudget)} on {fmtDate(metaRamp.change.date)}) —
+                  it&apos;s only spending{' '}
                   {metaHealth?.pacingRatio != null
                     ? `${Math.round(metaHealth.pacingRatio * 100)}%`
-                    : 'low'}{' '}
-                  reading is still settling. Let it ramp about a week, then re-read; if
-                  it&apos;s still low on clean data, check audience, bids, creative, and feed.
+                    : 'a fraction'}{' '}
+                  of the new budget so far, which is normal while delivery scales up.
+                  Give it about a week, then re-read; if it&apos;s still low, check
+                  audience, bids, creative, and feed.
                 </p>
               ) : (
                 <p

@@ -94,13 +94,23 @@ export interface PacingHealth {
   windowDays: number;
   /** Spend inside the window ($). */
   windowSpend: number;
-  /** What a fully-delivering campaign would have spent over the window ($). */
+  /** What a fully-delivering campaign would have spent over the window ($) —
+   *  the sum of each day's OWN budget, not today's budget × days. See
+   *  expectedOverWindow. */
   expected: number;
-  /** windowSpend ÷ expected. null when not computable (no budget / too young
-   *  / rolling window needs the spend series and none is synced yet). */
+  /** windowSpend ÷ expected — the ad's DELIVERY EFFICIENCY against the budget it
+   *  was actually given each day (1.0 = spent exactly what it was told to).
+   *  Because the denominator is per-day, this is immune to mid-window budget
+   *  changes, which makes it the right basis for projecting forward:
+   *  expected_future_daily = current_daily_budget × this. null when not
+   *  computable (no budget / too young / no synced series yet). */
   pacingRatio: number | null;
-  /** Demonstrated daily spend ($/day). Read as a floor for a healthy ad
-   *  (budget-capped) and roughly the true ceiling for a low ad
+  /** Demonstrated daily spend ($/day) — windowSpend ÷ windowDays. DESCRIPTIVE
+   *  only: it is a historical average earned under whatever budgets were in
+   *  force, so it is NOT a valid predictor after a budget change (that misuse is
+   *  what reported a $45 overspend on an ad whose budget had just been cut —
+   *  project with dailyBudget × pacingRatio instead). Read as a floor for a
+   *  healthy ad (budget-capped) and roughly the true ceiling for a low ad
    *  (capacity-capped). null when not computable. */
   runRate: number | null;
   verdict: PacingHealthVerdict | null;
@@ -150,6 +160,57 @@ const noHealth = (
   spendToday,
   daysLive,
 });
+
+/**
+ * What a fully-delivering ad SHOULD have spent across the window ($): the sum
+ * of the budget in force on each day, each weighted by how much of that day the
+ * window covers (the trailing day is partial, ending at the data edge).
+ *
+ * The load-bearing detail is "in force on each day." The previous form —
+ * `current_daily_budget × window_days` — applied today's budget retroactively
+ * to days that ran on a different one, so ANY mid-window budget change distorted
+ * the percentage. Cutting a budget from $65 to $53.42 made a perfectly healthy
+ * ad read 121% ("overdelivering"), because six days of $65 spend were divided by
+ * a $53.42 denominator; that inflated figure then propagated into the run-rate
+ * projection and reported a $45 overspend on an ad that was on target. Summing
+ * per-day budgets reads the same ad at ~99% — delivering exactly what it was
+ * told to, which is what the number is supposed to mean.
+ *
+ * A day with no stored budget (pre-tool backfill, or a day the sync never saw)
+ * falls back to the current budget — i.e. the old behavior for that day only.
+ * When every day carries the same budget this returns exactly
+ * `dailyBudget × windowDays`, so the reading is UNCHANGED for any ad whose
+ * budget didn't move: the fix moves only the ads it needs to.
+ */
+function expectedOverWindow(
+  windowStartIso: string,
+  windowStartMs: number,
+  edgeMs: number,
+  series: DailySpendPoint[],
+  fallbackBudget: number,
+): number {
+  const budgetByDate = new Map<string, number>();
+  for (const p of series) {
+    if (p.dailyBudget != null && p.dailyBudget > 0) {
+      budgetByDate.set(p.date, p.dailyBudget);
+    }
+  }
+  let expected = 0;
+  // Day boundaries step by DAY_MS from the window's start rather than being
+  // recomputed per calendar date, so the weights telescope to exactly
+  // (edgeMs − windowStartMs) / DAY_MS == windowDays. (Same whole-day assumption
+  // windowDays itself makes; a DST day is off by an hour in both, consistently.)
+  const maxDays = HEALTH_WINDOW_DAYS + 2; // safety stop; windows never exceed 7
+  for (let i = 0; i < maxDays; i++) {
+    const dayStart = windowStartMs + i * DAY_MS;
+    if (dayStart >= edgeMs) break;
+    const weight = (Math.min(dayStart + DAY_MS, edgeMs) - dayStart) / DAY_MS;
+    if (weight <= 0) continue;
+    const iso = addDaysIso(windowStartIso, i);
+    expected += (budgetByDate.get(iso) ?? fallbackBudget) * weight;
+  }
+  return expected;
+}
 
 // ─── Meta: rolling 7-day pacing health ──────────────────────────────────────
 
@@ -250,10 +311,14 @@ export function computeMetaPacingHealth(
 
   let windowDays: number;
   let windowSpend: number;
+  let windowStartIso: string;
+  let windowStartMs: number;
   if (daysToEdge <= HEALTH_WINDOW_DAYS) {
     // All-time equals the window (go-live → data edge). Prefer summing the
     // series (exact); fall back to the cumulative figure already on the card.
     windowDays = daysToEdge;
+    windowStartIso = liveDateIso;
+    windowStartMs = liveMs;
     if (series.length > 0) {
       windowSpend = series.reduce(
         (s, p) => (p.date >= liveDateIso && p.date <= edgeIso ? s + p.spend : s),
@@ -276,10 +341,18 @@ export function computeMetaPacingHealth(
     );
     const [sy, sm, sd] = startIso.split('-').map(Number);
     const startMs = zonedMidnightMs(sy, sm, sd, timeZone);
+    windowStartIso = startIso;
+    windowStartMs = startMs;
     windowDays = Math.min(daysToEdge, (edgeMs - startMs) / DAY_MS);
   }
 
-  const expected = dailyBudget * windowDays;
+  const expected = expectedOverWindow(
+    windowStartIso,
+    windowStartMs,
+    edgeMs,
+    series,
+    dailyBudget,
+  );
   if (!(expected > 0) || !(windowDays > 0))
     return noHealth(spendToday, daysToEdge);
   const pacingRatio = windowSpend / expected;
@@ -514,7 +587,13 @@ export interface MetaRecommendation {
   /** (target − actual) ÷ days remaining — the rate that lands exactly on
    *  target ($/day, floored at 0). The number `adjust` hands over. */
   requiredRate: number;
-  /** actual + run_rate × days remaining — where CURRENT behavior lands ($). */
+  /** Where CURRENT behavior lands ($): actual + (daily_budget × delivery
+   *  efficiency) × days remaining. Uses the current budget scaled by demonstrated
+   *  efficiency, NOT the raw historical run rate — see the derivation in
+   *  buildMetaRecommendation for why that distinction matters after a budget
+   *  change. Equals the Projected Spend card's figure for an ad delivering its
+   *  budget (efficiency 1.0), and diverges from it exactly by the amount the ad
+   *  under- or over-delivers. */
   projectedRunrate: number;
   /** Most the ad could plausibly spend per day ($): daily × (1 + headroom),
    *  headroom = raise_step_cap for a delivering ad (bigger single jumps risk
@@ -581,21 +660,36 @@ export function buildMetaRecommendation(
 
   const healthKnown = input.health?.verdict != null;
   const verdict = input.health?.verdict ?? 'healthy';
-  // No health data → assume the ad keeps spending its budget (the pre-engine
-  // assumption), so the machine still resolves; the flag lets the UI hedge.
-  const runRate = input.health?.runRate ?? dailyBudget;
+  // The forward rate: what the CURRENT budget should deliver at this ad's
+  // demonstrated efficiency. Deliberately NOT health.runRate (windowSpend ÷
+  // windowDays) — that's a historical average earned under whatever budgets were
+  // in force, so a mid-window budget change makes it a bad predictor. An ad whose
+  // budget was cut $65 → $53.42 shows a 121% runRate-derived overspend warning
+  // while actually being on target; efficiency × the new budget reads it right.
+  //
+  // Identical to the old expression whenever the budget held steady across the
+  // window (then efficiency == runRate ÷ dailyBudget by construction), so this
+  // only moves ads that actually had a budget change.
+  //
+  // No health data → efficiency 1.0, i.e. assume the ad spends its budget (the
+  // pre-engine assumption); the healthKnown flag lets the UI hedge.
+  const efficiency = input.health?.pacingRatio ?? 1;
+  const projectedDailyRate = dailyBudget * efficiency;
 
   const remainingBudget = target - actualSpend;
   const tolerance = onTrackTolerance(
     totalDays > 0 ? daysRemaining / totalDays : 0,
   );
-  const projectedRunrate = actualSpend + runRate * daysRemaining;
+  const projectedRunrate = actualSpend + projectedDailyRate * daysRemaining;
   const requiredRate =
     daysRemaining > 0 ? Math.max(0, remainingBudget) / daysRemaining : Infinity;
   const headroom =
     verdict === 'low' ? input.overageAllowance : RAISE_STEP_CAP;
   const recoverableCapacity = dailyBudget * (1 + headroom);
-  const maxSpendable = Math.max(0, runRate * Math.max(0, daysRemaining));
+  const maxSpendable = Math.max(
+    0,
+    projectedDailyRate * Math.max(0, daysRemaining),
+  );
   const gap = Math.max(0, remainingBudget) - maxSpendable;
 
   // §4 warm-up: keyed off ACCUMULATED history (health.daysLive), never

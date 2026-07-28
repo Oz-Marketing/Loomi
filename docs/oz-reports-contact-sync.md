@@ -213,6 +213,23 @@ untouched, so `updatedAt` alone cannot tell "quiet Sunday" from "cron deleted
 three weeks ago". Every accepted batch writes an `IngestRun` row even when it
 changed nothing, so **no rows means no sync**.
 
+### Quiet rooftops still heartbeat
+
+The bridge posts a batch per account per endpoint **even when the rooftop had no
+rows in its window**, and Loomi records a heartbeat for that empty batch. This is
+deliberate: without it, a low-volume store with a quiet week is indistinguishable
+from one the sync stopped reaching, so the monitor would false-alarm on exactly
+the accounts whose silence you'd least notice.
+
+The consequence worth understanding: `stale` now means "the pipeline isn't
+reaching this account" — a pure liveness signal — while actual data volume shows
+up separately in each account's `last24h.rows` / `created` / `updated`. An
+account can be `ok` with zero rows, and that's correct.
+
+Empty batches make the run log busier (roughly hundreds to ~1k rows a day across
+38 rooftops on an hourly job plus the nightly). The health route's retention
+prune keeps it bounded.
+
 ### stale fails, never-synced only warns
 
 Four mapped accounts have no CRM feed of their own — `youngAutomotiveGroup`,

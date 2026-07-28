@@ -12,6 +12,8 @@ import {
   MAX_FILE_SIZE_BYTES,
   MAX_FILE_SIZE_MB,
   MAX_FILES_PER_FIELD,
+  MAX_TOTAL_UPLOAD_BYTES,
+  MAX_TOTAL_UPLOAD_MB,
   ALLOWED_FILE_TYPES_LABEL,
   isAllowedFileType,
 } from './file-upload';
@@ -129,6 +131,26 @@ export function validateSubmission(
       } else if (normalized === 'email' && !identifiers.email && EMAIL_REGEX.test(result.value)) {
         identifiers.email = result.value;
       }
+    }
+  }
+
+  // Combined upload weight across every file field. The per-field checks
+  // above bound each file and each field; this bounds the submission as a
+  // whole so a form with several file fields can't add up to a body the
+  // proxy in front of us would reject.
+  if (errors.length === 0) {
+    const totalBytes = Object.values(values).reduce((sum, value) => {
+      if (!Array.isArray(value)) return sum + (value instanceof File ? value.size : 0);
+      return (
+        sum +
+        value.reduce((n, v) => n + (v instanceof File ? v.size : 0), 0)
+      );
+    }, 0);
+    if (totalBytes > MAX_TOTAL_UPLOAD_BYTES) {
+      errors.push({
+        field: '_form',
+        message: `Your attachments total ${Math.round(totalBytes / (1024 * 1024))}MB — please keep them under ${MAX_TOTAL_UPLOAD_MB}MB in total.`,
+      });
     }
   }
 

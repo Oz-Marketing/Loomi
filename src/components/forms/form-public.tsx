@@ -270,6 +270,18 @@ export function FormPublic({
 
     const payload = (await res.json().catch(() => ({}))) as SubmitResponse;
 
+    // A 413 comes from the proxy in front of the app (nginx
+    // client_max_body_size), not from us — the body is an HTML error page,
+    // so `payload` is empty and the generic message below would hide the
+    // real cause. Name it so the visitor knows to drop an attachment.
+    if (res.status === 413) {
+      setPhase('error');
+      setTopError(
+        'Your attachments are too large to upload. Please remove or shrink a file and try again.',
+      );
+      return;
+    }
+
     if (res.ok && payload.ok) {
       if (payload.redirectUrl) {
         // Top-level redirect even when in an iframe — the parent page

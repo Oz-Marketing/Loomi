@@ -14,8 +14,13 @@ import * as React from 'react';
 import { FieldShell, inputStyle, type FieldFileProps } from './fields';
 import {
   FILE_ACCEPT_ATTR,
+  MAX_FILE_SIZE_BYTES,
   MAX_FILE_SIZE_MB,
+  MAX_FILES_PER_FIELD,
+  MAX_TOTAL_UPLOAD_BYTES,
+  MAX_TOTAL_UPLOAD_MB,
   ALLOWED_FILE_TYPES_LABEL,
+  isAllowedFileType,
 } from '../file-upload';
 
 /**
@@ -72,6 +77,7 @@ export const FieldFile: React.FC<FieldFileProps> = (props) => {
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [files, setFiles] = React.useState<File[]>([]);
   const [dragOver, setDragOver] = React.useState(false);
+  const [localError, setLocalError] = React.useState<string | null>(null);
 
   const accent = props.inputBorderColor || '#d4d4d4';
   const radius = props.inputBorderRadius ?? 6;
@@ -131,26 +137,62 @@ export const FieldFile: React.FC<FieldFileProps> = (props) => {
     (incoming: FileList | File[]) => {
       const list = Array.from(incoming);
       if (list.length === 0) return;
+
+      // Screen selections in the browser rather than shipping bytes we
+      // know the server (or the proxy in front of it) will reject. The
+      // same rules run server-side in validate.ts — this is purely so the
+      // visitor finds out immediately and keeps their valid files.
+      const rejected: string[] = [];
+      const accepted: File[] = [];
+      for (const f of list) {
+        if (!isAllowedFileType(f.type, f.name)) {
+          rejected.push(`"${f.name}" isn't a supported file type`);
+        } else if (f.size > MAX_FILE_SIZE_BYTES) {
+          rejected.push(`"${f.name}" is over ${MAX_FILE_SIZE_MB}MB`);
+        } else {
+          accepted.push(f);
+        }
+      }
+
       if (!props.multiple) {
-        commit(list.slice(-1));
+        const last = accepted.slice(-1);
+        setLocalError(rejected[0] ?? null);
+        if (last.length) commit(last);
         return;
       }
+
       // Accumulate + de-dupe so re-opening the picker adds rather than
       // replaces, and the same file can't be added twice.
       const seen = new Set(files.map(fileKey));
       const merged = [...files];
-      for (const f of list) {
-        if (!seen.has(fileKey(f))) {
-          seen.add(fileKey(f));
-          merged.push(f);
+      let total = files.reduce((n, f) => n + f.size, 0);
+      for (const f of accepted) {
+        if (seen.has(fileKey(f))) continue;
+        if (merged.length >= MAX_FILES_PER_FIELD) {
+          rejected.push(`only ${MAX_FILES_PER_FIELD} files can be attached`);
+          break;
         }
+        if (total + f.size > MAX_TOTAL_UPLOAD_BYTES) {
+          rejected.push(
+            `"${f.name}" would push the total over ${MAX_TOTAL_UPLOAD_MB}MB`,
+          );
+          continue;
+        }
+        seen.add(fileKey(f));
+        merged.push(f);
+        total += f.size;
       }
+
+      setLocalError(rejected.length ? `${rejected.join('; ')}.` : null);
       commit(merged);
     },
     [commit, files, props.multiple],
   );
 
   const removeAt = (index: number) => {
+    // Dropping a file can only bring the selection back within limits, so
+    // clear any stale "too big" / "too many" warning.
+    setLocalError(null);
     commit(files.filter((_, i) => i !== index));
   };
 
@@ -264,6 +306,14 @@ export const FieldFile: React.FC<FieldFileProps> = (props) => {
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Client-side rejection notice (unsupported type, too big, too many).
+          Server-side field errors are rendered by the form renderer. */}
+      {localError && (
+        <div role="alert" style={{ marginTop: 8, color: '#dc2626', fontSize: 13 }}>
+          {localError}
+        </div>
       )}
     </FieldShell>
   );

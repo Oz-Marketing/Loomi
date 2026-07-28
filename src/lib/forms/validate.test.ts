@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { validateSubmission, FormValidationError } from './validate';
 import { emptyFormTemplate, type Block, type FormTemplate } from './types';
-import { MAX_FILE_SIZE_BYTES } from './file-upload';
+import { MAX_FILE_SIZE_BYTES, MAX_TOTAL_UPLOAD_BYTES } from './file-upload';
 
 function formWith(blocks: Block[]): FormTemplate {
   return { ...emptyFormTemplate(), blocks };
@@ -62,5 +62,35 @@ describe('validateSubmission — field_file', () => {
   it('passes and returns [] when an optional file field is empty', () => {
     const { values } = validateSubmission(formWith([fileBlock()]), {});
     expect(values.resume).toEqual([]);
+  });
+
+  it('rejects a submission whose files are individually fine but too big in total', () => {
+    // Two 15MB files: each under the 25MB per-file cap, 30MB combined —
+    // over the total cap, and over what the proxy would accept.
+    const half = Math.floor(MAX_TOTAL_UPLOAD_BYTES * 0.6);
+    const blocks = [
+      { id: 'a', type: 'field_file', props: { name: 'front' } } as Block,
+      { id: 'b', type: 'field_file', props: { name: 'back' } } as Block,
+    ];
+    expect(() =>
+      validateSubmission(formWith(blocks), {
+        front: makeFile('front.pdf', 'application/pdf', half),
+        back: makeFile('back.pdf', 'application/pdf', half),
+      }),
+    ).toThrow(FormValidationError);
+  });
+
+  it('allows files that add up to exactly the total cap', () => {
+    const each = Math.floor(MAX_TOTAL_UPLOAD_BYTES / 2);
+    const blocks = [
+      { id: 'a', type: 'field_file', props: { name: 'front' } } as Block,
+      { id: 'b', type: 'field_file', props: { name: 'back' } } as Block,
+    ];
+    const { values } = validateSubmission(formWith(blocks), {
+      front: makeFile('front.pdf', 'application/pdf', each),
+      back: makeFile('back.pdf', 'application/pdf', each),
+    });
+    expect((values.front as File[]).length).toBe(1);
+    expect((values.back as File[]).length).toBe(1);
   });
 });

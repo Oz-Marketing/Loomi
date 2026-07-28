@@ -11,6 +11,21 @@
 export const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 export const MAX_FILE_SIZE_MB = 25;
 
+/**
+ * Maximum combined size of every file on a single submission (25 MB).
+ *
+ * The per-file cap alone isn't enough: 10 files × 25 MB would be a 250 MB
+ * request body. nginx in front of the app is provisioned at
+ * `client_max_body_size 30m` (see .github/workflows/deploy*.yml), and a
+ * body over that is rejected by the proxy with an HTML 413 the app never
+ * sees — the visitor just gets a generic failure. Keep this comfortably
+ * under the nginx value so multipart overhead and the form's other fields
+ * still fit, and so oversize submissions fail in the browser with a clear
+ * message instead of at the proxy.
+ */
+export const MAX_TOTAL_UPLOAD_BYTES = 25 * 1024 * 1024;
+export const MAX_TOTAL_UPLOAD_MB = 25;
+
 /** Hard cap on files per field — guards against payload-bomb submissions. */
 export const MAX_FILES_PER_FIELD = 10;
 

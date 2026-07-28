@@ -8,9 +8,13 @@ import {
   detectBudgetChange,
   budgetRampStatus,
   buildHealthHoverRows,
+  warmupThresholdDays,
+  pacingDirection,
   type DailySpendPoint,
   type PacingHealth,
+  type MetaRecommendation,
 } from './pacing-engine';
+import { classifyPacerHealth } from './helpers';
 
 const TZ = 'America/Denver';
 
@@ -25,8 +29,35 @@ function health(overrides: Partial<PacingHealth>): PacingHealth {
     runRate: 0,
     verdict: 'healthy',
     spendToday: null,
+    // A full week of history — past any warm-up threshold, so the state-machine
+    // tests below exercise the four states rather than the §4 gate (which has
+    // its own describe block).
+    daysLive: 7,
     ...overrides,
   };
+}
+
+/**
+ * Health fixture pinned to a demonstrated $/day rate on a given daily budget,
+ * keeping `pacingRatio` (the delivery efficiency the engine projects from) and
+ * `runRate` (descriptive only) mutually consistent.
+ *
+ * Prefer this over raw `health({ pacingRatio, runRate })`: those two are not
+ * independent — `runRate == dailyBudget × pacingRatio` by construction — and
+ * setting them separately lets a fixture describe an ad that cannot exist. Three
+ * tests here did exactly that, which is the same latent inconsistency the
+ * production card had.
+ */
+function healthAtRate(
+  dailyBudget: number,
+  ratePerDay: number,
+  overrides: Partial<PacingHealth> = {},
+): PacingHealth {
+  return health({
+    pacingRatio: ratePerDay / dailyBudget,
+    runRate: ratePerDay,
+    ...overrides,
+  });
 }
 
 // ─── Meta pacing health (spec §3) ───────────────────────────────────────────
@@ -278,7 +309,7 @@ describe('buildMetaRecommendation', () => {
       daysRemaining: 21.34,
       totalDays: 26,
       dailyBudget: 11.55,
-      health: health({ pacingRatio: 0.94, runRate: 11.55, verdict: 'healthy' }),
+      health: healthAtRate(11.55, 11.55, { verdict: 'healthy' }),
       overageAllowance: 0.75,
     })!;
     // projected_runrate = 42.35 + 11.55 × 21.34 = 288.83 ≈ target
@@ -293,7 +324,7 @@ describe('buildMetaRecommendation', () => {
       daysRemaining: 17.35,
       totalDays: 30,
       dailyBudget: 11.55,
-      health: health({ pacingRatio: 1, runRate: 11.55, verdict: 'healthy' }),
+      health: healthAtRate(11.55, 11.55, { verdict: 'healthy' }),
       overageAllowance: 0.75,
     })!;
     expect(rec.state).toBe('adjust');
@@ -310,7 +341,7 @@ describe('buildMetaRecommendation', () => {
       daysRemaining: 10,
       totalDays: 30,
       dailyBudget: 15,
-      health: health({ pacingRatio: 1, runRate: 15, verdict: 'healthy' }),
+      health: healthAtRate(15, 15, { verdict: 'healthy' }),
       overageAllowance: 0.75,
     })!;
     // projected 200 + 150 = 350 > 300 × 1.05
@@ -327,7 +358,7 @@ describe('buildMetaRecommendation', () => {
       daysRemaining: 19.5,
       totalDays: 30,
       dailyBudget: 13,
-      health: health({ pacingRatio: 0.46, runRate: 6, verdict: 'low' }),
+      health: healthAtRate(13, 6, { verdict: 'low' }),
       overageAllowance: 0.75,
     })!;
     expect(rec.requiredRate).toBeCloseTo(14.36, 2);
@@ -342,7 +373,7 @@ describe('buildMetaRecommendation', () => {
       daysRemaining: 19.5,
       totalDays: 30,
       dailyBudget: 13,
-      health: health({ pacingRatio: 0.46, runRate: 6, verdict: 'low' }),
+      health: healthAtRate(13, 6, { verdict: 'low' }),
       overageAllowance: 0.25,
     })!;
     expect(rec.recoverableCapacity).toBeCloseTo(16.25, 2);
@@ -359,7 +390,7 @@ describe('buildMetaRecommendation', () => {
       daysRemaining: 1.5,
       totalDays: 30,
       dailyBudget: 11.55,
-      health: health({ pacingRatio: 0.69, runRate: 8, verdict: 'low' }),
+      health: healthAtRate(11.55, 8, { verdict: 'low' }),
       overageAllowance: 0.75,
     })!;
     expect(rec.state).toBe('delivery_low');
@@ -376,7 +407,7 @@ describe('buildMetaRecommendation', () => {
       daysRemaining: 1.5,
       totalDays: 30,
       dailyBudget: 11.55,
-      health: health({ pacingRatio: 1, runRate: 11.55, verdict: 'healthy' }),
+      health: healthAtRate(11.55, 11.55, { verdict: 'healthy' }),
       overageAllowance: 0.75,
     })!;
     expect(rec.state).toBe('adjust');
@@ -411,6 +442,351 @@ describe('buildMetaRecommendation', () => {
         overageAllowance: 0.75,
       }),
     ).toBeNull();
+  });
+});
+
+// ─── Addendum §3: daysLive is populated on every path ───────────────────────
+// The warm-up gate reads health.daysLive, so the paths that WITHHOLD a verdict
+// must still carry it — those are exactly the newest ads the gate exists for.
+
+describe('computeMetaPacingHealth — daysLive', () => {
+  const NOW = Date.UTC(2026, 6, 10, 22, 31, 0); // Jul 10 2026, 16:31 MDT
+
+  it('carries daysLive alongside a resolved verdict', () => {
+    const h = computeMetaPacingHealth({
+      dailyBudget: 11.55,
+      liveDateIso: '2026-07-06',
+      series: [],
+      cumulativeSpend: 42.35,
+      nowMs: NOW,
+      timeZone: TZ,
+    });
+    expect(h.daysLive).toBeCloseTo(4.69, 2);
+  });
+
+  it('carries daysLive even under the minimum-history floor (verdict withheld)', () => {
+    const h = computeMetaPacingHealth({
+      dailyBudget: 10,
+      liveDateIso: '2026-07-10',
+      series: [],
+      cumulativeSpend: 3,
+      nowMs: Date.UTC(2026, 6, 10, 8, 0, 0), // 02:00 MDT → 0.08 days live
+      timeZone: TZ,
+    });
+    expect(h.verdict).toBeNull();
+    expect(h.daysLive).toBeCloseTo(0.08, 2); // the gate can still see it
+  });
+
+  it('carries daysLive with no daily budget (CBO row)', () => {
+    const h = computeMetaPacingHealth({
+      dailyBudget: 0,
+      liveDateIso: '2026-07-09',
+      series: [],
+      cumulativeSpend: null,
+      nowMs: NOW,
+      timeZone: TZ,
+    });
+    expect(h.pacingRatio).toBeNull();
+    expect(h.daysLive).toBeCloseTo(1.69, 2);
+  });
+
+  it('leaves daysLive null when go-live is unknown (gate fails open)', () => {
+    const h = computeMetaPacingHealth({
+      dailyBudget: 10,
+      liveDateIso: null,
+      series: [],
+      cumulativeSpend: 100,
+      nowMs: NOW,
+      timeZone: TZ,
+    });
+    expect(h.daysLive).toBeNull();
+  });
+
+  it('daysLive tracks history while windowDays stops at the rolling cap', () => {
+    // 40 days live: the window saturates at ~7 but history keeps climbing.
+    const series: DailySpendPoint[] = [];
+    for (let d = 1; d <= 10; d++) {
+      series.push({
+        date: `2026-07-${String(d).padStart(2, '0')}`,
+        spend: 10,
+        dailyBudget: 10,
+      });
+    }
+    const h = computeMetaPacingHealth({
+      dailyBudget: 10,
+      liveDateIso: '2026-06-01',
+      series,
+      cumulativeSpend: null,
+      nowMs: NOW,
+      timeZone: TZ,
+    });
+    expect(h.windowDays).toBeCloseTo(6.69, 2);
+    expect(h.daysLive).toBeCloseTo(39.69, 2);
+  });
+});
+
+// ─── Addendum §4: warm-up threshold + gate ──────────────────────────────────
+
+describe('warmupThresholdDays', () => {
+  it('floors at 3 days for a month-length flight', () => {
+    expect(warmupThresholdDays(30)).toBeCloseTo(3.0, 3);
+  });
+
+  it('a 13-day flight also lands on the 3-day floor (min of 3 and 3.25)', () => {
+    expect(warmupThresholdDays(13)).toBeCloseTo(3.0, 3);
+  });
+
+  it('caps at 25% of a short flight — a 6-day event warms up in 1.5 days', () => {
+    expect(warmupThresholdDays(6)).toBeCloseTo(1.5, 3);
+  });
+
+  it('falls back to the clamped window when flight dates are missing', () => {
+    expect(warmupThresholdDays(0, 8)).toBeCloseTo(2.0, 3);
+  });
+
+  it('with neither a flight length nor a fallback, uses the full floor', () => {
+    expect(warmupThresholdDays(0, 0)).toBeCloseTo(3.0, 3);
+  });
+});
+
+describe('buildMetaRecommendation — warm-up gate', () => {
+  // The Triumph Demo Days case: flight Jul 27 – Aug 8 (13 days), set up
+  // mid-afternoon Jul 27, read Jul 28 ~11 AM → 1.46 days of history. Before the
+  // gate this surfaced "Add $0.88 to current Daily Budget" off a window too
+  // short to mean anything.
+  const triumph = {
+    target: 200,
+    actualSpend: 19.41,
+    daysRemaining: 3.5,
+    totalDays: 5, // July slice — deliberately NOT the warm-up basis
+    dailyBudget: 15.4,
+    overageAllowance: 0.75,
+    flightLengthDays: 13,
+  };
+
+  it('suppresses the recommendation on a window that is too short', () => {
+    const rec = buildMetaRecommendation({
+      ...triumph,
+      health: healthAtRate(15.4, 13.3, { daysLive: 1.46, windowDays: 1.46 }),
+    })!;
+    expect(rec.state).toBe('warmup');
+    expect(rec.warmupActive).toBe(true);
+    expect(rec.warmupThresholdDays).toBeCloseTo(3.0, 2);
+    expect(rec.warmupDaysLive).toBeCloseTo(1.46, 2);
+  });
+
+  it('still computes the catch-up math behind the gate (nothing is lost)', () => {
+    const rec = buildMetaRecommendation({
+      ...triumph,
+      health: healthAtRate(15.4, 13.3, { daysLive: 1.46, windowDays: 1.46 }),
+    })!;
+    expect(rec.requiredRate).toBeCloseTo((200 - 19.41) / 3.5, 2);
+    expect(rec.projectedRunrate).toBeCloseTo(19.41 + 13.3 * 3.5, 2);
+  });
+
+  it('keys off accumulated history, NOT the window: a stale sync must not re-warm-up a mature ad', () => {
+    // 40 days live, but the last sync was days ago so the rolling window only
+    // spans ~3. Gating on windowDays (the spec's literal §4.2 wording) would
+    // suppress recommendations on an ad that has been running for six weeks.
+    const rec = buildMetaRecommendation({
+      target: 360,
+      actualSpend: 128,
+      daysRemaining: 17.35,
+      totalDays: 30,
+      dailyBudget: 11.55,
+      health: healthAtRate(11.55, 11.55, {
+        daysLive: 40,
+        windowDays: 2.9,
+        verdict: 'healthy',
+      }),
+      overageAllowance: 0.75,
+      flightLengthDays: 30,
+    })!;
+    expect(rec.warmupActive).toBe(false);
+    expect(rec.state).toBe('adjust');
+  });
+
+  it('releases the gate once history reaches the threshold', () => {
+    const rec = buildMetaRecommendation({
+      ...triumph,
+      health: healthAtRate(15.4, 15.4, {
+        daysLive: 3.0,
+        windowDays: 3.0,
+        verdict: 'healthy',
+      }),
+    })!;
+    expect(rec.warmupActive).toBe(false);
+    expect(rec.state).not.toBe('warmup');
+  });
+
+  it('a short flight clears warm-up early (25% cap, not the 3-day floor)', () => {
+    // 6-day event flight, 2 days live → threshold 1.5, already past it.
+    const rec = buildMetaRecommendation({
+      target: 120,
+      actualSpend: 40,
+      daysRemaining: 4,
+      totalDays: 6,
+      dailyBudget: 20,
+      health: healthAtRate(20, 20, {
+        daysLive: 2,
+        windowDays: 2,
+        verdict: 'healthy',
+      }),
+      overageAllowance: 0.75,
+      flightLengthDays: 6,
+    })!;
+    expect(rec.warmupThresholdDays).toBeCloseTo(1.5, 2);
+    expect(rec.warmupActive).toBe(false);
+  });
+
+  it('fails open when go-live is unknown (no basis to call the ad new)', () => {
+    const rec = buildMetaRecommendation({
+      ...triumph,
+      health: healthAtRate(15.4, 13.3, { daysLive: null, windowDays: 1.46 }),
+    })!;
+    expect(rec.warmupActive).toBe(false);
+    expect(rec.state).not.toBe('warmup');
+  });
+});
+
+// ─── Addendum §6: one shared verdict for badge, box and message ──────────────
+
+describe('pacingDirection', () => {
+  // The $400 card from §6.7: projected $396.43 vs $400 target — 0.9% under, i.e.
+  // inside the band. Green badge beside a neutral "$13.91/day to land on
+  // $400.00" box is the CORRECT output, not a contradiction.
+  const fourHundred = {
+    target: 400,
+    actualSpend: 350.86,
+    daysRemaining: 3.53,
+    totalDays: 31,
+    dailyBudget: 12.9,
+    health: healthAtRate(12.9, 12.9, { verdict: 'healthy' }),
+    overageAllowance: 0.75,
+    flightLengthDays: 31,
+  };
+
+  it('reads on_target for the $400 worked example', () => {
+    const rec = buildMetaRecommendation(fourHundred)!;
+    expect(rec.projectedRunrate).toBeCloseTo(396.4, 1);
+    expect(rec.state).toBe('on_track');
+    expect(pacingDirection(rec, 400)).toBe('on_target');
+  });
+
+  it('withholds a direction during warm-up (the engine is not calling it)', () => {
+    const rec = buildMetaRecommendation({
+      ...fourHundred,
+      health: healthAtRate(12.9, 12.9, { daysLive: 1 }),
+    })!;
+    expect(rec.state).toBe('warmup');
+    expect(pacingDirection(rec, 400)).toBeNull();
+  });
+
+  it('never disagrees with the state it was derived from', () => {
+    const cases: { rec: MetaRecommendation; target: number }[] = [
+      { rec: buildMetaRecommendation(fourHundred)!, target: 400 },
+      {
+        rec: buildMetaRecommendation({
+          target: 300,
+          actualSpend: 200,
+          daysRemaining: 10,
+          totalDays: 30,
+          dailyBudget: 15,
+          health: healthAtRate(15, 15, { verdict: 'healthy' }),
+          overageAllowance: 0.75,
+        })!,
+        target: 300,
+      },
+      {
+        rec: buildMetaRecommendation({
+          target: 360,
+          actualSpend: 128,
+          daysRemaining: 17.35,
+          totalDays: 30,
+          dailyBudget: 11.55,
+          health: healthAtRate(11.55, 11.55, { verdict: 'healthy' }),
+          overageAllowance: 0.75,
+        })!,
+        target: 360,
+      },
+      {
+        rec: buildMetaRecommendation({
+          target: 360,
+          actualSpend: 80,
+          daysRemaining: 19.5,
+          totalDays: 30,
+          dailyBudget: 13,
+          health: healthAtRate(13, 6, { verdict: 'low' }),
+          overageAllowance: 0.75,
+        })!,
+        target: 360,
+      },
+    ];
+    for (const { rec, target } of cases) {
+      const dir = pacingDirection(rec, target);
+      if (rec.state === 'on_track') expect(dir).toBe('on_target');
+      // Every under-tolerance state (adjust/raise, delivery_low) reads as
+      // `under`; only a trim reads as `over` (§6.4).
+      if (rec.state === 'delivery_low') expect(dir).toBe('under');
+      if (rec.state === 'adjust') {
+        expect(dir).toBe(rec.direction === 'trim' ? 'over' : 'under');
+      }
+    }
+  });
+});
+
+describe('badge ↔ recommendation agreement (§6.1)', () => {
+  const calc = (over: Partial<Parameters<typeof classifyPacerHealth>[1]> = {}) => ({
+    budget: 300,
+    spent: 100,
+    projected: 300,
+    hasDates: true,
+    endsBeforeToday: false,
+    lifetimePacingPct: null,
+    ...over,
+  });
+  const ad = { adStatus: 'Live', budgetType: 'Daily' as const };
+
+  // The audit case: an ON TRACK badge beside an active recommendation. The badge
+  // used to run its own ±5% test on the BUDGET-RATE projection (spend + daily ×
+  // days), which is blind to underdelivery, while the engine tested the RUN-RATE
+  // projection against a tapering band. Here they disagree, and the badge must
+  // follow the engine.
+  const underdelivering = buildMetaRecommendation({
+    target: 300,
+    actualSpend: 100,
+    daysRemaining: 10,
+    totalDays: 30,
+    dailyBudget: 20,
+    health: healthAtRate(20, 10, { verdict: 'low' }),
+    overageAllowance: 0.75,
+    flightLengthDays: 30,
+  })!;
+
+  it('the legacy budget-rate test would call this ad on track', () => {
+    // spend + daily × days = 100 + 20 × 10 = 300 → dead on target.
+    expect(classifyPacerHealth(ad, calc()).state).toBe('on-track');
+  });
+
+  it('the engine sees the underdelivery and the badge follows it', () => {
+    expect(underdelivering.state).toBe('delivery_low');
+    const dir = pacingDirection(underdelivering, 300);
+    expect(dir).toBe('under');
+    expect(classifyPacerHealth(ad, calc(), dir).state).toBe('underpacing');
+  });
+
+  it('renders a neutral warming-up badge instead of guessing a direction', () => {
+    expect(classifyPacerHealth(ad, calc(), null).state).toBe('warming-up');
+  });
+
+  it('absolute states still outrank any direction', () => {
+    // Already over budget is a fact, not a projection.
+    expect(
+      classifyPacerHealth(ad, calc({ spent: 400 }), 'on_target').state,
+    ).toBe('over-budget');
+    expect(
+      classifyPacerHealth({ ...ad, adStatus: 'Off' }, calc(), 'under').state,
+    ).toBe('stopped');
   });
 });
 

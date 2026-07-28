@@ -41,6 +41,8 @@ import {
   OVERAGE_ALLOWANCE_MIN,
   OVERAGE_MIN_HISTORY_DAYS,
   RAISE_STEP_CAP,
+  WARMUP_FLIGHT_FRACTION,
+  WARMUP_MAX_DAYS,
 } from './constants';
 import { zonedMidnightMs, zonedTodayIso } from '@/lib/timezone';
 
@@ -65,8 +67,17 @@ export type PacingHealthVerdict = 'healthy' | 'soft' | 'low';
  * against a low pacing-health reading — the operator makes that call, the tool
  * doesn't declare it. `delivery_low` is a pacing-health descriptor (the ad is
  * behind AND underdelivering), not a rec-box takeover.
+ *
+ * `warmup` (addendum §4) is not a verdict — it's the engine declining to make
+ * a call yet because the ad hasn't accumulated a trustworthy window. It
+ * suppresses the three actionable states; `on_track` is NOT "selected" during
+ * warm-up either.
  */
-export type MetaRecommendationState = 'on_track' | 'adjust' | 'delivery_low';
+export type MetaRecommendationState =
+  | 'on_track'
+  | 'adjust'
+  | 'delivery_low'
+  | 'warmup';
 
 /** The four Google recommendation states. Same set as Meta except the third:
  *  Google's is `delivery_limited` because the cause is usually traffic (low
@@ -98,6 +109,20 @@ export interface PacingHealth {
    *  avoids); its one job is "did it break today or has it been soft all
    *  week." null when unknown. */
   spendToday: number | null;
+  /**
+   * Fractional days from go-live to the data edge — how much history this ad
+   * has ACCUMULATED, as distinct from `windowDays` (how much the rolling
+   * window currently spans). They diverge in two directions and the warm-up
+   * gate (§4) needs this one, never `windowDays`:
+   *   - a mature ad with a stale sync has a SHORT windowDays (the window is
+   *     clipped at the data edge) but a large daysLive — gating on windowDays
+   *     would falsely re-warm-up a 40-day-old ad;
+   *   - past HEALTH_WINDOW_DAYS the rolling window stops growing while
+   *     daysLive keeps climbing.
+   * Populated whenever go-live is known — including the paths that withhold a
+   * verdict, so the gate can still see a 3-hour-old ad.
+   */
+  daysLive: number | null;
 }
 
 function verdictOf(ratio: number): PacingHealthVerdict {
@@ -112,7 +137,10 @@ function addDaysIso(iso: string, n: number): string {
   return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
 }
 
-const noHealth = (spendToday: number | null = null): PacingHealth => ({
+const noHealth = (
+  spendToday: number | null = null,
+  daysLive: number | null = null,
+): PacingHealth => ({
   windowDays: 0,
   windowSpend: 0,
   expected: 0,
@@ -120,6 +148,7 @@ const noHealth = (spendToday: number | null = null): PacingHealth => ({
   runRate: null,
   verdict: null,
   spendToday,
+  daysLive,
 });
 
 // ─── Meta: rolling 7-day pacing health ──────────────────────────────────────
@@ -193,7 +222,16 @@ export function computeMetaPacingHealth(
   const edgeRow = series.find((p) => p.date === edgeIso);
   const spendToday = edgeRow ? edgeRow.spend : null;
 
-  if (!(dailyBudget > 0) || !liveDateIso) return noHealth(spendToday);
+  // Resolve go-live FIRST, independently of the budget: `daysToEdge` is the
+  // warm-up gate's input, and the gate has to work on the very ads that fall
+  // through the guards below (a CBO row with no daily budget, an ad only three
+  // hours old). Every return path from here on carries it.
+  //
+  // The one exception is an unknown go-live, which leaves daysLive null and
+  // makes the gate fail OPEN. That happens only when metaStartDate, liveDate
+  // AND flightStart are all absent — no basis to call the ad new, and
+  // suppressing every such ad's recommendation would be worse than not gating.
+  if (!liveDateIso) return noHealth(spendToday);
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(liveDateIso);
   if (!m) return noHealth(spendToday);
   // Loomi stores go-live as a date (no time), so days-live counts from that
@@ -207,7 +245,8 @@ export function computeMetaPacingHealth(
   // Days from go-live to the DATA EDGE (not now) — the span the denominator
   // must match.
   const daysToEdge = (edgeMs - liveMs) / DAY_MS;
-  if (daysToEdge < HEALTH_MIN_DAYS) return noHealth(spendToday);
+  if (!(dailyBudget > 0)) return noHealth(spendToday, daysToEdge);
+  if (daysToEdge < HEALTH_MIN_DAYS) return noHealth(spendToday, daysToEdge);
 
   let windowDays: number;
   let windowSpend: number;
@@ -223,13 +262,13 @@ export function computeMetaPacingHealth(
     } else if (input.cumulativeSpend != null) {
       windowSpend = input.cumulativeSpend;
     } else {
-      return noHealth(spendToday);
+      return noHealth(spendToday, daysToEdge);
     }
   } else {
     // Rolling window: the last HEALTH_WINDOW_DAYS calendar dates. The START
     // stays clock-anchored (today − 6) so the numerator is unchanged; only the
     // END/day-count moves to the data edge. span = data_edge − window_start.
-    if (series.length === 0) return noHealth(spendToday); // needs the series
+    if (series.length === 0) return noHealth(spendToday, daysToEdge); // needs the series
     const startIso = addDaysIso(todayIso, -(HEALTH_WINDOW_DAYS - 1));
     windowSpend = series.reduce(
       (s, p) => (p.date >= startIso && p.date <= edgeIso ? s + p.spend : s),
@@ -241,7 +280,8 @@ export function computeMetaPacingHealth(
   }
 
   const expected = dailyBudget * windowDays;
-  if (!(expected > 0) || !(windowDays > 0)) return noHealth(spendToday);
+  if (!(expected > 0) || !(windowDays > 0))
+    return noHealth(spendToday, daysToEdge);
   const pacingRatio = windowSpend / expected;
   return {
     windowDays,
@@ -251,6 +291,7 @@ export function computeMetaPacingHealth(
     runRate: windowSpend / windowDays,
     verdict: verdictOf(pacingRatio),
     spendToday,
+    daysLive: daysToEdge,
   };
 }
 
@@ -391,6 +432,58 @@ export function onTrackTolerance(fractionRemaining: number): number {
   return Math.max(ON_TRACK_TOLERANCE_FLOOR, ON_TRACK_TOLERANCE * f);
 }
 
+// ─── Meta: warm-up gate (addendum §4) ───────────────────────────────────────
+
+/**
+ * How much history this ad must accumulate before the engine will make a call:
+ * `min(WARMUP_MAX_DAYS, WARMUP_FLIGHT_FRACTION × flight_length)`.
+ *
+ * `flightLengthDays` is the FULL planned flight, deliberately NOT the
+ * month-clamped pacing window. A Jul 27 – Aug 8 flight has a 13-day run but
+ * only a 5-day July slice; keying off the slice would set the threshold at
+ * 1.25d and let the very phantom recommendation this gate exists to suppress
+ * through on day two. The 25% cap is about the flight's life, not the month's.
+ * Falls back to the clamped window only when flight dates are missing entirely.
+ */
+export function warmupThresholdDays(
+  flightLengthDays: number,
+  fallbackDays = 0,
+): number {
+  const len = flightLengthDays > 0 ? flightLengthDays : fallbackDays;
+  if (!(len > 0)) return WARMUP_MAX_DAYS;
+  return Math.min(WARMUP_MAX_DAYS, WARMUP_FLIGHT_FRACTION * len);
+}
+
+// ─── Shared: the one over/under verdict badge + message both render ─────────
+
+/**
+ * Which way the ad is drifting, and the SINGLE source both the badge and the
+ * status message read. `null` = the engine isn't making a call (warm-up, or no
+ * target to measure against).
+ */
+export type PacingDirection = 'on_target' | 'under' | 'over';
+
+/**
+ * The tolerance verdict, re-derived from the same projection and band the state
+ * machine used. This exists so the badge cannot disagree with the recommendation:
+ * before this, the badge ran its own hardcoded ±5% test against a DIFFERENT
+ * projection (budget-rate `spent + daily × daysLeft`) while the engine tested
+ * the run-rate projection against a tapering band — which is how an ON TRACK
+ * badge ended up beside an active "Add $1.01" recommendation. Anything rendering
+ * a direction must come through here.
+ */
+export function pacingDirection(
+  rec: MetaRecommendation,
+  target: number,
+): PacingDirection | null {
+  if (rec.state === 'warmup') return null; // no call yet, by design
+  if (!(target > 0)) return null;
+  if (Math.abs(rec.projectedRunrate - target) <= rec.tolerance * target) {
+    return 'on_target';
+  }
+  return rec.projectedRunrate > target ? 'over' : 'under';
+}
+
 // ─── Meta: recommendation state machine ─────────────────────────────────────
 
 export interface MetaRecommendationInput {
@@ -410,6 +503,10 @@ export interface MetaRecommendationInput {
   /** Per-account single-day flexibility (0.25–0.75), see
    *  deriveOverageAllowance. */
   overageAllowance: number;
+  /** §4 warm-up: the FULL planned flight length in days (unclamped by the
+   *  pacing month) — see warmupThresholdDays for why the month slice is the
+   *  wrong basis. 0/omitted falls back to `totalDays`. */
+  flightLengthDays?: number;
 }
 
 export interface MetaRecommendation {
@@ -445,13 +542,27 @@ export interface MetaRecommendation {
   /** False when no pacing-health data was available (pre-series sync) and the
    *  machine assumed budget-rate delivery. */
   healthKnown: boolean;
+  /** §4: the window hasn't reached trustworthy length, so the three actionable
+   *  states are suppressed and `state` is `warmup`. The catch-up arithmetic
+   *  below is still fully computed — nothing is lost, it just isn't surfaced as
+   *  a recommendation yet. */
+  warmupActive: boolean;
+  /** The trustworthy-window threshold this ad is measured against (days). */
+  warmupThresholdDays: number;
+  /** History accumulated so far (days) — the numerator of the "1.5d of 3d"
+   *  progress readout. null when go-live is unknown. */
+  warmupDaysLive: number | null;
 }
 
 /**
  * The Meta state machine (a descriptor now, not the rec-box driver).
  * Evaluated top to bottom, first match wins. The rec box reads the arithmetic
- * fields directly (requiredRate / remainingBudget) and never the state; the
- * state only colors the pacing-health descriptor and prose:
+ * fields directly (requiredRate / remainingBudget) and never the state — with
+ * the single documented exception of `warmup`, which replaces the box's figure
+ * with a progress readout (§5); the state otherwise only colors the
+ * pacing-health descriptor and prose:
+ *   - warmup:   too little history to make a call — suppresses all three
+ *     actionable states below. Checked first.
  *   - on_track: current behavior lands within tolerance of target.
  *   - adjust:   off target with a correction to make (raise or trim).
  *   - delivery_low: behind AND underdelivering (health verdict low) — a bigger
@@ -487,6 +598,17 @@ export function buildMetaRecommendation(
   const maxSpendable = Math.max(0, runRate * Math.max(0, daysRemaining));
   const gap = Math.max(0, remainingBudget) - maxSpendable;
 
+  // §4 warm-up: keyed off ACCUMULATED history (health.daysLive), never
+  // health.windowDays — a mature ad whose sync went stale has a short window
+  // but plenty of history, and gating on the window would re-warm-up an ad
+  // that's been running for weeks.
+  const threshold = warmupThresholdDays(
+    input.flightLengthDays ?? 0,
+    totalDays,
+  );
+  const daysLive = input.health?.daysLive ?? null;
+  const warmupActive = daysLive != null && daysLive < threshold;
+
   const base = {
     requiredRate: Number.isFinite(requiredRate) ? requiredRate : 0,
     projectedRunrate,
@@ -496,9 +618,18 @@ export function buildMetaRecommendation(
     gap,
     tolerance,
     healthKnown,
+    warmupActive,
+    warmupThresholdDays: threshold,
+    warmupDaysLive: daysLive,
     direction: null as MetaRecommendation['direction'],
     largeJump: false,
   };
+
+  // 0. Warm-up gate — evaluated BEFORE state selection so no actionable state
+  //    can be reached on a window too short to trust. Deliberately not
+  //    `on_track` either: the engine isn't saying the ad is fine, it's saying
+  //    it hasn't measured yet.
+  if (warmupActive) return { state: 'warmup', ...base };
 
   // 1. On track: current behavior lands within tolerance of target.
   if (Math.abs(projectedRunrate - target) <= tolerance * target) {
@@ -630,6 +761,10 @@ export function buildGoogleRecommendation(
     runRate,
     verdict: pacingRatio != null ? verdictOf(pacingRatio) : null,
     spendToday: null,
+    // Google's window IS its elapsed eligible time, so the two coincide here.
+    // Google has no warm-up gate (the addendum is Meta-scoped); this field is
+    // populated for shape parity, not read by the Google state machine.
+    daysLive: daysElapsed,
   };
 
   const remainingBudget = target - actualSpend;

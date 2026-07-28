@@ -24,6 +24,7 @@ import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
 import { TeamsTab } from '@/components/settings/teams-tab';
 import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
 import { useSettingsTabs, type SettingsTabKey } from '@/components/settings/use-settings-tabs';
+import { HelpTip } from '@/components/ui/help-tip';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import { organizationOptions, subAccountCount } from '@/lib/organization-options';
 
@@ -336,7 +337,22 @@ function AccountSettingsTab() {
             </div>
 
             <div>
-              <label className={labelClass}>Organization</label>
+              <div className="mb-1.5 flex items-center gap-1.5">
+                <label className="text-xs font-medium text-[var(--muted-foreground)]">
+                  Organization
+                </label>
+                <HelpTip title="Organization">
+                  <p>
+                    The account this one belongs to. Its contacts roll up to that account, and it
+                    inherits that account&rsquo;s brand kit and templates.
+                  </p>
+                  <p>
+                    There is no separate promote step — an account becomes an Organization the
+                    moment another account points at it here. To dissolve one, set this field back
+                    to <strong>None</strong> on each of its sub-accounts.
+                  </p>
+                </HelpTip>
+              </div>
               <select
                 value={parentAccountKey}
                 onChange={(e) => setParentAccountKey(e.target.value)}
@@ -347,13 +363,12 @@ function AccountSettingsTab() {
                   <option key={o.key} value={o.key}>{o.label}</option>
                 ))}
               </select>
-              <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
-                The account this one belongs to. Its contacts roll up to that account, and it
-                inherits that account&apos;s brand kit and templates.
-                {rooftopCount > 0
-                  ? ` This account is itself an Organization — ${rooftopCount} sub-account${rooftopCount === 1 ? '' : 's'} roll up to it.`
-                  : ''}
-              </p>
+              {rooftopCount > 0 && (
+                <p className="mt-1.5 text-[11px] leading-4 text-[var(--muted-foreground)]">
+                  This account is itself an Organization — {rooftopCount} sub-account
+                  {rooftopCount === 1 ? '' : 's'} roll{rooftopCount === 1 ? 's' : ''} up to it.
+                </p>
+              )}
             </div>
 
             {showBrandsSelector && (

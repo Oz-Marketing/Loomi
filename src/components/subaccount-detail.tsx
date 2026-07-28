@@ -37,6 +37,7 @@ import { UserAvatar } from '@/components/user-avatar';
 import { AccountAvatar } from '@/components/account-avatar';
 import { MediaPickerModal } from '@/components/media-picker-modal';
 import { ContactsTable } from '@/components/contacts/contacts-table';
+import { HelpTip } from '@/components/ui/help-tip';
 import type { Contact } from '@/lib/contacts/types';
 import type { AccountData } from '@/contexts/account-context';
 import { useAccount } from '@/contexts/account-context';
@@ -988,7 +989,22 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                 </div>
 
                 <div>
-                  <label className={labelClass}>Organization</label>
+                  <div className="mb-1.5 flex items-center gap-1.5">
+                    <label className="text-xs font-medium text-[var(--muted-foreground)]">
+                      Organization
+                    </label>
+                    <HelpTip title="Organization">
+                      <p>
+                        The account this one belongs to. Its contacts roll up to that account, and
+                        it inherits that account&rsquo;s brand kit and templates.
+                      </p>
+                      <p>
+                        There is no separate promote step — an account becomes an Organization the
+                        moment another account points at it here. To dissolve one, set this field
+                        back to <strong>None</strong> on each of its sub-accounts.
+                      </p>
+                    </HelpTip>
+                  </div>
                   <select
                     value={parentAccountKey}
                     onChange={e => setParentAccountKey(e.target.value)}
@@ -999,22 +1015,12 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                       <option key={o.key} value={o.key}>{o.label}</option>
                     ))}
                   </select>
-                  <p className="mt-1.5 text-[11px] leading-4 text-[var(--muted-foreground)]">
-                    The account this one belongs to. Its contacts roll up to that account, and it
-                    inherits that account&rsquo;s brand kit and templates. Setting this is what
-                    makes the parent an Organization — there is no separate promote step.
-                    {ownSubAccountCount > 0 && (
-                      <>
-                        {' '}
-                        <span className="font-medium text-[var(--foreground)]">
-                          This account is itself an Organization
-                        </span>{' '}
-                        — {ownSubAccountCount} sub-account{ownSubAccountCount === 1 ? '' : 's'} roll
-                        {ownSubAccountCount === 1 ? 's' : ''} up to it. To dissolve it, clear the
-                        Organization on each of those.
-                      </>
-                    )}
-                  </p>
+                  {ownSubAccountCount > 0 && (
+                    <p className="mt-1.5 text-[11px] leading-4 text-[var(--muted-foreground)]">
+                      This account is itself an Organization — {ownSubAccountCount} sub-account
+                      {ownSubAccountCount === 1 ? '' : 's'} roll{ownSubAccountCount === 1 ? 's' : ''} up to it.
+                    </p>
+                  )}
                 </div>
 
                 <div>

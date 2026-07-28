@@ -31,13 +31,19 @@ jobs:
           # maxAgeHours 30 = one missed nightly run plus slack. Tighten once the
           # cadence has proven itself; loosen if the weekly sweep overruns.
           #
-          # ignore = rooftops deliberately parked out of the sync (their
-          # dealer_map rows sit in an unused loomi_set). Grizzly HD and
-          # Powersports Missoula were pushing each other's records off a shared
-          # accounting ID; Truck & Trailer has no feed yet. Remove a key here
-          # the same day you un-park it in dealer_map, or it stops being
-          # monitored while it is live.
-          ENDPOINT: https://studio.loomilm.com/api/internal/contact-sync/health?maxAgeHours=30&ignore=youngGrizzlyHarleyDavidson,youngPowersportsOfMissoula,youngTruckAndTrailerOfKaysville,youngTruckAndTrailerOfLogan
+          # ignore = rooftops deliberately out of the sync. Truck & Trailer
+          # (Kaysville, Logan) share one CDK accounting code with no known
+          # discriminator in the data, so they aren't mapped in dealer_map yet.
+          # Remove a key here the same day it starts syncing, or it stays
+          # unmonitored while live.
+          #
+          # Grizzly HD / Powersports Missoula also share accounting code 800236,
+          # but that one IS solved: Grizzly takes make IN ('HARLEY DAVIDSON',
+          # 'Harley') and Missoula takes the complement, via dealer_map's
+          # loomi_make_include / loomi_make_exclude. Verified 2026-07-28 —
+          # 55 + 99 candidates summing to the 154 the shared code produced
+          # before the split. Both are monitored normally.
+          ENDPOINT: https://studio.loomilm.com/api/internal/contact-sync/health?maxAgeHours=30&ignore=youngTruckAndTrailerOfKaysville,youngTruckAndTrailerOfLogan
         run: |
           set -euo pipefail
 

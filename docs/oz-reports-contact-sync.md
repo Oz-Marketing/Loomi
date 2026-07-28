@@ -302,13 +302,76 @@ Currently parked:
 
 | Account | Why |
 |---|---|
-| `youngGrizzlyHarleyDavidson` | Shares an accounting ID with Powersports Missoula — each was receiving the other's records |
-| `youngPowersportsOfMissoula` | Same shared-ID problem |
-| `youngTruckAndTrailerOfKaysville` | No CRM feed yet (never mapped in `dealer_map`) |
-| `youngTruckAndTrailerOfLogan` | No CRM feed yet (never mapped in `dealer_map`) |
+| `youngTruckAndTrailerOfKaysville` | Shares one CDK accounting code with Logan and no discriminator has been found in the data — not mapped in `dealer_map` yet |
+| `youngTruckAndTrailerOfLogan` | Same shared-code problem |
 
 Note that parking stops *future* pushes; it does not remove contacts an earlier
 run already delivered.
+
+## Splitting two rooftops that share an accounting code
+
+Grizzly HD and Powersports Missoula are one physical store under CDK code
+`800236`, so every query keyed on that code returns both rooftops' records —
+each was receiving the other's customers. Grizzly sells only Harley-Davidson,
+which makes `make` the discriminator:
+
+```sql
+UPDATE dealer_map SET loomi_make_include = 'HARLEY DAVIDSON,Harley', loomi_make_exclude = NULL
+ WHERE loomi_account_key = 'youngGrizzlyHarleyDavidson';
+UPDATE dealer_map SET loomi_make_exclude = 'HARLEY DAVIDSON,Harley', loomi_make_include = NULL
+ WHERE loomi_account_key = 'youngPowersportsOfMissoula';
+```
+
+`applyMakeFilter()` runs at all 8 query sites (both customer pushes, both event
+pushes), so the split covers contacts and timeline history alike.
+
+Three things to know if you set up another one of these:
+
+1. **Keep the two lists byte-identical** — one `include`, one `exclude`, same
+   values. Identical lists mean every row lands in exactly one account. If they
+   drift, rows either duplicate into both or fall into neither.
+2. **Null the opposite column.** `include` wins when both are set on one row, so
+   a leftover value silently overrides.
+3. **Enumerate the spellings first** — matching is exact (per-value, case
+   insensitive), so a variant you miss gets misrouted rather than erroring. This
+   store had both `HARLEY DAVIDSON` (1,557 service rows) and `Harley` (22):
+
+   ```sql
+   SELECT make, COUNT(*) FROM ps_service_data
+    WHERE accounting_account = '800236'
+      AND (make LIKE '%HARL%' OR make LIKE '%DAVID%' OR make LIKE '%H-D%' OR make LIKE 'HD%')
+    GROUP BY make;
+   ```
+
+Verify with a dry run: the two accounts' candidate counts must **sum** to what
+the shared code produced before the split (55 + 99 = 154 here). A sum that's too
+high means duplication, too low means dropped rows.
+
+Note 271 service rows at this store have a blank `make` and therefore fall to
+Missoula, as the non-Harley side. Some of those are probably Harleys with a
+missing field — the alternative (excluding blanks from both) would drop them
+from Loomi entirely, so this is the deliberate choice.
+
+### When make isn't the discriminator
+
+The Truck & Trailer pair share a code but sell the same products, so `make`
+can't separate them. Candidate columns worth checking before resorting to a
+heuristic — these carry per-`dealer_map`-row values for Tekion-sourced rows:
+
+- `sales_data.tekion_dealer_id` and `sales_data.dealer_name`
+- `service_data.dealership`, and `service_data.dealer` (set from `cdk_svc`,
+  often per-store even when the sales code is shared)
+
+Note the Tekion importer deliberately leaves `service_data.tekion_dealer_id`
+empty (see the comment in `Tekion.php`), so it can solve sales but not service.
+
+Splitting on any column other than `make` needs a generic filter added to the
+bridge (`loomi_filter_column` + include/exclude, mirroring the make filter).
+Splitting by customer city/zip is possible with the same mechanism but assigns
+by where the customer *lives*, not where they transacted — acceptable for
+top-of-funnel, wrong for service reminders. And the choice is sticky: ingest
+never moves a contact between accounts, so records sent to the wrong one need
+manual deletion and a re-push.
 
 ## Exit codes
 

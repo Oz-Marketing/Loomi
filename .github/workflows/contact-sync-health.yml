@@ -1,0 +1,130 @@
+name: CRM Contact Sync Health
+
+# Watches the Oz Reports → Loomi contact pipeline from the Loomi side.
+#
+# The push half runs on the Oz Reports host's crontab (see
+# scripts/ops/oz-reports-contact-sync.sh), which nothing in this repo can see.
+# If that cron gets disabled, the ingest secret rotates, or a dealer mapping
+# breaks, contacts quietly stop refreshing and no one finds out until a
+# campaign goes to a stale roster. This job asks Loomi "when did each account
+# last receive a CRM batch?" and fails loudly when the answer is "too long
+# ago".
+#
+# A failed run e-mails whoever watches this repo — that's the alert channel.
+
+on:
+  schedule:
+    # 15:00 UTC = 9 AM MDT / 8 AM MST. Deliberately hours after the 03:30 MT
+    # nightly push, so a slow full sweep isn't mistaken for a dead pipeline.
+    - cron: '0 15 * * *'
+  workflow_dispatch:
+    # Run on demand from the Actions tab, e.g. right after installing the cron.
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check contact sync freshness
+        env:
+          INTERNAL_JOB_SECRET: ${{ secrets.INTERNAL_JOB_SECRET }}
+          # maxAgeHours 30 = one missed nightly run plus slack. Tighten once the
+          # cadence has proven itself; loosen if the weekly sweep overruns.
+          #
+          # ignore = rooftops deliberately out of the sync. Truck & Trailer
+          # (Kaysville, Logan) share one CDK accounting code with no known
+          # discriminator in the data, so they aren't mapped in dealer_map yet.
+          # Remove a key here the same day it starts syncing, or it stays
+          # unmonitored while live.
+          #
+          # Grizzly HD / Powersports Missoula also share accounting code 800236,
+          # but that one IS solved: Grizzly takes make IN ('HARLEY DAVIDSON',
+          # 'Harley') and Missoula takes the complement, via dealer_map's
+          # loomi_make_include / loomi_make_exclude. Verified 2026-07-28 —
+          # 55 + 99 candidates summing to the 154 the shared code produced
+          # before the split. Both are monitored normally.
+          ENDPOINT: https://studio.loomilm.com/api/internal/contact-sync/health?maxAgeHours=30&ignore=youngTruckAndTrailerOfKaysville,youngTruckAndTrailerOfLogan
+        run: |
+          set -euo pipefail
+
+          if [ -z "${INTERNAL_JOB_SECRET}" ]; then
+            echo "::error::INTERNAL_JOB_SECRET secret is not set in this repo"
+            exit 1
+          fi
+
+          status=$(curl --silent --show-error --location \
+            --output /tmp/health.json \
+            --write-out "%{http_code}" \
+            --max-time 120 \
+            -H "x-internal-job-secret: ${INTERNAL_JOB_SECRET}" \
+            "${ENDPOINT}")
+
+          echo "HTTP ${status}"
+          if [ "${status}" != "200" ]; then
+            echo "─── response ───"
+            cat /tmp/health.json || true
+            echo
+            echo "::error::Health endpoint returned HTTP ${status}"
+            exit 1
+          fi
+
+          healthy=$(jq -r '.healthy' /tmp/health.json)
+          checked=$(jq -r '.accountsChecked' /tmp/health.json)
+          stale=$(jq -r '.staleCount' /tmp/health.json)
+          never=$(jq -r '.neverSyncedCount' /tmp/health.json)
+          runs=$(jq -r '.runsAllTime' /tmp/health.json)
+
+          {
+            echo "### CRM contact sync"
+            echo
+            echo "| accounts | stale | never synced | rows (24h) | created | updated |"
+            echo "|---|---|---|---|---|---|"
+            jq -r '"| \(.accountsChecked) | \(.staleCount) | \(.neverSyncedCount) | \(.totals24h.rows) | \(.totals24h.created) | \(.totals24h.updated) |"' /tmp/health.json
+            echo
+            if [ "${stale}" != "0" ]; then
+              echo "#### Stale — these stopped receiving batches"
+              echo
+              echo "| account | dealer | hours since last run | contacts |"
+              echo "|---|---|---|---|"
+              jq -r '.problems[] | "| \(.accountKey) | \(.dealer // "—") | \(.hoursSinceLastRun // "never") | \(.contactCount) |"' /tmp/health.json
+              echo
+            fi
+            if [ "${never}" != "0" ]; then
+              echo "<details><summary>Never synced (${never}) — expected for feed-less parent accounts</summary>"
+              echo
+              echo "| account | dealer | contacts |"
+              echo "|---|---|---|"
+              jq -r '.warnings[] | "| \(.accountKey) | \(.dealer // "—") | \(.contactCount) |"' /tmp/health.json
+              echo
+              echo "</details>"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          # Surface per-account detail in the log for triage.
+          jq -r '.accounts[] | "\(.status)\t\(.accountKey)\thours=\(.hoursSinceLastRun // "never")\tcontacts=\(.contactCount)\t24h_rows=\(.last24h.rows)"' \
+            /tmp/health.json
+
+          # never-synced accounts are a warning, not a failure: several YAG
+          # accounts are parent entities with no CRM feed, so they never
+          # produce a heartbeat and would otherwise fail this job daily.
+          if [ "${never}" != "0" ]; then
+            echo "::warning::${never} account(s) have never received a batch — expected for feed-less parent accounts, but check the summary if that number grows."
+          fi
+
+          if [ "${healthy}" = "true" ]; then
+            echo "All ${checked} account(s) with an active feed synced within the freshness window."
+            exit 0
+          fi
+
+          if [ "${checked}" = "0" ]; then
+            echo "::error::No accounts found at all — either an empty database or the ingest routes have never been hit."
+            exit 1
+          fi
+
+          if [ "${runs}" = "0" ]; then
+            echo "::error::No account has EVER received a CRM ingest batch — is the Oz Reports cron installed? See docs/oz-reports-contact-sync.md."
+            exit 1
+          fi
+
+          echo "::error::Contact sync is stale for ${stale} of ${checked} account(s). See the run summary and docs/oz-reports-contact-sync.md."
+          exit 1

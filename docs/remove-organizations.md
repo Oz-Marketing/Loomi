@@ -38,15 +38,34 @@ the cookies have aged out.
 
 ## Per-environment steps (still required)
 
-1. **`npx prisma db push`** — drops the `Organization` table, the
-   `organizationId` columns on `Account`/`Template`/`Form`/`LandingPage`/
-   `AdTemplateDoc`, and `User.orgKeys`.
+1. **Nothing manual — the deploy does it.** `scripts/drop-organization-model.ts`
+   runs inside `deploy:prepare`, before `prisma db push`.
 
-   Run from the app directory, and strip `?uselibpqcompat`/`?schema=public`
-   from `DATABASE_URL` if you also plan to hand the URL to `psql`.
+   It has to run there rather than letting `db push` do it: the guarded push
+   refuses to drop a populated column and aborts the whole deploy. Adding
+   `--accept-data-loss` would "fix" that by disarming the guard for every
+   future schema change, which is why it drops these objects explicitly
+   instead. Idempotent, so it stays in the pipeline harmlessly.
 
-2. **Everyone logs out and back in.** Account grants are computed when the JWT
-   is built, so a session minted before the change still carries the old shape.
+   It **refuses to run** if any account was grouped by `organizationId` but has
+   no place in the hierarchy — nothing above it and nothing below. That's a
+   hard stop, not a warning: dropping then would lose the grouping for good.
+   Fix by setting each named account's Organization, then re-deploy.
+
+2. **Re-auth only if the script migrated grants.** Watch this line in the
+   deploy log:
+
+   ```
+   [drop-organization-model] migrated org grants for N/M user(s)
+   ```
+
+   `N > 0` means someone's `accountKeys` changed and those users need to log
+   out and back in — grants are computed at JWT build. `0/0` means no user
+   actually held an org grant and no re-auth is needed.
+
+   Staging reported `0/0`: the 22 non-null `orgKeys` values were all the `"[]"`
+   column default, which is non-null (hence Prisma's warning) but grants
+   nothing. Nobody's access depended on the org layer.
 
 3. **Confirm `parentAccountKey` is populated** before trusting any roll-up —
    an empty hierarchy silently reads as "no children":

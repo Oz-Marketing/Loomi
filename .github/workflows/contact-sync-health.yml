@@ -1,0 +1,94 @@
+name: CRM Contact Sync Health
+
+# Watches the Oz Reports → Loomi contact pipeline from the Loomi side.
+#
+# The push half runs on the Oz Reports host's crontab (see
+# scripts/ops/oz-reports-contact-sync.sh), which nothing in this repo can see.
+# If that cron gets disabled, the ingest secret rotates, or a dealer mapping
+# breaks, contacts quietly stop refreshing and no one finds out until a
+# campaign goes to a stale roster. This job asks Loomi "when did each account
+# last receive a CRM batch?" and fails loudly when the answer is "too long
+# ago".
+#
+# A failed run e-mails whoever watches this repo — that's the alert channel.
+
+on:
+  schedule:
+    # 15:00 UTC = 9 AM MDT / 8 AM MST. Deliberately hours after the 03:30 MT
+    # nightly push, so a slow full sweep isn't mistaken for a dead pipeline.
+    - cron: '0 15 * * *'
+  workflow_dispatch:
+    # Run on demand from the Actions tab, e.g. right after installing the cron.
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check contact sync freshness
+        env:
+          INTERNAL_JOB_SECRET: ${{ secrets.INTERNAL_JOB_SECRET }}
+          # 30h = one missed nightly run plus slack. Tighten once the cadence
+          # has proven itself; loosen if the weekly sweep regularly overruns.
+          ENDPOINT: https://studio.loomilm.com/api/internal/contact-sync/health?maxAgeHours=30
+        run: |
+          set -euo pipefail
+
+          if [ -z "${INTERNAL_JOB_SECRET}" ]; then
+            echo "::error::INTERNAL_JOB_SECRET secret is not set in this repo"
+            exit 1
+          fi
+
+          status=$(curl --silent --show-error --location \
+            --output /tmp/health.json \
+            --write-out "%{http_code}" \
+            --max-time 120 \
+            -H "x-internal-job-secret: ${INTERNAL_JOB_SECRET}" \
+            "${ENDPOINT}")
+
+          echo "HTTP ${status}"
+          if [ "${status}" != "200" ]; then
+            echo "─── response ───"
+            cat /tmp/health.json || true
+            echo
+            echo "::error::Health endpoint returned HTTP ${status}"
+            exit 1
+          fi
+
+          healthy=$(jq -r '.healthy' /tmp/health.json)
+          checked=$(jq -r '.accountsChecked' /tmp/health.json)
+          stale=$(jq -r '.staleCount' /tmp/health.json)
+          never=$(jq -r '.neverSyncedCount' /tmp/health.json)
+
+          {
+            echo "### CRM contact sync"
+            echo
+            echo "| accounts | stale | never synced | rows (24h) | created | updated |"
+            echo "|---|---|---|---|---|---|"
+            jq -r '"| \(.accountsChecked) | \(.staleCount) | \(.neverSyncedCount) | \(.totals24h.rows) | \(.totals24h.created) | \(.totals24h.updated) |"' /tmp/health.json
+            echo
+            if [ "${stale}" != "0" ] || [ "${never}" != "0" ]; then
+              echo "#### Problems"
+              echo
+              echo "| account | dealer | status | hours since last run | contacts |"
+              echo "|---|---|---|---|---|"
+              jq -r '.problems[] | "| \(.accountKey) | \(.dealer // "—") | \(.status) | \(.hoursSinceLastRun // "never") | \(.contactCount) |"' /tmp/health.json
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          # Surface per-account detail in the log for triage.
+          jq -r '.accounts[] | "\(.status)\t\(.accountKey)\thours=\(.hoursSinceLastRun // "never")\tcontacts=\(.contactCount)\t24h_rows=\(.last24h.rows)"' \
+            /tmp/health.json
+
+          if [ "${healthy}" = "true" ]; then
+            echo "All ${checked} account(s) synced within the freshness window."
+            exit 0
+          fi
+
+          if [ "${checked}" = "0" ]; then
+            echo "::error::No accounts have ever received a CRM ingest batch — is the Oz Reports cron installed? (scripts/ops/oz-reports-contact-sync.sh)"
+            exit 1
+          fi
+
+          echo "::error::Contact sync is stale: ${stale} stale, ${never} never-synced of ${checked} account(s). See the run summary and docs/oz-reports-contact-sync.md."
+          exit 1

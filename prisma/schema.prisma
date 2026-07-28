@@ -231,6 +231,7 @@ model Account {
   contactLists             ContactList[]
   contactCustomFields      ContactCustomField[]
   contactEvents            ContactEvent[]
+  ingestRuns               IngestRun[]
   loomiFlows               LoomiFlow[]
   forms                    Form[]
   crmDestinations          CrmDestination[]
@@ -525,6 +526,47 @@ model ContactEvent {
   @@index([accountKey, contactId, eventDate])
   @@index([contactId, type])
   @@index([contactId, vehicleVin])
+}
+
+// ─────────────────────────────────────────────────────
+// Ingest run log — one row per accepted /api/ingest/* batch.
+//
+// This is the heartbeat the contact-sync health check reads. Without it,
+// "the CRM sync is dead" and "the CRM sync ran and there was genuinely
+// nothing new in the window" look identical from the outside (both leave
+// Contact.updatedAt untouched), which is the classic silent-pipeline
+// failure. A run row is written even when the batch changed nothing, so
+// absence of rows means absence of runs — full stop.
+//
+// Deliberately append-only and cheap: the nightly cron writes on the
+// order of tens of rows per day (one per 300-contact batch per account),
+// and `prune` in the health route drops rows past the retention window.
+// ─────────────────────────────────────────────────────
+
+model IngestRun {
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  kind   String // 'contacts' | 'events'
+  // Batch-level source as sent by the bridge, e.g. 'oz-reports:automotive',
+  // 'oz-reports:leads'. Note the leads push overrides source PER CONTACT
+  // (with the CRM lead source, e.g. "AutoTrader"), so this batch-level value
+  // is the only reliable record of which feed a run came from.
+  source String?
+
+  totalRows  Int
+  created    Int
+  updated    Int
+  skipped    Int
+  issueCount Int @default(0)
+
+  startedAt DateTime @default(now())
+
+  // Freshness lookups are "latest run for this account" and "everything
+  // since T" — both served by these two indexes.
+  @@index([accountKey, startedAt])
+  @@index([startedAt])
 }
 
 // ─────────────────────────────────────────────────────

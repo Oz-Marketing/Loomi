@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { ingestEvents, type IngestEventInput } from '@/lib/contacts/ingest-events';
+import { recordIngestRun } from '@/lib/contacts/ingest-runs';
 
 // POST /api/ingest/events
 //
@@ -78,6 +79,18 @@ export async function POST(req: NextRequest) {
     `[ingest:events] account=${accountKey} received=${summary.totalRows} ` +
       `created=${summary.created} updated=${summary.updated} skipped=${summary.skipped}`,
   );
+
+  // Heartbeat for the contact-sync health check — see ingest-runs.ts.
+  await recordIngestRun({
+    accountKey,
+    kind: 'events',
+    source: typeof body.source === 'string' && body.source.trim() ? body.source.trim() : null,
+    totalRows: summary.totalRows,
+    created: summary.created,
+    updated: summary.updated,
+    skipped: summary.skipped,
+    issueCount: summary.issues.length,
+  });
 
   return NextResponse.json(summary);
 }

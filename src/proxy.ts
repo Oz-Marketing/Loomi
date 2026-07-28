@@ -256,6 +256,12 @@ export async function proxy(request: NextRequest) {
     // embedded on customer sites (iframe / JS snippet), so it must skip the
     // session gate just like the public /f/ form page below.
     pathname.startsWith('/api/f/') ||
+    // Form-submission file downloads. Authorizes itself two ways — an
+    // HMAC-signed token, or a scoped session — because the dealer opening
+    // a lead in their CRM has no Loomi session to gate on. Like
+    // /api/internal/ above, it must skip this gate or the proxy 401s the
+    // signed links we put in lead emails before the route can check them.
+    pathname === '/api/forms/files' ||
     pathname.startsWith('/login') ||
     pathname.startsWith('/onboarding') ||
     pathname.startsWith('/forgot-password') ||

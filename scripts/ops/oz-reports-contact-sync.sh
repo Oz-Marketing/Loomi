@@ -198,6 +198,44 @@ php
 /usr/local/cpanel/3rdparty/bin/php
 "
 
+# ─────────────────────────────────────────────────────────────
+# curl capability probe.
+#
+# --retry-connrefused landed in curl 7.52 (2016); shared hosting often ships
+# 7.29 from the CentOS 7 era, where an unknown option makes curl exit 2
+# WITHOUT making a request — every endpoint "fails" instantly. So probe for it
+# rather than assuming.
+#
+# `curl --help all` lists every option on 7.65+; on older builds it exits
+# non-zero and the plain `--help` fallback lists them instead.
+# ─────────────────────────────────────────────────────────────
+curl_supports() {
+  { curl --help all 2>/dev/null || curl --help 2>/dev/null; } | grep -q -- "$1"
+}
+
+# Retry transient DNS/connection/5xx failures. Safe to retry: every push is an
+# idempotent upsert on the Loomi side.
+CURL_RETRY_ARGS="--retry 2 --retry-delay 30"
+if curl_supports '--retry-connrefused'; then
+  CURL_RETRY_ARGS="${CURL_RETRY_ARGS} --retry-connrefused"
+fi
+
+# Human-readable curl exit codes, so a failure names its own cause instead of
+# leaving someone to look up the number.
+curl_exit_meaning() {
+  case "$1" in
+    2)  echo "curl rejected an option (unsupported flag for this curl version)" ;;
+    3)  echo "malformed URL — check OZ_BASE" ;;
+    6)  echo "could not resolve host — check OZ_BASE and DNS" ;;
+    7)  echo "could not connect — is the web server up on this host?" ;;
+    22) echo "HTTP error returned by the server" ;;
+    28) echo "timed out (exceeded ${CURL_MAX_TIME}s)" ;;
+    35) echo "TLS handshake failed" ;;
+    60) echo "TLS certificate could not be verified" ;;
+    *)  echo "see curl's exit code $1" ;;
+  esac
+}
+
 detect_php() {
   if [ -n "$PHP_BIN" ] && command -v "$PHP_BIN" >/dev/null 2>&1; then
     printf '%s\n' "$PHP_BIN"
@@ -311,11 +349,10 @@ run_call() {
   log "→ ${url}"
   local started=$SECONDS http rc
 
-  # --retry covers transient DNS/connection/5xx. Safe to retry: every push
-  # is an idempotent upsert on the Loomi side.
+  # shellcheck disable=SC2086 # CURL_RETRY_ARGS is an intentional word list
   http=$(curl -sS \
     --max-time "$CURL_MAX_TIME" \
-    --retry 2 --retry-delay 30 --retry-connrefused \
+    $CURL_RETRY_ARGS \
     -o "$BODY" -w '%{http_code}' \
     "$url" 2>>"$LOG_FILE")
   rc=$?
@@ -324,7 +361,7 @@ run_call() {
 
   if [ "$rc" -ne 0 ]; then
     HARD_FAIL=1
-    fail "${endpoint}/${set}: curl exited ${rc} after ${elapsed}s (timeout or transport error)"
+    fail "${endpoint}/${set}: curl exited ${rc} after ${elapsed}s — $(curl_exit_meaning "$rc")"
     return
   fi
 
@@ -392,8 +429,9 @@ discover_dealers() {
   local endpoint="$1" set="$2" url http
   url="${OZ_BASE}/loomi/${endpoint}/${set}?dry_run=1&days=1"
 
+  # shellcheck disable=SC2086 # intentional word list
   http=$(curl -sS \
-    --max-time 300 --retry 2 --retry-delay 15 --retry-connrefused \
+    --max-time 300 $CURL_RETRY_ARGS \
     -o "$DISCOVER_BODY" -w '%{http_code}' \
     "$url" 2>>"$LOG_FILE")
 
@@ -459,7 +497,7 @@ if [ -n "$RESOLVED_PHP" ]; then
   write_parser
 fi
 
-log "=== start job=${JOB} sets='${SETS}' base=${OZ_BASE} extra='${EXTRA_QUERY}' php=${RESOLVED_PHP:-none}"
+log "=== start job=${JOB} sets='${SETS}' base=${OZ_BASE} extra='${EXTRA_QUERY}' php=${RESOLVED_PHP:-none} curl_retry='${CURL_RETRY_ARGS}'"
 
 if [ -z "$RESOLVED_PHP" ]; then
   log "WARN no PHP CLI found — using the coarse fallback summarizer. Set PHP_BIN in ${CONFIG_FILE} to restore per-dealer detail."

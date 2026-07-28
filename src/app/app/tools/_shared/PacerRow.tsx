@@ -34,6 +34,7 @@ import { buildGooglePacingCard } from '@/lib/ad-pacer/google-pacer-calc';
 import {
   computeMetaPacingHealth,
   buildMetaRecommendation,
+  pacingDirection,
   budgetRampStatus,
   buildHealthHoverRows,
   type PacingHealth,
@@ -75,14 +76,18 @@ function hoverBarColor(ratio: number | null): string {
 function HealthHoverPanel({
   rows,
   change,
-  dailyBudget,
+  expected,
   windowSpend,
   windowDays,
   ratio,
 }: {
   rows: HealthHoverDay[];
   change: BudgetChange | null;
-  dailyBudget: number;
+  /** Σ each day's own budget over the window — the real denominator. Shown as a
+   *  single figure rather than `budget × days`, which stopped being the actual
+   *  math once the denominator became per-day (and was misleading whenever the
+   *  budget changed mid-window — exactly when this hover matters most). */
+  expected: number;
   windowSpend: number;
   windowDays: number;
   ratio: number | null;
@@ -110,7 +115,8 @@ function HealthHoverPanel({
           {ratio != null ? `${Math.round(ratio * 100)}%` : '—'}
         </span>
         <span className="text-[10px] text-[var(--muted-foreground)]">
-          {fmt(windowSpend)} ÷ ({fmt(dailyBudget)} × {fmtDaysNum(windowDays)}d)
+          {fmt(windowSpend)} ÷ {fmt(expected)} budgeted over{' '}
+          {fmtDaysNum(windowDays)}d
         </span>
       </div>
 
@@ -158,11 +164,17 @@ function HealthHoverPanel({
         })}
       </div>
 
-      {/* Footer — one sentence tying it together. */}
-      {changeInWindow && preAvg != null && (
+      {/* Footer — one sentence tying it together. Deliberately factual, with no
+          claim that the headline % is distorted: the denominator now measures
+          each day against ITS OWN budget, so a mid-window change no longer skews
+          the reading and there's nothing to explain away. */}
+      {changeInWindow && preAvg != null && change != null && (
         <div className="mt-2 border-t border-[var(--border)] pt-1.5 text-[10px] leading-relaxed text-[var(--muted-foreground)]">
-          Pre-raise days delivered ~{Math.round(preAvg * 100)}% of their budget — the low % is
-          the raise, not a delivery problem.
+          Days before the change delivered ~{Math.round(preAvg * 100)}% of the budget
+          they were on
+          {change.newBudget > change.prevBudget
+            ? ' — post-raise days may still be scaling to the new budget.'
+            : '.'}
         </div>
       )}
     </div>
@@ -191,6 +203,7 @@ function PacingHealthBox({
   ramp,
   hoverRows,
   dailyBudget,
+  warmup = false,
 }: {
   health: PacingHealth | null;
   spendToday: number | null;
@@ -198,19 +211,35 @@ function PacingHealthBox({
   ramp?: { change: BudgetChange | null; ramping: boolean };
   hoverRows?: HealthHoverDay[];
   dailyBudget?: number | null;
+  /** §4.3 + §5: the window hasn't reached trustworthy length. The percentage
+   *  still renders (warm-up gates the recommendation, not the reading), but the
+   *  VERDICT LABEL is withheld and the color goes neutral — "light — watch it"
+   *  off 1.5 days is the false signal this addendum exists to kill, and a
+   *  colored number is a verdict whether or not it's spelled out. */
+  warmup?: boolean;
 }) {
   const ratio = health?.pacingRatio ?? null;
   const verdict = health?.verdict ?? null;
   const ramping = !!ramp?.ramping && ramp.change != null;
-  const color = ramping
-    ? COLORS.warn
-    : verdict === 'healthy'
-      ? COLORS.success
-      : verdict === 'soft'
-        ? COLORS.warn
-        : verdict === 'low'
-          ? COLORS.error
-          : undefined;
+  // Only a RAISE still warrants the "don't trust this yet" treatment, and for a
+  // real reason rather than a math one: Meta's delivery takes time to scale to a
+  // higher budget, so post-raise days genuinely underdeliver for a while. The
+  // measurement artifact that used to distort BOTH directions is gone — each day
+  // is now measured against its own budget — so a REDUCTION no longer needs the
+  // amber hedge, and its (accurate) reading gets its true verdict color.
+  const scalingUp =
+    ramping && ramp!.change!.newBudget > ramp!.change!.prevBudget;
+  const color = warmup
+    ? undefined
+    : scalingUp
+      ? COLORS.warn
+      : verdict === 'healthy'
+        ? COLORS.success
+        : verdict === 'soft'
+          ? COLORS.warn
+          : verdict === 'low'
+            ? COLORS.error
+            : undefined;
   const verdictLabel =
     verdict === 'healthy'
       ? 'delivering'
@@ -223,13 +252,23 @@ function PacingHealthBox({
       : health
         ? `last ${fmtDaysNum(Math.min(health.windowDays, 7))}d vs daily budget`
         : '';
+  // During warm-up the honest quantity is history ACCUMULATED, not the rolling
+  // window: with no series synced yet windowDays is 0, which would render an
+  // absurd "last 0d vs daily budget".
   const sub = !health
     ? 'needs synced spend history'
-    : ramping && ramp?.change
-      ? `ramping since ${fmtDate(ramp.change.date)} — reading still settling`
-      : verdict
-        ? `${verdictLabel} · ${windowLabel}`
-        : 'needs synced spend history';
+    : warmup
+      ? health.daysLive != null
+        ? `too little history to judge · ${fmtDaysNum(health.daysLive)}d so far`
+        : 'too little history to judge'
+      : scalingUp && ramp?.change
+        ? `scaling to a higher budget since ${fmtDate(ramp.change.date)}`
+        : ramping && ramp?.change
+          ? // A reduction: note it as context, but the reading itself is sound.
+            `${verdictLabel} · budget lowered ${fmtDate(ramp.change.date)}`
+          : verdict
+            ? `${verdictLabel} · ${windowLabel}`
+            : 'needs synced spend history';
   const box = (
     <MetricBox
       label="Pacing Health"
@@ -256,7 +295,7 @@ function PacingHealthBox({
           <HealthHoverPanel
             rows={hoverRows}
             change={ramp?.change ?? null}
-            dailyBudget={dailyBudget}
+            expected={health.expected}
             windowSpend={health.windowSpend}
             windowDays={health.windowDays}
             ratio={ratio}
@@ -419,6 +458,17 @@ export function PacerRow({
         : null,
     [isGoogle, ad, nowMs, timeZone],
   );
+  // §4: the FULL planned flight, unclamped by the pacing month — the warm-up
+  // threshold is 25% of the flight's life, not 25% of the month slice (a
+  // Jul 27–Aug 8 flight has a 5-day July slice but a 13-day run).
+  const flightLengthDays = useMemo(
+    () =>
+      calcDays(
+        ad.flightStart ?? ad.metaStartDate ?? ad.liveDate,
+        ad.flightEnd ?? ad.metaEndDate,
+      ),
+    [ad.flightStart, ad.metaStartDate, ad.liveDate, ad.flightEnd, ad.metaEndDate],
+  );
   const metaRec = useMemo(
     () =>
       !isGoogle && ad.budgetType !== 'Lifetime'
@@ -430,10 +480,12 @@ export function PacerRow({
             dailyBudget: calc.dailyBudget,
             health: metaHealth,
             overageAllowance: overageAllowance ?? OVERAGE_ALLOWANCE_DEFAULT,
+            flightLengthDays,
           })
         : null,
-    [isGoogle, ad.budgetType, calc, metaHealth, overageAllowance],
+    [isGoogle, ad.budgetType, calc, metaHealth, overageAllowance, flightLengthDays],
   );
+  const warmupActive = metaRec?.warmupActive ?? false;
   // Spend so far today from the synced series — a diagnostic breadcrumb shown
   // quietly under the health box, never a decision input.
   const spendToday = useMemo(() => {
@@ -475,18 +527,22 @@ export function PacerRow({
   // stays available (the classification is still editable).
   const showsProjection = !showCompletedSummary && !isPastRun;
 
-  // Color the recommended-vs-current daily comparison
+  // How far the catch-up rate sits from what's running now. Informational only
+  // (§6.2) — it phrases the box's delta line, and deliberately no longer
+  // decides whether the box shows a number or the word "No change".
   const dailyDelta = calc.recDaily - calc.dailyBudget;
-  const isOnTrack = calc.budget > 0 && Math.abs(dailyDelta) < 0.5;
-  const recColor = isOnTrack
-    ? COLORS.success
-    : calc.recDaily > calc.dailyBudget
-      ? COLORS.warn
-      : COLORS.lifetime;
 
-  // Health-based accent colors the left stripe AND the compact pacing
-  // badge in the summary row, so both UI elements agree on the bucket.
-  const health = useMemo(() => classifyPacerHealth(ad, calc), [ad, calc]);
+  // Health-based accent colors the left stripe AND the compact pacing badge in
+  // the summary row. On Meta daily lines the direction comes from the ENGINE
+  // (§6.1/§6.4) so the badge can never contradict the recommendation; lifetime
+  // and Google lines pass no direction and keep the legacy classification.
+  const health = useMemo(
+    () =>
+      metaRec != null
+        ? classifyPacerHealth(ad, calc, pacingDirection(metaRec, calc.budget))
+        : classifyPacerHealth(ad, calc),
+    [ad, calc, metaRec],
+  );
 
   // Resolved = the user billed the ad's full run in its own month
   // (fullRunAppliedToMonth). Cross-month accounting is a MANUAL choice via the
@@ -550,13 +606,20 @@ export function PacerRow({
   // Health icon picks the right semantic affordance per bucket — keeps
   // the loudest verdict (health pill) visually distinct from the
   // quieter status dot + budget-type suffix.
+  // `warming-up` joins stopped/no-data in the quiet treatment: it is the badge
+  // declining to claim a direction, so it must not read as a warning.
   const HealthIcon =
     health.state === 'on-track'
       ? CheckCircleIcon
-      : health.state === 'stopped' || health.state === 'no-data'
+      : health.state === 'stopped' ||
+          health.state === 'no-data' ||
+          health.state === 'warming-up'
         ? MinusCircleIcon
         : ExclamationTriangleIcon;
-  const healthMuted = health.state === 'stopped' || health.state === 'no-data';
+  const healthMuted =
+    health.state === 'stopped' ||
+    health.state === 'no-data' ||
+    health.state === 'warming-up';
 
   // Compact one-line summary row. Four visual languages, one per signal:
   //   - identity:   colored ad-dot + name
@@ -703,9 +766,15 @@ export function PacerRow({
               >
                 {calc.budget > 0 ? fmt(calc.budget) : '—'}
               </span>
-              <span className="text-[11px] text-[var(--muted-foreground)]">
-                {isLifetime ? 'total' : '/day target'}
-              </span>
+              {/* §6.8: NO "/day" suffix here. This value is the flight-period
+                  total (allocation), not a daily rate — the per-day figure is
+                  the Daily Budget card. "total" is accurate for lifetime; a
+                  daily line's value stands bare under the TARGET SPEND header. */}
+              {isLifetime && (
+                <span className="text-[11px] text-[var(--muted-foreground)]">
+                  total
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-2 text-[10px]">
               {/* Budget type — Daily (blue) vs Lifetime (purple), matching the
@@ -1170,6 +1239,7 @@ export function PacerRow({
             ramp={metaRamp}
             hoverRows={metaHoverRows}
             dailyBudget={calc.dailyBudget}
+            warmup={warmupActive}
           />
         )}
         {isLifetime ? (
@@ -1376,24 +1446,30 @@ export function PacerRow({
               />
             );
           }
-          // Within rounding of the current daily → nothing to type.
-          if (isOnTrack) {
+          // §5 warm-up: the ONE case where this box reads the engine state
+          // instead of pure arithmetic. Showing a catch-up figure off ~1.5 days
+          // of history is the phantom recommendation the addendum removes, so
+          // the box shows progress toward a trustworthy window instead. It
+          // returns to normal output on the next sync, no user action needed.
+          if (metaRec.warmupActive) {
             return (
               <MetricBox
                 label="Rec. Daily Adjustment"
-                value="No change"
-                sub="on track to spend it"
-                detail={
-                  metaRec.healthKnown
-                    ? undefined
-                    : 'assumes full delivery — spend history syncs daily'
-                }
-                color={COLORS.success}
+                value="Warming up"
+                sub={`gathering pacing history (${fmtDaysNum(
+                  metaRec.warmupDaysLive ?? 0,
+                )}d of ${fmtDaysNum(metaRec.warmupThresholdDays)}d)`}
+                detail="too little history for a reliable recommendation yet"
               />
             );
           }
-          // Otherwise hand over the catch-up rate (raise or trim). A big single
-          // move is flagged to stage + monitor, but the number still shows.
+          // §6.2: ALWAYS the number — both directions, never "No change", never
+          // a verdict word. The user wants the figure and makes the call
+          // themselves. Tone is informational, not imperative: an imperative
+          // "Add $1.01" beside a green ON TRACK badge is what read as a
+          // contradiction, and the direction/escalation now lives in the badge
+          // and status message instead. No color for the same reason — a
+          // colored number is a verdict.
           return (
             <MetricBox
               label="Rec. Daily Adjustment"
@@ -1405,13 +1481,22 @@ export function PacerRow({
                   ? `${fmt(calc.remaining)} remaining ÷ ${fmtDaysBasisPhrase(calc.daysLeft)} left`
                   : `${fmt(calc.remaining)} remaining ÷ 1 day (final day)`
               }
-              detail={
-                (dailyDelta > 0
-                  ? `Add ${fmt(Math.abs(dailyDelta))} to current Daily Budget`
-                  : `Reduce current Daily Budget by ${fmt(Math.abs(dailyDelta))}`) +
-                (metaRec.largeJump ? ' — large jump, stage it and monitor' : '')
-              }
-              color={recColor}
+              detail={[
+                calc.budget > 0
+                  ? `lands on ${fmt(calc.budget)} target`
+                  : 'lands on target',
+                Math.abs(dailyDelta) >= 0.005
+                  ? `${fmt(Math.abs(dailyDelta))} ${
+                      dailyDelta > 0 ? 'above' : 'below'
+                    } current ${fmt(calc.dailyBudget)}/day`
+                  : 'matches current daily',
+                metaRec.largeJump ? 'large change, stage it and monitor' : null,
+                metaRec.healthKnown
+                  ? null
+                  : 'assumes full delivery — spend history syncs daily',
+              ]
+                .filter(Boolean)
+                .join(' · ')}
             />
           );
         })()}
@@ -1464,23 +1549,40 @@ export function PacerRow({
         // projection bands without a target.
         if (metaRec != null) {
           switch (metaRec.state) {
+            case 'warmup':
+              // §5: say why there's no recommendation. Silent suppression makes
+              // the tool look broken; naming the gate makes it legible.
+              return (
+                <p className="m-0 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                  Warming up — {fmtDaysNum(metaRec.warmupDaysLive ?? 0)} of{' '}
+                  {fmtDaysNum(metaRec.warmupThresholdDays)} days of pacing history.
+                  A window this short swings on a single soft hour, so no budget
+                  change is recommended yet. Health and projection below are live;
+                  the recommendation resumes on its own once the window fills.
+                </p>
+              );
             case 'delivery_low':
-              // M2: during a ramp the low % is the recent raise, not a delivery
-              // fault — say "settling," not "underdelivering," so the reading
-              // isn't misread. The annotation drops once the window is clean.
-              return metaRamp?.ramping && metaRamp.change ? (
+              // A recent RAISE is still a real explanation for a low reading —
+              // Meta's delivery takes time to scale to a bigger budget — but the
+              // reason is delivery, not arithmetic: each day is now measured
+              // against its own budget, so the % is no longer "settling," it's
+              // accurately reporting that the new budget isn't being spent yet.
+              return metaRamp?.ramping &&
+                metaRamp.change &&
+                metaRamp.change.newBudget > metaRamp.change.prevBudget ? (
                 <p
                   className="m-0 text-[11px] leading-relaxed"
                   style={{ color: COLORS.warn }}
                 >
                   Recently raised ({fmt(metaRamp.change.prevBudget)} →{' '}
-                  {fmt(metaRamp.change.newBudget)} on {fmtDate(metaRamp.change.date)}) — the
-                  last 7 days still include pre-raise days, so the{' '}
+                  {fmt(metaRamp.change.newBudget)} on {fmtDate(metaRamp.change.date)}) —
+                  it&apos;s only spending{' '}
                   {metaHealth?.pacingRatio != null
                     ? `${Math.round(metaHealth.pacingRatio * 100)}%`
-                    : 'low'}{' '}
-                  reading is still settling. Let it ramp about a week, then re-read; if
-                  it&apos;s still low on clean data, check audience, bids, creative, and feed.
+                    : 'a fraction'}{' '}
+                  of the new budget so far, which is normal while delivery scales up.
+                  Give it about a week, then re-read; if it&apos;s still low, check
+                  audience, bids, creative, and feed.
                 </p>
               ) : (
                 <p

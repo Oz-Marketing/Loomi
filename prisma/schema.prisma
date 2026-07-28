@@ -538,9 +538,12 @@ model ContactEvent {
 // failure. A run row is written even when the batch changed nothing, so
 // absence of rows means absence of runs — full stop.
 //
-// Deliberately append-only and cheap: the nightly cron writes on the
-// order of tens of rows per day (one per 300-contact batch per account),
-// and `prune` in the health route drops rows past the retention window.
+// Append-only. The bridge posts one batch per account per endpoint —
+// INCLUDING empty batches when a rooftop had no rows in its window, which is
+// what keeps a quiet store distinguishable from an unreachable one. With ~38
+// rooftops on an hourly leads job plus the nightly, that lands in the low
+// hundreds to ~1k rows per day; `prune` in the health route drops anything
+// past the retention window so it stays bounded.
 // ─────────────────────────────────────────────────────
 
 model IngestRun {

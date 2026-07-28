@@ -55,9 +55,6 @@ export async function POST(req: NextRequest) {
   if (!Array.isArray(events)) {
     return NextResponse.json({ error: 'events must be an array' }, { status: 400 });
   }
-  if (events.length === 0) {
-    return NextResponse.json({ totalRows: 0, created: 0, updated: 0, skipped: 0, issues: [] });
-  }
   if (events.length > MAX_EVENTS_PER_REQUEST) {
     return NextResponse.json(
       { error: `Batch exceeds ${MAX_EVENTS_PER_REQUEST} events; split into smaller requests` },
@@ -65,12 +62,32 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Before the empty-batch branch: a typo'd accountKey must still 404, and the
+  // heartbeat below needs a valid FK.
   const account = await prisma.account.findUnique({
     where: { key: accountKey },
     select: { key: true },
   });
   if (!account) {
     return NextResponse.json({ error: `Unknown accountKey: ${accountKey}` }, { status: 404 });
+  }
+
+  const batchSource =
+    typeof body.source === 'string' && body.source.trim() ? body.source.trim() : null;
+
+  // Empty batches still write a heartbeat — see the contacts route for why.
+  if (events.length === 0) {
+    await recordIngestRun({
+      accountKey,
+      kind: 'events',
+      source: batchSource,
+      totalRows: 0,
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      issueCount: 0,
+    });
+    return NextResponse.json({ totalRows: 0, created: 0, updated: 0, skipped: 0, issues: [] });
   }
 
   const summary = await ingestEvents({ accountKey, events: events as IngestEventInput[] });
@@ -84,7 +101,7 @@ export async function POST(req: NextRequest) {
   await recordIngestRun({
     accountKey,
     kind: 'events',
-    source: typeof body.source === 'string' && body.source.trim() ? body.source.trim() : null,
+    source: batchSource,
     totalRows: summary.totalRows,
     created: summary.created,
     updated: summary.updated,

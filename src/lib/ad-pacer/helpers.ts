@@ -7,6 +7,7 @@
 import { toIso } from '@/components/ui/date-picker';
 import { randomUUID } from './random-id';
 import { COLORS } from './constants';
+import type { PacingDirection } from './pacing-engine';
 import type { PacerAd } from './types';
 
 export function fmt(val: number | string | null | undefined): string {
@@ -355,6 +356,7 @@ export type PacerHealth =
   | 'overpacing'
   | 'underpacing'
   | 'on-track'
+  | 'warming-up'
   | 'stopped'
   | 'no-data';
 
@@ -375,6 +377,20 @@ export function classifyPacerHealth(
     endsBeforeToday: boolean;
     lifetimePacingPct: number | null;
   },
+  /**
+   * The engine's tolerance verdict (pacingDirection), when the caller has an
+   * engine result. THIS is the badge's direction source on Meta daily lines:
+   * passing it is what keeps the badge from contradicting the recommendation,
+   * because both then derive from one projection and one band.
+   *   - a direction  → render it
+   *   - `null`       → the engine declined to call it (warm-up) → 'warming-up'
+   *   - omitted      → no engine result available (lifetime lines, and the
+   *     auto-expand seed in BudgetPacerPanel) → fall back to the legacy ±5%
+   *     budget-rate test below.
+   * The absolute states (stopped / no-data / over-budget) are facts, not
+   * projections, and still win over any direction.
+   */
+  direction?: PacingDirection | null,
 ): PacerHealthInfo {
   if (ad.adStatus === 'Off' || ad.adStatus === 'Completed Run') {
     return {
@@ -400,6 +416,41 @@ export function classifyPacerHealth(
       short: 'Over',
     };
   }
+  // Engine-driven path (Meta daily lines): one shared verdict, so badge and
+  // recommendation can't disagree.
+  if (direction !== undefined) {
+    if (direction === null) {
+      return {
+        state: 'warming-up',
+        color: 'var(--border)',
+        label: 'Warming up',
+        short: 'Warming up',
+      };
+    }
+    if (direction === 'over') {
+      return {
+        state: 'overpacing',
+        color: '#ef4444',
+        label: 'Overpacing',
+        short: 'Overpacing',
+      };
+    }
+    if (direction === 'under') {
+      return {
+        state: 'underpacing',
+        color: '#f59e0b',
+        label: 'Underpacing',
+        short: 'Under',
+      };
+    }
+    return {
+      state: 'on-track',
+      color: '#22c55e',
+      label: 'On track',
+      short: 'On track',
+    };
+  }
+
   const isLifetime = ad.budgetType === 'Lifetime';
   const pct = isLifetime
     ? calc.lifetimePacingPct

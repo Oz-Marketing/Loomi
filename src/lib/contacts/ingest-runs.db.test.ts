@@ -30,6 +30,9 @@ const INGEST_SECRET = '__vitest_oz_ingest_secret__';
 // The bridge account: exercised through the real ingest routes, so the wiring
 // between "batch accepted" and "heartbeat written" is covered end to end.
 const bridged = `${PREFIX}bridged`;
+// A low-volume rooftop that gets reached but has no rows in the window — the
+// case the empty-batch heartbeat exists for.
+const quiet = `${PREFIX}quiet`;
 
 function ingestRequest(path: string, body: unknown): NextRequest {
   return new NextRequest(`http://localhost${path}`, {
@@ -98,6 +101,7 @@ describe.skipIf(!RUN)('ingest run log + contact-sync health', () => {
         { key: stale, dealer: 'Vitest Stale Motors' },
         { key: never, dealer: 'Vitest Never Motors' },
         { key: bridged, dealer: 'Vitest Bridged Motors' },
+        { key: quiet, dealer: 'Vitest Quiet Motors' },
       ],
     });
 
@@ -185,6 +189,61 @@ describe.skipIf(!RUN)('ingest run log + contact-sync health', () => {
     });
     expect(runs).toHaveLength(1);
     expect(runs[0].totalRows).toBe(1);
+  });
+
+  it('an EMPTY batch still writes a heartbeat', async () => {
+    // The bridge posts an empty batch when a rooftop had no rows in its window.
+    // Without a heartbeat there, a genuinely quiet low-volume store is
+    // indistinguishable from one the pipeline stopped reaching, and the monitor
+    // false-alarms on the accounts you'd least notice going dark.
+    const before = await prisma.ingestRun.count({ where: { accountKey: quiet } });
+    expect(before).toBe(0);
+
+    const res = await ingestContactsRoute(
+      ingestRequest('/api/ingest/contacts', {
+        accountKey: quiet,
+        source: 'oz-reports:automotive',
+        contacts: [],
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ totalRows: 0, created: 0, updated: 0, skipped: 0 });
+
+    const runs = await prisma.ingestRun.findMany({ where: { accountKey: quiet } });
+    expect(runs).toHaveLength(1);
+    expect(runs[0].totalRows).toBe(0);
+    expect(runs[0].source).toBe('oz-reports:automotive');
+
+    // And an empty EVENTS batch does the same.
+    const evRes = await ingestEventsRoute(
+      ingestRequest('/api/ingest/events', { accountKey: quiet, events: [] }),
+    );
+    expect(evRes.status).toBe(200);
+    expect(
+      await prisma.ingestRun.count({ where: { accountKey: quiet, kind: 'events' } }),
+    ).toBe(1);
+  });
+
+  it('a quiet rooftop reads as ok, not stale', async () => {
+    // The payoff: an account that received nothing but was reached is healthy.
+    const { body } = await callHealth('&maxAgeHours=30');
+    const q = find(body.accounts, quiet);
+    expect(q.status).toBe('ok');
+    expect(q.last24h.runs).toBe(2); // contacts + events, both empty
+    expect(q.last24h.rows).toBe(0); // ...and zero data, visible separately
+    expect(body.problems.map((p) => p.accountKey)).not.toContain(quiet);
+  });
+
+  it('still 404s an unknown account on an empty batch', async () => {
+    // The empty-batch branch must sit AFTER the account lookup, or a typo'd
+    // accountKey silently returns 200 and nobody finds out.
+    const res = await ingestContactsRoute(
+      ingestRequest('/api/ingest/contacts', {
+        accountKey: '__vitest_no_such_account__',
+        contacts: [],
+      }),
+    );
+    expect(res.status).toBe(404);
   });
 
   it('reports the bridged account as freshly synced', async () => {

@@ -75,12 +75,6 @@ export async function POST(req: NextRequest) {
   if (!Array.isArray(contacts)) {
     return NextResponse.json({ error: 'contacts must be an array' }, { status: 400 });
   }
-  if (contacts.length === 0) {
-    return NextResponse.json(
-      { totalRows: 0, created: 0, updated: 0, skipped: 0, issues: [] },
-      { status: 200 },
-    );
-  }
   if (contacts.length > MAX_CONTACTS_PER_REQUEST) {
     return NextResponse.json(
       { error: `Batch exceeds ${MAX_CONTACTS_PER_REQUEST} contacts; split into smaller requests` },
@@ -89,7 +83,9 @@ export async function POST(req: NextRequest) {
   }
 
   // Reject unknown accounts up front with a clear error instead of
-  // letting every row fail on the Contact.accountKey foreign key.
+  // letting every row fail on the Contact.accountKey foreign key. Runs before
+  // the empty-batch branch below so a typo'd accountKey still 404s instead of
+  // silently succeeding, and so the heartbeat has a valid FK to write against.
   const account = await prisma.account.findUnique({
     where: { key: accountKey },
     select: { key: true },
@@ -99,6 +95,28 @@ export async function POST(req: NextRequest) {
   }
 
   const source = typeof body.source === 'string' && body.source.trim() ? body.source.trim() : undefined;
+
+  // An EMPTY batch is a first-class signal, not a no-op: the bridge sends one
+  // when a rooftop had no rows in its window, which is normal for a quiet
+  // store. Recording the heartbeat anyway is what lets the health check tell
+  // "this rooftop was quiet" from "this rooftop stopped being reached" —
+  // without it, a slow week on a low-volume store reads as a dead pipeline.
+  if (contacts.length === 0) {
+    await recordIngestRun({
+      accountKey,
+      kind: 'contacts',
+      source,
+      totalRows: 0,
+      created: 0,
+      updated: 0,
+      skipped: 0,
+      issueCount: 0,
+    });
+    return NextResponse.json(
+      { totalRows: 0, created: 0, updated: 0, skipped: 0, issues: [] },
+      { status: 200 },
+    );
+  }
 
   const summary = await ingestContacts({
     accountKey,

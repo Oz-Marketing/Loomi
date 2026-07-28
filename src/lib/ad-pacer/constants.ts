@@ -193,6 +193,19 @@ export const OVERAGE_ALLOWANCE_DEFAULT = 0.75;
 /** Days of nonzero spend history required before trusting the empirically
  *  derived overage (a young ad may never have run hot enough to reveal it). */
 export const OVERAGE_MIN_HISTORY_DAYS = 14;
+/**
+ * Warm-up gate (addendum §4): the general minimum trustworthy window, in days,
+ * for a month-length flight. Below this much clean history the four-state
+ * engine withholds an actionable recommendation — ~1.5 days of history is thin
+ * enough that a single soft hour swings the reading.
+ */
+export const WARMUP_MAX_DAYS = 3.0;
+/**
+ * Warm-up gate cap as a fraction of flight length, so a SHORT flight isn't
+ * blind for a large share of its run: a 6-day event flight warms up in 1.5
+ * days, not 3. Threshold = min(WARMUP_MAX_DAYS, this × flight_length_days).
+ */
+export const WARMUP_FLIGHT_FRACTION = 0.25;
 /** Google: monthly charging limit multiplier (30.4 = 365/12). A Google
  *  constant, not a judgment knob — exposed so a future platform change is a
  *  config edit. */

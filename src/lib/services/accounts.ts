@@ -1,4 +1,10 @@
 import { prisma } from '@/lib/prisma';
+import {
+  ancestorKeys,
+  expandWithDescendants,
+  relatedKeys,
+  type AccountEdge,
+} from '@/lib/account-hierarchy';
 
 const ACCOUNT_REP_SELECT = {
   id: true,
@@ -166,39 +172,20 @@ export async function getAllAccountKeys() {
   return excludeInternal(accounts).map((a) => a.key);
 }
 
+/** The whole parent/child edge list — one query, reused by the walks below. */
+function hierarchyEdges(): Promise<AccountEdge[]> {
+  return prisma.account.findMany({ select: { key: true, parentAccountKey: true } });
+}
+
 /**
  * Expand account grants down the hierarchy: granting a group account (e.g.
  * `youngAutomotiveGroup`) implies access to every rooftop beneath it, so all
  * the existing accountKey-scoped queries keep working unchanged.
  *
- * This is the hierarchy analogue of resolveOrgAccountKeys, and replaces it as
- * Organization is retired. Returns the input keys plus all descendants.
  */
 export async function expandAccountKeysWithDescendants(keys: string[]): Promise<string[]> {
   if (keys.length === 0) return [];
-  const all = await prisma.account.findMany({
-    select: { key: true, parentAccountKey: true },
-  });
-
-  const childrenOf = new Map<string, string[]>();
-  for (const a of all) {
-    if (!a.parentAccountKey) continue;
-    const list = childrenOf.get(a.parentAccountKey) ?? [];
-    list.push(a.key);
-    childrenOf.set(a.parentAccountKey, list);
-  }
-
-  const out = new Set<string>(keys);
-  const stack = [...keys];
-  while (stack.length) {
-    const key = stack.pop()!;
-    for (const child of childrenOf.get(key) ?? []) {
-      if (out.has(child)) continue; // also guards a malformed parent cycle
-      out.add(child);
-      stack.push(child);
-    }
-  }
-  return [...out];
+  return expandWithDescendants(await hierarchyEdges(), keys);
 }
 
 /**
@@ -209,66 +196,16 @@ export async function expandAccountKeysWithDescendants(keys: string[]): Promise<
  * "mine + my ancestors'".
  */
 export async function getAncestorAccountKeys(accountKey: string): Promise<string[]> {
-  const all = await prisma.account.findMany({ select: { key: true, parentAccountKey: true } });
-  const parentOf = new Map(all.map((a) => [a.key, a.parentAccountKey]));
-
-  const chain: string[] = [];
-  const seen = new Set<string>([accountKey]);
-  let cursor = parentOf.get(accountKey) ?? null;
-  while (cursor && !seen.has(cursor)) {
-    seen.add(cursor); // guards a malformed parent cycle
-    chain.push(cursor);
-    cursor = parentOf.get(cursor) ?? null;
-  }
-  return chain;
+  return ancestorKeys(await hierarchyEdges(), accountKey);
 }
 
 /**
  * Every OTHER account grouped with `accountKey` — the set a suppression must
  * cascade to, so an opt-out at one rooftop silences the whole group.
  *
- * Walks to the top of the tree, then takes every descendant of that root, minus
- * self. Deliberately NOT the `self + descendants` set a roll-up view uses: a
- * rooftop's opt-out must also reach its PARENT and its SIBLINGS. Under-
- * propagating here is a compliance failure, so this is intentionally the wider
- * set. A standalone account (no parent, no children) cascades to nothing.
+ * See `relatedKeys` in `lib/account-hierarchy.ts` for why this is deliberately
+ * wider than the roll-up set.
  */
 export async function getRelatedAccountKeys(accountKey: string): Promise<string[]> {
-  const all = await prisma.account.findMany({ select: { key: true, parentAccountKey: true } });
-  if (!all.some((a) => a.key === accountKey)) return [];
-
-  const parentOf = new Map(all.map((a) => [a.key, a.parentAccountKey]));
-  const childrenOf = new Map<string, string[]>();
-  for (const a of all) {
-    if (!a.parentAccountKey) continue;
-    const list = childrenOf.get(a.parentAccountKey) ?? [];
-    list.push(a.key);
-    childrenOf.set(a.parentAccountKey, list);
-  }
-
-  // Climb to the root of this account's tree.
-  let root = accountKey;
-  const climbed = new Set<string>([root]);
-  for (;;) {
-    const parent = parentOf.get(root) ?? null;
-    if (!parent || climbed.has(parent)) break; // null parent, or a malformed cycle
-    climbed.add(parent);
-    root = parent;
-  }
-
-  // Standalone: no parent above and nothing below — nothing to cascade to.
-  if (root === accountKey && (childrenOf.get(accountKey) ?? []).length === 0) return [];
-
-  const related = new Set<string>();
-  const stack = [root];
-  const seen = new Set<string>();
-  while (stack.length) {
-    const key = stack.pop()!;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    related.add(key);
-    for (const child of childrenOf.get(key) ?? []) stack.push(child);
-  }
-  related.delete(accountKey);
-  return [...related];
+  return relatedKeys(await hierarchyEdges(), accountKey);
 }

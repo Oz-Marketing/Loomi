@@ -29,7 +29,7 @@ import { useIndustries } from '@/lib/hooks/use-industries';
 type Tab = SettingsTabKey;
 
 export default function SettingsPage() {
-  const { isAdmin, isAccount, isOrg, initialized, userRole, accountKey, accountData, scopedAccountKeys } = useAccount();
+  const { isAdmin, isAccount, isGroup, initialized, userRole, accountKey, accountData, scopedAccountKeys } = useAccount();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -59,7 +59,7 @@ export default function SettingsPage() {
     if (!routeTab || !tabs.some(t => t.key === routeTab)) {
       router.replace(defaultTabPath, { scroll: false });
     }
-  }, [initialized, routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, isOrg, userRole]);
+  }, [initialized, routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, isGroup, userRole]);
 
   const activeTabObj = tabs.find((t) => t.key === activeTab);
   const TitleIcon = activeTabObj?.icon ?? CogIcon;
@@ -125,7 +125,7 @@ export default function SettingsPage() {
         <AccountsList
           listPath="/settings/subaccounts"
           detailBasePath="/settings/subaccounts"
-          restrictKeys={isOrg ? scopedAccountKeys : undefined}
+          restrictKeys={isGroup ? scopedAccountKeys : undefined}
         />
       )}
       {activeTab === 'subaccount' && <AccountSettingsTab />}
@@ -169,7 +169,6 @@ function AccountSettingsTab() {
     accountKey,
     accountData,
     accounts,
-    organizations,
     refreshAccounts,
   } = useAccount();
   // Name of the parent ACCOUNT (if any) — for the "inherits the brand kit"
@@ -179,9 +178,7 @@ function AccountSettingsTab() {
     (accountData?.parentAccountKey
       ? accounts[accountData.parentAccountKey]?.dealer ?? accountData.parentAccountKey
       : null) ??
-    (accountData?.organizationId
-      ? Object.values(organizations).find((o) => o.id === accountData.organizationId)?.name ?? null
-      : null);
+    null;
   const { markClean } = useUnsavedChanges();
   const categorySuggestions = useIndustries();
 

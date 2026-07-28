@@ -36,7 +36,6 @@ export async function GET(req: NextRequest) {
   const format = req.nextUrl.searchParams.get('format'); // 'raw' for raw HTML
   const type = req.nextUrl.searchParams.get('type'); // 'lifecycle' | 'design'
   const accountKeyParam = req.nextUrl.searchParams.get('accountKey'); // scope to a specific subaccount
-  const organizationIdParam = req.nextUrl.searchParams.get('organizationId'); // org-owned templates
   const scopeParam = req.nextUrl.searchParams.get('scope'); // 'library' | 'subaccount' | 'all'
   // Clients only ever see published templates from the library. For
   // subaccount-owned templates the published flag is meaningless, so we don't
@@ -75,11 +74,9 @@ export async function GET(req: NextRequest) {
 
   // Resolve list scoping. Order of precedence:
   //   1. ?accountKey=<key> → the account's EFFECTIVE set: its own templates +
-  //      inherited org-owned templates (Phase 2). Access-checked.
-  //   2. ?organizationId=<id> → templates authored at that org (org-mode
-  //      authoring view). Access-checked.
-  //   3. ?scope=library|subaccount|all → explicit scope
-  //   4. default → library (preserves the canonical /email/templates list)
+  //      any inherited from an ancestor (group) account. Access-checked.
+  //   2. ?scope=library|subaccount|all → explicit scope
+  //   3. default → library (preserves the canonical /email/templates list)
   type ListedTemplate = Awaited<ReturnType<typeof templateService.getTemplatesWithContent>>[number];
   let templates: ListedTemplate[];
 
@@ -89,12 +86,6 @@ export async function GET(req: NextRequest) {
     }
     templates = await templateService.getEffectiveTemplatesForAccount(accountKeyParam, {
       type: type || undefined,
-    });
-  } else if (organizationIdParam) {
-    templates = await templateService.getTemplatesWithContent({
-      type: type || undefined,
-      publishedOnly,
-      organizationId: organizationIdParam,
     });
   } else if (scopeParam === 'subaccount' || scopeParam === 'all') {
     // 'subaccount' / 'all' scopes are management-only — exposing every
@@ -120,7 +111,6 @@ export async function GET(req: NextRequest) {
       id: t.id,
       design: t.slug,
       accountKey: t.accountKey,
-      organizationId: t.organizationId,
       name: extractFrontmatterTitle(t.content) || t.title,
       editorType: hasVisualTemplateScaffold(t.content) ? 'visual' : 'code',
       type: t.type,
@@ -206,7 +196,6 @@ export async function POST(req: NextRequest) {
     const unrestricted = hasUnrestrictedAccountAccess(role, userAccountKeys);
 
     let resolvedAccountKey: string | null = null;
-    let resolvedOrgId: string | null = null;
     if (typeof accountKey === 'string' && accountKey.trim()) {
       const key = accountKey.trim();
       if (!unrestricted && !userAccountKeys.includes(key)) {
@@ -226,13 +215,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid design name' }, { status: 400 });
     }
 
-    // Prefix sub-account- and org-owned slugs so they stay unique from library
-    // templates that might share a name (slug is globally unique).
+    // Prefix account-owned slugs so they stay unique from library templates
+    // that might share a name (slug is globally unique).
     const finalSlug = resolvedAccountKey
       ? await findAvailableSlug(`${resolvedAccountKey}-${safeSlug}`)
-      : resolvedOrgId
-        ? await findAvailableSlug(`org-${safeSlug}`)
-        : safeSlug;
+      : safeSlug;
 
     const designLabel = safeSlug
       .split('-')
@@ -249,7 +236,6 @@ export async function POST(req: NextRequest) {
       content: starter,
       createdByUserId: session!.user.id,
       accountKey: resolvedAccountKey,
-      organizationId: resolvedOrgId,
     });
 
     return NextResponse.json({ design: finalSlug });

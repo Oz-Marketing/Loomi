@@ -26,8 +26,6 @@ export interface LandingPageSummary {
   id: string;
   /** '' for an account-less system/library template. */
   accountKey: string;
-  /** Set for an org-owned template (account-less, inherited by sub-accounts). */
-  organizationId: string | null;
   name: string;
   slug: string;
   status: LandingPageStatus;
@@ -75,7 +73,6 @@ export interface LandingPageDetail extends LandingPageSummary {
 interface LandingPageRow {
   id: string;
   accountKey: string | null;
-  organizationId?: string | null;
   name: string;
   slug: string;
   status: string;
@@ -137,7 +134,6 @@ function toSummary(row: LandingPageRow): LandingPageSummary {
   return {
     id: row.id,
     accountKey: row.accountKey ?? '',
-    organizationId: row.organizationId ?? null,
     name: row.name,
     slug: row.slug,
     status: (row.status as LandingPageStatus) ?? 'draft',
@@ -217,39 +213,25 @@ export async function listLandingPages(
 export async function listLandingPageTemplates(
   accountKey?: string | null,
   includeAll = false,
-  organizationId?: string | null,
 ): Promise<LandingPageSummary[]> {
   let where: Record<string, unknown>;
-  if (organizationId) {
-    // Org-authoring view: the templates this organization owns (and cascades
-    // to its sub-accounts).
-    where = { isTemplate: true, organizationId };
-  } else if (accountKey) {
-    // A sub-account's effective template set = its own templates + any
-    // authored by its parent organization (author-once inheritance).
-    const account = await prisma.account.findUnique({
-      where: { key: accountKey },
-      select: { organizationId: true },
-    });
-    const orgId = account?.organizationId ?? null;
-    // Inheritance follows the account hierarchy: a rooftop sees its own landing
-    // pages plus any authored by an ancestor account. The legacy organizationId
-    // match is kept so anything not yet migrated still resolves.
+  if (accountKey) {
+    // A sub-account's effective template set = its own templates plus any
+    // authored by an ancestor (group) account — author once, inherit down.
     const ancestorKeys = await getAncestorAccountKeys(accountKey);
     where = {
       isTemplate: true,
       OR: [
         { accountKey },
         ...(ancestorKeys.length > 0 ? [{ accountKey: { in: ancestorKeys } }] : []),
-        ...(orgId ? [{ organizationId: orgId }] : []),
       ],
     };
   } else if (includeAll) {
     where = { isTemplate: true };
   } else {
-    // System library only: account-less AND org-less (org templates are
-    // owned inheritance, not global library).
-    where = { isTemplate: true, accountKey: null, organizationId: null };
+    // System library only: account-less. Group-authored templates belong to
+    // the group ACCOUNT, so they are inherited, not global library rows.
+    where = { isTemplate: true, accountKey: null };
   }
   const rows = await prisma.landingPage.findMany({
     where,
@@ -318,9 +300,6 @@ export interface CreateLandingPageInput {
   createdByUserId?: string;
   /** When true, the new row is a reusable template, not a live page. */
   isTemplate?: boolean;
-  /** Set only for an org-authored template (account-less, owned by the org
-   *  so its sub-accounts inherit it). */
-  organizationId?: string | null;
 }
 
 export async function createLandingPage(input: CreateLandingPageInput): Promise<LandingPageDetail> {
@@ -338,7 +317,6 @@ export async function createLandingPage(input: CreateLandingPageInput): Promise<
   const row = await prisma.landingPage.create({
     data: {
       accountKey: input.accountKey,
-      organizationId: input.organizationId ?? null,
       name: input.name.trim(),
       slug,
       schema,

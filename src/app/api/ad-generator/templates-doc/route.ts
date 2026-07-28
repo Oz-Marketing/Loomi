@@ -10,6 +10,7 @@
  *                    account's own (dealer-branded plates etc.)
  * - GET ?all=1     → every template incl. drafts (admin; the builder's Load)
  * - POST           → create (admin); optional accountKey scopes it to one account
+ *                    (a group account's templates are inherited by its rooftops)
  *
  * Resilient: if the table isn't migrated in this environment, list endpoints
  * return [] so the generator simply falls back to code templates.
@@ -18,6 +19,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession, getAccountScope, requireRole } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
+import { getAncestorAccountKeys } from '@/lib/services/accounts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,7 +32,6 @@ type Row = {
   status: string;
   isActive: boolean;
   accountKey: string | null;
-  organizationId: string | null;
   category: string | null;
   tags: string | null;
   updatedAt: Date;
@@ -39,14 +40,14 @@ type Row = {
   createdByImage: string | null;
 };
 
-/** Distinct parent-org ids for a set of account keys (for picker inheritance). */
-async function orgIdsForAccounts(keys: string[]): Promise<string[]> {
+/**
+ * Every ancestor of the given accounts, deduped. A template authored at a
+ * parent (group) account is inherited by each rooftop beneath it.
+ */
+async function ancestorsForAccounts(keys: string[]): Promise<string[]> {
   if (!keys.length) return [];
-  const rows = await prisma.account.findMany({
-    where: { key: { in: keys } },
-    select: { organizationId: true },
-  });
-  return [...new Set(rows.map((r) => r.organizationId).filter((x): x is string => !!x))];
+  const chains = await Promise.all(keys.map((k) => getAncestorAccountKeys(k)));
+  return [...new Set(chains.flat())].filter((k) => !keys.includes(k));
 }
 
 function parseTags(raw: string | null): string[] {
@@ -78,7 +79,6 @@ function shape(r: Row) {
     status: r.status,
     isActive: r.isActive,
     accountKey: r.accountKey,
-    organizationId: r.organizationId,
     category: r.category,
     tags: parseTags(r.tags),
     updatedAt: r.updatedAt,
@@ -96,12 +96,12 @@ export async function GET(req: NextRequest) {
   if (req.nextUrl.searchParams.get('all') === '1') {
     const { error } = await requireRole('developer', 'super_admin', 'admin');
     if (error) return error;
-    // ?organizationId=<id> → the org-authoring view: only that org's own
+    // ?accountKey=<key> → the group-authoring view: only that account's own
     // templates (access-gated). Otherwise the whole library.
-    const organizationId = req.nextUrl.searchParams.get('organizationId')?.trim() || null;
+    const ownerKey = req.nextUrl.searchParams.get('accountKey')?.trim() || null;
     try {
       const rows = (await prisma.adTemplateDoc.findMany({
-        ...(organizationId ? { where: { organizationId } } : {}),
+        ...(ownerKey ? { where: { accountKey: ownerKey } } : {}),
         orderBy: { updatedAt: 'desc' },
       })) as Row[];
       return NextResponse.json({ templates: rows.map(shape) });
@@ -125,16 +125,16 @@ export async function GET(req: NextRequest) {
     if (session.user.role === 'client') {
       const keys = getAccountScope(session) ?? [];
       const allowed = accountKey ? (keys.includes(accountKey) ? [accountKey] : []) : keys;
-      // Inherit templates authored at each account's parent organization.
-      const orgIds = await orgIdsForAccounts(allowed);
+      // Inherit templates authored at any ancestor (group) account.
+      const inherited = await ancestorsForAccounts(allowed);
       const rows = (await prisma.adTemplateDoc.findMany({
         where: {
           status: 'published',
           isActive: true,
           OR: [
-            { accountKey: null, organizationId: null },
+            { accountKey: null },
             ...(allowed.length ? [{ accountKey: { in: allowed } }] : []),
-            ...(orgIds.length ? [{ organizationId: { in: orgIds } }] : []),
+            ...(inherited.length ? [{ accountKey: { in: inherited } }] : []),
           ],
         },
         orderBy: { name: 'asc' },
@@ -142,16 +142,16 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ templates: rows.map(shape).filter((t) => t.doc) });
     }
 
-    // Admins+: global templates + the active account's own + inherited org-owned.
-    const orgIds = accountKey ? await orgIdsForAccounts([accountKey]) : [];
+    // Admins+: global templates + the active account's own + ancestors' own.
+    const inherited = accountKey ? await ancestorsForAccounts([accountKey]) : [];
     const rows = (await prisma.adTemplateDoc.findMany({
       where: {
         status: 'published',
         isActive: true,
         OR: [
-          { accountKey: null, organizationId: null },
+          { accountKey: null },
           ...(accountKey ? [{ accountKey }] : []),
-          ...(orgIds.length ? [{ organizationId: { in: orgIds } }] : []),
+          ...(inherited.length ? [{ accountKey: { in: inherited } }] : []),
         ],
       },
       orderBy: { name: 'asc' },
@@ -170,7 +170,7 @@ export async function POST(req: NextRequest) {
   if (error) return error;
   const session = await getAuthSession();
 
-  let body: { name?: string; description?: string; doc?: unknown; status?: string; accountKey?: string | null; organizationId?: string | null };
+  let body: { name?: string; description?: string; doc?: unknown; status?: string; accountKey?: string | null };
   try {
     body = await req.json();
   } catch {
@@ -184,11 +184,8 @@ export async function POST(req: NextRequest) {
   }
   const status = body.status === 'published' ? 'published' : 'draft';
   const accountKey = typeof body.accountKey === 'string' && body.accountKey.trim() ? body.accountKey.trim() : null;
-  // Org-owned template: account-less, tagged to the org so its sub-accounts
-  // inherit it. Verify the session may author for this org.
-  const organizationId = !accountKey && typeof body.organizationId === 'string' && body.organizationId.trim()
-    ? body.organizationId.trim()
-    : null;
+  // A template saved against a group account is inherited by every rooftop
+  // beneath it; accountKey null keeps it in the shared Loomi library.
 
   const u = session?.user as { name?: string | null; email?: string | null; image?: string | null } | undefined;
   try {
@@ -199,7 +196,6 @@ export async function POST(req: NextRequest) {
         doc: JSON.stringify(doc),
         status,
         accountKey,
-        organizationId,
         // Shared taxonomy — read off the doc (the builder stores category/tags there)
         // so the columns stay in sync for library filtering.
         category: typeof (doc as { category?: unknown }).category === 'string' ? (doc as { category: string }).category.trim() || null : null,

@@ -1,120 +1,71 @@
-# Removing the Organization model
+# The Organization model has been removed
 
-Organizations have been superseded by the account hierarchy
+Organizations were superseded by the account hierarchy
 (`Account.parentAccountKey`). A group like Young Automotive Group is now just an
 Account with children: it sends its own marketing AND rolls up its rooftops.
-Everything user-facing already runs off the hierarchy. What remains is deleting
-the dead layer.
 
-**Do this in the order below.** Steps 1–2 are safe and independently
-shippable; step 4 is destructive and must come last.
+This file was the removal runbook. The removal is **complete in code** — kept
+here as a record of what changed and what still has to happen per environment.
 
 ---
 
-## ⚠️ Three traps — read before starting
+## What replaced what
 
-### 1. Two service functions are load-bearing. Do NOT delete `organizations.ts` wholesale.
+| Old (Organization) | New (Account hierarchy) |
+|---|---|
+| `Account.organizationId` | `Account.parentAccountKey` (self-relation) |
+| Org-owned template/form/landing page (`accountKey` NULL + `organizationId`) | Owned by the **group Account**; children inherit via "mine + my ancestors'" |
+| `User.orgKeys` | An `accountKeys` grant on the group account, expanded by `expandAccountKeysWithDescendants` |
+| `resolveOrgAccountKeys` (auth) | `expandAccountKeysWithDescendants` (`services/accounts.ts`) |
+| `getRelatedAccountKeys` (org ∪ hierarchy) | `getRelatedAccountKeys` (hierarchy only) — climbs to root, returns all descendants minus self |
+| `/org/<slug>/…` routes, `useScopedHref` | `/subaccount/<slug>/…`, `useSubaccountHref` |
+| Agency "Organizations" settings tab | Parent Account selector in **Settings → Account** |
+| `{ mode: 'org' }`, `isOrg` | `isGroup` (an Account with children) |
 
-| Function | Used by | Why it matters |
-|---|---|---|
-| `getRelatedAccountKeys` | `api/contacts/[contactId]/suppression`, `sending/sendgrid-events.ts`, `sending/twilio-events.ts` | **Compliance.** Cascades an opt-out to every account grouped with this one. Already unions org membership + the hierarchy. |
-| `resolveOrgAccountKeys` | `lib/auth.ts` (JWT build) | Expands org grants into `accountKeys`. Removing it before migrating `User.orgKeys` **revokes access** for anyone holding an org grant. |
+Deleted: `services/organizations.ts`, `api/organizations/`, `app/org/`,
+`settings/organizations/`, `organizations-tab.tsx`,
+`organization-settings-tab.tsx`, `canAccessOrg`,
+`scripts/promote-account-to-org.ts`,
+`scripts/migrate-orgs-to-account-hierarchy.ts`.
 
-Move `getRelatedAccountKeys` into `services/accounts.ts` (drop its org half once
-`organizationId` is gone). Only delete `resolveOrgAccountKeys` after step 3.
-
-### 2. Deleting an Organization row can DESTROY data.
-
-`Template`, `Form`, and `LandingPage` declare `onDelete: Cascade` on the
-organization relation (`Account` uses `SetNull`). Dropping org rows before
-reassigning their owned records **deletes those records**.
-
-`deleteOrganization()` already guards this — it reassigns to the group account
-first and refuses when no account can inherit. **Any bulk cleanup must do the
-same.** Verify `org-owned: none` via the migration script before dropping
-anything.
-
-### 3. The active-scope cookie is shared across surfaces.
-
-`loomi-active-account` stores `org:<id>` and is read by studio/app/reporting.
-`account-context.tsx` already falls back to admin when the org doesn't resolve —
-keep that fallback until the cookie format is retired, or users land in a broken
-scope with no `accountKey`.
+The only survivor is `ORG_PREFIX` / `parseOrgValue` in
+`src/lib/active-account.ts`. The shared `loomi-active-account` cookie used to
+store `org:<id>`; `account-context.tsx` recognises that stale value and falls
+back to the role default instead of reading it as an account key. Keep it until
+the cookies have aged out.
 
 ---
 
-## Step 1 — Remove the UI surfaces (safe, ship alone)
+## Per-environment steps (still required)
 
-Stops anyone recreating an org. Nothing else depends on these.
+1. **`npx prisma db push`** — drops the `Organization` table, the
+   `organizationId` columns on `Account`/`Template`/`Form`/`LandingPage`/
+   `AdTemplateDoc`, and `User.orgKeys`.
 
-- Delete `src/components/settings/organizations-tab.tsx`
-- Delete `src/components/settings/organization-settings-tab.tsx`
-- Delete `src/app/settings/organizations/` (whole dir)
-- `src/components/settings/use-settings-tabs.ts` — drop the `'organizations'`
-  and `'organization'` tab entries (~lines 23–24, 66, 73)
-- `src/app/settings/page.tsx` — drop the two tab renders + imports (~lines 133–134)
-- `src/components/accounts-list.tsx` — remove the org picker in the create-account
-  modal and the "promote to organization" action; replace with a **parent account**
-  picker (the selector in `AccountSettingsTab` is the reference implementation)
-- `src/components/agency-dashboard.tsx` — the Organizations stat/grid; switch
-  `standaloneCount` from `!a.organizationId` to `!a.parentAccountKey`
+   Run from the app directory, and strip `?uselibpqcompat`/`?schema=public`
+   from `DATABASE_URL` if you also plan to hand the URL to `psql`.
 
-**Verify:** `npm run verify` + no route can reach an org form.
+2. **Everyone logs out and back in.** Account grants are computed when the JWT
+   is built, so a session minted before the change still carries the old shape.
 
-## Step 2 — Retire the `/org/*` routes
+3. **Confirm `parentAccountKey` is populated** before trusting any roll-up —
+   an empty hierarchy silently reads as "no children":
 
-`src/app/org/[slug]/layout.tsx` is already a redirect to `/subaccount/<slug>/…`.
-Keep it one release for old bookmarks, then delete `src/app/org/` entirely.
+   ```sql
+   SELECT "parentAccountKey", COUNT(*) FROM "Account" GROUP BY 1 ORDER BY 2 DESC;
+   ```
 
-Also then-dead in `src/lib/account-slugs.ts`: `ORG_ROUTE_ROOTS`, `orgSlugFor`,
-`orgSlugToId`, `orgPath`, `isOrgRoute`, `extractOrgSlug`.
-
-`src/hooks/use-scoped-href.ts` exists only to keep roll-up links inside
-`/org/<slug>` — once there's one URL scheme it collapses back into
-`useSubaccountHref`.
-
-## Step 3 — Migrate auth grants (do BEFORE step 4)
-
-`User.orgKeys` grants access to an org's children. Convert each to the
-equivalent **parent account key**, then:
-
-- `src/lib/auth.ts` — drop the `resolveOrgAccountKeys` block. The
-  `expandAccountKeysWithDescendants` call right below it already covers the
-  hierarchy, so a parent-account grant keeps implying its rooftops.
-- Remove `orgKeys` from the NextAuth `User`/`JWT`/`Session` type declarations,
-  `src/app/api/impersonate/route.ts`, and `src/components/dev-impersonate.tsx`.
-- `src/lib/api-auth.ts` — `canAccessOrg` + `getOrgChildKeys`; note the duplicate
-  local implementation in `src/app/api/templates/route.ts`.
-
-**Everyone must log out and back in** — grants are computed at JWT build.
-
-## Step 4 — Drop the model (destructive, last)
-
-Only once steps 1–3 are live and no org rows own anything.
-
-1. Confirm nothing is owned:
-   `npx tsx scripts/migrate-orgs-to-account-hierarchy.ts` → every org shows
-   `org-owned: none`.
-2. Delete rows via `deleteOrganization()` (which reassigns safely) — **not** a
-   raw SQL `DELETE`, which would cascade.
-3. Schema: remove `model Organization`; `Account.organizationId` + relation +
-   index; `Template`/`Form`/`LandingPage`/`AdTemplateDoc.organizationId` +
-   relations + indexes; `User.orgKeys`.
-4. Delete `src/app/api/organizations/` and the remainder of
-   `src/lib/services/organizations.ts`.
-5. Drop the legacy `organizationId` branches in `services/templates.ts`,
-   `forms.ts`, `landing-pages.ts` (each currently ORs it alongside the ancestor
-   match), and the org brand-kit fallback in `api/accounts/route.ts`.
-6. `src/lib/active-account.ts` — `ORG_PREFIX`, `encodeOrgValue`, `parseOrgValue`.
-7. `account-context.tsx` — `isOrg`, `organizationId`, `organizationData`,
-   `organizations`, `OrganizationData`, and the `{ mode: 'org' }` union member.
+   Production expects 40 rooftops under `youngAutomotiveGroup`.
 
 ---
 
-## Already migrated to the hierarchy (don't re-point these)
+## The one trap that outlived the model
 
-- Roll-ups (contacts/lists/segments/reporting) → `scopedAccountKeys`
-- Brand-kit inheritance → walks the `parentAccountKey` chain
-- Template / form / landing-page inheritance → "mine + my ancestors'"
-- Suppression cascade + access grants → union of both (intentionally wider)
-- Nav, switcher, `/org` redirects
+Suppression is a **compliance** path, not a convenience. An opt-out on one
+rooftop must cascade to every account grouped with it.
+
+`getRelatedAccountKeys` (in `services/accounts.ts`) is what does that, and it is
+consumed by `api/contacts/[contactId]/suppression`, `sending/sendgrid-events.ts`
+and `sending/twilio-events.ts`. It now walks the hierarchy only — so if
+`parentAccountKey` is not set, the cascade silently narrows to a single account.
+That is the failure mode to watch for, and step 3 above is what rules it out.

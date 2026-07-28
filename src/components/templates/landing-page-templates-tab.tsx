@@ -38,34 +38,22 @@ const fetcher = async (url: string) => {
  */
 export function LandingPageTemplatesTab({
   accountKey,
-  organizationId,
-  orgLabel,
 }: {
   accountKey?: string;
-  organizationId?: string;
-  orgLabel?: string;
 }) {
   const router = useRouter();
   const subHref = useSubaccountHref();
-  const { accounts, organizations } = useAccount();
+  const { accounts } = useAccount();
   const { confirm } = useLoomiDialog();
   // key → dealer name, for the shared rail's Subaccount facet + card scope badge.
   const accountLabels = useMemo(
     () => Object.fromEntries(Object.entries(accounts).map(([k, a]) => [k, a.dealer || k])),
     [accounts],
   );
-  const orgLabels = useMemo(
-    () => Object.fromEntries(Object.values(organizations).map((o) => [o.id, o.name])),
-    [organizations],
-  );
   const [creating, setCreating] = useState(false);
   const [usingId, setUsingId] = useState<string | null>(null);
 
-  const listQuery = organizationId
-    ? `&organizationId=${encodeURIComponent(organizationId)}`
-    : accountKey
-      ? `&accountKey=${encodeURIComponent(accountKey)}`
-      : '';
+  const listQuery = accountKey ? `&accountKey=${encodeURIComponent(accountKey)}` : '';
   const { data, isLoading, error, mutate } = useSWR<{ pages: LandingPageSummary[] }>(
     `/api/landing-pages?isTemplate=true${listQuery}`,
     fetcher,
@@ -101,7 +89,7 @@ export function LandingPageTemplatesTab({
           name: 'Untitled template',
           isTemplate: true,
           templateId: 'blank',
-          ...(organizationId ? { organizationId } : accountKey ? { accountKey } : {}),
+          ...(accountKey ? { accountKey } : {}),
         }),
       });
       const json = await res.json();
@@ -224,13 +212,6 @@ export function LandingPageTemplatesTab({
   return (
     <>
       {header}
-      {organizationId && (
-        <div className="mb-4 rounded-lg border border-[var(--primary)]/30 bg-[var(--primary)]/5 px-4 py-2.5 text-xs text-[var(--muted-foreground)]">
-          You&rsquo;re authoring for{' '}
-          <span className="font-medium text-[var(--foreground)]">{orgLabel ?? 'this organization'}</span>. New
-          templates here are shared with every sub-account in the organization.
-        </div>
-      )}
       <TemplateLibraryShell
         resultCount={filtered.length}
         rail={
@@ -261,9 +242,7 @@ export function LandingPageTemplatesTab({
                 status={t.status === 'published' ? 'published' : 'draft'}
                 scope={
                   !accountKey
-                    ? t.organizationId
-                      ? { label: orgLabels[t.organizationId] ?? 'Organization', kind: 'org' as const }
-                      : { label: t.accountKey ? accountLabels[t.accountKey] ?? t.accountKey : 'All accounts', kind: t.accountKey ? 'account' : 'global' }
+                    ? { label: t.accountKey ? accountLabels[t.accountKey] ?? t.accountKey : 'All accounts', kind: t.accountKey ? 'account' : 'global' }
                     : undefined
                 }
                 category={t.category}

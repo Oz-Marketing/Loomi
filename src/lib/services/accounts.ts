@@ -103,9 +103,8 @@ export async function createAccount(data: {
   customFonts?: string;
   customValues?: string;
   accountRepId?: string;
-  // Parent organization (Phase 3 onboarding): set when this account is created
-  // as part of a group.
-  organizationId?: string | null;
+  // Parent account (group) this rooftop belongs to, when created as part of one.
+  parentAccountKey?: string | null;
 }) {
   const slug = data.slug || await generateUniqueSlug(data.dealer, data.city);
   return prisma.account.create({ data: { ...data, slug } });
@@ -206,10 +205,8 @@ export async function expandAccountKeysWithDescendants(keys: string[]): Promise<
  * The account's ancestors, nearest first — its parent, then grandparent, etc.
  *
  * Powers "author once, inherit down": a rooftop sees templates/forms/landing
- * pages owned by its group account. Replaces the Organization-based
- * inheritance, where group-owned records were marked accountKey=null +
- * organizationId; the migration reassigns those to the group ACCOUNT, so
- * inheritance is now simply "mine + my ancestors'".
+ * pages owned by its group account — inheritance is simply
+ * "mine + my ancestors'".
  */
 export async function getAncestorAccountKeys(accountKey: string): Promise<string[]> {
   const all = await prisma.account.findMany({ select: { key: true, parentAccountKey: true } });

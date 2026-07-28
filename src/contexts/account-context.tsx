@@ -8,7 +8,6 @@ import {
   ADMIN_VALUE,
   readActiveAccountCookie,
   writeActiveAccountCookie,
-  encodeOrgValue,
   parseOrgValue,
 } from '@/lib/active-account';
 
@@ -98,8 +97,6 @@ export interface AccountData {
   senderName?: string | null;
   sendingDomain?: string | null;
   replyToEmail?: string | null;
-  /** Parent organization id, or null for a standalone sub-account. */
-  organizationId?: string | null;
   /**
    * Parent account key, or null for a top-level account. This is the
    * hierarchy that replaces the separate Organization concept: a group
@@ -109,24 +106,8 @@ export interface AccountData {
   parentAccountKey?: string | null;
 }
 
-/** An organization (parent grouping) as seen by the switcher. */
-export interface OrganizationData {
-  id: string;
-  key: string;
-  slug?: string | null;
-  name: string;
-  logos?: string | null;
-  branding?: string | null;
-  /** The org's primary ("house") sub-account key — where its own operating
-   *  work lives. null = no primary designated yet. */
-  primaryAccountKey?: string | null;
-  /** Child sub-account keys under this organization. */
-  accountKeys: string[];
-}
-
 export type AccountType =
   | { mode: 'admin' }
-  | { mode: 'org'; organizationId: string }
   | { mode: 'account'; accountKey: string };
 
 interface AccountContextValue {
@@ -136,8 +117,6 @@ interface AccountContextValue {
   /** User has full (all-account) access — drives font roll-up, etc. */
   isUnrestricted: boolean;
   isAccount: boolean;
-  /** True when an organization (roll-up) is the active selection. */
-  isOrg: boolean;
   accountKey: string | null;
   accountData: AccountData | null;
   accounts: Record<string, AccountData>;
@@ -173,14 +152,6 @@ interface AccountContextValue {
    * is visually distinguishable from a plain sub-account in the same list.
    */
   childCounts: Record<string, number>;
-  /** Active organization id, or null when not in org mode. */
-  organizationId: string | null;
-  /** Active organization's data, or null when not in org mode. */
-  organizationData: OrganizationData | null;
-  /** All organizations visible to the user, keyed by org key. */
-  organizations: Record<string, OrganizationData>;
-  organizationsLoaded: boolean;
-  refreshOrganizations: () => Promise<void>;
   userRole: UserRole | null;
   userName: string | null;
   userTitle: string | null;
@@ -207,8 +178,6 @@ export function AccountProvider({ children }: { children: ReactNode }) {
   const [account, setAccountState] = useState<AccountType>({ mode: 'admin' });
   const [accounts, setAccounts] = useState<Record<string, AccountData>>({});
   const [accountsLoaded, setAccountsLoaded] = useState(false);
-  const [organizations, setOrganizations] = useState<Record<string, OrganizationData>>({});
-  const [organizationsLoaded, setOrganizationsLoaded] = useState(false);
   const [initialized, setInitialized] = useState(false);
 
   // Set default mode when session loads.
@@ -268,14 +237,10 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       // ADMIN_VALUE / unset falls through to the role default below.
       if (typeof window !== 'undefined') {
         const cookieVal = readActiveAccountCookie();
-        // Organization (roll-up) mode. Clients never enter org mode; other
-        // roles restore it and let the fetched org list validate later.
+        // A legacy `org:<id>` cookie from before Organizations were retired.
+        // Ignore it and fall through to the role default rather than stranding
+        // the user in a scope that no longer exists.
         const cookieOrgId = parseOrgValue(cookieVal);
-        if (cookieOrgId && userRole !== 'client') {
-          setAccountState({ mode: 'org', organizationId: cookieOrgId });
-          setInitialized(true);
-          return;
-        }
         if (cookieVal && cookieVal !== ADMIN_VALUE && !cookieOrgId) {
           const restricted =
             (userRole === 'client' && userAccountKeys.length > 0) ||
@@ -330,37 +295,6 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       .catch(() => setAccountsLoaded(true));
   }, [status, filterAccountsForCurrentUser]);
 
-  // Fetch organizations when authenticated (scoped server-side to what the
-  // user can see). Powers the switcher's org groups + org (roll-up) mode.
-  useEffect(() => {
-    if (status !== 'authenticated') return;
-    if (userRole === 'client') {
-      setOrganizationsLoaded(true);
-      return;
-    }
-
-    // Organizations are retired — the account hierarchy (parentAccountKey)
-    // replaced them and the /api/organizations endpoint is gone. The map stays
-    // (empty) so the few remaining readers keep compiling until they're
-    // removed with the model itself.
-    setOrganizations({});
-    setOrganizationsLoaded(true);
-  }, [status, userRole]);
-
-  // Recover from a stale org scope. The active-scope cookie is shared across
-  // studio/app/reporting and stores `org:<id>`; once an organization is deleted
-  // — or once Organization is retired entirely — that id resolves to nothing and
-  // the user is stranded in a mode with no accountKey and no data. Fall back to
-  // admin (and let the normal cookie write correct it) instead.
-  useEffect(() => {
-    if (!organizationsLoaded) return;
-    if (account.mode !== 'org') return;
-    const stillExists = Object.values(organizations).some((o) => o.id === account.organizationId);
-    if (!stillExists) {
-      setAccountState({ mode: 'admin' });
-    }
-  }, [organizationsLoaded, organizations, account]);
-
   const setAccount = (newAccount: AccountType) => {
     // Account role users cannot switch to admin or org mode
     if (userRole === 'client' && newAccount.mode !== 'account') return;
@@ -372,16 +306,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     // Persist so the selection survives reloads and stays in sync across the
     // studio / app / reporting surfaces (shared parent-domain cookie).
     writeActiveAccountCookie(
-      newAccount.mode === 'admin'
-        ? ADMIN_VALUE
-        : newAccount.mode === 'org'
-          ? encodeOrgValue(newAccount.organizationId)
-          : newAccount.accountKey,
+      newAccount.mode === 'admin' ? ADMIN_VALUE : newAccount.accountKey,
     );
   };
-
-  // No-op: organizations are retired (see the loader above).
-  const refreshOrganizations = useCallback(async () => {}, []);
 
   const refreshAccounts = useCallback(async () => {
     try {
@@ -394,21 +321,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
   const isAdmin = account.mode === 'admin';
   const isAccount = account.mode === 'account';
-  const isOrg = account.mode === 'org';
-  const organizationId = account.mode === 'org' ? account.organizationId : null;
-  const organizationData = organizationId
-    ? Object.values(organizations).find((o) => o.id === organizationId) || null
-    : null;
-  // The operating account. In org mode this resolves to the org's primary
-  // ("house") sub-account, so operational pages (campaigns, flows, media, …)
-  // that read `accountKey` operate the org's own work. Roll-up pages branch on
-  // `isOrg` first, so they still aggregate across all sub-accounts.
-  const accountKey =
-    account.mode === 'account'
-      ? account.accountKey
-      : account.mode === 'org'
-        ? organizationData?.primaryAccountKey ?? null
-        : null;
+  const accountKey = account.mode === 'account' ? account.accountKey : null;
   const accountData = accountKey ? accounts[accountKey] || null : null;
 
   // parentAccountKey → child keys, built once per accounts map. This is the
@@ -450,18 +363,13 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       // leaf account still resolves to just itself.
       return account.accountKey ? descendantsOf(account.accountKey) : [];
     }
-    if (account.mode === 'org') {
-      const org = Object.values(organizations).find((o) => o.id === account.organizationId);
-      return (org?.accountKeys ?? []).filter((k) => accounts[k]);
-    }
     // admin
     return Object.keys(accounts);
-  }, [account, organizations, accounts, descendantsOf]);
+  }, [account, accounts, descendantsOf]);
 
   // A group is an account with anything beneath it. Roll-up pages branch on
-  // this instead of `isOrg`.
+  // this to decide whether to aggregate.
   const isGroup = useMemo<boolean>(() => {
-    if (account.mode === 'org') return true; // legacy path, still a roll-up
     if (account.mode !== 'account' || !account.accountKey) return false;
     return (childrenByParent[account.accountKey] ?? []).length > 0;
   }, [account, childrenByParent]);
@@ -492,7 +400,6 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         isAdmin,
         isUnrestricted,
         isAccount,
-        isOrg,
         accountKey,
         accountData,
         accounts,
@@ -502,11 +409,6 @@ export function AccountProvider({ children }: { children: ReactNode }) {
         scopedAccountKeys,
         isGroup,
         childCounts,
-        organizationId,
-        organizationData,
-        organizations,
-        organizationsLoaded,
-        refreshOrganizations,
         userRole,
         userName,
         userTitle,

@@ -71,12 +71,8 @@ export function AccountsList({
   void _listPath;
   const router = useRouter();
   const { confirm } = useLoomiDialog();
-  const { userRole, organizations } = useAccount();
+  const { userRole } = useAccount();
   const canManageAccounts = userRole === 'developer' || userRole === 'super_admin';
-  const orgList = useMemo(
-    () => Object.values(organizations).sort((a, b) => a.name.localeCompare(b.name)),
-    [organizations],
-  );
   const [accounts, setAccounts] = useState<Record<string, AccountData> | null>(null);
   const [search, setSearch] = useState('');
   const [sortField, setSortField] = useState<AccountSortField>('dealer');
@@ -94,9 +90,6 @@ export function AccountsList({
   const [creating, setCreating] = useState(false);
   // Onboarding "client type": standalone location, join an existing org, or
   // spin up a new one with this account as its first member.
-  const [newOrgChoice, setNewOrgChoice] = useState<'standalone' | 'existing' | 'new'>('standalone');
-  const [newOrgId, setNewOrgId] = useState('');
-  const [newOrgName, setNewOrgName] = useState('');
 
 
   // Users for account rep picker (fetched when creation modal opens)
@@ -132,9 +125,6 @@ export function AccountsList({
     setNewCategory('General');
     setNewOems([]);
     setNewRepId(null);
-    setNewOrgChoice('standalone');
-    setNewOrgId('');
-    setNewOrgName('');
     setCreating(false);
   };
 
@@ -384,58 +374,6 @@ export function AccountsList({
                       />
                     </div>
                   )}
-
-                  {/* Client type — standalone, or part of an organization. */}
-                  <div>
-                    <label className="text-xs text-[var(--muted-foreground)] mb-1 block">Client type</label>
-                    <div className="inline-flex w-full rounded-lg border border-[var(--border)] p-0.5">
-                      {([
-                        ['standalone', 'Single location'],
-                        ['existing', 'Add to organization'],
-                        ['new', 'New organization'],
-                      ] as const).map(([val, label]) => (
-                        <button
-                          key={val}
-                          type="button"
-                          onClick={() => setNewOrgChoice(val)}
-                          className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
-                            newOrgChoice === val
-                              ? 'bg-[var(--primary)] text-white'
-                              : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                          }`}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {newOrgChoice === 'existing' && (
-                      <select
-                        value={newOrgId}
-                        onChange={(e) => setNewOrgId(e.target.value)}
-                        className="mt-2 w-full bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm"
-                      >
-                        <option value="">Select an organization…</option>
-                        {orgList.map((o) => (
-                          <option key={o.id} value={o.id}>{o.name}</option>
-                        ))}
-                      </select>
-                    )}
-                    {newOrgChoice === 'existing' && orgList.length === 0 && (
-                      <p className="text-[10px] text-[var(--muted-foreground)] mt-1">
-                        No organizations yet — choose &quot;New organization&quot; to create one.
-                      </p>
-                    )}
-                    {newOrgChoice === 'new' && (
-                      <input
-                        type="text"
-                        value={newOrgName}
-                        onChange={(e) => setNewOrgName(e.target.value)}
-                        className="mt-2 w-full bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm"
-                        placeholder="Organization name (e.g. Young Automotive Group)"
-                      />
-                    )}
-                  </div>
 
                   {/* Account Rep picker */}
                   <div>

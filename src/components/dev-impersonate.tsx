@@ -143,7 +143,6 @@ export function DevImpersonate({ bare = false }: { bare?: boolean }) {
           avatarUrl: data.avatarUrl,
           role: data.role,
           accountKeys: data.accountKeys || [],
-          orgKeys: data.orgKeys || [],
           originalUserId: data.originalUserId,
         },
       });
@@ -177,7 +176,6 @@ export function DevImpersonate({ bare = false }: { bare?: boolean }) {
           avatarUrl: data.avatarUrl,
           role: data.role,
           accountKeys: data.accountKeys || [],
-          orgKeys: data.orgKeys || [],
         },
       });
 

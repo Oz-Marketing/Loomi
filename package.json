@@ -11,6 +11,7 @@
     "worker:start": "node --import tsx src/worker/index.ts",
     "db:generate": "npx prisma generate",
     "db:push": "npx prisma db push",
+    "db:sync": "prisma generate && npx tsx scripts/drop-retired-ad-types.ts && npx tsx scripts/drop-organization-model.ts && prisma db push",
     "db:seed": "npx tsx prisma/seed.ts",
     "db:migrate:sqlite-to-postgres": "npx tsx scripts/migrate-sqlite-to-postgres.ts",
     "verify": "npx tsc --noEmit && npx tsc --noEmit --noUnusedLocals --noUnusedParameters",

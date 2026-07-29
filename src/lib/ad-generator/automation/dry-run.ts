@@ -12,6 +12,8 @@ import { mergeRenderData, renderCreativeSizes } from '../render-creative';
 import type { TemplateDoc } from '../doc-types';
 import type { AdData } from '../types';
 import { selectOffer, type SelectableOfferType } from './select-offer';
+import type { RunWindow } from './offer-timing';
+import { runWindowFor } from './poll-offers';
 
 /**
  * Phase 0 dry run — walk the whole autonomous chain for ONE vehicle and report
@@ -125,8 +127,27 @@ async function resolveAutomationTemplate(
   };
 }
 
+/**
+ * The run window this sub-account plans against — read from its automation config
+ * so the inspector judges eligibility exactly as the generator does. Falls back
+ * to next month, matching the config default, when no config row exists yet.
+ */
+async function accountRunWindow(accountKey: string, now: Date): Promise<RunWindow> {
+  try {
+    const cfg = await prisma.adAutomationConfig.findUnique({
+      where: { accountKey },
+      select: { runWindowMode: true, rollingDays: true },
+    });
+    if (cfg) return runWindowFor(cfg, now);
+  } catch {
+    // Unmigrated or unreadable — the default below is the honest fallback.
+  }
+  return runWindowFor({ runWindowMode: 'next_month', rollingDays: 30 }, now);
+}
+
 export async function dryRunOneVehicle(input: DryRunInput): Promise<DryRunResult> {
   const steps: DryRunStep[] = [];
+  const now = new Date();
 
   // ── 1. Sub-account ──
   const account = await prisma.account.findUnique({
@@ -171,9 +192,23 @@ export async function dryRunOneVehicle(input: DryRunInput): Promise<DryRunResult
   if (!feed?.incentives.length) return { ok: false, steps, previews: [] };
 
   // ── 3. Selection ──
+  // Gate on the sub-account's RUN WINDOW, the same rule the generator uses.
+  //
+  // This previously defaulted to `minDaysRemaining: 7`, which made the diagnostic
+  // disagree with the thing it diagnoses: on 2026-07-29 the generator produced
+  // seven Chevrolet drafts while the dry run reported "no eligible offer among 6
+  // candidates" for the same vehicle, because GM's programmes end 08-03 and are
+  // therefore under a 7-day floor yet perfectly valid for an August flight. A
+  // debugging tool that contradicts production is worse than none.
+  //
+  // `minDaysRemaining` is still honoured when passed explicitly, so the inspector
+  // can be used to ask the "what if" question deliberately.
+  const runWindow = input.minDaysRemaining == null ? await accountRunWindow(input.accountKey, now) : undefined;
   const selection = selectOffer(feed.incentives, {
     priority: input.priority,
-    minDaysRemaining: input.minDaysRemaining ?? 7,
+    runWindow,
+    minDaysRemaining: input.minDaysRemaining,
+    now,
   });
   steps.push({
     id: 'select',

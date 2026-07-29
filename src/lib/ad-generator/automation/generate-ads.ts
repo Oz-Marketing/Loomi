@@ -353,6 +353,17 @@ export async function generateForAccount(
         'No S3 bucket: the EVOX image is the raw uncropped original, so the vehicle sits small and the EVOX watermark is still present. Cropping happens on re-host.',
       );
     }
+    // A dealer feed photo is whatever the dealership uploaded, and observed
+    // examples include a lot photo with an ENTIRELY DIFFERENT promotion burned
+    // into it ("90 DAYS NO PAYMENTS", "$1000 GAS CARD"). Putting that inside an
+    // ad about a 4.9% APR offer advertises two competing offers at once, which
+    // is confusing at best and a co-op problem at worst. EVOX imagery is clean by
+    // construction; this is not, so it always needs eyes on it.
+    if (image.source === 'dealer_photo') {
+      warnings.push(
+        'Vehicle image is a DEALER-SUPPLIED feed photo, not clean EVOX studio imagery — its content is unvetted and may contain a burned-in promotion, signage, or plates. Check the image before approving.',
+      );
+    }
 
     // ── disclaimer ──
     const disclaimer = await resolveDisclaimerText(data, { make: g.make });

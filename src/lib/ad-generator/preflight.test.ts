@@ -365,6 +365,37 @@ describe('preflight — co-op rules', () => {
   });
 });
 
+describe('preflight — unset brand colour', () => {
+  const brandEl = textEl('e1', '_offerMain', { color: 'brand' });
+
+  it('warns when a brand-driven design has no brand colour, without blocking', () => {
+    // Unattended, nobody sees the canvas — a whole month could ship in Loomi's
+    // default indigo instead of the dealer's colour.
+    const result = preflight({ doc: doc([brandEl]), data: LEASE });
+    const issue = result.issues.find((i) => i.code === 'unset_brand_color');
+    expect(issue?.severity).toBe('warning');
+    expect(result.ok).toBe(true);
+  });
+
+  it('stays quiet once a brand colour is set', () => {
+    const result = preflight({ doc: doc([brandEl]), data: { ...LEASE, brandColor: '#1b4f9c' } });
+    expect(result.issues.some((i) => i.code === 'unset_brand_color')).toBe(false);
+  });
+
+  it('stays quiet for a design that never references the brand colour', () => {
+    const result = preflight({ doc: doc([textEl('e1', '_offerMain', { color: '#000000' })]), data: LEASE });
+    expect(result.issues.some((i) => i.code === 'unset_brand_color')).toBe(false);
+  });
+
+  it('also catches brand used as a shape fill', () => {
+    const result = preflight({
+      doc: doc([textEl('e1', '_offerMain'), { id: 'band', type: 'shape', fill: 'brand' }]),
+      data: LEASE,
+    });
+    expect(result.issues.some((i) => i.code === 'unset_brand_color')).toBe(true);
+  });
+});
+
 describe('summarizePreflight', () => {
   it('joins the blocking reasons for a run log', () => {
     const result = preflight({

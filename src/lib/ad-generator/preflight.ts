@@ -28,6 +28,8 @@ export type PreflightCode =
   | 'placeholder_value'
   | 'empty_binding'
   | 'no_sizes'
+  /** The design is brand-colour driven but the sub-account has no colour set. */
+  | 'unset_brand_color'
   /** A manufacturer co-op advertising rule was violated. */
   | 'coop_violation';
 
@@ -226,6 +228,31 @@ export function preflight({ doc, data, oemRule, coopPack, sizeIds }: PreflightIn
       label: FIELD_LABELS[baseKey(key)] ?? key,
       sizes: [...sizeSet],
       message: `Nothing to render for "${key}" — the element is visible but the value is empty.`,
+    });
+  }
+
+  // ── 3b. Unset brand colour ──
+  // The renderer resolves `'brand'` from `data.brandColor` and silently falls
+  // back to Loomi's own indigo when it's empty. A hand-built ad gets looked at,
+  // so a designer notices; an unattended one does not, and the sub-account ships
+  // a whole month of ads in the wrong colour. Warning rather than error: it must
+  // be visible, but it shouldn't block an account whose branding isn't set up yet.
+  const usesBrandColor = doc.elements.some(
+    (el) =>
+      (visible.has(el.id) || el.type === 'background') &&
+      (el.color === 'brand' ||
+        el.fill === 'brand' ||
+        el.bg === 'brand' ||
+        el.gradientFill?.stops?.some((s) => s.color === 'brand')),
+  );
+  if (usesBrandColor && !(enriched.brandColor ?? '').trim()) {
+    issues.push({
+      code: 'unset_brand_color',
+      severity: 'warning',
+      field: 'brandColor',
+      label: 'Brand colour',
+      message:
+        'This design is brand-colour driven but the sub-account has no brand colour set — it will render in Loomi’s default indigo, not the dealer’s colour.',
     });
   }
 

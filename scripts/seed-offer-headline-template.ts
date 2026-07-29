@@ -184,12 +184,15 @@ function squareLayout(): Layout {
   return {
     band: { x: 0, y: 0.63, w: 1, h: 0.37, z: 1 },
 
-    // "$" sits raised and right-aligned against the number's left edge.
+    // The price cluster reads left-to-right: $ · number · % · label. Each mark
+    // gets its OWN horizontal lane, because a layout box is per-size and cannot
+    // vary by offer type — overlapping the % and the label meant they collided on
+    // every APR ad while looking fine on every lease ad.
     offerCurrency: { x: 0.05, y: 0.115, w: 0.09, h: 0.1, fontSize: 118, z: 5 },
-    offerValue: { x: 0.14, y: 0.09, w: 0.42, h: 0.19, fontSize: 232, z: 5 },
-    offerPercent: { x: 0.56, y: 0.115, w: 0.1, h: 0.12, fontSize: 118, z: 5 },
-    // Three stacked words beside the number, optically centred on it.
-    offerLabel: { x: 0.565, y: 0.10, w: 0.30, h: 0.17, fontSize: 54, z: 5 },
+    offerValue: { x: 0.14, y: 0.09, w: 0.36, h: 0.19, fontSize: 232, z: 5 },
+    offerPercent: { x: 0.50, y: 0.115, w: 0.09, h: 0.12, fontSize: 118, z: 5 },
+    // Stacked words in their own lane, clear of the % even when it's showing.
+    offerLabel: { x: 0.60, y: 0.10, w: 0.33, h: 0.17, fontSize: 54, z: 5 },
 
     vehicleName: { x: 0.05, y: 0.295, w: 0.9, h: 0.06, fontSize: 52, z: 5 },
     offerTerms: { x: 0.05, y: 0.355, w: 0.9, h: 0.042, fontSize: 31, z: 5 },

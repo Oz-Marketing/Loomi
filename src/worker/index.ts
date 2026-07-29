@@ -35,6 +35,10 @@ import {
   type DeliverCrmLeadJob,
 } from '@/lib/integrations/crm/dispatch';
 import { deliverCrmLead } from '@/lib/integrations/crm/deliver';
+import { pollAllAccounts } from '@/lib/ad-generator/automation/poll-offers';
+import { syncAllInventoryFeeds } from '@/lib/ad-generator/automation/sync-inventory';
+import { generateAllAccounts } from '@/lib/ad-generator/automation/generate-ads';
+import { expireStaleAds } from '@/lib/ad-generator/automation/expire-ads';
 
 const PROCESS_DUE_CAMPAIGNS_QUEUE = 'loomi.process-due-campaigns';
 const PROCESS_FLOW_ENROLLMENTS_QUEUE = 'loomi.process-flow-enrollments';
@@ -45,6 +49,25 @@ const PROCESS_FLOW_TRIGGERS_QUEUE = 'loomi.process-flow-triggers';
 // windows. Tweak ARCHIVE_RETENTION_DAYS if the global rule changes.
 const PURGE_ARCHIVED_QUEUE = 'loomi.purge-archived';
 const ARCHIVE_RETENTION_DAYS = 30;
+// Ad Generator autonomous generation — PHASE 1, SHADOW MODE. These two jobs
+// record state and generate nothing: no creatives, no renders, no notifications.
+// They run so we accumulate real offer + inventory history before anything is
+// produced unattended.
+//
+// Inventory syncs first (05:30 UTC), then the offer poll (06:00 UTC) reads the
+// stock it just landed to decide what to watch. Both are daily: OEM regional
+// programmes change on the order of days, and MarketCheck caches 24h anyway, so
+// a tighter cadence would just burn quota.
+const ADGEN_SYNC_INVENTORY_QUEUE = 'loomi.adgen.sync-inventory';
+const ADGEN_POLL_OFFERS_QUEUE = 'loomi.adgen.poll-offers';
+// Phase 3: turn watched offers into DRAFT creatives. Runs after the poll so it
+// works from offers landed the same morning. Drafts only — publishing stays a
+// human action, and `ready` additionally requires a verified co-op pack.
+const ADGEN_GENERATE_QUEUE = 'loomi.adgen.generate';
+// Retire ads whose offer has ended. Runs FIRST in the daily chain, before the
+// poll and generate steps, so a dead offer's ad is pulled before anything new is
+// built on top of it.
+const ADGEN_EXPIRE_QUEUE = 'loomi.adgen.expire';
 
 async function runProcessDueCampaigns(): Promise<void> {
   const startedAt = Date.now();
@@ -120,6 +143,86 @@ async function runPurgeArchived(): Promise<void> {
   }
 }
 
+async function runAdgenSyncInventory(): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const { feeds } = await syncAllInventoryFeeds();
+    if (feeds.length > 0) {
+      const bad = feeds.filter((f) => f.status !== 'ok');
+      console.log(
+        `[worker] adgen inventory: ${feeds.length} feed(s), ${feeds.reduce((n, f) => n + f.vehicles, 0)} vehicle(s)` +
+          `${bad.length ? `, ${bad.length} FAILED: ${bad.map((f) => f.name).join(', ')}` : ''}` +
+          ` in ${Date.now() - startedAt}ms`,
+      );
+    }
+  } catch (err) {
+    console.error('[worker] adgen syncAllInventoryFeeds failed', err);
+  }
+}
+
+async function runAdgenPollOffers(): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const results = await pollAllAccounts();
+    if (results.length > 0) {
+      const now = results.reduce(
+        (acc, r) => ({
+          scopes: acc.scopes + r.scopes.length,
+          fresh: acc.fresh + r.offersNew,
+          ended: acc.ended + r.offersEnded,
+        }),
+        { scopes: 0, fresh: 0, ended: 0 },
+      );
+      // Surface the month-boundary state explicitly — "everything expires and
+      // nothing new is published" must never read as "no offers exist".
+      const unrenewed = results
+        .flatMap((r) => r.scopes)
+        .filter((s) => s.cycleState === 'expiring_unrenewed').length;
+      console.log(
+        `[worker] adgen offer poll: ${results.length} account(s), ${now.scopes} scope(s), ` +
+          `${now.fresh} new / ${now.ended} ended` +
+          `${unrenewed ? `, ${unrenewed} awaiting next OEM cycle` : ''}` +
+          ` in ${Date.now() - startedAt}ms`,
+      );
+    }
+  } catch (err) {
+    console.error('[worker] adgen pollAllAccounts failed', err);
+  }
+}
+
+async function runAdgenGenerate(): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const results = await generateAllAccounts();
+    const made = results.reduce((n, r) => n + r.generated.filter((g) => !g.updated).length, 0);
+    const refreshed = results.reduce((n, r) => n + r.generated.filter((g) => g.updated).length, 0);
+    const skipped = results.reduce((n, r) => n + r.skipped.length, 0);
+    if (results.length > 0 && (made || refreshed || skipped)) {
+      console.log(
+        `[worker] adgen generate: ${made} new draft(s), ${refreshed} refreshed, ${skipped} skipped ` +
+          `across ${results.length} account(s) in ${Date.now() - startedAt}ms`,
+      );
+    }
+  } catch (err) {
+    console.error('[worker] adgen generateAllAccounts failed', err);
+  }
+}
+
+async function runAdgenExpire(): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const r = await expireStaleAds();
+    if (r.demoted.length || r.annotated) {
+      console.log(
+        `[worker] adgen expire: ${r.demoted.length} approved ad(s) DEMOTED to draft, ` +
+          `${r.annotated} draft(s) annotated in ${Date.now() - startedAt}ms`,
+      );
+    }
+  } catch (err) {
+    console.error('[worker] adgen expireStaleAds failed', err);
+  }
+}
+
 async function main(): Promise<void> {
   const boss = await getBoss();
   console.log('[worker] pg-boss started');
@@ -142,6 +245,26 @@ async function main(): Promise<void> {
   await boss.createQueue(PURGE_ARCHIVED_QUEUE);
   await boss.work(PURGE_ARCHIVED_QUEUE, async () => {
     await runPurgeArchived();
+  });
+
+  await boss.createQueue(ADGEN_SYNC_INVENTORY_QUEUE);
+  await boss.work(ADGEN_SYNC_INVENTORY_QUEUE, async () => {
+    await runAdgenSyncInventory();
+  });
+
+  await boss.createQueue(ADGEN_POLL_OFFERS_QUEUE);
+  await boss.work(ADGEN_POLL_OFFERS_QUEUE, async () => {
+    await runAdgenPollOffers();
+  });
+
+  await boss.createQueue(ADGEN_GENERATE_QUEUE);
+  await boss.work(ADGEN_GENERATE_QUEUE, async () => {
+    await runAdgenGenerate();
+  });
+
+  await boss.createQueue(ADGEN_EXPIRE_QUEUE);
+  await boss.work(ADGEN_EXPIRE_QUEUE, async () => {
+    await runAdgenExpire();
   });
 
   // Form → CRM lead delivery (ADF email). Event-driven (no schedule):
@@ -183,6 +306,25 @@ async function main(): Promise<void> {
   // model that supports archiving.
   await boss.schedule(PURGE_ARCHIVED_QUEUE, '0 2 * * *');
   console.log('[worker] scheduled', PURGE_ARCHIVED_QUEUE, 'daily at 02:00 UTC');
+
+  // 05:00 — first in the daily chain, so an ad for a dead offer is pulled before
+  // the day's new work is built.
+  await boss.schedule(ADGEN_EXPIRE_QUEUE, '0 5 * * *');
+  console.log('[worker] scheduled', ADGEN_EXPIRE_QUEUE, 'daily at 05:00 UTC');
+
+  // Shadow mode: inventory first so the offer poll can read fresh stock to
+  // decide what to watch. Neither job produces an ad.
+  await boss.schedule(ADGEN_SYNC_INVENTORY_QUEUE, '30 5 * * *');
+  console.log('[worker] scheduled', ADGEN_SYNC_INVENTORY_QUEUE, 'daily at 05:30 UTC');
+
+  await boss.schedule(ADGEN_POLL_OFFERS_QUEUE, '0 6 * * *');
+  console.log('[worker] scheduled', ADGEN_POLL_OFFERS_QUEUE, 'daily at 06:00 UTC');
+
+  // 06:30 — half an hour after the poll, so a programme published overnight
+  // becomes a draft the same morning. Rendering is the expensive step, hence the
+  // gap rather than chaining directly.
+  await boss.schedule(ADGEN_GENERATE_QUEUE, '30 6 * * *');
+  console.log('[worker] scheduled', ADGEN_GENERATE_QUEUE, 'daily at 06:30 UTC');
 
   // Also run once immediately so the first send doesn't have to wait up
   // to a minute after boot.

@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import { getIncentives, marketcheckConfigured } from '@/lib/integrations/marketcheck';
-import { diffOffers, normalizeEndDate, offerFingerprint, offerScopeKey } from './fingerprint';
+import { diffOffers, normalizeEndDate, offerScopeKey } from './fingerprint';
 import {
   evaluateOfferCycle,
   monthWindow,

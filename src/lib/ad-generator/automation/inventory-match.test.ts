@@ -134,18 +134,20 @@ describe('chooseVehicleImage', () => {
     expect(c.source).toBe('evox');
   });
 
-  it('falls back to the dealer photo when EVOX has no match', () => {
-    // The Accord/Civic case: EVOX 404s per-model, the feed always has photos.
+  it('NEVER falls back to a dealer photo, even when the feed has one', () => {
+    // Dealers composite website furniture into their photos. A real Silverado
+    // 3500HD feed photo carried "90 DAYS NO PAYMENTS" and "$1000 GAS CARD" burned
+    // in, which would have put two competing offers in one creative.
     const c = chooseVehicleImage(null, unit('X', { imageUrls: ['http://dealer/1.jpg'] }));
-    expect(c.source).toBe('dealer_photo');
-    expect(c.url).toBe('http://dealer/1.jpg');
-    expect(c.reason).toContain('No EVOX imagery');
-  });
-
-  it('reports none when neither source has anything', () => {
-    const c = chooseVehicleImage(null, unit('X'));
     expect(c.source).toBe('none');
     expect(c.url).toBeNull();
+    expect(c.reason).toContain('not used');
+  });
+
+  it('explains that the model needs EVOX coverage, since that is the actual fix', () => {
+    const c = chooseVehicleImage(null, unit('X'));
+    expect(c.source).toBe('none');
+    expect(c.reason).toContain('EVOX');
   });
 
   it('handles having no stock unit at all', () => {

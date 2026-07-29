@@ -55,6 +55,11 @@ export type SkipReason =
   | 'stock_gate'
   | 'no_eligible_offer'
   | 'no_template'
+  /** EVOX has no licensed imagery for the model, and dealer photos are never
+   *  used. Reported separately from `preflight_failed` because it's the one skip
+   *  reason with a purely commercial fix — extending EVOX coverage — rather than
+   *  anything to change in the data or the template. */
+  | 'no_vehicle_imagery'
   | 'preflight_failed'
   | 'render_failed'
   | 'cap_reached';
@@ -341,8 +346,15 @@ export async function generateForAccount(
       evoxUrl = jb?.url ?? null;
     }
     const image = chooseVehicleImage(evoxUrl, unit);
-    if (image.url) data.vehicleImageUrl = image.url;
-    else warnings.push(image.reason);
+    if (!image.url) {
+      // Skip here rather than letting preflight refuse it downstream: both stop
+      // the ad, but this reports WHY in terms someone can act on ("EVOX doesn't
+      // cover this model") instead of the mechanical "nothing to render for
+      // vehicleImageUrl".
+      skipped.push({ vehicle, reason: 'no_vehicle_imagery', detail: image.reason });
+      continue;
+    }
+    data.vehicleImageUrl = image.url;
     // Without a bucket, importEvoxImage returns the ORIGINAL EVOX URL rather than
     // a re-hosted copy — which means the image is UNCROPPED: full 2400×1800 canvas,
     // wide transparent margins, and the "©EVOX IMAGES" watermark still baked in.
@@ -351,17 +363,6 @@ export async function generateForAccount(
     if (image.source === 'evox' && !isS3Configured()) {
       warnings.push(
         'No S3 bucket: the EVOX image is the raw uncropped original, so the vehicle sits small and the EVOX watermark is still present. Cropping happens on re-host.',
-      );
-    }
-    // A dealer feed photo is whatever the dealership uploaded, and observed
-    // examples include a lot photo with an ENTIRELY DIFFERENT promotion burned
-    // into it ("90 DAYS NO PAYMENTS", "$1000 GAS CARD"). Putting that inside an
-    // ad about a 4.9% APR offer advertises two competing offers at once, which
-    // is confusing at best and a co-op problem at worst. EVOX imagery is clean by
-    // construction; this is not, so it always needs eyes on it.
-    if (image.source === 'dealer_photo') {
-      warnings.push(
-        'Vehicle image is a DEALER-SUPPLIED feed photo, not clean EVOX studio imagery — its content is unvetted and may contain a burned-in promotion, signage, or plates. Check the image before approving.',
       );
     }
 

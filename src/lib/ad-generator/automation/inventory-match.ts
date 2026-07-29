@@ -133,7 +133,9 @@ export function stockUnitPatch(unit: StockUnit, existing: AdData = {}): AdData {
   return patch;
 }
 
-export type ImageSource = 'evox' | 'dealer_photo' | 'none';
+/** `dealer_photo` was removed deliberately — see chooseVehicleImage. Keeping it
+ *  in the union would imply a path that no longer exists. */
+export type ImageSource = 'evox' | 'none';
 
 export interface ImageChoice {
   source: ImageSource;
@@ -152,19 +154,31 @@ export interface ImageChoice {
  * year), whereas every new unit in the Young feeds carries real photos. So the
  * models EVOX can't serve are exactly the ones inventory rescues.
  */
-export function chooseVehicleImage(evoxUrl: string | null, unit: StockUnit | null): ImageChoice {
+/**
+ * EVOX jellybeans ONLY — dealer feed photos are never used.
+ *
+ * The fallback used to reach for the inventory photo when EVOX had no licensed
+ * model. Removed on instruction after a real example showed why: the Silverado
+ * 3500HD feed photo was a lot shot with an ENTIRELY DIFFERENT promotion burned
+ * into it ("90 DAYS NO PAYMENTS", "$1000 GAS CARD"), which put two competing
+ * offers in one creative. Dealers composite website furniture into their photos
+ * as a matter of course, so the content can never be assumed clean.
+ *
+ * When EVOX has nothing, this returns no image and the caller SKIPS the ad. That
+ * is deliberate: a vehicle ad with an empty vehicle is not a lesser ad, it's a
+ * broken one, and preflight would refuse it anyway. Skipping explicitly produces
+ * a reason someone can act on instead of a mystery.
+ */
+export function chooseVehicleImage(evoxUrl: string | null, _unit: StockUnit | null): ImageChoice {
   if (evoxUrl) {
     return { source: 'evox', url: evoxUrl, reason: 'EVOX jellybean (clean cut-out, composites best).' };
   }
-  const photo = unit?.imageUrls[0];
-  if (photo) {
-    return {
-      source: 'dealer_photo',
-      url: photo,
-      reason: 'No EVOX imagery licensed for this model — using the dealer photo of the actual unit.',
-    };
-  }
-  return { source: 'none', url: null, reason: 'No vehicle image available from EVOX or the feed.' };
+  return {
+    source: 'none',
+    url: null,
+    reason:
+      'No EVOX imagery licensed for this model. Dealer feed photos are deliberately not used — they routinely carry burned-in promotions and signage. This vehicle cannot be automated until EVOX covers it.',
+  };
 }
 
 /**

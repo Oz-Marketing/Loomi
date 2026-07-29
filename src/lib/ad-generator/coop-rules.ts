@@ -171,9 +171,21 @@ function matcher(rule: { phrase?: string; pattern?: string }): ((text: string) =
   return null;
 }
 
-/** Elements bound to `field`, i.e. the ones that display it. */
+/**
+ * Elements that display `field`, matched by binding KEY across binding kinds.
+ *
+ * Both `field` and `brand` bindings carry a key, and the account-derived values a
+ * co-op rule cares about most — `logoUrl`, `dealerName`, `brandColor` — are
+ * normally wired as `brand` bindings, not `field`. Matching only `kind: 'field'`
+ * therefore reported "the template has no element bound to logoUrl" for a
+ * template with a perfectly good logo element, which would have made every
+ * brandmark rule fire falsely on every ad.
+ */
 function elementsFor(doc: TemplateDoc, field: string): DocElement[] {
-  return doc.elements.filter((el) => el.binding?.kind === 'field' && el.binding.key === field);
+  return doc.elements.filter(
+    (el) =>
+      (el.binding?.kind === 'field' || el.binding?.kind === 'brand') && el.binding.key === field,
+  );
 }
 
 /** Whether an element is visible for this data (honours `visibleWhen`). */

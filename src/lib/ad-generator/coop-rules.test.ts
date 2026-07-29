@@ -186,6 +186,21 @@ describe('required_element', () => {
     expect(f[0].observed).toContain('no element bound');
   });
 
+  it('accepts a BRAND binding, not just a field binding', () => {
+    // logoUrl / dealerName / brandColor are normally wired as `brand` bindings.
+    // Matching only `kind: 'field'` made every brandmark rule fire falsely on
+    // templates that had a perfectly good logo element.
+    const logoRule: CoopRule = {
+      id: 'need-logo',
+      kind: 'required_element',
+      field: 'logoUrl',
+      severity: 'error',
+      description: 'Logo required.',
+    };
+    const d = doc([{ id: 'logo', type: 'logo', binding: { kind: 'brand', key: 'logoUrl' } }]);
+    expect(evaluateCoopRules({ doc: d, data: LEASE, pack: pack([logoRule]) })).toEqual([]);
+  });
+
   it('flags an element hidden in every rendered size', () => {
     const d = doc([textEl('e', 'disclaimer')], { boxes: { square: { e: { hidden: true } } } });
     const f = evaluateCoopRules({ doc: d, data: LEASE, pack: pack([rule]) });

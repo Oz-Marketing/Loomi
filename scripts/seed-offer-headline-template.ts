@@ -170,6 +170,21 @@ function elements(): DocElement[] {
       binding: { kind: 'brand', key: 'logoUrl' },
       fit: 'contain',
     },
+    // The dealership NAME as text, not just the logo. GM requires the ad to "list
+    // your dealership's name" and Subaru requires the retailer's official DBA
+    // exactly as listed on subaru.com — two manufacturers demanding it
+    // independently, and a logo is not stated to satisfy either.
+    {
+      id: 'dealerName',
+      type: 'text',
+      name: 'Dealership name',
+      binding: { kind: 'brand', key: 'dealerName' },
+      fontWeight: 700,
+      color: ON_BAND,
+      align: 'right',
+      vAlign: 'middle',
+      shrink: true,
+    },
     // The OEM sales-event mark. Machine-populated per run from the manufacturer's
     // event calendar, so it appears during an event window and vanishes after —
     // most OEMs mandate it while their event is live. `visibleWhen` isn't usable
@@ -213,6 +228,7 @@ function squareLayout(): Layout {
     vehicle: { x: 0.11, y: 0.40, w: 0.82, h: 0.42, z: 3 },
 
     disclaimer: { x: 0.05, y: 0.895, w: 0.46, h: 0.06, fontSize: 15, z: 5 },
+    dealerName: { x: 0.55, y: 0.845, w: 0.40, h: 0.032, fontSize: 19, z: 5 },
     logo: { x: 0.62, y: 0.885, w: 0.33, h: 0.07, z: 5 },
     // Top-right, on the white field rather than the brand band — event marks are
     // full-colour artwork and would fight a coloured background. Sits above the
@@ -243,6 +259,7 @@ function verticalLayout(sizeId: 'v600' | 'v850'): Layout {
     vehicle: { x: 0.05, y: tall ? 0.32 : 0.35, w: 0.9, h: tall ? 0.30 : 0.28, z: 3 },
 
     disclaimer: { x: 0.08, y: tall ? 0.86 : 0.83, w: 0.84, h: tall ? 0.08 : 0.09, fontSize: 8, z: 5 },
+    dealerName: { x: 0.08, y: tall ? 0.925 : 0.912, w: 0.84, h: 0.024, fontSize: 10, z: 5 },
     logo: { x: 0.28, y: tall ? 0.955 : 0.945, w: 0.44, h: 0.03, z: 5 },
     // Top-right above the offer label. Cramped at 300px wide — like the rest of
     // the vertical layouts, a first pass to be tuned on the builder canvas.

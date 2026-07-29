@@ -24,6 +24,7 @@ import {
   type StockUnit,
 } from './inventory-match';
 import { runWindowFor, type AutomationConfigRow } from './poll-offers';
+import { resolveEventAsset } from './event-assets';
 import { resolveAutomationTemplate, type TemplateCandidate } from './resolve-automation-template';
 import { selectOffer, type SelectableOfferType } from './select-offer';
 
@@ -60,6 +61,8 @@ export type SkipReason =
    *  reason with a purely commercial fix — extending EVOX coverage — rather than
    *  anything to change in the data or the template. */
   | 'no_vehicle_imagery'
+  /** A required OEM sales-event mark has no element to render into. */
+  | 'no_event_slot'
   | 'preflight_failed'
   | 'render_failed'
   | 'cap_reached';
@@ -74,6 +77,8 @@ export interface GeneratedAd {
   templateReason: string;
   status: 'draft' | 'ready';
   imageSource: string;
+  /** Active OEM sales event applied, or null when none was in force. */
+  eventName: string | null;
   vin: string | null;
   sizes: number;
   expiresAt: string | null;
@@ -324,6 +329,9 @@ export async function generateForAccount(
     const required = requiredFieldsFor(inc.type === 'cash' ? 'discount' : inc.type, oemRule);
     const unit = pickStockUnit(units, inc.trim);
     const warnings: string[] = [];
+    // Set when an OEM sales event is in force for the run window and the template
+    // has somewhere to put its mark.
+    let eventName: string | null = null;
     if (unit && required.some((f) => f === 'vin' || f === 'stockNumber' || f === 'msrp')) {
       data = { ...data, ...stockUnitPatch(unit, data) };
     }
@@ -364,6 +372,38 @@ export async function generateForAccount(
       warnings.push(
         'No S3 bucket: the EVOX image is the raw uncropped original, so the vehicle sits small and the EVOX watermark is still present. Cropping happens on re-host.',
       );
+    }
+
+    // ── OEM sales event ──
+    // Resolved against the RUN date, not today: preparing an August flight in July
+    // must carry August's event mark. Most OEMs mandate it during the window, so a
+    // required event with nowhere to render is a hard stop — an ad that silently
+    // omits it looks fine and is not claimable, which is the worst combination.
+    const event = await resolveEventAsset(g.make, window.start, data.offerType ?? 'custom');
+    if (event) {
+      const hasSlot = tpl.doc.elements.some(
+        (el) => el.binding?.kind === 'field' && el.binding.key === 'eventLogoUrl',
+      );
+      if (!hasSlot) {
+        if (event.required) {
+          skipped.push({
+            vehicle,
+            reason: 'no_event_slot',
+            detail: `${g.make} requires the "${event.name}" event mark on ads running ${event.effectiveFrom
+              .toISOString()
+              .slice(0, 10)}–${event.effectiveTo
+              .toISOString()
+              .slice(0, 10)}, but "${tpl.name}" has no element bound to eventLogoUrl.`,
+          });
+          continue;
+        }
+        warnings.push(
+          `"${event.name}" is available for this window but the template has no eventLogoUrl element, so it is omitted. This OEM does not mandate it.`,
+        );
+      } else {
+        data.eventLogoUrl = event.logoUrl;
+        eventName = event.name;
+      }
     }
 
     // ── disclaimer ──
@@ -489,6 +529,7 @@ export async function generateForAccount(
       templateReason: resolution.explanation,
       status: nextStatus,
       imageSource: image.source,
+      eventName,
       vin: data.vin ?? null,
       sizes: sizeCount,
       expiresAt: expiresAt ? expiresAt.toISOString() : null,

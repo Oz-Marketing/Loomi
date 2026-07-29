@@ -88,6 +88,21 @@ function baseKey(key: string): string {
 }
 
 /**
+ * Bindings that are EMPTY BY DESIGN, and so must not trip the empty-binding check.
+ *
+ * `eventLogoUrl` carries the OEM's sales-event mark, which exists only inside an
+ * event window. A template needs a permanent slot for it — the generate step
+ * refuses to build an ad when a REQUIRED event has nowhere to render — but on any
+ * ordinary week the field is legitimately blank. Without this exemption the slot
+ * that makes event compliance possible would block every ad outside an event,
+ * which is the same trap `costPerThousand` set for lease ads.
+ *
+ * Keep this list tiny and justified. Every entry weakens a check whose whole
+ * purpose is catching holes in unattended output.
+ */
+export const OPTIONAL_BINDING_KEYS = ['eventLogoUrl'];
+
+/**
  * Element ids visible for `data` in at least one of `sizeIds`, mapped to the
  * sizes they appear in. Honours both per-size `hidden` and the element's
  * `visibleWhen` condition, so an APR-only badge isn't demanded of a lease ad.
@@ -213,6 +228,7 @@ export function preflight({ doc, data, oemRule, coopPack, sizeIds }: PreflightIn
     if (!elSizes || el.binding?.kind !== 'field') continue;
     const key = el.binding.key;
     boundFields.add(key);
+    if (OPTIONAL_BINDING_KEYS.includes(baseKey(key))) continue;
     if ((enriched[key] ?? '').trim() !== '') continue;
     const acc = emptyBySizes.get(key) ?? new Set<string>();
     elSizes.forEach((s) => acc.add(s));

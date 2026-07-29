@@ -2530,6 +2530,56 @@ model AdCoopRulePack {
 }
 
 // ─────────────────────────────────────────────────────
+// Ad Generator — OEM sales-event assets
+// ─────────────────────────────────────────────────────
+//
+// A time-boxed manufacturer campaign mark — "Presidents Day Event", "Summer Drive
+// Event" — which most OEMs REQUIRE on any ad running inside the event window. It
+// is not the brandmark (that lives in the sub-account's co-branded lockup) and not
+// a template design choice: it's a third asset, mandated by the manufacturer, that
+// appears and then disappears on a schedule.
+//
+// That schedule is why this is a table and not a template element. An ad built on
+// 20 February and an ad built on 20 March need different marks from the same
+// template, so the asset has to be resolved per run against the run date rather
+// than baked into a design or a config field.
+//
+// Managed by the co-op team alongside the guideline documents — they already own
+// the relationship that produces these assets.
+model AdOemEventAsset {
+  id   String @id @default(cuid())
+  make String
+  name String // "Chevy Presidents Day Event"
+
+  /// The event mark itself. Expected to be a transparent PNG so it composites
+  /// over any template background.
+  logoUrl String  @db.Text
+  notes   String? @db.Text
+
+  /// Inclusive window, evaluated against the ad's RUN date — not the date it was
+  /// generated. Preparing next month's flight must pick next month's event.
+  effectiveFrom DateTime
+  effectiveTo   DateTime
+
+  /// Most OEMs mandate the mark during the event; a few merely permit it. When
+  /// true and a template has nowhere to put it, generation refuses rather than
+  /// silently producing a non-claimable ad.
+  required Boolean @default(true)
+
+  /// Optional narrowing: JSON string[] of offer types this event applies to
+  /// (e.g. only lease). Null/empty = every offer type.
+  offerTypes String? @db.Text
+
+  isActive  Boolean  @default(true)
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Resolution is always "the active event for this make on this date".
+  @@index([make, isActive, effectiveFrom, effectiveTo])
+}
+
+// ─────────────────────────────────────────────────────
 // Ad Generator — autonomous generation (Phase 1: shadow mode)
 // ─────────────────────────────────────────────────────
 //

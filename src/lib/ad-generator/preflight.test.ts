@@ -365,6 +365,37 @@ describe('preflight — co-op rules', () => {
   });
 });
 
+describe('preflight — optional bindings', () => {
+  it('does not block on an empty event-logo slot', () => {
+    // A template needs a permanent slot for the OEM event mark so generation can
+    // require it during an event window — but on an ordinary week it's blank, and
+    // blocking then would refuse every ad outside an event.
+    const result = preflight({
+      doc: doc([textEl('e1', '_offerMain'), { id: 'ev', type: 'image', binding: { kind: 'field', key: 'eventLogoUrl' } }]),
+      data: LEASE,
+    });
+    expect(result.issues.some((i) => i.code === 'empty_binding')).toBe(false);
+    expect(result.ok).toBe(true);
+  });
+
+  it('still reports it among the bound fields it checked', () => {
+    const result = preflight({
+      doc: doc([textEl('e1', '_offerMain'), { id: 'ev', type: 'image', binding: { kind: 'field', key: 'eventLogoUrl' } }]),
+      data: LEASE,
+    });
+    expect(result.boundFields).toContain('eventLogoUrl');
+  });
+
+  it('keeps blocking other empty image bindings', () => {
+    // The exemption must stay narrow — a missing vehicle is still a broken ad.
+    const result = preflight({
+      doc: doc([textEl('e1', '_offerMain'), { id: 'v', type: 'image', binding: { kind: 'field', key: 'vehicleImageUrl' } }]),
+      data: LEASE,
+    });
+    expect(result.issues.some((i) => i.code === 'empty_binding' && i.field === 'vehicleImageUrl')).toBe(true);
+  });
+});
+
 describe('preflight — unset brand colour', () => {
   const brandEl = textEl('e1', '_offerMain', { color: 'brand' });
 

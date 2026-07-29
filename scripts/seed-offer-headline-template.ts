@@ -166,8 +166,20 @@ function elements(): DocElement[] {
     {
       id: 'logo',
       type: 'logo',
-      name: 'Dealer logo',
+      name: 'Dealer + OEM lockup',
       binding: { kind: 'brand', key: 'logoUrl' },
+      fit: 'contain',
+    },
+    // The OEM sales-event mark. Machine-populated per run from the manufacturer's
+    // event calendar, so it appears during an event window and vanishes after —
+    // most OEMs mandate it while their event is live. `visibleWhen` isn't usable
+    // here (it keys off offer type, not a date), so it relies on the field simply
+    // being empty outside an event; the generate step is what enforces presence.
+    {
+      id: 'eventLogo',
+      type: 'image',
+      name: 'OEM sales event mark',
+      binding: { kind: 'field', key: 'eventLogoUrl' },
       fit: 'contain',
     },
   ];
@@ -202,6 +214,10 @@ function squareLayout(): Layout {
 
     disclaimer: { x: 0.05, y: 0.895, w: 0.46, h: 0.06, fontSize: 15, z: 5 },
     logo: { x: 0.62, y: 0.885, w: 0.33, h: 0.07, z: 5 },
+    // Top-right, on the white field rather than the brand band — event marks are
+    // full-colour artwork and would fight a coloured background. Sits above the
+    // offer label, which starts at y 0.10.
+    eventLogo: { x: 0.70, y: 0.015, w: 0.25, h: 0.068, z: 6 },
   };
 }
 
@@ -228,6 +244,9 @@ function verticalLayout(sizeId: 'v600' | 'v850'): Layout {
 
     disclaimer: { x: 0.08, y: tall ? 0.86 : 0.83, w: 0.84, h: tall ? 0.08 : 0.09, fontSize: 8, z: 5 },
     logo: { x: 0.28, y: tall ? 0.955 : 0.945, w: 0.44, h: 0.03, z: 5 },
+    // Top-right above the offer label. Cramped at 300px wide — like the rest of
+    // the vertical layouts, a first pass to be tuned on the builder canvas.
+    eventLogo: { x: 0.60, y: 0.012, w: 0.32, h: tall ? 0.032 : 0.038, z: 6 },
   };
 }
 

@@ -47,19 +47,26 @@ const PACK: CoopRulePack = {
     {
       id: 'gm-brandmark-required',
       kind: 'required_element',
-      field: 'oemLogoUrl',
+      // The sub-account's uploaded logo IS the co-branded lockup (dealer group +
+      // OEM brandmark together, built to be claimable), so `logoUrl` is the
+      // brandmark. An earlier draft of this pack invented an `oemLogoUrl` field on
+      // the assumption the two were separate assets — they aren't.
+      field: 'logoUrl',
       severity: 'error',
       description:
-        'Every ad must carry the Chevrolet brandmark (bowtie + wordmark). A bowtie inside the DEALERSHIP logo explicitly does not satisfy this, and neither do event, partner or Bonus Tag logos.',
+        'Every ad must carry the Chevrolet brandmark (bowtie + wordmark), supplied here by the sub-account\'s co-branded lockup. Note GM distinguishes this from a bowtie ABSORBED INTO a dealership\'s own mark, which does not qualify — a distinct, correct brandmark alongside the dealer logo does.',
       citation: `${SOURCE} — "GRAPHIC STANDARDS AND LOGO/TAGLINE USAGE" › Chevrolet, p.13`,
     },
     {
       id: 'gm-tagline-required',
       kind: 'required_element',
-      field: 'oemTagline',
-      severity: 'error',
+      // Also expected to live inside the lockup asset. Kept as a distinct rule so
+      // the requirement is recorded and citable, but pointed at the same asset
+      // and downgraded to a warning — see the description.
+      field: 'logoUrl',
+      severity: 'warning',
       description:
-        'The "Together let\'s drive" tagline is a required element in every advertisement. It should appear locked up with the brandmark; they may only be split when space is limited.',
+        'The "Together let\'s drive" tagline is required in every advertisement, locked up with the brandmark unless space forces them apart. Whether it is baked into the uploaded lockup cannot be determined from the image, so this is a warning: confirm once per sub-account at upload, then this rule can be retired for that account.',
       citation: `${SOURCE} — "GRAPHIC STANDARDS AND LOGO/TAGLINE USAGE" › Chevrolet, p.13`,
     },
     {
@@ -148,12 +155,9 @@ async function main() {
   console.log(`  verified: ${row.verified} (findings are WARNINGS until a human checks them)`);
   console.log(`  source  : ${row.source}`);
   console.log();
-  console.log('  Rules referencing fields the system does not yet have:');
-  for (const r of PACK.rules) {
-    if ('field' in r && ['oemLogoUrl', 'oemTagline'].includes(r.field)) {
-      console.log(`    - ${r.id} → ${r.field}`);
-    }
-  }
+  console.log('  Fields these rules require a template to bind:');
+  const fields = [...new Set(PACK.rules.flatMap((r) => ('field' in r ? [r.field] : [])))];
+  console.log(`    ${fields.join(', ')}`);
   await prisma.$disconnect();
 }
 

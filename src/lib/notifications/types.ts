@@ -21,7 +21,9 @@ export type NotificationType =
   | 'task_due_soon'
   | 'task_overdue'
   | 'task_comment'
-  | 'task_mention';
+  | 'task_mention'
+  // Ad Generator (Studio surface) — autonomous generation
+  | 'incentive_ads_ready';
 
 export interface NotificationTypeMeta {
   type: NotificationType;
@@ -182,6 +184,17 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     label: 'You were mentioned',
     description: 'Someone @mentioned you in a task comment.',
     category: 'Projects',
+    channel: 'immediate',
+    defaultEnabled: true,
+  },
+  {
+    type: 'incentive_ads_ready',
+    label: 'OEM offer ads ready to review',
+    description:
+      'The Ad Generator built draft ads from new manufacturer offers. Nothing publishes until a person approves them.',
+    category: 'Ad Generator',
+    // Immediate, not digest: these are time-boxed by the offer's own expiry, and a
+    // day's delay can be a meaningful chunk of the window an offer is valid for.
     channel: 'immediate',
     defaultEnabled: true,
   },

@@ -2508,6 +2508,15 @@ model AdCoopRulePack {
   source String?
   notes  String? @db.Text
 
+  /// MediaAsset id of the guideline PDF these rules were transcribed from, so a
+  /// citation like "§4.2 p.11" can actually be opened and checked. A citation
+  /// whose source document isn't reachable can't be audited, which defeats the
+  /// point of citing it.
+  sourceAssetId String?
+  /// Public URL of that document, denormalised so the page can link it without a
+  /// media lookup per row.
+  sourceUrl     String? @db.Text
+
   // False until a human has checked the transcription against the source. An
   // unverified pack still evaluates, but every finding is downgraded to a
   // warning so a half-finished transcription can't block a brand's whole month.

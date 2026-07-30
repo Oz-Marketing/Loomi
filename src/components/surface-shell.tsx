@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import { Bars3Icon } from '@heroicons/react/24/outline';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
@@ -29,7 +29,6 @@ export function SurfaceShell({
   const { collapsed, mobileOpen, setMobileOpen } = useSidebarCollapse();
   const pathname = usePathname();
   const mainRef = useRef<HTMLDivElement>(null);
-  const [scrolled, setScrolled] = useState(false);
 
   // Close the mobile drawer on navigation (e.g. tapping a nav link).
   useEffect(() => {
@@ -44,36 +43,39 @@ export function SurfaceShell({
     return () => document.removeEventListener('keydown', onKey);
   }, [mobileOpen, setMobileOpen]);
 
-  // Track whether the content card has scrolled (drives the pinned header's
-  // opaque + compacted state). Re-sync on navigation since the card element
-  // persists.
+  // Track whether the content card has scrolled, so the pinned
+  // `.page-sticky-header` can paint its backdrop (`data-scrolled='true'`).
+  // Re-sync on navigation since the card element persists.
   //
-  // The docked header compacts its top padding, which SHORTENS the header by
-  // ~14–20px. On a page that only just overflows, docking removes enough
-  // height to clamp scrollTop back under the trigger, which un-docks, which
-  // restores the height — a feedback loop that reads as scroll jitter. Two
-  // guards kill it:
-  //   1. Hysteresis — dock past DOCK_ON, only pop back up below DOCK_OFF, so a
-  //      single boundary can't flip the state twice per gesture.
-  //   2. A minimum scroll range — never dock unless the page overflows by more
-  //      than the compaction delta (measured while un-docked, so it reflects
-  //      the rest-state range). Below that, docking would always clamp-bounce,
-  //      so we simply stay at rest. Barely-scrolling pages lose the compaction,
-  //      which is invisible there anyway.
+  // Two deliberate choices here, both learned the hard way:
+  //
+  //   1. The attribute is written DIRECTLY to the DOM instead of going through
+  //      React state. Docking is a paint-only change to one pseudo-element, so
+  //      there's nothing to re-render — and routing it through state re-rendered
+  //      the entire page subtree (`children`) mid-gesture, which is exactly when
+  //      you can least afford the work.
+  //   2. Hysteresis: dock past DOCK_ON, undock only below DOCK_OFF. A single
+  //      boundary can't then flip twice inside one trackpad wobble.
+  //
+  // What is NOT needed any more: the old "minimum scroll range" guard. It
+  // existed because docking used to shrink the header ~20px, which changed
+  // scrollHeight and let scroll anchoring shove scrollTop around. Docking no
+  // longer touches layout at all (see `.page-sticky-header` in globals.css), so
+  // there's no feedback loop left to guard against. Keep it that way: anything
+  // that resizes on `data-scrolled` brings the jitter straight back.
   useEffect(() => {
     const main = mainRef.current;
     if (!main) return;
-    const DOCK_ON = 16; // enter docked once scrolled past this
-    const DOCK_OFF = 4; // leave docked once back under this (hysteresis)
-    const MIN_RANGE = 48; // rest-state overflow required to dock at all
+    const DOCK_ON = 14; // dock once scrolled past this
+    const DOCK_OFF = 6; // undock once back under this (hysteresis)
+    let docked = main.dataset.scrolled === 'true';
+    const apply = (next: boolean) => {
+      if (next === docked) return;
+      docked = next;
+      main.dataset.scrolled = next ? 'true' : 'false';
+    };
     const onScroll = () =>
-      setScrolled((prev) => {
-        const top = main.scrollTop;
-        if (prev) return top > DOCK_OFF;
-        const restRange = main.scrollHeight - main.clientHeight; // un-docked here
-        if (restRange < MIN_RANGE) return false;
-        return top > DOCK_ON;
-      });
+      apply(docked ? main.scrollTop > DOCK_OFF : main.scrollTop > DOCK_ON);
     onScroll();
     main.addEventListener('scroll', onScroll, { passive: true });
     return () => main.removeEventListener('scroll', onScroll);
@@ -121,16 +123,31 @@ export function SurfaceShell({
               be trapped inside this card instead of covering the viewport. Keeping
               the blur on a sibling layer preserves the look while letting modals
               go truly full-screen. */}
-          <div className="relative flex-1 min-h-0">
+          {/* The rounded clip lives on this NON-scrolling wrapper so the
+              scroller inside stays a plain, unpromoted scroll container. */}
+          <div className="relative flex-1 min-h-0 overflow-hidden rounded-2xl">
             <div
               aria-hidden
               className="pointer-events-none absolute inset-0 rounded-2xl border border-[var(--border)] bg-[var(--card)] backdrop-blur-xl shadow-sm"
             />
+            {/* Plain scroll container — deliberately NOT GPU-promoted.
+                A hairline of scrolled-away content used to show along the card's
+                top edge, and this element carried a `translateZ(0)` blamed for
+                fixing it. It never did: the culprit was `.page-sticky-header`'s
+                1px transparent border, which its backdrop pseudo-element didn't
+                cover (see globals.css). Proven with a clip-path on the wrapper —
+                authoritative, and the hairline survived it — so nothing was
+                escaping the clip in the first place. Promotion here is not free:
+                it would make this element the containing block for every
+                `position: fixed` descendant. */}
             <div
               ref={mainRef}
-              data-scrolled={scrolled ? 'true' : 'false'}
+              data-scrolled="false"
               className="relative h-full overflow-y-auto overflow-x-hidden overscroll-contain rounded-2xl px-6 md:px-8 pb-6 md:pb-8"
             >
+              {/* Rest-state clearance above a pinned page header. Scrolls away
+                  under the docked bar, so the header itself never resizes. */}
+              <div aria-hidden className="content-dock-lead" />
               {children}
             </div>
           </div>

@@ -9,23 +9,11 @@
  * the transcription against the source.
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * ⚠️  MAZDA CONTRADICTS THREE THINGS THE SYSTEM CURRENTLY DOES. Read this before
+ * ⚠️  MAZDA CONTRADICTS TWO THINGS THE SYSTEM CURRENTLY DOES. Read this before
  * enabling Mazda automation — none of them are fixed by this pack, which only
  * REPORTS them.
  *
- * 1. §5d — THE CO-BRANDED LOCKUP IS NON-COMPLIANT FOR MAZDA.
- *    "The Mazda logo or any of its components may not appear as a direct lockup
- *    to your dealer name or logo. Separating your name and the Mazda logo with a
- *    line is not sufficient." The guideline prints three NON-COMPLIANT examples,
- *    one of which is exactly a dealer name and Mazda mark divided by a vertical
- *    rule. Compliant layouts keep them as separate elements at prescribed
- *    ratios: dealer NAME at 85% (recommended) or 115% of the Mazda script height,
- *    or a pre-approved dealer LOGO no larger than 50% of the brand mark.
- *    → A single combined lockup image therefore cannot satisfy Mazda, and the
- *      account's `logoUrl` is exactly that. Mazda needs the brand mark and the
- *      dealer identity as two elements with a size relationship between them.
- *
- * 2. §6a/§6b — MAZDA ADS MUST BE MONOCHROME.
+ * 1. §6a/§6b — MAZDA ADS MUST BE MONOCHROME.
  *    "All typography is to be set in monochrome tones only (black, gray, white)."
  *    The brand colour palette is greyscale plus black and white; "no other color
  *    is permitted unless vehicle photography is used", and colour explicitly may
@@ -34,12 +22,35 @@
  *      coloured price. That is non-compliant for Mazda regardless of which colour
  *      the sub-account sets. Mazda needs a greyscale variant.
  *
- * 3. §8c — VEHICLE NAMES MUST BE UPPERCASE WHEN STANDING ALONE.
+ * 2. §8c — VEHICLE NAMES MUST BE UPPERCASE WHEN STANDING ALONE.
  *    "2024 MAZDA3 SEDAN" is compliant; "2024 Mazda3 Sedan" is not. Also Mazda3
  *    is one word with a capital M and no space before the numeral, while CX/MX
  *    lines take a space and a hyphen ("Mazda CX-90").
  *    → MarketCheck supplies "2026 Mazda CX-5" — body-text form. Our headline is
  *      standalone copy, so it needs uppercasing for Mazda.
+ *
+ * CORRECTED READING OF §5d — the co-branded lockup IS permitted.
+ *
+ * An earlier draft of this pack claimed a combined dealer+Mazda lockup could never
+ * satisfy Mazda, reading "Separating your name and the Mazda logo with a line is
+ * not sufficient" as banning any single asset. That was wrong. Young's actual
+ * record — years of approvals, never once denied on the logo — was better evidence
+ * than the inference.
+ *
+ * §5d prohibits the Mazda mark being ABSORBED INTO the dealer's own wordmark; the
+ * non-compliant examples are "MAZDA OF HOMETOWN" constructions using the mark as a
+ * word. §5e then lists three PERMITTED presentations of dealer identity, the third
+ * being "Pre-approved dealer logo no bigger than 50% of brand mark", and allows
+ * group logos at the same ratio with pre-approval recommended. A properly
+ * proportioned, pre-approved co-branded asset is compliant. §5a also grants
+ * exclusions "where the brand mark and dealer identity is already displayed where
+ * the ad is present, such as website sliders, SOCIAL, and endemic sites" — which is
+ * where these ads run.
+ *
+ * The residual requirements (Mazda mark leading at full size, dealer logo ≤50%,
+ * palette-compliant colour) are properties of the ASSET, settled once at upload and
+ * pre-approval. They aren't per-ad facts and can't be read from a composite image,
+ * so the rule below only checks the lockup is present.
  *
  * NOT EXPRESSIBLE, omitted rather than approximated:
  *   - §7b the price/offer height may not exceed the height of the vehicle. A
@@ -75,8 +86,8 @@ const PACK: CoopRulePack = {
       field: 'logoUrl',
       severity: 'error',
       description:
-        'The Mazda brand mark must be used once and placed prominently. NOTE §5d: it may NOT appear as a direct lockup to the dealer name or logo — a dividing line is explicitly insufficient — so a single combined lockup asset does not satisfy Mazda.',
-      citation: cite('5a/5d', 12),
+        'The Mazda brand mark must be used once and placed prominently. §5d bars the mark being absorbed into the dealer wordmark ("MAZDA OF HOMETOWN"), but §5e permits a pre-approved dealer or group logo alongside it at no more than 50% of the brand mark. Those proportions are a property of the uploaded asset, confirmed once at pre-approval, so this rule only checks that the lockup is present.',
+      citation: cite('5a/5d/5e', 12),
     },
     {
       id: 'mazda-dealer-dba-required',
@@ -250,10 +261,11 @@ async function main() {
   console.log(`✔ ${row.make} co-op pack "${row.version}" — ${PACK.rules.length} rules`);
   console.log(`  verified: ${row.verified}`);
   console.log();
-  console.log('  ⚠️  Mazda contradicts three things the system currently does:');
-  console.log('    §5d  a combined dealer+Mazda lockup is NON-COMPLIANT (a dividing line is not enough)');
+  console.log('  ⚠️  Mazda contradicts two things the system currently does:');
   console.log('    §6b  ads must be MONOCHROME — the brand-colour template is non-compliant for Mazda');
   console.log('    §8c  standalone vehicle names must be UPPERCASE ("2026 MAZDA CX-5")');
+  console.log('  §5d/5e: the co-branded lockup IS permitted at the documented ratios with');
+  console.log('          pre-approval — an earlier draft of this pack wrongly said otherwise.');
   await prisma.$disconnect();
 }
 

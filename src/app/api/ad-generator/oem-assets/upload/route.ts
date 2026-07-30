@@ -141,6 +141,7 @@ export async function POST(req: NextRequest) {
     sourceUrl,
     sourceAssetId,
     bytes,
+    mimeType,
     createdBy: (session.user as { id?: string }).id ?? null,
   });
   if (!row) return NextResponse.json({ error: 'Could not register the document' }, { status: 500 });

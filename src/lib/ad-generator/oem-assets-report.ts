@@ -71,9 +71,9 @@ export interface MakeAssets {
   eventSummary: string;
   /** True when no pack for this make is verified — nothing can reach `ready`. */
   unverified: boolean;
-  /** The registered guideline documents, with their change state. */
+  /** The registered guideline documents, with their state. */
   docs: GuidelineDocRow[];
-  /** True when any document changed after it was last reviewed. */
+  /** True when a document was recently reissued or has become unreachable. */
   docsChanged: boolean;
   /** Per-template layout verdicts against this make's pack. */
   templateChecks: TemplateCheckRow[];
@@ -230,7 +230,7 @@ export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets
       docs,
       // 'unreachable' counts as needing attention too — a document we can no longer
       // fetch is one whose citations can't be checked.
-      docsChanged: docs.some((d) => d.state === 'changed' || d.state === 'unreachable'),
+      docsChanged: docs.some((d) => d.state === 'updated' || d.state === 'unreachable'),
       templateChecks: checkRows.filter((c) => c.make.trim().toLowerCase() === lower),
     });
   }

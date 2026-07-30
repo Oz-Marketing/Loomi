@@ -1,41 +1,66 @@
 import { describe, it, expect } from 'vitest';
-import { docState, hashBytes } from './guideline-docs';
+import { docState, hashBytes, RECENT_UPDATE_DAYS } from './guideline-docs';
 
 const enc = (s: string) => new TextEncoder().encode(s);
+const NOW = new Date('2026-07-30T12:00:00Z');
+const daysAgo = (n: number) => new Date(NOW.getTime() - n * 86_400_000);
 
 describe('docState', () => {
-  it('reports unfetched before any baseline exists', () => {
-    const r = docState({ contentHash: null, reviewedHash: null, checkError: null });
+  it('reports unfetched when no copy is on file', () => {
+    const r = docState({ contentHash: null, replacedAt: null, checkError: null }, NOW);
     expect(r.state).toBe('unfetched');
   });
 
-  it('reports unreviewed once fetched but never signed off', () => {
-    const r = docState({ contentHash: 'a', reviewedHash: null, checkError: null });
-    expect(r.state).toBe('unreviewed');
-    expect(r.summary).toContain('mark it reviewed');
+  it('reports stored for a document we hold that has never been replaced', () => {
+    // The normal, quiet state — no attestation required to reach it.
+    const r = docState({ contentHash: 'a', replacedAt: null, checkError: null }, NOW);
+    expect(r.state).toBe('stored');
+    expect(r.summary).toBe('On file.');
   });
 
-  it('reports current when the bytes match the reviewed baseline', () => {
-    expect(docState({ contentHash: 'a', reviewedHash: 'a', checkError: null }).state).toBe('current');
+  it('reports updated after a recent replacement, and says how long ago', () => {
+    const r = docState({ contentHash: 'b', replacedAt: daysAgo(3), checkError: null }, NOW);
+    expect(r.state).toBe('updated');
+    expect(r.summary).toContain('3 days ago');
   });
 
-  it('reports changed when the document moved after review', () => {
-    // The case the whole register exists for.
-    const r = docState({ contentHash: 'b', reviewedHash: 'a', checkError: null });
-    expect(r.state).toBe('changed');
-    expect(r.summary).toContain('CHANGED');
+  it('says "today" rather than "0 days ago"', () => {
+    const r = docState({ contentHash: 'b', replacedAt: daysAgo(0), checkError: null }, NOW);
+    expect(r.summary).toContain('today');
   });
 
-  it('reports unreachable even when the hashes still agree', () => {
+  it('singularises one day', () => {
+    expect(docState({ contentHash: 'b', replacedAt: daysAgo(1), checkError: null }, NOW).summary).toContain(
+      '1 day ago',
+    );
+  });
+
+  it('lets the updated flag fade rather than nagging forever', () => {
+    // A replacement is history, not a task — past the horizon it goes quiet on its
+    // own, which is the whole point of dropping the review gate.
+    expect(docState({ contentHash: 'b', replacedAt: daysAgo(RECENT_UPDATE_DAYS), checkError: null }, NOW).state).toBe(
+      'updated',
+    );
+    expect(
+      docState({ contentHash: 'b', replacedAt: daysAgo(RECENT_UPDATE_DAYS + 1), checkError: null }, NOW).state,
+    ).toBe('stored');
+  });
+
+  it('accepts an ISO string for replacedAt, as the API serializes it', () => {
+    const r = docState({ contentHash: 'b', replacedAt: daysAgo(2).toISOString(), checkError: null }, NOW);
+    expect(r.state).toBe('updated');
+  });
+
+  it('reports unreachable even when we still hold a copy', () => {
     // A 404 is not reassurance: the source a citation points at can no longer be
-    // opened, which must not read as "current".
-    const r = docState({ contentHash: 'a', reviewedHash: 'a', checkError: 'HTTP 404' });
+    // opened, which must not read as "on file".
+    const r = docState({ contentHash: 'a', replacedAt: null, checkError: 'HTTP 404' }, NOW);
     expect(r.state).toBe('unreachable');
     expect(r.summary).toContain('404');
   });
 
-  it('prefers unreachable over changed', () => {
-    const r = docState({ contentHash: 'b', reviewedHash: 'a', checkError: 'timeout' });
+  it('prefers unreachable over updated', () => {
+    const r = docState({ contentHash: 'b', replacedAt: daysAgo(1), checkError: 'timeout' }, NOW);
     expect(r.state).toBe('unreachable');
   });
 });

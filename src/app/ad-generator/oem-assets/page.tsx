@@ -3,26 +3,30 @@
 /**
  * OEM Guidelines & Sales Events (admin) — the co-op team's surface.
  *
- * Four things per manufacturer, together because they're one job: versioned,
- * time-boxed, co-op-owned, and consequential when stale.
+ * MASTER-DETAIL, one manufacturer at a time. The first version stacked every make
+ * down one page; at 24 makes that was an unreadable scroll where the three that
+ * actually have rules were buried alphabetically. Now the left rail carries the
+ * whole roster with its status, and the right pane shows only what's selected.
  *
- *   Source documents  the guideline PDF, tracked by content hash — the mechanism
- *                     that says "this changed, go look"
- *   Transcribed rules the machine-checkable pack + the verified toggle
- *   Template checks   each template's standing against those rules, computed once
- *   Sales events      the campaign mark + its window + whether the OEM mandates it
+ * Three things per make:
  *
- * The page leads with STALENESS rather than listings, because the failures are all
- * of that shape: a document reissued and nobody noticed; an event window closing
- * with no successor queued, after which ads silently drop a mandated mark.
+ *   Guideline documents  the manufacturer's PDF, with its cover, watched by content
+ *                        hash so a reissue is visible
+ *   Automated checks     the rules transcribed from it, and how each ad template
+ *                        stands against them
+ *   Sales events         the campaign mark and the window it must appear in
  *
- * What this page deliberately does NOT do is edit rules or derive them from a
- * document. See `guideline-docs.ts` for why — briefly: a wrong rule silently costs
- * a brand a month of ads, so the human stays in the loop and the machine's job is
- * to say when to look.
+ * There is deliberately NO "mark reviewed" action. An earlier version demanded that
+ * attestation before it would go quiet, which turned a library into a to-do list.
+ * A document is simply what it is; when it changes, that's recorded as history and
+ * the change is announced once.
+ *
+ * The page also doesn't edit rules or derive them from a document — see the header
+ * of `guideline-docs.ts`. Briefly: a wrong rule silently costs a brand a month of
+ * ads, so the machine's job is to say when to look, not to decide.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import {
@@ -31,14 +35,21 @@ import {
   CheckCircleIcon,
   DocumentTextIcon,
   ExclamationTriangleIcon,
+  MagnifyingGlassIcon,
+  PhotoIcon,
   PlusIcon,
   ShieldCheckIcon,
+  SparklesIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { HelpTip } from '@/components/ui/help-tip';
+import { MediaPickerModal } from '@/components/media-picker-modal';
+
+// ── types (mirror the API's read model) ──
 
 type EventState = 'covered' | 'ending_soon' | 'upcoming' | 'none';
+type DocState = 'unfetched' | 'updated' | 'stored' | 'unreachable';
 
 interface EventRow {
   id: string;
@@ -68,8 +79,6 @@ interface PackRow {
   updatedAt: string;
 }
 
-type DocState = 'unfetched' | 'unreviewed' | 'current' | 'changed' | 'unreachable';
-
 interface GuidelineDocRow {
   id: string;
   make: string;
@@ -77,9 +86,11 @@ interface GuidelineDocRow {
   sourceUrl: string | null;
   contentHash: string | null;
   byteSize: number | null;
-  reviewedHash: string | null;
-  reviewedBy: string | null;
-  reviewedAt: string | null;
+  pageCount: number | null;
+  previewImage: string | null;
+  previousHash: string | null;
+  replacedAt: string | null;
+  notes: string | null;
   checkedAt: string | null;
   checkError: string | null;
   state: DocState;
@@ -119,32 +130,20 @@ interface MakeAssets {
   templateChecks: TemplateCheckRow[];
 }
 
-/** KB below a megabyte, MB above — "6834 KB" is a number nobody reads as 6.7 MB. */
-function fileSize(bytes: number | null): string | null {
-  if (bytes == null) return null;
-  return bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
-}
-
-/**
- * States whose summary sentence earns its place, because it names an action.
- * `unreviewed` and `current` are fully carried by the badge, and repeating a
- * sentence across 33 rows turns the page into a wall nobody reads.
- */
-const EXPLAIN_STATE = new Set<DocState>(['changed', 'unreachable', 'unfetched']);
-
-const DOC_STATE: Record<DocState, { label: string; className: string }> = {
-  current: { label: 'Reviewed', className: 'bg-emerald-500/15 text-emerald-500' },
-  changed: { label: 'CHANGED', className: 'bg-amber-500/15 text-amber-500' },
-  unreviewed: { label: 'Not reviewed', className: 'bg-blue-500/15 text-blue-500' },
-  unfetched: { label: 'Not fetched', className: 'bg-[var(--muted)] text-[var(--muted-foreground)]' },
-  unreachable: { label: 'Unreachable', className: 'bg-red-500/15 text-red-500' },
-};
+// ── presentation constants ──
 
 const EVENT_STATE: Record<EventState, { label: string; className: string }> = {
-  covered: { label: 'Covered', className: 'bg-emerald-500/15 text-emerald-500' },
-  ending_soon: { label: 'Ending soon', className: 'bg-amber-500/15 text-amber-500' },
-  upcoming: { label: 'Upcoming', className: 'bg-blue-500/15 text-blue-500' },
+  covered: { label: 'Event covered', className: 'bg-emerald-500/15 text-emerald-500' },
+  ending_soon: { label: 'Event ending', className: 'bg-amber-500/15 text-amber-500' },
+  upcoming: { label: 'Event upcoming', className: 'bg-blue-500/15 text-blue-500' },
   none: { label: 'No event', className: 'bg-[var(--muted)] text-[var(--muted-foreground)]' },
+};
+
+const DOC_STATE: Record<DocState, { label: string; className: string }> = {
+  stored: { label: 'On file', className: 'bg-emerald-500/15 text-emerald-500' },
+  updated: { label: 'Updated', className: 'bg-blue-500/15 text-blue-500' },
+  unfetched: { label: 'Not fetched', className: 'bg-[var(--muted)] text-[var(--muted-foreground)]' },
+  unreachable: { label: 'Unreachable', className: 'bg-red-500/15 text-red-500' },
 };
 
 const PHASE: Record<EventRow['phase'], string> = {
@@ -155,11 +154,18 @@ const PHASE: Record<EventRow['phase'], string> = {
 
 const OFFER_TYPES = ['lease', 'apr', 'discount', 'sales_price'] as const;
 
-/** Blank draft for the "register document" form. */
+/** KB below a megabyte, MB above — "6834 KB" is a number nobody reads as 6.7 MB. */
+function fileSize(bytes: number | null): string | null {
+  if (bytes == null) return null;
+  return bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+/** States whose summary earns a line of its own, because it names a consequence. */
+const EXPLAIN_STATE = new Set<DocState>(['updated', 'unreachable', 'unfetched']);
+
 const emptyDocDraft = (make: string) => ({ make, title: '', sourceUrl: '', file: null as File | null });
 
-/** Blank draft for the "add event" form. */
-const emptyDraft = (make: string) => ({
+const emptyEventDraft = (make: string) => ({
   id: '',
   make,
   name: '',
@@ -177,8 +183,13 @@ export default function OemAssetsPage() {
   const [makes, setMakes] = useState<MakeAssets[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [draft, setDraft] = useState<ReturnType<typeof emptyDraft> | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [eventDraft, setEventDraft] = useState<ReturnType<typeof emptyEventDraft> | null>(null);
   const [docDraft, setDocDraft] = useState<ReturnType<typeof emptyDocDraft> | null>(null);
+  const [pickingLogo, setPickingLogo] = useState(false);
+  /** Cover thumbnails, fetched per document on demand — the list omits them. */
+  const [covers, setCovers] = useState<Record<string, string | null>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -222,10 +233,7 @@ export default function OemAssetsPage() {
     [load],
   );
 
-  /**
-   * Upload a document through the multipart route. Separate from `act` because that
-   * one posts JSON; sharing it would mean branching on body type in the caller.
-   */
+  /** Upload a document. Multipart, so it can't share `act`'s JSON body. */
   const uploadDoc = useCallback(
     async (make: string, title: string, file: File) => {
       setBusy('upload-doc');
@@ -241,7 +249,7 @@ export default function OemAssetsPage() {
         // Registration works without S3 — the hash still drives change detection —
         // so surface that the file itself wasn't kept rather than implying it was.
         else if (json.warning) toast.warning(json.warning);
-        else toast.success('Document uploaded and registered');
+        else toast.success('Document uploaded');
         await load();
         return true;
       } catch (err) {
@@ -254,6 +262,56 @@ export default function OemAssetsPage() {
     [load],
   );
 
+  /** Lazily fetch one document's cover. The list response omits previews. */
+  const loadCover = useCallback(
+    async (docId: string) => {
+      if (docId in covers) return;
+      setCovers((c) => ({ ...c, [docId]: null }));
+      try {
+        const res = await fetch(`/api/ad-generator/oem-assets?docId=${encodeURIComponent(docId)}`);
+        const json = await res.json();
+        if (res.ok && json.doc?.previewImage) {
+          setCovers((c) => ({ ...c, [docId]: json.doc.previewImage }));
+        }
+      } catch {
+        // A missing cover is cosmetic — leave the placeholder.
+      }
+    },
+    [covers],
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return makes;
+    return makes.filter(
+      (m) => m.make.toLowerCase().includes(q) || m.docs.some((d) => d.title.toLowerCase().includes(q)),
+    );
+  }, [makes, query]);
+
+  const active = useMemo(
+    () => filtered.find((m) => m.make === selected) ?? filtered[0] ?? null,
+    [filtered, selected],
+  );
+
+  // Fetch covers for whichever make is on screen.
+  useEffect(() => {
+    if (!active) return;
+    for (const d of active.docs) if (d.contentHash) void loadCover(d.id);
+    // loadCover is intentionally excluded: it closes over `covers`, so including it
+    // would re-run this effect on every cover that lands.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.make, active?.docs.length]);
+
+  const attention = useMemo(
+    () => ({
+      docs: makes.flatMap((m) =>
+        m.docs.filter((d) => d.state === 'unreachable').map((d) => ({ make: m.make, doc: d })),
+      ),
+      events: makes.filter((m) => m.eventState === 'ending_soon'),
+    }),
+    [makes],
+  );
+
   if (!isAdmin) {
     return (
       <div className="mx-auto max-w-3xl px-6 py-16 text-center">
@@ -264,15 +322,11 @@ export default function OemAssetsPage() {
     );
   }
 
-  const needsAttention = makes.filter((m) => m.eventState === 'ending_soon');
-  // The register's whole purpose, hoisted to the top of the page: a document that
-  // moved after someone reviewed it, or one that can no longer be fetched at all.
-  const changedDocs = makes.flatMap((m) =>
-    m.docs.filter((d) => d.state === 'changed' || d.state === 'unreachable').map((d) => ({ make: m.make, doc: d })),
-  );
+  const totalDocs = makes.reduce((n, m) => n + m.docs.length, 0);
+  const withRules = makes.filter((m) => m.packs.length > 0).length;
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
+    <div className="mx-auto max-w-7xl px-6 py-8">
       <Link
         href="/ad-generator"
         className="mb-6 inline-flex items-center gap-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
@@ -284,511 +338,536 @@ export default function OemAssetsPage() {
         <div>
           <h1 className="text-2xl font-semibold text-[var(--foreground)]">OEM guidelines &amp; sales events</h1>
           <p className="mt-1.5 max-w-3xl text-sm text-[var(--muted-foreground)]">
-            Per manufacturer: the guideline document Loomi watches for changes, the rules transcribed from it,
-            how each template stands against those rules, and the sales-event marks that must appear on ads
-            during a campaign window.
+            {makes.length} manufacturers · {totalDocs} guideline documents watched for changes · {withRules} with
+            rules Loomi enforces automatically
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() =>
-              act('refresh_docs', {}, 'refresh-docs', 'Documents re-fetched and compared')
-            }
+            onClick={() => act('refresh_docs', {}, 'refresh-docs', 'Documents re-checked')}
             disabled={!!busy || loading}
             className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
           >
-            <ArrowPathIcon className={`h-3.5 w-3.5 ${busy === 'refresh-docs' ? 'animate-spin' : ''}`} /> Check documents
-            now
+            <ArrowPathIcon className={`h-3.5 w-3.5 ${busy === 'refresh-docs' ? 'animate-spin' : ''}`} />
+            Check for updates
           </button>
           <button
             onClick={load}
             disabled={loading}
             className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
           >
-            <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+            <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Reload
           </button>
         </div>
       </header>
 
-      {/* ── coverage at a glance ──
-          With two dozen makes the page is long, and the ones that matter aren't
-          alphabetically first. These four numbers answer "where do we stand" without
-          scrolling, and the gap between documents and packs is the honest headline:
-          holding a guideline is not the same as checking anything against it. */}
-      {makes.length > 0 && (
-        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          {[
-            { label: 'Makes', value: makes.length, hint: 'with a document, pack, event or automation config' },
-            {
-              label: 'Documents watched',
-              value: makes.reduce((n, m) => n + m.docs.length, 0),
-              hint: 'tracked by content hash',
-            },
-            {
-              label: 'Awaiting review',
-              value: makes.reduce((n, m) => n + m.docs.filter((d) => d.state !== 'current').length, 0),
-              hint: 'no baseline set yet, so a change would go unnoticed',
-            },
-            {
-              label: 'Rules transcribed',
-              value: makes.filter((m) => m.packs.length > 0).length,
-              hint: 'makes with a machine-checkable pack',
-            },
-          ].map((s) => (
-            <div key={s.label} className="rounded-xl border border-[var(--border)] px-3 py-2.5" title={s.hint}>
-              <p className="text-lg font-semibold text-[var(--foreground)]">{s.value}</p>
-              <p className="text-[11px] text-[var(--muted-foreground)]">{s.label}</p>
-            </div>
+      {/* ── the two things that actually go wrong ── */}
+      {(attention.docs.length > 0 || attention.events.length > 0) && (
+        <div className="mb-6 space-y-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          {attention.docs.map(({ make, doc }) => (
+            <p key={doc.id} className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400">
+              <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+              <span>
+                <button onClick={() => setSelected(make)} className="font-medium underline">
+                  {make}
+                </button>{' '}
+                — {doc.title} can no longer be fetched. {doc.checkError}
+              </span>
+            </p>
+          ))}
+          {attention.events.map((m) => (
+            <p key={m.make} className="flex items-start gap-2 text-xs text-amber-600 dark:text-amber-400">
+              <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+              <span>
+                <button onClick={() => setSelected(m.make)} className="font-medium underline">
+                  {m.make}
+                </button>{' '}
+                — {m.eventSummary}
+              </span>
+            </p>
           ))}
         </div>
       )}
 
-      {/* ── a guideline moved under us: the register's reason to exist ── */}
-      {changedDocs.length > 0 && (
-        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-          <p className="flex items-center gap-2 text-sm font-medium text-amber-600 dark:text-amber-400">
-            <ExclamationTriangleIcon className="h-4 w-4" />
-            {changedDocs.length} guideline document{changedDocs.length > 1 ? 's need' : ' needs'} attention
-          </p>
-          <ul className="mt-1.5 space-y-0.5 text-xs text-amber-600/90 dark:text-amber-400/90">
-            {changedDocs.map(({ make, doc }) => (
-              <li key={doc.id}>
-                <span className="font-medium">{make}</span> — {doc.title}: {doc.summary}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* ── the thing that actually goes wrong ── */}
-      {needsAttention.length > 0 && (
-        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-          <p className="flex items-center gap-2 text-sm font-medium text-amber-600 dark:text-amber-400">
-            <ExclamationTriangleIcon className="h-4 w-4" />
-            {needsAttention.length} manufacturer{needsAttention.length > 1 ? 's have' : ' has'} an event window
-            closing with nothing queued behind it
-          </p>
-          <ul className="mt-1.5 space-y-0.5 text-xs text-amber-600/90 dark:text-amber-400/90">
-            {needsAttention.map((m) => (
-              <li key={m.make}>
-                <span className="font-medium">{m.make}</span> — {m.eventSummary}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {makes.length === 0 && !loading && (
+      {makes.length === 0 && !loading ? (
         <div className="glass-card rounded-2xl border border-dashed border-[var(--border)] p-12 text-center">
           <p className="text-sm text-[var(--muted-foreground)]">
-            No manufacturers yet. A make appears here once it has a rule pack, an event, or a sub-account
-            configured for automation.
+            No manufacturers yet. A make appears once it has a guideline document, a rule pack, an event, or a
+            sub-account configured for automation.
           </p>
         </div>
-      )}
-
-      <div className="space-y-4">
-        {makes.map((m) => {
-          const st = EVENT_STATE[m.eventState];
-          return (
-            <section key={m.make} className="glass-card rounded-2xl border border-[var(--border)] p-5">
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                <h2 className="flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
-                  {m.make}
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${st.className}`}>
-                    {st.label}
-                  </span>
-                  {m.unverified && (
-                    <span
-                      className="rounded-full bg-[var(--muted)] px-2 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]"
-                      title="No verified pack — ads for this make cannot be auto-approved"
-                    >
-                      unverified
+      ) : (
+        <div className="flex flex-col gap-5 lg:flex-row">
+          {/* ── master: the roster ── */}
+          <aside className="lg:w-64 lg:flex-shrink-0">
+            <div className="relative mb-2">
+              <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search manufacturers"
+                className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] py-1.5 pl-8 pr-3 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+              />
+            </div>
+            <nav className="max-h-[70vh] space-y-0.5 overflow-y-auto pr-1">
+              {filtered.map((m) => {
+                const isActive = active?.make === m.make;
+                return (
+                  <button
+                    key={m.make}
+                    onClick={() => setSelected(m.make)}
+                    className={`flex w-full items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${
+                      isActive ? 'bg-[var(--primary)]/10 text-[var(--foreground)]' : 'hover:bg-[var(--muted)]/40'
+                    }`}
+                  >
+                    <span className="min-w-0">
+                      <span
+                        className={`block truncate text-xs ${isActive ? 'font-semibold' : 'font-medium text-[var(--foreground)]'}`}
+                      >
+                        {m.make}
+                      </span>
+                      <span className="block text-[10px] text-[var(--muted-foreground)]">
+                        {m.docs.length || 'no'} doc{m.docs.length === 1 ? '' : 's'}
+                        {m.packs.length > 0 && ' · rules'}
+                      </span>
                     </span>
-                  )}
-                </h2>
-                <p className="text-[11px] text-[var(--muted-foreground)]">{m.eventSummary}</p>
+                    <span className="flex flex-shrink-0 items-center gap-1">
+                      {/* Only real problems get a dot. "No pack" is the norm, not a fault. */}
+                      {m.docs.some((d) => d.state === 'unreachable') && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" title="A document is unreachable" />
+                      )}
+                      {m.eventState === 'ending_soon' && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-500" title="Event window closing" />
+                      )}
+                      {m.packs.some((p) => p.verified) && (
+                        <ShieldCheckIcon className="h-3.5 w-3.5 text-emerald-500" title="Rules enforced" />
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+              {filtered.length === 0 && (
+                <p className="px-2.5 py-3 text-xs text-[var(--muted-foreground)]">No match.</p>
+              )}
+            </nav>
+          </aside>
+
+          {/* ── detail: one make ── */}
+          {active && (
+            <section className="min-w-0 flex-1 space-y-5">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-lg font-semibold text-[var(--foreground)]">{active.make}</h2>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${EVENT_STATE[active.eventState].className}`}
+                >
+                  {EVENT_STATE[active.eventState].label}
+                </span>
+                {active.packs.length === 0 ? (
+                  <span className="rounded-full bg-[var(--muted)] px-2 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">
+                    no automated rules
+                  </span>
+                ) : active.unverified ? (
+                  <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-500">
+                    rules not approved
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-500">
+                    rules enforced
+                  </span>
+                )}
               </div>
 
-              {/* ── source documents ── */}
-              <div className="mb-2 flex items-center justify-between">
-                <h3 className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                  Source documents
-                  <HelpTip title="How these stay current">
+              {/* ── guideline documents ── */}
+              <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="flex items-center gap-1.5 text-sm font-semibold text-[var(--foreground)]">
+                    Guideline documents
+                    <HelpTip title="What these are for">
+                      <p>
+                        The manufacturer&rsquo;s own document, kept here so anyone at the agency can read it and so
+                        a citation like &ldquo;§5e p.12&rdquo; can be checked.
+                      </p>
+                      <p>
+                        Each is fingerprinted. Upload a newer edition over the top and Loomi notices the bytes
+                        changed, keeps the old fingerprint as history, and tells the admins once. Documents with a
+                        public URL are re-checked daily on their own.
+                      </p>
+                      <p>Nothing is read out of the document automatically — a person decides what a change means.</p>
+                    </HelpTip>
+                  </h3>
+                  <button
+                    onClick={() => setDocDraft(emptyDocDraft(active.make))}
+                    className="flex items-center gap-1 text-[11px] font-medium text-[var(--primary)] hover:underline"
+                  >
+                    <PlusIcon className="h-3 w-3" /> Add document
+                  </button>
+                </div>
+
+                {active.docs.length === 0 ? (
+                  <p className="text-xs text-[var(--muted-foreground)]">
+                    Nothing on file. Add {active.make}&rsquo;s guidelines and Loomi will tell you when they change.
+                  </p>
+                ) : (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {active.docs.map((d) => {
+                      const ds = DOC_STATE[d.state];
+                      const cover = covers[d.id];
+                      return (
+                        <div
+                          key={d.id}
+                          className={`flex gap-3 rounded-xl border p-3 ${
+                            d.state === 'unreachable' ? 'border-red-500/30 bg-red-500/5' : 'border-[var(--border)]'
+                          }`}
+                        >
+                          {/* cover */}
+                          <div className="flex h-[104px] w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--border)] bg-white">
+                            {cover ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={cover} alt="" className="h-full w-full object-contain" />
+                            ) : (
+                              <DocumentTextIcon className="h-6 w-6 text-neutral-300" />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-start gap-1.5">
+                              <span className="text-xs font-medium leading-snug text-[var(--foreground)]">
+                                {d.title}
+                              </span>
+                              <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-medium ${ds.className}`}>
+                                {ds.label}
+                              </span>
+                            </div>
+                            {EXPLAIN_STATE.has(d.state) && (
+                              <p className="mt-1 text-[10px] leading-snug text-[var(--muted-foreground)]">
+                                {d.summary}
+                              </p>
+                            )}
+                            {d.notes && (
+                              <p className="mt-1 text-[10px] italic leading-snug text-[var(--muted-foreground)]">
+                                {d.notes}
+                              </p>
+                            )}
+                            <div className="mt-1.5 flex flex-wrap gap-x-2 text-[10px] text-[var(--muted-foreground)]">
+                              {d.pageCount && <span>{d.pageCount} pp</span>}
+                              {fileSize(d.byteSize) && <span>{fileSize(d.byteSize)}</span>}
+                              {d.contentHash && <span className="font-mono">{d.contentHash.slice(0, 8)}</span>}
+                            </div>
+                            {d.previousHash && d.replacedAt && (
+                              <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
+                                replaced {d.replacedAt.slice(0, 10)}, was{' '}
+                                <span className="font-mono">{d.previousHash.slice(0, 8)}</span>
+                              </p>
+                            )}
+                            <div className="mt-2 flex items-center gap-2">
+                              {d.sourceUrl && (
+                                <a
+                                  href={d.sourceUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-[11px] font-medium text-[var(--primary)] hover:underline"
+                                >
+                                  Open
+                                </a>
+                              )}
+                              <button
+                                onClick={() =>
+                                  setDocDraft({ ...emptyDocDraft(active.make), title: d.title })
+                                }
+                                className="text-[11px] font-medium text-[var(--primary)] hover:underline"
+                              >
+                                Replace
+                              </button>
+                              <button
+                                onClick={() => act('delete_doc', { docId: d.id }, `dd-${d.id}`, 'Document removed')}
+                                disabled={!!busy}
+                                aria-label={`Remove ${d.title}`}
+                                className="ml-auto rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
+                              >
+                                <TrashIcon className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* ── automated checks ── */}
+              <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
+                <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-[var(--foreground)]">
+                  Automated checks
+                  <HelpTip title="What Loomi enforces">
                     <p>
-                      Each document is tracked by a <strong>content hash</strong>. When the manufacturer reissues
-                      it, the hash stops matching the one that was last reviewed and it shows as{' '}
-                      <strong>CHANGED</strong>.
+                      A small set of rules transcribed by hand from the document above, each with a citation. Only
+                      a handful of manufacturers have these, on purpose.
                     </p>
                     <p>
-                      Nothing is re-derived automatically. Transcribing rules from a document is slow and easy to
-                      get wrong, and a wrong rule silently costs a brand a month of ads — so a person reads what
-                      changed and decides whether any template needs work.
+                      Where a make has <strong>no</strong> pack, ads still generate — they just stay drafts and
+                      never auto-approve, so a person sees every one. Nothing is skipped.
                     </p>
                     <p>
-                      URL-backed documents are re-fetched daily at 07:00 UTC. &ldquo;Mark reviewed&rdquo; sets the
-                      baseline to what the document says right now.
+                      <strong>Approve for enforcement</strong> means a person checked the transcription against the
+                      document. Until then findings only warn, so a half-finished transcription can&rsquo;t block a
+                      brand&rsquo;s month.
                     </p>
                   </HelpTip>
                 </h3>
-                <button
-                  onClick={() => setDocDraft(emptyDocDraft(m.make))}
-                  className="flex items-center gap-1 text-[11px] font-medium text-[var(--primary)] hover:underline"
-                >
-                  <PlusIcon className="h-3 w-3" /> Register document
-                </button>
-              </div>
-              {m.docs.length === 0 ? (
-                <p className="mb-4 text-xs text-[var(--muted-foreground)]">
-                  No document registered. Nothing will tell you when {m.make} reissues its guidelines.
-                </p>
-              ) : (
-                <div className="mb-4 space-y-1.5">
-                  {m.docs.map((d) => {
-                    const ds = DOC_STATE[d.state];
-                    return (
+
+                {active.packs.length === 0 ? (
+                  <p className="text-xs text-[var(--muted-foreground)]">
+                    None for {active.make}. Ads generate as drafts for a person to approve.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {active.packs.map((p) => (
                       <div
-                        key={d.id}
-                        className={`flex flex-wrap items-start justify-between gap-2 rounded-lg border px-3 py-2 ${
-                          d.state === 'changed' || d.state === 'unreachable'
-                            ? 'border-amber-500/30 bg-amber-500/5'
-                            : 'border-[var(--border)]'
+                        key={p.id}
+                        className={`rounded-xl border px-3 py-2.5 ${
+                          p.verified ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-[var(--border)]'
                         }`}
                       >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-xs font-medium text-[var(--foreground)]">{d.title}</span>
-                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${ds.className}`}>
-                              {ds.label}
-                            </span>
-                            {d.sourceUrl && (
-                              <a
-                                href={d.sourceUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-[11px] font-medium text-[var(--primary)] hover:underline"
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-medium text-[var(--foreground)]">{p.version}</span>
+                              <span className="text-[11px] text-[var(--muted-foreground)]">
+                                {p.ruleCount} rules · {p.errorCount} can block
+                              </span>
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
+                              {p.verified
+                                ? `Approved${p.verifiedBy ? ` by ${p.verifiedBy}` : ''}${p.verifiedAt ? ` on ${p.verifiedAt.slice(0, 10)}` : ''} — these can block a non-compliant ad.`
+                                : 'Not approved — findings only warn, and ads for this make stay drafts.'}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() =>
+                              act(
+                                'set_verified',
+                                { packId: p.id, verified: !p.verified },
+                                `v-${p.id}`,
+                                p.verified ? 'Approval removed' : 'Approved for enforcement',
+                              )
+                            }
+                            disabled={!!busy}
+                            className={`flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
+                              p.verified
+                                ? 'border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)]/40'
+                                : 'bg-[var(--primary)] text-white hover:opacity-90'
+                            }`}
+                          >
+                            {p.verified ? (
+                              <CheckCircleIcon className="h-3.5 w-3.5" />
+                            ) : (
+                              <ShieldCheckIcon className="h-3.5 w-3.5" />
+                            )}
+                            {p.verified ? 'Approved' : 'Approve for enforcement'}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+
+                    {/* template verdicts */}
+                    {active.templateChecks.length > 0 && (
+                      <div className="mt-3 border-t border-[var(--border)] pt-3">
+                        <p className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-[var(--muted-foreground)]">
+                          Ad templates checked against these rules
+                          <HelpTip title="Why once per template">
+                            <p>
+                              Most of these rules constrain the <strong>layout</strong> — brandmark present,
+                              disclaimer big enough, logo in the permitted zone. That answer is a property of the
+                              design, so it&rsquo;s the same for every ad built from it.
+                            </p>
+                            <p>
+                              Checking once means a problem reads as &ldquo;this template needs fixing&rdquo; rather
+                              than &ldquo;today&rsquo;s ads didn&rsquo;t generate&rdquo;. Re-runs by itself when the
+                              design or the rules change.
+                            </p>
+                          </HelpTip>
+                        </p>
+                        {active.templateChecks.map((c) => (
+                          <div key={c.templateId} className="mb-1.5 rounded-lg border border-[var(--border)] px-3 py-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="flex min-w-0 items-center gap-2">
+                                {c.ok ? (
+                                  <CheckCircleIcon className="h-4 w-4 flex-shrink-0 text-emerald-500" />
+                                ) : (
+                                  <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 text-red-500" />
+                                )}
+                                <span className="font-mono text-[11px] text-[var(--foreground)]">{c.templateId}</span>
+                                <span className="text-[11px] text-[var(--muted-foreground)]">
+                                  {c.ok ? `passes ${c.ruleCount} layout rule(s)` : `${c.errorCount} to fix`}
+                                </span>
+                              </span>
+                              <button
+                                onClick={() =>
+                                  act(
+                                    'recheck_template',
+                                    { templateId: c.templateId, make: active.make },
+                                    `rc-${c.templateId}`,
+                                    'Template re-checked',
+                                  )
+                                }
+                                disabled={!!busy}
+                                className="flex flex-shrink-0 items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
                               >
-                                open →
-                              </a>
+                                <ArrowPathIcon
+                                  className={`h-3 w-3 ${busy === `rc-${c.templateId}` ? 'animate-spin' : ''}`}
+                                />
+                                Re-check
+                              </button>
+                            </div>
+                            {c.findings.length > 0 && (
+                              <ul className="mt-1.5 space-y-0.5 border-t border-[var(--border)] pt-1.5">
+                                {c.findings.map((f, i) => (
+                                  <li
+                                    key={`${f.ruleId}-${f.offerType}-${i}`}
+                                    className={`text-[11px] ${f.severity === 'error' ? 'text-red-500' : 'text-amber-500'}`}
+                                  >
+                                    {f.description}
+                                    {f.offerType && f.offerType !== 'any' && (
+                                      <span className="text-[var(--muted-foreground)]"> — {f.offerType} only</span>
+                                    )}
+                                    {f.citation && (
+                                      <span className="text-[var(--muted-foreground)]"> ({f.citation})</span>
+                                    )}
+                                  </li>
+                                ))}
+                              </ul>
                             )}
                           </div>
-                          {EXPLAIN_STATE.has(d.state) && (
-                            <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">{d.summary}</p>
-                          )}
-                          <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] text-[var(--muted-foreground)]">
-                            {d.contentHash && <span className="font-mono">{d.contentHash.slice(0, 12)}</span>}
-                            {fileSize(d.byteSize) && <span>{fileSize(d.byteSize)}</span>}
-                            {d.checkedAt && <span>checked {d.checkedAt.slice(0, 10)}</span>}
-                            {d.reviewedBy && (
-                              <span>
-                                reviewed by {d.reviewedBy}
-                                {d.reviewedAt ? ` on ${d.reviewedAt.slice(0, 10)}` : ''}
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* ── sales events ── */}
+              <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="flex items-center gap-1.5 text-sm font-semibold text-[var(--foreground)]">
+                    Sales events
+                    <HelpTip title="Campaign marks">
+                      <p>
+                        Most manufacturers require their event logo on any ad running inside the campaign window.
+                        Ads generated in that window pick it up automatically.
+                      </p>
+                      <p>
+                        <strong>Mandatory</strong> means generation refuses rather than produce an ad that
+                        can&rsquo;t be claimed. The warning you want to act on is a window closing with nothing
+                        queued behind it.
+                      </p>
+                    </HelpTip>
+                  </h3>
+                  <button
+                    onClick={() => setEventDraft(emptyEventDraft(active.make))}
+                    className="flex items-center gap-1 text-[11px] font-medium text-[var(--primary)] hover:underline"
+                  >
+                    <PlusIcon className="h-3 w-3" /> Add event
+                  </button>
+                </div>
+                <p className="mb-2 text-[11px] text-[var(--muted-foreground)]">{active.eventSummary}</p>
+                {active.events.length === 0 ? (
+                  <p className="text-xs text-[var(--muted-foreground)]">No events on file.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {active.events.map((e) => (
+                      <div
+                        key={e.id}
+                        className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 ${
+                          e.phase === 'live' ? 'border-emerald-500/30' : 'border-[var(--border)]'
+                        } ${e.isActive ? '' : 'opacity-50'}`}
+                      >
+                        <div className="flex min-w-0 flex-1 items-center gap-2">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={e.logoUrl}
+                            alt=""
+                            className="h-6 w-12 flex-shrink-0 rounded bg-white object-contain"
+                          />
+                          <div className="min-w-0">
+                            <span className="text-xs font-medium text-[var(--foreground)]">{e.name}</span>
+                            <div className="flex flex-wrap gap-x-2 text-[11px] text-[var(--muted-foreground)]">
+                              <span className={PHASE[e.phase]}>
+                                {e.phase}
+                                {e.daysRemaining != null ? ` · ${e.daysRemaining}d left` : ''}
                               </span>
-                            )}
+                              <span>
+                                {e.effectiveFrom} → {e.effectiveTo}
+                              </span>
+                              <span>{e.required ? 'mandatory' : 'optional'}</span>
+                              {e.offerTypes.length > 0 && <span>{e.offerTypes.join(', ')}</span>}
+                            </div>
                           </div>
                         </div>
-                        <div className="flex flex-shrink-0 items-center gap-1.5">
-                          {d.state !== 'current' && d.state !== 'unfetched' && (
-                            <button
-                              onClick={() =>
-                                act('mark_doc_reviewed', { docId: d.id }, `dr-${d.id}`, 'Baseline updated')
-                              }
-                              disabled={!!busy}
-                              className="flex items-center gap-1 rounded-lg bg-[var(--primary)] px-2.5 py-1.5 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-                            >
-                              <CheckCircleIcon className="h-3.5 w-3.5" /> Mark reviewed
-                            </button>
-                          )}
+                        <div className="flex flex-shrink-0 items-center gap-1">
                           <button
-                            onClick={() => act('delete_doc', { docId: d.id }, `dd-${d.id}`, 'Document removed')}
+                            onClick={() => setEventDraft({ ...e, make: active.make, offerTypes: [...e.offerTypes] })}
+                            className="rounded-md px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => act('delete_event', { id: e.id }, `d-${e.id}`, 'Event removed')}
                             disabled={!!busy}
-                            className="rounded-lg border border-[var(--border)] p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
-                            title="Remove from the register"
+                            aria-label={`Remove ${e.name}`}
+                            className="rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
                           >
                             <TrashIcon className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* ── guideline packs ── */}
-              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                Transcribed rules
-              </h3>
-              {m.packs.length === 0 ? (
-                <p className="mb-4 text-xs text-[var(--muted-foreground)]">
-                  No pack transcribed. Nothing for this make is checked against manufacturer rules.
-                </p>
-              ) : (
-                <div className="mb-4 space-y-2">
-                  {m.packs.map((p) => (
-                    <div
-                      key={p.id}
-                      className={`flex flex-wrap items-start justify-between gap-3 rounded-xl border px-3 py-2.5 ${
-                        p.verified ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-[var(--border)]'
-                      }`}
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <DocumentTextIcon className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]" />
-                          <span className="text-sm font-medium text-[var(--foreground)]">{p.version}</span>
-                          <span className="text-[11px] text-[var(--muted-foreground)]">
-                            {p.ruleCount} rules · {p.errorCount} blocking · {p.warningCount} advisory
-                          </span>
-                          {p.sourceUrl && (
-                            <a
-                              href={p.sourceUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-[11px] font-medium text-[var(--primary)] hover:underline"
-                            >
-                              open document →
-                            </a>
-                          )}
-                        </div>
-                        {p.source && (
-                          <p className="mt-1 break-words text-[11px] text-[var(--muted-foreground)]">{p.source}</p>
-                        )}
-                        <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
-                          {p.verified ? (
-                            <>
-                              Verified{p.verifiedBy ? ` by ${p.verifiedBy}` : ''}
-                              {p.verifiedAt ? ` on ${p.verifiedAt.slice(0, 10)}` : ''} — rules can block a
-                              non-compliant ad.
-                            </>
-                          ) : (
-                            <>
-                              Not verified — every finding is downgraded to a warning, and ads for this make
-                              cannot be auto-approved.
-                            </>
-                          )}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() =>
-                          act(
-                            'set_verified',
-                            { packId: p.id, verified: !p.verified },
-                            `v-${p.id}`,
-                            p.verified ? 'Verification removed' : 'Pack marked verified',
-                          )
-                        }
-                        disabled={!!busy}
-                        className={`flex flex-shrink-0 items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-50 ${
-                          p.verified
-                            ? 'border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)]/40'
-                            : 'bg-[var(--primary)] text-white hover:opacity-90'
-                        }`}
-                      >
-                        {p.verified ? <CheckCircleIcon className="h-3.5 w-3.5" /> : <ShieldCheckIcon className="h-3.5 w-3.5" />}
-                        {p.verified ? 'Verified' : 'Mark verified'}
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* ── design-time template verdicts ── */}
-              {m.templateChecks.length > 0 && (
-                <>
-                  <h3 className="mb-2 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                    Template layout checks
-                    <HelpTip title="Why these are per template">
-                      <p>
-                        Most co-op rules constrain the <strong>layout</strong> — brandmark present, disclaimer big
-                        enough, logo in the permitted zone. That answer is a property of the design, so it is the
-                        same for every ad built from it.
-                      </p>
-                      <p>
-                        Checking it once means a violation reads as &ldquo;this template needs fixing&rdquo; instead
-                        of &ldquo;today&rsquo;s ads didn&rsquo;t generate&rdquo;. Rules about wording still run on
-                        every ad, because the disclaimer comes from the manufacturer&rsquo;s own text per offer.
-                      </p>
-                      <p>Re-runs automatically when the design or the rule pack changes.</p>
-                    </HelpTip>
-                  </h3>
-                  <div className="mb-4 space-y-1.5">
-                    {m.templateChecks.map((c) => (
-                      <div
-                        key={c.templateId}
-                        className={`rounded-lg border px-3 py-2 ${
-                          c.ok ? 'border-[var(--border)]' : 'border-red-500/30 bg-red-500/5'
-                        }`}
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex min-w-0 flex-wrap items-center gap-2">
-                            {c.ok ? (
-                              <CheckCircleIcon className="h-4 w-4 flex-shrink-0 text-emerald-500" />
-                            ) : (
-                              <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 text-red-500" />
-                            )}
-                            <span className="font-mono text-[11px] text-[var(--foreground)]">{c.templateId}</span>
-                            <span className="text-[11px] text-[var(--muted-foreground)]">
-                              {c.ruleCount === 0
-                                ? 'no layout rules'
-                                : `${c.ruleCount} rule(s) · ${c.errorCount} blocking · ${c.warningCount} advisory`}
-                            </span>
-                            {c.offerTypes.length > 0 && (
-                              <span className="text-[10px] text-[var(--muted-foreground)]">
-                                {c.offerTypes.join(', ')}
-                              </span>
-                            )}
-                          </div>
-                          <button
-                            onClick={() =>
-                              act(
-                                'recheck_template',
-                                { templateId: c.templateId, make: m.make },
-                                `rc-${c.templateId}`,
-                                'Template re-checked',
-                              )
-                            }
-                            disabled={!!busy}
-                            className="flex flex-shrink-0 items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
-                          >
-                            <ArrowPathIcon
-                              className={`h-3 w-3 ${busy === `rc-${c.templateId}` ? 'animate-spin' : ''}`}
-                            />
-                            Re-check
-                          </button>
-                        </div>
-                        {c.findings.length > 0 && (
-                          <ul className="mt-1.5 space-y-0.5 border-t border-[var(--border)] pt-1.5">
-                            {c.findings.map((f, i) => (
-                              <li
-                                key={`${f.ruleId}-${f.offerType}-${i}`}
-                                className={`text-[11px] ${f.severity === 'error' ? 'text-red-500' : 'text-amber-500'}`}
-                              >
-                                {f.description}
-                                {f.offerType && f.offerType !== 'any' && (
-                                  <span className="text-[var(--muted-foreground)]"> — {f.offerType} only</span>
-                                )}
-                                {f.citation && (
-                                  <span className="text-[var(--muted-foreground)]"> ({f.citation})</span>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                        <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
-                          Pack {c.packVersion} · checked {c.checkedAt.slice(0, 10)}
-                          {c.checkedBy ? ` by ${c.checkedBy}` : ' automatically'}
-                        </p>
-                      </div>
                     ))}
                   </div>
-                </>
-              )}
-
-              {/* ── sales events ── */}
-              <div className="mb-2 flex items-center justify-between">
-                <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                  Sales events
-                </h3>
-                <button
-                  onClick={() => setDraft(emptyDraft(m.make))}
-                  className="flex items-center gap-1 text-[11px] font-medium text-[var(--primary)] hover:underline"
-                >
-                  <PlusIcon className="h-3 w-3" /> Add event
-                </button>
+                )}
               </div>
-              {m.events.length === 0 ? (
-                <p className="text-xs text-[var(--muted-foreground)]">No events on file.</p>
-              ) : (
-                <div className="space-y-1.5">
-                  {m.events.map((e) => (
-                    <div
-                      key={e.id}
-                      className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 ${
-                        e.phase === 'live' ? 'border-emerald-500/30' : 'border-[var(--border)]'
-                      } ${e.isActive ? '' : 'opacity-50'}`}
-                    >
-                      <div className="flex min-w-0 flex-1 items-center gap-2">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={e.logoUrl}
-                          alt=""
-                          className="h-6 w-12 flex-shrink-0 rounded bg-white object-contain"
-                        />
-                        <div className="min-w-0">
-                          <span className="text-xs font-medium text-[var(--foreground)]">{e.name}</span>
-                          <div className="flex flex-wrap gap-x-2 text-[11px] text-[var(--muted-foreground)]">
-                            <span className={PHASE[e.phase]}>
-                              {e.phase}
-                              {e.daysRemaining != null ? ` · ${e.daysRemaining}d left` : ''}
-                            </span>
-                            <span>
-                              {e.effectiveFrom} → {e.effectiveTo}
-                            </span>
-                            <span>{e.required ? 'mandatory' : 'optional'}</span>
-                            {e.offerTypes.length > 0 && <span>{e.offerTypes.join(', ')}</span>}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex flex-shrink-0 items-center gap-1">
-                        <button
-                          onClick={() => setDraft({ ...e, make: m.make, offerTypes: [...e.offerTypes] })}
-                          className="rounded-md px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => act('delete_event', { id: e.id }, `d-${e.id}`, 'Event removed')}
-                          disabled={!!busy}
-                          aria-label={`Remove ${e.name}`}
-                          className="rounded-md p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
-                        >
-                          <TrashIcon className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </section>
-          );
-        })}
-      </div>
+          )}
+        </div>
+      )}
 
-      {/* ── register a source document ── */}
+      {/* ── add / replace a document ── */}
       {docDraft && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="glass-card w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
             <h2 className="mb-1 text-sm font-semibold text-[var(--foreground)]">
-              Register guideline document — {docDraft.make}
+              {docDraft.title ? 'Replace' : 'Add'} guideline document — {docDraft.make}
             </h2>
             <p className="mb-4 text-[11px] text-[var(--muted-foreground)]">
-              Loomi hashes the document and tells you when the manufacturer reissues it. It does not read the rules
-              out of it.
+              {docDraft.title
+                ? 'Upload the newer edition. The old fingerprint is kept as history and the change is announced once.'
+                : 'Loomi fingerprints the document and tells you when the manufacturer reissues it.'}
             </p>
             <div className="space-y-3">
               <div>
-                <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Title</label>
+                <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
+                  Document name
+                </label>
                 <input
                   value={docDraft.title}
                   onChange={(e) => setDocDraft({ ...docDraft, title: e.target.value })}
-                  placeholder="Subaru SAF Guidelines"
+                  placeholder="Subaru SAF Guidelines 2026"
                   className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
                 />
+                <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
+                  Keep the name identical to replace an existing document; change it to add a second one.
+                </p>
               </div>
               <div>
                 <label className="mb-1 flex items-center gap-1 text-[11px] font-medium text-[var(--muted-foreground)]">
-                  Upload the document
-                  <HelpTip title="Upload or link — either works">
+                  Upload the file
+                  <HelpTip title="Upload or link">
                     <p>
-                      <strong>Uploading</strong> is the usual route, because most manufacturer portals sit behind a
-                      login and can&rsquo;t be fetched on a schedule. The file is stored in the Loomi media library
-                      so anyone at the agency can open it, and re-uploading a newer edition is how a reissue enters
-                      the register.
+                      <strong>Uploading</strong> is the usual route — most manufacturer portals need a login, so
+                      Loomi can&rsquo;t fetch them on a schedule.
                     </p>
                     <p>
-                      <strong>A URL</strong> is better when the document has a stable public address — Loomi
-                      re-fetches it daily and spots a change without anyone doing anything. A Google Drive{' '}
-                      <em>share</em> link won&rsquo;t work: it returns an HTML page rather than the file, so its
-                      hash churns whenever Drive restyles that page.
+                      <strong>A URL</strong> is better when the document has a stable public address, because then
+                      Loomi re-checks it daily by itself. A Google Drive <em>share</em> link won&rsquo;t work: it
+                      returns a web page rather than the file.
                     </p>
                     <p>PDF or Word, up to 80 MB.</p>
                   </HelpTip>
@@ -812,7 +891,7 @@ export default function OemAssetsPage() {
               </div>
               <div>
                 <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
-                  Document URL <span className="font-normal">— re-fetched daily</span>
+                  Public URL <span className="font-normal">— re-checked daily</span>
                 </label>
                 <input
                   value={docDraft.sourceUrl}
@@ -831,28 +910,23 @@ export default function OemAssetsPage() {
               </button>
               <button
                 onClick={async () => {
-                  // A file, when given, goes through the multipart route — it does the
-                  // upload, the hash and the register as one operation, so a register
-                  // entry can't end up pointing at a document that was never stored.
-                  if (docDraft.file) {
-                    const ok = await uploadDoc(docDraft.make, docDraft.title, docDraft.file);
-                    if (ok) setDocDraft(null);
-                    return;
-                  }
-                  const ok = await act(
-                    'register_doc',
-                    { make: docDraft.make, title: docDraft.title, sourceUrl: docDraft.sourceUrl },
-                    'reg-doc',
-                    'Document registered',
-                  );
+                  // A file, when given, goes through the multipart route — it uploads,
+                  // hashes and registers as one operation, so a register entry can't
+                  // end up pointing at a document that was never stored.
+                  const ok = docDraft.file
+                    ? await uploadDoc(docDraft.make, docDraft.title, docDraft.file)
+                    : await act(
+                        'register_doc',
+                        { make: docDraft.make, title: docDraft.title, sourceUrl: docDraft.sourceUrl },
+                        'reg-doc',
+                        'Document added',
+                      );
                   if (ok) setDocDraft(null);
                 }}
-                disabled={
-                  !!busy || !docDraft.title.trim() || (!docDraft.file && !docDraft.sourceUrl.trim())
-                }
+                disabled={!!busy || !docDraft.title.trim() || (!docDraft.file && !docDraft.sourceUrl.trim())}
                 className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
               >
-                {docDraft.file ? 'Upload & register' : 'Register'}
+                {busy === 'upload-doc' ? 'Uploading…' : docDraft.file ? 'Upload' : 'Add'}
               </button>
             </div>
           </div>
@@ -860,11 +934,11 @@ export default function OemAssetsPage() {
       )}
 
       {/* ── add / edit event ── */}
-      {draft && (
+      {eventDraft && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="glass-card w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
             <h2 className="mb-4 text-sm font-semibold text-[var(--foreground)]">
-              {draft.id ? 'Edit' : 'Add'} sales event — {draft.make}
+              {eventDraft.id ? 'Edit' : 'Add'} sales event — {eventDraft.make}
             </h2>
             <div className="space-y-3">
               <div>
@@ -872,99 +946,120 @@ export default function OemAssetsPage() {
                   Event name
                 </label>
                 <input
-                  value={draft.name}
-                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                  value={eventDraft.name}
+                  onChange={(e) => setEventDraft({ ...eventDraft, name: e.target.value })}
                   placeholder="Presidents Day Event"
                   className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
                 />
               </div>
+
+              {/* Event mark — from the media library, which is where these already live. */}
               <div>
-                <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
-                  Event mark URL <span className="font-normal">— transparent PNG</span>
+                <label className="mb-1 flex items-center gap-1 text-[11px] font-medium text-[var(--muted-foreground)]">
+                  Event mark
+                  <HelpTip title="The campaign logo">
+                    <p>
+                      Pick it from the media library, or paste a URL if it&rsquo;s hosted elsewhere. A transparent
+                      PNG works best — it composites over any template background.
+                    </p>
+                  </HelpTip>
                 </label>
-                <input
-                  value={draft.logoUrl}
-                  onChange={(e) => setDraft({ ...draft, logoUrl: e.target.value })}
-                  placeholder="https://…/presidents-day.png"
-                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-                />
+                <div className="flex items-center gap-2">
+                  <div className="flex h-12 w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--border)] bg-white">
+                    {eventDraft.logoUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={eventDraft.logoUrl} alt="" className="h-full w-full object-contain" />
+                    ) : (
+                      <PhotoIcon className="h-5 w-5 text-neutral-300" />
+                    )}
+                  </div>
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <button
+                      onClick={() => setPickingLogo(true)}
+                      className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40"
+                    >
+                      <SparklesIcon className="h-3.5 w-3.5" />
+                      Choose from media library
+                    </button>
+                    <input
+                      value={eventDraft.logoUrl}
+                      onChange={(e) => setEventDraft({ ...eventDraft, logoUrl: e.target.value })}
+                      placeholder="…or paste a https:// URL"
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                    />
+                  </div>
+                </div>
               </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
-                    Runs from
+                    Starts
                   </label>
                   <input
                     type="date"
-                    value={draft.effectiveFrom}
-                    onChange={(e) => setDraft({ ...draft, effectiveFrom: e.target.value })}
+                    value={eventDraft.effectiveFrom}
+                    onChange={(e) => setEventDraft({ ...eventDraft, effectiveFrom: e.target.value })}
                     className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
                   />
                 </div>
                 <div>
-                  <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
-                    Runs to <span className="font-normal">— inclusive</span>
-                  </label>
+                  <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Ends</label>
                   <input
                     type="date"
-                    value={draft.effectiveTo}
-                    onChange={(e) => setDraft({ ...draft, effectiveTo: e.target.value })}
+                    value={eventDraft.effectiveTo}
+                    onChange={(e) => setEventDraft({ ...eventDraft, effectiveTo: e.target.value })}
                     className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
                   />
                 </div>
               </div>
+
+              <label className="flex items-center gap-2 text-xs text-[var(--foreground)]">
+                <input
+                  type="checkbox"
+                  checked={eventDraft.required}
+                  onChange={(e) => setEventDraft({ ...eventDraft, required: e.target.checked })}
+                  className="h-3.5 w-3.5 rounded border-[var(--border)]"
+                />
+                The manufacturer requires this mark during the window
+              </label>
+
               <div>
-                <label className="mb-1.5 block text-[11px] font-medium text-[var(--muted-foreground)]">
-                  Applies to <span className="font-normal">— none selected = every offer type</span>
+                <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
+                  Limit to offer types <span className="font-normal">— none selected means all</span>
                 </label>
                 <div className="flex flex-wrap gap-1.5">
                   {OFFER_TYPES.map((t) => {
-                    const on = draft.offerTypes.includes(t);
+                    const on = eventDraft.offerTypes.includes(t);
                     return (
                       <button
                         key={t}
-                        type="button"
                         onClick={() =>
-                          setDraft({
-                            ...draft,
+                          setEventDraft({
+                            ...eventDraft,
                             offerTypes: on
-                              ? draft.offerTypes.filter((x) => x !== t)
-                              : [...draft.offerTypes, t],
+                              ? eventDraft.offerTypes.filter((x) => x !== t)
+                              : [...eventDraft.offerTypes, t],
                           })
                         }
-                        aria-pressed={on}
                         className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                           on
-                            ? 'bg-[var(--primary)]/15 text-[var(--primary)]'
-                            : 'bg-[var(--muted)] text-[var(--muted-foreground)] opacity-60 hover:opacity-100'
+                            ? 'bg-[var(--primary)] text-white'
+                            : 'border border-[var(--border)] text-[var(--muted-foreground)] hover:bg-[var(--muted)]/40'
                         }`}
                       >
-                        {t.replace('_', ' ')}
+                        {t}
                       </button>
                     );
                   })}
                 </div>
               </div>
-              <label className="flex items-start gap-2 text-xs text-[var(--foreground)]">
-                <input
-                  type="checkbox"
-                  checked={draft.required}
-                  onChange={(e) => setDraft({ ...draft, required: e.target.checked })}
-                  className="mt-0.5"
-                />
-                <span>
-                  The manufacturer mandates this mark during the window
-                  <span className="block text-[11px] text-[var(--muted-foreground)]">
-                    When mandatory, generation refuses any ad whose template has nowhere to render it, rather
-                    than quietly producing one that isn’t claimable.
-                  </span>
-                </span>
-              </label>
             </div>
-            <div className="mt-5 flex items-center justify-end gap-2">
+
+            <div className="mt-5 flex justify-end gap-2">
               <button
-                onClick={() => setDraft(null)}
-                className="rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40"
+                onClick={() => setEventDraft(null)}
+                className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40"
               >
                 Cancel
               </button>
@@ -972,20 +1067,50 @@ export default function OemAssetsPage() {
                 onClick={async () => {
                   const ok = await act(
                     'save_event',
-                    { ...draft, id: draft.id || undefined },
-                    'save_event',
-                    draft.id ? 'Event updated' : 'Event added',
+                    {
+                      id: eventDraft.id || undefined,
+                      make: eventDraft.make,
+                      name: eventDraft.name,
+                      logoUrl: eventDraft.logoUrl,
+                      effectiveFrom: eventDraft.effectiveFrom,
+                      effectiveTo: eventDraft.effectiveTo,
+                      required: eventDraft.required,
+                      offerTypes: eventDraft.offerTypes,
+                    },
+                    'save-event',
+                    eventDraft.id ? 'Event updated' : 'Event added',
                   );
-                  if (ok) setDraft(null);
+                  if (ok) setEventDraft(null);
                 }}
-                disabled={!!busy || !draft.name.trim() || !draft.logoUrl.trim()}
-                className="rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                disabled={
+                  !!busy ||
+                  !eventDraft.name.trim() ||
+                  !eventDraft.logoUrl.trim() ||
+                  !eventDraft.effectiveFrom ||
+                  !eventDraft.effectiveTo
+                }
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
               >
-                {busy === 'save_event' ? 'Saving…' : 'Save event'}
+                Save
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Media library picker for the event mark. Rendered outside the event modal's
+          markup but above it in z-order, so choosing a logo doesn't lose the draft. */}
+      {pickingLogo && eventDraft && (
+        <MediaPickerModal
+          onSelect={(url) => {
+            setEventDraft({ ...eventDraft, logoUrl: url });
+            setPickingLogo(false);
+          }}
+          onClose={() => setPickingLogo(false)}
+          showCategories
+          category="oem"
+          uploadCategory="oem"
+        />
       )}
     </div>
   );

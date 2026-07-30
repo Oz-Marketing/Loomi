@@ -2567,17 +2567,29 @@ model AdGuidelineDoc {
   /// sha256 of the document bytes as last seen. Null until first fetched.
   contentHash String?
   byteSize    Int?
+  pageCount   Int?
 
-  /// The hash a human last reviewed the templates against. The comparison
-  /// `contentHash != reviewedHash` IS the change signal — plain equality, with no
-  /// attempt to interpret what moved inside the document.
-  reviewedHash String?
-  reviewedBy   String?
-  reviewedAt   DateTime?
-  reviewNotes  String?   @db.Text
+  /// Page 1 rendered to a small webp, stored as a `data:` URI — the cover thumbnail
+  /// on the guidelines page. A data URI rather than an S3 object deliberately:
+  /// these are ~5-35 KB, and S3 isn't configured in every environment, so an
+  /// S3-backed preview would be one that only appears in production.
+  previewImage String? @db.Text
+
+  /// VERSION HISTORY, not a review gate. An earlier design made a human attest
+  /// "I reviewed this" before the register would go quiet, which turned out to be
+  /// ceremony nobody wanted: what's actually useful is "this document was replaced
+  /// on this date, and here's the hash it replaced". Detection and notification are
+  /// unchanged — only the attestation button is gone.
+  previousHash String?
+  replacedAt   DateTime?
+
+  /// Free-text note about the document, e.g. that it's a claim-status reference
+  /// rather than advertising rules. Carried on the row so the caveat travels with
+  /// the document instead of living only in an import script.
+  notes String? @db.Text
 
   /// Last fetch attempt. A non-null `checkError` means the document is unreachable,
-  /// which has to read differently from "unchanged" — a 404 is not reassurance.
+  /// which has to read differently from "we have it" — a 404 is not reassurance.
   checkedAt  DateTime?
   checkError String?   @db.Text
 

@@ -18,7 +18,7 @@ import { buildOemAssetsReport } from '@/lib/ad-generator/oem-assets-report';
 import { loadActiveCoopPack } from '@/lib/ad-generator/coop-pack-store';
 import { summarizeTemplateCoop } from '@/lib/ad-generator/coop-template-check';
 import { invalidatePackChecks, resolveTemplateCoopCheck } from '@/lib/ad-generator/coop-template-check-store';
-import { markReviewed, refreshGuidelineDocs, registerGuidelineDoc } from '@/lib/ad-generator/guideline-docs';
+import { getGuidelineDoc, refreshGuidelineDocs, registerGuidelineDoc } from '@/lib/ad-generator/guideline-docs';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
 export const runtime = 'nodejs';
@@ -33,10 +33,19 @@ async function gate() {
   return null;
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const denied = await gate();
   if (denied) return denied;
   try {
+    // `?docId=` fetches one document WITH its cover thumbnail. The list response
+    // omits previews deliberately — 33 base64 covers is about a megabyte of payload
+    // for a view that mostly renders counts.
+    const docId = req.nextUrl.searchParams.get('docId');
+    if (docId) {
+      const doc = await getGuidelineDoc(docId);
+      if (!doc) return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+      return NextResponse.json({ doc });
+    }
     return NextResponse.json({ makes: await buildOemAssetsReport() });
   } catch (err) {
     console.error('[api/adgen/oem-assets] GET failed:', err);
@@ -216,22 +225,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true, doc: row });
       }
 
-      case 'mark_doc_reviewed': {
+      case 'save_doc_notes': {
         const docId = (body.docId ?? '').trim();
         if (!docId) return NextResponse.json({ error: 'docId is required' }, { status: 400 });
-        const u = session?.user as { id?: string; name?: string | null; email?: string | null } | undefined;
-        const row = await markReviewed(docId, u?.name || u?.email || u?.id || 'unknown', body.notes ?? null);
-        if (!row) return NextResponse.json({ error: 'Document not found' }, { status: 404 });
-        // Reviewing an unfetched document would pin the baseline to null and
-        // permanently suppress the change signal, so markReviewed refuses; say so
-        // rather than reporting a success that didn't happen.
-        if (!row.reviewedHash) {
-          return NextResponse.json(
-            { error: 'This document has not been fetched yet, so there is nothing to baseline. Refresh it first.' },
-            { status: 409 },
-          );
-        }
-        return NextResponse.json({ ok: true, doc: row });
+        const row = await prisma.adGuidelineDoc.update({
+          where: { id: docId },
+          data: { notes: body.notes?.trim() || null },
+        });
+        return NextResponse.json({ ok: true, doc: { id: row.id } });
       }
 
       case 'delete_doc': {

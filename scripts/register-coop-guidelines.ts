@@ -7,20 +7,20 @@
  *
  * WHAT THIS DOES, AND WHAT IT POINTEDLY DOES NOT
  *
- * It hashes each document and records make + title + hash. That's the whole
- * change-detection mechanism: when a manufacturer reissues a document, its hash
- * stops matching the one a human last reviewed and the OEM guidelines page says so.
- * It does NOT read rules out of the documents — see the header of
- * `guideline-docs.ts` for why that was designed and deliberately rejected.
+ * It hashes each document, records make + title + hash, and renders page 1 to a
+ * cover thumbnail. That's the whole change-detection mechanism: when a manufacturer
+ * reissues a document its hash moves, the previous hash is kept as history, and the
+ * OEM guidelines page flags it. It does NOT read rules out of the documents — see
+ * the header of `guideline-docs.ts` for why that was designed and rejected.
  *
  * `--upload` additionally puts each file in the Loomi media library (category
  * "oem") and attaches it, so agency staff can open the source a citation points at.
  * That needs S3, so it's a no-op locally and has to be run per environment — same
  * constraint as the OEM/disclaimer seed data.
  *
- * Idempotent. Re-running with unchanged files is a no-op; re-running after a file
- * is REPLACED updates the hash and leaves `reviewedHash` alone, which is precisely
- * what surfaces the change.
+ * Idempotent. Re-running with unchanged files is a no-op (and skips re-rendering the
+ * covers); re-running after a file is REPLACED moves the hash and stamps
+ * `replacedAt`, which is what surfaces the change.
  *
  * ── THE MAKE MAP IS HAND-REVIEWED ON PURPOSE ──
  *
@@ -41,6 +41,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { prisma } from '@/lib/prisma';
 import { registerGuidelineDoc } from '@/lib/ad-generator/guideline-docs';
+import { withPreviewRenderer } from '@/lib/ad-generator/guideline-preview';
 import { isS3Configured, s3PublicUrl, uploadToS3 } from '@/lib/s3';
 
 interface Entry {
@@ -155,8 +156,10 @@ async function main() {
   let registered = 0;
   let changed = 0;
   let uploaded = 0;
+  let previews = 0;
   const failures: string[] = [];
 
+  await withPreviewRenderer(async (render) => {
   for (const entry of ENTRIES) {
     const full = path.join(dir, entry.file);
     let bytes: Buffer;
@@ -174,7 +177,7 @@ async function main() {
     const existing = await prisma.adGuidelineDoc
       .findUnique({
         where: { make_title: { make: entry.make, title: entry.title } },
-        select: { contentHash: true, reviewedHash: true, sourceAssetId: true },
+        select: { contentHash: true, sourceAssetId: true },
       })
       .catch(() => null);
     const isNew = !existing;
@@ -225,27 +228,30 @@ async function main() {
         sourceUrl,
         sourceAssetId,
         bytes,
+        mimeType: mimeFor(entry.file),
+        // One shared browser across all 33 — a launch per document was slow and
+        // flaky enough that one cover failed under the memory pressure.
+        render,
+        // The caveat lives on the row so it travels with the document rather than
+        // only in this script.
+        notes: entry.note ?? null,
       });
       if (!row) {
         failures.push(`${entry.file}: register failed`);
         continue;
       }
-      if (entry.note) {
-        // Park the caveat on the row so it travels with the document rather than
-        // living only in this script.
-        await prisma.adGuidelineDoc
-          .update({ where: { id: row.id }, data: { reviewNotes: entry.note } })
-          .catch(() => null);
-      }
+      if (row.previewImage) previews++;
     }
     registered++;
     if (isChanged) changed++;
   }
+  });
 
   console.log(`\n── summary`);
   console.log(`   registered      ${registered}/${ENTRIES.length}`);
   if (changed) console.log(`   CHANGED         ${changed} (hash moved since last run)`);
   if (doUpload) console.log(`   uploaded        ${uploaded}`);
+  console.log(`   covers rendered ${previews}`);
   console.log(`   excluded        ${Object.keys(EXCLUDED).length}`);
   for (const [f, why] of Object.entries(EXCLUDED)) console.log(`      · ${f} — ${why}`);
   if (missing.length) {

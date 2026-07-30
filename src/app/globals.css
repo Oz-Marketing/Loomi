@@ -409,16 +409,17 @@ body {
      padding so the bar can span edge-to-edge, and matching horizontal padding
      keeps the title aligned with the rest of the page.
 
-     TOP padding is generous at rest so the title clears the card's rounded
-     top edge, then compacts once the header docks on scroll (the stuck rule
-     below) so the pinned bar reads tight. Only the top padding changes —
-     horizontal + bottom stay constant. The content card is a fixed-height
-     scroll area and any page rendering a sticky header has enough content
-     that compacting can't make it un-scrollable, so the height change can't
-     bounce the stuck state. */
+     PADDING IS CONSTANT — docking must never change this box's height. It used
+     to compact its top padding when stuck, which moved the header's height by
+     20px, moved the scroller's scrollHeight with it, and left Chrome's scroll
+     anchoring to "correct" scrollTop on every crossing of the threshold: the
+     content jumped and the scroll position fought the gesture. The extra
+     rest-state clearance now comes from `.content-dock-lead` — a spacer above
+     the header that simply scrolls away — so docking is paint-only (the
+     ::after backdrop) and nothing reflows. Keep it that way. */
   margin-left: -1.5rem;
   margin-right: -1.5rem;
-  padding: 1.5rem 1.5rem 0.75rem;
+  padding: 1rem 1.5rem 0.75rem;
   border: 1px solid transparent;
 }
 
@@ -426,7 +427,26 @@ body {
   .page-sticky-header {
     margin-left: -2rem;
     margin-right: -2rem;
-    padding: 2rem 2rem 0.75rem;
+    padding: 1rem 2rem 0.75rem;
+  }
+}
+
+/* The rest-state clearance the header's top padding used to provide. It's the
+   scroller's first child, so it scrolls away under the docked bar — same look
+   as the old compaction, without touching the header's height. Sized only when
+   the page actually renders a sticky header. */
+.content-dock-lead {
+  height: 0;
+  flex-shrink: 0;
+}
+
+[data-scrolled]:has(.page-sticky-header) > .content-dock-lead {
+  height: 0.5rem;
+}
+
+@media (min-width: 768px) {
+  [data-scrolled]:has(.page-sticky-header) > .content-dock-lead {
+    height: 1rem;
   }
 }
 
@@ -439,18 +459,9 @@ body {
 /* `.pad-on-scroll` is a legacy alias kept so existing call sites don't need
    sweeping — it intentionally adds nothing now. */
 
-/* Stuck (page scrolled): compact the top padding so the docked bar reads tight
-   (it's generous at rest, above). No divider, no shadow, no brighter fill —
-   the ::after below is the entire treatment. */
-[data-scrolled='true'] .page-sticky-header {
-  padding-top: 0.625rem;
-}
-
-@media (min-width: 768px) {
-  [data-scrolled='true'] .page-sticky-header {
-    padding-top: 0.75rem;
-  }
-}
+/* Docking is paint-only: the ::after backdrop below is the entire treatment.
+   No padding change, no divider, no shadow, no brighter fill — anything that
+   alters layout here reintroduces the scroll-anchoring fight described above. */
 
 /* The docked header's backdrop — the macOS treatment. It paints the content
    card's OWN body colour (`--content-fade`) behind the title, then ramps that
@@ -465,10 +476,16 @@ body {
 [data-scrolled='true'] .page-sticky-header::after {
   content: '';
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: calc(100% + 2rem);
+  /* Offsets are -1px, NOT 0, and the height carries the same +1px: this
+     pseudo-element resolves against the header's PADDING box, but the header
+     carries `border: 1px solid transparent`. At top: 0 the backdrop stopped 1px
+     short of the header's real top edge, and scrolled-away content showed
+     through that 1px strip (2 device px on a 2× display) as a thin peek along
+     the content card's top edge. Cover the border box instead. */
+  top: -1px;
+  left: -1px;
+  right: -1px;
+  height: calc(100% + 2rem + 1px);
   z-index: -1;
   pointer-events: none;
   background: linear-gradient(
@@ -479,12 +496,10 @@ body {
   );
 }
 
-/* The dashboard greeting collapses once the header docks — it's a one-time
-   welcome, not a persistent label, so it shows only at rest (top). Scoped to
-   `.dashboard-welcome` so this is dashboards-only. */
-[data-scrolled='true'] .dashboard-welcome {
-  display: none;
-}
+/* NOTE: the dashboard greeting used to collapse (`display: none`) once the
+   header docked. That's the same layout-change-on-dock mistake as the old
+   padding compaction — it shrank the sticky header mid-scroll — so it's gone.
+   `.dashboard-welcome` is now just a static class on the greeting. */
 
 /* Pages that don't render a sticky page header still need top breathing
    room — bake it into the scroll card here. Header pages bake it into the

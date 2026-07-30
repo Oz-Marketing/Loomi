@@ -16,11 +16,13 @@ import { Field, DollarInput, readonlyClass } from './inputs';
 import { MetricBox } from './metrics';
 import { usePacerReadOnly } from './pacer-read-only';
 
-// Collapsed-summary figures scale with the viewport instead of wrapping onto a
-// second line: at ~1000px the four stats still fit one row, and they grow back
-// to the full 1.35rem on a wide screen.
+// Collapsed-summary figures scale with the CARD (cqi = 1% of the container's
+// inline size), not the viewport — two cards share a row, so viewport width says
+// little about how much room a figure actually has. The grid below handles
+// wrapping (4 across → 2x2), so this only has to keep long figures like
+// $20,229.28 inside their column.
 const STAT_VALUE_CLASS = 'font-bold tabular-nums leading-none';
-const STAT_VALUE_SIZE = { fontSize: 'clamp(0.95rem, 1.5vw, 1.35rem)' } as const;
+const STAT_VALUE_SIZE = { fontSize: 'clamp(1rem, 4cqi, 1.35rem)' } as const;
 
 export function BudgetPanel({
   title,
@@ -152,8 +154,15 @@ export function BudgetPanel({
       >
         <div className="overflow-hidden">
           {/* Stacked label-over-value so the dollar figures read large at a
-              glance (the live feedback while allocating); labels stay small. */}
-          <div className="flex flex-wrap items-end gap-x-4 gap-y-2 pb-2.5">
+              glance (the live feedback while allocating); labels stay small.
+
+              Laid out against the CARD's width (container query), not the
+              viewport: two cards sit side by side, so the same viewport gives
+              wildly different card widths. Four across when the card can hold
+              them, otherwise a clean 2x2 — a plain flex-wrap dropped a lone
+              fourth stat onto its own line, which read as broken. */}
+          <div className="@container pb-2.5">
+            <div className="grid grid-cols-2 items-end gap-x-4 gap-y-2 @min-[30rem]:grid-cols-4">
             <div>
               <div className="whitespace-nowrap text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
                 Client Budget
@@ -212,6 +221,7 @@ export function BudgetPanel({
                 </div>
               </div>
             )}
+            </div>
           </div>
         </div>
       </div>

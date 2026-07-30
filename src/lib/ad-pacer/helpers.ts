@@ -19,6 +19,25 @@ export function fmt(val: number | string | null | undefined): string {
   })}`;
 }
 
+/**
+ * Split `total` dollars into `n` parts that sum back to `total` EXACTLY to the
+ * cent. Equal shares, with leftover cents handed to the first rows — so
+ * "distribute evenly" never leaves a phantom remainder from rounding each row
+ * independently. Operates in integer cents; rounds only at the very end.
+ * Shared by the Budget Calculator and the bulk-add modal's spread.
+ */
+export function splitToCents(total: number, n: number): number[] {
+  if (n <= 0) return [];
+  const cents = Math.round(total * 100);
+  const base = Math.trunc(cents / n);
+  let remainder = cents - base * n; // 0..n-1 leftover cents
+  return Array.from({ length: n }, () => {
+    const extra = remainder > 0 ? 1 : 0;
+    if (remainder > 0) remainder -= 1;
+    return (base + extra) / 100;
+  });
+}
+
 export function fmtDate(d: string | null | undefined): string {
   if (!d) return '—';
   return new Date(d + 'T00:00:00').toLocaleDateString('en-US', {

@@ -121,15 +121,35 @@ export function SurfaceShell({
               be trapped inside this card instead of covering the viewport. Keeping
               the blur on a sibling layer preserves the look while letting modals
               go truly full-screen. */}
-          <div className="relative flex-1 min-h-0">
+          {/* The rounded clip lives here too, on a NON-scrolling element: the
+              promoted scroller below stops most of the bleed, but a composited
+              descendant (the account status battery) still slipped a hairline
+              past it. Two nested clips — one un-promoted, one promoted — is what
+              actually holds. */}
+          <div className="relative flex-1 min-h-0 overflow-hidden rounded-2xl">
             <div
               aria-hidden
               className="pointer-events-none absolute inset-0 rounded-2xl border border-[var(--border)] bg-[var(--card)] backdrop-blur-xl shadow-sm"
             />
+            {/* The `translateZ(0)` here is load-bearing, not a perf tweak:
+                it gives this scroller its own compositing layer so its overflow
+                clip is applied ON that layer. Page content is full of
+                `backdrop-filter` cards + sticky headers, which Chrome promotes to
+                layers of their own, and a promoted descendant only loosely honours
+                an un-promoted ancestor's clip — so scrolled-away content bled a
+                few pixels above the card's top edge, in the gap under the app top
+                bar. Verified that `contain: paint`, moving the radius onto a
+                non-scrolling wrapper, and Tailwind's `transform-gpu` (which
+                resolves to an IDENTITY 2D matrix, so Chrome promotes nothing) all
+                fail to fix it — the transform has to be 3D.
+                Safe re: the containing-block side effect — every `position: fixed`
+                thing in the shell (sidebar rail, Iris FAB, bulk-action dock) and
+                every popover in here portals to document.body, so none of them
+                resolve against this element. */}
             <div
               ref={mainRef}
               data-scrolled={scrolled ? 'true' : 'false'}
-              className="relative h-full overflow-y-auto overflow-x-hidden overscroll-contain rounded-2xl px-6 md:px-8 pb-6 md:pb-8"
+              className="relative h-full overflow-y-auto overflow-x-hidden overscroll-contain rounded-2xl px-6 md:px-8 pb-6 md:pb-8 [transform:translateZ(0)]"
             >
               {children}
             </div>

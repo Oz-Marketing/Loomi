@@ -102,7 +102,7 @@ function HealthHoverPanel({
       : null;
   const changeInWindow = change != null && rows.some((r) => r.date >= change.date);
   return (
-    <div className="text-left" style={{ width: 292 }}>
+    <div className="text-left" style={{ width: 316 }}>
       {/* Header — the headline calc, so the hover shows its own math. */}
       <div className="flex items-baseline justify-between">
         <span className="text-[11px] text-[var(--muted-foreground)]">Daily spend</span>
@@ -141,8 +141,8 @@ function HealthHoverPanel({
                   <div className="h-px flex-1 border-t border-dashed border-[var(--border)]" />
                 </div>
               )}
-              <div className="grid grid-cols-[44px_1fr_78px] items-center gap-2">
-                <span className="text-[10px] text-[var(--muted-foreground)]">
+              <div className="grid grid-cols-[44px_1fr_96px] items-center gap-2">
+                <span className="whitespace-nowrap text-[10px] text-[var(--muted-foreground)]">
                   {fmtDate(r.date)}
                 </span>
                 <span className="h-[11px] overflow-hidden rounded-[3px] bg-[var(--muted)]">
@@ -154,7 +154,7 @@ function HealthHoverPanel({
                     }}
                   />
                 </span>
-                <span className="text-right text-[10px] text-[var(--muted-foreground)]">
+                <span className="whitespace-nowrap text-right text-[10px] text-[var(--muted-foreground)]">
                   {r.isToday
                     ? `${fmt(r.spend)} · so far`
                     : `${fmt(r.spend)} / ${r.budget != null ? fmt(r.budget) : '—'}`}
@@ -1020,7 +1020,7 @@ export function PacerRow({
                   object, so it belongs with the link, not in the card header. */}
               <div className="flex min-w-0 items-center gap-3">
                 {linkPicker}
-                {isLinked && <AdStatusBadge ad={ad} label />}
+                {isLinked && <AdStatusBadge ad={ad} />}
               </div>
               <div className="flex flex-shrink-0 items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
                 {ad.pacerSyncedAt && (
@@ -1494,7 +1494,10 @@ export function PacerRow({
                   ? `${fmt(calc.remaining)} remaining ÷ ${fmtDaysBasisPhrase(calc.daysLeft)} left`
                   : `${fmt(calc.remaining)} remaining ÷ 1 day (final day)`
               }
-              detail={[
+              // The derivation + caveats used to sit as a third line under the
+              // number, which crowded the box; it hovers now (info dot on the
+              // label marks it).
+              tooltip={[
                 calc.budget > 0
                   ? `lands on ${fmt(calc.budget)} target`
                   : 'lands on target',

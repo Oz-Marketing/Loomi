@@ -119,6 +119,19 @@ interface MakeAssets {
   templateChecks: TemplateCheckRow[];
 }
 
+/** KB below a megabyte, MB above — "6834 KB" is a number nobody reads as 6.7 MB. */
+function fileSize(bytes: number | null): string | null {
+  if (bytes == null) return null;
+  return bytes < 1048576 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1048576).toFixed(1)} MB`;
+}
+
+/**
+ * States whose summary sentence earns its place, because it names an action.
+ * `unreviewed` and `current` are fully carried by the badge, and repeating a
+ * sentence across 33 rows turns the page into a wall nobody reads.
+ */
+const EXPLAIN_STATE = new Set<DocState>(['changed', 'unreachable', 'unfetched']);
+
 const DOC_STATE: Record<DocState, { label: string; className: string }> = {
   current: { label: 'Reviewed', className: 'bg-emerald-500/15 text-emerald-500' },
   changed: { label: 'CHANGED', className: 'bg-amber-500/15 text-amber-500' },
@@ -143,7 +156,7 @@ const PHASE: Record<EventRow['phase'], string> = {
 const OFFER_TYPES = ['lease', 'apr', 'discount', 'sales_price'] as const;
 
 /** Blank draft for the "register document" form. */
-const emptyDocDraft = (make: string) => ({ make, title: '', sourceUrl: '' });
+const emptyDocDraft = (make: string) => ({ make, title: '', sourceUrl: '', file: null as File | null });
 
 /** Blank draft for the "add event" form. */
 const emptyDraft = (make: string) => ({
@@ -209,6 +222,38 @@ export default function OemAssetsPage() {
     [load],
   );
 
+  /**
+   * Upload a document through the multipart route. Separate from `act` because that
+   * one posts JSON; sharing it would mean branching on body type in the caller.
+   */
+  const uploadDoc = useCallback(
+    async (make: string, title: string, file: File) => {
+      setBusy('upload-doc');
+      try {
+        const body = new FormData();
+        body.set('make', make);
+        body.set('title', title);
+        body.set('file', file);
+        const res = await fetch('/api/ad-generator/oem-assets/upload', { method: 'POST', body });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+        if (json.unchanged) toast.info(json.message);
+        // Registration works without S3 — the hash still drives change detection —
+        // so surface that the file itself wasn't kept rather than implying it was.
+        else if (json.warning) toast.warning(json.warning);
+        else toast.success('Document uploaded and registered');
+        await load();
+        return true;
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Upload failed');
+        return false;
+      } finally {
+        setBusy(null);
+      }
+    },
+    [load],
+  );
+
   if (!isAdmin) {
     return (
       <div className="mx-auto max-w-3xl px-6 py-16 text-center">
@@ -264,6 +309,39 @@ export default function OemAssetsPage() {
           </button>
         </div>
       </header>
+
+      {/* ── coverage at a glance ──
+          With two dozen makes the page is long, and the ones that matter aren't
+          alphabetically first. These four numbers answer "where do we stand" without
+          scrolling, and the gap between documents and packs is the honest headline:
+          holding a guideline is not the same as checking anything against it. */}
+      {makes.length > 0 && (
+        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          {[
+            { label: 'Makes', value: makes.length, hint: 'with a document, pack, event or automation config' },
+            {
+              label: 'Documents watched',
+              value: makes.reduce((n, m) => n + m.docs.length, 0),
+              hint: 'tracked by content hash',
+            },
+            {
+              label: 'Awaiting review',
+              value: makes.reduce((n, m) => n + m.docs.filter((d) => d.state !== 'current').length, 0),
+              hint: 'no baseline set yet, so a change would go unnoticed',
+            },
+            {
+              label: 'Rules transcribed',
+              value: makes.filter((m) => m.packs.length > 0).length,
+              hint: 'makes with a machine-checkable pack',
+            },
+          ].map((s) => (
+            <div key={s.label} className="rounded-xl border border-[var(--border)] px-3 py-2.5" title={s.hint}>
+              <p className="text-lg font-semibold text-[var(--foreground)]">{s.value}</p>
+              <p className="text-[11px] text-[var(--muted-foreground)]">{s.label}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* ── a guideline moved under us: the register's reason to exist ── */}
       {changedDocs.length > 0 && (
@@ -394,10 +472,12 @@ export default function OemAssetsPage() {
                               </a>
                             )}
                           </div>
-                          <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">{d.summary}</p>
+                          {EXPLAIN_STATE.has(d.state) && (
+                            <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">{d.summary}</p>
+                          )}
                           <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] text-[var(--muted-foreground)]">
                             {d.contentHash && <span className="font-mono">{d.contentHash.slice(0, 12)}</span>}
-                            {d.byteSize != null && <span>{Math.round(d.byteSize / 1024)} KB</span>}
+                            {fileSize(d.byteSize) && <span>{fileSize(d.byteSize)}</span>}
                             {d.checkedAt && <span>checked {d.checkedAt.slice(0, 10)}</span>}
                             {d.reviewedBy && (
                               <span>
@@ -696,17 +776,43 @@ export default function OemAssetsPage() {
               </div>
               <div>
                 <label className="mb-1 flex items-center gap-1 text-[11px] font-medium text-[var(--muted-foreground)]">
-                  Document URL
-                  <HelpTip title="What makes a good URL">
+                  Upload the document
+                  <HelpTip title="Upload or link — either works">
                     <p>
-                      It must be fetchable by the server without a login — a direct PDF link on the manufacturer
-                      portal, or a file uploaded to Loomi&rsquo;s media library.
+                      <strong>Uploading</strong> is the usual route, because most manufacturer portals sit behind a
+                      login and can&rsquo;t be fetched on a schedule. The file is stored in the Loomi media library
+                      so anyone at the agency can open it, and re-uploading a newer edition is how a reissue enters
+                      the register.
                     </p>
                     <p>
-                      A Google Drive <em>share</em> link usually returns an HTML interstitial rather than the file,
-                      so its hash changes whenever Drive changes that page. Use a direct-download link.
+                      <strong>A URL</strong> is better when the document has a stable public address — Loomi
+                      re-fetches it daily and spots a change without anyone doing anything. A Google Drive{' '}
+                      <em>share</em> link won&rsquo;t work: it returns an HTML page rather than the file, so its
+                      hash churns whenever Drive restyles that page.
                     </p>
+                    <p>PDF or Word, up to 80 MB.</p>
                   </HelpTip>
+                </label>
+                <input
+                  type="file"
+                  accept=".pdf,.docx,.doc,application/pdf"
+                  onChange={(e) => setDocDraft({ ...docDraft, file: e.target.files?.[0] ?? null })}
+                  className="w-full cursor-pointer rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--foreground)] outline-none file:mr-3 file:rounded-md file:border-0 file:bg-[var(--muted)] file:px-2 file:py-1 file:text-xs file:font-medium file:text-[var(--foreground)] focus:border-[var(--primary)]"
+                />
+                {docDraft.file && (
+                  <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+                    {docDraft.file.name} — {(docDraft.file.size / 1048576).toFixed(1)} MB
+                  </p>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="h-px flex-1 bg-[var(--border)]" />
+                <span className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">or</span>
+                <span className="h-px flex-1 bg-[var(--border)]" />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
+                  Document URL <span className="font-normal">— re-fetched daily</span>
                 </label>
                 <input
                   value={docDraft.sourceUrl}
@@ -725,6 +831,14 @@ export default function OemAssetsPage() {
               </button>
               <button
                 onClick={async () => {
+                  // A file, when given, goes through the multipart route — it does the
+                  // upload, the hash and the register as one operation, so a register
+                  // entry can't end up pointing at a document that was never stored.
+                  if (docDraft.file) {
+                    const ok = await uploadDoc(docDraft.make, docDraft.title, docDraft.file);
+                    if (ok) setDocDraft(null);
+                    return;
+                  }
                   const ok = await act(
                     'register_doc',
                     { make: docDraft.make, title: docDraft.title, sourceUrl: docDraft.sourceUrl },
@@ -733,10 +847,12 @@ export default function OemAssetsPage() {
                   );
                   if (ok) setDocDraft(null);
                 }}
-                disabled={!!busy || !docDraft.title.trim() || !docDraft.sourceUrl.trim()}
+                disabled={
+                  !!busy || !docDraft.title.trim() || (!docDraft.file && !docDraft.sourceUrl.trim())
+                }
                 className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
               >
-                Register
+                {docDraft.file ? 'Upload & register' : 'Register'}
               </button>
             </div>
           </div>

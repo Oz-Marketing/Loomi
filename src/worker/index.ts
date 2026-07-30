@@ -39,6 +39,7 @@ import { pollAllAccounts } from '@/lib/ad-generator/automation/poll-offers';
 import { syncAllInventoryFeeds } from '@/lib/ad-generator/automation/sync-inventory';
 import { generateAllAccounts } from '@/lib/ad-generator/automation/generate-ads';
 import { expireStaleAds } from '@/lib/ad-generator/automation/expire-ads';
+import { refreshGuidelineDocs } from '@/lib/ad-generator/guideline-docs';
 
 const PROCESS_DUE_CAMPAIGNS_QUEUE = 'loomi.process-due-campaigns';
 const PROCESS_FLOW_ENROLLMENTS_QUEUE = 'loomi.process-flow-enrollments';
@@ -68,6 +69,11 @@ const ADGEN_GENERATE_QUEUE = 'loomi.adgen.generate';
 // poll and generate steps, so a dead offer's ad is pulled before anything new is
 // built on top of it.
 const ADGEN_EXPIRE_QUEUE = 'loomi.adgen.expire';
+// Re-fetch the co-op guideline documents and compare content hashes. This is the
+// whole "keep the rules current" mechanism: it does not re-derive any rule, it
+// only detects that a manufacturer reissued a document and tells someone. Runs
+// well clear of the generate chain because nothing downstream depends on it.
+const ADGEN_GUIDELINES_QUEUE = 'loomi.adgen.guidelines';
 
 async function runProcessDueCampaigns(): Promise<void> {
   const startedAt = Date.now();
@@ -223,6 +229,25 @@ async function runAdgenExpire(): Promise<void> {
   }
 }
 
+async function runAdgenGuidelines(): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const r = await refreshGuidelineDocs();
+    // Log failures even when nothing changed: a document that has quietly become
+    // unreachable is the case where the register looks healthy and isn't.
+    if (r.changed.length || r.failed.length) {
+      console.log(
+        `[worker] adgen guidelines: ${r.checked} checked, ${r.changed.length} CHANGED` +
+          `${r.changed.length ? ` (${r.changed.join('; ')})` : ''}, ` +
+          `${r.failed.length} unreachable${r.failed.length ? ` (${r.failed.join('; ')})` : ''} ` +
+          `in ${Date.now() - startedAt}ms`,
+      );
+    }
+  } catch (err) {
+    console.error('[worker] adgen refreshGuidelineDocs failed', err);
+  }
+}
+
 async function main(): Promise<void> {
   const boss = await getBoss();
   console.log('[worker] pg-boss started');
@@ -265,6 +290,11 @@ async function main(): Promise<void> {
   await boss.createQueue(ADGEN_EXPIRE_QUEUE);
   await boss.work(ADGEN_EXPIRE_QUEUE, async () => {
     await runAdgenExpire();
+  });
+
+  await boss.createQueue(ADGEN_GUIDELINES_QUEUE);
+  await boss.work(ADGEN_GUIDELINES_QUEUE, async () => {
+    await runAdgenGuidelines();
   });
 
   // Form → CRM lead delivery (ADF email). Event-driven (no schedule):
@@ -325,6 +355,14 @@ async function main(): Promise<void> {
   // gap rather than chaining directly.
   await boss.schedule(ADGEN_GENERATE_QUEUE, '30 6 * * *');
   console.log('[worker] scheduled', ADGEN_GENERATE_QUEUE, 'daily at 06:30 UTC');
+
+  // 07:00 — deliberately AFTER generation rather than before. A guideline that
+  // changed overnight needs a human to interpret it, so blocking the morning's
+  // drafts on it would trade a small compliance risk for a guaranteed outage.
+  // The alert lands while the drafts are still unapproved, which is the window
+  // that matters.
+  await boss.schedule(ADGEN_GUIDELINES_QUEUE, '0 7 * * *');
+  console.log('[worker] scheduled', ADGEN_GUIDELINES_QUEUE, 'daily at 07:00 UTC');
 
   // Also run once immediately so the first send doesn't have to wait up
   // to a minute after boot.

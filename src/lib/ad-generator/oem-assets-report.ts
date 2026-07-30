@@ -1,5 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { parseCoopPack, type CoopRule } from './coop-rules';
+import { listTemplateChecks, type TemplateCheckRow } from './coop-template-check-store';
+import { listGuidelineDocs, type GuidelineDocRow } from './guideline-docs';
 
 /**
  * Read model for the OEM guidelines + sales-events page.
@@ -69,6 +71,12 @@ export interface MakeAssets {
   eventSummary: string;
   /** True when no pack for this make is verified — nothing can reach `ready`. */
   unverified: boolean;
+  /** The registered guideline documents, with their change state. */
+  docs: GuidelineDocRow[];
+  /** True when any document changed after it was last reviewed. */
+  docsChanged: boolean;
+  /** Per-template layout verdicts against this make's pack. */
+  templateChecks: TemplateCheckRow[];
 }
 
 function jsonArray(raw: string | null): string[] {
@@ -164,11 +172,13 @@ function toEventRow(r: {
  * neither asset on file still shows up rather than silently missing.
  */
 export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets[]> {
-  const [packRows, eventRows, configRows, accountRows] = await Promise.all([
+  const [packRows, eventRows, configRows, accountRows, docRows, checkRows] = await Promise.all([
     prisma.adCoopRulePack.findMany({ orderBy: [{ make: 'asc' }, { version: 'desc' }] }).catch(() => []),
     prisma.adOemEventAsset.findMany({ orderBy: [{ make: 'asc' }, { effectiveFrom: 'desc' }] }).catch(() => []),
     prisma.adAutomationConfig.findMany({ select: { makes: true } }).catch(() => []),
     prisma.account.findMany({ where: { oem: { not: null } }, select: { oem: true } }).catch(() => []),
+    listGuidelineDocs(),
+    listTemplateChecks(),
   ]);
 
   const makes = new Set<string>();
@@ -177,6 +187,9 @@ export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets
   for (const e of eventRows) makes.add(norm(e.make));
   for (const c of configRows) for (const m of jsonArray(c.makes)) if (m.trim()) makes.add(norm(m));
   for (const a of accountRows) if (a.oem?.trim()) makes.add(norm(a.oem));
+  // A document on file for a make with no pack still has to show up: "we hold the
+  // guidelines but transcribed nothing" is a state worth seeing, not hiding.
+  for (const d of docRows) makes.add(norm(d.make));
 
   const out: MakeAssets[] = [];
   for (const make of [...makes].sort((a, b) => a.localeCompare(b))) {
@@ -206,6 +219,7 @@ export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets
       .map((e) => toEventRow(e, now));
     const { state, summary } = classifyEvents(events);
 
+    const docs = docRows.filter((d) => d.make.trim().toLowerCase() === lower);
     out.push({
       make,
       packs,
@@ -213,6 +227,11 @@ export async function buildOemAssetsReport(now = new Date()): Promise<MakeAssets
       eventState: state,
       eventSummary: summary,
       unverified: packs.length === 0 || !packs.some((p) => p.verified && p.isActive),
+      docs,
+      // 'unreachable' counts as needing attention too — a document we can no longer
+      // fetch is one whose citations can't be checked.
+      docsChanged: docs.some((d) => d.state === 'changed' || d.state === 'unreachable'),
+      templateChecks: checkRows.filter((c) => c.make.trim().toLowerCase() === lower),
     });
   }
   return out;

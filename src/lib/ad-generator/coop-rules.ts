@@ -116,6 +116,57 @@ export type CoopRule =
   | MinElementSizeRule
   | RequiredElementRule;
 
+/**
+ * WHEN a rule can actually be decided — the distinction that keeps this engine
+ * cheap and its failures legible.
+ *
+ * `design`  The rule constrains the LAYOUT: is the brandmark present, is the
+ *           disclaimer large enough, is the logo inside the permitted zone. The
+ *           answer is a property of the template and the offer type, so it is
+ *           identical for every ad built from that template. Evaluate it ONCE,
+ *           when the design or the pack changes, and a violation reads as "fix
+ *           this template" instead of "today's ads didn't generate".
+ *
+ * `content` The rule inspects TEXT that varies per ad. The disclaimer is resolved
+ *           from the manufacturer's own verbatim wording per offer, so a banned
+ *           phrase genuinely can appear in one ad and not the next. These have to
+ *           run on every render, and they are cheap — regex over a few strings.
+ *
+ * A geometric rule evaluated per ad isn't merely wasteful, it's misleading: it
+ * reports a design fault at the moment of generation, which is the wrong place to
+ * look and the wrong person to tell.
+ */
+export type CoopRuleScope = 'design' | 'content';
+
+export const RULE_SCOPE: Record<CoopRule['kind'], CoopRuleScope> = {
+  required_element: 'design',
+  min_font_size: 'design',
+  element_zone: 'design',
+  min_element_size: 'design',
+  required_phrase: 'content',
+  banned_phrase: 'content',
+};
+
+export function ruleScope(rule: CoopRule): CoopRuleScope {
+  return RULE_SCOPE[rule.kind];
+}
+
+/**
+ * Split a pack into its design-time and per-ad halves, preserving make/version/
+ * verified on both so either can be evaluated independently.
+ *
+ * Both halves are always returned, even when empty — an empty design half means
+ * "nothing to check about the layout", which is a real and valid verdict, not a
+ * missing one.
+ */
+export function splitCoopPack(pack: CoopRulePack): { design: CoopRulePack; content: CoopRulePack } {
+  const shell = { make: pack.make, version: pack.version, source: pack.source, verified: pack.verified };
+  return {
+    design: { ...shell, rules: pack.rules.filter((r) => ruleScope(r) === 'design') },
+    content: { ...shell, rules: pack.rules.filter((r) => ruleScope(r) === 'content') },
+  };
+}
+
 export interface CoopRulePack {
   make: string;
   /** Guideline edition, e.g. "2026-Q3". Packs are versioned, never overwritten:

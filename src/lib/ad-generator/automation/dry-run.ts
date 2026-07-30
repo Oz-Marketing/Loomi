@@ -5,9 +5,11 @@ import { resolveJellybean } from '@/lib/integrations/evox-jellybean';
 import { incentiveToFieldPatch } from '../incentive-apply';
 import { resolveDisclaimerText } from '../disclaimer-resolve';
 import { parseOemRule, type OemOfferRule } from '../compliance';
-import { loadCoopPack } from '../coop-pack-store';
-import type { CoopRulePack } from '../coop-rules';
-import { preflight, summarizePreflight } from '../preflight';
+import { loadActiveCoopPack } from '../coop-pack-store';
+import { splitCoopPack, type CoopRulePack } from '../coop-rules';
+import { summarizeTemplateCoop } from '../coop-template-check';
+import { resolveTemplateCoopCheck } from '../coop-template-check-store';
+import { preflight, summarizePreflight, type CoopDesignVerdict } from '../preflight';
 import { mergeRenderData, renderCreativeSizes } from '../render-creative';
 import type { TemplateDoc } from '../doc-types';
 import type { AdData } from '../types';
@@ -312,7 +314,9 @@ export async function dryRunOneVehicle(input: DryRunInput): Promise<DryRunResult
   // which is reported explicitly rather than passing silently — "no pack" and
   // "no rules" look identical to the evaluator but mean very different things
   // when a co-op claim is at stake.
-  const coopPack: CoopRulePack | null = await loadCoopPack(make);
+  const coopEntry = await loadActiveCoopPack(make);
+  const coopPack: CoopRulePack | null = coopEntry?.pack ?? null;
+  const split = coopPack ? splitCoopPack(coopPack) : null;
   steps.push({
     id: 'coop',
     label: 'Co-op rules',
@@ -320,15 +324,59 @@ export async function dryRunOneVehicle(input: DryRunInput): Promise<DryRunResult
     ms: 0,
     summary: !coopPack
       ? `No co-op pack on file for ${make} — no manufacturer advertising rules were checked.`
-      : `${coopPack.make} ${coopPack.version} — ${coopPack.rules.length} rule(s)${
-          coopPack.verified ? '' : ', UNVERIFIED so findings cannot block'
+      : `${coopPack.make} ${coopPack.version} — ${split!.design.rules.length} layout rule(s) checked against the ` +
+        `template, ${split!.content.rules.length} content rule(s) checked per ad${
+          coopPack.verified ? '' : '. UNVERIFIED, so findings cannot block'
         }`,
     detail: coopPack
-      ? { make: coopPack.make, version: coopPack.version, source: coopPack.source, verified: coopPack.verified, rules: coopPack.rules }
+      ? {
+          make: coopPack.make,
+          version: coopPack.version,
+          source: coopPack.source,
+          verified: coopPack.verified,
+          designRules: split!.design.rules,
+          contentRules: split!.content.rules,
+        }
       : undefined,
   });
 
-  const pf = preflight({ doc: tpl.doc, data: renderData, oemRule, coopPack, sizeIds: input.sizeIds });
+  // The template's layout verdict, resolved through the same call production uses
+  // so the two paths cannot diverge — a dry run that gated differently from
+  // generate has already caused one contradiction (7 drafts vs "no eligible
+  // offer"). `persist: false` keeps this function's no-writes promise; the verdict
+  // is identical either way, only whether it's cached differs.
+  let coopDesign: CoopDesignVerdict | null = null;
+  if (coopEntry) {
+    const v = await resolveTemplateCoopCheck({
+      templateId: tpl.id,
+      doc: tpl.doc,
+      packId: coopEntry.id,
+      pack: coopEntry.pack,
+      persist: false,
+    });
+    coopDesign = {
+      make: v.make,
+      packVersion: v.packVersion,
+      stale: false,
+      findings: v.findings.map((f) => ({
+        ruleId: f.ruleId,
+        severity: f.severity,
+        description: f.description,
+        citation: f.citation,
+        offerType: f.offerType,
+      })),
+    };
+    steps.push({
+      id: 'coop_template',
+      label: 'Template layout check',
+      status: v.ok ? (v.warningCount ? 'warn' : 'ok') : 'failed',
+      ms: 0,
+      summary: summarizeTemplateCoop(v) + (v.fresh ? ' (computed now)' : ' (cached)'),
+      detail: { offerTypes: v.offerTypes, ruleCount: v.ruleCount, findings: v.findings },
+    });
+  }
+
+  const pf = preflight({ doc: tpl.doc, data: renderData, oemRule, coopPack, coopDesign, sizeIds: input.sizeIds });
   steps.push({
     id: 'preflight',
     label: 'Preflight',

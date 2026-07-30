@@ -3,7 +3,7 @@ import type { TemplateDoc } from './doc-types';
 import { enrichOfferFields } from './offer-text';
 import { missingRequired, type OemOfferRule, FIELD_LABELS } from './compliance';
 import { SYSTEM_FIELD_DEFAULTS } from './system-fields';
-import { evaluateCoopRules, type CoopRulePack } from './coop-rules';
+import { evaluateCoopRules, splitCoopPack, type CoopRulePack } from './coop-rules';
 
 /**
  * Preflight — the gate every UNATTENDED render must pass.
@@ -31,7 +31,9 @@ export type PreflightCode =
   /** The design is brand-colour driven but the sub-account has no colour set. */
   | 'unset_brand_color'
   /** A manufacturer co-op advertising rule was violated. */
-  | 'coop_violation';
+  | 'coop_violation'
+  /** The template's design-time co-op check predates the current design or pack. */
+  | 'coop_design_stale';
 
 export interface PreflightIssue {
   code: PreflightCode;
@@ -147,15 +149,39 @@ export interface PreflightInput {
    * transcribed from the manufacturer's document doesn't exist.
    */
   coopPack?: CoopRulePack | null;
+  /**
+   * The template's DESIGN-TIME co-op verdict, computed once per template × pack.
+   *
+   * Geometry rules ("the brandmark must be visible", "the disclaimer must be at
+   * least 1.2% of the short edge") describe the layout, so their answer is
+   * identical for every ad off this template and re-deriving it per ad answers a
+   * settled question. Pass the cached verdict and its findings are replayed here so
+   * the gate still holds — but the fault is attributed to the template, which is
+   * where someone can actually fix it.
+   *
+   * Omit and no design checks apply. `stale` marks a verdict whose template or pack
+   * has moved since it was computed; that reports as a warning rather than silently
+   * trusting a verdict for a design that no longer exists.
+   */
+  coopDesign?: CoopDesignVerdict | null;
   /** Sizes about to be rendered. Defaults to every size the doc defines. */
   sizeIds?: string[];
+}
+
+/** The stored design-time verdict, as preflight consumes it. */
+export interface CoopDesignVerdict {
+  make: string;
+  packVersion: string;
+  findings: { ruleId: string; severity: PreflightSeverity; description: string; citation?: string; offerType?: string }[];
+  /** True when the template or pack changed after this verdict was computed. */
+  stale?: boolean;
 }
 
 /**
  * Run every preflight check. Errors block the render; warnings are logged so a
  * reviewer can see them without the ad being skipped.
  */
-export function preflight({ doc, data, oemRule, coopPack, sizeIds }: PreflightInput): PreflightResult {
+export function preflight({ doc, data, oemRule, coopPack, coopDesign, sizeIds }: PreflightInput): PreflightResult {
   const issues: PreflightIssue[] = [];
   const sizes = sizeIds?.length ? sizeIds : doc.sizes.map((s) => s.id);
 
@@ -276,8 +302,14 @@ export function preflight({ doc, data, oemRule, coopPack, sizeIds }: PreflightIn
   // Deliberately last: the earlier checks are about whether the ad is COHERENT,
   // these are about whether it's PERMITTED. Seeing "the payment is a placeholder"
   // above "the disclaimer is too small" reads in the right order for a fix.
+  //
+  // Only CONTENT rules run here. The text they inspect genuinely varies per ad —
+  // the disclaimer is resolved from the manufacturer's own verbatim wording per
+  // offer, so a banned phrase really can appear in one ad and not the next. Geometry
+  // rules are settled at design time and arrive via `coopDesign` below.
   if (coopPack) {
-    for (const f of evaluateCoopRules({ doc, data: enriched, pack: coopPack, sizeIds: sizes })) {
+    const { content } = splitCoopPack(coopPack);
+    for (const f of evaluateCoopRules({ doc, data: enriched, pack: content, sizeIds: sizes })) {
       issues.push({
         code: 'coop_violation',
         severity: f.severity,
@@ -287,6 +319,32 @@ export function preflight({ doc, data, oemRule, coopPack, sizeIds }: PreflightIn
         ruleId: f.ruleId,
         citation: f.citation,
         message: `${coopPack.make} co-op: ${f.description} (${f.observed})`,
+      });
+    }
+  }
+
+  // ── 4b. Design-time co-op verdict ──
+  // Replayed, not recomputed. The message names the TEMPLATE because that's what
+  // has to change — a designer fixes this once and every future ad clears.
+  if (coopDesign) {
+    if (coopDesign.stale) {
+      issues.push({
+        code: 'coop_design_stale',
+        severity: 'warning',
+        message:
+          `${coopDesign.make} co-op: this template's layout check is out of date ` +
+          `(design or rules changed since it was last run). Re-check it from the OEM guidelines page.`,
+      });
+    }
+    for (const f of coopDesign.findings) {
+      issues.push({
+        code: 'coop_violation',
+        severity: f.severity,
+        ruleId: f.ruleId,
+        citation: f.citation,
+        message:
+          `${coopDesign.make} co-op: the TEMPLATE fails "${f.description}"` +
+          `${f.offerType && f.offerType !== 'any' ? ` for ${f.offerType} offers` : ''}. Fix the design, not this ad.`,
       });
     }
   }

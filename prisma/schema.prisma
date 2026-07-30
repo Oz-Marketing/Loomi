@@ -2539,6 +2539,103 @@ model AdCoopRulePack {
 }
 
 // ─────────────────────────────────────────────────────
+// Ad Generator — guideline document register
+// ─────────────────────────────────────────────────────
+//
+// The manufacturer's co-op guideline document itself, tracked by CONTENT HASH.
+//
+// This exists because the expensive question isn't "what are the rules" — it's
+// "have the rules changed since anyone last looked". Transcribing a document into
+// machine-checkable rules is slow and error-prone (an early Mazda §5d transcription
+// was wrong in a way that would have failed a perfectly compliant logo lockup), and
+// it only pays off for the few rules a generator can actually violate. Detecting
+// that a document CHANGED, by contrast, is cheap and exact.
+//
+// So: register the document, hash it, and remember the hash a human last reviewed.
+// When the two differ, say so and let a person decide what it means. That is the
+// whole mechanism — deliberately not an extraction pipeline.
+model AdGuidelineDoc {
+  id    String @id @default(cuid())
+  make  String
+  title String // "Subaru SAF Guidelines", "GM iMR Program Guidelines"
+
+  /// Where the document lives. A http(s) URL is re-fetched and re-hashed on a
+  /// schedule; a MediaAsset upload is hashed once when it is registered.
+  sourceUrl     String? @db.Text
+  sourceAssetId String?
+
+  /// sha256 of the document bytes as last seen. Null until first fetched.
+  contentHash String?
+  byteSize    Int?
+
+  /// The hash a human last reviewed the templates against. The comparison
+  /// `contentHash != reviewedHash` IS the change signal — plain equality, with no
+  /// attempt to interpret what moved inside the document.
+  reviewedHash String?
+  reviewedBy   String?
+  reviewedAt   DateTime?
+  reviewNotes  String?   @db.Text
+
+  /// Last fetch attempt. A non-null `checkError` means the document is unreachable,
+  /// which has to read differently from "unchanged" — a 404 is not reassurance.
+  checkedAt  DateTime?
+  checkError String?   @db.Text
+
+  isActive  Boolean  @default(true)
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([make, title])
+  @@index([make, isActive])
+}
+
+// ─────────────────────────────────────────────────────
+// Ad Generator — design-time co-op verdict per template
+// ─────────────────────────────────────────────────────
+//
+// A template's standing against one make's rule pack, computed ONCE instead of on
+// every generated ad.
+//
+// Most co-op rules constrain the LAYOUT — the brandmark must be present, the
+// disclaimer no smaller than X, the logo inside the lower third. A layout changes
+// when a designer changes it, perhaps twice a year, so re-deriving the same verdict
+// for all eight drafts of a morning run answers a question that cannot have changed
+// since the last answer. Worse, it puts a per-ad blocking gate in front of a fault
+// that is never per-ad: a template-level mistake then surfaces as "no ads
+// generated" rather than "this template needs fixing".
+//
+// Rules about CONTENT (banned or required phrases) genuinely do vary per ad, since
+// the disclaimer is resolved from the OEM's own verbatim text per offer. Those are
+// NOT stored here — they stay in preflight. See RULE_SCOPE in coop-rules.ts.
+model AdTemplateCoopCheck {
+  id         String @id @default(cuid())
+  templateId String
+  make       String
+
+  packId      String
+  packVersion String
+
+  /// sha256 of the template doc as checked. Together with packId this is the
+  /// staleness test: either the design moved or the rules did, so re-check.
+  docHash String
+
+  ok           Boolean
+  errorCount   Int     @default(0)
+  warningCount Int     @default(0)
+  /// JSON of findings, each tagged with the offer type it was observed under, so a
+  /// designer can see "fails only for lease" without re-running anything.
+  findings     String  @db.Text
+
+  /// Null when computed automatically during a run; set when a person re-ran it.
+  checkedBy String?
+  checkedAt DateTime @default(now())
+
+  @@unique([templateId, packId])
+  @@index([make])
+}
+
+// ─────────────────────────────────────────────────────
 // Ad Generator — OEM sales-event assets
 // ─────────────────────────────────────────────────────
 //

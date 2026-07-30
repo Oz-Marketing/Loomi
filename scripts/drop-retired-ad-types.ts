@@ -8,7 +8,15 @@
  * Fully idempotent (`IF EXISTS`): a no-op once the objects are gone, so it's safe
  * to leave in the deploy pipeline. Raw SQL — no Prisma model needed (the client
  * is generated from the current schema, which no longer defines AdType).
+ *
+ * Loads dotenv because it builds its OWN client rather than going through
+ * `@/lib/prisma`, and so gets none of Next's env loading. In deploy DATABASE_URL is
+ * already exported and dotenv won't override it; run locally without this, the pg
+ * adapter silently falls back to libpq defaults and fails with
+ * `DatabaseDoesNotExist` — which reads like a missing database rather than a
+ * missing variable, so it takes a while to see.
  */
+import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { PrismaClient } from '@prisma/client';

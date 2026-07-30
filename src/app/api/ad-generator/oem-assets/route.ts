@@ -15,6 +15,11 @@ import { getAuthSession, requireRole } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { buildOemAssetsReport } from '@/lib/ad-generator/oem-assets-report';
+import { loadActiveCoopPack } from '@/lib/ad-generator/coop-pack-store';
+import { summarizeTemplateCoop } from '@/lib/ad-generator/coop-template-check';
+import { invalidatePackChecks, resolveTemplateCoopCheck } from '@/lib/ad-generator/coop-template-check-store';
+import { markReviewed, refreshGuidelineDocs, registerGuidelineDoc } from '@/lib/ad-generator/guideline-docs';
+import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,6 +44,18 @@ export async function GET() {
       { error: err instanceof Error ? err.message : 'Could not load OEM assets' },
       { status: 500 },
     );
+  }
+}
+
+/** The stored TemplateDoc for an id, or null if missing/unparseable. */
+async function loadTemplateDoc(id: string): Promise<TemplateDoc | null> {
+  try {
+    const row = await prisma.adTemplateDoc.findUnique({ where: { id }, select: { doc: true } });
+    if (!row) return null;
+    const doc = JSON.parse(row.doc) as TemplateDoc;
+    return doc && Array.isArray(doc.sizes) && Array.isArray(doc.elements) ? doc : null;
+  } catch {
+    return null;
   }
 }
 
@@ -71,6 +88,12 @@ export async function POST(req: NextRequest) {
     verified?: boolean;
     sourceAssetId?: string;
     sourceUrl?: string;
+    // register_doc / mark_doc_reviewed / delete_doc
+    docId?: string;
+    title?: string;
+    notes?: string;
+    // recheck_template
+    templateId?: string;
   };
   try {
     body = await req.json();
@@ -141,7 +164,12 @@ export async function POST(req: NextRequest) {
             verifiedAt: verified ? new Date() : null,
           },
         });
-        return NextResponse.json({ ok: true, pack: { id: row.id, verified: row.verified } });
+        // Cached template verdicts were computed under the OLD flag, and `verified`
+        // decides whether a finding blocks or merely warns. The pack version hasn't
+        // moved, so nothing else would mark them stale — drop them and let the next
+        // run recompute.
+        const dropped = await invalidatePackChecks(row.id);
+        return NextResponse.json({ ok: true, pack: { id: row.id, verified: row.verified }, rechecksQueued: dropped });
       }
 
       case 'attach_source': {
@@ -159,6 +187,88 @@ export async function POST(req: NextRequest) {
           },
         });
         return NextResponse.json({ ok: true, pack: { id: row.id, sourceUrl: row.sourceUrl } });
+      }
+
+      // ── guideline document register ──
+      case 'register_doc': {
+        const make = (body.make ?? '').trim();
+        const title = (body.title ?? '').trim();
+        const sourceUrl = (body.sourceUrl ?? '').trim();
+        if (!make || !title) return NextResponse.json({ error: 'make and title are required' }, { status: 400 });
+        if (sourceUrl && !/^https?:\/\//i.test(sourceUrl)) {
+          return NextResponse.json({ error: 'sourceUrl must be http(s)' }, { status: 400 });
+        }
+        if (!sourceUrl && !body.sourceAssetId?.trim()) {
+          return NextResponse.json(
+            { error: 'Give either a fetchable URL or an uploaded document — a register entry with neither can never be compared.' },
+            { status: 400 },
+          );
+        }
+        const u = session?.user as { id?: string } | undefined;
+        const row = await registerGuidelineDoc({
+          make,
+          title,
+          sourceUrl: sourceUrl || null,
+          sourceAssetId: body.sourceAssetId ?? null,
+          createdBy: u?.id ?? null,
+        });
+        if (!row) return NextResponse.json({ error: 'Could not register the document' }, { status: 500 });
+        return NextResponse.json({ ok: true, doc: row });
+      }
+
+      case 'mark_doc_reviewed': {
+        const docId = (body.docId ?? '').trim();
+        if (!docId) return NextResponse.json({ error: 'docId is required' }, { status: 400 });
+        const u = session?.user as { id?: string; name?: string | null; email?: string | null } | undefined;
+        const row = await markReviewed(docId, u?.name || u?.email || u?.id || 'unknown', body.notes ?? null);
+        if (!row) return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+        // Reviewing an unfetched document would pin the baseline to null and
+        // permanently suppress the change signal, so markReviewed refuses; say so
+        // rather than reporting a success that didn't happen.
+        if (!row.reviewedHash) {
+          return NextResponse.json(
+            { error: 'This document has not been fetched yet, so there is nothing to baseline. Refresh it first.' },
+            { status: 409 },
+          );
+        }
+        return NextResponse.json({ ok: true, doc: row });
+      }
+
+      case 'delete_doc': {
+        const docId = (body.docId ?? '').trim();
+        if (!docId) return NextResponse.json({ error: 'docId is required' }, { status: 400 });
+        const res = await prisma.adGuidelineDoc.deleteMany({ where: { id: docId } });
+        return NextResponse.json({ ok: true, removed: res.count });
+      }
+
+      case 'refresh_docs': {
+        // Force: the button exists to answer "has this changed right now", so the
+        // 24h skip that keeps the daily job cheap would defeat the point.
+        const r = await refreshGuidelineDocs(new Date(), { force: true });
+        return NextResponse.json({ ok: true, ...r });
+      }
+
+      // ── design-time template check ──
+      case 'recheck_template': {
+        const templateId = (body.templateId ?? '').trim();
+        const make = (body.make ?? '').trim();
+        if (!templateId || !make) {
+          return NextResponse.json({ error: 'templateId and make are required' }, { status: 400 });
+        }
+        const entry = await loadActiveCoopPack(make);
+        if (!entry) return NextResponse.json({ error: `No active co-op pack for ${make}` }, { status: 404 });
+        const doc = await loadTemplateDoc(templateId);
+        if (!doc) return NextResponse.json({ error: `Template ${templateId} not found` }, { status: 404 });
+        const u = session?.user as { id?: string; name?: string | null; email?: string | null } | undefined;
+        const v = await resolveTemplateCoopCheck({
+          templateId,
+          doc,
+          packId: entry.id,
+          pack: entry.pack,
+          force: true,
+          checkedBy: u?.name || u?.email || u?.id || 'unknown',
+        });
+        return NextResponse.json({ ok: true, verdict: v, summary: summarizeTemplateCoop(v) });
       }
 
       default:

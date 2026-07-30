@@ -22,6 +22,21 @@ import { parseCoopPack, type CoopRulePack } from './coop-rules';
  * predecessor without needing the old one deleted.
  */
 export async function loadCoopPack(make: string, at = new Date()): Promise<CoopRulePack | null> {
+  return (await loadActiveCoopPack(make, at))?.pack ?? null;
+}
+
+/**
+ * As {@link loadCoopPack}, but also returns the ROW ID.
+ *
+ * The design-time template check is cached against the pack's id, not its make: a
+ * make can have several packs (a superseded edition still queryable, a draft for
+ * next quarter), and a verdict keyed on the make alone would be silently
+ * overwritten when either changed.
+ */
+export async function loadActiveCoopPack(
+  make: string,
+  at = new Date(),
+): Promise<{ id: string; pack: CoopRulePack } | null> {
   const m = (make ?? '').trim();
   if (!m) return null;
   try {
@@ -47,7 +62,10 @@ export async function loadCoopPack(make: string, at = new Date()): Promise<CoopR
     // The ROW is authoritative for identity and verification, not the JSON blob:
     // someone editing the JSON must not be able to self-certify a pack as
     // verified, since verification means a human checked it against the source.
-    return { ...pack, make: row.make, version: row.version, source: row.source ?? pack.source, verified: row.verified };
+    return {
+      id: row.id,
+      pack: { ...pack, make: row.make, version: row.version, source: row.source ?? pack.source, verified: row.verified },
+    };
   } catch (err) {
     console.warn('[coop-pack-store] lookup failed, continuing without co-op checks:', err);
     return null;

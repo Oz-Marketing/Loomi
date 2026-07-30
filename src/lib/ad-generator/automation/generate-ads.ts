@@ -4,11 +4,12 @@ import { resolveJellybean } from '@/lib/integrations/evox-jellybean';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
 import { createNotification } from '@/lib/notifications/service';
 import { parseOemRule, requiredFieldsFor, type OemOfferRule } from '../compliance';
-import { loadCoopPack } from '../coop-pack-store';
+import { loadActiveCoopPack } from '../coop-pack-store';
 import type { CoopRulePack } from '../coop-rules';
+import { resolveTemplateCoopCheck } from '../coop-template-check-store';
 import type { TemplateDoc } from '../doc-types';
 import { incentiveToFieldPatch } from '../incentive-apply';
-import { preflight, summarizePreflight } from '../preflight';
+import { preflight, summarizePreflight, type CoopDesignVerdict } from '../preflight';
 import { mergeRenderData, renderCreativeSizes, renderCreativeToS3 } from '../render-creative';
 import { isS3Configured } from '@/lib/s3';
 import { resolveDisclaimerText } from '../disclaimer-resolve';
@@ -230,7 +231,7 @@ export async function generateForAccount(
   // Per-make rules, fetched once each rather than per vehicle.
   const makes = [...new Set([...groups.values()].map((g) => g.make))];
   const oemRules = new Map<string, OemOfferRule | null>();
-  const coopPacks = new Map<string, CoopRulePack | null>();
+  const coopPacks = new Map<string, { id: string; pack: CoopRulePack } | null>();
   for (const make of makes) {
     try {
       const row = await prisma.adOemOfferRule.findFirst({
@@ -240,8 +241,49 @@ export async function generateForAccount(
     } catch {
       oemRules.set(make, null);
     }
-    coopPacks.set(make, await loadCoopPack(make, now));
+    coopPacks.set(make, await loadActiveCoopPack(make, now));
   }
+
+  /**
+   * Design-time co-op verdicts, memoised per (template, pack) for this run.
+   *
+   * The store already caches across runs; this map stops a run with eight vehicles
+   * on one template from making eight identical round trips to read it back.
+   */
+  const designVerdicts = new Map<string, CoopDesignVerdict | null>();
+  const designVerdictFor = async (
+    templateId: string,
+    doc: TemplateDoc,
+    entry: { id: string; pack: CoopRulePack } | null,
+  ): Promise<CoopDesignVerdict | null> => {
+    if (!entry) return null;
+    const key = `${templateId}::${entry.id}`;
+    if (designVerdicts.has(key)) return designVerdicts.get(key) ?? null;
+    let verdict: CoopDesignVerdict | null = null;
+    try {
+      const v = await resolveTemplateCoopCheck({ templateId, doc, packId: entry.id, pack: entry.pack });
+      verdict = {
+        make: v.make,
+        packVersion: v.packVersion,
+        // `resolveTemplateCoopCheck` recomputes on staleness rather than returning a
+        // stale verdict, so anything it hands back is current by construction.
+        stale: false,
+        findings: v.findings.map((f) => ({
+          ruleId: f.ruleId,
+          severity: f.severity,
+          description: f.description,
+          citation: f.citation,
+          offerType: f.offerType,
+        })),
+      };
+    } catch (err) {
+      // Same failure direction as the pack loader: a broken design check must not
+      // take down generation for every brand.
+      console.warn(`[generate-ads] design co-op check failed for ${templateId}:`, err);
+    }
+    designVerdicts.set(key, verdict);
+    return verdict;
+  };
 
   const generated: GeneratedAd[] = [];
   const skipped: SkippedVehicle[] = [];
@@ -411,9 +453,11 @@ export async function generateForAccount(
     data.disclaimer = disclaimer.text;
 
     // ── preflight (coherence + permission) ──
-    const coopPack = coopPacks.get(g.make) ?? null;
+    const coopEntry = coopPacks.get(g.make) ?? null;
+    const coopPack = coopEntry?.pack ?? null;
+    const coopDesign = await designVerdictFor(tpl.id, tpl.doc, coopEntry);
     const renderData = mergeRenderData(tpl.doc, data);
-    const pf = preflight({ doc: tpl.doc, data: renderData, oemRule, coopPack, sizeIds: undefined });
+    const pf = preflight({ doc: tpl.doc, data: renderData, oemRule, coopPack, coopDesign, sizeIds: undefined });
     for (const issue of pf.issues.filter((i) => i.severity === 'warning')) warnings.push(issue.message);
     if (!pf.ok) {
       skipped.push({ vehicle, reason: 'preflight_failed', detail: summarizePreflight(pf) });

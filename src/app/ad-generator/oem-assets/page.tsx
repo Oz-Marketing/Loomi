@@ -3,16 +3,23 @@
 /**
  * OEM Guidelines & Sales Events (admin) — the co-op team's surface.
  *
- * Two asset types per manufacturer, together because they're the same job:
- * versioned, time-boxed, co-op-owned, and consequential when stale.
+ * Four things per manufacturer, together because they're one job: versioned,
+ * time-boxed, co-op-owned, and consequential when stale.
  *
- *   Guidelines   the source PDF + its transcribed rule pack + the verified toggle
- *   Sales events the campaign mark + its window + whether the OEM mandates it
+ *   Source documents  the guideline PDF, tracked by content hash — the mechanism
+ *                     that says "this changed, go look"
+ *   Transcribed rules the machine-checkable pack + the verified toggle
+ *   Template checks   each template's standing against those rules, computed once
+ *   Sales events      the campaign mark + its window + whether the OEM mandates it
  *
- * The page leads with STALENESS rather than listings. Nobody forgets to upload a
- * document; what actually happens is an event window closing with no successor
- * queued, after which ads silently stop carrying a mark the manufacturer requires
- * — or get refused outright when it's mandatory.
+ * The page leads with STALENESS rather than listings, because the failures are all
+ * of that shape: a document reissued and nobody noticed; an event window closing
+ * with no successor queued, after which ads silently drop a mandated mark.
+ *
+ * What this page deliberately does NOT do is edit rules or derive them from a
+ * document. See `guideline-docs.ts` for why — briefly: a wrong rule silently costs
+ * a brand a month of ads, so the human stays in the loop and the machine's job is
+ * to say when to look.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -29,6 +36,7 @@ import {
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { HelpTip } from '@/components/ui/help-tip';
 
 type EventState = 'covered' | 'ending_soon' | 'upcoming' | 'none';
 
@@ -60,6 +68,45 @@ interface PackRow {
   updatedAt: string;
 }
 
+type DocState = 'unfetched' | 'unreviewed' | 'current' | 'changed' | 'unreachable';
+
+interface GuidelineDocRow {
+  id: string;
+  make: string;
+  title: string;
+  sourceUrl: string | null;
+  contentHash: string | null;
+  byteSize: number | null;
+  reviewedHash: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  checkedAt: string | null;
+  checkError: string | null;
+  state: DocState;
+  summary: string;
+}
+
+interface TemplateCheckFinding {
+  ruleId: string;
+  severity: 'error' | 'warning';
+  description: string;
+  citation?: string;
+  offerType: string;
+}
+
+interface TemplateCheckRow {
+  templateId: string;
+  packVersion: string;
+  ok: boolean;
+  errorCount: number;
+  warningCount: number;
+  findings: TemplateCheckFinding[];
+  offerTypes: string[];
+  ruleCount: number;
+  checkedAt: string;
+  checkedBy: string | null;
+}
+
 interface MakeAssets {
   make: string;
   packs: PackRow[];
@@ -67,7 +114,18 @@ interface MakeAssets {
   eventState: EventState;
   eventSummary: string;
   unverified: boolean;
+  docs: GuidelineDocRow[];
+  docsChanged: boolean;
+  templateChecks: TemplateCheckRow[];
 }
+
+const DOC_STATE: Record<DocState, { label: string; className: string }> = {
+  current: { label: 'Reviewed', className: 'bg-emerald-500/15 text-emerald-500' },
+  changed: { label: 'CHANGED', className: 'bg-amber-500/15 text-amber-500' },
+  unreviewed: { label: 'Not reviewed', className: 'bg-blue-500/15 text-blue-500' },
+  unfetched: { label: 'Not fetched', className: 'bg-[var(--muted)] text-[var(--muted-foreground)]' },
+  unreachable: { label: 'Unreachable', className: 'bg-red-500/15 text-red-500' },
+};
 
 const EVENT_STATE: Record<EventState, { label: string; className: string }> = {
   covered: { label: 'Covered', className: 'bg-emerald-500/15 text-emerald-500' },
@@ -83,6 +141,9 @@ const PHASE: Record<EventRow['phase'], string> = {
 };
 
 const OFFER_TYPES = ['lease', 'apr', 'discount', 'sales_price'] as const;
+
+/** Blank draft for the "register document" form. */
+const emptyDocDraft = (make: string) => ({ make, title: '', sourceUrl: '' });
 
 /** Blank draft for the "add event" form. */
 const emptyDraft = (make: string) => ({
@@ -104,6 +165,7 @@ export default function OemAssetsPage() {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [draft, setDraft] = useState<ReturnType<typeof emptyDraft> | null>(null);
+  const [docDraft, setDocDraft] = useState<ReturnType<typeof emptyDocDraft> | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -158,6 +220,11 @@ export default function OemAssetsPage() {
   }
 
   const needsAttention = makes.filter((m) => m.eventState === 'ending_soon');
+  // The register's whole purpose, hoisted to the top of the page: a document that
+  // moved after someone reviewed it, or one that can no longer be fetched at all.
+  const changedDocs = makes.flatMap((m) =>
+    m.docs.filter((d) => d.state === 'changed' || d.state === 'unreachable').map((d) => ({ make: m.make, doc: d })),
+  );
 
   return (
     <div className="mx-auto max-w-5xl px-6 py-8">
@@ -172,18 +239,48 @@ export default function OemAssetsPage() {
         <div>
           <h1 className="text-2xl font-semibold text-[var(--foreground)]">OEM guidelines &amp; sales events</h1>
           <p className="mt-1.5 max-w-3xl text-sm text-[var(--muted-foreground)]">
-            Per manufacturer: the co-op guideline document and its transcribed rules, plus the sales-event
-            marks that must appear on ads during a campaign window.
+            Per manufacturer: the guideline document Loomi watches for changes, the rules transcribed from it,
+            how each template stands against those rules, and the sales-event marks that must appear on ads
+            during a campaign window.
           </p>
         </div>
-        <button
-          onClick={load}
-          disabled={loading}
-          className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
-        >
-          <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() =>
+              act('refresh_docs', {}, 'refresh-docs', 'Documents re-fetched and compared')
+            }
+            disabled={!!busy || loading}
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
+          >
+            <ArrowPathIcon className={`h-3.5 w-3.5 ${busy === 'refresh-docs' ? 'animate-spin' : ''}`} /> Check documents
+            now
+          </button>
+          <button
+            onClick={load}
+            disabled={loading}
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
+          >
+            <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </button>
+        </div>
       </header>
+
+      {/* ── a guideline moved under us: the register's reason to exist ── */}
+      {changedDocs.length > 0 && (
+        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <p className="flex items-center gap-2 text-sm font-medium text-amber-600 dark:text-amber-400">
+            <ExclamationTriangleIcon className="h-4 w-4" />
+            {changedDocs.length} guideline document{changedDocs.length > 1 ? 's need' : ' needs'} attention
+          </p>
+          <ul className="mt-1.5 space-y-0.5 text-xs text-amber-600/90 dark:text-amber-400/90">
+            {changedDocs.map(({ make, doc }) => (
+              <li key={doc.id}>
+                <span className="font-medium">{make}</span> — {doc.title}: {doc.summary}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* ── the thing that actually goes wrong ── */}
       {needsAttention.length > 0 && (
@@ -235,9 +332,111 @@ export default function OemAssetsPage() {
                 <p className="text-[11px] text-[var(--muted-foreground)]">{m.eventSummary}</p>
               </div>
 
+              {/* ── source documents ── */}
+              <div className="mb-2 flex items-center justify-between">
+                <h3 className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                  Source documents
+                  <HelpTip title="How these stay current">
+                    <p>
+                      Each document is tracked by a <strong>content hash</strong>. When the manufacturer reissues
+                      it, the hash stops matching the one that was last reviewed and it shows as{' '}
+                      <strong>CHANGED</strong>.
+                    </p>
+                    <p>
+                      Nothing is re-derived automatically. Transcribing rules from a document is slow and easy to
+                      get wrong, and a wrong rule silently costs a brand a month of ads — so a person reads what
+                      changed and decides whether any template needs work.
+                    </p>
+                    <p>
+                      URL-backed documents are re-fetched daily at 07:00 UTC. &ldquo;Mark reviewed&rdquo; sets the
+                      baseline to what the document says right now.
+                    </p>
+                  </HelpTip>
+                </h3>
+                <button
+                  onClick={() => setDocDraft(emptyDocDraft(m.make))}
+                  className="flex items-center gap-1 text-[11px] font-medium text-[var(--primary)] hover:underline"
+                >
+                  <PlusIcon className="h-3 w-3" /> Register document
+                </button>
+              </div>
+              {m.docs.length === 0 ? (
+                <p className="mb-4 text-xs text-[var(--muted-foreground)]">
+                  No document registered. Nothing will tell you when {m.make} reissues its guidelines.
+                </p>
+              ) : (
+                <div className="mb-4 space-y-1.5">
+                  {m.docs.map((d) => {
+                    const ds = DOC_STATE[d.state];
+                    return (
+                      <div
+                        key={d.id}
+                        className={`flex flex-wrap items-start justify-between gap-2 rounded-lg border px-3 py-2 ${
+                          d.state === 'changed' || d.state === 'unreachable'
+                            ? 'border-amber-500/30 bg-amber-500/5'
+                            : 'border-[var(--border)]'
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-medium text-[var(--foreground)]">{d.title}</span>
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${ds.className}`}>
+                              {ds.label}
+                            </span>
+                            {d.sourceUrl && (
+                              <a
+                                href={d.sourceUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[11px] font-medium text-[var(--primary)] hover:underline"
+                              >
+                                open →
+                              </a>
+                            )}
+                          </div>
+                          <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">{d.summary}</p>
+                          <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] text-[var(--muted-foreground)]">
+                            {d.contentHash && <span className="font-mono">{d.contentHash.slice(0, 12)}</span>}
+                            {d.byteSize != null && <span>{Math.round(d.byteSize / 1024)} KB</span>}
+                            {d.checkedAt && <span>checked {d.checkedAt.slice(0, 10)}</span>}
+                            {d.reviewedBy && (
+                              <span>
+                                reviewed by {d.reviewedBy}
+                                {d.reviewedAt ? ` on ${d.reviewedAt.slice(0, 10)}` : ''}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex flex-shrink-0 items-center gap-1.5">
+                          {d.state !== 'current' && d.state !== 'unfetched' && (
+                            <button
+                              onClick={() =>
+                                act('mark_doc_reviewed', { docId: d.id }, `dr-${d.id}`, 'Baseline updated')
+                              }
+                              disabled={!!busy}
+                              className="flex items-center gap-1 rounded-lg bg-[var(--primary)] px-2.5 py-1.5 text-[11px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                            >
+                              <CheckCircleIcon className="h-3.5 w-3.5" /> Mark reviewed
+                            </button>
+                          )}
+                          <button
+                            onClick={() => act('delete_doc', { docId: d.id }, `dd-${d.id}`, 'Document removed')}
+                            disabled={!!busy}
+                            className="rounded-lg border border-[var(--border)] p-1.5 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
+                            title="Remove from the register"
+                          >
+                            <TrashIcon className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* ── guideline packs ── */}
               <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                Guidelines
+                Transcribed rules
               </h3>
               {m.packs.length === 0 ? (
                 <p className="mb-4 text-xs text-[var(--muted-foreground)]">
@@ -312,6 +511,98 @@ export default function OemAssetsPage() {
                 </div>
               )}
 
+              {/* ── design-time template verdicts ── */}
+              {m.templateChecks.length > 0 && (
+                <>
+                  <h3 className="mb-2 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                    Template layout checks
+                    <HelpTip title="Why these are per template">
+                      <p>
+                        Most co-op rules constrain the <strong>layout</strong> — brandmark present, disclaimer big
+                        enough, logo in the permitted zone. That answer is a property of the design, so it is the
+                        same for every ad built from it.
+                      </p>
+                      <p>
+                        Checking it once means a violation reads as &ldquo;this template needs fixing&rdquo; instead
+                        of &ldquo;today&rsquo;s ads didn&rsquo;t generate&rdquo;. Rules about wording still run on
+                        every ad, because the disclaimer comes from the manufacturer&rsquo;s own text per offer.
+                      </p>
+                      <p>Re-runs automatically when the design or the rule pack changes.</p>
+                    </HelpTip>
+                  </h3>
+                  <div className="mb-4 space-y-1.5">
+                    {m.templateChecks.map((c) => (
+                      <div
+                        key={c.templateId}
+                        className={`rounded-lg border px-3 py-2 ${
+                          c.ok ? 'border-[var(--border)]' : 'border-red-500/30 bg-red-500/5'
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex min-w-0 flex-wrap items-center gap-2">
+                            {c.ok ? (
+                              <CheckCircleIcon className="h-4 w-4 flex-shrink-0 text-emerald-500" />
+                            ) : (
+                              <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 text-red-500" />
+                            )}
+                            <span className="font-mono text-[11px] text-[var(--foreground)]">{c.templateId}</span>
+                            <span className="text-[11px] text-[var(--muted-foreground)]">
+                              {c.ruleCount === 0
+                                ? 'no layout rules'
+                                : `${c.ruleCount} rule(s) · ${c.errorCount} blocking · ${c.warningCount} advisory`}
+                            </span>
+                            {c.offerTypes.length > 0 && (
+                              <span className="text-[10px] text-[var(--muted-foreground)]">
+                                {c.offerTypes.join(', ')}
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            onClick={() =>
+                              act(
+                                'recheck_template',
+                                { templateId: c.templateId, make: m.make },
+                                `rc-${c.templateId}`,
+                                'Template re-checked',
+                              )
+                            }
+                            disabled={!!busy}
+                            className="flex flex-shrink-0 items-center gap-1 rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
+                          >
+                            <ArrowPathIcon
+                              className={`h-3 w-3 ${busy === `rc-${c.templateId}` ? 'animate-spin' : ''}`}
+                            />
+                            Re-check
+                          </button>
+                        </div>
+                        {c.findings.length > 0 && (
+                          <ul className="mt-1.5 space-y-0.5 border-t border-[var(--border)] pt-1.5">
+                            {c.findings.map((f, i) => (
+                              <li
+                                key={`${f.ruleId}-${f.offerType}-${i}`}
+                                className={`text-[11px] ${f.severity === 'error' ? 'text-red-500' : 'text-amber-500'}`}
+                              >
+                                {f.description}
+                                {f.offerType && f.offerType !== 'any' && (
+                                  <span className="text-[var(--muted-foreground)]"> — {f.offerType} only</span>
+                                )}
+                                {f.citation && (
+                                  <span className="text-[var(--muted-foreground)]"> ({f.citation})</span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
+                          Pack {c.packVersion} · checked {c.checkedAt.slice(0, 10)}
+                          {c.checkedBy ? ` by ${c.checkedBy}` : ' automatically'}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
               {/* ── sales events ── */}
               <div className="mb-2 flex items-center justify-between">
                 <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
@@ -381,6 +672,76 @@ export default function OemAssetsPage() {
           );
         })}
       </div>
+
+      {/* ── register a source document ── */}
+      {docDraft && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="glass-card w-full max-w-lg rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
+            <h2 className="mb-1 text-sm font-semibold text-[var(--foreground)]">
+              Register guideline document — {docDraft.make}
+            </h2>
+            <p className="mb-4 text-[11px] text-[var(--muted-foreground)]">
+              Loomi hashes the document and tells you when the manufacturer reissues it. It does not read the rules
+              out of it.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Title</label>
+                <input
+                  value={docDraft.title}
+                  onChange={(e) => setDocDraft({ ...docDraft, title: e.target.value })}
+                  placeholder="Subaru SAF Guidelines"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                />
+              </div>
+              <div>
+                <label className="mb-1 flex items-center gap-1 text-[11px] font-medium text-[var(--muted-foreground)]">
+                  Document URL
+                  <HelpTip title="What makes a good URL">
+                    <p>
+                      It must be fetchable by the server without a login — a direct PDF link on the manufacturer
+                      portal, or a file uploaded to Loomi&rsquo;s media library.
+                    </p>
+                    <p>
+                      A Google Drive <em>share</em> link usually returns an HTML interstitial rather than the file,
+                      so its hash changes whenever Drive changes that page. Use a direct-download link.
+                    </p>
+                  </HelpTip>
+                </label>
+                <input
+                  value={docDraft.sourceUrl}
+                  onChange={(e) => setDocDraft({ ...docDraft, sourceUrl: e.target.value })}
+                  placeholder="https://…/saf-guidelines.pdf"
+                  className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                />
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setDocDraft(null)}
+                className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={async () => {
+                  const ok = await act(
+                    'register_doc',
+                    { make: docDraft.make, title: docDraft.title, sourceUrl: docDraft.sourceUrl },
+                    'reg-doc',
+                    'Document registered',
+                  );
+                  if (ok) setDocDraft(null);
+                }}
+                disabled={!!busy || !docDraft.title.trim() || !docDraft.sourceUrl.trim()}
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              >
+                Register
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── add / edit event ── */}
       {draft && (

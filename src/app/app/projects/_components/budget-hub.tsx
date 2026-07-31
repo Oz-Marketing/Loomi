@@ -541,6 +541,11 @@ function PlanEditor({
   const [declared, setDeclared] = useState('');
   const [retainer, setRetainer] = useState('');
   const [markup, setMarkup] = useState('');
+  // Which channel "Lay out the year" puts the retainer on. Defaults to the
+  // pool, but the choice is surfaced rather than implied — generating twelve
+  // channel-less lines silently leaves the grid empty and the money invisible,
+  // which reads as the feature being broken.
+  const [retainerChannel, setRetainerChannel] = useState('');
   const [saving, setSaving] = useState(false);
 
   // Re-seed the inputs whenever the loaded plan changes (account/year switch).
@@ -554,6 +559,7 @@ function PlanEditor({
     declaredTotal: declared === '' ? null : Number(declared),
     monthlyRetainer: retainer === '' ? null : Number(retainer),
     defaultMarkup: markup === '' ? null : Number(markup),
+    retainerChannel: retainerChannel || null,
   });
 
   const run = async (generate: boolean) => {
@@ -630,10 +636,25 @@ function PlanEditor({
             >
               Lay out the year
             </button>
-            <span className="text-[11px] text-[var(--muted-foreground)]">
-              Creates a retainer line for each month that doesn&apos;t have one — safe to re-run.
-            </span>
+            <span className="text-[11px] text-[var(--muted-foreground)]">onto</span>
+            <div className="w-[150px]">
+              <SearchableSelect
+                value={retainerChannel}
+                onChange={setRetainerChannel}
+                searchable={false}
+                options={[
+                  { value: '', label: 'Unassigned pool' },
+                  ...BUDGET_CHANNELS.map((c) => ({ value: c.key, label: c.label })),
+                ]}
+                className="!bg-[var(--background)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
+              />
+            </div>
           </div>
+          <p className="sm:col-span-3 -mt-1 text-[11px] text-[var(--muted-foreground)]">
+            {retainerChannel
+              ? `Creates a ${channelLabel(retainerChannel)} line for each month that doesn’t already have a retainer — safe to re-run.`
+              : 'Creates an unassigned pool line for each month. Pick a channel above to have them show up in the grid instead.'}
+          </p>
         </div>
       )}
     </div>

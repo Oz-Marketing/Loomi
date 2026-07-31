@@ -62,6 +62,30 @@ function cacheSet(key: string, value: RenderedPage): void {
   }
 }
 
+/**
+ * The most recently read document's bytes.
+ *
+ * Every cache miss used to re-download the whole PDF to render one page — and
+ * the library runs to 66 MB, so reading ten pages of the Yamaha manual pulled
+ * 660 MB out of S3. A reader works through one document at a time, so holding
+ * just the last one turns page two onwards into a local render.
+ *
+ * ONE document, not an LRU: these are tens of megabytes each and the win is
+ * almost entirely "the page I'm about to ask for is in the doc I'm reading".
+ */
+const bytesCache: { hash: string | null; bytes: Uint8Array | null } = { hash: null, bytes: null };
+
+/**
+ * Renders in flight, keyed `${hash}:${page}`.
+ *
+ * Two requests can want the same page at once — the reader's own request and a
+ * neighbour warm, or simply a double click. Without this each one launched its
+ * own Chromium and rendered the same page, doubling the cost of every page turn
+ * and competing for memory on the droplet. Now the second request awaits the
+ * first one's promise.
+ */
+const inflight = new Map<string, Promise<Map<number, RenderedPage>>>();
+
 /** The document's bytes, from the media asset or its public URL. */
 async function fetchDocBytes(doc: {
   sourceAssetId: string | null;
@@ -119,11 +143,11 @@ export async function GET(req: NextRequest) {
   const page = Number.isFinite(pageParam) ? Math.max(1, Math.round(pageParam)) : 1;
   if (!docId) return NextResponse.json({ error: 'docId is required' }, { status: 400 });
 
-  let doc: { contentHash: string | null; sourceAssetId: string | null; sourceUrl: string | null } | null = null;
+  let doc: { contentHash: string | null; sourceAssetId: string | null; sourceUrl: string | null; pageCount: number | null } | null = null;
   try {
     doc = await prisma.adGuidelineDoc.findUnique({
       where: { id: docId },
-      select: { contentHash: true, sourceAssetId: true, sourceUrl: true },
+      select: { contentHash: true, sourceAssetId: true, sourceUrl: true, pageCount: true },
     });
   } catch (err) {
     console.error('[oem-assets/page-image] lookup failed:', err);
@@ -138,15 +162,47 @@ export async function GET(req: NextRequest) {
   const cached = cacheGet(key);
   if (cached) return wantBoxes ? boxesResponse(cached) : imageResponse(cached, key);
 
-  const got = await fetchDocBytes(doc);
-  if ('error' in got) return NextResponse.json({ error: got.error }, { status: got.status });
+  const hash = doc.contentHash ?? docId;
 
-  // Render the requested page plus the next one: the browser launch is the expensive
-  // part, so the neighbour is close to free and makes the common action — pressing
-  // "next" — instant.
-  const wanted = [page, page + 1].filter((n) => !cache.has(`${doc.contentHash ?? docId}:${n}`));
-  const rendered = await renderGuidelinePages(got.bytes, wanted);
-  for (const [n, r] of rendered) cacheSet(`${doc.contentHash ?? docId}:${n}`, r);
+  // Join a render already in flight for this page rather than starting a second.
+  const pending = inflight.get(key);
+  if (pending) {
+    const shared = await pending;
+    const hit = shared.get(page) ?? cacheGet(key);
+    if (hit) return wantBoxes ? boxesResponse(hit) : imageResponse(hit, key);
+  }
+
+  let bytes: Uint8Array;
+  if (bytesCache.hash === hash && bytesCache.bytes) {
+    bytes = bytesCache.bytes;
+  } else {
+    const got = await fetchDocBytes(doc);
+    if ('error' in got) return NextResponse.json({ error: got.error }, { status: got.status });
+    bytes = got.bytes;
+    bytesCache.hash = hash;
+    bytesCache.bytes = bytes;
+  }
+
+  // Render the requested page plus its neighbours. The browser is kept warm and a
+  // page costs ~150ms, so widening the window makes both "next" and "back" instant
+  // for the price of one page's render — and the reader turns pages far more often
+  // than it opens documents. `page` is first so a failure part-way still serves it.
+  const last = doc.pageCount ?? 0;
+  const wanted = [page, page + 1, page - 1, page + 2].filter(
+    (n) => n >= 1 && (last === 0 || n <= last) && !cache.has(`${hash}:${n}`),
+  );
+
+  const job = renderGuidelinePages(bytes, wanted);
+  // Register BEFORE awaiting, so a concurrent request for any page in this batch
+  // finds the promise instead of launching its own render.
+  for (const n of wanted) inflight.set(`${hash}:${n}`, job);
+  let rendered: Map<number, RenderedPage>;
+  try {
+    rendered = await job;
+  } finally {
+    for (const n of wanted) inflight.delete(`${hash}:${n}`);
+  }
+  for (const [n, r] of rendered) cacheSet(`${hash}:${n}`, r);
 
   const out = rendered.get(page) ?? cacheGet(key);
   if (!out) {

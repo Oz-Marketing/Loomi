@@ -98,13 +98,23 @@ export function GuidelineReader({ docId, title, pageCount, sourceUrl, onClose }:
 
   // ── the visible page ──
   useEffect(() => {
-    let cancelled = false;
+    // ABORT the superseded request, don't just ignore its result.
+    //
+    // This effect used to only flip a `cancelled` flag, which stopped the state
+    // update but left the request in flight — and each one holds a page render
+    // open on the server. Flipping through a document stacked them up, and a
+    // browser only opens ~6 connections per host, so after a few pages new
+    // requests queued behind stale ones and the image updated late, or appeared
+    // not to update at all. That's why it looked intermittent and why it behaved
+    // differently between browsers: it depended on the connection cap and on
+    // which response happened to win.
+    const ac = new AbortController();
     setLoading(true);
     setError(null);
 
     (async () => {
       try {
-        const res = await fetch(pageUrl(page));
+        const res = await fetch(pageUrl(page), { signal: ac.signal });
         if (!res.ok) {
           const j = await res.json().catch(() => ({}));
           throw new Error(j.error || `Could not load page ${page}`);
@@ -113,24 +123,27 @@ export function GuidelineReader({ docId, title, pageCount, sourceUrl, onClose }:
         if (Number.isFinite(count) && count > 0) setTotal(count);
 
         const blob = await res.blob();
-        if (cancelled) return;
+        if (ac.signal.aborted) return;
         const url = URL.createObjectURL(blob);
         urls.current.push(url);
         setSrc(url);
-
-        // Warm the next page. The API renders it alongside this one anyway, so this
-        // just moves it into the browser's cache.
-        if (!count || page < count) void fetch(pageUrl(page + 1)).catch(() => {});
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load this page');
+        // An abort is the expected outcome of turning the page quickly, not a
+        // failure to report.
+        if (ac.signal.aborted) return;
+        setError(err instanceof Error ? err.message : 'Could not load this page');
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!ac.signal.aborted) setLoading(false);
       }
     })();
 
-    return () => {
-      cancelled = true;
-    };
+    // The next page is NOT prefetched from here any more. The API renders it
+    // alongside this one and caches it server-side, so the old prefetch bought a
+    // warm browser cache at the cost of doubling in-flight requests — and it
+    // raced the very render it was waiting on: it always missed the cache the
+    // first request hadn't populated yet, so it launched a second Chromium and
+    // rendered the same page twice.
+    return () => ac.abort();
   }, [page, pageUrl]);
 
   // ── the document's text, fetched once ──

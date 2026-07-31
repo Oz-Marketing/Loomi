@@ -181,11 +181,10 @@ export async function renderGuidelinePages(
 ): Promise<Map<number, RenderedPage>> {
   const out = new Map<number, RenderedPage>();
   if (pageNumbers.length === 0) return out;
-  const held: { browser: Browser | null } = { browser: null };
+  const browser = await keepAliveBrowser();
   try {
-    held.browser = await launchBrowser();
     for (const n of pageNumbers) {
-      const rendered = await renderOn(held.browser, bytes, n, READ_LONG_EDGE, READ_QUALITY);
+      const rendered = await renderOn(browser, bytes, n, READ_LONG_EDGE, READ_QUALITY);
       // A page that fails is skipped rather than failing the batch — the reader
       // still gets the others, and a missing page reports itself in the UI.
       if (rendered) out.set(n, rendered);
@@ -193,10 +192,63 @@ export async function renderGuidelinePages(
     return out;
   } catch (err) {
     console.warn('[guideline-preview] page render failed:', err instanceof Error ? err.message : err);
+    // A crashed or disconnected browser must not be handed to the next request.
+    void closeKeepAlive();
     return out;
   } finally {
-    await held.browser?.close().catch(() => {});
+    releaseKeepAlive();
   }
+}
+
+// ── keep-alive browser for the reader ────────────────────────────────────────
+
+/**
+ * The reader's Chromium, kept warm between requests.
+ *
+ * A launch is ~1s against ~150ms to render a page, so launching per request made
+ * the browser start dominate every page turn. Reading a document is a burst of
+ * requests seconds apart, which is exactly the shape a keep-alive suits.
+ *
+ * Idle-closed rather than held forever: a Chromium parked on a droplet for the
+ * 23 hours nobody is reading co-op guidelines is pure memory cost. The refcount
+ * stops the timer firing mid-render.
+ */
+const KEEP_ALIVE_IDLE_MS = 60_000;
+const alive: { browser: Browser | null; users: number; timer: NodeJS.Timeout | null } = {
+  browser: null,
+  users: 0,
+  timer: null,
+};
+
+async function keepAliveBrowser(): Promise<Browser> {
+  if (alive.timer) {
+    clearTimeout(alive.timer);
+    alive.timer = null;
+  }
+  // `isConnected()` catches a browser that died since the last request — reusing
+  // a dead handle would fail every subsequent render until a restart.
+  if (alive.browser && !alive.browser.isConnected()) alive.browser = null;
+  alive.browser ??= await launchBrowser();
+  alive.users += 1;
+  return alive.browser;
+}
+
+function releaseKeepAlive(): void {
+  alive.users = Math.max(0, alive.users - 1);
+  if (alive.users > 0 || alive.timer) return;
+  alive.timer = setTimeout(() => {
+    alive.timer = null;
+    if (alive.users === 0) void closeKeepAlive();
+  }, KEEP_ALIVE_IDLE_MS);
+  // Don't hold a CLI process open for a minute waiting on this timer — the
+  // importer renders 33 covers and then expects to exit.
+  alive.timer.unref?.();
+}
+
+async function closeKeepAlive(): Promise<void> {
+  const b = alive.browser;
+  alive.browser = null;
+  await b?.close().catch(() => {});
 }
 
 type Browser = Awaited<ReturnType<typeof launchBrowser>>;

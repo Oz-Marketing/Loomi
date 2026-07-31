@@ -67,19 +67,38 @@ async function main() {
       return;
     }
 
-    // The column is new, so it may not exist on an older database. Without this the
-    // duplicate query below would throw a confusing "column does not exist".
+    // `offerFingerprint` is new, so on an existing database the column won't be
+    // there yet — and the index can't be built without it.
+    //
+    // An earlier version of this script bailed here and left the column to
+    // `db push`. That doesn't work: db push refuses the ENTIRE migration over the
+    // unique constraint, so it never gets as far as adding the column, and the
+    // deploy fails exactly as it did before this script existed. Adding a nullable
+    // column is additive and safe, so do it here and let db push find both the
+    // column and the index already in place.
     const cols = await prisma.$queryRawUnsafe<{ column_name: string }[]>(
       `SELECT column_name FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'AdCreative'
           AND column_name IN ('accountKey','templateId','offerFingerprint')`,
     );
-    if (cols.length < 3) {
-      console.log(
-        `[ensure-adcreative-offer-unique] AdCreative is missing ${3 - cols.length} of the three columns — ` +
-          'leaving the index to `db push`, which will add them together',
-      );
-      return;
+    const have = new Set(cols.map((c) => c.column_name));
+
+    if (!have.has('offerFingerprint')) {
+      await prisma.$executeRawUnsafe(`ALTER TABLE "AdCreative" ADD COLUMN IF NOT EXISTS "offerFingerprint" TEXT`);
+      console.log('[ensure-adcreative-offer-unique] added the nullable offerFingerprint column');
+      have.add('offerFingerprint');
+    }
+
+    // accountKey and templateId are long-standing NOT NULL columns. If either is
+    // genuinely absent this isn't the AdCreative we think it is, and inventing
+    // columns to satisfy an index would be worse than stopping.
+    for (const required of ['accountKey', 'templateId']) {
+      if (!have.has(required)) {
+        console.error(
+          `[ensure-adcreative-offer-unique] AdCreative has no "${required}" column — refusing to guess at the schema`,
+        );
+        process.exit(1);
+      }
     }
 
     const dupes = await prisma.$queryRawUnsafe<

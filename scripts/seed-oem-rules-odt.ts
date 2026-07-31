@@ -15,9 +15,8 @@
  * actually exposes it — requiring an unfillable field would block export
  * forever. As of the Subaru parity change, the vehicle-offer + dual-offer forms
  * expose dueAtSigning + securityDeposit on lease/apr/discount/sales_price, so
- * Subaru now matches ODT exactly. Still sanitized: Mazda drops the APR-only keys
- * (cost_per_thousand, financial_institution) from lease/custom, which have no
- * form field there. NOTE: Volkswagen still drops lease_due (dueAtSigning) from
+ * Subaru now matches ODT exactly. Mazda deliberately diverges: cost_per_thousand is
+ * required on APR but NOT on lease — see that rule's notes. NOTE: Volkswagen still drops lease_due (dueAtSigning) from
  * apr/sales_price for legacy reasons — that field is now exposed there, so VW
  * could be restored to full ODT parity if desired (not done here).
  *
@@ -52,13 +51,20 @@ const RULES: { make: string; requiredFields: Record<string, string[]>; notes: st
   {
     make: 'Mazda',
     requiredFields: {
-      lease: ['msrp', 'disclaimer', 'expiration', 'leaseTerm', 'dueAtSigning', 'costPerThousand'],
+      lease: ['msrp', 'disclaimer', 'expiration', 'leaseTerm', 'dueAtSigning'],
       apr: ['disclaimer', 'expiration', 'aprTerm', 'financialInstitution', 'costPerThousand'],
       discount: ['vehicleName', 'disclaimer', 'expiration', 'discountSource'],
       sales_price: ['vehicleName', 'msrp', 'disclaimer', 'expiration', 'discountSource'],
       custom: ['msrp', 'disclaimer', 'financialInstitution'],
     },
-    notes: 'Ported from ODT Monthly Offers oem_offer_rules — exact match. trim → vehicleName; costPerThousand exposed on lease + financialInstitution on custom (vehicle-offer form now shows them there) to satisfy the rule.',
+    notes:
+      'Ported from ODT Monthly Offers oem_offer_rules; trim → vehicleName, financialInstitution on custom. ' +
+      'DIVERGES FROM ODT on lease: costPerThousand removed 2026-07-31 on Connor\'s call. It is a financing ' +
+      'figure derived from rate and term, and a lease incentive carries no rate — so MarketCheck can never ' +
+      'supply it and every Mazda lease ad failed preflight and was silently skipped. The MCAP guideline on ' +
+      'file also never mentions cost per $1,000 (searched for it, plus money factor and amount financed), ' +
+      'so the ODT entry looks like an artifact rather than a Mazda requirement. Still required on APR, ' +
+      'where it is computable.',
   },
   {
     make: 'Volkswagen',

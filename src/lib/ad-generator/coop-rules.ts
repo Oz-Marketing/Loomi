@@ -1,0 +1,522 @@
+import type { AdData } from './types';
+import type { DocElement, TemplateDoc } from './doc-types';
+
+/**
+ * Co-op compliance rule packs — machine-checkable per-OEM advertising rules.
+ *
+ * WHY THIS IS SEPARATE FROM `AdOemOfferRule`. That model answers "which FIELDS
+ * must be filled" — it catches a missing VIN. It cannot catch "the disclaimer is
+ * smaller than the manufacturer permits", "this brand forbids the word FREE", or
+ * "the logo has to sit in the lower third". Those are the rules a human designer
+ * applies from memory, and once generation runs unattended there is no human
+ * applying them. Co-op reimbursement is real money and a rejected claim surfaces
+ * weeks later, so these have to become assertions.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ⚠️  THIS FILE DELIBERATELY CONTAINS NO ACTUAL OEM RULES.
+ *
+ * Every rule must be transcribed from the real co-op guideline document for that
+ * brand, with a `citation` pointing at the section it came from. Inventing a
+ * plausible-sounding threshold ("Toyota requires 8pt") would be worse than having
+ * no check at all: it manufactures false confidence in a compliance system, and
+ * a wrong rule either blocks valid ads or passes invalid ones. `EXAMPLE_PACK`
+ * below exists to document the SHAPE and is marked as non-authoritative.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Deterministic by construction — no model in the loop. When a rule blocks an ad
+ * the dealer gets a citation they can check, not an opinion.
+ *
+ * Pure: no DB, no network, no clock.
+ */
+
+export type CoopSeverity = 'error' | 'warning';
+
+/** Narrows a rule to particular offer types and/or output sizes. */
+export interface CoopScope {
+  /** Offer types this rule applies to. Omitted = all. */
+  offerTypes?: string[];
+  /** Size ids this rule applies to. Omitted = all sizes being rendered. */
+  sizes?: string[];
+}
+
+interface CoopRuleBase {
+  /** Stable id, unique within the pack — appears in findings and run logs. */
+  id: string;
+  severity: CoopSeverity;
+  /** What the rule requires, in plain language, for the person who gets blocked. */
+  description: string;
+  /** Where this came from in the source document, e.g. "2026 Co-op §4.2 p.11".
+   *  Required in practice: an uncitable rule can't be audited or defended. */
+  citation?: string;
+  scope?: CoopScope;
+}
+
+/** The ad data field a text rule inspects (e.g. `disclaimer`, `tagline`). */
+export interface RequiredPhraseRule extends CoopRuleBase {
+  kind: 'required_phrase';
+  field: string;
+  /** Literal text (case-insensitive) that must appear. */
+  phrase?: string;
+  /** Or a regex source string, for "term OR months" style requirements. */
+  pattern?: string;
+}
+
+export interface BannedPhraseRule extends CoopRuleBase {
+  kind: 'banned_phrase';
+  /** Fields to scan. Omitted = every string field in the ad data. */
+  fields?: string[];
+  phrase?: string;
+  pattern?: string;
+}
+
+/**
+ * Minimum size for the text of a bound element. Expressed EITHER as absolute px
+ * at each rendered size, or as a fraction of the canvas short edge — the latter
+ * being the resolution-independent form, which is what actually transfers across
+ * a 1080² square and a 300×600 tower.
+ */
+export interface MinFontSizeRule extends CoopRuleBase {
+  kind: 'min_font_size';
+  /** Binding key of the element to measure, e.g. `disclaimer`. */
+  field: string;
+  minPx?: number;
+  /** Fraction of min(width, height), e.g. 0.014 = 1.4% of the short edge. */
+  minShortEdgeFraction?: number;
+}
+
+/**
+ * The element's box must sit within a normalized region of the canvas. Bounds are
+ * fractions (0..1) of width/height, matching how DocLayoutBox stores placement.
+ */
+export interface ElementZoneRule extends CoopRuleBase {
+  kind: 'element_zone';
+  field: string;
+  zone: { x0: number; y0: number; x1: number; y1: number };
+}
+
+/** The element's box must be at least this fraction of the canvas. */
+export interface MinElementSizeRule extends CoopRuleBase {
+  kind: 'min_element_size';
+  field: string;
+  minWidthFraction?: number;
+  minHeightFraction?: number;
+}
+
+/** An element bound to `field` must exist and be visible. */
+export interface RequiredElementRule extends CoopRuleBase {
+  kind: 'required_element';
+  field: string;
+}
+
+export type CoopRule =
+  | RequiredPhraseRule
+  | BannedPhraseRule
+  | MinFontSizeRule
+  | ElementZoneRule
+  | MinElementSizeRule
+  | RequiredElementRule;
+
+/**
+ * WHEN a rule can actually be decided — the distinction that keeps this engine
+ * cheap and its failures legible.
+ *
+ * `design`  The rule constrains the LAYOUT: is the brandmark present, is the
+ *           disclaimer large enough, is the logo inside the permitted zone. The
+ *           answer is a property of the template and the offer type, so it is
+ *           identical for every ad built from that template. Evaluate it ONCE,
+ *           when the design or the pack changes, and a violation reads as "fix
+ *           this template" instead of "today's ads didn't generate".
+ *
+ * `content` The rule inspects TEXT that varies per ad. The disclaimer is resolved
+ *           from the manufacturer's own verbatim wording per offer, so a banned
+ *           phrase genuinely can appear in one ad and not the next. These have to
+ *           run on every render, and they are cheap — regex over a few strings.
+ *
+ * A geometric rule evaluated per ad isn't merely wasteful, it's misleading: it
+ * reports a design fault at the moment of generation, which is the wrong place to
+ * look and the wrong person to tell.
+ */
+export type CoopRuleScope = 'design' | 'content';
+
+export const RULE_SCOPE: Record<CoopRule['kind'], CoopRuleScope> = {
+  required_element: 'design',
+  min_font_size: 'design',
+  element_zone: 'design',
+  min_element_size: 'design',
+  required_phrase: 'content',
+  banned_phrase: 'content',
+};
+
+export function ruleScope(rule: CoopRule): CoopRuleScope {
+  return RULE_SCOPE[rule.kind];
+}
+
+/**
+ * Split a pack into its design-time and per-ad halves, preserving make/version/
+ * verified on both so either can be evaluated independently.
+ *
+ * Both halves are always returned, even when empty — an empty design half means
+ * "nothing to check about the layout", which is a real and valid verdict, not a
+ * missing one.
+ */
+export function splitCoopPack(pack: CoopRulePack): { design: CoopRulePack; content: CoopRulePack } {
+  const shell = { make: pack.make, version: pack.version, source: pack.source, verified: pack.verified };
+  return {
+    design: { ...shell, rules: pack.rules.filter((r) => ruleScope(r) === 'design') },
+    content: { ...shell, rules: pack.rules.filter((r) => ruleScope(r) === 'content') },
+  };
+}
+
+export interface CoopRulePack {
+  make: string;
+  /** Guideline edition, e.g. "2026-Q3". Packs are versioned, never overwritten:
+   *  an ad approved last quarter has to stay explicable against the rules that
+   *  were in force then. */
+  version: string;
+  /** The document these rules were transcribed from. */
+  source?: string;
+  /** True only when a human has checked the pack against the source document.
+   *  An unverified pack still evaluates, but findings are downgraded to warnings
+   *  so a half-transcribed pack can't block a dealer's whole month. */
+  verified?: boolean;
+  rules: CoopRule[];
+}
+
+export interface CoopFinding {
+  ruleId: string;
+  severity: CoopSeverity;
+  /** The rule's plain-language requirement. */
+  description: string;
+  citation?: string;
+  /** What was actually observed, so the gap is obvious without re-deriving it. */
+  observed: string;
+  field?: string;
+  sizes?: string[];
+}
+
+// ── helpers ──────────────────────────────────────────────────────────────────
+
+function inScope(rule: CoopRule, offerType: string, sizeId?: string): boolean {
+  const s = rule.scope;
+  if (!s) return true;
+  if (s.offerTypes?.length && !s.offerTypes.includes(offerType)) return false;
+  if (sizeId && s.sizes?.length && !s.sizes.includes(sizeId)) return false;
+  return true;
+}
+
+/** Build a case-insensitive matcher from a rule's `phrase` or `pattern`. */
+function matcher(rule: { phrase?: string; pattern?: string }): ((text: string) => boolean) | null {
+  if (rule.pattern) {
+    try {
+      const re = new RegExp(rule.pattern, 'i');
+      return (text) => re.test(text);
+    } catch {
+      // A malformed pattern must not silently pass everything.
+      return null;
+    }
+  }
+  if (rule.phrase) {
+    const needle = rule.phrase.toLowerCase();
+    return (text) => text.toLowerCase().includes(needle);
+  }
+  return null;
+}
+
+/**
+ * Elements that display `field`, matched by binding KEY across binding kinds.
+ *
+ * Both `field` and `brand` bindings carry a key, and the account-derived values a
+ * co-op rule cares about most — `logoUrl`, `dealerName`, `brandColor` — are
+ * normally wired as `brand` bindings, not `field`. Matching only `kind: 'field'`
+ * therefore reported "the template has no element bound to logoUrl" for a
+ * template with a perfectly good logo element, which would have made every
+ * brandmark rule fire falsely on every ad.
+ */
+function elementsFor(doc: TemplateDoc, field: string): DocElement[] {
+  return doc.elements.filter(
+    (el) =>
+      (el.binding?.kind === 'field' || el.binding?.kind === 'brand') && el.binding.key === field,
+  );
+}
+
+/** Whether an element is visible for this data (honours `visibleWhen`). */
+function elementVisible(el: DocElement, data: AdData): boolean {
+  if (!el.visibleWhen) return true;
+  return el.visibleWhen.in.includes(data[el.visibleWhen.field] ?? '');
+}
+
+/** Sizes where the element has a non-hidden placement. */
+function placedSizes(doc: TemplateDoc, elId: string, sizeIds: string[]): string[] {
+  return sizeIds.filter((sid) => {
+    const box = doc.layouts?.[sid]?.[elId];
+    return !!box && !box.hidden;
+  });
+}
+
+export interface CoopEvalInput {
+  doc: TemplateDoc;
+  /** Merged render data — same input preflight uses. */
+  data: AdData;
+  pack: CoopRulePack;
+  /** Sizes being rendered. Defaults to every size the doc defines. */
+  sizeIds?: string[];
+}
+
+/**
+ * Evaluate a pack against an ad. Returns one finding per violated rule (per
+ * affected size where the rule is geometric).
+ *
+ * An UNVERIFIED pack's findings are downgraded to warnings: a pack someone is
+ * still transcribing shouldn't be able to block every ad for a brand.
+ */
+export function evaluateCoopRules({ doc, data, pack, sizeIds }: CoopEvalInput): CoopFinding[] {
+  const sizes = sizeIds?.length ? sizeIds : doc.sizes.map((s) => s.id);
+  const offerType = data.offerType || 'custom';
+  const findings: CoopFinding[] = [];
+  const downgrade = pack.verified === false;
+
+  const push = (f: CoopFinding) => {
+    findings.push(downgrade && f.severity === 'error' ? { ...f, severity: 'warning' } : f);
+  };
+
+  for (const rule of pack.rules) {
+    if (!inScope(rule, offerType)) continue;
+
+    switch (rule.kind) {
+      case 'required_phrase': {
+        const test = matcher(rule);
+        const value = (data[rule.field] ?? '').trim();
+        if (!test) {
+          push({
+            ruleId: rule.id,
+            severity: 'error',
+            description: rule.description,
+            citation: rule.citation,
+            field: rule.field,
+            observed: 'Rule is malformed — it defines neither a phrase nor a valid pattern.',
+          });
+          break;
+        }
+        if (!test(value)) {
+          push({
+            ruleId: rule.id,
+            severity: rule.severity,
+            description: rule.description,
+            citation: rule.citation,
+            field: rule.field,
+            observed: value ? `"${value.slice(0, 120)}" does not contain it` : `${rule.field} is empty`,
+          });
+        }
+        break;
+      }
+
+      case 'banned_phrase': {
+        const test = matcher(rule);
+        if (!test) break;
+        // Scan the named fields, or every string value when unscoped. Skip the
+        // internal `_`-prefixed bookkeeping keys — they never reach the canvas.
+        const entries = rule.fields?.length
+          ? rule.fields.map((f) => [f, data[f] ?? ''] as const)
+          : Object.entries(data).filter(([k]) => !k.startsWith('_'));
+        for (const [key, value] of entries) {
+          if (typeof value !== 'string' || !value.trim()) continue;
+          if (test(value)) {
+            push({
+              ruleId: rule.id,
+              severity: rule.severity,
+              description: rule.description,
+              citation: rule.citation,
+              field: key,
+              observed: `${key} contains it: "${value.slice(0, 120)}"`,
+            });
+          }
+        }
+        break;
+      }
+
+      case 'required_element': {
+        const els = elementsFor(doc, rule.field).filter((el) => elementVisible(el, data));
+        const visibleSomewhere = els.some((el) => placedSizes(doc, el.id, sizes).length > 0);
+        if (!visibleSomewhere) {
+          push({
+            ruleId: rule.id,
+            severity: rule.severity,
+            description: rule.description,
+            citation: rule.citation,
+            field: rule.field,
+            observed: els.length
+              ? `An element for "${rule.field}" exists but is not placed in any rendered size`
+              : `The template has no element bound to "${rule.field}"`,
+          });
+        }
+        break;
+      }
+
+      case 'min_font_size': {
+        const els = elementsFor(doc, rule.field).filter((el) => elementVisible(el, data));
+        if (els.length === 0) break; // required_element is the rule for absence
+        for (const size of doc.sizes) {
+          if (!sizes.includes(size.id)) continue;
+          if (!inScope(rule, offerType, size.id)) continue;
+          const shortEdge = Math.min(size.width, size.height);
+          const floor = Math.max(
+            rule.minPx ?? 0,
+            rule.minShortEdgeFraction ? rule.minShortEdgeFraction * shortEdge : 0,
+          );
+          if (floor <= 0) continue;
+          for (const el of els) {
+            const box = doc.layouts?.[size.id]?.[el.id];
+            if (!box || box.hidden) continue;
+            const declared = box.fontSize ?? 0;
+            if (declared > 0 && declared < floor) {
+              push({
+                ruleId: rule.id,
+                severity: rule.severity,
+                description: rule.description,
+                citation: rule.citation,
+                field: rule.field,
+                sizes: [size.id],
+                observed: `${size.id}: ${Math.round(declared)}px declared, minimum ${Math.round(floor)}px`,
+              });
+            }
+          }
+        }
+        break;
+      }
+
+      case 'element_zone': {
+        const els = elementsFor(doc, rule.field).filter((el) => elementVisible(el, data));
+        for (const el of els) {
+          for (const sid of placedSizes(doc, el.id, sizes)) {
+            if (!inScope(rule, offerType, sid)) continue;
+            const b = doc.layouts[sid][el.id];
+            const z = rule.zone;
+            const inside =
+              b.x >= z.x0 - 1e-6 &&
+              b.y >= z.y0 - 1e-6 &&
+              b.x + b.w <= z.x1 + 1e-6 &&
+              b.y + b.h <= z.y1 + 1e-6;
+            if (!inside) {
+              const pct = (n: number) => `${Math.round(n * 100)}%`;
+              push({
+                ruleId: rule.id,
+                severity: rule.severity,
+                description: rule.description,
+                citation: rule.citation,
+                field: rule.field,
+                sizes: [sid],
+                observed: `${sid}: box spans x ${pct(b.x)}–${pct(b.x + b.w)}, y ${pct(b.y)}–${pct(
+                  b.y + b.h,
+                )}; required within x ${pct(z.x0)}–${pct(z.x1)}, y ${pct(z.y0)}–${pct(z.y1)}`,
+              });
+            }
+          }
+        }
+        break;
+      }
+
+      case 'min_element_size': {
+        const els = elementsFor(doc, rule.field).filter((el) => elementVisible(el, data));
+        for (const el of els) {
+          for (const sid of placedSizes(doc, el.id, sizes)) {
+            if (!inScope(rule, offerType, sid)) continue;
+            const b = doc.layouts[sid][el.id];
+            const tooNarrow = rule.minWidthFraction != null && b.w < rule.minWidthFraction - 1e-6;
+            const tooShort = rule.minHeightFraction != null && b.h < rule.minHeightFraction - 1e-6;
+            if (tooNarrow || tooShort) {
+              const pct = (n: number) => `${Math.round(n * 100)}%`;
+              const parts: string[] = [];
+              if (tooNarrow) parts.push(`width ${pct(b.w)} < ${pct(rule.minWidthFraction!)}`);
+              if (tooShort) parts.push(`height ${pct(b.h)} < ${pct(rule.minHeightFraction!)}`);
+              push({
+                ruleId: rule.id,
+                severity: rule.severity,
+                description: rule.description,
+                citation: rule.citation,
+                field: rule.field,
+                sizes: [sid],
+                observed: `${sid}: ${parts.join(', ')}`,
+              });
+            }
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  return findings;
+}
+
+/** True when nothing at error severity was found — safe to render. */
+export function coopPassed(findings: CoopFinding[]): boolean {
+  return !findings.some((f) => f.severity === 'error');
+}
+
+/** Parse a stored pack defensively. Returns null when unusable, so a corrupt
+ *  pack degrades to "no co-op checks" rather than throwing mid-run. */
+export function parseCoopPack(json: string): CoopRulePack | null {
+  try {
+    const p = JSON.parse(json) as CoopRulePack;
+    if (!p || typeof p.make !== 'string' || !Array.isArray(p.rules)) return null;
+    // Drop entries missing the fields every rule needs.
+    p.rules = p.rules.filter(
+      (r) => r && typeof r.id === 'string' && typeof r.kind === 'string' && typeof r.description === 'string',
+    );
+    return p;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A NON-AUTHORITATIVE example pack, purely to document the shape.
+ *
+ * The thresholds and phrases here are ILLUSTRATIVE. They are not transcribed
+ * from any manufacturer's co-op guidelines and must never be treated as such —
+ * note `verified: false`, which downgrades every finding to a warning so this
+ * can't block anything if it is left enabled by accident.
+ */
+export const EXAMPLE_PACK: CoopRulePack = {
+  make: '__example__',
+  version: 'example',
+  source: 'Not a real co-op document — shape reference only',
+  verified: false,
+  rules: [
+    {
+      id: 'example-disclaimer-present',
+      kind: 'required_element',
+      field: 'disclaimer',
+      severity: 'error',
+      description: 'The ad must display a disclaimer.',
+      citation: 'EXAMPLE — replace with a real citation',
+    },
+    {
+      id: 'example-credit-language',
+      kind: 'required_phrase',
+      field: 'disclaimer',
+      pattern: 'approved credit|qualified buyers|well-qualified',
+      severity: 'error',
+      description: 'Finance and lease disclaimers must state a credit qualification.',
+      citation: 'EXAMPLE — replace with a real citation',
+      scope: { offerTypes: ['lease', 'apr'] },
+    },
+    {
+      id: 'example-no-absolutes',
+      kind: 'banned_phrase',
+      pattern: '\\bfree\\b|\\bguaranteed\\b|lowest price',
+      severity: 'error',
+      description: 'Absolute or unqualified claims are not permitted.',
+      citation: 'EXAMPLE — replace with a real citation',
+    },
+    {
+      id: 'example-disclaimer-legibility',
+      kind: 'min_font_size',
+      field: 'disclaimer',
+      minShortEdgeFraction: 0.012,
+      severity: 'error',
+      description: 'The disclaimer must be at least 1.2% of the canvas short edge.',
+      citation: 'EXAMPLE — replace with a real citation',
+    },
+  ],
+};

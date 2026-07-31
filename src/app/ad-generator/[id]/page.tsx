@@ -31,7 +31,7 @@ import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { availableCustomFonts, buildFontFaceCssFromUrls, usedFontFamilies } from '@/lib/ad-generator/fonts';
 import { googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
-import { FontSelect, type FontSelectOption } from '@/components/font-select';
+import { Select, type SelectOption } from '@/components/select';
 import { isFieldVisible, isClientField, type AdData, type AdTemplate, type FieldSpec } from '@/lib/ad-generator/types';
 import { missingRequired, type OemOfferRule } from '@/lib/ad-generator/compliance';
 import { OfferCard, type VehicleSlot } from '@/components/ad-generator/client-form/offer-card';
@@ -185,7 +185,7 @@ export default function AdGeneratorPage() {
   );
   const fontFamilies = useMemo(() => [...new Set(customFonts.map((f) => f.family))], [customFonts]);
   // Font picker = system default + the account's uploaded fonts + websafe stacks.
-  const fontOptions = useMemo<FontSelectOption[]>(
+  const fontOptions = useMemo<SelectOption[]>(
     () => [
       { value: '', label: 'System default' },
       ...fontFamilies.map((fam) => ({ value: fam, label: fam })),
@@ -724,7 +724,7 @@ export default function AdGeneratorPage() {
 
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-[var(--foreground)]">Font</label>
-                  <FontSelect value={fontKey} onChange={setFontKey} options={fontOptions} />
+                  <Select value={fontKey} onChange={setFontKey} options={fontOptions} />
                 </div>
               </div>
             )}

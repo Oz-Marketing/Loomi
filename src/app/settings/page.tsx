@@ -22,6 +22,7 @@ import { IndustriesTab } from '@/components/settings/industries-tab';
 import { DefaultMarkupTab } from '@/components/settings/default-markup-tab';
 import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
 import { TeamsTab } from '@/components/settings/teams-tab';
+import { CoopGuidelinesTab } from '@/components/settings/coop-guidelines-tab';
 import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
 import { useSettingsTabs, type SettingsTabKey } from '@/components/settings/use-settings-tabs';
 import { HelpTip } from '@/components/ui/help-tip';
@@ -31,7 +32,7 @@ import { organizationOptions, subAccountCount } from '@/lib/organization-options
 type Tab = SettingsTabKey;
 
 export default function SettingsPage() {
-  const { isAdmin, isAccount, isGroup, initialized, userRole, accountKey, accountData, scopedAccountKeys } = useAccount();
+  const { isAdmin, isAccount, isGroup, initialized, accountsLoaded, userRole, accountKey, accountData, scopedAccountKeys } = useAccount();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -53,15 +54,21 @@ export default function SettingsPage() {
     : defaultTab;
 
   // Enforce canonical route per tab so browser history/back works correctly.
-  // Wait for `initialized` — before the active scope resolves from the cookie,
-  // the tab set reflects the default 'admin' mode, so redirecting here would
-  // bounce a deep link like /settings/organization to the wrong tab.
+  //
+  // Wait for `initialized` — before the active scope resolves from the cookie, the
+  // tab set reflects the default 'admin' mode, so redirecting here would bounce a
+  // deep link like /settings/organization to the wrong tab.
+  //
+  // Wait for `accountsLoaded` too: Co-op Guidelines only appears when some account
+  // is in an OEM industry, which isn't known until the account list arrives. Without
+  // this the tab is briefly absent, the redirect fires, and a deep link to it lands
+  // on Sub-Accounts instead — which is exactly what happened the first time.
   useEffect(() => {
-    if (!initialized || tabs.length === 0) return;
+    if (!initialized || !accountsLoaded || tabs.length === 0) return;
     if (!routeTab || !tabs.some(t => t.key === routeTab)) {
       router.replace(defaultTabPath, { scroll: false });
     }
-  }, [initialized, routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, isGroup, userRole]);
+  }, [initialized, accountsLoaded, routeTab, defaultTabPath, router, tabs.length, isAdmin, isAccount, isGroup, userRole]);
 
   const activeTabObj = tabs.find((t) => t.key === activeTab);
   const TitleIcon = activeTabObj?.icon ?? CogIcon;
@@ -140,6 +147,7 @@ export default function SettingsPage() {
       {activeTab === 'industries' && isElevated && isAdmin && <IndustriesTab />}
       {activeTab === 'markup' && isElevated && isAdmin && <DefaultMarkupTab />}
       {activeTab === 'alerts' && isElevated && isAdmin && <AlertRulesTab />}
+      {activeTab === 'coop-guidelines' && hasAdminAccess && isAdmin && <CoopGuidelinesTab />}
       {activeTab === 'notifications' && <NotificationsTab />}
       {activeTab === 'appearance' && <AppearanceTab />}
     </div>

@@ -49,6 +49,7 @@ import {
   GooglePacingInsight,
 } from './google-pacer-card';
 import { AdStatusBadge } from './AdStatusBadge';
+import { normalizeAdStatus } from '@/lib/ad-pacer/platform-status';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { usePacerReadOnly } from './pacer-read-only';
 import { Tooltip } from './Tooltip';
@@ -384,6 +385,11 @@ export function PacerRow({
   // Once a row is linked + synced, the platform owns its actual spend
   // (read-only here) and its daily budget is edited-then-pushed, not free-typed.
   const syncedFromMeta = synced;
+  // Whether a platform object is attached at all — distinct from `synced`, which
+  // additionally requires a completed pull. Derived from normalizeAdStatus rather
+  // than re-testing the id fields, so "is it linked" can't drift from the status
+  // the badge would actually render.
+  const isLinked = normalizeAdStatus(ad) !== 'Not linked';
   // Daily-budget editor state: collapsed (read-only + pencil) until the user
   // opts in; once they change the value a "Push" action appears.
   const [dailyEditing, setDailyEditing] = useState(false);
@@ -831,11 +837,12 @@ export function PacerRow({
             </div>
           </div>
         </div>
-        {/* Right cluster: the read-only platform Ad Status (always shown so the
-            real delivery state is visible at a glance) above the Flight window.
-            Mute alerts lives in the expanded-card footer (bottom-right). */}
+        {/* Right cluster: the Flight window. The platform Ad Status used to sit
+            above it, but it's a property of the LINK, so it now lives beside the
+            link control in the connection card and only renders when the row is
+            actually linked — an unlinked row was spending a header slot to say
+            "Not linked", which the link control already says. */}
         <div className="flex flex-shrink-0 flex-col items-end gap-2 text-right">
-          <AdStatusBadge ad={ad} label />
           {ad.flightStart && ad.flightEnd && (
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
@@ -1008,7 +1015,13 @@ export function PacerRow({
             // Connection footer — ad-set link + sync status below the spend
             // metrics, instead of crammed in as a third field.
             <div className="mt-3 flex items-center justify-between gap-4 border-t border-[var(--border)] px-3 pt-2.5">
-              {linkPicker}
+              {/* Link control (picker + unlink), then the platform Ad Status
+                  immediately to its right — the status describes the linked
+                  object, so it belongs with the link, not in the card header. */}
+              <div className="flex min-w-0 items-center gap-3">
+                {linkPicker}
+                {isLinked && <AdStatusBadge ad={ad} label />}
+              </div>
               <div className="flex flex-shrink-0 items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
                 {ad.pacerSyncedAt && (
                   <span className="whitespace-nowrap">

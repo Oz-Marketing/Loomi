@@ -1,26 +1,29 @@
 'use client';
 
 /**
- * Shadow-mode panel — the Phase 1 watch surface.
+ * The automation panel — everything about one sub-account's autonomous ads.
  *
- * Answers the three questions Phase 1 exists to answer, before anything
- * generates unattended:
+ * Reads top to bottom as a single story: is it on and healthy → what it's set
+ * to do → what it found → what it built. The three questions it exists to
+ * answer, before anything runs unattended:
  *   1. Is inventory fresh, and did the feed change shape? (feed staleness)
  *   2. Does each on-lot model actually have an advertisable offer, and is the
  *      OEM's cycle current or lapsed? (match rate + cycle state)
  *   3. How far ahead does each OEM really publish? (measured lead time)
  *
- * Nothing here creates an ad. The "would choose" column is the policy's verdict
- * recorded for inspection, deliberately not acted on.
+ * The "would choose" column is the policy's verdict recorded for inspection,
+ * deliberately not acted on — generation is a separate, explicit step.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import {
   ArrowPathIcon,
   CheckCircleIcon,
+
   ClockIcon,
+  Cog6ToothIcon,
   ExclamationTriangleIcon,
   PlayIcon,
   PlusIcon,
@@ -28,6 +31,7 @@ import {
   TrashIcon,
   XCircleIcon,
 } from '@heroicons/react/24/outline';
+import { HelpTip } from '@/components/ui/help-tip';
 
 interface FeedStatus {
   id: string;
@@ -146,16 +150,11 @@ const CYCLE: Record<CycleState, { label: string; className: string; hint: string
   unwatched: { label: 'Never polled', className: 'bg-[var(--muted)] text-[var(--muted-foreground)]', hint: 'No offer history yet' },
 };
 
-function Stat({ label, value, tone = 'default', hint }: { label: string; value: string; tone?: 'default' | 'good' | 'warn'; hint?: string }) {
-  const toneClass =
-    tone === 'good' ? 'text-emerald-500' : tone === 'warn' ? 'text-amber-500' : 'text-[var(--foreground)]';
-  return (
-    <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3" title={hint}>
-      <div className={`text-xl font-semibold tabular-nums ${toneClass}`}>{value}</div>
-      <div className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">{label}</div>
-    </div>
-  );
-}
+const WINDOW_LABEL: Record<string, string> = {
+  next_month: 'next month',
+  current_month: 'this month',
+  rolling: 'the next 30 days',
+};
 
 function relTime(iso: string | null): string {
   if (!iso) return 'never';
@@ -167,27 +166,180 @@ function relTime(iso: string | null): string {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
-export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
+// ── shared chrome ────────────────────────────────────────────────────────────
+
+/** Every block on the page uses this, so the headings stop competing. */
+function Card({
+  title,
+  help,
+  count,
+  children,
+}: {
+  title: string;
+  help?: React.ReactNode;
+  count?: number;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
+      <div className="mb-3 flex items-center gap-1.5">
+        <h2 className="text-sm font-semibold text-[var(--foreground)]">{title}</h2>
+        {count !== undefined && (
+          <span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-[var(--muted-foreground)]">
+            {count}
+          </span>
+        )}
+        {help && <HelpTip title={title} iconClassName="h-3.5 w-3.5">{help}</HelpTip>}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * A labelled field. Explanatory text goes in the HelpTip rather than trailing
+ * the label — the labels used to carry "— blank = all", "— 0 = don't check" and
+ * the like, which made every row a different width and buried the field name.
+ */
+function Field({
+  label,
+  help,
+  className = '',
+  children,
+}: {
+  label: string;
+  help?: React.ReactNode;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={className}>
+      <div className="mb-1 flex items-center gap-1">
+        <label className="text-[11px] font-medium text-[var(--muted-foreground)]">{label}</label>
+        {help && <HelpTip title={label} iconClassName="h-3 w-3">{help}</HelpTip>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+const inputClass =
+  'w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]';
+
+function Stat({
+  label,
+  value,
+  sub,
+  tone = 'default',
+  help,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: 'default' | 'good' | 'warn';
+  help?: React.ReactNode;
+}) {
+  const toneClass =
+    tone === 'good' ? 'text-emerald-500' : tone === 'warn' ? 'text-amber-500' : 'text-[var(--foreground)]';
+  return (
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+      <div className={`text-xl font-semibold tabular-nums ${toneClass}`}>{value}</div>
+      <div className="mt-0.5 flex items-center gap-1">
+        <span className="text-[11px] text-[var(--muted-foreground)]">{label}</span>
+        {help && <HelpTip title={label} iconClassName="h-3 w-3">{help}</HelpTip>}
+      </div>
+      {sub && <div className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">{sub}</div>}
+    </div>
+  );
+}
+
+// ── settings form ────────────────────────────────────────────────────────────
+
+/** The editable config, held as one object so "has anything changed" is one compare. */
+interface ScopeForm {
+  makes: string;
+  focus: string;
+  exclude: string;
+  zip: string;
+  windowMode: string;
+  templateId: string;
+  sizeIds: string[];
+  maxAds: string;
+  minStock: string;
+  mode: string;
+}
+
+const BLANK_FORM: ScopeForm = {
+  makes: '',
+  focus: '',
+  exclude: '',
+  zip: '',
+  windowMode: 'next_month',
+  templateId: '',
+  sizeIds: [],
+  maxAds: '10',
+  minStock: '0',
+  mode: 'draft',
+};
+
+function formFromReport(rep: ShadowReport): ScopeForm {
+  return {
+    makes: rep.scope?.makes?.join(', ') ?? '',
+    focus: rep.scope?.focusModels?.join(', ') ?? '',
+    exclude: rep.scope?.excludeModels?.join(', ') ?? '',
+    zip: rep.scope?.zip ?? '',
+    windowMode: rep.runWindow?.mode ?? 'next_month',
+    templateId: rep.scope?.templateMap?.all ?? '',
+    sizeIds: rep.scope?.sizeIds ?? [],
+    maxAds: String(rep.scope?.maxAdsPerRun ?? 10),
+    minStock: String(rep.scope?.minStock ?? 0),
+    mode: rep.scope?.mode ?? 'draft',
+  };
+}
+
+const csv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
+
+function toPayload(f: ScopeForm) {
+  return {
+    makes: csv(f.makes),
+    focusModels: csv(f.focus),
+    excludeModels: csv(f.exclude),
+    zip: f.zip.trim(),
+    runWindowMode: f.windowMode,
+    templateMap: f.templateId ? { all: f.templateId } : {},
+    sizeIds: f.sizeIds,
+    maxAdsPerRun: Number(f.maxAds) || 10,
+    minStock: Number(f.minStock) || 0,
+    mode: f.mode,
+  };
+}
+
+/** Order-insensitive on sizeIds, so re-picking the same sizes isn't "dirty". */
+const formKey = (f: ScopeForm) => JSON.stringify({ ...f, sizeIds: [...f.sizeIds].sort() });
+
+/**
+ * Which slice of the panel to show. The page owns the tab bar; the status strip
+ * and its run-now actions render on all of them, because "is it on" and "run it
+ * now" are questions you have regardless of which table you're reading.
+ */
+export type AutomationView = 'overview' | 'inventory' | 'drafts' | 'runs' | 'settings';
+
+export function ShadowPanel({ accountKey, view }: { accountKey: string | null; view: AutomationView }) {
   const [report, setReport] = useState<ShadowReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [feedUrl, setFeedUrl] = useState('');
   const [feedName, setFeedName] = useState('');
-  // Watch scope. Blank makes = watch every make the inventory reports, which is
-  // the zero-config default; blank models = every model with stock.
-  const [makes, setMakes] = useState('');
-  const [focus, setFocus] = useState('');
-  const [zip, setZip] = useState('');
-  const [windowMode, setWindowMode] = useState('next_month');
-  // Which template generation aims at. Empty = unmapped, and the resolver will
-  // refuse rather than pick something arbitrary.
-  const [templateId, setTemplateId] = useState('');
-  /** Empty = render every size the template defines. */
-  const [sizeIds, setSizeIds] = useState<string[]>([]);
-  const [exclude, setExclude] = useState('');
-  const [maxAds, setMaxAds] = useState('10');
-  const [minStock, setMinStock] = useState('0');
-  const [mode, setMode] = useState('draft');
+
+  // `form` is what's on screen; `saved` is what the server last confirmed. The
+  // difference is what the Save button acts on — and what lets the enable/pause
+  // toggle post the SAVED config instead of silently committing a half-typed edit.
+  const [form, setForm] = useState<ScopeForm>(BLANK_FORM);
+  const [saved, setSaved] = useState<ScopeForm>(BLANK_FORM);
+  const dirty = formKey(form) !== formKey(saved);
+
+  const set = <K extends keyof ScopeForm>(key: K, value: ScopeForm[K]) =>
+    setForm((f) => ({ ...f, [key]: value }));
 
   const load = useCallback(async () => {
     if (!accountKey) return;
@@ -198,41 +350,15 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
       const rep = json as ShadowReport;
       setReport(rep);
-      // Mirror the saved scope into the inputs so edits start from the truth.
-      setMakes(rep.scope?.makes?.join(', ') ?? '');
-      setFocus(rep.scope?.focusModels?.join(', ') ?? '');
-      setZip(rep.scope?.zip ?? '');
-      setWindowMode(rep.runWindow?.mode ?? 'next_month');
-      setTemplateId(rep.scope?.templateMap?.all ?? '');
-      setSizeIds(rep.scope?.sizeIds ?? []);
-      setExclude(rep.scope?.excludeModels?.join(', ') ?? '');
-      setMaxAds(String(rep.scope?.maxAdsPerRun ?? 10));
-      setMinStock(String(rep.scope?.minStock ?? 0));
-      setMode(rep.scope?.mode ?? 'draft');
+      const next = formFromReport(rep);
+      setForm(next);
+      setSaved(next);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not load the shadow report');
+      toast.error(err instanceof Error ? err.message : 'Could not load the automation report');
     } finally {
       setLoading(false);
     }
   }, [accountKey]);
-
-  const csv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
-  /** The scope fields, sent with every config save so a toggle can't wipe them. */
-  const scopePayload = useCallback(
-    () => ({
-      makes: csv(makes),
-      focusModels: csv(focus),
-      zip: zip.trim(),
-      runWindowMode: windowMode,
-      templateMap: templateId ? { all: templateId } : {},
-      sizeIds,
-      excludeModels: csv(exclude),
-      maxAdsPerRun: Number(maxAds) || 10,
-      minStock: Number(minStock) || 0,
-      mode,
-    }),
-    [makes, focus, zip, windowMode, templateId, sizeIds, exclude, maxAds, minStock, mode],
-  );
 
   useEffect(() => {
     void load();
@@ -258,9 +384,7 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
               : `Synced ${json.feeds.length} feed(s)`,
           );
         } else if (action === 'poll_offers') {
-          toast.success(
-            `Polled ${json.scopes} vehicle(s): ${json.offersNew} new, ${json.offersEnded} ended`,
-          );
+          toast.success(`Polled ${json.scopes} vehicle(s): ${json.offersNew} new, ${json.offersEnded} ended`);
         } else if (action === 'generate') {
           const skipped = (json.skipped ?? []).length;
           toast[json.created || json.refreshed ? 'success' : 'warning'](
@@ -281,305 +405,338 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
     [accountKey, load],
   );
 
+  const templates = report?.templates ?? [];
+  const templateSizes = templates.find((t) => t.id === form.templateId)?.sizes ?? [];
+  const drafts = useMemo(() => report?.drafts ?? [], [report]);
+
+  /**
+   * Warnings that landed on EVERY draft describe the environment, not the ad —
+   * "no S3 bucket", "no brand colour set". Repeating them on eight cards buried
+   * the one note that was actually about a specific ad, so they're hoisted into
+   * a single banner and removed from the cards below.
+   */
+  const sharedNotes = useMemo(() => {
+    if (drafts.length < 2) return new Set<string>();
+    const counts = new Map<string, number>();
+    for (const d of drafts) for (const n of new Set(d.reviewNotes)) counts.set(n, (counts.get(n) ?? 0) + 1);
+    return new Set([...counts].filter(([, c]) => c === drafts.length).map(([n]) => n));
+  }, [drafts]);
+
   if (!accountKey) {
     return (
       <div className="glass-card rounded-2xl border border-dashed border-[var(--border)] p-12 text-center">
-        <p className="text-sm text-[var(--muted-foreground)]">Pick a sub-account to see its shadow report.</p>
+        <p className="text-sm text-[var(--muted-foreground)]">Pick a sub-account to see its automation.</p>
       </div>
     );
   }
 
   const t = report?.totals;
+  const state = !report?.configured ? 'not configured' : report.enabled ? 'watching' : 'paused';
+  const templateName = templates.find((x) => x.id === form.templateId)?.name;
+
+  /** One-line recap of the config, so the collapsed card still says what it does. */
+  const summary = [
+    form.makes.trim() || 'all makes',
+    form.focus.trim() || 'every model with stock',
+    templateName ?? 'no template',
+    form.sizeIds.length ? `${form.sizeIds.length} size${form.sizeIds.length === 1 ? '' : 's'}` : 'all sizes',
+    `up to ${form.maxAds}/run`,
+    form.mode === 'ready' ? 'publish-ready' : 'drafts',
+  ].join(' · ');
 
   return (
     <div className="space-y-5">
-      {/* ── status + actions ── */}
-      <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-[var(--foreground)]">
-              Shadow mode
-              {report && (
-                <span
-                  className={`ml-2 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                    report.enabled
-                      ? 'bg-emerald-500/15 text-emerald-500'
+      {/* ── status + run actions ── */}
+      <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold text-[var(--foreground)]">Automation</h2>
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                  state === 'watching'
+                    ? 'bg-emerald-500/15 text-emerald-500'
+                    : state === 'paused'
+                      ? 'bg-amber-500/15 text-amber-500'
                       : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
-                  }`}
-                >
-                  {report.configured ? (report.enabled ? 'watching' : 'configured, paused') : 'not configured'}
-                </span>
-              )}
-            </h2>
+                }`}
+              >
+                {state}
+              </span>
+            </div>
             <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-              Records offer history and inventory. Creates no ads.
-              {report && (
+              {report ? (
                 <>
-                  {' '}Planning for{' '}
-                  <span className="text-[var(--foreground)]">
-                    {report.runWindow.start} → {report.runWindow.end}
-                  </span>{' '}
-                  ({report.runWindow.mode.replace('_', ' ')}).
+                  Watching inventory and OEM offers, planning for{' '}
+                  <span className="text-[var(--foreground)]">{WINDOW_LABEL[report.runWindow.mode] ?? report.runWindow.mode}</span>{' '}
+                  ({report.runWindow.start} → {report.runWindow.end}). Ads are built only when you generate them.
                 </>
+              ) : (
+                'Loading…'
               )}
             </p>
           </div>
+
           <div className="flex flex-wrap items-center gap-2">
             <button
-              onClick={() => act('save_config', { enabled: !report?.enabled, ...scopePayload() }, 'toggle')}
+              onClick={() => act('save_config', { enabled: !report?.enabled, ...toPayload(saved) }, 'toggle')}
               disabled={!!busy}
               className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
             >
-              {report?.enabled ? 'Pause watching' : 'Enable watching'}
+              {report?.enabled ? 'Pause' : 'Enable'}
             </button>
-            <button
-              onClick={() => act('sync_feeds')}
-              disabled={!!busy}
-              className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
-            >
-              {busy === 'sync_feeds' ? <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" /> : <ArrowPathIcon className="h-3.5 w-3.5" />}
-              Sync inventory
-            </button>
-            <button
-              onClick={() => act('poll_offers')}
-              disabled={!!busy}
-              className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
-            >
-              {busy === 'poll_offers' ? <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" /> : <PlayIcon className="h-3.5 w-3.5" />}
-              Poll offers now
-            </button>
+            {/* Run-now actions, grouped so they read as one cluster distinct
+                from the on/off switch beside them. */}
+            <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] p-1">
+              <button
+                onClick={() => act('sync_feeds')}
+                disabled={!!busy}
+                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/60 disabled:opacity-50"
+              >
+                <ArrowPathIcon className={`h-3.5 w-3.5 ${busy === 'sync_feeds' ? 'animate-spin' : ''}`} />
+                Sync inventory
+              </button>
+              <button
+                onClick={() => act('poll_offers')}
+                disabled={!!busy}
+                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/60 disabled:opacity-50"
+              >
+                {busy === 'poll_offers' ? (
+                  <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <PlayIcon className="h-3.5 w-3.5" />
+                )}
+                Poll offers
+              </button>
+            </div>
             <button
               onClick={() => act('generate')}
               disabled={!!busy}
               title="Renders draft ads from the offers on file. Nothing publishes."
               className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
             >
-              {busy === 'generate' ? <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" /> : <SparklesIcon className="h-3.5 w-3.5" />}
+              {busy === 'generate' ? (
+                <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <SparklesIcon className="h-3.5 w-3.5" />
+              )}
               Generate drafts
             </button>
           </div>
         </div>
 
-        {/* ── watch scope ── */}
-        <div className="mb-4 grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 p-3 sm:grid-cols-2 lg:grid-cols-6">
-          <div className="lg:col-span-1">
-            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
-              Makes <span className="font-normal">— blank = all</span>
-            </label>
-            <input
-              value={makes}
-              onChange={(e) => setMakes(e.target.value)}
-              placeholder="Chevrolet"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-            />
-          </div>
-          <div className="lg:col-span-2">
-            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
-              Focus models <span className="font-normal">— blank = every model with stock</span>
-            </label>
-            <input
-              value={focus}
-              onChange={(e) => setFocus(e.target.value)}
-              placeholder="Silverado 1500, Equinox"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">ZIP</label>
-            <input
-              value={zip}
-              onChange={(e) => setZip(e.target.value)}
-              placeholder="84401"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
-              Template <span className="font-normal">— required to generate</span>
-            </label>
-            <select
-              value={templateId}
-              onChange={(e) => setTemplateId(e.target.value)}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-            >
-              <option value="">Not mapped — generation will skip</option>
-              {(report?.templates ?? []).map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                  {t.owned ? '' : ' (shared)'}
-                </option>
+        {/* Environment problems affecting every generated ad. */}
+        {view === 'overview' && sharedNotes.size > 0 && (
+          <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2.5">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-amber-500">
+              <ExclamationTriangleIcon className="h-3.5 w-3.5" />
+              Affects every generated ad
+            </div>
+            <ul className="mt-1.5 space-y-1">
+              {[...sharedNotes].map((n) => (
+                <li key={n} className="text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                  {n}
+                </li>
               ))}
-            </select>
+            </ul>
+          </div>
+        )}
 
-            {/* Sizes. Driven by the SELECTED template's own list rather than a
-                fixed set, because sizes are a property of the design — offering
-                one the template doesn't define would just render nothing. */}
-            {(() => {
-              const sizes = report?.templates?.find((t) => t.id === templateId)?.sizes ?? [];
-              if (!templateId || sizes.length === 0) return null;
-              const all = sizeIds.length === 0;
-              return (
-                <div className="mt-2">
-                  <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
-                    Sizes to generate{' '}
-                    <span className="font-normal">— none selected means all {sizes.length}</span>
-                  </label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {sizes.map((sz) => {
-                      const on = all || sizeIds.includes(sz.id);
-                      return (
-                        <button
-                          key={sz.id}
-                          type="button"
-                          onClick={() =>
-                            setSizeIds((cur) => {
-                              // First click on an "all" state means "just this one",
-                              // which is what someone narrowing down actually wants.
-                              if (cur.length === 0) return [sz.id];
-                              const next = cur.includes(sz.id)
-                                ? cur.filter((x) => x !== sz.id)
-                                : [...cur, sz.id];
-                              // Deselecting the last one returns to all, rather than
-                              // leaving a config that renders nothing.
-                              return next.length === sizes.length ? [] : next;
-                            })
-                          }
-                          className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
-                            on
-                              ? 'bg-[var(--primary)] text-white'
-                              : 'border border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
-                          }`}
-                        >
-                          {sz.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Plan for</label>
-            <div className="flex gap-1.5">
-              <select
-                value={windowMode}
-                onChange={(e) => setWindowMode(e.target.value)}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-              >
-                <option value="next_month">Next month</option>
-                <option value="current_month">This month</option>
-                <option value="rolling">Rolling 30d</option>
-              </select>
-              <button
-                onClick={() => act('save_config', { enabled: report?.enabled ?? false, ...scopePayload() }, 'save_scope')}
-                disabled={!!busy}
-                className="flex-shrink-0 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
-              >
-                Save
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* ── generation limits + autonomy dial ── */}
-        <div className="mb-4 grid gap-3 rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 p-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
-              Exclude models
-            </label>
-            <input
-              value={exclude}
-              onChange={(e) => setExclude(e.target.value)}
-              placeholder="Bolt EV"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
-              Max ads per run
-            </label>
-            <input
-              value={maxAds}
-              onChange={(e) => setMaxAds(e.target.value.replace(/[^0-9]/g, ''))}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
-              Min stock <span className="font-normal">— 0 = don’t check</span>
-            </label>
-            <input
-              value={minStock}
-              onChange={(e) => setMinStock(e.target.value.replace(/[^0-9]/g, ''))}
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2.5 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Output</label>
-            <div className="flex gap-1.5">
-              <select
-                value={mode}
-                onChange={(e) => setMode(e.target.value)}
-                className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-              >
-                <option value="draft">Draft — a person approves</option>
-                <option value="ready">Ready — needs verified co-op</option>
-              </select>
-              <button
-                onClick={() => act('save_config', { enabled: report?.enabled ?? false, ...scopePayload() }, 'save_limits')}
-                disabled={!!busy}
-                className="flex-shrink-0 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
-              >
-                Save
-              </button>
-            </div>
-            {/* State the precondition inline. A dial that silently does nothing is
-                worse than no dial — `ready` falls back to `draft` per-ad without a
-                verified pack, and the reason lands in that ad's review notes. */}
-            {mode === 'ready' && (
-              <p className="mt-1.5 flex gap-1 text-[10px] text-amber-500">
-                <ExclamationTriangleIcon className="mt-0.5 h-3 w-3 flex-shrink-0" />
-                <span>
-                  Ads still land as drafts for any make without a <strong>verified</strong> co-op pack — no
-                  packs are on file yet, so this currently changes nothing.
-                </span>
-              </p>
-            )}
-          </div>
-        </div>
-
-        {t && (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            <Stat label="new units on lot" value={String(t.newUnits)} />
-            <Stat label="year/make/model groups" value={String(t.stockGroups)} />
+        {view === 'overview' && t && (
+          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <Stat label="new units on lot" value={String(t.newUnits)} sub={`${t.stockGroups} model groups`} />
             <Stat
-              label="with a usable offer"
-              value={`${t.groupsWithOffer}/${t.stockGroups}`}
-              tone={t.matchRatePct >= 70 ? 'good' : 'warn'}
-            />
-            <Stat
-              label="match rate"
+              label="have a usable offer"
               value={`${t.matchRatePct}%`}
+              sub={`${t.groupsWithOffer} of ${t.stockGroups} groups`}
               tone={t.matchRatePct >= 70 ? 'good' : 'warn'}
-              hint="On-lot models with an offer valid for the run window"
+              help={<p>Share of on-lot model groups with an OEM offer valid for the run window. The rest can&apos;t be advertised until the manufacturer publishes something.</p>}
             />
             <Stat label="live offers on file" value={String(t.liveOffers)} />
             <Stat
               label="awaiting next OEM cycle"
               value={String(t.awaitingNextCycle)}
               tone={t.awaitingNextCycle > 0 ? 'warn' : 'default'}
-              hint="Programmes expire before the run window and the OEM has not published the next cycle"
+              help={<p>Programmes that expire before the run window opens, where the manufacturer hasn&apos;t published the next cycle yet. A wait state, not a failure.</p>}
             />
           </div>
         )}
-      </div>
+      </section>
 
-      {/* ── feeds ── */}
-      <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-          Inventory feeds
-        </h2>
+      {/* ── settings ── */}
+      {view === 'settings' && (
+      <section className="glass-card rounded-2xl border border-[var(--border)]">
+        <div className="flex items-center gap-3 p-5 pb-0">
+          <Cog6ToothIcon className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
+              Settings
+              {dirty && (
+                <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">
+                  unsaved
+                </span>
+              )}
+            </div>
+            <p className="mt-0.5 truncate text-[11px] text-[var(--muted-foreground)]">{summary}</p>
+          </div>
+        </div>
+
+        <div className="mt-5 space-y-5 px-5 pb-5">
+            {/* What to advertise */}
+            <div>
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                What to advertise
+              </h3>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Field label="Makes" help={<p>Comma-separated. Leave blank to watch <strong>every make</strong> the inventory feed reports.</p>}>
+                  <input value={form.makes} onChange={(e) => set('makes', e.target.value)} placeholder="Chevrolet" className={inputClass} />
+                </Field>
+                <Field label="Focus models" help={<p>Only advertise these. Leave blank for <strong>every model with stock</strong>.</p>}>
+                  <input value={form.focus} onChange={(e) => set('focus', e.target.value)} placeholder="Silverado 1500, Equinox" className={inputClass} />
+                </Field>
+                <Field label="Exclude models" help={<p>Never advertise these, even when they have stock and a live offer.</p>}>
+                  <input value={form.exclude} onChange={(e) => set('exclude', e.target.value)} placeholder="Bolt EV" className={inputClass} />
+                </Field>
+                <Field label="Min stock" help={<p>Skip a model unless at least this many new units are on the lot. <strong>0 turns the check off.</strong></p>}>
+                  <input value={form.minStock} onChange={(e) => set('minStock', e.target.value.replace(/[^0-9]/g, ''))} className={inputClass} />
+                </Field>
+              </div>
+            </div>
+
+            {/* How ads are built */}
+            <div>
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                How ads are built
+              </h3>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <Field label="Template" help={<p>The design every generated ad uses. <strong>Required</strong> — with none mapped, generation skips every vehicle.</p>}>
+                  <select value={form.templateId} onChange={(e) => set('templateId', e.target.value)} className={inputClass}>
+                    <option value="">Not mapped — generation will skip</option>
+                    {templates.map((tpl) => (
+                      <option key={tpl.id} value={tpl.id}>
+                        {tpl.name}
+                        {tpl.owned ? '' : ' (shared)'}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                <Field label="Output" help={<p><strong>Draft</strong> holds every ad for a person to approve. <strong>Ready</strong> publishes automatically, but only for makes with a verified co-op pack.</p>}>
+                  <select value={form.mode} onChange={(e) => set('mode', e.target.value)} className={inputClass}>
+                    <option value="draft">Draft — a person approves</option>
+                    <option value="ready">Ready — needs verified co-op</option>
+                  </select>
+                  {/* A dial that silently does nothing is worse than no dial —
+                      `ready` falls back to `draft` per-ad without a verified pack. */}
+                  {form.mode === 'ready' && (
+                    <p className="mt-1.5 flex gap-1 text-[10px] text-amber-500">
+                      <ExclamationTriangleIcon className="mt-0.5 h-3 w-3 flex-shrink-0" />
+                      <span>
+                        Ads still land as drafts for any make without a <strong>verified</strong> co-op pack — no
+                        packs are on file yet, so this currently changes nothing.
+                      </span>
+                    </p>
+                  )}
+                </Field>
+
+                {/* Sizes come from the SELECTED template's own list rather than a
+                    fixed set: sizes are a property of the design, so offering one
+                    the template doesn't define would just render nothing. */}
+                {form.templateId && templateSizes.length > 0 && (
+                  <Field
+                    label="Sizes"
+                    help={<p>Which of the template&apos;s sizes to render. Select none to render <strong>all {templateSizes.length}</strong>.</p>}
+                  >
+                    <div className="flex flex-wrap gap-1.5">
+                      {templateSizes.map((sz) => {
+                        const on = form.sizeIds.length === 0 || form.sizeIds.includes(sz.id);
+                        return (
+                          <button
+                            key={sz.id}
+                            type="button"
+                            onClick={() =>
+                              set(
+                                'sizeIds',
+                                (() => {
+                                  const cur = form.sizeIds;
+                                  // First click on an "all" state means "just this
+                                  // one", which is what narrowing down wants.
+                                  if (cur.length === 0) return [sz.id];
+                                  const next = cur.includes(sz.id) ? cur.filter((x) => x !== sz.id) : [...cur, sz.id];
+                                  // Deselecting the last returns to all, rather
+                                  // than leaving a config that renders nothing.
+                                  return next.length === templateSizes.length ? [] : next;
+                                })(),
+                              )
+                            }
+                            className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                              on
+                                ? 'bg-[var(--primary)] text-white'
+                                : 'border border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+                            }`}
+                          >
+                            {sz.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </Field>
+                )}
+              </div>
+            </div>
+
+            {/* Timing and limits */}
+            <div>
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                Timing &amp; limits
+              </h3>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                <Field label="Plan for" help={<p>The window an offer has to cover to be advertisable. Most OEMs publish month by month, so <strong>next month</strong> is the usual choice.</p>}>
+                  <select value={form.windowMode} onChange={(e) => set('windowMode', e.target.value)} className={inputClass}>
+                    <option value="next_month">Next month</option>
+                    <option value="current_month">This month</option>
+                    <option value="rolling">Rolling 30 days</option>
+                  </select>
+                </Field>
+                <Field label="Max ads per run" help={<p>Ceiling on how many ads one generate produces, so a feed change can&apos;t flood the review queue.</p>}>
+                  <input value={form.maxAds} onChange={(e) => set('maxAds', e.target.value.replace(/[^0-9]/g, ''))} className={inputClass} />
+                </Field>
+                <Field label="ZIP" help={<p>Where OEM offers are looked up. Regional incentives differ by market, so this should be the dealership&apos;s own ZIP.</p>}>
+                  <input value={form.zip} onChange={(e) => set('zip', e.target.value)} placeholder="84401" className={inputClass} />
+                </Field>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] pt-4">
+              {dirty && (
+                <button
+                  onClick={() => setForm(saved)}
+                  disabled={!!busy}
+                  className="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50"
+                >
+                  Discard changes
+                </button>
+              )}
+              <button
+                onClick={() => act('save_config', { enabled: report?.enabled ?? false, ...toPayload(form) }, 'save')}
+                disabled={!!busy || !dirty}
+                className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+              >
+                {busy === 'save' ? 'Saving…' : dirty ? 'Save changes' : 'Saved'}
+              </button>
+            </div>
+        </div>
+      </section>
+      )}
+
+      {/* ── feeds + the watch list they feed ── */}
+      {view === 'inventory' && (
+      <>
+      <Card
+        title="Inventory feeds"
+        count={report?.feeds.length}
+        help={<p>The dealership&apos;s Vehicle Listing Ads export. It supplies on-lot stock, which decides what&apos;s worth advertising and gates generation on real availability.</p>}
+      >
         {report?.feeds.length ? (
           <div className="mb-4 space-y-2">
             {report.feeds.map((f) => (
@@ -631,25 +788,13 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
           </p>
         )}
 
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="min-w-[140px] flex-1">
-            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Name</label>
-            <input
-              value={feedName}
-              onChange={(e) => setFeedName(e.target.value)}
-              placeholder="Young Chev"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-            />
-          </div>
-          <div className="min-w-[240px] flex-[3]">
-            <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Feed URL</label>
-            <input
-              value={feedUrl}
-              onChange={(e) => setFeedUrl(e.target.value)}
-              placeholder="https://ozreports.com/feed/vla/…"
-              className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
-            />
-          </div>
+        <div className="flex flex-wrap items-end gap-2 border-t border-[var(--border)] pt-4">
+          <Field label="Name" className="min-w-[140px] flex-1">
+            <input value={feedName} onChange={(e) => setFeedName(e.target.value)} placeholder="Young Chev" className={inputClass} />
+          </Field>
+          <Field label="Feed URL" className="min-w-[240px] flex-[3]">
+            <input value={feedUrl} onChange={(e) => setFeedUrl(e.target.value)} placeholder="https://ozreports.com/feed/vla/…" className={inputClass} />
+          </Field>
           <button
             onClick={async () => {
               await act('add_feed', { url: feedUrl, name: feedName }, 'add_feed');
@@ -657,18 +802,40 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
               setFeedName('');
             }}
             disabled={!!busy || !feedUrl.trim()}
-            className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-[7px] text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             <PlusIcon className="h-3.5 w-3.5" /> Add feed
           </button>
         </div>
-      </div>
+      </Card>
 
       {/* ── watched vehicles ── */}
-      <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-          Watched vehicles
-        </h2>
+      <Card
+        title="Watched vehicles"
+        count={report?.vehicles.length}
+        help={
+          <>
+            <p><strong>What each column means:</strong></p>
+            <ul>
+              <li><strong>Stock</strong> — new units of that model on the lot right now.</li>
+              <li><strong>Live</strong> — manufacturer offers currently valid for it.</li>
+              <li><strong>Ended</strong> — offers that have since expired.</li>
+              <li><strong>Cycle</strong> — whether those offers cover the window you&apos;re planning for.</li>
+              <li><strong>Last ends</strong> — when the latest one runs out.</li>
+              <li><strong>Would choose</strong> — the offer the policy would put on an ad, if you generated one now.</li>
+            </ul>
+            <p>The list builds itself. Anything with new stock in the feed and inside your Settings scope lands here — there&apos;s nothing to add by hand.</p>
+          </>
+        }
+      >
+        {/* Connor asked what this section even was. It's the join between the
+            two feeds, and saying so plainly beats another tooltip. */}
+        <p className="-mt-1 mb-3 max-w-3xl text-xs leading-relaxed text-[var(--muted-foreground)]">
+          Your on-lot inventory matched against the manufacturer offers polled for it — what you have to sell,
+          next to what the OEM is currently paying to advertise. A model can only produce an ad when it appears
+          here with stock <em>and</em> a live offer. Nothing here is acted on: <strong>Would choose</strong> is the
+          decision recorded for inspection, so you can check the automation&apos;s judgement before trusting it.
+        </p>
         {report?.vehicles.length ? (
           <div className="-mx-2 overflow-x-auto">
             <table className="w-full min-w-[720px] text-left text-xs">
@@ -703,7 +870,9 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
                         {v.endedOffers || '—'}
                       </td>
                       <td className="px-2 py-2">
-                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${c.className}`}>{c.label}</span>
+                        <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${c.className}`} title={c.hint}>
+                          {c.label}
+                        </span>
                       </td>
                       <td className="px-2 py-2 tabular-nums text-[var(--muted-foreground)]">{v.latestEnd ?? '—'}</td>
                       <td className="px-2 py-2 text-[var(--foreground)]">{v.wouldChoose ?? '—'}</td>
@@ -718,21 +887,29 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
             Nothing watched yet. Sync inventory, then poll offers — the watch list builds itself from on-lot new stock.
           </p>
         )}
-      </div>
+      </Card>
+      </>
+      )}
 
       {/* ── generated drafts (the review queue) ── */}
-      {report?.drafts.length ? (
-        <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
-          <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-            Generated drafts
-          </h2>
-          <p className="mb-3 text-[11px] text-[var(--muted-foreground)]">
-            Machine-built and waiting on a person. Nothing here has published. A blank co-op column means no
-            manufacturer rules were checked for that brand.
-          </p>
+      {view === 'drafts' && (
+        drafts.length === 0 ? (
+          <div className="glass-card rounded-2xl border border-dashed border-[var(--border)] p-12 text-center">
+            <p className="text-sm text-[var(--muted-foreground)]">Nothing generated yet.</p>
+            <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+              Use <strong>Generate drafts</strong> above to build ads from the offers on file.
+            </p>
+          </div>
+        ) : (
+        <Card
+          title="Generated drafts"
+          count={drafts.length}
+          help={<p>Machine-built and waiting on a person — nothing here has published. A <strong>no co-op check</strong> badge means no manufacturer rules were on file for that brand, so none were evaluated.</p>}
+        >
           <div className="space-y-2">
-            {report.drafts.map((d) => {
+            {drafts.map((d) => {
               const expired = d.expiresAt ? new Date(d.expiresAt).getTime() < Date.now() : false;
+              const notes = d.reviewNotes.filter((n) => !sharedNotes.has(n));
               return (
                 <div
                   key={d.id}
@@ -789,9 +966,9 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
                         </span>
                       )}
                     </div>
-                    {d.reviewNotes.length > 0 && (
+                    {notes.length > 0 && (
                       <ul className="mt-1.5 space-y-0.5">
-                        {d.reviewNotes.map((n, i) => (
+                        {notes.map((n, i) => (
                           <li key={i} className="flex gap-1.5 text-[11px] text-amber-500">
                             <ExclamationTriangleIcon className="mt-0.5 h-3 w-3 flex-shrink-0" />
                             <span className="break-words">{n}</span>
@@ -804,20 +981,25 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
               );
             })}
           </div>
-        </div>
-      ) : null}
+        </Card>
+        )
+      )}
 
       {/* ── measured OEM lead time ── */}
-      {report?.leadTimes.length ? (
-        <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
-          <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-            Measured publication lead time
-          </h2>
-          <p className="mb-3 text-[11px] text-[var(--muted-foreground)]">
-            Days between first seeing a programme and its expiry. Measured, not assumed — testing found Honda
-            publishing ~6 weeks out while Mazda and GM published only to month-end, so a single hardcoded
-            assumption would be wrong for most brands. Accuracy improves as history accumulates.
-          </p>
+      {view === 'overview' && report?.leadTimes.length ? (
+        <Card
+          title="Measured publication lead time"
+          help={
+            <>
+              <p>Days between first seeing a programme and its expiry.</p>
+              <p>
+                Measured, not assumed — testing found Honda publishing ~6 weeks out while Mazda and GM published
+                only to month-end, so a single hardcoded assumption would be wrong for most brands.
+              </p>
+              <p>Accuracy improves as history accumulates.</p>
+            </>
+          }
+        >
           <div className="flex flex-wrap gap-3">
             {report.leadTimes.map((l) => (
               <div key={l.make} className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-3 py-2">
@@ -828,18 +1010,15 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
               </div>
             ))}
           </div>
-        </div>
+        </Card>
       ) : null}
 
       {/* ── run history / heartbeat ── */}
-      <div className="glass-card rounded-2xl border border-[var(--border)] p-5">
-        <h2 className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-          Run history
-        </h2>
-        <p className="mb-3 text-[11px] text-[var(--muted-foreground)]">
-          Every run is recorded, including ones that changed nothing — otherwise a stalled job looks identical to a
-          quiet month.
-        </p>
+      {view === 'runs' && (
+      <Card
+        title="Run history"
+        help={<p>Every run is recorded, including ones that changed nothing — otherwise a stalled job looks identical to a quiet month.</p>}
+      >
         {report?.runs.length ? (
           <div className="space-y-1.5">
             {report.runs.map((r) => (
@@ -863,6 +1042,15 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
                       <span className="text-[var(--foreground)]">{r.offersNew} new</span>
                       <span>{r.offersEnded} ended</span>
                     </>
+                  ) : r.kind === 'generate' ? (
+                    /* A generate run counts VEHICLE GROUPS in `scopesChecked` and
+                       never sets `vehiclesSeen`, so the feed-sync labels below
+                       read "8 feeds · 0 vehicles" — wrong on every column. */
+                    <>
+                      <span className="text-[var(--foreground)]">{r.scopesChecked} vehicles</span>
+                      <span>{r.offersSeen} offers</span>
+                      {r.issueCount > 0 && <span className="text-amber-500">{r.issueCount} skipped</span>}
+                    </>
                   ) : (
                     <>
                       <span>{r.scopesChecked} feeds</span>
@@ -883,7 +1071,8 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
         ) : (
           <p className="text-xs text-[var(--muted-foreground)]">No runs yet.</p>
         )}
-      </div>
+      </Card>
+      )}
 
       {loading && (
         <p className="flex items-center justify-center gap-1.5 text-[11px] text-[var(--muted-foreground)]">

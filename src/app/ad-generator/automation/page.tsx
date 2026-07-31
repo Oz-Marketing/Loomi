@@ -31,7 +31,7 @@ import {
 import { useAccount } from '@/contexts/account-context';
 import { FontSelect, type FontSelectOption } from '@/components/font-select';
 import { EVOX_CURRENT_YEAR, EVOX_YEARS, EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
-import { ShadowPanel } from '@/components/ad-generator/automation/shadow-panel';
+import { ShadowPanel, type AutomationView } from '@/components/ad-generator/automation/shadow-panel';
 
 type Status = 'ok' | 'warn' | 'failed' | 'skipped';
 
@@ -140,9 +140,9 @@ export default function AutomationDryRunPage() {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<DryRunResult | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
-  // Shadow is the default view: Phase 1's job is watching, and the dry run is
-  // the diagnostic you reach for when something in the chain looks wrong.
-  const [tab, setTab] = useState<'shadow' | 'dryrun'>('shadow');
+  // Overview is the default: the day-to-day question is "is it healthy", and
+  // the dry run is the diagnostic you reach for when the chain looks wrong.
+  const [tab, setTab] = useState<AutomationView | 'dryrun'>('overview');
 
   // Seed make + ZIP from the active sub-account (the same defaults the worker
   // would use), without clobbering anything already typed.
@@ -239,16 +239,23 @@ export default function AutomationDryRunPage() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold text-[var(--foreground)]">Ad automation</h1>
         <p className="mt-1.5 max-w-3xl text-sm text-[var(--muted-foreground)]">
-          {tab === 'shadow'
-            ? 'Phase 1 — shadow mode. Records OEM offer history and dealer inventory so the feed’s real behaviour is known before anything generates unattended. No ads are created.'
-            : 'Walks the full autonomous chain for one vehicle and reports every step. Nothing is saved — no ad is created, no render is uploaded, no offer state is recorded.'}
+          {/* The old copy said "no ads are created" while a Generate drafts
+              button sat directly below it. What's true is that nothing
+              PUBLISHES — generated ads land as drafts for a person to approve. */}
+          {tab === 'dryrun'
+            ? 'Walks the full autonomous chain for one vehicle and reports every step. Nothing is saved — no ad is created, no render is uploaded, no offer state is recorded.'
+            : 'Watches this sub-account’s inventory and OEM offers, and builds draft ads from them. Nothing publishes on its own — every generated ad waits for a person.'}
         </p>
       </header>
 
       {/* ── view tabs ── */}
-      <div className="mb-6 flex items-center gap-5 border-b border-[var(--border)]">
+      <div className="mb-6 flex flex-wrap items-center gap-x-5 border-b border-[var(--border)]">
         {([
-          ['shadow', 'Shadow mode'],
+          ['overview', 'Overview'],
+          ['inventory', 'Inventory'],
+          ['drafts', 'Generated drafts'],
+          ['runs', 'Run history'],
+          ['settings', 'Settings'],
           ['dryrun', 'Dry run'],
         ] as const).map(([id, label]) => (
           <button
@@ -265,7 +272,7 @@ export default function AutomationDryRunPage() {
         ))}
       </div>
 
-      {tab === 'shadow' && <ShadowPanel accountKey={accountKey} />}
+      {tab !== 'dryrun' && <ShadowPanel accountKey={accountKey} view={tab} />}
 
       <div className={tab === 'dryrun' ? 'grid gap-6 lg:grid-cols-[340px_1fr]' : 'hidden'}>
         {/* ── Inputs ── */}

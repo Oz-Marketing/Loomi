@@ -178,16 +178,39 @@ export const GENERATE_CONFIG_SELECT = {
 } as const;
 
 /** Generate for one sub-account. */
+/**
+ * Per-run narrowing, from the "Generate from OEM offers" dialog.
+ *
+ * A scheduled run uses the sub-account's saved config and takes everything.
+ * A person triggering a run by hand usually wants a slice of it — this month's
+ * lease push, two models — and being made to edit the saved settings to get it
+ * would leave the automation misconfigured afterwards.
+ */
+export interface GenerateScope {
+  /** Group keys (`year|make|model`, lower-cased) to include. Absent/empty = all. */
+  vehicles?: string[];
+  /** Restrict to these offer types. Absent/empty = the sub-account's configured set. */
+  offerTypes?: SelectableOfferType[];
+}
+
 export async function generateForAccount(
   config: GenerateConfigRow,
-  opts: { now?: Date } = {},
+  opts: { now?: Date; scope?: GenerateScope } = {},
 ): Promise<GenerateResult> {
   const now = opts.now ?? new Date();
   const started = new Date();
   const window = runWindowFor(config, now);
-  const priority = jsonArray(config.offerTypePriority).filter((t): t is SelectableOfferType =>
+  const configured = jsonArray(config.offerTypePriority).filter((t): t is SelectableOfferType =>
     ['lease', 'apr', 'cash'].includes(t),
   );
+  // A run-scoped type list narrows the configured one, keeping the configured
+  // ORDER — the dialog picks which types are allowed, not which is preferred.
+  // If the two don't overlap the explicit choice wins: the alternative is an
+  // empty list, which `selectOffer` reads as "unset" and would silently widen
+  // the run back to all three types.
+  const wanted = opts.scope?.offerTypes?.length ? opts.scope.offerTypes : null;
+  const narrowed = wanted ? configured.filter((t) => wanted.includes(t)) : configured;
+  const priority = wanted && narrowed.length === 0 ? wanted : narrowed;
   const templateMap = jsonRecord(config.templateMap);
   // Which sizes to render. Empty = every size the template defines, which is what
   // this did before the setting existed, so an unconfigured account is unchanged.
@@ -232,6 +255,13 @@ export async function generateForAccount(
     const g = groups.get(key) ?? { year: s.year, make: s.make, model: s.model, incentives: [] };
     g.incentives.push(inc);
     groups.set(key, g);
+  }
+
+  // Run-scoped vehicle list. Applied after grouping so the keys match exactly
+  // what the dialog was offered.
+  const onlyVehicles = opts.scope?.vehicles?.length ? new Set(opts.scope.vehicles) : null;
+  if (onlyVehicles) {
+    for (const key of [...groups.keys()]) if (!onlyVehicles.has(key)) groups.delete(key);
   }
 
   // Per-make rules, fetched once each rather than per vehicle.

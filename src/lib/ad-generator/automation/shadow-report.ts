@@ -67,6 +67,10 @@ export interface WatchedVehicle {
   endedOffers: number;
   cycleState: OfferCycleState | 'unwatched';
   cycleSummary: string;
+  /** Distinct types among the live offers (`lease` | `apr` | `cash` | …). */
+  offerTypes: string[];
+  /** The type of the offer `wouldChoose` describes. */
+  wouldChooseType: string | null;
   /** Latest end date across live offers (yyyy-mm-dd). */
   latestEnd: string | null;
   /** What the policy would pick today — recorded, never acted on in Phase 1. */
@@ -354,6 +358,14 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
       cycleSummary: cycle?.summary ?? 'Never polled — no offer history for this vehicle yet.',
       latestEnd: cycle?.latestEnd?.toISOString().slice(0, 10) ?? null,
       wouldChoose: selection?.chosen ? describeChoice(selection.chosen.incentive) : null,
+      // The TYPE behind `wouldChoose`. The Generate dialog needs it to know when
+      // its own type filter has invalidated that pick — excluding leases makes
+      // "$299/mo" the wrong thing to promise for a vehicle that also has APR.
+      wouldChooseType: selection?.chosen ? selection.chosen.incentive.type : null,
+      // Which offer types are actually on file for this vehicle. The Generate
+      // dialog filters its list by this, so narrowing to "lease only" shows the
+      // vehicles that can really produce a lease ad rather than all of them.
+      offerTypes: [...new Set(incentives.map((i) => i.type))].sort(),
       firstSeenAt: firstSeen?.toISOString() ?? null,
     });
   }

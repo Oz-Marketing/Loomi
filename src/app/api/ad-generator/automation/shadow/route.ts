@@ -27,6 +27,7 @@ import {
   GENERATE_CONFIG_SELECT,
   type GenerateConfigRow,
 } from '@/lib/ad-generator/automation/generate-ads';
+import type { SelectableOfferType } from '@/lib/ad-generator/automation/select-offer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -86,6 +87,8 @@ export async function POST(req: NextRequest) {
   let body: {
     accountKey?: string;
     action?: string;
+    // generate
+    scope?: { vehicles?: unknown[]; offerTypes?: unknown[] };
     // save_config
     enabled?: boolean;
     makes?: string[];
@@ -256,7 +259,18 @@ export async function POST(req: NextRequest) {
             { status: 400 },
           );
         }
-        const result = await generateForAccount(config);
+        // Optional per-run narrowing from the Generate dialog. Validated hard:
+        // these come from a client, and an unrecognised offer type reaching
+        // `selectOffer` would reject every incentive without saying why.
+        const rawVehicles = Array.isArray(body.scope?.vehicles) ? body.scope!.vehicles! : [];
+        const rawTypes = Array.isArray(body.scope?.offerTypes) ? body.scope!.offerTypes! : [];
+        const scope = {
+          vehicles: rawVehicles.filter((v): v is string => typeof v === 'string' && !!v.trim()),
+          offerTypes: rawTypes.filter((t): t is SelectableOfferType =>
+            t === 'lease' || t === 'apr' || t === 'cash',
+          ),
+        };
+        const result = await generateForAccount(config, { scope });
         return NextResponse.json({
           ok: true,
           runId: result.runId,

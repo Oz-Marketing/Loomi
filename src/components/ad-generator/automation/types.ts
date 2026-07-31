@@ -29,8 +29,11 @@ export interface WatchedVehicle {
   endedOffers: number;
   cycleState: CycleState;
   cycleSummary: string;
+  /** Distinct types among the live offers. */
+  offerTypes: string[];
   latestEnd: string | null;
   wouldChoose: string | null;
+  wouldChooseType: string | null;
   firstSeenAt: string | null;
 }
 

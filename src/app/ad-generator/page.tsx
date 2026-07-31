@@ -42,6 +42,7 @@ import {
   type OfferWindow,
 } from '@/lib/ad-generator/ad-facets';
 import { AdFilterPanel } from '@/components/ad-generator/ad-filter-panel';
+import { GenerateOffersModal, type GenerateCandidate } from '@/components/ad-generator/generate-offers-modal';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import type { AdTemplate, AdData } from '@/lib/ad-generator/types';
 
@@ -87,6 +88,9 @@ export default function AdGeneratorListPage() {
   // configured AND have a template mapped, or a run can only report zero.
   const [automationReady, setAutomationReady] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [genOpen, setGenOpen] = useState(false);
+  const [candidates, setCandidates] = useState<GenerateCandidate[]>([]);
+  const [maxAdsPerRun, setMaxAdsPerRun] = useState(10);
   // Header dropdowns: the settings cog + the "New ad" split menu.
   const [cogOpen, setCogOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
@@ -162,10 +166,34 @@ export default function AdGeneratorListPage() {
     let cancelled = false;
     fetch(`/api/ad-generator/automation/shadow?accountKey=${encodeURIComponent(accountKey)}`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d: { configured?: boolean; scope?: { templateMap?: Record<string, string> } } | null) => {
-        if (cancelled) return;
-        setAutomationReady(!!d?.configured && !!d?.scope?.templateMap?.all);
-      })
+      .then(
+        (
+          d: {
+            configured?: boolean;
+            scope?: { templateMap?: Record<string, string>; maxAdsPerRun?: number };
+            vehicles?: (GenerateCandidate & { liveOffers?: number })[];
+          } | null,
+        ) => {
+          if (cancelled) return;
+          setAutomationReady(!!d?.configured && !!d?.scope?.templateMap?.all);
+          setMaxAdsPerRun(d?.scope?.maxAdsPerRun ?? 10);
+          // Only vehicles that could actually produce an ad — on the lot with at
+          // least one live offer. The dialog narrows further from there.
+          setCandidates(
+            (d?.vehicles ?? [])
+              .filter((v) => v.stock > 0 && (v.offerTypes?.length ?? 0) > 0)
+              .map((v) => ({
+                year: v.year,
+                make: v.make,
+                model: v.model,
+                stock: v.stock,
+                offerTypes: v.offerTypes ?? [],
+                wouldChoose: v.wouldChoose ?? null,
+                wouldChooseType: v.wouldChooseType ?? null,
+              })),
+          );
+        },
+      )
       .catch(() => {
         if (!cancelled) setAutomationReady(false);
       });
@@ -174,15 +202,14 @@ export default function AdGeneratorListPage() {
     };
   }, [accountKey, isManager]);
 
-  async function generateFromOffers() {
+  async function generateFromOffers(scope: { vehicles: string[]; offerTypes: string[] }) {
     if (!accountKey) return;
-    setNewOpen(false);
     setGenerating(true);
     try {
       const res = await fetch('/api/ad-generator/automation/shadow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accountKey, action: 'generate' }),
+        body: JSON.stringify({ accountKey, action: 'generate', scope }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
@@ -202,6 +229,9 @@ export default function AdGeneratorListPage() {
           `No ads generated${skipped ? ` — ${skipped} vehicle(s) skipped` : ''}. See Automation → Run history.`,
         );
       }
+      // The run completed either way, so the dialog has done its job. A thrown
+      // error leaves it open so the same selection can be retried.
+      setGenOpen(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not generate');
     } finally {
@@ -490,14 +520,17 @@ export default function AdGeneratorListPage() {
                       <button
                         type="button"
                         disabled={generating || !accountKey}
-                        onClick={generateFromOffers}
+                        onClick={() => {
+                          setNewOpen(false);
+                          setGenOpen(true);
+                        }}
                         className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50"
                       >
                         <BoltIcon className={`w-4 h-4 flex-shrink-0 ${generating ? 'animate-pulse' : ''}`} />
                         <span>
-                          {generating ? 'Generating…' : 'Generate from OEM offers'}
+                          Generate from OEM offers
                           <span className="block text-[11px] text-[var(--muted-foreground)]">
-                            Build drafts for every in-stock model with a live offer.
+                            Pick the models and offer types, then build drafts.
                           </span>
                         </span>
                       </button>
@@ -775,6 +808,16 @@ export default function AdGeneratorListPage() {
           creating={creating}
           onClose={() => !creating && setScratchOpen(false)}
           onStart={(name, sizes, vehicleMode) => void createBlank(name, sizes, vehicleMode)}
+        />
+      )}
+
+      {genOpen && (
+        <GenerateOffersModal
+          candidates={candidates}
+          maxAdsPerRun={maxAdsPerRun}
+          busy={generating}
+          onCancel={() => !generating && setGenOpen(false)}
+          onGenerate={(scope) => void generateFromOffers(scope)}
         />
       )}
     </div>

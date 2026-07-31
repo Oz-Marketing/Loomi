@@ -139,6 +139,23 @@ async function main() {
   const dir = args.find((a) => !a.startsWith('--')) ?? DEFAULT_DIR;
   const doUpload = args.includes('--upload');
   const dryRun = args.includes('--dry');
+  const noPreview = args.includes('--no-preview');
+
+  // Chromium is picked by NODE_ENV: production uses @sparticuz/chromium, which
+  // bundles its own system libraries, and anything else uses the `puppeteer`
+  // package's downloaded build. That build needs GTK/atk libraries a bare server
+  // doesn't have, so running this on a droplet without NODE_ENV=production fails
+  // every cover with "libatk-1.0.so.0: cannot open shared object file" — 32 times
+  // in a row, after uploading everything. Stop before that instead.
+  if (!noPreview && process.platform === 'linux' && process.env.NODE_ENV !== 'production') {
+    console.error(
+      '[register-coop-guidelines] NODE_ENV is not "production" on a Linux host.\n' +
+        '  Cover rendering and text extraction would fail for every document.\n' +
+        '  Re-run as:  NODE_ENV=production npx tsx scripts/register-coop-guidelines.ts <dir> --upload\n' +
+        '  (or pass --no-preview to register hashes only)',
+    );
+    process.exit(1);
+  }
 
   console.log(`[register-coop-guidelines] dir: ${dir}`);
   console.log(`[register-coop-guidelines] upload: ${doUpload ? (isS3Configured() ? 'yes' : 'REQUESTED BUT S3 NOT CONFIGURED') : 'no'}`);
@@ -229,6 +246,7 @@ async function main() {
         sourceAssetId,
         bytes,
         mimeType: mimeFor(entry.file),
+        skipPreview: noPreview,
         // One shared browser across all 33 — a launch per document was slow and
         // flaky enough that one cover failed under the memory pressure.
         render,

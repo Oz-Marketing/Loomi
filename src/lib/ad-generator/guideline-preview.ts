@@ -86,6 +86,10 @@ function cachedSources() {
 
 export type RenderPreview = (bytes: Uint8Array, mimeType: string) => Promise<GuidelinePreview | null>;
 
+/** Long edge for a page being READ rather than thumbnailed. */
+export const READ_LONG_EDGE = 1600;
+const READ_QUALITY = 82;
+
 /**
  * Render one or many covers on a SINGLE browser.
  *
@@ -109,7 +113,17 @@ export async function withPreviewRenderer<T>(fn: (render: RenderPreview) => Prom
       // starts Chromium at all.
       if (!mimeType.includes('pdf')) return null;
       held.browser ??= await launchBrowser();
-      return renderOn(held.browser, bytes);
+      const page = await renderOn(held.browser, bytes);
+      if (!page) return null;
+      const dataUri = `data:image/webp;base64,${page.buffer.toString('base64')}`;
+      // The cover is stored inline on the row, so it has to stay small. A cover
+      // that won't fit is dropped rather than bloating the record — the register
+      // works on the hash, and a missing thumbnail is cosmetic.
+      if (dataUri.length > MAX_DATA_URI_BYTES) {
+        console.warn(`[guideline-preview] cover too large (${dataUri.length}B) — skipping`);
+        return null;
+      }
+      return { dataUri, pageCount: page.pageCount, width: page.width, height: page.height };
     };
     return await fn(render);
   } finally {
@@ -132,11 +146,62 @@ export async function renderGuidelinePreview(
   return withPreviewRenderer((render) => render(bytes, mimeType));
 }
 
+/**
+ * Render a run of pages at reading resolution, for the in-page document viewer.
+ *
+ * Takes a LIST of page numbers so one browser launch can serve the page the reader
+ * asked for plus its neighbours — the launch dominates the cost (~1s against ~150ms
+ * per page after), so rendering the next page speculatively makes flipping feel
+ * instant for what is effectively free.
+ */
+export async function renderGuidelinePages(
+  bytes: Uint8Array,
+  pageNumbers: number[],
+): Promise<Map<number, RenderedPage>> {
+  const out = new Map<number, RenderedPage>();
+  if (pageNumbers.length === 0) return out;
+  const held: { browser: Browser | null } = { browser: null };
+  try {
+    held.browser = await launchBrowser();
+    for (const n of pageNumbers) {
+      const rendered = await renderOn(held.browser, bytes, n, READ_LONG_EDGE, READ_QUALITY);
+      // A page that fails is skipped rather than failing the batch — the reader
+      // still gets the others, and a missing page reports itself in the UI.
+      if (rendered) out.set(n, rendered);
+    }
+    return out;
+  } catch (err) {
+    console.warn('[guideline-preview] page render failed:', err instanceof Error ? err.message : err);
+    return out;
+  } finally {
+    await held.browser?.close().catch(() => {});
+  }
+}
+
 type Browser = Awaited<ReturnType<typeof launchBrowser>>;
 type BrowserPage = Awaited<ReturnType<Browser['newPage']>>;
 
-/** The actual render, against an already-open browser. */
-async function renderOn(browser: Browser, bytes: Uint8Array): Promise<GuidelinePreview | null> {
+export interface RenderedPage {
+  /** webp bytes. */
+  buffer: Buffer;
+  pageCount: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Render one page of a PDF, against an already-open browser.
+ *
+ * `pageNumber` is 1-based and clamped to the document, so a stale bookmark asking
+ * for page 900 of a 42-page manual gets the last page rather than an error.
+ */
+async function renderOn(
+  browser: Browser,
+  bytes: Uint8Array,
+  pageNumber = 1,
+  longEdge = THUMB_LONG_EDGE,
+  quality = 72,
+): Promise<RenderedPage | null> {
   let page: BrowserPage | null = null;
   try {
     const { lib: libSrc, worker: workerSrc } = await cachedSources();
@@ -155,7 +220,7 @@ async function renderOn(browser: Browser, bytes: Uint8Array): Promise<GuidelineP
     const b64 = Buffer.from(bytes).toString('base64');
 
     const result = (await page.evaluate(
-      async (data: string, longEdge: number, worker: string) => {
+      async (data: string, edge: number, worker: string, wanted: number) => {
         const w = window as unknown as {
           pdfjsLib?: { getDocument: (o: unknown) => { promise: Promise<unknown> }; GlobalWorkerOptions: { workerSrc: string } };
         };
@@ -177,10 +242,13 @@ async function renderOn(browser: Browser, bytes: Uint8Array): Promise<GuidelineP
         };
         const doc = (await lib.getDocument({ data: buf, disableFontFace: false, isEvalSupported: false })
           .promise) as { numPages: number; getPage: (n: number) => Promise<Pg> };
-        const pg = await doc.getPage(1);
+        // Clamp rather than throw: a stale link to page 900 of a 42-page document
+        // should land on the last page, not error.
+        const n = Math.min(Math.max(1, Math.round(wanted)), doc.numPages);
+        const pg = await doc.getPage(n);
 
         const base = pg.getViewport({ scale: 1 });
-        const scale = longEdge / Math.max(base.width, base.height);
+        const scale = edge / Math.max(base.width, base.height);
         const vp = pg.getViewport({ scale });
 
         const canvas = document.createElement('canvas');
@@ -197,8 +265,9 @@ async function renderOn(browser: Browser, bytes: Uint8Array): Promise<GuidelineP
         return { png: canvas.toDataURL('image/png'), pageCount: doc.numPages };
       },
       b64,
-      THUMB_LONG_EDGE,
+      longEdge,
       workerSrc,
+      pageNumber,
     )) as { png: string; pageCount: number } | null;
 
     if (!result?.png) return null;
@@ -207,18 +276,12 @@ async function renderOn(browser: Browser, bytes: Uint8Array): Promise<GuidelineP
     // of image, which is what keeps the data URI inside the row budget.
     const png = Buffer.from(result.png.split(',')[1] ?? '', 'base64');
     const webp = await sharp(png)
-      .resize(THUMB_LONG_EDGE, THUMB_LONG_EDGE, { fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: 72 })
+      .resize(longEdge, longEdge, { fit: 'inside', withoutEnlargement: true })
+      .webp({ quality })
       .toBuffer({ resolveWithObject: true });
 
-    const dataUri = `data:image/webp;base64,${webp.data.toString('base64')}`;
-    if (dataUri.length > MAX_DATA_URI_BYTES) {
-      console.warn(`[guideline-preview] thumbnail too large (${dataUri.length}B) — skipping`);
-      return null;
-    }
-
     return {
-      dataUri,
+      buffer: webp.data,
       pageCount: result.pageCount,
       width: webp.info.width,
       height: webp.info.height,

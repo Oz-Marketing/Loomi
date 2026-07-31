@@ -32,6 +32,7 @@ import { toast } from 'sonner';
 import {
   ArrowLeftIcon,
   ArrowPathIcon,
+  BookOpenIcon,
   CheckCircleIcon,
   DocumentTextIcon,
   ExclamationTriangleIcon,
@@ -39,12 +40,12 @@ import {
   PhotoIcon,
   PlusIcon,
   ShieldCheckIcon,
-  SparklesIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { HelpTip } from '@/components/ui/help-tip';
 import { MediaPickerModal } from '@/components/media-picker-modal';
+import { GuidelineReader } from '@/components/ad-generator/guideline-reader';
 
 // ── types (mirror the API's read model) ──
 
@@ -188,6 +189,7 @@ export default function OemAssetsPage() {
   const [eventDraft, setEventDraft] = useState<ReturnType<typeof emptyEventDraft> | null>(null);
   const [docDraft, setDocDraft] = useState<ReturnType<typeof emptyDocDraft> | null>(null);
   const [pickingLogo, setPickingLogo] = useState(false);
+  const [reading, setReading] = useState<GuidelineDocRow | null>(null);
   /** Cover thumbnails, fetched per document on demand — the list omits them. */
   const [covers, setCovers] = useState<Record<string, string | null>>({});
 
@@ -519,15 +521,23 @@ export default function OemAssetsPage() {
                             d.state === 'unreachable' ? 'border-red-500/30 bg-red-500/5' : 'border-[var(--border)]'
                           }`}
                         >
-                          {/* cover */}
-                          <div className="flex h-[104px] w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--border)] bg-white">
+                          {/* cover — doubles as the button into the reader */}
+                          <button
+                            onClick={() => setReading(d)}
+                            aria-label={`Read ${d.title}`}
+                            title="Read this document"
+                            className="group relative flex h-[104px] w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--border)] bg-white transition-colors hover:border-[var(--primary)]"
+                          >
                             {cover ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img src={cover} alt="" className="h-full w-full object-contain" />
                             ) : (
                               <DocumentTextIcon className="h-6 w-6 text-neutral-300" />
                             )}
-                          </div>
+                            <span className="absolute inset-0 flex items-center justify-center bg-black/55 opacity-0 transition-opacity group-hover:opacity-100">
+                              <BookOpenIcon className="h-5 w-5 text-white" />
+                            </span>
+                          </button>
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-start gap-1.5">
                               <span className="text-xs font-medium leading-snug text-[var(--foreground)]">
@@ -559,14 +569,20 @@ export default function OemAssetsPage() {
                               </p>
                             )}
                             <div className="mt-2 flex items-center gap-2">
+                              <button
+                                onClick={() => setReading(d)}
+                                className="text-[11px] font-medium text-[var(--primary)] hover:underline"
+                              >
+                                Read
+                              </button>
                               {d.sourceUrl && (
                                 <a
                                   href={d.sourceUrl}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="text-[11px] font-medium text-[var(--primary)] hover:underline"
+                                  className="text-[11px] font-medium text-[var(--muted-foreground)] hover:underline"
                                 >
-                                  Open
+                                  Download
                                 </a>
                               )}
                               <button
@@ -978,7 +994,7 @@ export default function OemAssetsPage() {
                       onClick={() => setPickingLogo(true)}
                       className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40"
                     >
-                      <SparklesIcon className="h-3.5 w-3.5" />
+                      <PhotoIcon className="h-3.5 w-3.5" />
                       Choose from media library
                     </button>
                     <input
@@ -1096,6 +1112,17 @@ export default function OemAssetsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── read a document in place ── */}
+      {reading && (
+        <GuidelineReader
+          docId={reading.id}
+          title={reading.title}
+          pageCount={reading.pageCount}
+          sourceUrl={reading.sourceUrl}
+          onClose={() => setReading(null)}
+        />
       )}
 
       {/* Media library picker for the event mark. Rendered outside the event modal's

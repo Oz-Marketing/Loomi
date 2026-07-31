@@ -57,8 +57,6 @@ import {
   Field,
   ComparePanel,
   StatusBattery,
-  PlanDetailToggle,
-  usePlanDetailLevel,
 } from '@/app/app/tools/_shared';
 import { AccountNotesDrawer } from '@/app/app/tools/meta/_components/AccountNotesDrawer';
 
@@ -188,8 +186,6 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   // Basic (default) vs Detailed plan view — Detailed adds the Design +
   // Approvals columns and the matching editor sections. Same sticky
   // preference as Meta's planner, so the choice follows the user.
-  const [detailLevel, setDetailLevel] = usePlanDetailLevel();
-  const showCreativeWorkflow = detailLevel === 'detailed';
   // Which account's notes drawer is open (null = closed). Carries an accountKey
   // so an admin can open notes for any card, not just the selected account.
   const [notesTarget, setNotesTarget] = useState<{ accountKey: string; label: string } | null>(
@@ -693,11 +689,6 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               </button>
             )}
           </div>
-          {/* Plan-table/editor detail level — Pacing has no creative columns,
-              so the toggle would be a no-op there. */}
-          {tab === 'planner' && (
-            <PlanDetailToggle value={detailLevel} onChange={setDetailLevel} />
-          )}
           {connected && (
             <button
               type="button"
@@ -821,14 +812,13 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
                 {[
                   'Ad',
                   '',
-                  'Task Status',
+                  'Ad Status',
                   'Due Date',
                   'Budget',
                   'Allocation',
                   'Flight Dates',
-                  // Detailed only — must stay in sync with AdSummaryRow's
-                  // showCreativeWorkflow, or headers and cells drift apart.
-                  ...(showCreativeWorkflow ? ['Design', 'Approvals'] : []),
+                  'Design',
+                  'Approvals',
                 ].map((h, i) => (
                   <th
                     key={i}
@@ -852,7 +842,6 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
                   onClone={() => cloneCampaign(ad.id)}
                   isSelected={false}
                   onSelectToggle={() => {}}
-                  showCreativeWorkflow={showCreativeWorkflow}
                 />
               ))}
             </tbody>
@@ -879,7 +868,6 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           onEditActivity={onEditActivity}
           onDeleteActivity={onDeleteActivity}
           platform="google"
-          detailLevel={detailLevel}
           editorExtraFields={(ad, onUpdate) => (
             <Field label="Channel">
               <SearchableSelect

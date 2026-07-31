@@ -29,11 +29,6 @@ export { PeriodSelector } from './PeriodSelector';
 export { StatusBattery } from './StatusBattery';
 export { CollapsibleSection } from './CollapsibleSection';
 export { BudgetTypeToggle, BudgetSourceToggle } from './toggles';
-export {
-  PlanDetailToggle,
-  usePlanDetailLevel,
-  type PlanDetailLevel,
-} from './plan-detail-level';
 export { UserPicker } from './UserPicker';
 export {
   BudgetPanel,

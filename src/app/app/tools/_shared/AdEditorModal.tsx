@@ -23,7 +23,6 @@ import {
 } from '@/lib/ad-pacer/constants';
 import { fmtBytes } from '@/lib/ad-pacer/helpers';
 import { PlanAdForm } from './PlanAdForm';
-import type { PlanDetailLevel } from './plan-detail-level';
 import { Tooltip } from './Tooltip';
 import { usePacerReadOnly } from './pacer-read-only';
 import { inputClass } from './inputs';
@@ -413,7 +412,6 @@ export function AdEditorModal({
   onEditActivity,
   onDeleteActivity,
   platform = 'meta',
-  detailLevel = 'detailed',
   editorExtraFields,
 }: {
   initialAd: PacerAd;
@@ -436,11 +434,6 @@ export function AdEditorModal({
   onDeleteActivity: (adId: string, entryId: string) => Promise<void>;
   /** Forwarded to PlanAdForm — 'google' hides the Meta-only planning fields. */
   platform?: 'meta' | 'google';
-  /**
-   * Forwarded to PlanAdForm — 'basic' drops the workflow fields (Owner,
-   * Digital Details, Co-op, Creative & Design, Approvals).
-   */
-  detailLevel?: PlanDetailLevel;
   /** Forwarded to PlanAdForm's Ad Details grid (Google passes its Channel picker). */
   editorExtraFields?: (ad: PacerAd, onUpdate: (ad: PacerAd) => void) => ReactNode;
 }) {
@@ -601,7 +594,6 @@ export function AdEditorModal({
                 onUpdate={setDraft}
                 markup={markup}
                 platform={platform}
-                detailLevel={detailLevel}
                 extraDetailFields={editorExtraFields}
               />
             </fieldset>

@@ -40,7 +40,6 @@ import { CollapsibleSection } from './CollapsibleSection';
 import { UserPicker } from './UserPicker';
 import { Tooltip } from './Tooltip';
 import { Divider, MetricBox } from './metrics';
-import type { PlanDetailLevel } from './plan-detail-level';
 
 // ─── PlanAdForm (appended below) ───────────────────────────────────────────
 export function PlanAdForm({
@@ -49,7 +48,6 @@ export function PlanAdForm({
   onUpdate,
   markup,
   platform = 'meta',
-  detailLevel = 'detailed',
   extraDetailFields,
 }: {
   ad: PacerAd;
@@ -59,22 +57,15 @@ export function PlanAdForm({
   // down so the Gross Allocation display grosses up at the right rate.
   markup: number | null;
   // 'meta' (default) shows every planning field. 'google' hides the Meta-only
-  // ones that don't map to Google campaigns (Action Needed). The creative
-  // workflow is orthogonal to platform — see showCreativeWorkflow below.
+  // ones that don't map to Google campaigns (Action Needed). Creative & Design
+  // and Approvals show on both — a rep may track them against any line.
   platform?: 'meta' | 'google';
-  // Basic vs Detailed plan view (see usePlanDetailLevel). 'basic' drops the
-  // fields a budget-only planner doesn't fill in — Owner, Digital Details,
-  // Co-op, and the whole Creative & Design + Approvals sections. Fields are
-  // only hidden, never cleared, so flipping back to Detailed still shows
-  // whatever the ad already carries.
-  detailLevel?: PlanDetailLevel;
   // Platform-specific extra field(s) rendered in the Ad Details grid — Google
   // passes its Channel picker. A render-prop so the field can read/write the
   // editor's live draft.
   extraDetailFields?: (ad: PacerAd, onUpdate: (ad: PacerAd) => void) => ReactNode;
 }) {
   const isMeta = platform === 'meta';
-  const detailed = detailLevel === 'detailed';
   const days = calcDays(ad.flightStart, ad.flightEnd);
   const allocation = num(ad.allocation) ?? 0;
 
@@ -128,26 +119,21 @@ export function PlanAdForm({
             icon={<ClipboardDocumentListIcon className="w-3 h-3" />}
             label="Ad Details"
           />
-          {/* Owner is a workflow field (who's building it) — Basic hides it.
-              Platform extras (Google's Channel picker) describe the campaign
-              itself, so they stay in both views. */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 mb-3 max-w-2xl">
-            {detailed && (
-              <Field label="Owner / Assigned To">
-                <UserPicker
-                  users={users}
-                  value={ad.ownerUserId}
-                  filterFor="owner"
-                  onChange={(v) => onUpdate({ ...ad, ownerUserId: v })}
-                />
-              </Field>
-            )}
+            <Field label="Owner / Assigned To">
+              <UserPicker
+                users={users}
+                value={ad.ownerUserId}
+                filterFor="owner"
+                onChange={(v) => onUpdate({ ...ad, ownerUserId: v })}
+              />
+            </Field>
+            {/* Platform extras — Google's Channel picker. */}
             {extraDetailFields?.(ad, onUpdate)}
           </div>
 
-          {detailed && (
-            <div className="mb-3">
-              <Field label="Digital Details">
+          <div className="mb-3">
+            <Field label="Digital Details">
                 <textarea
                   value={ad.digitalDetails ?? ''}
                   onChange={(e) =>
@@ -157,9 +143,8 @@ export function PlanAdForm({
                   placeholder="Goal, audience, targeting notes, copy direction…"
                   className={`${inputClass} resize-y leading-relaxed min-h-[88px]`}
                 />
-              </Field>
-            </div>
-          )}
+            </Field>
+          </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3">
             {isMeta && (
@@ -194,8 +179,7 @@ export function PlanAdForm({
                 ))}
               </select>
             </Field>
-            {detailed && (
-              <Field label="Co-op?">
+            <Field label="Co-op?">
                 <select
                   value={ad.coop}
                   onChange={(e) => onUpdate({ ...ad, coop: e.target.value })}
@@ -207,11 +191,11 @@ export function PlanAdForm({
                     </option>
                   ))}
                 </select>
-              </Field>
-            )}
-            {/* The team's planning lifecycle (editable). Renamed Task Status to
-                distinguish it from the read-only platform Ad Status beside it. */}
-            <Field label="Task Status">
+            </Field>
+            {/* The team's planning lifecycle (editable) — distinct from the
+                read-only platform status beside it, which reports what
+                Meta/Google is actually doing with the campaign. */}
+            <Field label="Ad Status">
               <StatusSelect
                 value={ad.adStatus}
                 options={AD_STATUSES}
@@ -232,7 +216,7 @@ export function PlanAdForm({
                         : ad.dateCompleted,
                   });
                 }}
-                ariaLabel="Task status"
+                ariaLabel="Ad status"
               />
             </Field>
             {/* Read-only platform Ad Status — the campaign's real delivery state
@@ -425,9 +409,7 @@ export function PlanAdForm({
 
           {/* Creative & Design + Approvals — optional nice-to-haves on both
               platforms. Google campaigns have no creative workflow of their own,
-              but reps may still want to track design/approvals against a line.
-              Hidden entirely in the Basic view. */}
-          {detailed && (
+              but reps may still want to track design/approvals against a line. */}
           <>
           <CollapsibleSection
             icon={<PaintBrushIcon className="w-3 h-3" />}
@@ -579,7 +561,6 @@ export function PlanAdForm({
           </div>
           </CollapsibleSection>
           </>
-          )}
 
     </div>
   );

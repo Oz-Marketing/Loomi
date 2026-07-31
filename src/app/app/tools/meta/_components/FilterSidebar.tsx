@@ -237,10 +237,10 @@ export function MetaAdsPacerFilterSidebar({
             </div>
           </section>
 
-          {/* Task Status (the team's planning lifecycle) */}
+          {/* Ad Status (the team's planning lifecycle) */}
           <section className="space-y-2.5">
             <div className="flex items-center justify-between gap-2">
-              <p className={sectionLabelClass}>Task status</p>
+              <p className={sectionLabelClass}>Ad status</p>
               {filters.status && (
                 <button
                   type="button"

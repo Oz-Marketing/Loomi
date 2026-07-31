@@ -38,8 +38,6 @@ import {
   useDragReorder,
   Tooltip,
   usePacerReadOnly,
-  PlanDetailToggle,
-  usePlanDetailLevel,
 } from '@/app/app/tools/_shared';
 import { FilterStatus } from './FilterSidebar';
 import { CopyPlanModal, type CopyFieldOptions } from './CopyPlanModal';
@@ -94,8 +92,6 @@ export function AdPlannerPanel({
   const [showBulkAdd, setShowBulkAdd] = useState(false);
   // Basic (default) hides the creative-workflow surface — Design + Approvals
   // columns here, and the matching editor sections. Sticky per user.
-  const [detailLevel, setDetailLevel] = usePlanDetailLevel();
-  const showCreativeWorkflow = detailLevel === 'detailed';
 
   const handleReorder = (nextAds: PacerAd[]) => {
     if (readOnly) return; // frozen month — reorder is a no-op
@@ -360,7 +356,6 @@ export function AdPlannerPanel({
           } ad${plan.ads.length !== 1 ? 's' : ''})`}
         </h2>
         <div className="flex items-center gap-2 flex-wrap">
-          <PlanDetailToggle value={detailLevel} onChange={setDetailLevel} />
           <Tooltip
             label={
               readOnly
@@ -437,7 +432,7 @@ export function AdPlannerPanel({
                   {/* Updates icon column — no header, just kept aligned */}
                   <th className="w-10 px-2 py-2"></th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Task Status
+                    Ad Status
                   </th>
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Due Date
@@ -451,18 +446,12 @@ export function AdPlannerPanel({
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Flight Dates
                   </th>
-                  {/* Detailed view only — must stay in sync with the same flag
-                      on AdSummaryRow, or headers and cells drift apart. */}
-                  {showCreativeWorkflow && (
-                    <>
-                      <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                        Design
-                      </th>
-                      <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                        Approvals
-                      </th>
-                    </>
-                  )}
+                  <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                    Design
+                  </th>
+                  <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                    Approvals
+                  </th>
                   <th className="px-3 py-2"></th>
                 </tr>
               </thead>
@@ -486,7 +475,6 @@ export function AdPlannerPanel({
                     }
                     isSelected={selectedAdIds.has(ad.id)}
                     onSelectToggle={() => toggleSelectAd(ad.id)}
-                    showCreativeWorkflow={showCreativeWorkflow}
                   />
                 ))}
               </tbody>
@@ -503,7 +491,6 @@ export function AdPlannerPanel({
           mode={editor.mode}
           users={users}
           currentUserId={currentUserId}
-          detailLevel={detailLevel}
           onSave={handleSave}
           onCancel={() => setEditor(null)}
           onAddActivity={onAddActivity}
@@ -613,35 +600,28 @@ export function AdPlannerPanel({
             },
             {
               id: 'ad-status',
-              label: 'Task Status',
+              label: 'Ad Status',
               icon: <ClockIcon className="h-4 w-4" />,
               onClick: () => setBulkField('adStatus'),
             },
-            // Creative-workflow bulk edits follow the same Basic/Detailed
-            // split as the columns — no point offering a bulk edit for a
-            // field the user has hidden.
-            ...(showCreativeWorkflow
-              ? [
-                  {
-                    id: 'design-status',
-                    label: 'Design Status',
-                    icon: <PaintBrushIcon className="h-4 w-4" />,
-                    onClick: () => setBulkField('designStatus'),
-                  },
-                  {
-                    id: 'internal-status',
-                    label: 'Internal Status',
-                    icon: <CheckBadgeIcon className="h-4 w-4" />,
-                    onClick: () => setBulkField('internalApproval'),
-                  },
-                  {
-                    id: 'client-status',
-                    label: 'Client Status',
-                    icon: <CheckBadgeIcon className="h-4 w-4" />,
-                    onClick: () => setBulkField('clientApproval'),
-                  },
-                ]
-              : []),
+            {
+              id: 'design-status',
+              label: 'Design Status',
+              icon: <PaintBrushIcon className="h-4 w-4" />,
+              onClick: () => setBulkField('designStatus'),
+            },
+            {
+              id: 'internal-status',
+              label: 'Internal Status',
+              icon: <CheckBadgeIcon className="h-4 w-4" />,
+              onClick: () => setBulkField('internalApproval'),
+            },
+            {
+              id: 'client-status',
+              label: 'Client Status',
+              icon: <CheckBadgeIcon className="h-4 w-4" />,
+              onClick: () => setBulkField('clientApproval'),
+            },
             {
               id: 'delete',
               label: 'Delete',

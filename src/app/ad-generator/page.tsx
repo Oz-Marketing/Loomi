@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon, PaintBrushIcon } from '@heroicons/react/24/outline';
+import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
@@ -296,11 +296,6 @@ export default function AdGeneratorListPage() {
                             <Link href={`/ad-generator/automation${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
                               <BoltIcon className="w-4 h-4" />
                               Automation
-                            </Link>
-                            <div className="my-1 h-px bg-[var(--border)]" />
-                            <Link href={`/ad-generator/builder${acct}`} onClick={() => setCogOpen(false)} className={itemCls}>
-                              <PaintBrushIcon className="w-4 h-4" />
-                              Template builder
                             </Link>
                           </>
                         )}

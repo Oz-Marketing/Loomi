@@ -26,7 +26,7 @@
  * ads, so the machine's job is to say when to look, not to decide.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import {
@@ -35,6 +35,7 @@ import {
   BookOpenIcon,
   CheckCircleIcon,
   DocumentTextIcon,
+  EllipsisHorizontalIcon,
   ExclamationTriangleIcon,
   MagnifyingGlassIcon,
   PhotoIcon,
@@ -194,6 +195,94 @@ const emptyEventDraft = (make: string) => ({
   required: true,
   offerTypes: [] as string[],
 });
+
+/**
+ * Per-document overflow menu. Follows the pattern in `forms/form-card` — a plain
+ * popover with mousedown-outside and Escape to dismiss — rather than pulling in a
+ * menu library for three items.
+ *
+ * Every handler stops propagation: the card behind it opens the reader on click, so
+ * without that, choosing "Remove" would also open the document being removed.
+ */
+function DocMenu({
+  label,
+  disabled,
+  className = '',
+  onRename,
+  onReplace,
+  onRemove,
+}: {
+  label: string;
+  disabled?: boolean;
+  className?: string;
+  onRename: () => void;
+  onReplace: () => void;
+  onRemove: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current || ref.current.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const item = (text: string, onPick: () => void, danger = false) => (
+    <button
+      onClick={(e) => {
+        e.stopPropagation();
+        setOpen(false);
+        onPick();
+      }}
+      disabled={disabled}
+      className={`flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs transition-colors disabled:opacity-50 ${
+        danger
+          ? 'text-red-500 hover:bg-red-500/10'
+          : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
+      }`}
+    >
+      {text}
+    </button>
+  );
+
+  return (
+    <div ref={ref} className={`relative ${className}`} onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((v) => !v);
+        }}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`More actions for ${label}`}
+        title="More actions"
+        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+      >
+        <EllipsisHorizontalIcon className="h-4 w-4" />
+      </button>
+      {open && (
+        <div role="menu" className="glass-dropdown absolute right-0 top-full z-50 mt-1 w-36 p-1 shadow-lg">
+          {item('Rename', onRename)}
+          {item('Replace', onReplace)}
+          {item('Remove', onRemove, true)}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function OemAssetsPage() {
   const { userRole } = useAccount();
@@ -537,34 +626,47 @@ export default function OemAssetsPage() {
                       return (
                         <div
                           key={d.id}
-                          className={`flex gap-3 rounded-xl border p-3 ${
+                          // The whole card opens the reader. A div rather than a
+                          // button because it contains its own controls, and nesting
+                          // buttons is invalid — hence the explicit role and key
+                          // handling to keep it reachable without a mouse.
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setReading(d)}
+                          onKeyDown={(e) => {
+                            if (e.target !== e.currentTarget) return;
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setReading(d);
+                            }
+                          }}
+                          className={`group/doc flex cursor-pointer gap-3 rounded-xl border p-3 transition-colors hover:border-[var(--primary)]/60 hover:bg-[var(--muted)]/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--primary)] ${
                             d.state === 'unreachable' ? 'border-red-500/30 bg-red-500/5' : 'border-[var(--border)]'
                           }`}
                         >
-                          {/* cover — doubles as the button into the reader */}
-                          <button
-                            onClick={() => setReading(d)}
-                            aria-label={`Read ${d.title}`}
-                            title="Read this document"
-                            className="group relative flex h-[104px] w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--border)] bg-white transition-colors hover:border-[var(--primary)]"
-                          >
+                          {/* cover */}
+                          <div className="relative flex h-[104px] w-20 flex-shrink-0 items-center justify-center overflow-hidden rounded-md border border-[var(--border)] bg-white">
                             {cover ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img src={cover} alt="" className="h-full w-full object-contain" />
                             ) : (
                               <DocumentTextIcon className="h-6 w-6 text-neutral-300" />
                             )}
-                            <span className="absolute inset-0 flex items-center justify-center bg-black/55 opacity-0 transition-opacity group-hover:opacity-100">
+                            <span className="absolute inset-0 flex items-center justify-center bg-black/55 opacity-0 transition-opacity group-hover/doc:opacity-100">
                               <BookOpenIcon className="h-5 w-5 text-white" />
                             </span>
-                          </button>
+                          </div>
                           <div className="min-w-0 flex-1">
                             {renaming?.id === d.id ? (
                               <input
                                 autoFocus
                                 value={renaming.title}
+                                // Every interaction inside the editor has to stay off
+                                // the card, or typing a space would open the reader.
+                                onClick={(e) => e.stopPropagation()}
                                 onChange={(e) => setRenaming({ id: d.id, title: e.target.value })}
                                 onKeyDown={(e) => {
+                                  e.stopPropagation();
                                   if (e.key === 'Escape') setRenaming(null);
                                   if (e.key === 'Enter') e.currentTarget.blur();
                                 }}
@@ -583,7 +685,10 @@ export default function OemAssetsPage() {
                             ) : (
                               <div className="flex flex-wrap items-start gap-1.5">
                                 <button
-                                  onClick={() => setRenaming({ id: d.id, title: d.title })}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setRenaming({ id: d.id, title: d.title });
+                                  }}
                                   title="Click to rename"
                                   className="rounded text-left text-xs font-medium leading-snug text-[var(--foreground)] hover:underline"
                                 >
@@ -616,44 +721,25 @@ export default function OemAssetsPage() {
                               </p>
                             )}
                             <div className="mt-2 flex items-center gap-2">
-                              <button
-                                onClick={() => setReading(d)}
-                                className="text-[11px] font-medium text-[var(--primary)] hover:underline"
-                              >
-                                Read
-                              </button>
-                              <button
-                                onClick={() => setRenaming({ id: d.id, title: d.title })}
-                                className="text-[11px] font-medium text-[var(--muted-foreground)] hover:underline"
-                              >
-                                Rename
-                              </button>
                               {d.sourceUrl && (
                                 <a
                                   href={d.sourceUrl}
                                   target="_blank"
                                   rel="noreferrer"
+                                  onClick={(e) => e.stopPropagation()}
                                   className="text-[11px] font-medium text-[var(--muted-foreground)] hover:underline"
                                 >
                                   Download
                                 </a>
                               )}
-                              <button
-                                onClick={() =>
-                                  setDocDraft({ ...emptyDocDraft(active.make), title: d.title })
-                                }
-                                className="text-[11px] font-medium text-[var(--primary)] hover:underline"
-                              >
-                                Replace
-                              </button>
-                              <button
-                                onClick={() => act('delete_doc', { docId: d.id }, `dd-${d.id}`, 'Document removed')}
+                              <DocMenu
+                                className="ml-auto"
+                                label={d.title}
                                 disabled={!!busy}
-                                aria-label={`Remove ${d.title}`}
-                                className="ml-auto rounded p-1 text-[var(--muted-foreground)] transition-colors hover:bg-red-500/10 hover:text-red-500 disabled:opacity-50"
-                              >
-                                <TrashIcon className="h-3.5 w-3.5" />
-                              </button>
+                                onRename={() => setRenaming({ id: d.id, title: d.title })}
+                                onReplace={() => setDocDraft({ ...emptyDocDraft(active.make), title: d.title })}
+                                onRemove={() => act('delete_doc', { docId: d.id }, `dd-${d.id}`, 'Document removed')}
+                              />
                             </div>
                           </div>
                         </div>

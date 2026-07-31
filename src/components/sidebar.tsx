@@ -33,8 +33,10 @@ import {
   BellAlertIcon,
   BellIcon,
   SwatchIcon,
+  ShieldCheckIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
+import { OEM_INDUSTRIES } from '@/components/settings/use-settings-tabs';
 import { useTheme } from '@/contexts/theme-context';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 import { SidebarTooltip, SidebarPopout } from '@/components/sidebar-collapsed-ui';
@@ -175,7 +177,11 @@ const subaccountAdminNavItems: NavEntry[] = adminNavItems;
 //
 // Role-gated to mirror use-settings-tabs: plain admins don't see the elevated
 // (developer / super_admin) configuration items.
-function buildAgencyNav(userRole: string | null): NavEntry[] {
+//
+// `oemRelevant` mirrors the same gate in use-settings-tabs — this rail declares its
+// own items rather than reading that hook, so anything conditional has to be kept in
+// step in both places or the tab renders with no way to navigate to it.
+function buildAgencyNav(userRole: string | null, oemRelevant: boolean): NavEntry[] {
   const hasAdminAccess = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
   const isElevated = userRole === 'developer' || userRole === 'super_admin';
   const abs = (href: string, label: string, icon: IconComponent): NavItem => ({ href, label, icon, absolute: true });
@@ -197,6 +203,10 @@ function buildAgencyNav(userRole: string | null): NavEntry[] {
     configure.push(abs('/settings/industries', 'Industries', BriefcaseIcon));
     configure.push(abs('/settings/markup', 'Markup', CalculatorIcon));
     configure.push(abs('/settings/alerts', 'Alerts', BellAlertIcon));
+  }
+  // Co-op guidelines: only for agencies with manufacturer relationships.
+  if (hasAdminAccess && oemRelevant) {
+    configure.push(abs('/settings/coop-guidelines', 'Co-op Guidelines', ShieldCheckIcon));
   }
   configure.push(abs('/settings/notifications', 'Notifications', BellIcon));
   configure.push(abs('/settings/appearance', 'Appearance', SwatchIcon));
@@ -254,7 +264,10 @@ export function Sidebar() {
 
   if (isAgencyView) {
     // Agency View: platform management, surfaced inline instead of behind Settings.
-    navItems = buildAgencyNav(userRole);
+    navItems = buildAgencyNav(
+      userRole,
+      Object.values(accounts ?? {}).some((a) => OEM_INDUSTRIES.has(a?.category ?? '')),
+    );
   } else if (slug) {
     prefix = `/subaccount/${slug}`;
     navItems = isClientRole ? subaccountClientNavItems : subaccountAdminNavItems;

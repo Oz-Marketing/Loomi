@@ -1149,17 +1149,12 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
               <p className="text-[11px] text-[var(--muted-foreground)] mb-6 -mt-2">
                 Upload, choose from media library, or paste URLs for each logo variant. Used in email templates and previews.
               </p>
-              <div className="mb-6">
-                <LogoSlot
-                  accountKey={key}
-                  label="Storefront Image"
-                  variant="storefront"
-                  value={storefrontImage}
-                  onChange={setStorefrontImage}
-                  onUpload={(file) => handleLogoUpload('storefront', file)}
-                  required={false}
-                />
-              </div>
+              {/* The Storefront Image slot was removed from this tab. The VALUE is
+                  deliberately still loaded, saved and sent — a dozen surfaces read
+                  it (account health, media, contacts, flows, blast lists) and the
+                  `storefront_image` custom value is exposed as an ESP variable, so
+                  dropping the field would break them. Only the upload control is
+                  gone from Branding. */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {([
                   { label: 'Light Logo', variant: 'light' as const, value: logoLight, setter: setLogoLight, required: true },

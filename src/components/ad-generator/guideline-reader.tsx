@@ -16,9 +16,16 @@
  * The reader assumes nothing about whether a page will arrive: a document can be
  * registered by hash with no stored copy behind it, in which case the API says so
  * and this shows that message rather than an endless spinner.
+ *
+ * PORTALLED TO THE BODY. `position: fixed` is relative to the nearest ancestor with
+ * a transform, filter, backdrop-filter or containment — and Loomi's shell and glass
+ * cards use backdrop-blur throughout. Rendered in place, `inset-0` sized itself to
+ * whichever panel happened to contain it instead of the viewport, which is exactly
+ * what happened when this moved into Settings.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { findHits, pageHighlights, MAX_HITS, MIN_QUERY, type TextItem } from './guideline-search';
 import {
   ArrowDownTrayIcon,
@@ -250,7 +257,12 @@ export function GuidelineReader({ docId, title, pageCount, sourceUrl, onClose }:
   const atStart = page <= 1;
   const atEnd = !!total && page >= total;
 
-  return (
+  // Mounted guard: document.body doesn't exist during SSR.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  if (!mounted) return null;
+
+  return createPortal(
     <div className="fixed inset-0 z-[60] flex flex-col bg-black/90 backdrop-blur-sm">
       {/* ── toolbar: title | search | close ──
           z-20 so the results list paints over the page below it. Without it the
@@ -454,6 +466,7 @@ export function GuidelineReader({ docId, title, pageCount, sourceUrl, onClose }:
           <ChevronRightIcon className="h-5 w-5" />
         </button>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

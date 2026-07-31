@@ -376,6 +376,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
           period: planData.period ?? period,
           baseBudgetGoal: planData.baseBudgetGoal ?? null,
           addedBudgetGoal: planData.addedBudgetGoal ?? null,
+          budgetManaged: planData.budgetManaged ?? false,
           markup:
             typeof planData.markup === 'number' &&
             Number.isFinite(planData.markup)
@@ -553,6 +554,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
         period: data.period ?? period,
         baseBudgetGoal: data.baseBudgetGoal ?? null,
         addedBudgetGoal: data.addedBudgetGoal ?? null,
+        budgetManaged: data.budgetManaged ?? false,
         markup:
           typeof data.markup === 'number' && Number.isFinite(data.markup)
             ? data.markup
@@ -644,6 +646,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
       period: (data.period as string) ?? period,
       baseBudgetGoal: (data.baseBudgetGoal as string | null) ?? null,
       addedBudgetGoal: (data.addedBudgetGoal as string | null) ?? null,
+      budgetManaged: (data.budgetManaged as boolean | undefined) ?? false,
       markup:
         typeof data.markup === 'number' && Number.isFinite(data.markup)
           ? (data.markup as number)
@@ -682,6 +685,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
         period: data.period ?? period,
         baseBudgetGoal: data.baseBudgetGoal ?? null,
         addedBudgetGoal: data.addedBudgetGoal ?? null,
+        budgetManaged: data.budgetManaged ?? false,
         markup:
           typeof data.markup === 'number' && Number.isFinite(data.markup)
             ? data.markup
@@ -730,6 +734,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
         period: data.period ?? period,
         baseBudgetGoal: data.baseBudgetGoal ?? null,
         addedBudgetGoal: data.addedBudgetGoal ?? null,
+        budgetManaged: data.budgetManaged ?? false,
         markup:
           typeof data.markup === 'number' && Number.isFinite(data.markup)
             ? data.markup
@@ -782,6 +787,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
         period: updated.period ?? period,
         baseBudgetGoal: updated.baseBudgetGoal ?? null,
         addedBudgetGoal: updated.addedBudgetGoal ?? null,
+        budgetManaged: updated.budgetManaged ?? false,
         markup:
           typeof updated.markup === 'number' && Number.isFinite(updated.markup)
             ? updated.markup

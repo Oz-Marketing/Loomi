@@ -21,12 +21,19 @@ export function DollarInput({
   value,
   onChange,
   placeholder,
+  disabled,
 }: {
   value: string | null;
   onChange: (v: string) => void;
   placeholder?: string;
+  /**
+   * Lock this one field independently of the month-level read-only context
+   * (used by budget-managed goal inputs — the month is editable, but this
+   * particular number is owned by the ledger).
+   */
+  disabled?: boolean;
 }) {
-  const readOnly = usePacerReadOnly();
+  const readOnly = usePacerReadOnly() || !!disabled;
   const hasValue = value != null && value !== '';
   return (
     <div className="relative">

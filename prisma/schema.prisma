@@ -54,6 +54,9 @@ model User {
   tasksRequested   Task[]           @relation("TaskRequester")
   taskComments     TaskComment[]    @relation("TaskCommentAuthor")
   taskActivity     TaskActivity[]   @relation("TaskActivityAuthor")
+
+  // Budget
+  budgetLineEvents BudgetLineEvent[] @relation("BudgetLineEventAuthor")
 }
 
 model UserInvite {
@@ -107,9 +110,9 @@ model DashboardLayoutPreference {
 // ─────────────────────────────────────────────────────
 
 model Account {
-  id                        String    @id @default(cuid())
-  key                       String    @unique // "youngHonda", "smithToyota"
-  slug                      String?   @unique // URL-safe kebab-case: "young-honda"
+  id                        String  @id @default(cuid())
+  key                       String  @unique // "youngHonda", "smithToyota"
+  slug                      String? @unique // URL-safe kebab-case: "young-honda"
   dealer                    String // "Young Honda"
   category                  String? // "Automotive", "Healthcare", etc.
   oem                       String? // single OEM key
@@ -203,7 +206,7 @@ model Account {
   // then America/Denver, when unset.
   metaTimezone              String?
   accountRepId              String?
-  accountRep                User?     @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
+  accountRep                User?   @relation(fields: [accountRepId], references: [id], onDelete: SetNull)
 
   // ── Account hierarchy ──
   // A group like Young Automotive Group is BOTH a marketing entity (it sends
@@ -213,17 +216,17 @@ model Account {
   //
   // SetNull on delete so removing a parent detaches children rather than
   // cascading a destructive delete of live account data.
-  parentAccountKey          String?
-  parent                    Account?  @relation("AccountHierarchy", fields: [parentAccountKey], references: [key], onDelete: SetNull)
-  children                  Account[] @relation("AccountHierarchy")
+  parentAccountKey String?
+  parent           Account?  @relation("AccountHierarchy", fields: [parentAccountKey], references: [key], onDelete: SetNull)
+  children         Account[] @relation("AccountHierarchy")
 
   // Marker for the one-time bootstrap that seeds Loomi's six lifecycle
   // audiences (service overdue, lease ending, etc.) into automotive
   // accounts. Set once on first visit to /contacts/segments. Powersports
   // and other categories stay null and never get seeded.
-  lifecyclePresetsSeededAt  DateTime?
-  createdAt                 DateTime  @default(now())
-  updatedAt                 DateTime  @updatedAt
+  lifecyclePresetsSeededAt DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   emails                   AccountEmail[]
   audiences                Audience[]
@@ -247,6 +250,9 @@ model Account {
   campaigns                Campaign[]
   initiatives              Initiative[]
   tasks                    Task[]
+  budgetPlans              BudgetPlan[]
+  budgetLinesBilled        BudgetLine[]                 @relation("BudgetLineBilled")
+  budgetLinesSpend         BudgetLine[]                 @relation("BudgetLineSpend")
 
   @@index([accountRepId])
   @@index([parentAccountKey])
@@ -1870,6 +1876,19 @@ model MetaAdsPacerPeriodBudget {
   addedBudgetGoal       String?
   googleBaseBudgetGoal  String?
   googleAddedBudgetGoal String?
+  // Budget-module ownership (docs/budget-module.md §4). When true, the pair
+  // above is written by syncPeriodBudgetFromLines from the BudgetLine ledger
+  // and the pacer UI renders it read-only — one writer at a time, which is the
+  // whole point of the binding. Per-platform and per-period, so a Meta
+  // specialist unmanaging August doesn't touch Google or September.
+  //
+  // Deliberately a STORED FLAG, not inferred from "does this month have lines":
+  // a legitimately $0 month would read as unmanaged and quietly serve a stale
+  // hand-typed number. Opt-in per account, so nothing changes for anyone until
+  // it's switched on — necessary while Oz Reports is still the system of record
+  // for accounts that have no lines yet.
+  managedByBudget       Boolean          @default(false)
+  googleManagedByBudget Boolean          @default(false)
   // Carryover applied from the prior month's over/under (Change 7), in
   // actual-spend dollars, per bucket. Opt-in (null = none). Added to the
   // DERIVED spend target only (target = clientBudget × markup + carryover);
@@ -2528,7 +2547,8 @@ model Initiative {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  tasks Task[]
+  tasks       Task[]
+  budgetLines BudgetLine[]
 
   @@index([accountKey, status])
   @@index([ownerUserId])
@@ -2592,8 +2612,9 @@ model Task {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  comments TaskComment[]
-  activity TaskActivity[]
+  comments    TaskComment[]
+  activity    TaskActivity[]
+  budgetLines BudgetLine[]
 
   @@index([accountKey, status])
   @@index([initiativeId, status])
@@ -2636,4 +2657,174 @@ model TaskActivity {
   createdAt    DateTime @default(now())
 
   @@index([taskId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────
+// Budget — the media-dollar ledger (see docs/budget-module.md)
+// ─────────────────────────────────────────────────────
+//
+// Replaces the Oz Reports `account_budgets` system. Every dollar of media
+// budget is a BudgetLine; lines link to the Projects work that spends them and
+// roll up into the Ad Pacer's per-period budget goals. Flow is ONE-WAY —
+// budget owns intent, the pacer owns execution, and the pacer never writes
+// back. Actuals come back for display and settlement only.
+
+/// A client's declared budget commitment for one year — the "high level" the
+/// budget hub renders against. Thin by design: the authoritative money is the
+/// sum of BudgetLines, and this is what they're checked AGAINST, so "declared
+/// $120k, laid out $104k, $16k still in pool" is one query. `defaultMarkup`
+/// seeds each new line's markupSnapshot when the account has no better rule.
+model BudgetPlan {
+  id              String   @id @default(cuid())
+  accountKey      String
+  account         Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+  year            Int
+  // Declared annual client gross. Null = no formal commitment; the account
+  // runs off ad-hoc lines only (valid — the hub just shows no target bar).
+  declaredTotal   Decimal? @db.Decimal(12, 2)
+  // Recurring monthly retainer, when the client is on one. The "generate 12
+  // months" action stamps lines from this under a shared batchId.
+  monthlyRetainer Decimal? @db.Decimal(12, 2)
+  // Account-level markup override for budget lines. null → Account.markup →
+  // agency default (resolved via accountMarginSetting, same as the pacer).
+  defaultMarkup   Float?
+  notes           String?  @db.Text
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([accountKey, year])
+  @@index([year])
+}
+
+/// The ledger. Every dollar of media budget in the agency is one row.
+///
+/// A line moves along the two allocation axes (period, channel) as it gets
+/// assigned: an unassigned pool entry has both null, a fully-placed line has
+/// both set. Ported from oz-reports' account_budgets, minus the
+/// denormalization, the magic `for_month = 0`, and the text-blob audit trail.
+model BudgetLine {
+  id              String  @id @default(cuid())
+  // Billed to vs spent from. Ported from oz-reports' account_id /
+  // spend_account_id: a co-op or group buy is billed to one rooftop but spends
+  // out of another's ad account. Equal in the ordinary case. The pacer binding
+  // keys off spendAccountKey; billing rollups key off accountKey.
+  accountKey      String
+  account         Account @relation("BudgetLineBilled", fields: [accountKey], references: [key], onDelete: Cascade)
+  spendAccountKey String
+  spendAccount    Account @relation("BudgetLineSpend", fields: [spendAccountKey], references: [key], onDelete: Cascade)
+
+  // Budget year. ALWAYS set, including for pool lines — it's what anchors an
+  // unplaced dollar to a BudgetPlan, and what every rollup filters on. When
+  // `period` is set the two must agree (period.slice(0,4) === String(year));
+  // the service enforces that invariant on write.
+  year Int
+
+  // Position on the two allocation axes. null = still in the pool: the money
+  // is committed to the account but not yet assigned a month / a channel.
+  // (oz-reports overloaded for_month = 0 for this; nullable columns say it
+  // honestly and keep the index story clean.)
+  period   String? // "YYYY-MM" — same shape as MetaAdsPacerPeriodBudget.period
+  channel  String? // BudgetChannel key: "meta" | "google" | "radio" | ...
+  category String? // display grouping: "Digital" | "Traditional" | ...
+
+  // Client gross. Decimal, NOT the String the pacer money fields use — those
+  // mirror form input, this is an accounting ledger that gets summed and
+  // compared against ceilings. Postgres numeric, 2dp.
+  amount         Decimal @db.Decimal(12, 2)
+  // The gross→spend factor frozen at creation: spend = amount × markupSnapshot.
+  // Resolved once via accountMarginSetting() and never re-derived, so changing
+  // an account's markup can't silently rewrite last quarter's targets.
+  markupSnapshot Float
+
+  // Where the money came from. Drives the pacer bucket default and lets the hub
+  // separate "the retainer" from "things people asked for".
+  //   retainer — generated from BudgetPlan.monthlyRetainer
+  //   task     — created by a Projects intake request
+  //   adhoc    — entered directly in the budget hub
+  //   pool     — unassigned money added to the account's pool
+  source String @default("adhoc")
+
+  //   planned   — drafted, not yet counted against the pool
+  //   committed — counted; feeds the pacer
+  //   live      — in flight (platform lines only, set when the pacer links)
+  //   settled   — closed out; actual recorded
+  //   canceled  — released back; excluded from every rollup
+  status String @default("planned")
+
+  // Which pacer pool this lands in. Defaults from `source` (retainer → base,
+  // everything else → added) but explicit and overridable, because reps will
+  // need exceptions and a derived value gives them nowhere to put one.
+  bucket String @default("added") // "base" | "added"
+
+  // The link oz-reports never had.
+  initiativeId String?
+  initiative   Initiative? @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
+  taskId       String?
+  task         Task?       @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  // oz-reports' bulk_entry_id: one UUID across every line from a single
+  // submission (12 stores × 6 months), so the batch edits/deletes as a unit.
+  batchId String?
+
+  // Soft link to the thing actually spending it. Polymorphic, no FK — same
+  // pattern as Task.linkedAssetType/Id.
+  //   "meta_pacer_ad" | "google_pacer_ad" | "campaign"
+  linkedAssetType String?
+  linkedAssetId   String?
+
+  // Settlement. For platform channels this is filled from synced spend when the
+  // month freezes; for radio/print/video a human records it.
+  actualAmount Decimal?  @db.Decimal(12, 2)
+  settledAt    DateTime?
+
+  label           String? // free-text line name, e.g. "Summer Sales Event"
+  notes           String?   @db.Text
+  createdByUserId String?
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  events BudgetLineEvent[]
+
+  @@index([accountKey, year])
+  @@index([accountKey, period])
+  @@index([spendAccountKey, period, channel])
+  @@index([accountKey, status])
+  @@index([initiativeId])
+  @@index([taskId])
+  @@index([batchId])
+  @@index([archivedAt])
+}
+
+/// Auto-logged, typed, queryable. Modeled on TaskActivity /
+/// MetaAdsPacerAuditEntry — written transparently, never by a button press.
+/// Replaces oz-reports' rep_notes string concatenation AND its separate
+/// logBudgetMove table: a split/move writes one event on each side, tied by
+/// groupId, with counterpartyLineId pointing at the other half.
+model BudgetLineEvent {
+  id     String     @id @default(cuid())
+  lineId String
+  line   BudgetLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  // created | edited | allocated | returned | split | committed | settled |
+  // canceled | pushed_to_pacer
+  action String
+
+  field     String?
+  fromValue String?
+  toValue   String?
+  summary   String // human-readable one-liner
+
+  // The other side of a split / move / allocation.
+  counterpartyLineId String?
+  // Ties a multi-line action together (one save, one batch allocate).
+  groupId            String?
+
+  authorUserId String?
+  author       User?    @relation("BudgetLineEventAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  createdAt    DateTime @default(now())
+
+  @@index([lineId, createdAt])
+  @@index([groupId])
+  @@index([createdAt])
 }

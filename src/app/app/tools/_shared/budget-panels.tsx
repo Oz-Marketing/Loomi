@@ -6,7 +6,9 @@ import {
   PlusIcon,
   DocumentDuplicateIcon,
   ClipboardDocumentListIcon,
+  LockClosedIcon,
 } from '@heroicons/react/24/outline';
+import { toast } from '@/lib/toast';
 import type { PacerPlan, PeriodSummary } from '@/lib/ad-pacer/types';
 import { COLORS, AD_COLORS } from '@/lib/ad-pacer/constants';
 import { fmt, num, adContribution, effMarkupOf } from '@/lib/ad-pacer/helpers';
@@ -31,6 +33,7 @@ export function BudgetPanel({
   goalKey,
   plan,
   onChange,
+  platform = 'meta',
 }: {
   title: string;
   source: 'base' | 'added';
@@ -38,6 +41,12 @@ export function BudgetPanel({
   goalKey: 'baseBudgetGoal' | 'addedBudgetGoal';
   plan: PacerPlan;
   onChange: (p: PacerPlan) => void;
+  /**
+   * Which platform's goal pair this panel edits. Both tools render the same
+   * `goalKey`; the server resolves the actual column from this. Only needed for
+   * the budget-managed unmanage call — everything else is platform-agnostic.
+   */
+  platform?: 'meta' | 'google';
 }) {
   const goal = num(plan[goalKey]);
   // Include split ads here too — their per-source portion contributes
@@ -77,6 +86,32 @@ export function BudgetPanel({
   // allocation bar (the live feedback you want while allocating), and expands
   // for the goal input, metric boxes, and per-ad legend.
   const [expanded, setExpanded] = useState(false);
+
+  // Hand this month's goals back to the specialist. The last synced value stays
+  // put (reverting to a pre-handover number nobody has looked at since would be
+  // the more surprising behavior), so only the flag flips.
+  const [unmanaging, setUnmanaging] = useState(false);
+  const unmanage = async () => {
+    setUnmanaging(true);
+    try {
+      const res = await fetch(
+        `/api/meta-ads-pacer/${plan.accountKey}/budget-managed?period=${plan.period}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ platform, managed: false }),
+        },
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Could not unmanage this month');
+      onChange({ ...plan, budgetManaged: false });
+      toast.success('Budget goals unlocked for this month');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not unmanage this month');
+    } finally {
+      setUnmanaging(false);
+    }
+  };
 
   // Per-ad allocation slices for the bar (+ legend when expanded). Lifted out
   // of the render so the compact and expanded layouts share them.
@@ -126,6 +161,17 @@ export function BudgetPanel({
                   ? 'Full'
                   : 'Under'}
             </span>
+          )}
+          {/* Budget-managed months get a visible owner. Without this the goal
+              just looks broken — a number you can't type into and can't
+              explain. */}
+          {plan.budgetManaged && (
+            <Tooltip label="This month's goal comes from the budget ledger. Expand to unmanage it.">
+              <span className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-[var(--muted)] text-[var(--muted-foreground)]">
+                <LockClosedIcon className="h-3 w-3" />
+                Budget
+              </span>
+            </Tooltip>
           )}
         </div>
         <Tooltip label={expanded ? 'Collapse' : 'Expand for budget goal & breakdown'}>
@@ -244,7 +290,22 @@ export function BudgetPanel({
                 value={plan[goalKey]}
                 onChange={(v) => onChange({ ...plan, [goalKey]: v })}
                 placeholder="0.00"
+                disabled={plan.budgetManaged}
               />
+              {plan.budgetManaged && (
+                <div className="mt-1 text-[10px] leading-snug text-[var(--muted-foreground)]">
+                  Set from the budget ledger.{' '}
+                  <button
+                    type="button"
+                    disabled={unmanaging}
+                    onClick={unmanage}
+                    className="underline underline-offset-2 hover:text-[var(--foreground)] disabled:opacity-50"
+                  >
+                    {unmanaging ? 'Unmanaging…' : 'Unmanage this month'}
+                  </button>{' '}
+                  to edit by hand.
+                </div>
+              )}
             </Field>
             <Field label="Actual Spend Budget">
               <div

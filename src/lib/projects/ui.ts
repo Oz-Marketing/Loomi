@@ -161,7 +161,6 @@ export const TYPE_FIELDS: Record<string, FieldDef[]> = {
   print: [
     { key: 'printTypes', label: 'Print types', input: 'multiselect',
       options: ['Mailer (EDDM)', 'Mailer (data list)', 'Brochure', 'Flyer', 'Postcard', 'Other'] },
-    { key: 'mailerBudget', label: 'Mailer budget', input: 'number' },
     { key: 'dataPullType', label: 'Data pull type', input: 'multiselect',
       options: ['EDDM', 'Purchased list', 'Client list', 'Conquest'] },
     { key: 'eddZip', label: 'EDDM zip code(s)', input: 'text' },
@@ -171,19 +170,14 @@ export const TYPE_FIELDS: Record<string, FieldDef[]> = {
   email: [
     { key: 'deliveryMethods', label: 'Delivery methods', input: 'multiselect',
       options: ['Email', 'Text / SMS'], required: true },
-    { key: 'budget', label: 'Budget', input: 'number' },
     { key: 'audienceTargeting', label: 'Audience targeting', input: 'multiselect',
       options: ['Customer list', 'Lookalike', 'Geo radius', 'Past leads', 'Service customers', 'Conquest'] },
     { key: 'audienceDetails', label: 'Audience details', input: 'longtext' },
     { key: 'sendDate', label: 'Send date', input: 'date' },
   ],
   ads: [
-    { key: 'channels', label: 'Channels', input: 'multiselect',
-      options: ['Facebook', 'Google', 'TikTok', 'SEM', 'KSL'] },
     { key: 'requestType', label: 'Request type', input: 'multiselect',
       options: ['New campaign', 'Add budget', 'Creative refresh', 'Audience change'] },
-    { key: 'budget', label: 'Total budget', input: 'number',
-      hint: 'Per-channel split can go in the brief.' },
   ],
   dev: [
     { key: 'devType', label: 'Dev type', input: 'multiselect',
@@ -193,20 +187,15 @@ export const TYPE_FIELDS: Record<string, FieldDef[]> = {
     { key: 'prType', label: 'PR type', input: 'multiselect',
       options: ['Press release', 'Sponsorship', 'Community event', 'Media outreach'] },
     { key: 'pressReleaseDate', label: 'Press release date', input: 'date' },
-    { key: 'sponsorshipAmount', label: 'Sponsorship amount', input: 'number' },
     { key: 'sponsorshipInfo', label: 'Sponsorship name & info', input: 'longtext' },
   ],
   media_buy: [
     { key: 'mediaTypes', label: 'Mass-media types', input: 'multiselect',
       options: ['Radio', 'Billboard', 'TV', 'OTT'] },
-    { key: 'radioBudget', label: 'Radio budget', input: 'number' },
-    { key: 'billboardBudget', label: 'Billboard budget', input: 'number' },
-    { key: 'tvBudget', label: 'TV budget', input: 'number' },
   ],
   video: [
     { key: 'format', label: 'Format', input: 'multiselect',
       options: ['Commercial', 'Social video', 'Radio spot', 'OTT / CTV', 'YouTube', 'Photography'] },
-    { key: 'videoBudget', label: 'Production budget', input: 'number' },
     { key: 'voiceover', label: 'Voiceover needed?', input: 'toggle' },
     { key: 'referenceLinks', label: 'Reference links', input: 'text' },
     { key: 'endSlate', label: 'End-slate info', input: 'longtext' },
@@ -215,6 +204,42 @@ export const TYPE_FIELDS: Record<string, FieldDef[]> = {
 
 export function fieldsForKind(kind: string): FieldDef[] {
   return TYPE_FIELDS[kind] ?? [];
+}
+
+// ── Budget ────────────────────────────────────────────────────────────────
+// Money is NOT a per-type field. It used to be six unrelated `number` keys in
+// TYPE_FIELDS (mailerBudget, radioBudget, tvBudget, videoBudget,
+// sponsorshipAmount, budget) that nothing could sum, reconcile, or trace. It
+// is now a real ledger — see docs/budget-module.md. Intake collects one amount
+// per BUDGET CHANNEL and the server turns each into a BudgetLine.
+
+/**
+ * The budget channels a task Type can spend on. Keys are BudgetChannel keys
+ * (src/lib/budget/channels.ts) — never invent one here. A kind absent from this
+ * map spends no media budget and gets no budget block at intake.
+ */
+export const KIND_BUDGET_CHANNELS: Record<string, string[]> = {
+  ads: ['meta', 'google', 'youtube'],
+  print: ['print'],
+  email: ['email_sms'],
+  sms: ['email_sms'],
+  media_buy: ['radio', 'tv', 'billboard', 'ott'],
+  video: ['video'],
+  pr: ['pr'],
+};
+
+export function budgetChannelsForKind(kind: string): string[] {
+  return KIND_BUDGET_CHANNELS[kind] ?? [];
+}
+
+export function kindSpendsBudget(kind: string): boolean {
+  return budgetChannelsForKind(kind).length > 0;
+}
+
+/** One channel's requested amount, as intake sends it. */
+export interface BudgetEntry {
+  channel: string;
+  amount: number;
 }
 
 /** Minimal billing block — collapsed on the form; deeper accounting is internal. */

@@ -203,6 +203,8 @@ export async function PUT(
       addedBudgetGoal: true,
       googleBaseBudgetGoal: true,
       googleAddedBudgetGoal: true,
+      managedByBudget: true,
+      googleManagedByBudget: true,
     },
   });
   const accountDealer =
@@ -221,6 +223,27 @@ export async function PUT(
   const budgetData: Record<string, string | null> = {};
   if ('baseBudgetGoal' in body) budgetData[baseCol] = nullable(body.baseBudgetGoal);
   if ('addedBudgetGoal' in body) budgetData[addedCol] = nullable(body.addedBudgetGoal);
+
+  // Budget-managed periods are owned by the BudgetLine ledger
+  // (docs/budget-module.md §4) — the UI renders the goal inputs read-only, so a
+  // write arriving here is either a stale tab or a direct API call. Reject it
+  // rather than let it land and get silently reverted by the next ledger sync:
+  // two writers on one number is exactly the bug the binding removes. Unmanage
+  // the month first (POST …/budget-managed) to take manual control.
+  const goalsManaged =
+    postPlatform === 'google'
+      ? !!existingBudget?.googleManagedByBudget
+      : !!existingBudget?.managedByBudget;
+  if (goalsManaged && Object.keys(budgetData).length > 0) {
+    return NextResponse.json(
+      {
+        error:
+          'This month’s budget goals are managed by the budget ledger. Turn off budget management for the month to edit them by hand.',
+        code: 'budget_managed',
+      },
+      { status: 409 },
+    );
+  }
 
   await prisma.$transaction(async (tx) => {
     // Period budget — upsert only when the caller manages budget goals.

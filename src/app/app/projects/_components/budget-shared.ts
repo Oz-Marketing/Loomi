@@ -104,7 +104,7 @@ export function monthIndexOf(period: string): number {
 }
 
 export const SOURCE_LABEL: Record<string, string> = {
-  retainer: 'Retainer',
+  retainer: 'Managed Marketing Service',
   task: 'From a ticket',
   adhoc: 'Added here',
   pool: 'Returned to pool',

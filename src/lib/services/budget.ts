@@ -925,7 +925,7 @@ export async function generateRetainerLines(
       amount: monthly,
       source: 'retainer',
       status: 'committed',
-      label: 'Monthly retainer',
+      label: 'Managed Marketing Service',
     }));
 
   return createLines(inputs, userId);

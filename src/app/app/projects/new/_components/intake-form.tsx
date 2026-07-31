@@ -76,7 +76,7 @@ const PRIORITIES = ['low', 'medium', 'high', 'urgent'] as const;
 
 // Sizes the SearchableSelect/MultiSelect triggers to match the form's
 // `.loomi-input` fields (rounded-lg, py-2 px-3, text-sm, page background).
-const SELECT_TRIGGER = '!bg-[var(--background)] !rounded-lg !px-3 !py-2 !text-sm';
+const SELECT_TRIGGER = '!bg-[var(--input)] !rounded-lg !px-3 !py-2 !text-sm';
 
 // Project templates — pre-select the standard department set for common
 // engagements. Team keys are matched against the live team list, so a
@@ -713,7 +713,7 @@ export function IntakeForm() {
                                                 onChange={(e) =>
                                                   setBudget(tk, kind, ch, e.target.value)
                                                 }
-                                                className="loomi-input w-full !bg-[var(--background)] !pl-6"
+                                                className="loomi-input w-full !bg-[var(--input)] !pl-6"
                                               />
                                             </span>
                                           </label>

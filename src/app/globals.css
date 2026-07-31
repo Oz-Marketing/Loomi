@@ -1090,7 +1090,13 @@ body {
   width: 100%;
   border-radius: 0.5rem;
   border: 1px solid var(--border);
-  background: var(--background);
+  /* `--input` (a translucent lift over whatever is behind it), NOT
+     `--background`. The page background in dark mode is near-black, so an
+     input painted with it reads as a hole punched in the surface rather than
+     a raised control. `--input` is what the rest of the app already uses
+     directly (clients, ad-generator, the pacer panels); this brings the shared
+     class in line with it. */
+  background: var(--input);
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
   color: var(--foreground);

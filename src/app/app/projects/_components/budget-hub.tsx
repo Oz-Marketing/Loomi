@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  AdjustmentsHorizontalIcon,
   BanknotesIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -17,6 +18,7 @@ import { periodOf } from '@/lib/budget/period';
 import { useProjectOptions } from './use-project-options';
 import { jsonFetcher } from './fetcher';
 import { BudgetLineDrawer } from './budget-line-drawer';
+import { BudgetPlanModal } from './budget-plan-modal';
 import { StatusPill } from './budget-status-pill';
 import {
   MONTH_ABBR,
@@ -178,33 +180,70 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
 
   return (
     <div className="py-6">
-      {/* ── Header ── */}
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold text-[var(--foreground)]">Budget</h1>
-          <p className="mt-1 text-sm text-[var(--muted-foreground)]">
-            A client&apos;s media budget for the year, and where it&apos;s committed.
-          </p>
+      {/* ── Identity + controls ──
+          The account is the subject of this page, so it leads: a real-size
+          logo and the dealer name, with Budget/year as the context line. The
+          pickers and Plan sit opposite as controls, not as page identity. */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex min-w-0 items-center gap-3.5">
+          {account ? (
+            <AccountAvatar
+              name={account.dealer}
+              accountKey={account.key}
+              logos={account.logos}
+              size={44}
+              aspect="auto"
+              maxWidth={200}
+              logoInsetClassName="p-0"
+              className="flex-shrink-0 rounded-lg"
+            />
+          ) : (
+            <div className="h-[44px] w-[44px] flex-shrink-0 rounded-lg bg-[var(--muted)]" />
+          )}
+          <div className="min-w-0">
+            <h1 className="truncate text-xl font-semibold text-[var(--foreground)]">
+              {account?.dealer ?? 'Select an account'}
+            </h1>
+            <p className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-[var(--muted-foreground)]">
+              <span>Budget · {year}</span>
+              {summary?.overAllocated && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600">
+                  <ExclamationTriangleIcon className="h-3.5 w-3.5" />
+                  Over-allocated
+                </span>
+              )}
+            </p>
+          </div>
         </div>
-        <div className="flex items-end gap-2">
-          <div className="min-w-[220px]">
+
+        <div className="flex items-center gap-2">
+          <div className="min-w-[200px]">
             <SearchableSelect
               value={accountKey}
               onChange={setAccountKey}
               options={accountOptions}
               placeholder="Select account"
-              className="!bg-[var(--background)] !rounded-lg !px-3 !py-2 !text-sm"
+              className="!bg-[var(--input)] !rounded-lg !px-3 !py-2 !text-sm"
             />
           </div>
-          <div className="w-[100px]">
+          <div className="w-[96px]">
             <SearchableSelect
               value={String(year)}
               onChange={(v) => setYear(Number(v))}
               searchable={false}
               options={yearOptions}
-              className="!bg-[var(--background)] !rounded-lg !px-3 !py-2 !text-sm"
+              className="!bg-[var(--input)] !rounded-lg !px-3 !py-2 !text-sm"
             />
           </div>
+          <button
+            type="button"
+            disabled={!accountKey}
+            onClick={() => setPlanOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50"
+          >
+            <AdjustmentsHorizontalIcon className="h-4 w-4" />
+            Plan
+          </button>
         </div>
       </div>
 
@@ -223,67 +262,92 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
         <p className="mt-10 text-sm text-[var(--muted-foreground)]">Loading…</p>
       ) : (
         <>
-          {/* ── Summary bar ── */}
-          <div className="mt-6 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-5">
-            <div className="flex flex-wrap items-center gap-3">
-              {account && (
-                <AccountAvatar
-                  name={account.dealer}
-                  accountKey={account.key}
-                  logos={account.logos}
-                  size={28}
-                />
-              )}
-              <span className="text-sm font-semibold text-[var(--foreground)]">
-                {account?.dealer ?? accountKey}
-              </span>
-              <span className="text-sm text-[var(--muted-foreground)]">· {year}</span>
-              {summary.overAllocated && (
-                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-600">
-                  <ExclamationTriangleIcon className="h-3.5 w-3.5" />
-                  Over-allocated
-                </span>
-              )}
-            </div>
-
-            <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
-              <Stat label="Planned for the year" value={summary.declaredTotal} empty="Not set" />
-              <Stat label="Committed" value={summary.totalCommitted} />
-              <Stat label="Scheduled" value={summary.allocated} hint="on a channel + month" />
-              <Stat
-                label="Unassigned pool"
-                value={summary.pool}
-                hint={summary.pool > 0 ? 'not yet placed' : undefined}
-              />
-            </div>
-
-            {summary.declaredTotal != null && (
-              <div className="mt-4">
-                <ProgressBar
-                  declared={summary.declaredTotal}
-                  allocated={summary.allocated}
-                  pool={summary.pool}
-                />
-                <p className="mt-1.5 text-xs text-[var(--muted-foreground)]">
-                  {summary.unplanned != null && summary.unplanned >= 0 ? (
-                    <>{usd0(summary.unplanned)} of the year still unplanned</>
-                  ) : (
-                    <span className="font-medium text-amber-600">
-                      {usd0(Math.abs(summary.unplanned ?? 0))} committed beyond the planned total
-                    </span>
-                  )}
-                </p>
-              </div>
-            )}
-
-            {/* Plan editor */}
-            <PlanEditor
-              open={planOpen}
-              onToggle={() => setPlanOpen((o) => !o)}
-              plan={plan}
-              onSave={savePlan}
+          {/* ── Stat cards ──
+              Four peers, each its own card. The sub-line under each number is
+              where the relationship between them lives, so the row reads as a
+              sentence rather than four unrelated figures. */}
+          <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatCard
+              label="Planned for the year"
+              value={summary.declaredTotal}
+              empty="Not set"
+              sub={
+                summary.declaredTotal == null
+                  ? 'Add one in Plan to track against'
+                  : summary.monthlyRetainer
+                    ? `${usd0(summary.monthlyRetainer)}/mo managed service`
+                    : 'what the client signed up for'
+              }
+            />
+            <StatCard
+              label="Committed"
+              value={summary.totalCommitted}
+              tone={summary.overAllocated ? 'warn' : undefined}
+              sub={
+                summary.declaredTotal
+                  ? summary.overAllocated
+                    ? `scheduled + pool · ${usd0(Math.abs(summary.unplanned ?? 0))} over plan`
+                    : `scheduled + pool · ${Math.round((summary.totalCommitted / summary.declaredTotal) * 100)}% of plan`
+                  : 'scheduled + pool'
+              }
+            />
+            <StatCard
+              label="Scheduled"
+              value={summary.allocated}
+              sub={
+                grid.length > 0
+                  ? `placed across ${grid.length} channel${grid.length === 1 ? '' : 's'}`
+                  : 'nothing placed yet'
+              }
+            />
+            <StatCard
+              label="Unassigned pool"
+              value={summary.pool}
+              tone={summary.pool > 0 ? 'accent' : undefined}
+              sub={
+                summary.pool > 0
+                  ? `committed, no channel or month yet`
+                  : 'everything is placed'
+              }
             />
           </div>
+
+          {/* Progress strip — relates the four numbers above. Only meaningful
+              once there's a declared total to measure against. */}
+          {summary.declaredTotal != null && (
+            <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+              <ProgressBar
+                declared={summary.declaredTotal}
+                allocated={summary.allocated}
+                pool={summary.pool}
+              />
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[var(--muted-foreground)]">
+                <LegendDot className={summary.overAllocated ? 'bg-amber-500' : 'bg-[var(--primary)]'}>
+                  Scheduled {usd0(summary.allocated)}
+                </LegendDot>
+                <LegendDot
+                  className={summary.overAllocated ? 'bg-amber-500/50' : 'bg-[var(--primary)]/40'}
+                >
+                  Pool {usd0(summary.pool)}
+                </LegendDot>
+                <LegendDot
+                  className={
+                    summary.unplanned != null && summary.unplanned < 0
+                      ? 'bg-amber-600'
+                      : 'bg-[var(--border)]'
+                  }
+                >
+                  {summary.unplanned != null && summary.unplanned >= 0 ? (
+                    <>Uncommitted {usd0(summary.unplanned)}</>
+                  ) : (
+                    <span className="font-medium text-amber-600">
+                      {usd0(Math.abs(summary.unplanned ?? 0))} beyond plan
+                    </span>
+                  )}
+                </LegendDot>
+              </div>
+            </div>
+          )}
 
           {/* ── Channel × month grid ── */}
           <div className="mt-6">
@@ -298,10 +362,19 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
                 <p className="mt-3 text-sm font-medium text-[var(--foreground)]">
                   Nothing scheduled for {year}
                 </p>
-                <p className="mx-auto mt-1 max-w-sm text-sm text-[var(--muted-foreground)]">
-                  Set a monthly retainer above to lay out the year, or add a one-off line. Budget
-                  also lands here automatically when a rep files a funded ticket.
+                <p className="mx-auto mt-1 max-w-md text-sm text-[var(--muted-foreground)]">
+                  Set a monthly Managed Marketing Service amount in Plan to lay out the year, or
+                  add a one-off line. Budget also lands here on its own when a rep files a funded
+                  ticket.
                 </p>
+                <button
+                  type="button"
+                  onClick={() => setPlanOpen(true)}
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+                >
+                  <AdjustmentsHorizontalIcon className="h-4 w-4" />
+                  Open Plan
+                </button>
               </div>
             ) : (
               <div className="overflow-x-auto rounded-2xl border border-[var(--border)] bg-[var(--card)]">
@@ -465,6 +538,16 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
         </>
       )}
 
+      {planOpen && accountKey && (
+        <BudgetPlanModal
+          year={year}
+          accountName={account?.dealer ?? accountKey}
+          plan={plan}
+          onSave={savePlan}
+          onClose={() => setPlanOpen(false)}
+        />
+      )}
+
       {activeLineId && (
         <BudgetLineDrawer
           lineId={activeLineId}
@@ -479,31 +562,63 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
 
 // ── Pieces ──────────────────────────────────────────────────────────────────
 
-function Stat({
+/**
+ * One headline figure as its own card. `tone` colors the value only — the label
+ * and sub-line stay muted so a warning reads as emphasis on the number, not as
+ * the whole card shouting.
+ */
+function StatCard({
   label,
   value,
-  hint,
+  sub,
   empty,
+  tone,
 }: {
   label: string;
   value: number | null;
-  hint?: string;
+  sub?: string;
   empty?: string;
+  tone?: 'warn' | 'accent';
 }) {
+  const valueColor =
+    tone === 'warn'
+      ? 'text-amber-600'
+      : tone === 'accent'
+        ? 'text-[var(--primary)]'
+        : 'text-[var(--foreground)]';
   return (
-    <div>
+    <div className="rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3.5">
       <p className="text-xs text-[var(--muted-foreground)]">{label}</p>
-      <p className="mt-0.5 text-lg font-semibold tabular-nums text-[var(--foreground)]">
+      <p className={`mt-1 text-2xl font-semibold tabular-nums leading-tight ${valueColor}`}>
         {value == null ? (
-          <span className="text-base font-normal text-[var(--muted-foreground)]">
+          <span className="text-lg font-normal text-[var(--muted-foreground)]">
             {empty ?? '—'}
           </span>
         ) : (
           usd0(value)
         )}
       </p>
-      {hint && <p className="text-[11px] text-[var(--muted-foreground)]">{hint}</p>}
+      {sub && (
+        <p className="mt-0.5 truncate text-[11px] text-[var(--muted-foreground)]" title={sub}>
+          {sub}
+        </p>
+      )}
     </div>
+  );
+}
+
+function LegendDot({
+  className,
+  children,
+}: {
+  className: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={`h-2 w-2 flex-shrink-0 rounded-full ${className}`} />
+      {children}
+    </span>
   );
 }
 
@@ -534,178 +649,6 @@ function ProgressBar({
         className={over ? 'bg-amber-500/50' : 'bg-[var(--primary)]/40'}
         style={{ width: `${pct(pool)}%` }}
       />
-    </div>
-  );
-}
-
-function PlanEditor({
-  open,
-  onToggle,
-  plan,
-  onSave,
-}: {
-  open: boolean;
-  onToggle: () => void;
-  plan: Plan | null;
-  onSave: (body: Record<string, unknown>, generate?: boolean) => Promise<void>;
-}) {
-  const [declared, setDeclared] = useState('');
-  const [retainer, setRetainer] = useState('');
-  const [markup, setMarkup] = useState('');
-  // Which channel "Lay out the year" puts the retainer on. Defaults to the
-  // pool, but the choice is surfaced rather than implied — generating twelve
-  // channel-less lines silently leaves the grid empty and the money invisible,
-  // which reads as the feature being broken.
-  const [retainerChannel, setRetainerChannel] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  // Re-seed the inputs whenever the loaded plan changes (account/year switch).
-  useEffect(() => {
-    setDeclared(plan?.declaredTotal ? String(plan.declaredTotal) : '');
-    setRetainer(plan?.monthlyRetainer ? String(plan.monthlyRetainer) : '');
-    setMarkup(plan?.defaultMarkup != null ? String(plan.defaultMarkup) : '');
-  }, [plan]);
-
-  const body = () => ({
-    declaredTotal: declared === '' ? null : Number(declared),
-    monthlyRetainer: retainer === '' ? null : Number(retainer),
-    defaultMarkup: markup === '' ? null : Number(markup),
-    retainerChannel: retainerChannel || null,
-  });
-
-  const run = async (generate: boolean) => {
-    setSaving(true);
-    await onSave(body(), generate);
-    setSaving(false);
-  };
-
-  return (
-    <div className="mt-4 border-t border-[var(--border)] pt-3">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center justify-between text-left text-sm font-medium text-[var(--foreground)]"
-      >
-        <span>
-          Plan{' '}
-          <span className="text-xs font-normal text-[var(--muted-foreground)]">
-            — annual total, retainer, markup
-          </span>
-        </span>
-        {open ? (
-          <ChevronDownIcon className="h-4 w-4 text-[var(--muted-foreground)]" />
-        ) : (
-          <ChevronRightIcon className="h-4 w-4 text-[var(--muted-foreground)]" />
-        )}
-      </button>
-
-      {open && (
-        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <MoneyField
-            label="Planned for the year"
-            hint="What the client committed. Blank = no formal plan."
-            value={declared}
-            onChange={setDeclared}
-          />
-          <MoneyField
-            label="Monthly retainer"
-            hint="Used by “Lay out the year”."
-            value={retainer}
-            onChange={setRetainer}
-          />
-          <div>
-            <label className="block text-xs text-[var(--muted-foreground)]">Markup override</label>
-            <input
-              type="number"
-              step="0.01"
-              min="0"
-              max="1"
-              placeholder="account default"
-              value={markup}
-              onChange={(e) => setMarkup(e.target.value)}
-              className="loomi-input mt-1 w-full !bg-[var(--background)]"
-            />
-            <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
-              Spend = budget × markup. Frozen onto each new line.
-            </p>
-          </div>
-
-          <div className="sm:col-span-3 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={saving}
-              onClick={() => void run(false)}
-              className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
-            >
-              {saving ? 'Saving…' : 'Save plan'}
-            </button>
-            <button
-              type="button"
-              disabled={saving || retainer === ''}
-              onClick={() => void run(true)}
-              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50"
-            >
-              Lay out the year
-            </button>
-            <span className="text-[11px] text-[var(--muted-foreground)]">onto</span>
-            <div className="w-[150px]">
-              <SearchableSelect
-                value={retainerChannel}
-                onChange={setRetainerChannel}
-                searchable={false}
-                options={[
-                  { value: '', label: 'Unassigned pool' },
-                  ...BUDGET_CHANNELS.map((c) => ({
-                    value: c.key,
-                    label: c.label,
-                    icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
-                  })),
-                ]}
-                className="!bg-[var(--background)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
-              />
-            </div>
-          </div>
-          <p className="sm:col-span-3 -mt-1 text-[11px] text-[var(--muted-foreground)]">
-            {retainerChannel
-              ? `Creates a ${channelLabel(retainerChannel)} line for each month that doesn’t already have a retainer — safe to re-run.`
-              : 'Creates an unassigned pool line for each month. Pick a channel above to have them show up in the grid instead.'}
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function MoneyField({
-  label,
-  hint,
-  value,
-  onChange,
-}: {
-  label: string;
-  hint?: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div>
-      <label className="block text-xs text-[var(--muted-foreground)]">{label}</label>
-      <div className="relative mt-1">
-        <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[var(--muted-foreground)]">
-          $
-        </span>
-        <input
-          type="number"
-          min="0"
-          step="any"
-          inputMode="decimal"
-          placeholder="0"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="loomi-input w-full !bg-[var(--background)] !pl-6"
-        />
-      </div>
-      {hint && <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">{hint}</p>}
     </div>
   );
 }
@@ -812,7 +755,7 @@ function AddLineButton({
             label: c.label,
             icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
           }))}
-          className="!bg-[var(--background)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
+          className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
         />
       </div>
       <div className="w-[110px]">
@@ -821,7 +764,7 @@ function AddLineButton({
           onChange={setMonth}
           searchable={false}
           options={MONTH_ABBR.map((m, i) => ({ value: String(i + 1), label: m }))}
-          className="!bg-[var(--background)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
+          className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
         />
       </div>
       <input
@@ -831,14 +774,14 @@ function AddLineButton({
         placeholder="Amount"
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
-        className="loomi-input w-[110px] !bg-[var(--background)] !py-1.5 !text-xs"
+        className="loomi-input w-[110px] !bg-[var(--input)] !py-1.5 !text-xs"
       />
       <input
         type="text"
         placeholder="Label (optional)"
         value={label}
         onChange={(e) => setLabel(e.target.value)}
-        className="loomi-input w-[160px] !bg-[var(--background)] !py-1.5 !text-xs"
+        className="loomi-input w-[160px] !bg-[var(--input)] !py-1.5 !text-xs"
       />
       <button
         type="button"

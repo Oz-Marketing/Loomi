@@ -124,7 +124,7 @@ async function seedMain(userId: string | null): Promise<void> {
         amount: 11_000,
         source: 'retainer',
         status: 'committed',
-        label: 'Monthly retainer',
+        label: 'Managed Marketing Service',
       },
       {
         accountKey: key,
@@ -133,7 +133,7 @@ async function seedMain(userId: string | null): Promise<void> {
         amount: 7_000,
         source: 'retainer',
         status: 'committed',
-        label: 'Monthly retainer',
+        label: 'Managed Marketing Service',
       },
     ]),
     userId,

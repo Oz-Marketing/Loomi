@@ -131,18 +131,22 @@ export function BudgetLineDrawer({
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div
-        className="absolute inset-0 bg-black/30"
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={onClose}
         aria-hidden
       />
-      <div className="relative flex h-full w-full max-w-md flex-col overflow-y-auto border-l border-[var(--border)] bg-[var(--card)] shadow-xl">
-        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-[var(--border)] bg-[var(--card)] px-5 py-4">
+      {/* frost-heavy, not bg-[var(--card)] — `--card` is 62% opaque by design
+          for in-page surfaces, which makes a floating panel unreadable over
+          the grid behind it. */}
+      <div className="frost-heavy relative flex h-full w-full max-w-md flex-col overflow-y-auto shadow-xl">
+        <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-[var(--border)] bg-inherit px-5 py-4">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-[var(--foreground)]">
               {line?.label || line?.taskTitle || 'Budget line'}
             </p>
             {line && (
-              <p className="mt-0.5 inline-flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+              <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                <StatusPill status={line.status} />
                 <ChannelIcon channel={line.channel} className="h-3.5 w-3.5" />
                 <span>
                   {line.channel ? channelLabel(line.channel) : 'Unassigned channel'}
@@ -243,7 +247,7 @@ export function BudgetLineDrawer({
                   step="any"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
-                  className="loomi-input mt-1 w-full !bg-[var(--background)]"
+                  className="loomi-input mt-1 w-full !bg-[var(--input)]"
                 />
               </label>
 
@@ -254,7 +258,7 @@ export function BudgetLineDrawer({
                   value={label}
                   onChange={(e) => setLabel(e.target.value)}
                   placeholder="e.g. Summer Sales Event"
-                  className="loomi-input mt-1 w-full !bg-[var(--background)]"
+                  className="loomi-input mt-1 w-full !bg-[var(--input)]"
                 />
               </label>
 
@@ -274,7 +278,7 @@ export function BudgetLineDrawer({
                           icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
                         })),
                       ]}
-                      className="!bg-[var(--background)] !rounded-lg !px-2.5 !py-2 !text-sm"
+                      className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-2 !text-sm"
                     />
                   </div>
                 </div>
@@ -292,7 +296,7 @@ export function BudgetLineDrawer({
                           label: m,
                         })),
                       ]}
-                      className="!bg-[var(--background)] !rounded-lg !px-2.5 !py-2 !text-sm"
+                      className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-2 !text-sm"
                     />
                   </div>
                 </div>
@@ -309,7 +313,7 @@ export function BudgetLineDrawer({
                     onChange={setStatus}
                     searchable={false}
                     options={EDITABLE_STATUSES.map((s) => ({ value: s, label: s }))}
-                    className="!bg-[var(--background)] !rounded-lg !px-2.5 !py-2 !text-sm"
+                    className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-2 !text-sm"
                   />
                 </div>
                 <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
@@ -377,10 +381,6 @@ export function BudgetLineDrawer({
                   </li>
                 ))}
               </ul>
-            </div>
-
-            <div className="pt-1">
-              <StatusPill status={line.status} />
             </div>
           </div>
         )}

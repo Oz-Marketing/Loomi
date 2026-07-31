@@ -225,6 +225,36 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true, doc: row });
       }
 
+      case 'rename_doc': {
+        const docId = (body.docId ?? '').trim();
+        const title = (body.title ?? '').trim();
+        if (!docId || !title) return NextResponse.json({ error: 'docId and title are required' }, { status: 400 });
+
+        const current = await prisma.adGuidelineDoc.findUnique({
+          where: { id: docId },
+          select: { make: true, title: true },
+        });
+        if (!current) return NextResponse.json({ error: 'Document not found' }, { status: 404 });
+        if (current.title === title) return NextResponse.json({ ok: true, unchanged: true });
+
+        // (make, title) is the unique key, and it's also what a re-upload matches on
+        // to replace a document. Colliding with a sibling would either fail at the
+        // constraint or, worse, make two documents indistinguishable to the uploader.
+        const clash = await prisma.adGuidelineDoc.findUnique({
+          where: { make_title: { make: current.make, title } },
+          select: { id: true },
+        });
+        if (clash && clash.id !== docId) {
+          return NextResponse.json(
+            { error: `${current.make} already has a document called "${title}".` },
+            { status: 409 },
+          );
+        }
+
+        const row = await prisma.adGuidelineDoc.update({ where: { id: docId }, data: { title } });
+        return NextResponse.json({ ok: true, doc: { id: row.id, title: row.title } });
+      }
+
       case 'save_doc_notes': {
         const docId = (body.docId ?? '').trim();
         if (!docId) return NextResponse.json({ error: 'docId is required' }, { status: 400 });

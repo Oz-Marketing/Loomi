@@ -164,6 +164,24 @@ function fileSize(bytes: number | null): string | null {
 /** States whose summary earns a line of its own, because it names a consequence. */
 const EXPLAIN_STATE = new Set<DocState>(['updated', 'unreachable', 'unfetched']);
 
+/**
+ * A readable starting name from a filename, offered when adding a document.
+ *
+ * The real library is full of things like
+ * "KiaDealerAdvertisingGuidelinesVer2.02025Apr638967455042013902.pdf" and
+ * "14257276_2026 Q2 Hyundai...", so this strips the extension, the leading numeric
+ * id some portals prepend, and separator punctuation. It's a starting point to edit,
+ * not a guess anyone has to accept.
+ */
+function titleFromFilename(name: string): string {
+  return name
+    .replace(/\.[^.]+$/, '')
+    .replace(/^\d{6,}[_-]\s*/, '')
+    .replace(/[_]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 const emptyDocDraft = (make: string) => ({ make, title: '', sourceUrl: '', file: null as File | null });
 
 const emptyEventDraft = (make: string) => ({
@@ -190,6 +208,8 @@ export default function OemAssetsPage() {
   const [docDraft, setDocDraft] = useState<ReturnType<typeof emptyDocDraft> | null>(null);
   const [pickingLogo, setPickingLogo] = useState(false);
   const [reading, setReading] = useState<GuidelineDocRow | null>(null);
+  /** Document currently being renamed inline, and the text being typed. */
+  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   /** Cover thumbnails, fetched per document on demand — the list omits them. */
   const [covers, setCovers] = useState<Record<string, string | null>>({});
 
@@ -539,14 +559,41 @@ export default function OemAssetsPage() {
                             </span>
                           </button>
                           <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-start gap-1.5">
-                              <span className="text-xs font-medium leading-snug text-[var(--foreground)]">
-                                {d.title}
-                              </span>
-                              <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-medium ${ds.className}`}>
-                                {ds.label}
-                              </span>
-                            </div>
+                            {renaming?.id === d.id ? (
+                              <input
+                                autoFocus
+                                value={renaming.title}
+                                onChange={(e) => setRenaming({ id: d.id, title: e.target.value })}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Escape') setRenaming(null);
+                                  if (e.key === 'Enter') e.currentTarget.blur();
+                                }}
+                                // Commit on blur so Enter, Tab and clicking away all
+                                // save — losing a rename because you clicked outside
+                                // is the kind of small betrayal that stops people
+                                // trusting inline editing.
+                                onBlur={async () => {
+                                  const next = renaming.title.trim();
+                                  setRenaming(null);
+                                  if (!next || next === d.title) return;
+                                  await act('rename_doc', { docId: d.id, title: next }, `rn-${d.id}`, 'Renamed');
+                                }}
+                                className="w-full rounded border border-[var(--primary)] bg-[var(--background)] px-1.5 py-0.5 text-xs text-[var(--foreground)] outline-none"
+                              />
+                            ) : (
+                              <div className="flex flex-wrap items-start gap-1.5">
+                                <button
+                                  onClick={() => setRenaming({ id: d.id, title: d.title })}
+                                  title="Click to rename"
+                                  className="rounded text-left text-xs font-medium leading-snug text-[var(--foreground)] hover:underline"
+                                >
+                                  {d.title}
+                                </button>
+                                <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-medium ${ds.className}`}>
+                                  {ds.label}
+                                </span>
+                              </div>
+                            )}
                             {EXPLAIN_STATE.has(d.state) && (
                               <p className="mt-1 text-[10px] leading-snug text-[var(--muted-foreground)]">
                                 {d.summary}
@@ -574,6 +621,12 @@ export default function OemAssetsPage() {
                                 className="text-[11px] font-medium text-[var(--primary)] hover:underline"
                               >
                                 Read
+                              </button>
+                              <button
+                                onClick={() => setRenaming({ id: d.id, title: d.title })}
+                                className="text-[11px] font-medium text-[var(--muted-foreground)] hover:underline"
+                              >
+                                Rename
                               </button>
                               {d.sourceUrl && (
                                 <a
@@ -891,7 +944,15 @@ export default function OemAssetsPage() {
                 <input
                   type="file"
                   accept=".pdf,.docx,.doc,application/pdf"
-                  onChange={(e) => setDocDraft({ ...docDraft, file: e.target.files?.[0] ?? null })}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] ?? null;
+                    // Offer the filename as the name, tidied — but never overwrite
+                    // something already typed, and never on a Replace (where the
+                    // title is the key that finds the document being replaced).
+                    const suggested =
+                      file && !docDraft.title.trim() ? titleFromFilename(file.name) : docDraft.title;
+                    setDocDraft({ ...docDraft, file, title: suggested });
+                  }}
                   className="w-full cursor-pointer rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-xs text-[var(--foreground)] outline-none file:mr-3 file:rounded-md file:border-0 file:bg-[var(--muted)] file:px-2 file:py-1 file:text-xs file:font-medium file:text-[var(--foreground)] focus:border-[var(--primary)]"
                 />
                 {docDraft.file && (

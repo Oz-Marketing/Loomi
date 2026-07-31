@@ -15,11 +15,12 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
+import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
 import { ListToolbar } from '@/components/list-toolbar';
+import BulkActionDock from '@/components/bulk-action-dock';
 import { AccountLogo } from '@/components/account-logo';
 import { ImpersonationEscape } from '@/components/impersonation-escape';
 import type { StatusFilterValue } from '@/components/status-filter';
@@ -91,6 +92,9 @@ export default function AdGeneratorListPage() {
   const [genOpen, setGenOpen] = useState(false);
   const [candidates, setCandidates] = useState<GenerateCandidate[]>([]);
   const [maxAdsPerRun, setMaxAdsPerRun] = useState(10);
+  // Bulk selection. Ids rather than indices so it survives filtering and reloads.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   // Header dropdowns: the settings cog + the "New ad" split menu.
   const [cogOpen, setCogOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
@@ -143,7 +147,10 @@ export default function AdGeneratorListPage() {
     }
     let cancelled = false;
     setCreatives(null);
-    fetch(`/api/ad-generator/creatives?accountKey=${encodeURIComponent(accountKey)}`)
+    // Archived ads live behind their own query rather than being filtered out
+    // client-side, so an account with thousands of them doesn't ship them all.
+    const archived = statusFilter === 'archived' ? '&archived=1' : '';
+    fetch(`/api/ad-generator/creatives?accountKey=${encodeURIComponent(accountKey)}${archived}`)
       .then((r) => (r.ok ? r.json() : { creatives: [] }))
       .then((d: { creatives?: Creative[] }) => {
         if (!cancelled) setCreatives(d.creatives ?? []);
@@ -154,6 +161,12 @@ export default function AdGeneratorListPage() {
     return () => {
       cancelled = true;
     };
+  }, [accountKey, statusFilter]);
+
+  // Selecting something, then filtering it out of view, would leave it queued
+  // for a bulk action nobody can see. Keep the selection inside the visible set.
+  useEffect(() => {
+    setSelected(new Set());
   }, [accountKey]);
 
   // Is automation set up for this sub-account? Managers only — the endpoint is
@@ -239,6 +252,73 @@ export default function AdGeneratorListPage() {
     }
   }
 
+  function toggleSelect(id: string) {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function runBulk(action: 'archive' | 'restore' | 'delete' | 'mark_ready' | 'mark_draft') {
+    const ids = selectedVisible;
+    if (!ids.length) return;
+
+    // Deletion is the one that can't be walked back — archive is reversible, and
+    // a status flip is just a flip.
+    if (action === 'delete') {
+      const ok = await confirm({
+        title: `Delete ${ids.length} ad${ids.length === 1 ? '' : 's'}?`,
+        message: 'This can’t be undone. Archive them instead if you only want them out of the way.',
+        confirmLabel: 'Delete',
+        destructive: true,
+      });
+      if (!ok) return;
+    }
+
+    setBulkBusy(true);
+    try {
+      const res = await fetch('/api/ad-generator/creatives/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, action }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+
+      const n = json.count ?? ids.length;
+      const noun = `${n} ad${n === 1 ? '' : 's'}`;
+      toast.success(
+        action === 'delete'
+          ? `Deleted ${noun}`
+          : action === 'archive'
+            ? `Archived ${noun}`
+            : action === 'restore'
+              ? `Restored ${noun}`
+              : `Marked ${noun} ${action === 'mark_ready' ? 'ready' : 'draft'}`,
+      );
+
+      // Apply locally rather than refetching: delete/archive/restore all remove
+      // the rows from the current view, and a status flip is a field update.
+      const gone = action === 'delete' || action === 'archive' || action === 'restore';
+      setCreatives((cur) =>
+        (cur ?? [])
+          .filter((c) => !(gone && ids.includes(c.id)))
+          .map((c) =>
+            !gone && ids.includes(c.id)
+              ? { ...c, status: action === 'mark_ready' ? 'ready' : 'draft' }
+              : c,
+          ),
+      );
+      setSelected(new Set());
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Bulk action failed');
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   // Account branding for the mini previews (same as the editor merges in).
   const branding: AdData = useMemo(() => brandingFromAccount(accountData), [accountData]);
 
@@ -259,6 +339,7 @@ export default function AdGeneratorListPage() {
   // for "Silverado" and the Make picker shows only the makes still in play).
   const preFacet = useMemo(() => {
     let list = faceted;
+    // 'archived' is served by its own query, so there's nothing to narrow here.
     if (statusFilter === 'published') list = list.filter((c) => c.status === 'ready');
     else if (statusFilter === 'draft') list = list.filter((c) => c.status !== 'ready');
     if (sourceFilter === 'auto') list = list.filter((c) => c.autoGenerated);
@@ -297,6 +378,13 @@ export default function AdGeneratorListPage() {
   const visible = useMemo(
     () => preFacet.filter((c) => matchesFacets(c.facets, facetSel)),
     [preFacet, facetSel],
+  );
+
+  /** Ids currently visible — what "select all" means, and what a bulk action hits. */
+  const visibleIds = useMemo(() => visible.map((c) => c.id), [visible]);
+  const selectedVisible = useMemo(
+    () => visibleIds.filter((id) => selected.has(id)),
+    [visibleIds, selected],
   );
 
   // Switching sub-accounts carries the old rooftop's vehicles into a store that
@@ -561,9 +649,24 @@ export default function AdGeneratorListPage() {
               control and one count instead of a crowded toolbar row. */}
           <ListToolbar
             leading={
-              <span className="text-sm text-[var(--muted-foreground)]">
-                {visible.length} {visible.length === 1 ? 'ad' : 'ads'}
-              </span>
+              <div className="flex items-center gap-3">
+                <span className="text-sm text-[var(--muted-foreground)]">
+                  {visible.length} {visible.length === 1 ? 'ad' : 'ads'}
+                </span>
+                {visible.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSelected(
+                        selectedVisible.length === visible.length ? new Set() : new Set(visibleIds),
+                      )
+                    }
+                    className="text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+                  >
+                    {selectedVisible.length === visible.length ? 'Clear selection' : 'Select all'}
+                  </button>
+                )}
+              </div>
             }
             search={search}
             onSearchChange={setSearch}
@@ -647,10 +750,50 @@ export default function AdGeneratorListPage() {
                 key={c.id}
                 role="button"
                 tabIndex={0}
-                onClick={() => router.push(`/ad-generator/${c.id}`)}
-                onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && router.push(`/ad-generator/${c.id}`)}
-                className="glass-card group cursor-pointer overflow-hidden rounded-2xl border border-[var(--border)] text-left transition-colors hover:border-[var(--primary)]"
+                // With a selection open the card toggles instead of navigating —
+                // clicking through to the editor mid-selection is never what you
+                // meant, and it loses the selection on the way.
+                onClick={() => (selected.size > 0 ? toggleSelect(c.id) : router.push(`/ad-generator/${c.id}`))}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter' && e.key !== ' ') return;
+                  e.preventDefault();
+                  if (selected.size > 0) toggleSelect(c.id);
+                  else router.push(`/ad-generator/${c.id}`);
+                }}
+                className={`glass-card group relative cursor-pointer overflow-hidden rounded-2xl border text-left transition-colors ${
+                  selected.has(c.id)
+                    ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]'
+                    : 'border-[var(--border)] hover:border-[var(--primary)]'
+                }`}
               >
+                {/* Hidden until hover or selection, so an unselected grid stays
+                    clean but the affordance is one movement away. */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleSelect(c.id);
+                  }}
+                  aria-label={selected.has(c.id) ? `Deselect ${c.name}` : `Select ${c.name}`}
+                  aria-pressed={selected.has(c.id)}
+                  className={`absolute left-2.5 top-2.5 z-10 flex h-5 w-5 items-center justify-center rounded-md border transition-opacity ${
+                    selected.has(c.id)
+                      ? 'border-[var(--primary)] bg-[var(--primary)] opacity-100'
+                      : 'border-[var(--border)] bg-[var(--background)]/90 opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+                  }`}
+                >
+                  {selected.has(c.id) && (
+                    <svg viewBox="0 0 12 12" className="h-3 w-3 text-white" fill="none">
+                      <path
+                        d="M2.5 6.5l2.5 2.5 4.5-5"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  )}
+                </button>
                 <AdPreviewThumb template={template} data={c.data} branding={branding} />
                 <div className="flex items-start justify-between gap-2 p-3">
                   <div className="min-w-0">
@@ -808,6 +951,65 @@ export default function AdGeneratorListPage() {
           creating={creating}
           onClose={() => !creating && setScratchOpen(false)}
           onStart={(name, sizes, vehicleMode) => void createBlank(name, sizes, vehicleMode)}
+        />
+      )}
+
+      {selectedVisible.length > 0 && (
+        <BulkActionDock
+          count={selectedVisible.length}
+          itemLabel={selectedVisible.length === 1 ? 'ad' : 'ads'}
+          onClose={() => setSelected(new Set())}
+          actions={
+            statusFilter === 'archived'
+              ? [
+                  {
+                    id: 'restore',
+                    label: 'Restore',
+                    icon: <ArrowUturnLeftIcon className="h-4 w-4" />,
+                    disabled: bulkBusy,
+                    onClick: () => void runBulk('restore'),
+                  },
+                  {
+                    id: 'delete',
+                    label: 'Delete',
+                    icon: <TrashIcon className="h-4 w-4" />,
+                    disabled: bulkBusy,
+                    danger: true,
+                    onClick: () => void runBulk('delete'),
+                  },
+                ]
+              : [
+                  {
+                    id: 'mark-ready',
+                    label: 'Mark ready',
+                    icon: <CheckCircleIcon className="h-4 w-4" />,
+                    disabled: bulkBusy,
+                    onClick: () => void runBulk('mark_ready'),
+                  },
+                  {
+                    id: 'mark-draft',
+                    label: 'Mark draft',
+                    icon: <PencilSquareIcon className="h-4 w-4" />,
+                    disabled: bulkBusy,
+                    onClick: () => void runBulk('mark_draft'),
+                  },
+                  {
+                    id: 'archive',
+                    label: 'Archive',
+                    icon: <ArchiveBoxIcon className="h-4 w-4" />,
+                    disabled: bulkBusy,
+                    onClick: () => void runBulk('archive'),
+                  },
+                  {
+                    id: 'delete',
+                    label: 'Delete',
+                    icon: <TrashIcon className="h-4 w-4" />,
+                    disabled: bulkBusy,
+                    danger: true,
+                    onClick: () => void runBulk('delete'),
+                  },
+                ]
+          }
         />
       )}
 

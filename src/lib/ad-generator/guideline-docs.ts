@@ -61,6 +61,10 @@ export interface GuidelineDocRow {
   byteSize: number | null;
   pageCount: number | null;
   previewImage: string | null;
+  /** Per-page plain text for reader search, as a JSON string[]. */
+  pageText: string | null;
+  /** Section headings as JSON {page,title}[], for labelling search results. */
+  sections: string | null;
   previousHash: string | null;
   replacedAt: string | null;
   notes: string | null;
@@ -121,6 +125,8 @@ type DbRow = {
   byteSize: number | null;
   pageCount: number | null;
   previewImage: string | null;
+  pageText: string | null;
+  sections: string | null;
   previousHash: string | null;
   replacedAt: Date | null;
   notes: string | null;
@@ -143,6 +149,8 @@ function toRow(r: DbRow, now = new Date()): GuidelineDocRow {
     byteSize: r.byteSize,
     pageCount: r.pageCount,
     previewImage: r.previewImage,
+    pageText: r.pageText,
+    sections: r.sections,
     previousHash: r.previousHash,
     replacedAt: r.replacedAt?.toISOString() ?? null,
     notes: r.notes,
@@ -175,7 +183,13 @@ export async function listGuidelineDocs(
     const now = new Date();
     return rows.map((r) => {
       const row = toRow(r, now);
-      if (!opts.includePreview) row.previewImage = null;
+      // Both are bulk payloads the list view never reads: 33 covers is ~1 MB of
+      // base64 and 33 documents' text is several more.
+      if (!opts.includePreview) {
+        row.previewImage = null;
+        row.pageText = null;
+        row.sections = null;
+      }
       return row;
     });
   } catch (err) {
@@ -233,8 +247,8 @@ export async function registerGuidelineDoc(args: RegisterArgs): Promise<Guidelin
   try {
     const existing = (await prisma.adGuidelineDoc.findUnique({
       where: { make_title: { make, title } },
-      select: { contentHash: true, previewImage: true },
-    })) as { contentHash: string | null; previewImage: string | null } | null;
+      select: { contentHash: true, previewImage: true, pageText: true },
+    })) as { contentHash: string | null; previewImage: string | null; pageText: string | null } | null;
 
     let hashed: Record<string, unknown> = {};
     if (args.bytes) {
@@ -250,13 +264,17 @@ export async function registerGuidelineDoc(args: RegisterArgs): Promise<Guidelin
 
       // Render the cover when the bytes are new to us. Skipped when unchanged so a
       // re-register doesn't pay for a Chromium launch to redraw the same page.
-      const needsPreview = !args.skipPreview && (moved || !existing?.previewImage);
+      // Re-render when the bytes moved, or when either artefact is missing — a
+      // document registered before search existed has a cover but no text.
+      const needsPreview = !args.skipPreview && (moved || !existing?.previewImage || !existing?.pageText);
       if (needsPreview) {
         const render = args.render ?? renderGuidelinePreview;
-        const preview = await render(args.bytes, args.mimeType ?? 'application/pdf');
+        const preview = await render(args.bytes, args.mimeType ?? 'application/pdf', { withText: true });
         if (preview) {
           hashed.previewImage = preview.dataUri;
           hashed.pageCount = preview.pageCount;
+          if (preview.pageText) hashed.pageText = JSON.stringify(preview.pageText);
+          if (preview.sections) hashed.sections = JSON.stringify(preview.sections);
         }
       }
     }
@@ -336,9 +354,16 @@ export async function refreshGuidelineDocs(
       const hash = hashBytes(bytes);
       const moved = !!row.contentHash && row.contentHash !== hash;
 
-      let preview: { dataUri: string; pageCount: number } | null = null;
+      let preview: {
+        dataUri: string;
+        pageCount: number;
+        pageText?: string[];
+        sections?: { page: number; title: string }[];
+      } | null = null;
       if (moved || !row.contentHash) {
-        preview = await renderGuidelinePreview(bytes, res.headers.get('content-type') ?? 'application/pdf');
+        preview = await renderGuidelinePreview(bytes, res.headers.get('content-type') ?? 'application/pdf', {
+          withText: true,
+        });
       }
 
       await prisma.adGuidelineDoc.update({
@@ -349,7 +374,14 @@ export async function refreshGuidelineDocs(
           checkedAt: now,
           checkError: null,
           ...(moved ? { previousHash: row.contentHash, replacedAt: now } : {}),
-          ...(preview ? { previewImage: preview.dataUri, pageCount: preview.pageCount } : {}),
+          ...(preview
+            ? {
+                previewImage: preview.dataUri,
+                pageCount: preview.pageCount,
+                ...(preview.pageText ? { pageText: JSON.stringify(preview.pageText) } : {}),
+                ...(preview.sections ? { sections: JSON.stringify(preview.sections) } : {}),
+              }
+            : {}),
         },
       });
       if (moved) out.changed.push(`${row.make} — ${row.title}`);

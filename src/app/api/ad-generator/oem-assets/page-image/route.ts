@@ -131,9 +131,12 @@ export async function GET(req: NextRequest) {
   }
   if (!doc) return NextResponse.json({ error: 'Document not found' }, { status: 404 });
 
+  // `?boxes=1` asks for the page's text geometry instead of its image. Same cache
+  // entry, so highlighting a match never costs an extra render.
+  const wantBoxes = req.nextUrl.searchParams.get('boxes') === '1';
   const key = `${doc.contentHash ?? docId}:${page}`;
   const cached = cacheGet(key);
-  if (cached) return imageResponse(cached, key);
+  if (cached) return wantBoxes ? boxesResponse(cached) : imageResponse(cached, key);
 
   const got = await fetchDocBytes(doc);
   if ('error' in got) return NextResponse.json({ error: got.error }, { status: got.status });
@@ -152,7 +155,15 @@ export async function GET(req: NextRequest) {
       { status: 422 },
     );
   }
-  return imageResponse(out, key);
+  return wantBoxes ? boxesResponse(out) : imageResponse(out, key);
+}
+
+/** Text-run geometry for one page, in normalized 0..1 coordinates. */
+function boxesResponse(page: RenderedPage): NextResponse {
+  return NextResponse.json(
+    { items: page.items ?? [], pageCount: page.pageCount },
+    { headers: { 'Cache-Control': 'private, max-age=86400' } },
+  );
 }
 
 function imageResponse(page: RenderedPage, etag: string): NextResponse {

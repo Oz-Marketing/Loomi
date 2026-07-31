@@ -2575,6 +2575,17 @@ model AdGuidelineDoc {
   /// S3-backed preview would be one that only appears in production.
   previewImage String? @db.Text
 
+  /// Per-page plain text as a JSON string[], so the in-app reader can search the
+  /// document. Extracted in the same pdf.js pass that renders the cover — it costs
+  /// ~250ms for 60 pages and ~160-230 KB of text, which is cheap enough to store
+  /// rather than re-derive on every search.
+  pageText String? @db.Text
+
+  /// Section headings as a JSON {page,title}[], from the PDF's own outline where it
+  /// has one and a heading pattern otherwise. Lets a search result say which
+  /// section it's in rather than only which page.
+  sections String? @db.Text
+
   /// VERSION HISTORY, not a review gate. An earlier design made a human attest
   /// "I reviewed this" before the register would go quiet, which turned out to be
   /// ceremony nobody wanted: what's actually useful is "this document was replaced

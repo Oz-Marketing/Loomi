@@ -136,8 +136,10 @@ export interface ShadowReport {
     id: string;
     name: string;
     owned: boolean;
-    /** The sizes this template defines — what the size picker offers. */
-    sizes: { id: string; label: string }[];
+    /** The sizes this template defines — what the size picker offers.
+     *  Dimensions travel with them so the picker can show the aspect ratio,
+     *  which is what someone choosing "Story vs Landscape" actually cares about. */
+    sizes: { id: string; label: string; width: number; height: number }[];
   }[];
   /** Auto-generated drafts, newest first — the review queue. */
   drafts: GeneratedDraft[];
@@ -453,10 +455,19 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
       owned: t.accountKey === accountKey,
       sizes: (() => {
         try {
-          const d = JSON.parse(t.doc) as { sizes?: { id?: string; label?: string }[] };
+          const d = JSON.parse(t.doc) as {
+            sizes?: { id?: string; label?: string; width?: number; height?: number }[];
+          };
           return (d.sizes ?? [])
-            .filter((x): x is { id: string; label?: string } => typeof x?.id === 'string')
-            .map((x) => ({ id: x.id, label: x.label || x.id }));
+            .filter((x): x is { id: string; label?: string; width?: number; height?: number } =>
+              typeof x?.id === 'string',
+            )
+            .map((x) => ({
+              id: x.id,
+              label: x.label || x.id,
+              width: Number(x.width) || 0,
+              height: Number(x.height) || 0,
+            }));
         } catch {
           return [];
         }

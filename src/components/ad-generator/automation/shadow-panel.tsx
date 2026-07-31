@@ -15,124 +15,25 @@
  * deliberately not acted on — generation is a separate, explicit step.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
-import { toast } from 'sonner';
 import {
   ArrowPathIcon,
   CheckCircleIcon,
-
   ClockIcon,
   Cog6ToothIcon,
   ExclamationTriangleIcon,
   PlayIcon,
   PlusIcon,
-  SparklesIcon,
   TrashIcon,
   XCircleIcon,
 } from '@heroicons/react/24/outline';
+import { Select } from '@/components/select';
 import { HelpTip } from '@/components/ui/help-tip';
-
-interface FeedStatus {
-  id: string;
-  name: string;
-  url: string;
-  storeCode: string | null;
-  isActive: boolean;
-  lastSyncedAt: string | null;
-  lastSyncStatus: string | null;
-  lastSyncMessage: string | null;
-  vehicleCount: number;
-  newVehicleCount: number;
-  ageHours: number | null;
-  stale: boolean;
-}
-
-type CycleState = 'none' | 'current' | 'partial' | 'expiring_unrenewed' | 'undated' | 'unwatched';
-
-interface WatchedVehicle {
-  year: number;
-  make: string;
-  model: string;
-  stock: number;
-  liveOffers: number;
-  endedOffers: number;
-  cycleState: CycleState;
-  cycleSummary: string;
-  latestEnd: string | null;
-  wouldChoose: string | null;
-  firstSeenAt: string | null;
-}
-
-interface LeadTimeStat {
-  make: string;
-  median: number;
-  min: number;
-  max: number;
-  n: number;
-}
-
-interface RunSummary {
-  id: string;
-  kind: string;
-  startedAt: string;
-  finishedAt: string | null;
-  scopesChecked: number;
-  offersSeen: number;
-  offersNew: number;
-  offersEnded: number;
-  vehiclesSeen: number;
-  issueCount: number;
-  error: string | null;
-}
-
-interface ShadowScope {
-  makes: string[];
-  focusModels: string[];
-  excludeModels: string[];
-  zip: string | null;
-  templateMap: Record<string, string>;
-  /** Size ids to render; empty = every size the template defines. */
-  sizeIds: string[];
-  radius: number;
-  maxAdsPerRun: number;
-  minStock: number;
-  offerTypePriority: string[];
-  mode: string;
-}
-
-interface GeneratedDraft {
-  id: string;
-  name: string;
-  status: string;
-  thumbnailUrl: string | null;
-  coopCheckedVersion: string | null;
-  expiresAt: string | null;
-  reviewNotes: string[];
-  updatedAt: string;
-}
-
-interface ShadowReport {
-  accountKey: string;
-  configured: boolean;
-  enabled: boolean;
-  scope: ShadowScope;
-  templates: { id: string; name: string; owned: boolean; sizes: { id: string; label: string }[] }[];
-  drafts: GeneratedDraft[];
-  runWindow: { start: string; end: string; mode: string };
-  feeds: FeedStatus[];
-  vehicles: WatchedVehicle[];
-  leadTimes: LeadTimeStat[];
-  runs: RunSummary[];
-  totals: {
-    newUnits: number;
-    stockGroups: number;
-    groupsWithOffer: number;
-    matchRatePct: number;
-    liveOffers: number;
-    awaitingNextCycle: number;
-  };
-}
+import { aspectLabel } from '@/lib/ad-generator/ad-size-catalog';
+import { windowPreview } from '@/lib/ad-generator/automation/window-preview';
+import type { CycleState } from './types';
+import { type Automation } from './use-automation';
 
 /** Cycle-state presentation. `expiring_unrenewed` is amber, NOT red: the OEM
  *  simply hasn't published next month yet, which is a wait state rather than a
@@ -156,6 +57,17 @@ const WINDOW_LABEL: Record<string, string> = {
   rolling: 'the next 30 days',
 };
 
+/**
+ * Template size labels are authored as "Square 1080×1080", so printing the
+ * dimensions again under them reads as a stutter. Keep the name, let the line
+ * below carry ratio + pixels.
+ */
+function sizeName(label: string, width: number, height: number): string {
+  if (!width || !height) return label;
+  const stripped = label.replace(new RegExp(`\\s*${width}\\s*[×x]\\s*${height}\\s*$`), '').trim();
+  return stripped || label;
+}
+
 function relTime(iso: string | null): string {
   if (!iso) return 'never';
   const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -173,16 +85,19 @@ function Card({
   title,
   help,
   count,
+  actions,
   children,
 }: {
   title: string;
   help?: React.ReactNode;
   count?: number;
+  /** Refresh controls, placed with the data they refresh. */
+  actions?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
-      <div className="mb-3 flex items-center gap-1.5">
+      <div className="mb-3 flex flex-wrap items-center gap-1.5">
         <h2 className="text-sm font-semibold text-[var(--foreground)]">{title}</h2>
         {count !== undefined && (
           <span className="rounded-full bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-[var(--muted-foreground)]">
@@ -190,6 +105,7 @@ function Card({
           </span>
         )}
         {help && <HelpTip title={title} iconClassName="h-3.5 w-3.5">{help}</HelpTip>}
+        {actions && <div className="ml-auto flex items-center gap-2">{actions}</div>}
       </div>
       {children}
     </section>
@@ -255,68 +171,6 @@ function Stat({
 
 // ── settings form ────────────────────────────────────────────────────────────
 
-/** The editable config, held as one object so "has anything changed" is one compare. */
-interface ScopeForm {
-  makes: string;
-  focus: string;
-  exclude: string;
-  zip: string;
-  windowMode: string;
-  templateId: string;
-  sizeIds: string[];
-  maxAds: string;
-  minStock: string;
-  mode: string;
-}
-
-const BLANK_FORM: ScopeForm = {
-  makes: '',
-  focus: '',
-  exclude: '',
-  zip: '',
-  windowMode: 'next_month',
-  templateId: '',
-  sizeIds: [],
-  maxAds: '10',
-  minStock: '0',
-  mode: 'draft',
-};
-
-function formFromReport(rep: ShadowReport): ScopeForm {
-  return {
-    makes: rep.scope?.makes?.join(', ') ?? '',
-    focus: rep.scope?.focusModels?.join(', ') ?? '',
-    exclude: rep.scope?.excludeModels?.join(', ') ?? '',
-    zip: rep.scope?.zip ?? '',
-    windowMode: rep.runWindow?.mode ?? 'next_month',
-    templateId: rep.scope?.templateMap?.all ?? '',
-    sizeIds: rep.scope?.sizeIds ?? [],
-    maxAds: String(rep.scope?.maxAdsPerRun ?? 10),
-    minStock: String(rep.scope?.minStock ?? 0),
-    mode: rep.scope?.mode ?? 'draft',
-  };
-}
-
-const csv = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
-
-function toPayload(f: ScopeForm) {
-  return {
-    makes: csv(f.makes),
-    focusModels: csv(f.focus),
-    excludeModels: csv(f.exclude),
-    zip: f.zip.trim(),
-    runWindowMode: f.windowMode,
-    templateMap: f.templateId ? { all: f.templateId } : {},
-    sizeIds: f.sizeIds,
-    maxAdsPerRun: Number(f.maxAds) || 10,
-    minStock: Number(f.minStock) || 0,
-    mode: f.mode,
-  };
-}
-
-/** Order-insensitive on sizeIds, so re-picking the same sizes isn't "dirty". */
-const formKey = (f: ScopeForm) => JSON.stringify({ ...f, sizeIds: [...f.sizeIds].sort() });
-
 /**
  * Which slice of the panel to show. The page owns the tab bar; the status strip
  * and its run-now actions render on all of them, because "is it on" and "run it
@@ -324,86 +178,18 @@ const formKey = (f: ScopeForm) => JSON.stringify({ ...f, sizeIds: [...f.sizeIds]
  */
 export type AutomationView = 'overview' | 'inventory' | 'drafts' | 'runs' | 'settings';
 
-export function ShadowPanel({ accountKey, view }: { accountKey: string | null; view: AutomationView }) {
-  const [report, setReport] = useState<ShadowReport | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
+export function ShadowPanel({
+  accountKey,
+  view,
+  automation,
+}: {
+  accountKey: string | null;
+  view: AutomationView;
+  automation: Automation;
+}) {
+  const { report, loading, busy, form, dirty, set, reset, act, save } = automation;
   const [feedUrl, setFeedUrl] = useState('');
   const [feedName, setFeedName] = useState('');
-
-  // `form` is what's on screen; `saved` is what the server last confirmed. The
-  // difference is what the Save button acts on — and what lets the enable/pause
-  // toggle post the SAVED config instead of silently committing a half-typed edit.
-  const [form, setForm] = useState<ScopeForm>(BLANK_FORM);
-  const [saved, setSaved] = useState<ScopeForm>(BLANK_FORM);
-  const dirty = formKey(form) !== formKey(saved);
-
-  const set = <K extends keyof ScopeForm>(key: K, value: ScopeForm[K]) =>
-    setForm((f) => ({ ...f, [key]: value }));
-
-  const load = useCallback(async () => {
-    if (!accountKey) return;
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/ad-generator/automation/shadow?accountKey=${encodeURIComponent(accountKey)}`);
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      const rep = json as ShadowReport;
-      setReport(rep);
-      const next = formFromReport(rep);
-      setForm(next);
-      setSaved(next);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not load the automation report');
-    } finally {
-      setLoading(false);
-    }
-  }, [accountKey]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const act = useCallback(
-    async (action: string, extra: Record<string, unknown> = {}, label = action) => {
-      if (!accountKey) return;
-      setBusy(label);
-      try {
-        const res = await fetch('/api/ad-generator/automation/shadow', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accountKey, action, ...extra }),
-        });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-        if (action === 'sync_feeds') {
-          const bad = (json.feeds ?? []).filter((f: { status: string }) => f.status !== 'ok');
-          toast[bad.length ? 'warning' : 'success'](
-            bad.length
-              ? `${bad.length} of ${json.feeds.length} feed(s) had problems`
-              : `Synced ${json.feeds.length} feed(s)`,
-          );
-        } else if (action === 'poll_offers') {
-          toast.success(`Polled ${json.scopes} vehicle(s): ${json.offersNew} new, ${json.offersEnded} ended`);
-        } else if (action === 'generate') {
-          const skipped = (json.skipped ?? []).length;
-          toast[json.created || json.refreshed ? 'success' : 'warning'](
-            json.created || json.refreshed
-              ? `${json.created} new draft(s), ${json.refreshed} refreshed${skipped ? `, ${skipped} skipped` : ''}`
-              : `No ads generated — ${skipped} vehicle(s) skipped. See the skip reasons below.`,
-          );
-        } else {
-          toast.success('Saved');
-        }
-        await load();
-      } catch (err) {
-        toast.error(err instanceof Error ? err.message : 'Action failed');
-      } finally {
-        setBusy(null);
-      }
-    },
-    [accountKey, load],
-  );
 
   const templates = report?.templates ?? [];
   const templateSizes = templates.find((t) => t.id === form.templateId)?.sizes ?? [];
@@ -431,7 +217,6 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
   }
 
   const t = report?.totals;
-  const state = !report?.configured ? 'not configured' : report.enabled ? 'watching' : 'paused';
   const templateName = templates.find((x) => x.id === form.templateId)?.name;
 
   /** One-line recap of the config, so the collapsed card still says what it does. */
@@ -446,104 +231,48 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
 
   return (
     <div className="space-y-5">
-      {/* ── status + run actions ── */}
-      <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold text-[var(--foreground)]">Automation</h2>
-              <span
-                className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                  state === 'watching'
-                    ? 'bg-emerald-500/15 text-emerald-500'
-                    : state === 'paused'
-                      ? 'bg-amber-500/15 text-amber-500'
-                      : 'bg-[var(--muted)] text-[var(--muted-foreground)]'
-                }`}
-              >
-                {state}
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-              {report ? (
-                <>
-                  Watching inventory and OEM offers, planning for{' '}
-                  <span className="text-[var(--foreground)]">{WINDOW_LABEL[report.runWindow.mode] ?? report.runWindow.mode}</span>{' '}
-                  ({report.runWindow.start} → {report.runWindow.end}). Ads are built only when you generate them.
-                </>
-              ) : (
-                'Loading…'
-              )}
-            </p>
+      {/* ── overview ── */}
+      {view === 'overview' && (
+        <section className="glass-card rounded-2xl border border-[var(--border)] p-5">
+          <div className="flex items-center gap-1.5">
+            <h2 className="text-sm font-semibold text-[var(--foreground)]">This month at a glance</h2>
+            <HelpTip title="Planning window" iconClassName="h-3.5 w-3.5">
+              <p>Set by <strong>Plan for</strong> in Settings. An offer has to stay valid through this range to count as advertisable.</p>
+            </HelpTip>
           </div>
+          <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+            {report ? (
+              <>
+                Planning for{' '}
+                <span className="text-[var(--foreground)]">
+                  {WINDOW_LABEL[report.runWindow.mode] ?? report.runWindow.mode}
+                </span>{' '}
+                — {report.runWindow.start} → {report.runWindow.end}.
+              </>
+            ) : (
+              'Loading…'
+            )}
+          </p>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => act('save_config', { enabled: !report?.enabled, ...toPayload(saved) }, 'toggle')}
-              disabled={!!busy}
-              className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
-            >
-              {report?.enabled ? 'Pause' : 'Enable'}
-            </button>
-            {/* Run-now actions, grouped so they read as one cluster distinct
-                from the on/off switch beside them. */}
-            <div className="flex items-center gap-1 rounded-lg border border-[var(--border)] p-1">
-              <button
-                onClick={() => act('sync_feeds')}
-                disabled={!!busy}
-                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/60 disabled:opacity-50"
-              >
-                <ArrowPathIcon className={`h-3.5 w-3.5 ${busy === 'sync_feeds' ? 'animate-spin' : ''}`} />
-                Sync inventory
-              </button>
-              <button
-                onClick={() => act('poll_offers')}
-                disabled={!!busy}
-                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/60 disabled:opacity-50"
-              >
-                {busy === 'poll_offers' ? (
-                  <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <PlayIcon className="h-3.5 w-3.5" />
-                )}
-                Poll offers
-              </button>
+          {/* Environment problems affecting every generated ad. */}
+          {sharedNotes.size > 0 && (
+            <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2.5">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-amber-500">
+                <ExclamationTriangleIcon className="h-3.5 w-3.5" />
+                Affects every generated ad
+              </div>
+              <ul className="mt-1.5 space-y-1">
+                {[...sharedNotes].map((n) => (
+                  <li key={n} className="text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+                    {n}
+                  </li>
+                ))}
+              </ul>
             </div>
-            <button
-              onClick={() => act('generate')}
-              disabled={!!busy}
-              title="Renders draft ads from the offers on file. Nothing publishes."
-              className="flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              {busy === 'generate' ? (
-                <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <SparklesIcon className="h-3.5 w-3.5" />
-              )}
-              Generate drafts
-            </button>
-          </div>
-        </div>
+          )}
 
-        {/* Environment problems affecting every generated ad. */}
-        {view === 'overview' && sharedNotes.size > 0 && (
-          <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2.5">
-            <div className="flex items-center gap-1.5 text-xs font-medium text-amber-500">
-              <ExclamationTriangleIcon className="h-3.5 w-3.5" />
-              Affects every generated ad
-            </div>
-            <ul className="mt-1.5 space-y-1">
-              {[...sharedNotes].map((n) => (
-                <li key={n} className="text-[11px] leading-relaxed text-[var(--muted-foreground)]">
-                  {n}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
-        {view === 'overview' && t && (
-          <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          {t && (
+            <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <Stat label="new units on lot" value={String(t.newUnits)} sub={`${t.stockGroups} model groups`} />
             <Stat
               label="have a usable offer"
@@ -559,9 +288,10 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
               tone={t.awaitingNextCycle > 0 ? 'warn' : 'default'}
               help={<p>Programmes that expire before the run window opens, where the manufacturer hasn&apos;t published the next cycle yet. A wait state, not a failure.</p>}
             />
-          </div>
-        )}
-      </section>
+            </div>
+          )}
+        </section>
+      )}
 
       {/* ── settings ── */}
       {view === 'settings' && (
@@ -585,7 +315,7 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
             {/* What to advertise */}
             <div>
               <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                What to advertise
+                1 · Which vehicles
               </h3>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <Field label="Makes" help={<p>Comma-separated. Leave blank to watch <strong>every make</strong> the inventory feed reports.</p>}>
@@ -603,29 +333,85 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
               </div>
             </div>
 
+            {/* Which offers count as advertisable */}
+            <div>
+              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                2 · Which offers count
+              </h3>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field
+                  label="Plan for"
+                  help={
+                    <>
+                      <p>The date range an offer has to stay valid through to be usable. It&apos;s what the <strong>Cycle</strong> column and the match rate on Overview are measured against.</p>
+                      <p>Most manufacturers publish month by month, so <strong>next month</strong> is the usual choice — it&apos;s what lets you build next month&apos;s ads before it starts.</p>
+                    </>
+                  }
+                >
+                  <Select
+                    value={form.windowMode}
+                    onChange={(v) => set('windowMode', v)}
+                    previewFont={false}
+                    options={[
+                      { value: 'next_month', label: 'Next month' },
+                      { value: 'current_month', label: 'This month' },
+                      { value: 'rolling', label: 'Rolling 30 days' },
+                    ]}
+                  />
+                  <p className="mt-1 text-[10px] text-[var(--muted-foreground)]">
+                    Offers must be valid through{' '}
+                    <span className="text-[var(--foreground)]">{windowPreview(form.windowMode)}</span>.
+                  </p>
+                </Field>
+                <Field
+                  label="ZIP"
+                  help={
+                    <>
+                      <p>Which market to look offers up in. Manufacturer incentives are regional — the same model carries different money in different areas.</p>
+                      <p>Use the dealership&apos;s own ZIP. Left blank, the sub-account&apos;s postal code is used.</p>
+                    </>
+                  }
+                >
+                  <input value={form.zip} onChange={(e) => set('zip', e.target.value)} placeholder="84401" className={inputClass} />
+                </Field>
+              </div>
+            </div>
+
             {/* How ads are built */}
             <div>
               <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                How ads are built
+                3 · How ads are built
               </h3>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 <Field label="Template" help={<p>The design every generated ad uses. <strong>Required</strong> — with none mapped, generation skips every vehicle.</p>}>
-                  <select value={form.templateId} onChange={(e) => set('templateId', e.target.value)} className={inputClass}>
-                    <option value="">Not mapped — generation will skip</option>
-                    {templates.map((tpl) => (
-                      <option key={tpl.id} value={tpl.id}>
-                        {tpl.name}
-                        {tpl.owned ? '' : ' (shared)'}
-                      </option>
-                    ))}
-                  </select>
+                  <Select
+                    value={form.templateId}
+                    onChange={(v) => set('templateId', v)}
+                    previewFont={false}
+                    options={[
+                      { value: '', label: 'Not mapped — generation will skip' },
+                      ...templates.map((tpl) => ({
+                        value: tpl.id,
+                        label: `${tpl.name}${tpl.owned ? '' : ' (shared)'}`,
+                      })),
+                    ]}
+                  />
+                </Field>
+
+                <Field label="Max ads per run" help={<p>Ceiling on how many ads one <strong>Generate drafts</strong> produces, so a big feed change can&apos;t flood the review queue with a hundred ads at once.</p>}>
+                  <input value={form.maxAds} onChange={(e) => set('maxAds', e.target.value.replace(/[^0-9]/g, ''))} className={inputClass} />
                 </Field>
 
                 <Field label="Output" help={<p><strong>Draft</strong> holds every ad for a person to approve. <strong>Ready</strong> publishes automatically, but only for makes with a verified co-op pack.</p>}>
-                  <select value={form.mode} onChange={(e) => set('mode', e.target.value)} className={inputClass}>
-                    <option value="draft">Draft — a person approves</option>
-                    <option value="ready">Ready — needs verified co-op</option>
-                  </select>
+                  <Select
+                    value={form.mode}
+                    onChange={(v) => set('mode', v)}
+                    previewFont={false}
+                    options={[
+                      { value: 'draft', label: 'Draft — a person approves' },
+                      { value: 'ready', label: 'Ready — needs verified co-op' },
+                    ]}
+                  />
                   {/* A dial that silently does nothing is worse than no dial —
                       `ready` falls back to `draft` per-ad without a verified pack. */}
                   {form.mode === 'ready' && (
@@ -645,11 +431,20 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
                 {form.templateId && templateSizes.length > 0 && (
                   <Field
                     label="Sizes"
+                    className="sm:col-span-2 lg:col-span-3"
                     help={<p>Which of the template&apos;s sizes to render. Select none to render <strong>all {templateSizes.length}</strong>.</p>}
                   >
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex flex-wrap gap-2">
                       {templateSizes.map((sz) => {
                         const on = form.sizeIds.length === 0 || form.sizeIds.includes(sz.id);
+                        const ratio = sz.width && sz.height ? aspectLabel(sz.width, sz.height) : null;
+                        // A proportional swatch, so "9:16 vs 1.91:1" is something
+                        // you can see rather than something you have to picture.
+                        const box = sz.width && sz.height
+                          ? sz.width >= sz.height
+                            ? { width: 22, height: Math.max(7, Math.round((22 * sz.height) / sz.width)) }
+                            : { height: 22, width: Math.max(7, Math.round((22 * sz.width) / sz.height)) }
+                          : null;
                         return (
                           <button
                             key={sz.id}
@@ -669,13 +464,35 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
                                 })(),
                               )
                             }
-                            className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                            aria-pressed={on}
+                            className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-left transition-colors ${
                               on
-                                ? 'bg-[var(--primary)] text-white'
-                                : 'border border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+                                ? 'border-[var(--primary)] bg-[var(--primary)]/10'
+                                : 'border-[var(--border)] hover:border-[var(--primary)]'
                             }`}
                           >
-                            {sz.label}
+                            {box && (
+                              <span
+                                style={box}
+                                className={`flex-shrink-0 rounded-[2px] border ${
+                                  on ? 'border-[var(--primary)] bg-[var(--primary)]/30' : 'border-[var(--muted-foreground)]/50'
+                                }`}
+                              />
+                            )}
+                            <span className="leading-tight">
+                              <span
+                                className={`block text-[11px] font-medium ${
+                                  on ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'
+                                }`}
+                              >
+                                {sizeName(sz.label, sz.width, sz.height)}
+                              </span>
+                              {ratio && (
+                                <span className="block text-[10px] tabular-nums text-[var(--muted-foreground)]">
+                                  {ratio} · {sz.width}×{sz.height}
+                                </span>
+                              )}
+                            </span>
                           </button>
                         );
                       })}
@@ -685,32 +502,10 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
               </div>
             </div>
 
-            {/* Timing and limits */}
-            <div>
-              <h3 className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                Timing &amp; limits
-              </h3>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                <Field label="Plan for" help={<p>The window an offer has to cover to be advertisable. Most OEMs publish month by month, so <strong>next month</strong> is the usual choice.</p>}>
-                  <select value={form.windowMode} onChange={(e) => set('windowMode', e.target.value)} className={inputClass}>
-                    <option value="next_month">Next month</option>
-                    <option value="current_month">This month</option>
-                    <option value="rolling">Rolling 30 days</option>
-                  </select>
-                </Field>
-                <Field label="Max ads per run" help={<p>Ceiling on how many ads one generate produces, so a feed change can&apos;t flood the review queue.</p>}>
-                  <input value={form.maxAds} onChange={(e) => set('maxAds', e.target.value.replace(/[^0-9]/g, ''))} className={inputClass} />
-                </Field>
-                <Field label="ZIP" help={<p>Where OEM offers are looked up. Regional incentives differ by market, so this should be the dealership&apos;s own ZIP.</p>}>
-                  <input value={form.zip} onChange={(e) => set('zip', e.target.value)} placeholder="84401" className={inputClass} />
-                </Field>
-              </div>
-            </div>
-
             <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] pt-4">
               {dirty && (
                 <button
-                  onClick={() => setForm(saved)}
+                  onClick={reset}
                   disabled={!!busy}
                   className="rounded-lg px-3 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50"
                 >
@@ -718,7 +513,7 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
                 </button>
               )}
               <button
-                onClick={() => act('save_config', { enabled: report?.enabled ?? false, ...toPayload(form) }, 'save')}
+                onClick={save}
                 disabled={!!busy || !dirty}
                 className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
               >
@@ -736,6 +531,16 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
         title="Inventory feeds"
         count={report?.feeds.length}
         help={<p>The dealership&apos;s Vehicle Listing Ads export. It supplies on-lot stock, which decides what&apos;s worth advertising and gates generation on real availability.</p>}
+        actions={
+          <button
+            onClick={() => act('sync_feeds')}
+            disabled={!!busy}
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
+          >
+            <ArrowPathIcon className={`h-3.5 w-3.5 ${busy === 'sync_feeds' ? 'animate-spin' : ''}`} />
+            Sync inventory
+          </button>
+        }
       >
         {report?.feeds.length ? (
           <div className="mb-4 space-y-2">
@@ -813,6 +618,21 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
       <Card
         title="Watched vehicles"
         count={report?.vehicles.length}
+        actions={
+          <button
+            onClick={() => act('poll_offers')}
+            disabled={!!busy}
+            title="Re-check the manufacturer for offers on every watched vehicle."
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]/40 disabled:opacity-50"
+          >
+            {busy === 'poll_offers' ? (
+              <ArrowPathIcon className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <PlayIcon className="h-3.5 w-3.5" />
+            )}
+            Refresh offers
+          </button>
+        }
         help={
           <>
             <p><strong>What each column means:</strong></p>
@@ -897,7 +717,8 @@ export function ShadowPanel({ accountKey, view }: { accountKey: string | null; v
           <div className="glass-card rounded-2xl border border-dashed border-[var(--border)] p-12 text-center">
             <p className="text-sm text-[var(--muted-foreground)]">Nothing generated yet.</p>
             <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-              Use <strong>Generate drafts</strong> above to build ads from the offers on file.
+              Build ads from the offers on file with{' '}
+              <strong>New ad → Generate from OEM offers</strong> on the Ad Generator.
             </p>
           </div>
         ) : (

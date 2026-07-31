@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { FontSelect } from '@/components/font-select';
+import { Select } from '@/components/select';
 import { createPortal } from 'react-dom';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
@@ -1221,7 +1221,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                   uploaded custom font or a system family. */}
               <div className="mb-4">
                 <label className={labelClass}>Ad Generator brand font</label>
-                <FontSelect
+                <Select
                   value={brandDefaultFont}
                   onChange={setBrandDefaultFont}
                   previewFont={false}
@@ -1239,11 +1239,11 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className={labelClass}>Heading Font</label>
-                  <FontSelect value={brandHeadingFont} onChange={setBrandHeadingFont} options={WEBSAFE_FONTS} />
+                  <Select value={brandHeadingFont} onChange={setBrandHeadingFont} options={WEBSAFE_FONTS} />
                 </div>
                 <div>
                   <label className={labelClass}>Body Font</label>
-                  <FontSelect value={brandBodyFont} onChange={setBrandBodyFont} options={WEBSAFE_FONTS} />
+                  <Select value={brandBodyFont} onChange={setBrandBodyFont} options={WEBSAFE_FONTS} />
                 </div>
               </div>
 
@@ -1323,7 +1323,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className={labelClass}>Weight</label>
-                      <FontSelect
+                      <Select
                         previewFont={false}
                         value={fontUpload.weight}
                         onChange={(v) => setFontUpload((s) => ({ ...s, weight: v }))}
@@ -1332,7 +1332,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                     </div>
                     <div>
                       <label className={labelClass}>Style</label>
-                      <FontSelect
+                      <Select
                         previewFont={false}
                         value={fontUpload.style}
                         onChange={(v) => setFontUpload((s) => ({ ...s, style: v }))}

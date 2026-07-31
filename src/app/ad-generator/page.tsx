@@ -83,6 +83,10 @@ export default function AdGeneratorListPage() {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [facetSel, setFacetSel] = useState<FacetSelection>({});
   const [offerWindow, setOfferWindow] = useState<OfferWindow>('all');
+  // Whether "Generate from OEM offers" is worth offering: automation has to be
+  // configured AND have a template mapped, or a run can only report zero.
+  const [automationReady, setAutomationReady] = useState(false);
+  const [generating, setGenerating] = useState(false);
   // Header dropdowns: the settings cog + the "New ad" split menu.
   const [cogOpen, setCogOpen] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
@@ -147,6 +151,63 @@ export default function AdGeneratorListPage() {
       cancelled = true;
     };
   }, [accountKey]);
+
+  // Is automation set up for this sub-account? Managers only — the endpoint is
+  // admin-gated, and a 403 here should stay silent rather than toast.
+  useEffect(() => {
+    if (!accountKey || !isManager) {
+      setAutomationReady(false);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/ad-generator/automation/shadow?accountKey=${encodeURIComponent(accountKey)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { configured?: boolean; scope?: { templateMap?: Record<string, string> } } | null) => {
+        if (cancelled) return;
+        setAutomationReady(!!d?.configured && !!d?.scope?.templateMap?.all);
+      })
+      .catch(() => {
+        if (!cancelled) setAutomationReady(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey, isManager]);
+
+  async function generateFromOffers() {
+    if (!accountKey) return;
+    setNewOpen(false);
+    setGenerating(true);
+    try {
+      const res = await fetch('/api/ad-generator/automation/shadow', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountKey, action: 'generate' }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      const skipped = (json.skipped ?? []).length;
+      if (json.created || json.refreshed) {
+        toast.success(
+          `${json.created} new draft${json.created === 1 ? '' : 's'}, ${json.refreshed} refreshed` +
+            (skipped ? `, ${skipped} skipped` : ''),
+        );
+        // Show them straight away rather than making the user reload.
+        const list = await fetch(`/api/ad-generator/creatives?accountKey=${encodeURIComponent(accountKey)}`)
+          .then((r) => (r.ok ? r.json() : { creatives: [] }))
+          .catch(() => ({ creatives: [] }));
+        setCreatives(list.creatives ?? []);
+      } else {
+        toast.warning(
+          `No ads generated${skipped ? ` — ${skipped} vehicle(s) skipped` : ''}. See Automation → Run history.`,
+        );
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not generate');
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   // Account branding for the mini previews (same as the editor merges in).
   const branding: AdData = useMemo(() => brandingFromAccount(accountData), [accountData]);
@@ -419,6 +480,29 @@ export default function AdGeneratorListPage() {
                       <span className="block text-[11px] text-[var(--muted-foreground)]">Name it and pick a size, then design in the builder.</span>
                     </span>
                   </button>
+                  {/* Generating from the OEM feed is a way of making ads, so it
+                      belongs with the other two rather than on the automation
+                      dashboard. Hidden until automation is set up — without a
+                      template mapped it would only ever report "0 generated". */}
+                  {automationReady && (
+                    <>
+                      <div className="my-1 border-t border-[var(--border)]" />
+                      <button
+                        type="button"
+                        disabled={generating || !accountKey}
+                        onClick={generateFromOffers}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50"
+                      >
+                        <BoltIcon className={`w-4 h-4 flex-shrink-0 ${generating ? 'animate-pulse' : ''}`} />
+                        <span>
+                          {generating ? 'Generating…' : 'Generate from OEM offers'}
+                          <span className="block text-[11px] text-[var(--muted-foreground)]">
+                            Build drafts for every in-stock model with a live offer.
+                          </span>
+                        </span>
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </div>

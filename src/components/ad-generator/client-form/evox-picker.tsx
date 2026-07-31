@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { XMarkIcon, MagnifyingGlassIcon, TruckIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
-import { FontSelect, type FontSelectOption } from '@/components/font-select';
+import { Select, type SelectOption } from '@/components/select';
 import type { EvoxVehicle, EvoxColor } from '@/lib/integrations/evox';
 import { EVOX_CURRENT_YEAR, EVOX_YEARS, EVOX_MAKES } from './evox-makes';
 
@@ -49,8 +49,8 @@ export function EvoxPickerModal({ onClose, onPick, initial }: { onClose: () => v
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const yearOptions: FontSelectOption[] = EVOX_YEARS.map((y) => ({ value: String(y), label: String(y) }));
-  const makeOptions: FontSelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
+  const yearOptions: SelectOption[] = EVOX_YEARS.map((y) => ({ value: String(y), label: String(y) }));
+  const makeOptions: SelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
 
   async function search() {
     if (!make || !model.trim()) {
@@ -127,8 +127,8 @@ export function EvoxPickerModal({ onClose, onPick, initial }: { onClose: () => v
         </div>
 
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <FontSelect value={year} onChange={setYear} options={yearOptions} previewFont={false} />
-          <FontSelect value={make} onChange={setMake} options={makeOptions} previewFont={false} />
+          <Select value={year} onChange={setYear} options={yearOptions} previewFont={false} />
+          <Select value={make} onChange={setMake} options={makeOptions} previewFont={false} />
           <input
             value={model}
             onChange={(e) => setModel(e.target.value)}

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { ArrowPathIcon, MagnifyingGlassIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
-import { FontSelect, type FontSelectOption } from '@/components/font-select';
+import { Select, type SelectOption } from '@/components/select';
 import type { EvoxVehicle } from '@/lib/integrations/evox';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
 import { incentiveKey, incentiveToFieldPatch } from '@/lib/ad-generator/incentive-apply';
@@ -64,8 +64,8 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
   // searched before), so the incentive list comes back instead of vanishing.
   const didAutoSearch = useRef(false);
 
-  const yearOptions: FontSelectOption[] = EVOX_YEARS.filter((y) => y >= 2020).map((y) => ({ value: String(y), label: String(y) }));
-  const makeOptions: FontSelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
+  const yearOptions: SelectOption[] = EVOX_YEARS.filter((y) => y >= 2020).map((y) => ({ value: String(y), label: String(y) }));
+  const makeOptions: SelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
 
   // Offer-type filter: the distinct types in the results (stable order) and the
   // subset left after removing the ones the user toggled off.
@@ -192,11 +192,11 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
       <div className="grid grid-cols-3 gap-3">
         <div>
           <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Year</label>
-          <FontSelect value={year} onChange={setYear} options={yearOptions} previewFont={false} />
+          <Select value={year} onChange={setYear} options={yearOptions} previewFont={false} />
         </div>
         <div>
           <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Make</label>
-          <FontSelect value={make} onChange={setMake} options={makeOptions} previewFont={false} />
+          <Select value={make} onChange={setMake} options={makeOptions} previewFont={false} />
         </div>
         <div>
           <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Model</label>

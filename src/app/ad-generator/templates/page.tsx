@@ -13,7 +13,7 @@ import Link from 'next/link';
 import { toast } from 'sonner';
 import { ArrowLeftIcon, PlusIcon, PencilSquareIcon, TrashIcon, DocumentTextIcon, ShieldCheckIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
-import { FontSelect } from '@/components/font-select';
+import { Select } from '@/components/select';
 import { OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { DISCLAIMER_SLUGS } from '@/lib/ad-generator/disclaimer';
 
@@ -332,7 +332,7 @@ function TemplateForm({
         </div>
         <div>
           <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">Offer type</label>
-          <FontSelect value={draft.offerType} onChange={(v) => setDraft({ ...draft, offerType: v })} options={OFFER_TYPES} previewFont={false} />
+          <Select value={draft.offerType} onChange={(v) => setDraft({ ...draft, offerType: v })} options={OFFER_TYPES} previewFont={false} />
         </div>
         <div className="flex items-center gap-5 pb-1.5">
           <label className="flex cursor-pointer items-center gap-2 text-sm text-[var(--foreground)]">

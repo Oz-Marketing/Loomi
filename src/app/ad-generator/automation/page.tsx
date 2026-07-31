@@ -29,9 +29,10 @@ import {
   XCircleIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
-import { FontSelect, type FontSelectOption } from '@/components/font-select';
+import { Select, type SelectOption } from '@/components/select';
 import { EVOX_CURRENT_YEAR, EVOX_YEARS, EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
 import { ShadowPanel, type AutomationView } from '@/components/ad-generator/automation/shadow-panel';
+import { useAutomation, type Automation } from '@/components/ad-generator/automation/use-automation';
 
 type Status = 'ok' | 'warn' | 'failed' | 'skipped';
 
@@ -124,6 +125,50 @@ function CopyableDetail({ value }: { value: unknown }) {
   );
 }
 
+/**
+ * The on/off switch for unattended runs.
+ *
+ * A real switch rather than a Pause/Enable button: this is a persistent state
+ * you glance at, not a command you issue, and the button phrasing made you read
+ * the label to work out which way round it was.
+ */
+function AutomationSwitch({ automation }: { automation: Automation }) {
+  const { report, busy, toggleEnabled } = automation;
+  const on = !!report?.enabled;
+  const configured = !!report?.configured;
+
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="text-right">
+        <div className="text-xs font-medium text-[var(--foreground)]">
+          {on ? 'Automation on' : 'Automation off'}
+        </div>
+        <div className="text-[11px] text-[var(--muted-foreground)]">
+          {!configured ? 'Not set up yet' : on ? 'Watching for new offers' : 'Nothing runs on a schedule'}
+        </div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label="Automation"
+        onClick={() => void toggleEnabled()}
+        disabled={!!busy || !report}
+        className={`relative h-6 w-11 flex-shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+          on ? 'bg-[var(--primary)]' : 'bg-[var(--muted)] border border-[var(--border)]'
+        }`}
+      >
+        <span
+          className={`absolute top-1/2 h-4.5 w-4.5 -translate-y-1/2 rounded-full bg-white shadow transition-all ${
+            on ? 'left-[1.55rem]' : 'left-1'
+          }`}
+          style={{ height: '1.125rem', width: '1.125rem' }}
+        />
+      </button>
+    </div>
+  );
+}
+
 export default function AutomationDryRunPage() {
   const { accountKey, accountData, userRole } = useAccount();
   const isAdmin = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
@@ -143,6 +188,9 @@ export default function AutomationDryRunPage() {
   // Overview is the default: the day-to-day question is "is it healthy", and
   // the dry run is the diagnostic you reach for when the chain looks wrong.
   const [tab, setTab] = useState<AutomationView | 'dryrun'>('overview');
+  // Owned here, not in the panel: the on/off switch lives in this header while
+  // the settings form lives in a tab, and both need the same saved snapshot.
+  const automation = useAutomation(accountKey);
 
   // Seed make + ZIP from the active sub-account (the same defaults the worker
   // would use), without clobbering anything already typed.
@@ -201,15 +249,15 @@ export default function AutomationDryRunPage() {
     }
   }, [accountKey, make, model, year, zip, templateId, priority, minDays]);
 
-  const yearOptions: FontSelectOption[] = useMemo(
+  const yearOptions: SelectOption[] = useMemo(
     () => EVOX_YEARS.filter((y) => y >= 2020).map((y) => ({ value: String(y), label: String(y) })),
     [],
   );
-  const makeOptions: FontSelectOption[] = useMemo(
+  const makeOptions: SelectOption[] = useMemo(
     () => [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))],
     [],
   );
-  const templateOptions: FontSelectOption[] = useMemo(
+  const templateOptions: SelectOption[] = useMemo(
     () => [
       { value: '', label: 'Auto — newest published in scope' },
       ...templates.map((t) => ({ value: t.id, label: t.name })),
@@ -236,7 +284,8 @@ export default function AutomationDryRunPage() {
         <ArrowLeftIcon className="h-3.5 w-3.5" /> Ad Generator
       </Link>
 
-      <header className="mb-6">
+      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0">
         <h1 className="text-2xl font-semibold text-[var(--foreground)]">Ad automation</h1>
         <p className="mt-1.5 max-w-3xl text-sm text-[var(--muted-foreground)]">
           {/* The old copy said "no ads are created" while a Generate drafts
@@ -246,6 +295,8 @@ export default function AutomationDryRunPage() {
             ? 'Walks the full autonomous chain for one vehicle and reports every step. Nothing is saved — no ad is created, no render is uploaded, no offer state is recorded.'
             : 'Watches this sub-account’s inventory and OEM offers, and builds draft ads from them. Nothing publishes on its own — every generated ad waits for a person.'}
         </p>
+        </div>
+        <AutomationSwitch automation={automation} />
       </header>
 
       {/* ── view tabs ── */}
@@ -272,7 +323,7 @@ export default function AutomationDryRunPage() {
         ))}
       </div>
 
-      {tab !== 'dryrun' && <ShadowPanel accountKey={accountKey} view={tab} />}
+      {tab !== 'dryrun' && <ShadowPanel accountKey={accountKey} view={tab} automation={automation} />}
 
       <div className={tab === 'dryrun' ? 'grid gap-6 lg:grid-cols-[340px_1fr]' : 'hidden'}>
         {/* ── Inputs ── */}
@@ -284,7 +335,7 @@ export default function AutomationDryRunPage() {
           <div className="space-y-3">
             <div>
               <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Make</label>
-              <FontSelect value={make} onChange={setMake} options={makeOptions} previewFont={false} />
+              <Select value={make} onChange={setMake} options={makeOptions} previewFont={false} />
             </div>
             <div>
               <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Model</label>
@@ -299,7 +350,7 @@ export default function AutomationDryRunPage() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Year</label>
-                <FontSelect value={year} onChange={setYear} options={yearOptions} previewFont={false} />
+                <Select value={year} onChange={setYear} options={yearOptions} previewFont={false} />
               </div>
               <div>
                 <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">ZIP</label>
@@ -356,7 +407,7 @@ export default function AutomationDryRunPage() {
             </div>
             <div>
               <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Template</label>
-              <FontSelect value={templateId} onChange={setTemplateId} options={templateOptions} previewFont={false} />
+              <Select value={templateId} onChange={setTemplateId} options={templateOptions} previewFont={false} />
             </div>
           </div>
 

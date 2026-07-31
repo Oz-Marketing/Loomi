@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import {
-  ArrowsPointingOutIcon,
   Bars2Icon,
   DocumentDuplicateIcon,
   TrashIcon,
@@ -50,22 +49,31 @@ const GOOGLE_DAYS_PER_MONTH = 30.4;
 const dateTriggerClass =
   'group -mx-1.5 -my-1 inline-flex max-w-full items-center rounded-md px-1.5 py-1 text-left transition-colors hover:bg-[var(--muted)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/50';
 
-/** Ad name — click to edit the text right in the cell. */
+/**
+ * Ad name — clicking it opens the full editor (the name is the row's handle on
+ * the whole ad, not just its title). Renaming is the pencil beside it, revealed
+ * on row hover.
+ */
 function NameCell({
   ad,
   onUpdate,
+  onOpen,
   onEditingChange,
 }: {
   ad: PacerAd;
   onUpdate?: (next: PacerAd) => void;
+  onOpen: () => void;
   onEditingChange?: (editing: boolean) => void;
 }) {
   return (
     <InlineTextCell
-      ariaLabel="Ad name"
+      ariaLabel={`Open details for ${ad.name || 'Untitled Ad'}`}
       value={ad.name}
       placeholder="Ad name…"
       disabled={!onUpdate}
+      hugContent
+      onTriggerClick={onOpen}
+      editLabel="Rename ad"
       onEditingChange={onEditingChange}
       onCommit={(name) => onUpdate?.({ ...ad, name })}
       display={
@@ -116,8 +124,9 @@ function AllocationCell({
 
 /**
  * Compact list-view row for an ad in the Plan table. Every cell is editable in
- * place — click it and the field's control drops below; the expand icon beside
- * the name opens the full editor modal. Pure + callback-driven (drag, open,
+ * place — click it and the field's control drops below; clicking the ad NAME
+ * opens the full editor modal (the pencil beside it renames). Pure +
+ * callback-driven (drag, open,
  * update, remove, clone, select are all props) so Meta + Google share it.
  */
 export function AdSummaryRow({
@@ -133,7 +142,6 @@ export function AdSummaryRow({
   dropEdge,
   isSelected,
   onSelectToggle,
-  showCreativeWorkflow = true,
 }: {
   ad: PacerAd;
   index: number;
@@ -154,7 +162,6 @@ export function AdSummaryRow({
   onSelectToggle: () => void;
   // Detailed view shows Design + Approvals columns; Basic hides them.
   // Must match the parent table's <th> set.
-  showCreativeWorkflow?: boolean;
 }) {
   const readOnly = usePacerReadOnly();
   const editable = !!onUpdate && !readOnly;
@@ -274,8 +281,8 @@ export function AdSummaryRow({
         </div>
       </td>
 
-      {/* Color + name (+ Google channel-type subline) + expand-to-modal */}
-      {/* Wider than the other columns: it carries the name plus the expand
+      {/* Color + name (+ Google channel-type subline) + rename pencil */}
+      {/* Wider than the other columns: it carries the name plus the rename
           affordance, and every other cell is nowrap so this one absorbs the
           table's flex. */}
       <td className="px-3 py-2 align-middle min-w-[300px] w-[38%]">
@@ -288,6 +295,7 @@ export function AdSummaryRow({
             <NameCell
               ad={ad}
               onUpdate={onUpdate}
+              onOpen={onOpen}
               onEditingChange={setInlineEditing}
             />
             {isGoogle && ad.googleChannelType && (
@@ -296,24 +304,6 @@ export function AdSummaryRow({
               </span>
             )}
           </div>
-          <Tooltip label="Open full details">
-            <button
-              type="button"
-              draggable
-              onDragStart={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpen();
-              }}
-              aria-label={`Open details for ${ad.name || 'Untitled Ad'}`}
-              className="flex-shrink-0 rounded p-1 text-[var(--muted-foreground)] opacity-0 transition-all hover:bg-[var(--muted)] hover:text-[var(--primary)] focus:opacity-100 group-hover:opacity-100"
-            >
-              <ArrowsPointingOutIcon className="w-3.5 h-3.5" />
-            </button>
-          </Tooltip>
         </div>
       </td>
 
@@ -325,10 +315,10 @@ export function AdSummaryRow({
         />
       </td>
 
-      {/* Task status */}
+      {/* Ad status */}
       <td className="px-3 py-2 align-middle whitespace-nowrap">
         <CellEditor
-          label="Task status"
+          label="Ad status"
           disabled={!onUpdate}
           display={<AdStatusPill status={ad.adStatus} />}
         >
@@ -442,8 +432,7 @@ export function AdSummaryRow({
         />
       </td>
 
-      {showCreativeWorkflow && (
-        <>
+      <>
           {/* Design */}
           <td className="px-3 py-2 align-middle whitespace-nowrap">
             <CellEditor
@@ -523,8 +512,7 @@ export function AdSummaryRow({
               )}
             </CellEditor>
           </td>
-        </>
-      )}
+      </>
 
       {/* Hover-only actions — hidden on a frozen month (read-only). */}
       <td className="px-3 py-2 align-middle whitespace-nowrap text-right">

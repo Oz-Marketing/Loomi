@@ -351,7 +351,6 @@ export function BudgetCalculatorModal({
     // longer applies.
     const seeded = seedSpecsForMode(calcMode);
     setSpecs(seeded);
-    openingSpecsRef.current = seeded;
     setUndoStack([]);
     lastEditKeyRef.current = null;
   }, [calcMode, seedSpecsForMode]);
@@ -361,8 +360,7 @@ export function BudgetCalculatorModal({
   // snapshot of the CURRENT specs is pushed just before a mutation; consecutive
   // edits to the same field coalesce into one step (so typing is one undo, not
   // one per keystroke), while discrete actions (checkbox, mode change, Spread)
-  // each get their own. Clear jumps back to the opening state.
-  const openingSpecsRef = useRef(specs);
+  // each get their own.
   const [undoStack, setUndoStack] = useState<Record<string, AdAllocSpec>[]>([]);
   const lastEditKeyRef = useRef<string | null>(null);
   const pushSnapshot = (editKey: string | null) => {
@@ -378,9 +376,25 @@ export function BudgetCalculatorModal({
       return st.slice(0, -1);
     });
   };
+  // Clear empties the amount fields you can SEE rather than rewinding to the
+  // opening state. The calculator seeds each row from its existing allocation,
+  // so "back to how it opened" still left every input populated — which doesn't
+  // read like Clear. Modes and the include checkboxes are left alone; it's the
+  // numbers being cleared. Snapshot first, so Undo brings them straight back.
+  const hasAnyAmountEntered = Object.values(specs).some(
+    (sp) => sp.amount !== '' || sp.percent !== '' || sp.clientAmount !== '',
+  );
   const clearEdits = () => {
-    setSpecs(openingSpecsRef.current);
-    setUndoStack([]);
+    if (!hasAnyAmountEntered) return;
+    pushSnapshot(null);
+    setSpecs((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).map(([adId, sp]) => [
+          adId,
+          { ...sp, amount: '', percent: '', clientAmount: '' },
+        ]),
+      ),
+    );
     lastEditKeyRef.current = null;
   };
 
@@ -938,8 +952,9 @@ export function BudgetCalculatorModal({
         </div>
 
         <div className="flex items-center gap-2 mt-4 pt-4 border-t border-[var(--border)]">
-          {/* Undo steps back one snapshot; Clear jumps to the opening state.
-              Both disabled until there's an edit to undo. */}
+          {/* Undo steps back one snapshot (disabled until there's something to
+              step back to); Clear empties every amount field, so it's available
+              whenever any amount is showing — seeded ones included. */}
           <button
             type="button"
             onClick={undo}
@@ -951,7 +966,7 @@ export function BudgetCalculatorModal({
           <button
             type="button"
             onClick={clearEdits}
-            disabled={undoStack.length === 0}
+            disabled={!hasAnyAmountEntered}
             className="px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--border)] hover:bg-[var(--muted)] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Clear

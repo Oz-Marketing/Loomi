@@ -211,3 +211,33 @@ describe('incentiveToFieldPatch — offer slots', () => {
     expect(patch).not.toHaveProperty('monthlyPayment');
   });
 });
+
+describe('APR down payment', () => {
+  // Subaru and Volkswagen both require dueAtSigning on APR. The feed sends
+  // downPayment for finance offers too, but it was only read on the lease branch,
+  // so those ads failed preflight on data we already had.
+  it('maps downPayment to dueAtSigning on an APR offer', () => {
+    const patch = incentiveToFieldPatch(
+      inc({ type: 'apr', rate: 3.9, term: 60, downPayment: 2500 }),
+      { make: 'Subaru', model: 'Outback', year: 2026 },
+    );
+    expect(patch.dueAtSigning).toBe('2500');
+  });
+
+  it('leaves it unset when the offer has no down payment', () => {
+    // Better a blocked ad than an invented figure.
+    const patch = incentiveToFieldPatch(
+      inc({ type: 'apr', rate: 3.9, term: 60, downPayment: 0 }),
+      { make: 'Subaru', model: 'Outback', year: 2026 },
+    );
+    expect(patch.dueAtSigning).toBeUndefined();
+  });
+
+  it('still maps it on a lease, unchanged', () => {
+    const patch = incentiveToFieldPatch(
+      inc({ type: 'lease', payment: 329, term: 36, downPayment: 3999 }),
+      { make: 'Subaru', model: 'Outback', year: 2026 },
+    );
+    expect(patch.dueAtSigning).toBe('3999');
+  });
+});

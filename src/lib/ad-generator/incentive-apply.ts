@@ -104,6 +104,10 @@ export function incentiveToFieldPatch(
     if (inc.term) patch[`${p}aprTerm`] = String(inc.term);
     const cpt = costPerThousand(inc.rate, inc.term);
     if (cpt) patch[`${p}costPerThousand`] = cpt;
+    // A financed deal has a cash-down figure too, and Subaru and Volkswagen both
+    // require it on APR. It was only mapped on the lease branch, so those ads
+    // failed preflight on a field the feed had been sending all along.
+    if (inc.downPayment) patch[`${p}dueAtSigning`] = String(Math.round(inc.downPayment));
   } else if (inc.type === 'cash') {
     if (inc.amount) patch[`${p}discountAmount`] = String(Math.round(inc.amount));
   }

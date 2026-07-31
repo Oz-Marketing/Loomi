@@ -1,7 +1,11 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { ChatBubbleOvalLeftIcon, PaperClipIcon } from '@heroicons/react/24/outline';
+import {
+  ChatBubbleOvalLeftIcon,
+  InformationCircleIcon,
+  PaperClipIcon,
+} from '@heroicons/react/24/outline';
 import { COLORS } from '@/lib/ad-pacer/constants';
 import { Tooltip } from './Tooltip';
 
@@ -42,6 +46,7 @@ export function MetricBox({
   value,
   sub,
   detail,
+  tooltip,
   color,
 }: {
   label: string;
@@ -49,16 +54,25 @@ export function MetricBox({
   sub?: string;
   /** Optional faint second line — e.g. the arithmetic basis behind `value`. */
   detail?: string;
+  /**
+   * Longer supporting detail, shown on hover instead of as a third line —
+   * for boxes whose caveats/derivation would otherwise crowd the number
+   * (the pacer's Rec. Daily Adjustment). Flagged by an info dot on the label.
+   */
+  tooltip?: string;
   color?: string;
 }) {
-  return (
+  const box = (
     // No border + softer bg so it reads as a passive computed-info card,
     // not as another fillable field. Editable inputs stay bordered+filled.
     // `metric-box` lets the pacer card recess these into darker wells (see
     // `.pacer-ad-card .metric-box` in globals.css); harmless elsewhere.
-    <div className="metric-box rounded-lg bg-[var(--muted)]/40 px-3 py-2.5">
-      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] mb-1">
+    <div className="metric-box w-full rounded-lg bg-[var(--muted)]/40 px-3 py-2.5 text-left">
+      <div className="mb-1 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
         {label}
+        {tooltip && (
+          <InformationCircleIcon className="h-3 w-3 flex-shrink-0 opacity-70" />
+        )}
       </div>
       <div className="text-lg font-bold leading-tight" style={{ color: color ?? 'var(--foreground)' }}>
         {value}
@@ -72,6 +86,15 @@ export function MetricBox({
         </div>
       )}
     </div>
+  );
+  // The tooltip wrapper is an inline-flex span, so it has to stretch or the
+  // box stops filling its grid cell.
+  return tooltip ? (
+    <Tooltip label={tooltip} className="w-full">
+      {box}
+    </Tooltip>
+  ) : (
+    box
   );
 }
 

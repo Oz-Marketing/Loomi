@@ -16,11 +16,13 @@ import {
   adContribution,
   effMarkupOf,
   sourceColor,
+  splitToCents,
 } from '@/lib/ad-pacer/helpers';
 import { CompactStat } from './metrics';
 import { DollarInput, inputClass } from './inputs';
 import { Tooltip } from './Tooltip';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 
 // ─── Budget Calculator modal (+ allocation helpers, appended below) ─────────
 /**
@@ -75,24 +77,6 @@ const DEFAULT_SPEC: AdAllocSpec = {
  * Excluded rows (`included === false`) are left out entirely — the parent
  * preserves their existing allocation on Apply.
  */
-/**
- * Split `total` dollars into `n` parts that sum back to `total` EXACTLY to the
- * cent (12a). Equal shares, with leftover cents handed to the first rows — so
- * "distribute evenly" never leaves a phantom remainder from rounding each row
- * independently. Operates in integer cents; rounds only at the very end.
- */
-function splitToCents(total: number, n: number): number[] {
-  if (n <= 0) return [];
-  const cents = Math.round(total * 100);
-  const base = Math.trunc(cents / n);
-  let remainder = cents - base * n; // 0..n-1 leftover cents
-  return Array.from({ length: n }, () => {
-    const extra = remainder > 0 ? 1 : 0;
-    if (remainder > 0) remainder -= 1;
-    return (base + extra) / 100;
-  });
-}
-
 function computeAllocations(
   ads: PacerAd[],
   pool: number,
@@ -141,6 +125,7 @@ export function BudgetCalculatorModal({
     >,
   ) => void;
 }) {
+  const { confirm } = useLoomiDialog();
   const [source, setSource] = useState<'base' | 'added'>('base');
   // Setup = fresh planning (clean slate, no spent column).
   // Mid-flight = adjusting allocations after some spend has happened (shows
@@ -366,7 +351,6 @@ export function BudgetCalculatorModal({
     // longer applies.
     const seeded = seedSpecsForMode(calcMode);
     setSpecs(seeded);
-    openingSpecsRef.current = seeded;
     setUndoStack([]);
     lastEditKeyRef.current = null;
   }, [calcMode, seedSpecsForMode]);
@@ -376,8 +360,7 @@ export function BudgetCalculatorModal({
   // snapshot of the CURRENT specs is pushed just before a mutation; consecutive
   // edits to the same field coalesce into one step (so typing is one undo, not
   // one per keystroke), while discrete actions (checkbox, mode change, Spread)
-  // each get their own. Clear jumps back to the opening state.
-  const openingSpecsRef = useRef(specs);
+  // each get their own.
   const [undoStack, setUndoStack] = useState<Record<string, AdAllocSpec>[]>([]);
   const lastEditKeyRef = useRef<string | null>(null);
   const pushSnapshot = (editKey: string | null) => {
@@ -393,9 +376,25 @@ export function BudgetCalculatorModal({
       return st.slice(0, -1);
     });
   };
+  // Clear empties the amount fields you can SEE rather than rewinding to the
+  // opening state. The calculator seeds each row from its existing allocation,
+  // so "back to how it opened" still left every input populated — which doesn't
+  // read like Clear. Modes and the include checkboxes are left alone; it's the
+  // numbers being cleared. Snapshot first, so Undo brings them straight back.
+  const hasAnyAmountEntered = Object.values(specs).some(
+    (sp) => sp.amount !== '' || sp.percent !== '' || sp.clientAmount !== '',
+  );
   const clearEdits = () => {
-    setSpecs(openingSpecsRef.current);
-    setUndoStack([]);
+    if (!hasAnyAmountEntered) return;
+    pushSnapshot(null);
+    setSpecs((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).map(([adId, sp]) => [
+          adId,
+          { ...sp, amount: '', percent: '', clientAmount: '' },
+        ]),
+      ),
+    );
     lastEditKeyRef.current = null;
   };
 
@@ -434,7 +433,7 @@ export function BudgetCalculatorModal({
     (a) => allocations[a.id] != null,
   ).length;
 
-  const handleApply = () => {
+  const handleApply = async () => {
     // Only ask about overwrite for rows that will actually be written AND
     // already have an allocation. Even-mode rows are skipped on Apply.
     const adsWithExisting = sourceAds.filter((a) => {
@@ -443,13 +442,20 @@ export function BudgetCalculatorModal({
       return existing != null && existing > 0;
     });
     if (adsWithExisting.length > 0) {
-      if (
-        !window.confirm(
-          `${adsWithExisting.length} ad${adsWithExisting.length === 1 ? '' : 's'} in ${source === 'base' ? 'Base' : 'Added'} already ${adsWithExisting.length === 1 ? 'has' : 'have'} an allocation set. Overwrite?`,
-        )
-      ) {
-        return;
-      }
+      // The app's own dialog, NOT window.confirm: native dialogs are
+      // suppressed in embedded/webview browsers, where confirm() returns
+      // false instantly and Apply looked like it did nothing at all.
+      const n = adsWithExisting.length;
+      const ok = await confirm({
+        title: `Overwrite ${n} existing allocation${n === 1 ? '' : 's'}?`,
+        message: `${n} ad${n === 1 ? '' : 's'} in ${
+          source === 'base' ? 'Base' : 'Added'
+        } already ${n === 1 ? 'has' : 'have'} an allocation set. Applying replaces ${
+          n === 1 ? 'it' : 'them'
+        }.`,
+        confirmLabel: 'Overwrite',
+      });
+      if (!ok) return;
     }
     // Map computed (source-portion) values back to real ads. For a Split ad,
     // set splitBaseAmount + combined allocation, preserving the OTHER source's
@@ -946,8 +952,9 @@ export function BudgetCalculatorModal({
         </div>
 
         <div className="flex items-center gap-2 mt-4 pt-4 border-t border-[var(--border)]">
-          {/* Undo steps back one snapshot; Clear jumps to the opening state.
-              Both disabled until there's an edit to undo. */}
+          {/* Undo steps back one snapshot (disabled until there's something to
+              step back to); Clear empties every amount field, so it's available
+              whenever any amount is showing — seeded ones included. */}
           <button
             type="button"
             onClick={undo}
@@ -959,12 +966,31 @@ export function BudgetCalculatorModal({
           <button
             type="button"
             onClick={clearEdits}
-            disabled={undoStack.length === 0}
+            disabled={!hasAnyAmountEntered}
             className="px-3 py-1.5 text-xs font-medium rounded-lg border border-[var(--border)] hover:bg-[var(--muted)] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Clear
           </button>
-          <div className="ml-auto flex gap-2">
+          {/* Why Apply is unavailable, spelled out rather than left to a hover
+              on a disabled button — a greyed Apply with no reason reads as
+              "the calculator is broken". */}
+          {(overBudget || hasUnderSpent || includedCount === 0) && (
+            <span
+              className="ml-auto max-w-[320px] text-right text-[10px] leading-snug"
+              style={{ color: overBudget || hasUnderSpent ? COLORS.error : 'var(--muted-foreground)' }}
+            >
+              {hasUnderSpent
+                ? 'An amount is below what that ad has already spent — raise it to apply.'
+                : overBudget
+                  ? `Allocations exceed the ${source === 'base' ? 'Base' : 'Added'} budget by ${fmt(Math.abs(stillToAllocate))} — lower an amount to apply.`
+                  : 'Set an amount, percentage, or spread the remainder to apply.'}
+            </span>
+          )}
+          <div
+            className={`flex gap-2 ${
+              overBudget || hasUnderSpent || includedCount === 0 ? '' : 'ml-auto'
+            }`}
+          >
           <button
             type="button"
             onClick={onClose}

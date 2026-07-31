@@ -13,6 +13,7 @@ import {
   BriefcaseIcon,
   CalculatorIcon,
   PuzzlePieceIcon,
+  ShieldCheckIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useCurrentSurface } from '@/lib/hooks/use-current-surface';
@@ -26,6 +27,7 @@ export type SettingsTabKey =
   | 'industries'
   | 'markup'
   | 'alerts'
+  | 'coop-guidelines'
   | 'contact-fields'
   | 'contact-field-blueprints'
   | 'integrations'
@@ -43,8 +45,18 @@ export type SettingsTab = {
  * The role/mode-gated Settings tabs — shared by the Settings page and the
  * sidebar's settings nav so both stay in sync.
  */
+/**
+ * Industries whose accounts carry OEM/manufacturer behaviour, and so have co-op
+ * guidelines to govern. Matches the pair called out in `industry-defaults`.
+ *
+ * Exported because the Agency-View sidebar declares its own nav items rather than
+ * reading this hook — one definition, so the tab and the link into it can't
+ * disagree about who should see them.
+ */
+export const OEM_INDUSTRIES = new Set(['Automotive', 'Powersports']);
+
 export function useSettingsTabs(): SettingsTab[] {
-  const { isAdmin, isAccount, isGroup, userRole } = useAccount();
+  const { isAdmin, isAccount, isGroup, userRole, accounts } = useAccount();
   const surface = useCurrentSurface();
   const isApp = surface === 'app';
   const hasAdminAccess = userRole === 'developer' || userRole === 'super_admin' || userRole === 'admin';
@@ -82,6 +94,28 @@ export function useSettingsTabs(): SettingsTab[] {
   if (isElevated && isAdmin) tabs.push({ key: 'industries', label: 'Industries', titleLabel: 'Industry Settings', icon: BriefcaseIcon });
   if (isElevated && isAdmin) tabs.push({ key: 'markup', label: 'Markup', titleLabel: 'Default Markup', icon: CalculatorIcon });
   if (isElevated && isAdmin) tabs.push({ key: 'alerts', label: 'Alerts', titleLabel: 'Alert Rules', icon: BellAlertIcon });
+
+  // ── Co-op guidelines ──
+  //
+  // Manufacturer guideline documents, the rules transcribed from them, and the
+  // sales-event marks.
+  //
+  // AGENCY VIEW ONLY, because the data is global — one library per make, shared by
+  // every sub-account. Offering it inside a sub-account would imply the documents
+  // were that location's, which is exactly backwards.
+  //
+  // Gated on industry as well: an agency with no manufacturer relationships has no
+  // co-op to govern. The test is whether ANY account is OEM-flavoured, since in
+  // Agency View the library spans the whole fleet rather than one location.
+  const oemRelevant = Object.values(accounts ?? {}).some((a) => OEM_INDUSTRIES.has(a?.category ?? ''));
+  if (hasAdminAccess && isAdmin && oemRelevant) {
+    tabs.push({
+      key: 'coop-guidelines',
+      label: 'Co-op Guidelines',
+      titleLabel: 'OEM Guidelines & Sales Events',
+      icon: ShieldCheckIcon,
+    });
+  }
   tabs.push({ key: 'notifications', label: 'Notifications', titleLabel: 'Notification Settings', icon: BellIcon });
   tabs.push({ key: 'appearance', label: 'Appearance', titleLabel: 'Appearance Settings', icon: SwatchIcon });
 

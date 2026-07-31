@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { ChevronDownIcon, CheckIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 
-export interface FontSelectOption {
+export interface SelectOption {
   value: string;
   label: string;
   /** Optional section header this option is grouped under (e.g. "Serif"). */
@@ -11,12 +11,17 @@ export interface FontSelectOption {
 }
 
 /**
- * Loomi-styled custom dropdown (replaces the native <select>). When
- * `previewFont` is set (default), the trigger and each option render in their
- * own value as a font-family — so a list of fonts previews itself. Set it false
- * for non-font option sets (e.g. weight/style).
+ * Loomi's dropdown — use this instead of a native `<select>`, which renders as
+ * an OS control that ignores the app's theme.
+ *
+ * `previewFont` renders the trigger and each option in its own value as a
+ * font-family, so a list of fonts previews itself. It defaults to TRUE for
+ * historical reasons (this began life as `FontSelect`): pass `previewFont={false}`
+ * for any ordinary option set. A value that isn't a real font family just falls
+ * back to the inherited one, so the default is harmless but rarely what a
+ * non-font list wants.
  */
-export function FontSelect({
+export function Select({
   value,
   onChange,
   options,
@@ -27,7 +32,7 @@ export function FontSelect({
 }: {
   value: string;
   onChange: (value: string) => void;
-  options: FontSelectOption[];
+  options: SelectOption[];
   placeholder?: string;
   previewFont?: boolean;
   className?: string;
@@ -50,7 +55,7 @@ export function FontSelect({
   // under no header.
   const groups = useMemo(() => {
     const order: string[] = [];
-    const map = new Map<string, FontSelectOption[]>();
+    const map = new Map<string, SelectOption[]>();
     for (const o of filtered) {
       const key = o.group ?? '';
       if (!map.has(key)) {

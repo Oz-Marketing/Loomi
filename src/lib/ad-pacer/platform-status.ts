@@ -1,7 +1,7 @@
 // The read-only "Ad Status" — the campaign's ACTUAL delivery status from the
 // platform, normalized to one shared vocabulary across Meta + Google so the
-// planner can show it next to the team's editable Task Status (the `adStatus`
-// field). Pure + unit-tested. This NEVER drives the Task Status or any
+// planner can show it next to the team's editable Ad Status (the `adStatus`
+// field). Pure + unit-tested. This NEVER drives the editable Ad Status or any
 // automation; it's display-only platform truth.
 
 import type { PacerAd } from './types';

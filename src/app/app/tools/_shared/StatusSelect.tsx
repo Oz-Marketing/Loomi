@@ -5,6 +5,60 @@ import { createPortal } from 'react-dom';
 import { ChevronDownIcon, CheckIcon } from '@heroicons/react/24/outline';
 
 /**
+ * The option chips shared by {@link StatusSelect}'s popover and the planner
+ * table's inline cell editors — one visual language for picking a status
+ * wherever it happens.
+ */
+export function StatusOptionList({
+  value,
+  options,
+  colorMap,
+  maxHeight = 360,
+  onPick,
+}: {
+  value: string;
+  options: readonly string[];
+  /** [bg, fg] tuple per option. Missing keys fall back to muted. */
+  colorMap: Record<string, [string, string]>;
+  /** Scroll past this height (px). Inline cell editors pass a shorter cap. */
+  maxHeight?: number;
+  onPick: (next: string) => void;
+}) {
+  return (
+    <div
+      className="overflow-y-auto themed-scrollbar space-y-1"
+      style={{ maxHeight }}
+    >
+      {options.map((option) => {
+        const [optBg, optFg] = colorMap[option] ?? [
+          'var(--muted)',
+          'var(--muted-foreground)',
+        ];
+        const selected = option === value;
+        return (
+          <button
+            key={option}
+            role="option"
+            type="button"
+            aria-selected={selected}
+            onClick={() => onPick(option)}
+            className="w-full inline-flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-wider hover:opacity-90 transition-opacity focus:outline-none"
+            style={{
+              background: optBg,
+              color: optFg,
+              boxShadow: selected ? `inset 0 0 0 2px ${optFg}` : undefined,
+            }}
+          >
+            <span className="truncate text-left">{option}</span>
+            {selected && <CheckIcon className="w-3.5 h-3.5 flex-shrink-0" />}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
  * Monday-style status dropdown. The trigger renders the current value as a
  * full-width colored chip (matching the chosen status's theme). The popover
  * shows every option as its own colored chip — click to commit. Falls back
@@ -107,40 +161,15 @@ export function StatusSelect({
                 width: Math.max(pos.width, 200),
               }}
             >
-              <div className="max-h-[360px] overflow-y-auto themed-scrollbar space-y-1">
-                {options.map((option) => {
-                  const [optBg, optFg] = colorMap[option] ?? [
-                    'var(--muted)',
-                    'var(--muted-foreground)',
-                  ];
-                  const selected = option === value;
-                  return (
-                    <button
-                      key={option}
-                      role="option"
-                      type="button"
-                      aria-selected={selected}
-                      onClick={() => {
-                        onChange(option);
-                        setOpen(false);
-                      }}
-                      className="w-full inline-flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-xs font-bold uppercase tracking-wider hover:opacity-90 transition-opacity focus:outline-none"
-                      style={{
-                        background: optBg,
-                        color: optFg,
-                        boxShadow: selected
-                          ? `inset 0 0 0 2px ${optFg}`
-                          : undefined,
-                      }}
-                    >
-                      <span className="truncate text-left">{option}</span>
-                      {selected && (
-                        <CheckIcon className="w-3.5 h-3.5 flex-shrink-0" />
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+              <StatusOptionList
+                value={value}
+                options={options}
+                colorMap={colorMap}
+                onPick={(option) => {
+                  onChange(option);
+                  setOpen(false);
+                }}
+              />
             </div>,
             document.body,
           )

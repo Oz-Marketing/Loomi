@@ -3,9 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { ArrowPathIcon, MagnifyingGlassIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
-import { FontSelect, type FontSelectOption } from '@/components/font-select';
+import { Select, type SelectOption } from '@/components/select';
 import type { EvoxVehicle } from '@/lib/integrations/evox';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
+import { incentiveKey, incentiveToFieldPatch } from '@/lib/ad-generator/incentive-apply';
 import { EVOX_CURRENT_YEAR, EVOX_YEARS, EVOX_MAKES } from './evox-makes';
 
 // A representative model per make so the Model placeholder matches the selected
@@ -63,8 +64,8 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
   // searched before), so the incentive list comes back instead of vanishing.
   const didAutoSearch = useRef(false);
 
-  const yearOptions: FontSelectOption[] = EVOX_YEARS.filter((y) => y >= 2020).map((y) => ({ value: String(y), label: String(y) }));
-  const makeOptions: FontSelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
+  const yearOptions: SelectOption[] = EVOX_YEARS.filter((y) => y >= 2020).map((y) => ({ value: String(y), label: String(y) }));
+  const makeOptions: SelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
 
   // Offer-type filter: the distinct types in the results (stable order) and the
   // subset left after removing the ones the user toggled off.
@@ -86,7 +87,7 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
       return next;
     });
   // Stable identity for selection highlighting (MarketCheck rows may lack an id).
-  const keyOf = (inc: MarketCheckIncentive) => inc.id || `${inc.type}:${inc.offerDetails || inc.description || ''}`;
+  const keyOf = incentiveKey;
 
   async function find() {
     if (!make) {
@@ -124,64 +125,19 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
   }
 
   function apply(inc: MarketCheckIncentive, which: '' | 'o2_' = '') {
-    const p = dual ? which : ''; // field prefix for the chosen offer slot
-    const patch: Record<string, string> = {};
-    if (inc.type === 'lease') {
-      patch[`${p}offerType`] = 'lease';
-      if (inc.payment) patch[`${p}monthlyPayment`] = String(Math.round(inc.payment));
-      if (inc.term) patch[`${p}leaseTerm`] = String(inc.term);
-      if (inc.downPayment) patch[`${p}dueAtSigning`] = String(Math.round(inc.downPayment));
-    } else if (inc.type === 'apr') {
-      patch[`${p}offerType`] = 'apr';
-      patch[`${p}aprRate`] = String(inc.rate);
-      if (inc.term) patch[`${p}aprTerm`] = String(inc.term);
-      // Cost per $1,000 financed — amortized from rate + term (matches ODT's
-      // auto-calc). 0% APR is the simple principal/term case.
-      if (inc.term > 0) {
-        const r = inc.rate / 100 / 12;
-        const cpt = r > 0 ? (r / (1 - Math.pow(1 + r, -inc.term))) * 1000 : 1000 / inc.term;
-        patch[`${p}costPerThousand`] = cpt.toFixed(2);
-      }
-    } else if (inc.type === 'cash') {
-      patch[`${p}offerType`] = 'discount';
-      if (inc.amount) patch[`${p}discountAmount`] = String(Math.round(inc.amount));
-    } else if (inc.type === 'other') {
-      // Misc / unrecognized programs → free-text custom offer type.
-      patch[`${p}offerType`] = 'custom';
-    }
-    if (inc.msrp) patch[`${p}msrp`] = String(Math.round(inc.msrp));
-    if (inc.endDate) {
-      const d = new Date(inc.endDate);
-      if (!Number.isNaN(d.getTime())) patch.expiration = d.toISOString().slice(0, 10); // shared (kept only if empty — see OfferCard onApply)
-    }
-    // The OEM offer's own fine print is authoritative — carry MarketCheck's
-    // eligibility text into the disclaimer (used verbatim; DisclaimerField stops
-    // auto-composing over it, and picking a template re-binds). `_oemDisclaimer`
-    // changes per apply so a fresh selection re-takes over; empty text leaves the
-    // template-composed disclaimer in place. Shared across offer slots.
-    patch._oemDisclaimer = keyOf(inc);
-    patch._oemDisclaimerText = inc.eligibility?.trim() || '';
-    // We already know the vehicle from the search — fill it too (name now, EVOX
-    // jellybean async). For a same-model dual, Offer 2 rides Offer 1's vehicle,
-    // so don't overwrite it here.
+    // For a same-model dual, Offer 2 rides Offer 1's vehicle — don't overwrite it.
     const setVehicle = !(dual && which === 'o2_' && dualVehicleMode === 'same');
-    if (setVehicle && (make || model)) {
-      patch[`${p}vehicleName`] = [year, make, model, inc.trim].filter(Boolean).join(' ');
-      // Stash the structured vehicle so the EVOX color picker can seed + auto-search
-      // it (no re-typing) — see evoxSeedFor(). Trim sharpens the EVOX image match.
-      patch[`${p}_vehYear`] = String(year || '');
-      patch[`${p}_vehMake`] = make || '';
-      patch[`${p}_vehModel`] = model || '';
-      if (inc.trim) patch[`${p}_vehTrim`] = inc.trim;
-    }
-    // Explicit marker that an OEM incentive was actually applied. The OfferCard
-    // gates the vehicle-color picker on this, so a fresh creative's template
-    // defaults (which look like a real offer) never surface it.
-    patch[`${p}_oemApplied`] = '1';
-    // Persist the search ZIP + which card was selected so reopening the ad
-    // restores the list (auto-searched) and the highlighted selection.
-    patch._oemSelectedKey = keyOf(inc);
-    patch._oemZip = zip;
+    // Shared with the automation worker so a generated ad matches a hand-built
+    // one from the same offer. The EVOX jellybean is layered on below (async).
+    const patch = incentiveToFieldPatch(inc, {
+      year,
+      make,
+      model,
+      zip,
+      slot: dual ? which : '',
+      skipVehicle: !setVehicle,
+    });
+    const p = dual ? which : ''; // field prefix for the chosen offer slot
     onApply(patch);
     toast.success(dual ? `Filled ${which === 'o2_' ? 'Offer 2' : 'Offer 1'} from the incentive` : 'Offer filled from the incentive');
     if (setVehicle && make) {
@@ -236,11 +192,11 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
       <div className="grid grid-cols-3 gap-3">
         <div>
           <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Year</label>
-          <FontSelect value={year} onChange={setYear} options={yearOptions} previewFont={false} />
+          <Select value={year} onChange={setYear} options={yearOptions} previewFont={false} />
         </div>
         <div>
           <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Make</label>
-          <FontSelect value={make} onChange={setMake} options={makeOptions} previewFont={false} />
+          <Select value={make} onChange={setMake} options={makeOptions} previewFont={false} />
         </div>
         <div>
           <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Model</label>

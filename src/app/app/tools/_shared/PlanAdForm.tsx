@@ -56,9 +56,9 @@ export function PlanAdForm({
   // §0.1: resolved per-account factor (override, else agency default), passed
   // down so the Gross Allocation display grosses up at the right rate.
   markup: number | null;
-  // 'meta' (default) shows the full creative-workflow form. 'google' hides the
-  // Meta-only fields that don't map to Google campaigns (action needed,
-  // recurring, co-op, the Creative & Design + Approvals sections).
+  // 'meta' (default) shows every planning field. 'google' hides the Meta-only
+  // ones that don't map to Google campaigns (Action Needed). Creative & Design
+  // and Approvals show on both — a rep may track them against any line.
   platform?: 'meta' | 'google';
   // Platform-specific extra field(s) rendered in the Ad Details grid — Google
   // passes its Channel picker. A render-prop so the field can read/write the
@@ -128,21 +128,21 @@ export function PlanAdForm({
                 onChange={(v) => onUpdate({ ...ad, ownerUserId: v })}
               />
             </Field>
-            {/* Platform extras (Google passes its Channel picker). */}
+            {/* Platform extras — Google's Channel picker. */}
             {extraDetailFields?.(ad, onUpdate)}
           </div>
 
           <div className="mb-3">
             <Field label="Digital Details">
-              <textarea
-                value={ad.digitalDetails ?? ''}
-                onChange={(e) =>
-                  onUpdate({ ...ad, digitalDetails: e.target.value || null })
-                }
-                rows={4}
-                placeholder="Goal, audience, targeting notes, copy direction…"
-                className={`${inputClass} resize-y leading-relaxed min-h-[88px]`}
-              />
+                <textarea
+                  value={ad.digitalDetails ?? ''}
+                  onChange={(e) =>
+                    onUpdate({ ...ad, digitalDetails: e.target.value || null })
+                  }
+                  rows={4}
+                  placeholder="Goal, audience, targeting notes, copy direction…"
+                  className={`${inputClass} resize-y leading-relaxed min-h-[88px]`}
+                />
             </Field>
           </div>
 
@@ -180,21 +180,22 @@ export function PlanAdForm({
               </select>
             </Field>
             <Field label="Co-op?">
-              <select
-                value={ad.coop}
-                onChange={(e) => onUpdate({ ...ad, coop: e.target.value })}
-                className={inputClass}
-              >
-                {COOP_OPTS.map((o) => (
-                  <option key={o} value={o}>
-                    {o}
-                  </option>
-                ))}
-              </select>
+                <select
+                  value={ad.coop}
+                  onChange={(e) => onUpdate({ ...ad, coop: e.target.value })}
+                  className={inputClass}
+                >
+                  {COOP_OPTS.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
             </Field>
-            {/* The team's planning lifecycle (editable). Renamed Task Status to
-                distinguish it from the read-only platform Ad Status beside it. */}
-            <Field label="Task Status">
+            {/* The team's planning lifecycle (editable) — distinct from the
+                read-only platform status beside it, which reports what
+                Meta/Google is actually doing with the campaign. */}
+            <Field label="Ad Status">
               <StatusSelect
                 value={ad.adStatus}
                 options={AD_STATUSES}
@@ -215,7 +216,7 @@ export function PlanAdForm({
                         : ad.dateCompleted,
                   });
                 }}
-                ariaLabel="Task status"
+                ariaLabel="Ad status"
               />
             </Field>
             {/* Read-only platform Ad Status — the campaign's real delivery state

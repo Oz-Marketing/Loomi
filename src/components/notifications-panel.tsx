@@ -127,7 +127,10 @@ export function NotificationsPanel({ onClose, onChange }: NotificationsPanelProp
     <div className="fixed inset-0 z-50 animate-overlay-in" onClick={onClose}>
       <div
         ref={panelRef}
-        className="glass-panel fixed right-3 top-3 bottom-3 w-[420px] rounded-2xl flex flex-col animate-slide-in-right overflow-hidden"
+        // frost-heavy, not glass-panel: the panel sits over dense page content
+        // (tables, budget cards) with no scrim, and the lighter glass let it all
+        // read through. Same treatment as the notes / budget-log drawers.
+        className="frost-heavy fixed right-3 top-3 bottom-3 w-[420px] rounded-2xl flex flex-col animate-slide-in-right overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="px-5 py-4 border-b border-[var(--sidebar-border-soft)] flex items-center justify-between">

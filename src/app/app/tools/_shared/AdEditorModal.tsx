@@ -15,6 +15,7 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { UserAvatar } from '@/components/user-avatar';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import type { PacerAd, ActivityEntry, DirectoryUser } from '@/lib/ad-pacer/types';
 import {
   PACER_ACTIVITY_MAX_UPLOAD_BYTES,
@@ -431,12 +432,13 @@ export function AdEditorModal({
   onAddActivity: (adId: string, text: string, file: File | null) => Promise<void>;
   onEditActivity: (adId: string, entryId: string, text: string) => Promise<void>;
   onDeleteActivity: (adId: string, entryId: string) => Promise<void>;
-  /** Forwarded to PlanAdForm — 'google' hides the Meta creative-workflow fields. */
+  /** Forwarded to PlanAdForm — 'google' hides the Meta-only planning fields. */
   platform?: 'meta' | 'google';
   /** Forwarded to PlanAdForm's Ad Details grid (Google passes its Channel picker). */
   editorExtraFields?: (ad: PacerAd, onUpdate: (ad: PacerAd) => void) => ReactNode;
 }) {
   const readOnly = usePacerReadOnly();
+  const { confirm } = useLoomiDialog();
   const [draft, setDraft] = useState<PacerAd>(initialAd);
   const [editingTitle, setEditingTitle] = useState(false);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
@@ -463,13 +465,17 @@ export function AdEditorModal({
     [draft, initialAd],
   );
 
-  const tryClose = () => {
-    if (
-      isDirty &&
-      typeof window !== 'undefined' &&
-      !window.confirm('Discard unsaved changes?')
-    ) {
-      return;
+  const tryClose = async () => {
+    // The app's own dialog, NOT window.confirm — a suppressed native dialog
+    // returns false, which used to leave a dirty editor impossible to close.
+    if (isDirty) {
+      const ok = await confirm({
+        title: 'Discard unsaved changes?',
+        message: 'The edits in this ad will be lost.',
+        confirmLabel: 'Discard',
+        destructive: true,
+      });
+      if (!ok) return;
     }
     onCancel();
   };

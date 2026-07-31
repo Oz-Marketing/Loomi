@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { requiredFieldsFor, missingRequired, parseOemRule } from './compliance';
+import { requiredFieldsFor, missingRequired, parseOemRule, applyOemDefaults } from './compliance';
 
 describe('requiredFieldsFor', () => {
   it('returns the baseline when there is no OEM rule', () => {
@@ -45,5 +45,81 @@ describe('parseOemRule', () => {
 
   it('returns null on invalid JSON', () => {
     expect(parseOemRule('GM', 'not json')).toBeNull();
+  });
+});
+
+describe('OEM standing defaults', () => {
+  // Subaru §6x: the ad must state whether a security deposit is required, and
+  // "none required" satisfies it. MarketCheck has no such field, so before
+  // defaults existed every Subaru lease failed preflight and was skipped.
+  const subaru = parseOemRule(
+    'Subaru',
+    JSON.stringify({ lease: ['securityDeposit', 'disclaimer'] }),
+    JSON.stringify({ lease: { securityDeposit: 'No security deposit required' } }),
+  );
+
+  it('reproduces the block when no default is set', () => {
+    const bare = parseOemRule('Subaru', JSON.stringify({ lease: ['securityDeposit', 'disclaimer'] }));
+    const data = { offerType: 'lease', disclaimer: 'x' };
+    expect(missingRequired(data, bare).map((m) => m.key)).toContain('securityDeposit');
+  });
+
+  it('fills the field from the standing default', () => {
+    // The baseline lease fields are unioned in by requiredFieldsFor, so a realistic
+    // offer has to carry them for "nothing missing" to mean anything.
+    const offer = { offerType: 'lease', disclaimer: 'x', monthlyPayment: '329', leaseTerm: '36' };
+    const { data, applied } = applyOemDefaults(offer, subaru);
+    expect(data.securityDeposit).toBe('No security deposit required');
+    expect(missingRequired(data, subaru)).toEqual([]);
+    expect(applied.map((a) => a.key)).toEqual(['securityDeposit']);
+  });
+
+  it('reports what it applied, so a draft can say the value was asserted', () => {
+    // An approver has to be able to tell an assertion from a derived value.
+    const { applied } = applyOemDefaults({ offerType: 'lease', disclaimer: 'x' }, subaru);
+    expect(applied[0]).toMatchObject({ key: 'securityDeposit', value: 'No security deposit required' });
+    expect(applied[0].label).toBeTruthy();
+  });
+
+  it('never overrides a value the offer actually carried', () => {
+    const { data, applied } = applyOemDefaults(
+      { offerType: 'lease', disclaimer: 'x', securityDeposit: '$395' },
+      subaru,
+    );
+    expect(data.securityDeposit).toBe('$395');
+    expect(applied).toEqual([]);
+  });
+
+  it('only fills fields that are REQUIRED for this offer type', () => {
+    // A stray default must not inject content into an ad that never asked for it.
+    const rule = parseOemRule(
+      'Subaru',
+      JSON.stringify({ lease: ['disclaimer'] }),
+      JSON.stringify({ lease: { securityDeposit: 'No security deposit required' } }),
+    );
+    const { data, applied } = applyOemDefaults({ offerType: 'lease', disclaimer: 'x' }, rule);
+    expect(data.securityDeposit).toBeUndefined();
+    expect(applied).toEqual([]);
+  });
+
+  it('scopes defaults to their offer type', () => {
+    const { data } = applyOemDefaults({ offerType: 'apr', disclaimer: 'x' }, subaru);
+    expect(data.securityDeposit).toBeUndefined();
+  });
+
+  it('ignores blank defaults rather than satisfying a requirement with nothing', () => {
+    const rule = parseOemRule(
+      'Subaru',
+      JSON.stringify({ lease: ['securityDeposit'] }),
+      JSON.stringify({ lease: { securityDeposit: '   ' } }),
+    );
+    expect(rule?.defaultValues).toBeUndefined();
+    expect(missingRequired({ offerType: 'lease' }, rule).map((m) => m.key)).toContain('securityDeposit');
+  });
+
+  it('survives malformed JSON', () => {
+    const rule = parseOemRule('Subaru', JSON.stringify({ lease: ['disclaimer'] }), '{not json');
+    expect(rule).not.toBeNull();
+    expect(rule?.defaultValues).toBeUndefined();
   });
 });

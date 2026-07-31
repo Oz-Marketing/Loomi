@@ -317,6 +317,13 @@ interface BaseProps {
   placeholder?: string;
   /** Optional ReactNode rendered inside the trigger before the value. */
   leadingIcon?: ReactNode;
+  /**
+   * Replaces the trigger's entire contents (icon + value + clear button) with
+   * a custom node. For places where the value already has its own
+   * representation and the picker is just the affordance behind it — e.g. the
+   * planner table's flight bar, which opens the range calendar on click.
+   */
+  triggerContent?: ReactNode;
   /** Pin the trigger to a specific min width. */
   minWidth?: number | string;
 }
@@ -634,6 +641,8 @@ export function DatePicker(props: DatePickerProps) {
         }
         style={props.minWidth ? { minWidth: props.minWidth } : undefined}
       >
+        {props.triggerContent ?? (
+          <>
         <span className="inline-flex items-center gap-2 min-w-0">
           {props.leadingIcon ?? (
             <CalendarIcon className="w-4 h-4 text-[var(--muted-foreground)] flex-shrink-0" />
@@ -658,6 +667,8 @@ export function DatePicker(props: DatePickerProps) {
             <XMarkIcon className="w-3.5 h-3.5" />
           </span>
         ) : null}
+          </>
+        )}
       </button>
 
       {open && popoverPos && typeof document !== 'undefined'

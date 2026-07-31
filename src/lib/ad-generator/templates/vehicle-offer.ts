@@ -138,6 +138,11 @@ export const vehicleOffer: AdTemplate = {
   fields: [
     { key: 'vehicleName', label: 'Vehicle', type: 'text', group: 'Vehicle', placeholder: '2024 Toyota Camry SE' },
     { key: 'vehicleImageUrl', label: 'Vehicle image URL', type: 'image', group: 'Vehicle', placeholder: 'https://…/camry.png', help: 'Transparent PNG (e.g. from EVOX) looks best.' },
+    // Machine-populated from the OEM's active sales event for the run date — most
+    // manufacturers REQUIRE their event mark on ads running inside the window.
+    // `internal` because nobody types this: it resolves per run and changes on the
+    // manufacturer's schedule, so a value a client typed would go stale silently.
+    { key: 'eventLogoUrl', label: 'Sales event logo', type: 'image', group: 'Brand', audience: 'internal', placeholder: 'auto — from the OEM event calendar', help: 'Filled automatically from the active OEM sales event. Leave empty; it resolves per run.' },
     { key: 'tagline', label: 'Tagline', type: 'text', group: 'Copy', placeholder: 'Drive home today', help: 'Short on-image hook — the AI can write this.', copy: true, maxLength: 28 },
     { key: 'offerType', label: 'Offer type', type: 'select', group: 'Offer', options: OFFER_TYPES, help: 'Drives the offer block + which fields show below.' },
     { key: 'offerLabel', label: 'Offer label', type: 'text', group: 'Offer', placeholder: 'auto (e.g. LEASE FOR)', help: 'Optional — overrides the default label. AI can write this.', copy: true, maxLength: 18 },

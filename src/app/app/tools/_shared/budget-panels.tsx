@@ -16,6 +16,14 @@ import { Field, DollarInput, readonlyClass } from './inputs';
 import { MetricBox } from './metrics';
 import { usePacerReadOnly } from './pacer-read-only';
 
+// Collapsed-summary figures scale with the CARD (cqi = 1% of the container's
+// inline size), not the viewport — two cards share a row, so viewport width says
+// little about how much room a figure actually has. The grid below handles
+// wrapping (4 across → 2x2), so this only has to keep long figures like
+// $20,229.28 inside their column.
+const STAT_VALUE_CLASS = 'font-bold tabular-nums leading-none';
+const STAT_VALUE_SIZE = { fontSize: 'clamp(1rem, 4cqi, 1.35rem)' } as const;
+
 export function BudgetPanel({
   title,
   source,
@@ -146,35 +154,63 @@ export function BudgetPanel({
       >
         <div className="overflow-hidden">
           {/* Stacked label-over-value so the dollar figures read large at a
-              glance (the live feedback while allocating); labels stay small. */}
-          <div className="flex flex-wrap items-end gap-x-7 gap-y-2 pb-2.5">
+              glance (the live feedback while allocating); labels stay small.
+
+              Laid out against the CARD's width (container query), not the
+              viewport: two cards sit side by side, so the same viewport gives
+              wildly different card widths. Four across when the card can hold
+              them, otherwise a clean 2x2 — a plain flex-wrap dropped a lone
+              fourth stat onto its own line, which read as broken. */}
+          <div className="@container pb-2.5">
+            <div className="grid grid-cols-2 items-end gap-x-4 gap-y-2 @min-[30rem]:grid-cols-4">
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-                Goal
+              <div className="whitespace-nowrap text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Client Budget
               </div>
-              <div className="text-2xl font-bold tabular-nums leading-none text-[var(--foreground)]">
+              <div
+                className={`${STAT_VALUE_CLASS} text-[var(--foreground)]`}
+                style={STAT_VALUE_SIZE}
+              >
                 {goal != null ? fmt(goal) : '—'}
               </div>
             </div>
+            {/* The number allocations are actually measured against (goal ×
+                markup + carryover). Without it the collapsed card showed only
+                the gross client goal, so the Allocated / Remaining figures
+                looked like they were being compared to the wrong total. */}
+            {spendTarget != null && (
+              <div>
+                <div className="whitespace-nowrap text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                  Actual Spend
+                </div>
+                <div
+                  className={STAT_VALUE_CLASS}
+                  style={{ ...STAT_VALUE_SIZE, color }}
+                >
+                  {fmt(spendTarget)}
+                </div>
+              </div>
+            )}
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+              <div className="whitespace-nowrap text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
                 Allocated
               </div>
               <div
-                className="text-2xl font-bold tabular-nums leading-none"
-                style={{ color: statusColor }}
+                className={STAT_VALUE_CLASS}
+                style={{ ...STAT_VALUE_SIZE, color: statusColor }}
               >
                 {fmt(totalAlloc)}
               </div>
             </div>
             {goal != null && (
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                <div className="whitespace-nowrap text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
                   {remaining != null && remaining < 0 ? 'Over' : 'Remaining'}
                 </div>
                 <div
-                  className="text-2xl font-bold tabular-nums leading-none"
+                  className={STAT_VALUE_CLASS}
                   style={{
+                    ...STAT_VALUE_SIZE,
                     color:
                       remaining != null && remaining < 0
                         ? COLORS.error
@@ -185,6 +221,7 @@ export function BudgetPanel({
                 </div>
               </div>
             )}
+            </div>
           </div>
         </div>
       </div>
@@ -416,7 +453,7 @@ export function TotalAllocationHeader({ plan }: { plan: PacerPlan }) {
         </span>
         <div className="flex gap-3 flex-wrap">
           <div className="text-right">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+            <div className="whitespace-nowrap text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
               Total Gross
             </div>
             <div className="text-base font-bold text-[var(--foreground)]">
@@ -424,7 +461,7 @@ export function TotalAllocationHeader({ plan }: { plan: PacerPlan }) {
             </div>
           </div>
           <div className="text-right">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+            <div className="whitespace-nowrap text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
               Total Actual Spend
             </div>
             <div className="text-base font-bold text-[var(--foreground)]">
@@ -433,7 +470,7 @@ export function TotalAllocationHeader({ plan }: { plan: PacerPlan }) {
           </div>
           {allocPct != null && (
             <div className="text-right">
-              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+              <div className="whitespace-nowrap text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
                 Allocated
               </div>
               <div className="text-base font-bold" style={{ color: pctColor }}>
@@ -626,10 +663,10 @@ export function AddPlanButton({
             <PlusIcon className="w-4 h-4 text-[var(--primary)] flex-shrink-0 mt-0.5" />
             <div>
               <div className="text-xs font-semibold text-[var(--foreground)]">
-                Create a new plan
+                Add ad sets
               </div>
               <div className="text-[10px] text-[var(--muted-foreground)]">
-                Start with a blank ad
+                Name, budget and flight dates — one row per ad set
               </div>
             </div>
           </button>

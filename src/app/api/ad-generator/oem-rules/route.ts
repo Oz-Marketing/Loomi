@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession, requireRole } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
-import { parseOemRule } from '@/lib/ad-generator/compliance';
+import { parseOemDefaults, parseOemRule } from '@/lib/ad-generator/compliance';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,6 +32,7 @@ export async function GET(req: NextRequest) {
           id: r.id,
           make: r.make,
           requiredFields: parseOemRule(r.make, r.requiredFields)?.requiredFields ?? {},
+          defaultValues: parseOemDefaults(r.defaultValues) ?? {},
           notes: r.notes,
           isActive: r.isActive,
         })),
@@ -52,7 +53,7 @@ export async function GET(req: NextRequest) {
     const row = await prisma.adOemOfferRule.findFirst({
       where: { isActive: true, make: { equals: make, mode: 'insensitive' } },
     });
-    return NextResponse.json({ rule: row ? parseOemRule(row.make, row.requiredFields) : null });
+    return NextResponse.json({ rule: row ? parseOemRule(row.make, row.requiredFields, row.defaultValues) : null });
   } catch (err) {
     console.warn('[api/ad-generator/oem-rules] falling back to null:', err);
     return NextResponse.json({ rule: null });
@@ -64,7 +65,13 @@ export async function POST(req: NextRequest) {
   const { error } = await requireRole('developer', 'super_admin', 'admin');
   if (error) return error;
 
-  let body: { make?: string; requiredFields?: Record<string, string[]>; notes?: string; isActive?: boolean };
+  let body: {
+    make?: string;
+    requiredFields?: Record<string, string[]>;
+    defaultValues?: Record<string, Record<string, string>>;
+    notes?: string;
+    isActive?: boolean;
+  };
   try {
     body = await req.json();
   } catch {
@@ -76,6 +83,7 @@ export async function POST(req: NextRequest) {
       data: {
         make: body.make.trim(),
         requiredFields: JSON.stringify(body.requiredFields ?? {}),
+        defaultValues: body.defaultValues ? JSON.stringify(body.defaultValues) : null,
         notes: body.notes?.trim() || null,
         isActive: body.isActive !== false,
       },

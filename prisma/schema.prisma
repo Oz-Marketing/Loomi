@@ -2778,6 +2778,12 @@ model AdAutomationConfig {
   // ── template resolution ──
   // JSON { [offerType]: adTemplateDocId }. Usually one entry, because a template
   // using visibleWhen on offerType covers every type.
+  /// Which of the template's sizes to render, as a JSON string[]. Empty or null =
+  /// every size the template defines, which is the old behaviour and stays the
+  /// default. A rooftop running only Meta feed placements shouldn't pay to render
+  /// and store a story crop it never posts.
+  sizeIds       String?
+
   templateMap String? @db.Text
 
   // ── output ──

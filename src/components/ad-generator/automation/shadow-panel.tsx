@@ -88,6 +88,8 @@ interface ShadowScope {
   excludeModels: string[];
   zip: string | null;
   templateMap: Record<string, string>;
+  /** Size ids to render; empty = every size the template defines. */
+  sizeIds: string[];
   radius: number;
   maxAdsPerRun: number;
   minStock: number;
@@ -111,7 +113,7 @@ interface ShadowReport {
   configured: boolean;
   enabled: boolean;
   scope: ShadowScope;
-  templates: { id: string; name: string; owned: boolean }[];
+  templates: { id: string; name: string; owned: boolean; sizes: { id: string; label: string }[] }[];
   drafts: GeneratedDraft[];
   runWindow: { start: string; end: string; mode: string };
   feeds: FeedStatus[];
@@ -180,6 +182,8 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
   // Which template generation aims at. Empty = unmapped, and the resolver will
   // refuse rather than pick something arbitrary.
   const [templateId, setTemplateId] = useState('');
+  /** Empty = render every size the template defines. */
+  const [sizeIds, setSizeIds] = useState<string[]>([]);
   const [exclude, setExclude] = useState('');
   const [maxAds, setMaxAds] = useState('10');
   const [minStock, setMinStock] = useState('0');
@@ -200,6 +204,7 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
       setZip(rep.scope?.zip ?? '');
       setWindowMode(rep.runWindow?.mode ?? 'next_month');
       setTemplateId(rep.scope?.templateMap?.all ?? '');
+      setSizeIds(rep.scope?.sizeIds ?? []);
       setExclude(rep.scope?.excludeModels?.join(', ') ?? '');
       setMaxAds(String(rep.scope?.maxAdsPerRun ?? 10));
       setMinStock(String(rep.scope?.minStock ?? 0));
@@ -220,12 +225,13 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
       zip: zip.trim(),
       runWindowMode: windowMode,
       templateMap: templateId ? { all: templateId } : {},
+      sizeIds,
       excludeModels: csv(exclude),
       maxAdsPerRun: Number(maxAds) || 10,
       minStock: Number(minStock) || 0,
       mode,
     }),
-    [makes, focus, zip, windowMode, templateId, exclude, maxAds, minStock, mode],
+    [makes, focus, zip, windowMode, templateId, sizeIds, exclude, maxAds, minStock, mode],
   );
 
   useEffect(() => {
@@ -404,6 +410,54 @@ export function ShadowPanel({ accountKey }: { accountKey: string | null }) {
                 </option>
               ))}
             </select>
+
+            {/* Sizes. Driven by the SELECTED template's own list rather than a
+                fixed set, because sizes are a property of the design — offering
+                one the template doesn't define would just render nothing. */}
+            {(() => {
+              const sizes = report?.templates?.find((t) => t.id === templateId)?.sizes ?? [];
+              if (!templateId || sizes.length === 0) return null;
+              const all = sizeIds.length === 0;
+              return (
+                <div className="mt-2">
+                  <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">
+                    Sizes to generate{' '}
+                    <span className="font-normal">— none selected means all {sizes.length}</span>
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {sizes.map((sz) => {
+                      const on = all || sizeIds.includes(sz.id);
+                      return (
+                        <button
+                          key={sz.id}
+                          type="button"
+                          onClick={() =>
+                            setSizeIds((cur) => {
+                              // First click on an "all" state means "just this one",
+                              // which is what someone narrowing down actually wants.
+                              if (cur.length === 0) return [sz.id];
+                              const next = cur.includes(sz.id)
+                                ? cur.filter((x) => x !== sz.id)
+                                : [...cur, sz.id];
+                              // Deselecting the last one returns to all, rather than
+                              // leaving a config that renders nothing.
+                              return next.length === sizes.length ? [] : next;
+                            })
+                          }
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                            on
+                              ? 'bg-[var(--primary)] text-white'
+                              : 'border border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]'
+                          }`}
+                        >
+                          {sz.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
           <div>
             <label className="mb-1 block text-[11px] font-medium text-[var(--muted-foreground)]">Plan for</label>

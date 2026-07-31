@@ -149,6 +149,8 @@ function safeJson<T>(raw: string | null): T | null {
 
 /** Full config row including the fields the poll doesn't need. */
 export interface GenerateConfigRow extends AutomationConfigRow {
+  /** JSON string[] of size ids to render; null/empty = every size in the template. */
+  sizeIds: string | null;
   maxAdsPerRun: number;
   minStock: number;
   templateMap: string | null;
@@ -167,6 +169,7 @@ export const GENERATE_CONFIG_SELECT = {
   offerTypePriority: true,
   runWindowMode: true,
   rollingDays: true,
+  sizeIds: true,
   maxAdsPerRun: true,
   minStock: true,
   templateMap: true,
@@ -186,6 +189,9 @@ export async function generateForAccount(
     ['lease', 'apr', 'cash'].includes(t),
   );
   const templateMap = jsonRecord(config.templateMap);
+  // Which sizes to render. Empty = every size the template defines, which is what
+  // this did before the setting existed, so an unconfigured account is unchanged.
+  const wantedSizes = jsonArray(config.sizeIds);
   const cap = config.maxAdsPerRun > 0 ? config.maxAdsPerRun : 10;
 
   const account = await prisma.account.findUnique({
@@ -476,7 +482,19 @@ export async function generateForAccount(
     const coopPack = coopEntry?.pack ?? null;
     const coopDesign = await designVerdictFor(tpl.id, tpl.doc, coopEntry);
     const renderData = mergeRenderData(tpl.doc, data);
-    const pf = preflight({ doc: tpl.doc, data: renderData, oemRule, coopPack, coopDesign, sizeIds: undefined });
+    // Intersect with what this template actually has: a size selected before a
+    // template swap can name an id the new one doesn't define, and rendering an
+    // empty set throws. Falling back to "all" beats failing the run.
+    const docSizeIds = tpl.doc.sizes.map((s) => s.id);
+    const sizeIds = wantedSizes.length ? docSizeIds.filter((id) => wantedSizes.includes(id)) : [];
+    const renderSizeIds = sizeIds.length ? sizeIds : undefined;
+    if (wantedSizes.length && !sizeIds.length) {
+      warnings.push(
+        `None of the configured sizes (${wantedSizes.join(', ')}) exist in ${tpl.name} — rendered every size instead.`,
+      );
+    }
+
+    const pf = preflight({ doc: tpl.doc, data: renderData, oemRule, coopPack, coopDesign, sizeIds: renderSizeIds });
     for (const issue of pf.issues.filter((i) => i.severity === 'warning')) warnings.push(issue.message);
     if (!pf.ok) {
       skipped.push({ vehicle, reason: 'preflight_failed', detail: summarizePreflight(pf) });
@@ -515,11 +533,17 @@ export async function generateForAccount(
           doc: tpl.doc,
           data,
           accountKey: config.accountKey,
+          sizeIds: renderSizeIds,
         });
         thumbnailUrl = persisted[0]?.url ?? null;
         sizeCount = persisted.length;
       } else {
-        const pixels = await renderCreativeSizes({ doc: tpl.doc, data, accountKey: config.accountKey });
+        const pixels = await renderCreativeSizes({
+          doc: tpl.doc,
+          data,
+          accountKey: config.accountKey,
+          sizeIds: renderSizeIds,
+        });
         sizeCount = pixels.length;
         warnings.push('No S3 bucket configured — the ad renders but no preview image was stored.');
       }

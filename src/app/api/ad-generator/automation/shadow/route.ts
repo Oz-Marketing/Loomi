@@ -96,6 +96,7 @@ export async function POST(req: NextRequest) {
     offerTypePriority?: string[];
     /** offerType (or `all`) → AdTemplateDoc id. */
     templateMap?: Record<string, string>;
+    sizeIds?: string[];
     maxAdsPerRun?: number;
     minStock?: number;
     radius?: number;
@@ -154,6 +155,13 @@ export async function POST(req: NextRequest) {
           // Clamped rather than trusted: a 0 or negative cap would mean "generate
           // nothing" while looking like a limit, and an unbounded one could render
           // hundreds of ads in a single run.
+          // Empty = every size the template defines, which is both the old
+          // behaviour and the right default: a size list is an optimisation, and
+          // an accidental empty one shouldn't silently stop rendering.
+          sizeIds:
+            Array.isArray(body.sizeIds) && body.sizeIds.length
+              ? JSON.stringify(body.sizeIds.filter((x) => typeof x === 'string' && x.trim()))
+              : null,
           maxAdsPerRun: clamp(body.maxAdsPerRun, 1, 100, 10),
           minStock: clamp(body.minStock, 0, 500, 0),
           radius: clamp(body.radius, 5, 500, 75),

@@ -122,6 +122,8 @@ export interface ShadowReport {
     zip: string | null;
     /** offerType (or `all`) → template id. Generation refuses without a match. */
     templateMap: Record<string, string>;
+    /** Size ids to render; empty = every size the template defines. */
+    sizeIds: string[];
     radius: number;
     maxAdsPerRun: number;
     minStock: number;
@@ -130,7 +132,13 @@ export interface ShadowReport {
     mode: string;
   };
   /** Published templates in scope, for the mapping dropdown. */
-  templates: { id: string; name: string; owned: boolean }[];
+  templates: {
+    id: string;
+    name: string;
+    owned: boolean;
+    /** The sizes this template defines — what the size picker offers. */
+    sizes: { id: string; label: string }[];
+  }[];
   /** Auto-generated drafts, newest first — the review queue. */
   drafts: GeneratedDraft[];
   runWindow: { start: string; end: string; mode: string };
@@ -173,6 +181,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
   let config:
     | (AutomationConfigRow & {
         templateMap: string | null;
+        sizeIds: string | null;
         maxAdsPerRun: number;
         minStock: number;
         mode: string;
@@ -193,6 +202,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
         runWindowMode: true,
         rollingDays: true,
         templateMap: true,
+        sizeIds: true,
         maxAdsPerRun: true,
         minStock: true,
         mode: true,
@@ -385,7 +395,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
   const templateRows = await prisma.adTemplateDoc
     .findMany({
       where: { status: 'published', isActive: true, OR: [{ accountKey }, { accountKey: null }] },
-      select: { id: true, name: true, accountKey: true },
+      select: { id: true, name: true, accountKey: true, doc: true },
       orderBy: { updatedAt: 'desc' },
     })
     .catch(() => []);
@@ -412,6 +422,14 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
       focusModels: jsonArray(config?.focusModels ?? null),
       excludeModels: jsonArray(config?.excludeModels ?? null),
       zip: config?.zip ?? null,
+      sizeIds: (() => {
+        try {
+          const v = JSON.parse(config?.sizeIds ?? '[]');
+          return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+        } catch {
+          return [];
+        }
+      })(),
       templateMap: (() => {
         try {
           const v = JSON.parse(config?.templateMap ?? '{}');
@@ -429,7 +447,21 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
       offerTypePriority: jsonArray(config?.offerTypePriority ?? null),
       mode: config?.mode ?? 'draft',
     },
-    templates: templateRows.map((t) => ({ id: t.id, name: t.name, owned: t.accountKey === accountKey })),
+    templates: templateRows.map((t) => ({
+      id: t.id,
+      name: t.name,
+      owned: t.accountKey === accountKey,
+      sizes: (() => {
+        try {
+          const d = JSON.parse(t.doc) as { sizes?: { id?: string; label?: string }[] };
+          return (d.sizes ?? [])
+            .filter((x): x is { id: string; label?: string } => typeof x?.id === 'string')
+            .map((x) => ({ id: x.id, label: x.label || x.id }));
+        } catch {
+          return [];
+        }
+      })(),
+    })),
     drafts: draftRows.map((d) => ({
       id: d.id,
       name: d.name,

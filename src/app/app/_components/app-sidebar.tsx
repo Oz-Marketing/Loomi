@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
+  BanknotesIcon,
   CalendarIcon,
   ChevronDownIcon,
   CogIcon,
@@ -67,6 +68,7 @@ const NAV: NavEntry[] = [
   { key: 'tasks', label: 'Tasks', href: '/projects/tasks', icon: ViewColumnsIcon },
   { key: 'my-work', label: 'My Work', href: '/projects/my-work', icon: UserCircleIcon },
   { key: 'calendar', label: 'Calendar', href: '/projects/calendar', icon: CalendarIcon },
+  { key: 'budget', label: 'Budget', href: '/projects/budget', icon: BanknotesIcon },
   // Ad Planning & Pacing — Meta and Google kept fully separate (different
   // specialists). Relocated from Studio /tools/*; the proxy rewrites those to
   // /app/tools/* on this host. Account-scoped by the global selector.

@@ -34,6 +34,10 @@ export const APPROVAL_STATUSES = [
   'Approved',
   'Does Not Approve',
   'Changes Requested',
+  // Mirrors DESIGN_STATUSES' N/A — an ad nobody needs to sign off on. Every
+  // approval check keys off 'Pending Approval', so N/A never nags: it drops out
+  // of the Needs Approval filter and the pending-approval reminders.
+  'N/A',
 ];
 
 export const ACTION_NEEDED = [
@@ -123,6 +127,7 @@ export const APPROVAL_STATUS_COLORS: Record<string, [string, string]> = {
   'Pending Approval': ['#f59e0b', '#ffffff'],
   'Does Not Approve': ['#ef4444', '#ffffff'],
   'Changes Requested': ['#0ea5e9', '#ffffff'],
+  'N/A': ['var(--muted)', 'var(--muted-foreground)'],
 };
 
 /**

@@ -53,9 +53,12 @@ import {
   PacerRow,
   Tooltip,
   AdEditorModal,
+  BulkAddAdsModal,
   Field,
   ComparePanel,
   StatusBattery,
+  PlanDetailToggle,
+  usePlanDetailLevel,
 } from '@/app/app/tools/_shared';
 import { AccountNotesDrawer } from '@/app/app/tools/meta/_components/AccountNotesDrawer';
 
@@ -178,9 +181,15 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const [syncing, setSyncing] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [showCopyModal, setShowCopyModal] = useState(false);
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [filters, setFilters] = useState<PlanFilters>(EMPTY_FILTERS);
   const [filterSidebarOpen, setFilterSidebarOpen] = useState(false);
+  // Basic (default) vs Detailed plan view — Detailed adds the Design +
+  // Approvals columns and the matching editor sections. Same sticky
+  // preference as Meta's planner, so the choice follows the user.
+  const [detailLevel, setDetailLevel] = usePlanDetailLevel();
+  const showCreativeWorkflow = detailLevel === 'detailed';
   // Which account's notes drawer is open (null = closed). Carries an accountKey
   // so an admin can open notes for any card, not just the selected account.
   const [notesTarget, setNotesTarget] = useState<{ accountKey: string; label: string } | null>(
@@ -684,6 +693,11 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               </button>
             )}
           </div>
+          {/* Plan-table/editor detail level — Pacing has no creative columns,
+              so the toggle would be a no-op there. */}
+          {tab === 'planner' && (
+            <PlanDetailToggle value={detailLevel} onChange={setDetailLevel} />
+          )}
           {connected && (
             <button
               type="button"
@@ -700,7 +714,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               prior month, or import from Google (import shown only when linked). */}
           {!frozen && (
             <AddPlanButton
-              onCreateNew={() => setEditing('new')}
+              onCreateNew={() => setBulkAddOpen(true)}
               onOpenCopy={() => setShowCopyModal(true)}
               onImport={connected ? () => setImportOpen(true) : undefined}
               importIcon={<GoogleAdsBrandIcon className="h-4 w-4" />}
@@ -803,8 +817,19 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
             <table className="w-full min-w-[900px]">
               <thead className="sticky top-0 z-10">
               <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
-                <th className="w-9 pl-3 pr-1 py-2" />
-                {['Ad', '', 'Task Status', 'Due Date', 'Budget', 'Allocation', 'Flight Dates'].map((h, i) => (
+                <th className="w-14 pl-2 pr-1 py-2" />
+                {[
+                  'Ad',
+                  '',
+                  'Task Status',
+                  'Due Date',
+                  'Budget',
+                  'Allocation',
+                  'Flight Dates',
+                  // Detailed only — must stay in sync with AdSummaryRow's
+                  // showCreativeWorkflow, or headers and cells drift apart.
+                  ...(showCreativeWorkflow ? ['Design', 'Approvals'] : []),
+                ].map((h, i) => (
                   <th
                     key={i}
                     className={`text-left px-3 py-2 text-xs font-medium uppercase tracking-wider text-[var(--muted-foreground)] ${h === '' ? 'w-10 px-2' : ''}`}
@@ -821,12 +846,13 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
                   key={ad.id}
                   ad={ad}
                   index={i}
-                  onClick={() => !frozen && setEditing(ad)}
+                  onOpen={() => !frozen && setEditing(ad)}
+                  onUpdate={frozen ? undefined : updateAd}
                   onRemove={() => deleteCampaign(ad)}
                   onClone={() => cloneCampaign(ad.id)}
                   isSelected={false}
                   onSelectToggle={() => {}}
-                  showCreativeWorkflow={false}
+                  showCreativeWorkflow={showCreativeWorkflow}
                 />
               ))}
             </tbody>
@@ -853,6 +879,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           onEditActivity={onEditActivity}
           onDeleteActivity={onDeleteActivity}
           platform="google"
+          detailLevel={detailLevel}
           editorExtraFields={(ad, onUpdate) => (
             <Field label="Channel">
               <SearchableSelect
@@ -862,6 +889,18 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               />
             </Field>
           )}
+        />
+      )}
+
+      {bulkAddOpen && plan && (
+        <BulkAddAdsModal
+          plan={plan}
+          onClose={() => setBulkAddOpen(false)}
+          onCreate={(newAds) => {
+            persist([...ads, ...newAds]);
+            setBulkAddOpen(false);
+            toast.success(`Added ${newAds.length} campaign${newAds.length === 1 ? '' : 's'}`);
+          }}
         />
       )}
 

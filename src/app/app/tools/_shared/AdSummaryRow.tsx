@@ -1,8 +1,23 @@
 'use client';
 
-import { DocumentDuplicateIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { useState } from 'react';
+import {
+  ArrowsPointingOutIcon,
+  Bars2Icon,
+  DocumentDuplicateIcon,
+  TrashIcon,
+} from '@heroicons/react/24/outline';
+import { DatePicker } from '@/components/ui/date-picker';
 import type { PacerAd } from '@/lib/ad-pacer/types';
-import { AD_COLORS } from '@/lib/ad-pacer/constants';
+import {
+  AD_COLORS,
+  AD_STATUSES,
+  AD_STATUS_COLORS,
+  APPROVAL_STATUSES,
+  APPROVAL_STATUS_COLORS,
+  DESIGN_STATUSES,
+  DESIGN_STATUS_COLORS,
+} from '@/lib/ad-pacer/constants';
 import {
   fmt,
   fmtDate,
@@ -13,25 +28,103 @@ import {
   sourceTint,
   sourceLabel,
 } from '@/lib/ad-pacer/helpers';
+import { flightDatePresets, TODAY_PRESET } from '@/lib/ad-pacer/period';
 import { googlePacingTypeLabel, isSharedBudget } from '@/lib/ad-pacer/google-pacer-calc';
 import { usePacerReadOnly } from './pacer-read-only';
 import { Tooltip } from './Tooltip';
 import { FlightBar } from './FlightBar';
 import { AdStatusPill, ApprovalPill, DesignPill } from './pills';
 import { UpdatesIndicator } from './metrics';
+import { CellEditor } from './CellEditor';
+import { InlineMoneyCell, InlineTextCell } from './InlineEditCell';
+import { StatusOptionList } from './StatusSelect';
+import { BudgetTypeToggle, BudgetSourceToggle } from './toggles';
+import { DollarInput } from './inputs';
 import type { DragReorderApi, DropEdge } from './use-drag-reorder';
 
 const GOOGLE_DAYS_PER_MONTH = 30.4;
 
+// Borderless date trigger so a picker can sit in a table cell without looking
+// like a form input. The cell content is the affordance; the calendar drops
+// below on click.
+const dateTriggerClass =
+  'group -mx-1.5 -my-1 inline-flex max-w-full items-center rounded-md px-1.5 py-1 text-left transition-colors hover:bg-[var(--muted)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/50';
+
+/** Ad name — click to edit the text right in the cell. */
+function NameCell({
+  ad,
+  onUpdate,
+  onEditingChange,
+}: {
+  ad: PacerAd;
+  onUpdate?: (next: PacerAd) => void;
+  onEditingChange?: (editing: boolean) => void;
+}) {
+  return (
+    <InlineTextCell
+      ariaLabel="Ad name"
+      value={ad.name}
+      placeholder="Ad name…"
+      disabled={!onUpdate}
+      onEditingChange={onEditingChange}
+      onCommit={(name) => onUpdate?.({ ...ad, name })}
+      display={
+        <span className="block truncate text-sm font-semibold text-[var(--foreground)]">
+          {ad.name || 'Untitled Ad'}
+        </span>
+      }
+    />
+  );
+}
+
+/** Allocation — click to type the amount right in the cell. */
+function AllocationCell({
+  ad,
+  onUpdate,
+  dailyRate,
+  onEditingChange,
+}: {
+  ad: PacerAd;
+  onUpdate?: (next: PacerAd) => void;
+  dailyRate: number | null;
+  onEditingChange?: (editing: boolean) => void;
+}) {
+  const allocation = num(ad.allocation);
+  return (
+    <InlineMoneyCell
+      ariaLabel="Actual spend amount"
+      value={ad.allocation}
+      disabled={!onUpdate}
+      onEditingChange={onEditingChange}
+      onCommit={(allocationNext) => onUpdate?.({ ...ad, allocation: allocationNext })}
+      display={
+        <span
+          className="block whitespace-nowrap text-xs font-semibold"
+          style={{ color: sourceColor(ad.budgetSource) }}
+        >
+          {allocation != null ? fmt(allocation) : '—'}
+          {dailyRate != null && (
+            <span className="block text-[10px] font-normal text-[var(--muted-foreground)]">
+              {fmt(dailyRate)}/day avg
+            </span>
+          )}
+        </span>
+      }
+    />
+  );
+}
+
 /**
- * Compact list-view row for an ad in the Plan table. Click opens the editor;
- * hover reveals clone/remove. Pure + callback-driven (drag, click, remove,
- * clone, select are all props) so Meta + Google share it.
+ * Compact list-view row for an ad in the Plan table. Every cell is editable in
+ * place — click it and the field's control drops below; the expand icon beside
+ * the name opens the full editor modal. Pure + callback-driven (drag, open,
+ * update, remove, clone, select are all props) so Meta + Google share it.
  */
 export function AdSummaryRow({
   ad,
   index,
-  onClick,
+  onOpen,
+  onUpdate,
   onRemove,
   onClone,
   dragProps,
@@ -44,7 +137,13 @@ export function AdSummaryRow({
 }: {
   ad: PacerAd;
   index: number;
-  onClick: () => void;
+  /** Opens the full ad editor modal (expand icon beside the name). */
+  onOpen: () => void;
+  /**
+   * Commits an inline cell edit. Omit to render the row as display-only —
+   * a frozen month also disables editing on its own via the read-only context.
+   */
+  onUpdate?: (next: PacerAd) => void;
   onRemove: (id: string) => void;
   onClone: (id: string) => void;
   dragProps?: ReturnType<DragReorderApi['rowProps']>;
@@ -53,11 +152,15 @@ export function AdSummaryRow({
   dropEdge?: DropEdge | null;
   isSelected: boolean;
   onSelectToggle: () => void;
-  // Meta shows Design + Approvals columns; Google hides them (its campaigns
-  // have no creative-workflow). Must match the parent table's <th> set.
+  // Detailed view shows Design + Approvals columns; Basic hides them.
+  // Must match the parent table's <th> set.
   showCreativeWorkflow?: boolean;
 }) {
   const readOnly = usePacerReadOnly();
+  const editable = !!onUpdate && !readOnly;
+  // While a text/money field is open in this row, drop the drag handlers —
+  // a native row drag beginning inside an input eats the text selection.
+  const [inlineEditing, setInlineEditing] = useState(false);
   const allocation = num(ad.allocation);
   const updatesCount = ad.activityLog.length;
   // §2/§4 Google planner row extras: Daily/Total label, the genuinely-shared
@@ -84,50 +187,133 @@ export function AdSummaryRow({
       ? 'inset 0 -2px 0 0 var(--primary)'
       : undefined;
 
+  const budgetBadges = (
+    <div className="flex items-center gap-1">
+      <span
+        className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+        style={{
+          background: budgetTypeTint(ad.budgetType),
+          color: budgetTypeColor(ad.budgetType),
+        }}
+      >
+        {gPacingType ?? ad.budgetType}
+      </span>
+      <span
+        className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+        style={{
+          background: sourceTint(ad.budgetSource),
+          color: sourceColor(ad.budgetSource),
+        }}
+      >
+        {sourceLabel(ad.budgetSource)}
+      </span>
+      {gShared && (
+        <span
+          className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
+          style={{ background: 'rgba(125,184,232,0.16)', color: '#7db8e8' }}
+        >
+          Shared{ad.googleBudgetReferenceCount ? ` ×${ad.googleBudgetReferenceCount}` : ''}
+        </span>
+      )}
+    </div>
+  );
+
+  const flightDisplay = (
+    <div className="flex items-center gap-2">
+      <FlightBar ad={ad} />
+      {isGoogle && ad.googleAdsDisapproved && (
+        <span
+          className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap"
+          style={{ background: 'rgba(248,113,113,0.16)', color: '#f87171' }}
+        >
+          Ads disapproved
+        </span>
+      )}
+      {isGoogle && !ad.googleAdsDisapproved && ad.googleBudgetConstrained && (
+        <span
+          className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap"
+          style={{ background: 'rgba(125,184,232,0.16)', color: '#7db8e8' }}
+        >
+          Limited by budget
+        </span>
+      )}
+    </div>
+  );
+
   return (
     <tr
-      onClick={onClick}
-      {...(dragProps && !readOnly ? dragProps : {})}
+      {...(dragProps && !readOnly && !inlineEditing ? dragProps : {})}
       style={{ boxShadow: dropShadow }}
       className={`group border-b border-[var(--border)] last:border-b-0 transition-colors hover:bg-[var(--muted)]/50 ${
-        readOnly ? 'cursor-pointer' : 'cursor-grab active:cursor-grabbing'
+        readOnly ? '' : 'cursor-grab active:cursor-grabbing'
       } ${isSelected ? 'bg-[var(--primary)]/8' : ''} ${
         isDragging ? 'bg-[var(--primary)]/10' : ''
       }`}
     >
-      {/* Bulk-selection checkbox (clicking it stops the row's click-to-edit) */}
+      {/* Drag hint + bulk-selection checkbox (clicking the box must not start
+          an edit, so it stops propagation) */}
       <td
-        className="w-9 pl-3 pr-1 py-2 align-middle"
+        className="w-14 pl-2 pr-1 py-2 align-middle"
         onClick={(e) => e.stopPropagation()}
       >
-        <input
-          type="checkbox"
-          aria-label={`Select ${ad.name || 'Untitled Ad'}`}
-          checked={isSelected}
-          onChange={onSelectToggle}
-          onClick={(e) => e.stopPropagation()}
-          className="h-4 w-4 rounded border-[var(--border)] bg-[var(--input)] text-[var(--primary)] cursor-pointer accent-[var(--primary)]"
-        />
+        <div className="flex items-center gap-1">
+          {!readOnly && (
+            <Bars2Icon
+              aria-hidden="true"
+              className="w-3.5 h-3.5 flex-shrink-0 rotate-90 text-[var(--muted-foreground)] opacity-0 transition-opacity group-hover:opacity-60"
+            />
+          )}
+          <input
+            type="checkbox"
+            aria-label={`Select ${ad.name || 'Untitled Ad'}`}
+            checked={isSelected}
+            onChange={onSelectToggle}
+            onClick={(e) => e.stopPropagation()}
+            className="h-4 w-4 rounded border-[var(--border)] bg-[var(--input)] text-[var(--primary)] cursor-pointer accent-[var(--primary)]"
+          />
+        </div>
       </td>
 
-      {/* Color + name (+ Google channel-type subline, like Meta leads with the
-          ad name) */}
-      <td className="px-3 py-2 align-middle min-w-[200px]">
+      {/* Color + name (+ Google channel-type subline) + expand-to-modal */}
+      {/* Wider than the other columns: it carries the name plus the expand
+          affordance, and every other cell is nowrap so this one absorbs the
+          table's flex. */}
+      <td className="px-3 py-2 align-middle min-w-[300px] w-[38%]">
         <div className="flex items-center gap-2 min-w-0">
           <div
             className="w-2 h-2 rounded-sm flex-shrink-0"
             style={{ background: AD_COLORS[index % AD_COLORS.length] }}
           />
-          <div className="min-w-0">
-            <span className="block text-sm font-semibold text-[var(--foreground)] truncate">
-              {ad.name || 'Untitled Ad'}
-            </span>
+          <div className="min-w-0 flex-1">
+            <NameCell
+              ad={ad}
+              onUpdate={onUpdate}
+              onEditingChange={setInlineEditing}
+            />
             {isGoogle && ad.googleChannelType && (
               <span className="block text-[11px] text-[var(--muted-foreground)] truncate">
                 {ad.googleChannelType}
               </span>
             )}
           </div>
+          <Tooltip label="Open full details">
+            <button
+              type="button"
+              draggable
+              onDragStart={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpen();
+              }}
+              aria-label={`Open details for ${ad.name || 'Untitled Ad'}`}
+              className="flex-shrink-0 rounded p-1 text-[var(--muted-foreground)] opacity-0 transition-all hover:bg-[var(--muted)] hover:text-[var(--primary)] focus:opacity-100 group-hover:opacity-100"
+            >
+              <ArrowsPointingOutIcon className="w-3.5 h-3.5" />
+            </button>
+          </Tooltip>
         </div>
       </td>
 
@@ -139,112 +325,203 @@ export function AdSummaryRow({
         />
       </td>
 
-      {/* Status */}
+      {/* Task status */}
       <td className="px-3 py-2 align-middle whitespace-nowrap">
-        <AdStatusPill status={ad.adStatus} />
+        <CellEditor
+          label="Task status"
+          disabled={!onUpdate}
+          display={<AdStatusPill status={ad.adStatus} />}
+        >
+          {(close) => (
+            <StatusOptionList
+              value={ad.adStatus}
+              options={AD_STATUSES}
+              colorMap={AD_STATUS_COLORS}
+              maxHeight={200}
+              onPick={(next) => {
+                onUpdate?.({ ...ad, adStatus: next });
+                close();
+              }}
+            />
+          )}
+        </CellEditor>
       </td>
 
       {/* Due date — user-set; muted dash when unset */}
-      <td
-        className="px-3 py-2 align-middle whitespace-nowrap text-xs"
-        style={{ color: ad.dueDate ? 'var(--foreground)' : 'var(--muted-foreground)' }}
-      >
-        {fmtDate(ad.dueDate)}
+      <td className="px-3 py-2 align-middle whitespace-nowrap text-xs">
+        <DatePicker
+          value={ad.dueDate}
+          disabled={!editable}
+          onChange={(v) => onUpdate?.({ ...ad, dueDate: v })}
+          presets={[TODAY_PRESET]}
+          className={dateTriggerClass}
+          triggerContent={
+            <span
+              style={{
+                color: ad.dueDate ? 'var(--foreground)' : 'var(--muted-foreground)',
+              }}
+            >
+              {fmtDate(ad.dueDate)}
+            </span>
+          }
+        />
       </td>
 
-      {/* Budget tags — Google shows Daily/Total + the genuinely-shared badge. */}
+      {/* Budget type + source. Google's Daily/Total label comes from the
+          campaign's own budget period, so only the source is editable there. */}
       <td className="px-3 py-2 align-middle whitespace-nowrap">
-        <div className="flex items-center gap-1">
-          <span
-            className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
-            style={{
-              background: budgetTypeTint(ad.budgetType),
-              color: budgetTypeColor(ad.budgetType),
-            }}
-          >
-            {gPacingType ?? ad.budgetType}
-          </span>
-          <span
-            className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
-            style={{
-              background: sourceTint(ad.budgetSource),
-              color: sourceColor(ad.budgetSource),
-            }}
-          >
-            {sourceLabel(ad.budgetSource)}
-          </span>
-          {gShared && (
-            <span
-              className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded"
-              style={{ background: 'rgba(125,184,232,0.16)', color: '#7db8e8' }}
-            >
-              Shared{ad.googleBudgetReferenceCount ? ` ×${ad.googleBudgetReferenceCount}` : ''}
-            </span>
+        <CellEditor
+          label="Budget"
+          disabled={!onUpdate}
+          width={260}
+          display={budgetBadges}
+        >
+          {() => (
+            <div className="space-y-2.5">
+              {!isGoogle && (
+                <div>
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                    Type
+                  </div>
+                  <BudgetTypeToggle
+                    value={ad.budgetType}
+                    onChange={(v) => onUpdate?.({ ...ad, budgetType: v })}
+                  />
+                </div>
+              )}
+              <div>
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                  Source
+                </div>
+                <BudgetSourceToggle
+                  value={ad.budgetSource}
+                  onChange={(v) => onUpdate?.({ ...ad, budgetSource: v })}
+                />
+              </div>
+              {ad.budgetSource === 'split' && (
+                <div>
+                  <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                    Base portion
+                  </div>
+                  <DollarInput
+                    value={ad.splitBaseAmount}
+                    onChange={(v) =>
+                      onUpdate?.({ ...ad, splitBaseAmount: v || null })
+                    }
+                    placeholder="0.00"
+                  />
+                </div>
+              )}
+            </div>
           )}
-        </div>
+        </CellEditor>
       </td>
 
       {/* Allocation (+ Google daily-rate subline: monthly ÷ 30.4) */}
-      <td
-        className="px-3 py-2 align-middle text-xs font-semibold whitespace-nowrap"
-        style={{
-          color: sourceColor(ad.budgetSource),
-        }}
-      >
-        {allocation != null ? fmt(allocation) : '—'}
-        {gDailyRate != null && (
-          <span className="block text-[10px] font-normal text-[var(--muted-foreground)]">
-            {fmt(gDailyRate)}/day avg
-          </span>
-        )}
+      <td className="px-3 py-2 align-middle">
+        <AllocationCell
+          ad={ad}
+          onUpdate={onUpdate}
+          dailyRate={gDailyRate}
+          onEditingChange={setInlineEditing}
+        />
       </td>
 
       {/* Run dates (status-colored progress bar) + §5 Google delivery flags */}
       <td className="px-3 py-2 align-middle">
-        <div className="flex items-center gap-2">
-          <FlightBar ad={ad} />
-          {isGoogle && ad.googleAdsDisapproved && (
-            <span
-              className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap"
-              style={{ background: 'rgba(248,113,113,0.16)', color: '#f87171' }}
-            >
-              Ads disapproved
-            </span>
-          )}
-          {isGoogle && !ad.googleAdsDisapproved && ad.googleBudgetConstrained && (
-            <span
-              className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded whitespace-nowrap"
-              style={{ background: 'rgba(125,184,232,0.16)', color: '#7db8e8' }}
-            >
-              Limited by budget
-            </span>
-          )}
-        </div>
+        <DatePicker
+          mode="range"
+          value={{ start: ad.flightStart, end: ad.flightEnd }}
+          disabled={!editable}
+          onChange={(r) =>
+            onUpdate?.({ ...ad, flightStart: r.start, flightEnd: r.end })
+          }
+          presets={flightDatePresets(ad.period)}
+          className={dateTriggerClass}
+          triggerContent={flightDisplay}
+        />
       </td>
 
       {showCreativeWorkflow && (
         <>
           {/* Design */}
           <td className="px-3 py-2 align-middle whitespace-nowrap">
-            <DesignPill status={ad.designStatus} />
+            <CellEditor
+              label="Design status"
+              disabled={!onUpdate}
+              display={<DesignPill status={ad.designStatus} />}
+            >
+              {(close) => (
+                <StatusOptionList
+                  value={ad.designStatus}
+                  options={DESIGN_STATUSES}
+                  colorMap={DESIGN_STATUS_COLORS}
+                  maxHeight={200}
+                  onPick={(next) => {
+                    onUpdate?.({ ...ad, designStatus: next });
+                    close();
+                  }}
+                />
+              )}
+            </CellEditor>
           </td>
 
-          {/* Approvals */}
+          {/* Approvals — internal + client in one popover */}
           <td className="px-3 py-2 align-middle whitespace-nowrap">
-            <div className="flex flex-col gap-1">
-              <div className="flex items-center gap-1">
-                <span className="text-[8px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] w-5 flex-shrink-0">
-                  Int
-                </span>
-                <ApprovalPill status={ad.internalApproval} />
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="text-[8px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] w-5 flex-shrink-0">
-                  Cli
-                </span>
-                <ApprovalPill status={ad.clientApproval} />
-              </div>
-            </div>
+            <CellEditor
+              label="Approvals"
+              disabled={!onUpdate}
+              width={260}
+              display={
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-1">
+                    <span className="text-[8px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] w-5 flex-shrink-0">
+                      Int
+                    </span>
+                    <ApprovalPill status={ad.internalApproval} />
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-[8px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)] w-5 flex-shrink-0">
+                      Cli
+                    </span>
+                    <ApprovalPill status={ad.clientApproval} />
+                  </div>
+                </div>
+              }
+            >
+              {() => (
+                <div className="space-y-2.5">
+                  <div>
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                      Internal
+                    </div>
+                    <StatusOptionList
+                      value={ad.internalApproval}
+                      options={APPROVAL_STATUSES}
+                      colorMap={APPROVAL_STATUS_COLORS}
+                      maxHeight={200}
+                      onPick={(next) =>
+                        onUpdate?.({ ...ad, internalApproval: next })
+                      }
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                      Client
+                    </div>
+                    <StatusOptionList
+                      value={ad.clientApproval}
+                      options={APPROVAL_STATUSES}
+                      colorMap={APPROVAL_STATUS_COLORS}
+                      maxHeight={200}
+                      onPick={(next) =>
+                        onUpdate?.({ ...ad, clientApproval: next })
+                      }
+                    />
+                  </div>
+                </div>
+              )}
+            </CellEditor>
           </td>
         </>
       )}

@@ -10,11 +10,9 @@ import {
   ClipboardDocumentListIcon,
   ClockIcon,
   FunnelIcon,
-  MagnifyingGlassIcon,
   PaintBrushIcon,
   TrashIcon,
   UserCircleIcon,
-  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { MetaBrandIcon } from '@/components/icons/platform-logos';
 import BulkActionDock from '@/components/bulk-action-dock';
@@ -28,17 +26,20 @@ import type {
   ActivityEntry,
 } from '@/lib/ad-pacer/types';
 import { type PlanFilters, EMPTY_FILTERS, applyFilters } from '@/lib/ad-pacer/filters';
-import { makeAd, newAdId } from '@/lib/ad-pacer/helpers';
+import { newAdId } from '@/lib/ad-pacer/helpers';
 import { fmtPeriodLong } from '@/lib/ad-pacer/period';
 import {
   AdSummaryRow,
   AddPlanButton,
   EmptyPeriodState,
   AdEditorModal,
+  BulkAddAdsModal,
   BudgetCalculatorModal,
   useDragReorder,
   Tooltip,
   usePacerReadOnly,
+  PlanDetailToggle,
+  usePlanDetailLevel,
 } from '@/app/app/tools/_shared';
 import { FilterStatus } from './FilterSidebar';
 import { CopyPlanModal, type CopyFieldOptions } from './CopyPlanModal';
@@ -90,6 +91,11 @@ export function AdPlannerPanel({
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [showCalcModal, setShowCalcModal] = useState(false);
+  const [showBulkAdd, setShowBulkAdd] = useState(false);
+  // Basic (default) hides the creative-workflow surface — Design + Approvals
+  // columns here, and the matching editor sections. Sticky per user.
+  const [detailLevel, setDetailLevel] = usePlanDetailLevel();
+  const showCreativeWorkflow = detailLevel === 'detailed';
 
   const handleReorder = (nextAds: PacerAd[]) => {
     if (readOnly) return; // frozen month — reorder is a no-op
@@ -138,15 +144,19 @@ export function AdPlannerPanel({
       },
     });
   };
-  const openCreate = () => {
-    const fresh = makeAd(plan.ads.length, period);
-    setEditor({ mode: 'create', draft: fresh });
-  };
   const openEdit = (id: string) => {
     const original = plan.ads.find((a) => a.id === id);
     if (!original) return;
     setEditor({ mode: 'edit', adId: id, original });
   };
+  // Inline cell edit from the table — same shape as a modal save, minus the
+  // activity log (which the row never touches). The parent's debounced
+  // autosave persists it.
+  const updateAd = (next: PacerAd) =>
+    onChange({
+      ...plan,
+      ads: plan.ads.map((a) => (a.id === next.id ? next : a)),
+    });
   const cloneAd = (id: string) => {
     const src = plan.ads.find((a) => a.id === id);
     if (!src) return;
@@ -206,13 +216,11 @@ export function AdPlannerPanel({
     setEditor(null);
   };
 
-  const [search, setSearch] = useState('');
-  const visibleAds = useMemo(() => {
-    const filtered = applyFilters(plan.ads, filters, currentUserId);
-    const q = search.trim().toLowerCase();
-    if (!q) return filtered;
-    return filtered.filter((a) => (a.name || '').toLowerCase().includes(q));
-  }, [plan.ads, filters, currentUserId, search]);
+  // Name search was removed — the Filters sidebar covers narrowing the list.
+  const visibleAds = useMemo(
+    () => applyFilters(plan.ads, filters, currentUserId),
+    [plan.ads, filters, currentUserId],
+  );
 
   // ── Bulk selection ──────────────────────────────────────────────────────
   const { confirm } = useLoomiDialog();
@@ -352,28 +360,7 @@ export function AdPlannerPanel({
           } ad${plan.ads.length !== 1 ? 's' : ''})`}
         </h2>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Quick search by ad name — applied on top of the active filters. */}
-          <div className="relative">
-            <MagnifyingGlassIcon className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] pointer-events-none" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search ads…"
-              aria-label="Search ads by name"
-              className="pl-8 pr-7 py-1.5 text-xs rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:outline-none focus:border-[var(--primary)] w-44"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch('')}
-                aria-label="Clear search"
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)]"
-              >
-                <XMarkIcon className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
+          <PlanDetailToggle value={detailLevel} onChange={setDetailLevel} />
           <Tooltip
             label={
               readOnly
@@ -393,7 +380,7 @@ export function AdPlannerPanel({
           </Tooltip>
           {!readOnly && (
             <AddPlanButton
-              onCreateNew={openCreate}
+              onCreateNew={() => setShowBulkAdd(true)}
               onOpenCopy={() => setShowCopyModal(true)}
               onImport={onImport}
               importIcon={<MetaBrandIcon className="w-4 h-4" />}
@@ -417,7 +404,7 @@ export function AdPlannerPanel({
         <EmptyPeriodState
           period={period}
           periodSummaries={periodSummaries}
-          onAddAd={openCreate}
+          onAddAd={() => setShowBulkAdd(true)}
           onOpenCopy={() => setShowCopyModal(true)}
         />
       ) : visibleAds.length === 0 ? (
@@ -430,7 +417,7 @@ export function AdPlannerPanel({
             <table className="w-full min-w-[1000px]">
               <thead className="sticky top-0 z-10">
                 <tr className="bg-[var(--muted)] border-b border-[var(--border)]">
-                  <th className="w-9 pl-3 pr-1 py-2">
+                  <th className="w-14 pl-2 pr-1 py-2">
                     <input
                       type="checkbox"
                       aria-label={
@@ -464,12 +451,18 @@ export function AdPlannerPanel({
                   <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
                     Flight Dates
                   </th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Design
-                  </th>
-                  <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
-                    Approvals
-                  </th>
+                  {/* Detailed view only — must stay in sync with the same flag
+                      on AdSummaryRow, or headers and cells drift apart. */}
+                  {showCreativeWorkflow && (
+                    <>
+                      <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                        Design
+                      </th>
+                      <th className="text-left px-3 py-2 text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider">
+                        Approvals
+                      </th>
+                    </>
+                  )}
                   <th className="px-3 py-2"></th>
                 </tr>
               </thead>
@@ -479,7 +472,8 @@ export function AdPlannerPanel({
                     key={ad.id}
                     ad={ad}
                     index={plan.ads.findIndex((a) => a.id === ad.id)}
-                    onClick={() => openEdit(ad.id)}
+                    onOpen={() => openEdit(ad.id)}
+                    onUpdate={updateAd}
                     onRemove={removeAd}
                     onClone={cloneAd}
                     dragProps={drag.rowProps(ad.id)}
@@ -492,6 +486,7 @@ export function AdPlannerPanel({
                     }
                     isSelected={selectedAdIds.has(ad.id)}
                     onSelectToggle={() => toggleSelectAd(ad.id)}
+                    showCreativeWorkflow={showCreativeWorkflow}
                   />
                 ))}
               </tbody>
@@ -508,11 +503,26 @@ export function AdPlannerPanel({
           mode={editor.mode}
           users={users}
           currentUserId={currentUserId}
+          detailLevel={detailLevel}
           onSave={handleSave}
           onCancel={() => setEditor(null)}
           onAddActivity={onAddActivity}
           onEditActivity={onEditActivity}
           onDeleteActivity={onDeleteActivity}
+        />
+      )}
+
+      {showBulkAdd && (
+        <BulkAddAdsModal
+          plan={plan}
+          onClose={() => setShowBulkAdd(false)}
+          onCreate={(newAds) => {
+            onChange({ ...plan, ads: [...plan.ads, ...newAds] });
+            setShowBulkAdd(false);
+            toast.success(
+              `Added ${newAds.length} ad${newAds.length === 1 ? '' : 's'}`,
+            );
+          }}
         />
       )}
 
@@ -607,24 +617,31 @@ export function AdPlannerPanel({
               icon: <ClockIcon className="h-4 w-4" />,
               onClick: () => setBulkField('adStatus'),
             },
-            {
-              id: 'design-status',
-              label: 'Design Status',
-              icon: <PaintBrushIcon className="h-4 w-4" />,
-              onClick: () => setBulkField('designStatus'),
-            },
-            {
-              id: 'internal-status',
-              label: 'Internal Status',
-              icon: <CheckBadgeIcon className="h-4 w-4" />,
-              onClick: () => setBulkField('internalApproval'),
-            },
-            {
-              id: 'client-status',
-              label: 'Client Status',
-              icon: <CheckBadgeIcon className="h-4 w-4" />,
-              onClick: () => setBulkField('clientApproval'),
-            },
+            // Creative-workflow bulk edits follow the same Basic/Detailed
+            // split as the columns — no point offering a bulk edit for a
+            // field the user has hidden.
+            ...(showCreativeWorkflow
+              ? [
+                  {
+                    id: 'design-status',
+                    label: 'Design Status',
+                    icon: <PaintBrushIcon className="h-4 w-4" />,
+                    onClick: () => setBulkField('designStatus'),
+                  },
+                  {
+                    id: 'internal-status',
+                    label: 'Internal Status',
+                    icon: <CheckBadgeIcon className="h-4 w-4" />,
+                    onClick: () => setBulkField('internalApproval'),
+                  },
+                  {
+                    id: 'client-status',
+                    label: 'Client Status',
+                    icon: <CheckBadgeIcon className="h-4 w-4" />,
+                    onClick: () => setBulkField('clientApproval'),
+                  },
+                ]
+              : []),
             {
               id: 'delete',
               label: 'Delete',

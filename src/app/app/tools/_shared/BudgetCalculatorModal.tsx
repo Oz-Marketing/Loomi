@@ -16,11 +16,13 @@ import {
   adContribution,
   effMarkupOf,
   sourceColor,
+  splitToCents,
 } from '@/lib/ad-pacer/helpers';
 import { CompactStat } from './metrics';
 import { DollarInput, inputClass } from './inputs';
 import { Tooltip } from './Tooltip';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
+import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 
 // ─── Budget Calculator modal (+ allocation helpers, appended below) ─────────
 /**
@@ -75,24 +77,6 @@ const DEFAULT_SPEC: AdAllocSpec = {
  * Excluded rows (`included === false`) are left out entirely — the parent
  * preserves their existing allocation on Apply.
  */
-/**
- * Split `total` dollars into `n` parts that sum back to `total` EXACTLY to the
- * cent (12a). Equal shares, with leftover cents handed to the first rows — so
- * "distribute evenly" never leaves a phantom remainder from rounding each row
- * independently. Operates in integer cents; rounds only at the very end.
- */
-function splitToCents(total: number, n: number): number[] {
-  if (n <= 0) return [];
-  const cents = Math.round(total * 100);
-  const base = Math.trunc(cents / n);
-  let remainder = cents - base * n; // 0..n-1 leftover cents
-  return Array.from({ length: n }, () => {
-    const extra = remainder > 0 ? 1 : 0;
-    if (remainder > 0) remainder -= 1;
-    return (base + extra) / 100;
-  });
-}
-
 function computeAllocations(
   ads: PacerAd[],
   pool: number,
@@ -141,6 +125,7 @@ export function BudgetCalculatorModal({
     >,
   ) => void;
 }) {
+  const { confirm } = useLoomiDialog();
   const [source, setSource] = useState<'base' | 'added'>('base');
   // Setup = fresh planning (clean slate, no spent column).
   // Mid-flight = adjusting allocations after some spend has happened (shows
@@ -434,7 +419,7 @@ export function BudgetCalculatorModal({
     (a) => allocations[a.id] != null,
   ).length;
 
-  const handleApply = () => {
+  const handleApply = async () => {
     // Only ask about overwrite for rows that will actually be written AND
     // already have an allocation. Even-mode rows are skipped on Apply.
     const adsWithExisting = sourceAds.filter((a) => {
@@ -443,13 +428,20 @@ export function BudgetCalculatorModal({
       return existing != null && existing > 0;
     });
     if (adsWithExisting.length > 0) {
-      if (
-        !window.confirm(
-          `${adsWithExisting.length} ad${adsWithExisting.length === 1 ? '' : 's'} in ${source === 'base' ? 'Base' : 'Added'} already ${adsWithExisting.length === 1 ? 'has' : 'have'} an allocation set. Overwrite?`,
-        )
-      ) {
-        return;
-      }
+      // The app's own dialog, NOT window.confirm: native dialogs are
+      // suppressed in embedded/webview browsers, where confirm() returns
+      // false instantly and Apply looked like it did nothing at all.
+      const n = adsWithExisting.length;
+      const ok = await confirm({
+        title: `Overwrite ${n} existing allocation${n === 1 ? '' : 's'}?`,
+        message: `${n} ad${n === 1 ? '' : 's'} in ${
+          source === 'base' ? 'Base' : 'Added'
+        } already ${n === 1 ? 'has' : 'have'} an allocation set. Applying replaces ${
+          n === 1 ? 'it' : 'them'
+        }.`,
+        confirmLabel: 'Overwrite',
+      });
+      if (!ok) return;
     }
     // Map computed (source-portion) values back to real ads. For a Split ad,
     // set splitBaseAmount + combined allocation, preserving the OTHER source's
@@ -964,7 +956,26 @@ export function BudgetCalculatorModal({
           >
             Clear
           </button>
-          <div className="ml-auto flex gap-2">
+          {/* Why Apply is unavailable, spelled out rather than left to a hover
+              on a disabled button — a greyed Apply with no reason reads as
+              "the calculator is broken". */}
+          {(overBudget || hasUnderSpent || includedCount === 0) && (
+            <span
+              className="ml-auto max-w-[320px] text-right text-[10px] leading-snug"
+              style={{ color: overBudget || hasUnderSpent ? COLORS.error : 'var(--muted-foreground)' }}
+            >
+              {hasUnderSpent
+                ? 'An amount is below what that ad has already spent — raise it to apply.'
+                : overBudget
+                  ? `Allocations exceed the ${source === 'base' ? 'Base' : 'Added'} budget by ${fmt(Math.abs(stillToAllocate))} — lower an amount to apply.`
+                  : 'Set an amount, percentage, or spread the remainder to apply.'}
+            </span>
+          )}
+          <div
+            className={`flex gap-2 ${
+              overBudget || hasUnderSpent || includedCount === 0 ? '' : 'ml-auto'
+            }`}
+          >
           <button
             type="button"
             onClick={onClose}

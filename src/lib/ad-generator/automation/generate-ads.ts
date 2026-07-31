@@ -3,7 +3,7 @@ import { evoxConfigured } from '@/lib/integrations/evox';
 import { resolveJellybean } from '@/lib/integrations/evox-jellybean';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
 import { createNotification } from '@/lib/notifications/service';
-import { parseOemRule, requiredFieldsFor, type OemOfferRule } from '../compliance';
+import { applyOemDefaults, parseOemRule, requiredFieldsFor, type OemOfferRule } from '../compliance';
 import { loadActiveCoopPack } from '../coop-pack-store';
 import type { CoopRulePack } from '../coop-rules';
 import { resolveTemplateCoopCheck } from '../coop-template-check-store';
@@ -237,7 +237,7 @@ export async function generateForAccount(
       const row = await prisma.adOemOfferRule.findFirst({
         where: { make: { equals: make, mode: 'insensitive' }, isActive: true },
       });
-      oemRules.set(make, row ? parseOemRule(row.make, row.requiredFields) : null);
+      oemRules.set(make, row ? parseOemRule(row.make, row.requiredFields, row.defaultValues) : null);
     } catch {
       oemRules.set(make, null);
     }
@@ -446,6 +446,25 @@ export async function generateForAccount(
         data.eventLogoUrl = event.logoUrl;
         eventName = event.name;
       }
+    }
+
+    // ── standing OEM defaults ──
+    //
+    // Some required disclosures belong to the PROGRAMME, not the offer, so the feed
+    // never carries them and nothing can derive them: Subaru §6x wants the ad to
+    // state whether a security deposit is required, and MarketCheck has no such
+    // field. Before these existed every Subaru lease failed preflight on a missing
+    // field and was silently skipped.
+    //
+    // Applied BEFORE the disclaimer so a composed disclaimer can use the value, and
+    // every application is recorded as a warning — an approver must be able to see
+    // which numbers came from the manufacturer's offer and which a person asserted.
+    const { data: withDefaults, applied } = applyOemDefaults(data, oemRule);
+    data = withDefaults;
+    for (const a of applied) {
+      warnings.push(
+        `${a.label} was filled from the ${g.make} standing default ("${a.value}") — the offer didn't carry it.`,
+      );
     }
 
     // ── disclaimer ──

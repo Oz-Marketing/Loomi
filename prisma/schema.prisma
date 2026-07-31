@@ -2306,6 +2306,22 @@ model AdOemOfferRule {
   id             String   @id @default(cuid())
   make           String   @unique // vehicle make / OEM (case-insensitive lookup)
   requiredFields String   @db.Text // JSON: { [offerType]: string[] }
+
+  /// Standing values for fields the offer feed doesn't carry, as JSON
+  /// { [offerType]: { [field]: value } }.
+  ///
+  /// Some required disclosures are properties of the PROGRAMME rather than the
+  /// individual offer, so MarketCheck never sends them and nothing can derive them.
+  /// Subaru §6x is the clearest case: an ad must state whether a security deposit
+  /// is required, and "none required" satisfies it — a standing fact a human can
+  /// assert once. Without somewhere to put that, every Subaru lease ad fails
+  /// preflight on a missing field and is silently skipped.
+  ///
+  /// These are ASSERTIONS, not derivations. A draft built using one records that
+  /// in its review notes, so an approver can see the value came from this table and
+  /// not from the manufacturer's offer.
+  defaultValues  String?  @db.Text
+
   notes          String?
   isActive       Boolean  @default(true)
   createdAt      DateTime @default(now())

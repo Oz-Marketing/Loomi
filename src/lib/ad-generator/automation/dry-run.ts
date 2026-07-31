@@ -306,7 +306,7 @@ export async function dryRunOneVehicle(input: DryRunInput): Promise<DryRunResult
     const row = await prisma.adOemOfferRule.findFirst({
       where: { make: { equals: make, mode: 'insensitive' }, isActive: true },
     });
-    if (row) oemRule = parseOemRule(row.make, row.requiredFields);
+    if (row) oemRule = parseOemRule(row.make, row.requiredFields, row.defaultValues);
   } catch {
     // Unmigrated table — the code baseline still applies.
   }

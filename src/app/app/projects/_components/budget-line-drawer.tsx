@@ -6,6 +6,7 @@ import { ArrowUturnLeftIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/ou
 import { toast } from '@/lib/toast';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { BUDGET_CHANNELS, channelLabel, isPacedChannel } from '@/lib/budget/channels';
+import { ChannelIcon } from '@/components/icons/channel-icon';
 import { periodOf } from '@/lib/budget/period';
 import { jsonFetcher } from './fetcher';
 import { StatusPill } from './budget-status-pill';
@@ -141,12 +142,15 @@ export function BudgetLineDrawer({
               {line?.label || line?.taskTitle || 'Budget line'}
             </p>
             {line && (
-              <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
-                {line.channel ? channelLabel(line.channel) : 'Unassigned channel'}
-                {' · '}
-                {line.period
-                  ? `${MONTH_ABBR[monthIndexOf(line.period)]} ${line.year}`
-                  : 'Unscheduled'}
+              <p className="mt-0.5 inline-flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                <ChannelIcon channel={line.channel} className="h-3.5 w-3.5" />
+                <span>
+                  {line.channel ? channelLabel(line.channel) : 'Unassigned channel'}
+                  {' · '}
+                  {line.period
+                    ? `${MONTH_ABBR[monthIndexOf(line.period)]} ${line.year}`
+                    : 'Unscheduled'}
+                </span>
               </p>
             )}
           </div>
@@ -264,7 +268,11 @@ export function BudgetLineDrawer({
                       searchable={false}
                       options={[
                         { value: '', label: 'Unassigned' },
-                        ...BUDGET_CHANNELS.map((c) => ({ value: c.key, label: c.label })),
+                        ...BUDGET_CHANNELS.map((c) => ({
+                          value: c.key,
+                          label: c.label,
+                          icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
+                        })),
                       ]}
                       className="!bg-[var(--background)] !rounded-lg !px-2.5 !py-2 !text-sm"
                     />

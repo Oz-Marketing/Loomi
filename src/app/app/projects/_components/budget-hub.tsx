@@ -12,6 +12,7 @@ import { toast } from '@/lib/toast';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { AccountAvatar } from '@/components/account-avatar';
 import { BUDGET_CHANNELS, channelLabel, isPacedChannel } from '@/lib/budget/channels';
+import { ChannelIcon } from '@/components/icons/channel-icon';
 import { periodOf } from '@/lib/budget/period';
 import { useProjectOptions } from './use-project-options';
 import { jsonFetcher } from './fetcher';
@@ -327,15 +328,21 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
                     {grid.map((row) => (
                       <tr key={row.channel} className="border-b border-[var(--border)] last:border-0">
                         <td className="whitespace-nowrap px-3 py-2">
-                          <span className="text-[var(--foreground)]">{row.label}</span>
-                          {isPacedChannel(row.channel) && (
-                            <span
-                              className="ml-1.5 text-[10px] text-[var(--muted-foreground)]"
-                              title="Feeds the Ad Pacer when the month is budget-managed"
-                            >
-                              ↗
-                            </span>
-                          )}
+                          <span className="inline-flex items-center gap-2">
+                            <ChannelIcon
+                              channel={row.channel}
+                              className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]"
+                            />
+                            <span className="text-[var(--foreground)]">{row.label}</span>
+                            {isPacedChannel(row.channel) && (
+                              <span
+                                className="text-[10px] text-[var(--muted-foreground)]"
+                                title="Feeds the Ad Pacer when the month is budget-managed"
+                              >
+                                ↗
+                              </span>
+                            )}
+                          </span>
                         </td>
                         {row.months.map((v, i) => {
                           const period = periodOf(year, i + 1);
@@ -393,9 +400,13 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
             {openCell && (
               <div className="mt-3 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4">
                 <div className="mb-2 flex items-center justify-between">
-                  <span className="text-sm font-semibold text-[var(--foreground)]">
+                  <span className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
+                    <ChannelIcon
+                      channel={openCell.channel}
+                      className="h-4 w-4 text-[var(--muted-foreground)]"
+                    />
                     {channelLabel(openCell.channel)} ·{' '}
-                    {MONTH_ABBR[Number(openCell.period.slice(5, 7)) - 1]} {year}
+                    {MONTH_ABBR[monthIndexOf(openCell.period)]} {year}
                   </span>
                   <button
                     type="button"
@@ -644,7 +655,11 @@ function PlanEditor({
                 searchable={false}
                 options={[
                   { value: '', label: 'Unassigned pool' },
-                  ...BUDGET_CHANNELS.map((c) => ({ value: c.key, label: c.label })),
+                  ...BUDGET_CHANNELS.map((c) => ({
+                    value: c.key,
+                    label: c.label,
+                    icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
+                  })),
                 ]}
                 className="!bg-[var(--background)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
               />
@@ -792,7 +807,11 @@ function AddLineButton({
           value={channel}
           onChange={setChannel}
           searchable={false}
-          options={BUDGET_CHANNELS.map((c) => ({ value: c.key, label: c.label }))}
+          options={BUDGET_CHANNELS.map((c) => ({
+            value: c.key,
+            label: c.label,
+            icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
+          }))}
           className="!bg-[var(--background)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
         />
       </div>

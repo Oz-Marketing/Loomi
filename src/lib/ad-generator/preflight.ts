@@ -102,7 +102,18 @@ function baseKey(key: string): string {
  * Keep this list tiny and justified. Every entry weakens a check whose whole
  * purpose is catching holes in unattended output.
  */
-export const OPTIONAL_BINDING_KEYS = ['eventLogoUrl'];
+export const OPTIONAL_BINDING_KEYS = [
+  'eventLogoUrl',
+  /**
+   * The terms line under an offer headline ("36-month lease · $3,999 due at
+   * signing"). `assembleOffer` builds it from whatever the offer supplied, so it's
+   * legitimately empty for an APR programme with no stated term, or a discount with
+   * no MSRP. Treating that as a hole would block ads whose headline is complete and
+   * whose disclaimer carries the detail anyway.
+   */
+  '_offerTerms',
+  '_o2_offerTerms',
+];
 
 /**
  * Element ids visible for `data` in at least one of `sizeIds`, mapped to the

@@ -13,7 +13,10 @@ import { StatusPill } from './budget-status-pill';
 import {
   EDITABLE_STATUSES,
   MONTH_ABBR,
+  bucketLabel,
   monthIndexOf,
+  sourceLabel,
+  statusLabel,
   usd2,
   type BudgetLine,
   type BudgetLineEvent,
@@ -199,7 +202,7 @@ export function BudgetLineDrawer({
               )}
               {line.channel && isPacedChannel(line.channel) && line.period && (
                 <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">
-                  Feeds the Ad Pacer&apos;s <strong>{line.bucket}</strong> budget for{' '}
+                  Feeds the Ad Pacer&apos;s <strong>{bucketLabel(line.bucket)}</strong> budget for{' '}
                   {line.period} when that month is budget-managed.
                 </p>
               )}
@@ -207,8 +210,8 @@ export function BudgetLineDrawer({
 
             {/* Provenance */}
             <div className="space-y-1.5 text-xs">
-              <Row label="Source" value={line.source} />
-              <Row label="Pacer bucket" value={line.bucket} />
+              <Row label="Source" value={sourceLabel(line.source)} />
+              <Row label="Pacer bucket" value={bucketLabel(line.bucket)} />
               {line.taskId && (
                 <div className="flex items-baseline justify-between gap-3">
                   <span className="text-[var(--muted-foreground)]">Ticket</span>
@@ -328,7 +331,7 @@ export function BudgetLineDrawer({
                     value={status}
                     onChange={setStatus}
                     searchable={false}
-                    options={EDITABLE_STATUSES.map((s) => ({ value: s, label: s }))}
+                    options={EDITABLE_STATUSES.map((s) => ({ value: s, label: statusLabel(s) }))}
                     className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-2 !text-sm"
                   />
                 </div>

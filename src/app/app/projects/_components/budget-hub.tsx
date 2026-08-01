@@ -275,8 +275,8 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
                 summary.declaredTotal == null
                   ? 'Add one in Plan to track against'
                   : summary.monthlyRetainer
-                    ? `${usd0(summary.monthlyRetainer)}/mo managed service`
-                    : 'what the client signed up for'
+                    ? `${usd0(summary.monthlyRetainer)}/mo Managed Marketing Service`
+                    : 'What the client signed up for'
               }
             />
             <StatCard
@@ -286,9 +286,9 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
               sub={
                 summary.declaredTotal
                   ? summary.overAllocated
-                    ? `scheduled + pool · ${usd0(Math.abs(summary.unplanned ?? 0))} over plan`
-                    : `scheduled + pool · ${Math.round((summary.totalCommitted / summary.declaredTotal) * 100)}% of plan`
-                  : 'scheduled + pool'
+                    ? `Scheduled + pool · ${usd0(Math.abs(summary.unplanned ?? 0))} over plan`
+                    : `Scheduled + pool · ${Math.round((summary.totalCommitted / summary.declaredTotal) * 100)}% of plan`
+                  : 'Scheduled + pool'
               }
             />
             <StatCard
@@ -296,8 +296,8 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
               value={summary.allocated}
               sub={
                 grid.length > 0
-                  ? `placed across ${grid.length} channel${grid.length === 1 ? '' : 's'}`
-                  : 'nothing placed yet'
+                  ? `Placed across ${grid.length} channel${grid.length === 1 ? '' : 's'}`
+                  : 'Nothing placed yet'
               }
             />
             <StatCard
@@ -306,8 +306,8 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
               tone={summary.pool > 0 ? 'accent' : undefined}
               sub={
                 summary.pool > 0
-                  ? `committed, no channel or month yet`
-                  : 'everything is placed'
+                  ? 'Committed, no channel or month yet'
+                  : 'Everything is placed'
               }
             />
           </div>

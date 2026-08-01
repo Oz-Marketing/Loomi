@@ -1,6 +1,6 @@
 'use client';
 
-import { STATUS_STYLE } from './budget-shared';
+import { STATUS_STYLE, statusLabel } from './budget-shared';
 
 /** A budget line's status as a small pill. Shared by the hub list and drawer. */
 export function StatusPill({ status }: { status: string }) {
@@ -10,7 +10,7 @@ export function StatusPill({ status }: { status: string }) {
         STATUS_STYLE[status] ?? STATUS_STYLE.planned
       }`}
     >
-      {status}
+      {statusLabel(status)}
     </span>
   );
 }

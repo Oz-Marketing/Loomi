@@ -105,10 +105,50 @@ export function monthIndexOf(period: string): number {
 
 export const SOURCE_LABEL: Record<string, string> = {
   retainer: 'Managed Marketing Service',
-  task: 'From a ticket',
-  adhoc: 'Added here',
-  pool: 'Returned to pool',
+  task: 'From a Ticket',
+  adhoc: 'Added Here',
+  pool: 'Returned to Pool',
 };
+
+/**
+ * Display labels for the stored status keys. The keys stay lowercase — they're
+ * identifiers the API and DB agree on — but nothing lowercase should reach the
+ * screen.
+ */
+export const STATUS_LABEL: Record<string, string> = {
+  planned: 'Planned',
+  committed: 'Committed',
+  live: 'Live',
+  settled: 'Settled',
+  canceled: 'Canceled',
+};
+
+export function statusLabel(status: string): string {
+  return STATUS_LABEL[status] ?? titleCase(status);
+}
+
+/** Which Ad Pacer pool a line feeds. Stored as base|added. */
+export const BUCKET_LABEL: Record<string, string> = {
+  base: 'Base',
+  added: 'Added',
+};
+
+export function bucketLabel(bucket: string): string {
+  return BUCKET_LABEL[bucket] ?? titleCase(bucket);
+}
+
+export function sourceLabel(source: string): string {
+  return SOURCE_LABEL[source] ?? titleCase(source);
+}
+
+/** Last-resort fallback so an unmapped key still renders capitalized. */
+export function titleCase(v: string): string {
+  return v
+    .split(/[\s_-]+/)
+    .filter(Boolean)
+    .map((w) => w[0]!.toUpperCase() + w.slice(1))
+    .join(' ');
+}
 
 export const STATUS_STYLE: Record<string, string> = {
   planned: 'bg-[var(--muted)] text-[var(--muted-foreground)]',

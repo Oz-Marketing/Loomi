@@ -233,6 +233,22 @@ export function BudgetLineDrawer({
               )}
             </div>
 
+            {/* Allocate — pool lines only.
+                Distinct from Edit below, which MOVES the whole line. This
+                splits part of it off onto a channel + month and leaves the
+                remainder pooled, which is how a contingency actually gets
+                spent: a piece at a time, as plans firm up. */}
+            {line.isPool && (
+              <AllocateBlock
+                line={line}
+                year={year}
+                onDone={async () => {
+                  await load();
+                  onChanged();
+                }}
+              />
+            )}
+
             {/* Edit */}
             <div className="space-y-3 border-t border-[var(--border)] pt-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
@@ -394,6 +410,178 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex items-baseline justify-between gap-3">
       <span className="text-[var(--muted-foreground)]">{label}</span>
       <span className="text-right text-[var(--foreground)]">{value}</span>
+    </div>
+  );
+}
+
+/**
+ * Split money off a pool line onto a channel + month.
+ *
+ * Deliberately separate from the Edit block: Edit re-places the whole line,
+ * this peels a piece off and leaves the rest pooled. Both are useful and they
+ * are not the same action — collapsing them would mean every partial
+ * allocation started by guessing what the leftover should be.
+ */
+function AllocateBlock({
+  line,
+  year,
+  onDone,
+}: {
+  line: BudgetLine;
+  year: number;
+  onDone: () => Promise<void>;
+}) {
+  const [amount, setAmount] = useState('');
+  const [channel, setChannel] = useState('');
+  const [month, setMonth] = useState('');
+  const [label, setLabel] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const entered = Number(amount);
+  const valid = Number.isFinite(entered) && entered > 0;
+  const remainder = valid ? line.amount - entered : line.amount;
+  const tooMuch = valid && entered > line.amount;
+
+  async function allocate() {
+    if (!valid) {
+      toast.error('Enter an amount to allocate');
+      return;
+    }
+    if (!channel || !month) {
+      toast.error('Pick a channel and a month');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/budget/lines/${line.id}/allocate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          amount: entered,
+          channel,
+          period: periodOf(year, Number(month)),
+          label: label.trim() || null,
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Could not allocate');
+      toast.success(
+        remainder > 0
+          ? `${usd2(entered)} allocated · ${usd2(remainder)} left in the pool`
+          : `${usd2(entered)} allocated · pool line fully drained`,
+      );
+      setAmount('');
+      setLabel('');
+      await onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not allocate');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-[var(--primary)]/30 bg-[var(--primary)]/5 p-3.5">
+      <div>
+        <p className="text-xs font-semibold uppercase tracking-wide text-[var(--foreground)]">
+          Allocate
+        </p>
+        <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
+          Put some of this {usd2(line.amount)} onto a channel and month. Whatever&apos;s left stays
+          in the pool.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <label className="block">
+          <span className="text-xs text-[var(--muted-foreground)]">Amount</span>
+          <input
+            type="number"
+            min="0"
+            step="any"
+            placeholder={String(line.amount)}
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            className="loomi-input mt-1 w-full !bg-[var(--input)]"
+          />
+        </label>
+        <div className="flex items-end">
+          <button
+            type="button"
+            onClick={() => setAmount(String(line.amount))}
+            className="mb-[1px] rounded-lg border border-[var(--border)] px-2.5 py-2 text-xs text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          >
+            All of it
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <span className="text-xs text-[var(--muted-foreground)]">Channel</span>
+          <div className="mt-1">
+            <SearchableSelect
+              value={channel}
+              onChange={setChannel}
+              searchable={false}
+              placeholder="Pick one"
+              options={BUDGET_CHANNELS.map((c) => ({
+                value: c.key,
+                label: c.label,
+                icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
+              }))}
+              className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-2 !text-sm"
+            />
+          </div>
+        </div>
+        <div>
+          <span className="text-xs text-[var(--muted-foreground)]">Month</span>
+          <div className="mt-1">
+            <SearchableSelect
+              value={month}
+              onChange={setMonth}
+              searchable={false}
+              placeholder="Pick one"
+              options={MONTH_ABBR.map((m: string, i: number) => ({
+                value: String(i + 1),
+                label: m,
+              }))}
+              className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-2 !text-sm"
+            />
+          </div>
+        </div>
+      </div>
+
+      <input
+        type="text"
+        placeholder="Label for the new line (optional)"
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        className="loomi-input w-full !bg-[var(--input)]"
+      />
+
+      {/* State the outcome before they commit to it — a split is two rows
+          afterwards, and "where did my $15k go" is the confusing version. */}
+      {valid && (
+        <p
+          className={`text-[11px] ${tooMuch ? 'font-medium text-amber-600' : 'text-[var(--muted-foreground)]'}`}
+        >
+          {tooMuch
+            ? `That's more than this line holds (${usd2(line.amount)}).`
+            : remainder > 0
+              ? `Leaves ${usd2(remainder)} in the pool.`
+              : 'Uses the whole line — nothing left in the pool.'}
+        </p>
+      )}
+
+      <button
+        type="button"
+        disabled={busy || !valid || tooMuch || !channel || !month}
+        onClick={() => void allocate()}
+        className="w-full rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+      >
+        {busy ? 'Allocating…' : 'Allocate'}
+      </button>
     </div>
   );
 }

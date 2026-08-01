@@ -149,13 +149,14 @@ carrying the five good ideas.
 
 ### Models
 
-Three models, in [`prisma/schema.prisma`](../prisma/schema.prisma) — the schema
+Four models, in [`prisma/schema.prisma`](../prisma/schema.prisma) — the schema
 is the source of truth and carries the full field-by-field commentary; this is
 the shape and the reasoning.
 
 | Model | Role |
 |---|---|
-| `BudgetPlan` | One row per account per year. The declared annual commitment + monthly retainer + optional markup override. Thin: it's what lines are checked *against*, not where the money lives. |
+| `ClientAgreement` | **What the client signed**, with real term dates. Total commitment + optional markup override. A year's target is *derived* from the term, not stored per year. Replaced the year-keyed `BudgetPlan` in Phase B — see §9. |
+| `AgreementFee` | A recurring monthly charge inside a term, on a specific channel. Replaced `BudgetPlan.monthlyRetainer`, which was one unnamed number with no channel. |
 | `BudgetLine` | **The ledger.** Every media dollar is one row. |
 | `BudgetLineEvent` | Typed, queryable audit. Replaces both `rep_notes` string concatenation and the separate `logBudgetMove` table. |
 
@@ -165,8 +166,11 @@ the shape and the reasoning.
   (oz-reports' `account_id` / `spend_account_id`). Equal in the ordinary case.
   The pacer rollup keys off `spendAccountKey`; billing keys off `accountKey`.
 - **`year`** — always set, *including on pool lines*. A pool line has no period,
-  so nothing else anchors it to a `BudgetPlan`. When `period` is set the two
+  so nothing else anchors it to a calendar year. When `period` is set the two
   must agree; `resolveYear` enforces it on every write.
+- **`agreementId`** — which agreement this money draws against, when it draws
+  against one. Nullable: plenty of spend is ad-hoc, and every line imported from
+  Oz Reports predates the concept.
 - **`period` + `channel`** — the two allocation axes. Both null = still in the
   pool. (oz-reports overloaded `for_month = 0`; nullable columns say it
   honestly and keep the index story clean.)
@@ -278,25 +282,32 @@ taking manual control of one month doesn't affect Google or any other month.
 | **3 — Pacer binding** | `syncPeriodBudgetFromLines` writes the goal pair; per-platform opt-in; UI locks + unmanage; save route guarded | **Built** |
 | **3b — Distribute to ads** | "Spread the remaining across N unallocated ads" on the pacer's Base/Added cards (the `adset_allocations` equivalent, both platforms) | **Built** |
 | **4 — Settlement** | Closed months settle from synced spend on the daily scan; non-platform by hand | **Built** |
+| **A — Line type + cost** | `lineType` on every line and channel; `cost` for resold services; margin per line type in the hub | **Built** |
+| **B — Agreements** | `ClientAgreement` + `AgreementFee` with real term dates; year targets pro-rated from the term | **Built** |
+| **C — Flight dates** | Start/end on a media line, with the monthly split derived rather than typed | Next |
 
 ### What exists
 
 | File | What |
 |---|---|
-| [`prisma/schema.prisma`](../prisma/schema.prisma) | `BudgetPlan`, `BudgetLine`, `BudgetLineEvent` + relations |
+| [`prisma/schema.prisma`](../prisma/schema.prisma) | `ClientAgreement`, `AgreementFee`, `BudgetLine`, `BudgetLineEvent` + relations |
 | [`src/lib/budget/channels.ts`](../src/lib/budget/channels.ts) | The channel registry + pacer-platform mapping |
 | [`src/lib/budget/period.ts`](../src/lib/budget/period.ts) | Period helpers + `resolveYear` (the year/period invariant). Prisma-free so routes can validate without pulling in a DB client |
-| [`src/lib/services/budget.ts`](../src/lib/services/budget.ts) | Create / allocate / return-to-pool / settle, rollups, `getPacerBudgetGoals`, retainer generation |
-| `src/app/api/budget/*` | `summary`, `plan` (+`?generate=true`), `lines`, `lines/[id]`, `lines/[id]/allocate`, `lines/[id]/settle`, `settle-period` |
+| [`src/lib/budget/term.ts`](../src/lib/budget/term.ts) | Agreement term arithmetic — `termMonths`, `monthsInYear`, `commitmentForYear`. Prisma-free, so the pro-rating that decides a client's target is unit-tested without a database |
+| [`src/lib/services/budget.ts`](../src/lib/services/budget.ts) | Agreement CRUD, create / allocate / return-to-pool / settle, rollups, `getPacerBudgetGoals`, fee-line generation |
+| `src/app/api/budget/*` | `summary`, `agreements`, `agreements/[id]` (+`?generate=YYYY`), `lines`, `lines/[id]`, `lines/[id]/allocate`, `lines/[id]/settle`, `settle-period` |
 | [`src/lib/budget/settlement.ts`](../src/lib/budget/settlement.ts) | Attribution math — exact-summing largest-remainder split, variance, attainment |
-| `src/app/app/projects/budget` + `_components/budget-*` | The hub, plan modal, add-line modal, line drawer |
+| `src/app/app/projects/budget` + `_components/budget-*` | The hub, agreement modal, add-line modal, line drawer |
 | `api/meta-ads-pacer/[k]/budget-managed` | GET state / POST manage-unmanage, per platform |
 | [`src/lib/projects/ui.ts`](../src/lib/projects/ui.ts) | `KIND_BUDGET_CHANNELS` — which channels each task Type can spend on |
 | `createTicket` in [`services/projects.ts`](../src/lib/services/projects.ts) | Turns a ticket's requested budget into lines |
+| [`scripts/migrate-budget-plans-to-agreements.ts`](../scripts/migrate-budget-plans-to-agreements.ts) | Deploy precursor: carries `BudgetPlan` rows into agreements and drops the table, because `db push` runs without `--accept-data-loss` and would otherwise fail the whole push |
 
-Tests: `budget/period.test.ts` + `budget/channels.test.ts` run always;
-`services/budget.db.test.ts` (33 cases — ledger arithmetic plus the pacer
-binding) self-skips unless `RUN_DB_TESTS=1`, matching `loomi-flows.db.test.ts`.
+Tests: `budget/period.test.ts`, `budget/channels.test.ts`, `budget/term.test.ts`
+and `budget/settlement.test.ts` run always (55 cases);
+`services/budget.db.test.ts` (56 cases — ledger arithmetic, agreements, the
+pacer binding, settlement) self-skips unless `RUN_DB_TESTS=1`, matching
+`loomi-flows.db.test.ts`.
 
 ### Settlement as built
 
@@ -495,7 +506,7 @@ their dollar weight.
 
 **Settled:**
 
-- **Per-channel markup.** `resolveMarkup` walks `BudgetPlan.defaultMarkup` →
+- **Per-channel markup.** `resolveMarkup` walks `ClientAgreement.defaultMarkup` →
   `Account.markup` → agency default, and any line can carry a hand-entered
   `markup` override (a radio buy whose margin differs from the account's digital
   rate). Because the factor is snapshotted per line, a `BudgetChannelMarkup`
@@ -524,6 +535,96 @@ their dollar weight.
   TikTok and KSL, which have no budget channel. They're dropped from the budget
   block (a Type's channels come from `KIND_BUDGET_CHANNELS`); if those become
   real spend channels they need registry entries.
+
+---
+
+## 9. The agreement layer (Phase B)
+
+### Why the year-keyed plan had to go
+
+`BudgetPlan` was one row per account per calendar year: a declared total, a
+monthly retainer, an optional markup. It came straight from Oz Reports, where
+budgeting *is* a calendar year, and it was wrong in a way that only shows up
+once real contracts are in the system:
+
+- **Almost nobody signs a January–December agreement.** A term starting in April
+  belongs to two calendar years. Under a year-keyed plan it either got filed
+  under one year and understated the other, or got split into two plans nobody
+  kept in sync. Neither reconciles against anything.
+- **One unnamed retainer number.** `monthlyRetainer` had no channel, so
+  generating lines from it needed the user to pick a channel *at generation
+  time* — a decision that belongs to the agreement, not to a button. Clients
+  with two recurring fees (a managed-service fee and a separate management fee,
+  which is common) couldn't be modelled at all.
+- **No renewal.** A plan replaced last year's plan. There was no way to hold a
+  signed renewal alongside the term it renews, which is exactly when someone
+  wants to look at both.
+
+Every commercial platform that does this — the agency-management tools this is
+being measured against — models the *contract*, not the fiscal year, and derives
+periods from it. That's the change.
+
+### The model
+
+| | |
+|---|---|
+| `ClientAgreement` | `startDate` / `endDate` as real dates, a total `committedAmount` for the whole term, `status`, an optional `defaultMarkup`, `archivedAt` |
+| `AgreementFee` | Zero or more recurring monthly charges, each on a **specific channel** |
+| `BudgetLine.agreementId` | Which agreement a line draws against. Nullable — ad-hoc spend and every Oz Reports import have none |
+
+A year's target is **derived**, never stored:
+`commitmentForYear = committedAmount × monthsInYear / termMonths`.
+
+**Pro-rated by months, not days.** Budget is planned, spent and billed monthly,
+so a term starting on 17 March is a March month. Counting 15/31 of it would
+produce a year target that reconciles against nothing, because the ledger
+underneath it only ever contains whole months. The arithmetic lives in
+[`src/lib/budget/term.ts`](../src/lib/budget/term.ts), Prisma-free, and the
+property that matters is pinned by test: **a term's yearly shares sum back to
+the whole commitment.** If they didn't, a year of someone's money would vanish
+at the calendar boundary.
+
+`getAccountSummary`'s `declaredTotal` is now the sum of every active agreement's
+share of the year, and stays `null` — not `0` — when no agreement carries a
+committed figure. Null means "we haven't been told"; zero would read as "they
+committed nothing" and put every account instantly over budget.
+
+### Laying out the year
+
+`generateAgreementFeeLines(agreementId, year)` creates one line per fee per
+month **of the term that falls in that year** — nine lines for an April–March
+term in its first year, three in its second. It skips
+`(channel, period)` pairs that already exist, so it's safe to re-run; that's the
+same idempotency rule the retainer generator had, now keyed on the agreement.
+
+### Migration
+
+Existing plans were carried across, not dropped: each became an agreement
+spanning Jan 1 – Dec 31 of its year (which is exactly what the row meant), and a
+`monthlyRetainer` became an `AgreementFee` on `managed_marketing_services` —
+what that money almost always was.
+
+This runs as a **deploy precursor**
+([`scripts/migrate-budget-plans-to-agreements.ts`](../scripts/migrate-budget-plans-to-agreements.ts)),
+before `db push`, for the same reason
+`ensure-budgetline-external-id-unique` exists: `db push` runs without
+`--accept-data-loss` and refuses to drop a table with rows in it, failing the
+*entire* push so the new columns never land either. Verified by reproducing the
+pre-Phase-B schema locally — `db push` alone errors with
+"about to drop the `BudgetPlan` table, which is not empty (2 rows)"; with the
+precursor it migrates both rows and pushes clean. Adding `--accept-data-loss`
+to the deploy would have fixed it once and then silently dropped columns on
+every future schema change.
+
+### Still to do
+
+- **The 1,464 unclassified lines / $963k** from the Oz Reports import still need
+  a human pass; `lineType` can't be guessed from names like "Group Sale".
+- **Phase C — flight dates.** A media line still carries a period, not a
+  start/end. Deriving the monthly split from a flight is what makes a buy that
+  runs 20 March – 10 May a single line instead of three.
+- Agreements are not yet **auto-attached** to lines created from intake. A
+  ticket's budget lands unlinked; the agreement link is set explicitly today.
 
 ---
 

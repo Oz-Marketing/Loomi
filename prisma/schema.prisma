@@ -250,7 +250,7 @@ model Account {
   campaigns                Campaign[]
   initiatives              Initiative[]
   tasks                    Task[]
-  budgetPlans              BudgetPlan[]
+  clientAgreements         ClientAgreement[]
   budgetLinesBilled        BudgetLine[]                 @relation("BudgetLineBilled")
   budgetLinesSpend         BudgetLine[]                 @relation("BudgetLineSpend")
 
@@ -3176,32 +3176,79 @@ model TaskActivity {
 // budget owns intent, the pacer owns execution, and the pacer never writes
 // back. Actuals come back for display and settlement only.
 
-/// A client's declared budget commitment for one year — the "high level" the
-/// budget hub renders against. Thin by design: the authoritative money is the
-/// sum of BudgetLines, and this is what they're checked AGAINST, so "declared
-/// $120k, laid out $104k, $16k still in pool" is one query. `defaultMarkup`
-/// seeds each new line's markupSnapshot when the account has no better rule.
-model BudgetPlan {
-  id              String   @id @default(cuid())
-  accountKey      String
-  account         Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
-  year            Int
-  // Declared annual client gross. Null = no formal commitment; the account
-  // runs off ad-hoc lines only (valid — the hub just shows no target bar).
-  declaredTotal   Decimal? @db.Decimal(12, 2)
-  // Recurring monthly retainer, when the client is on one. The "generate 12
-  // months" action stamps lines from this under a shared batchId.
-  monthlyRetainer Decimal? @db.Decimal(12, 2)
-  // Account-level markup override for budget lines. null → Account.markup →
-  // agency default (resolved via accountMarginSetting, same as the pacer).
-  defaultMarkup   Float?
-  notes           String?  @db.Text
-  createdByUserId String?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+/// What a client actually signed up for — the commitment budget draws down
+/// against (docs/budget-module.md §9, Phase B).
+///
+/// Replaces the year-keyed BudgetPlan. Agreements don't respect calendar
+/// years: a term running Mar 2026 – Feb 2027 can't be expressed as a row per
+/// year, and forcing it to be is how "planned vs committed" stops meaning
+/// anything. So the term is real dates, and a year's share is derived by
+/// counting the months of the term that fall inside it.
+///
+/// Oz Reports has no equivalent — there the lines ARE the budget, with nothing
+/// to reconcile against and no way to catch a rep committing past what a client
+/// agreed to. That gap is the whole reason this model exists.
+model ClientAgreement {
+  id         String  @id @default(cuid())
+  accountKey String
+  account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
 
-  @@unique([accountKey, year])
-  @@index([year])
+  /// Human label — "2026 Annual Agreement", "Summer Event Addendum".
+  name String
+
+  /// The term. Inclusive of both ends, date-only (no time-of-day semantics).
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+
+  /// Total the client committed across the WHOLE term, not per year. Null =
+  /// no formal number; the hub then shows no target rather than inventing one.
+  committedAmount Decimal? @db.Decimal(12, 2)
+
+  /// draft | active | completed | cancelled. Only `active` counts toward a
+  /// year's commitment — a draft shouldn't move the number a rep budgets
+  /// against.
+  status String @default("active")
+
+  /// Markup override for lines created under this agreement. Supersedes
+  /// Account.markup; still snapshotted per line, so changing it never rewrites
+  /// money already committed.
+  defaultMarkup Float?
+
+  notes           String?   @db.Text
+  createdByUserId String?
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  fees  AgreementFee[]
+  lines BudgetLine[]
+
+  @@index([accountKey, status])
+  @@index([accountKey, startDate, endDate])
+  @@index([archivedAt])
+}
+
+/// A recurring monthly charge under an agreement — the management fee, the
+/// managed-service fee, a contribution.
+///
+/// Separate rows rather than one `monthlyRetainer` number because a client
+/// typically pays several distinct fees that land on different channels and
+/// need to stay distinguishable in the P&L. Generating budget lines from these
+/// is what replaces the old single-channel retainer generator.
+model AgreementFee {
+  id          String          @id @default(cuid())
+  agreementId String
+  agreement   ClientAgreement @relation(fields: [agreementId], references: [id], onDelete: Cascade)
+
+  /// BudgetChannel key the generated lines land on (management_fee, etc).
+  channel       String
+  monthlyAmount Decimal @db.Decimal(12, 2)
+  label         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([agreementId])
 }
 
 /// The ledger. Every dollar of media budget in the agency is one row.
@@ -3283,6 +3330,13 @@ model BudgetLine {
   // need exceptions and a derived value gives them nowhere to put one.
   bucket String @default("added") // "base" | "added"
 
+  // The agreement this line draws down against, when there is one. Nullable:
+  // plenty of budget is entered ad hoc with no signed commitment behind it, and
+  // forcing a fake agreement to satisfy a FK would corrupt the very number the
+  // agreement exists to provide.
+  agreementId String?
+  agreement   ClientAgreement? @relation(fields: [agreementId], references: [id], onDelete: SetNull)
+
   // The link oz-reports never had.
   initiativeId String?
   initiative   Initiative? @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
@@ -3322,6 +3376,7 @@ model BudgetLine {
 
   @@index([accountKey, year])
   @@index([accountKey, lineType])
+  @@index([agreementId])
   @@index([accountKey, period])
   @@index([spendAccountKey, period, channel])
   @@index([accountKey, status])

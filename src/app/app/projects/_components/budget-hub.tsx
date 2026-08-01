@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  AdjustmentsHorizontalIcon,
+  DocumentTextIcon,
   BanknotesIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -23,7 +23,7 @@ import { periodOf } from '@/lib/budget/period';
 import { useAccount } from '@/contexts/account-context';
 import { jsonFetcher } from './fetcher';
 import { BudgetLineDrawer } from './budget-line-drawer';
-import { BudgetPlanModal } from './budget-plan-modal';
+import { BudgetAgreementModal } from './budget-agreement-modal';
 import { BudgetAddLineModal } from './budget-add-line-modal';
 import { StatusPill } from './budget-status-pill';
 import {
@@ -34,7 +34,7 @@ import {
   usd0,
   usd2,
   type BudgetLine,
-  type BudgetPlan as Plan,
+  type BudgetAgreement as Agreement,
   type BudgetSummary as Summary,
 } from './budget-shared';
 
@@ -46,12 +46,12 @@ export function BudgetHub() {
   const [year, setYear] = useState(() => new Date().getFullYear());
 
   const [summary, setSummary] = useState<Summary | null>(null);
-  const [plan, setPlan] = useState<Plan | null>(null);
+  const [agreements, setAgreements] = useState<Agreement[]>([]);
   const [lines, setLines] = useState<BudgetLine[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
-  const [planOpen, setPlanOpen] = useState(false);
+  const [agreementsOpen, setAgreementsOpen] = useState(false);
   // The cell (channel × period) whose lines are being inspected, or 'pool'.
   const [openCell, setOpenCell] = useState<{ channel: string; period: string } | null>(null);
   const [poolOpen, setPoolOpen] = useState(false);
@@ -66,11 +66,11 @@ export function BudgetHub() {
       const q = `accountKey=${encodeURIComponent(accountKey)}&year=${year}`;
       const [s, p, l] = await Promise.all([
         jsonFetcher(`/api/budget/summary?${q}`),
-        jsonFetcher(`/api/budget/plan?${q}`),
+        jsonFetcher(`/api/budget/agreements?${q}`),
         jsonFetcher(`/api/budget/lines?${q}`),
       ]);
       setSummary(s.summary);
-      setPlan(p.plan);
+      setAgreements(p.agreements ?? []);
       setLines(l.lines);
     } catch {
       setLoadError(true);
@@ -139,6 +139,26 @@ export function BudgetHub() {
     return placed.filter((l) => l.channel === openCell.channel && l.period === openCell.period);
   }, [openCell, placed]);
 
+  /**
+   * The sub-line under "Committed by Agreement". A term that only partly
+   * overlaps the year is the case worth explaining — the card's number is that
+   * term's SHARE of the year, and without saying so it looks like the contract
+   * value is wrong.
+   */
+  const agreementSub = useMemo(() => {
+    if (agreements.length === 0) return 'Add an agreement to track against';
+    if (summary?.declaredTotal == null) return 'No commitment set on the agreement';
+    const fees = agreements.reduce((t, a) => t + a.monthlyFeeTotal, 0);
+    const partial = agreements.filter((a) => a.monthsInYear != null && a.monthsInYear < a.termMonths);
+    if (partial.length > 0) {
+      return agreements.length === 1
+        ? `${partial[0].monthsInYear} of ${partial[0].termMonths} months of the term fall in ${year}`
+        : `Pro-rated share of ${agreements.length} agreements`;
+    }
+    if (fees > 0) return `${usd0(fees)}/mo recurring`;
+    return agreements.length === 1 ? 'What the client signed up for' : `Across ${agreements.length} agreements`;
+  }, [agreements, summary?.declaredTotal, year]);
+
   const yearOptions = useMemo(() => {
     const now = new Date().getFullYear();
     return [now - 1, now, now + 1].map((y) => ({ value: String(y), label: String(y) }));
@@ -146,28 +166,55 @@ export function BudgetHub() {
 
   // ── Mutations ──
 
-  async function savePlan(body: Record<string, unknown>, generate = false) {
+  /** Create or update an agreement. Returns whether it stuck, so the modal
+   *  knows not to close over an error. */
+  async function saveAgreement(body: Record<string, unknown>, id: string | null) {
     try {
-      const res = await fetch(`/api/budget/plan${generate ? '?generate=true' : ''}`, {
-        method: 'PUT',
+      const res = await fetch(id ? `/api/budget/agreements/${id}` : '/api/budget/agreements', {
+        method: id ? 'PATCH' : 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ accountKey, year, ...body }),
+        body: JSON.stringify({ accountKey, ...body }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || 'Could not save the plan');
-      if (generate) {
-        const n = data?.generated?.length ?? 0;
-        toast.success(
-          n > 0
-            ? `Created ${n} retainer month${n === 1 ? '' : 's'}`
-            : 'Every month already has a retainer line',
-        );
-      } else {
-        toast.success('Budget plan saved');
-      }
+      if (!res.ok) throw new Error(data?.error || 'Could not save the agreement');
+      toast.success(id ? 'Agreement saved' : 'Agreement created');
+      await reload();
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save the agreement');
+      return false;
+    }
+  }
+
+  async function generateFees(id: string) {
+    try {
+      const res = await fetch(`/api/budget/agreements/${id}?generate=${year}`, { method: 'POST' });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Could not lay out the year');
+      const n = data?.generated?.length ?? 0;
+      toast.success(
+        n > 0
+          ? `Created ${n} fee line${n === 1 ? '' : 's'}`
+          : 'Every month already has its fee lines',
+      );
       await reload();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save the plan');
+      toast.error(err instanceof Error ? err.message : 'Could not lay out the year');
+    }
+  }
+
+  async function archiveAgreement(id: string) {
+    try {
+      const res = await fetch(`/api/budget/agreements/${id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Could not archive the agreement');
+      // Lines keep their money — archiving ends the commitment, it doesn't
+      // unwind what's already been budgeted against it.
+      toast.success('Agreement archived · its budget lines are untouched');
+      await reload();
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not archive the agreement');
+      return false;
     }
   }
 
@@ -215,7 +262,7 @@ export function BudgetHub() {
       {/* ── Identity + controls ──
           The account is the subject of this page, so it leads: a real-size
           logo and the dealer name, with Budget/year as the context line. The
-          pickers and Plan sit opposite as controls, not as page identity. */}
+          pickers and Agreement sit opposite as controls, not page identity. */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3.5">
           <AccountAvatar
@@ -257,11 +304,11 @@ export function BudgetHub() {
           <button
             type="button"
             disabled={!accountKey}
-            onClick={() => setPlanOpen(true)}
+            onClick={() => setAgreementsOpen(true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50"
           >
-            <AdjustmentsHorizontalIcon className="h-4 w-4" />
-            Plan
+            <DocumentTextIcon className="h-4 w-4" />
+            {agreements.length > 1 ? `Agreements · ${agreements.length}` : 'Agreement'}
           </button>
         </div>
       </div>
@@ -287,16 +334,10 @@ export function BudgetHub() {
               sentence rather than four unrelated figures. */}
           <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatCard
-              label="Planned for the year"
+              label="Committed by Agreement"
               value={summary.declaredTotal}
               empty="Not set"
-              sub={
-                summary.declaredTotal == null
-                  ? 'Add one in Plan to track against'
-                  : summary.monthlyRetainer
-                    ? `${usd0(summary.monthlyRetainer)}/mo Managed Marketing Service`
-                    : 'What the client signed up for'
-              }
+              sub={agreementSub}
             />
             <StatCard
               label="Committed"
@@ -436,17 +477,16 @@ export function BudgetHub() {
                   Nothing scheduled for {year}
                 </p>
                 <p className="mx-auto mt-1 max-w-md text-sm text-[var(--muted-foreground)]">
-                  Set a monthly Managed Marketing Service amount in Plan to lay out the year, or
-                  add a one-off line. Budget also lands here on its own when a rep files a funded
-                  ticket.
+                  Add recurring fees to the client&rsquo;s agreement and lay out the year, or add a
+                  one-off line. Budget also lands here on its own when a rep files a funded ticket.
                 </p>
                 <button
                   type="button"
-                  onClick={() => setPlanOpen(true)}
+                  onClick={() => setAgreementsOpen(true)}
                   className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--foreground)] transition hover:bg-[var(--muted)]"
                 >
-                  <AdjustmentsHorizontalIcon className="h-4 w-4" />
-                  Open Plan
+                  <DocumentTextIcon className="h-4 w-4" />
+                  {agreements.length > 0 ? 'Open Agreement' : 'Add an Agreement'}
                 </button>
               </div>
             ) : (
@@ -631,13 +671,15 @@ export function BudgetHub() {
         </>
       )}
 
-      {planOpen && accountKey && (
-        <BudgetPlanModal
+      {agreementsOpen && accountKey && (
+        <BudgetAgreementModal
           year={year}
           accountName={accountData?.dealer ?? accountKey}
-          plan={plan}
-          onSave={savePlan}
-          onClose={() => setPlanOpen(false)}
+          agreements={agreements}
+          onSave={saveAgreement}
+          onArchive={archiveAgreement}
+          onGenerate={generateFees}
+          onClose={() => setAgreementsOpen(false)}
         />
       )}
 

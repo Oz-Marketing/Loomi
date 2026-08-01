@@ -22,6 +22,17 @@ const YEAR = 2031; // far future — can't collide with real data
 
 const toN = (d: unknown) => Number(d);
 
+/** A full-calendar-year agreement, which is what most tests want. */
+function agreement(accountKey: string, over: Partial<budget.AgreementInput> = {}) {
+  return budget.createAgreement({
+    accountKey,
+    name: 'Vitest Agreement',
+    startDate: `${YEAR}-01-01`,
+    endDate: `${YEAR}-12-31`,
+    ...over,
+  });
+}
+
 describe.skipIf(!RUN)('budget ledger — DB integration', () => {
   beforeAll(async () => {
     await prisma.account.deleteMany({ where: { key: { startsWith: PREFIX } } });
@@ -40,7 +51,7 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
   beforeEach(async () => {
     // Lines cascade from the account, but each test wants a clean year.
     await prisma.budgetLine.deleteMany({ where: { accountKey: { startsWith: PREFIX } } });
-    await prisma.budgetPlan.deleteMany({ where: { accountKey: { startsWith: PREFIX } } });
+    await prisma.clientAgreement.deleteMany({ where: { accountKey: { startsWith: PREFIX } } });
     // Pacer plans too — the Phase 3 tests set managedByBudget, and a leaked
     // flag would make an earlier test's state decide a later one's result.
     await prisma.metaAdsPacerPlan.deleteMany({
@@ -82,8 +93,8 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     expect(line.markupSnapshot).toBe(0.9);
   });
 
-  it('prefers the plan default over the account rate', async () => {
-    await budget.upsertPlan({ accountKey: acctA, year: YEAR, defaultMarkup: 0.7 });
+  it('prefers the agreement default over the account rate', async () => {
+    await agreement(acctA, { defaultMarkup: 0.7 });
     const line = await budget.createLine(
       { accountKey: acctA, period: `${YEAR}-03`, channel: 'meta', amount: 1000 },
       null,
@@ -127,7 +138,7 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
   // ── Summary math ──
 
   it('separates allocated from pool and flags over-allocation', async () => {
-    await budget.upsertPlan({ accountKey: acctA, year: YEAR, declaredTotal: 10_000 });
+    await agreement(acctA, { committedAmount: 10_000 });
     await budget.createLines(
       [
         { accountKey: acctA, period: `${YEAR}-01`, channel: 'meta', amount: 3000, status: 'committed' },
@@ -360,24 +371,56 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
 
   // ── Retainer generation ──
 
-  it('generates twelve retainer months and is safe to re-run', async () => {
-    await budget.upsertPlan({ accountKey: acctA, year: YEAR, monthlyRetainer: 2500 });
-    const first = await budget.generateRetainerLines(acctA, YEAR, { channel: 'meta' }, null);
+  it('generates twelve fee months and is safe to re-run', async () => {
+    const a = await agreement(acctA, {
+      fees: [{ channel: 'managed_marketing_services', monthlyAmount: 2500 }],
+    });
+    const first = await budget.generateAgreementFeeLines(a.id, YEAR, null);
     expect(first).toHaveLength(12);
     expect(first.every((l) => l.bucket === 'base')).toBe(true);
 
     // Re-running must not double anyone's budget.
-    const second = await budget.generateRetainerLines(acctA, YEAR, { channel: 'meta' }, null);
+    const second = await budget.generateAgreementFeeLines(a.id, YEAR, null);
     expect(second).toHaveLength(0);
 
     const s = await budget.getAccountSummary(acctA, YEAR);
     expect(s.totalCommitted).toBe(30_000);
   });
 
-  it('refuses to generate without a retainer set', async () => {
-    await budget.upsertPlan({ accountKey: acctA, year: YEAR, declaredTotal: 1000 });
-    await expect(budget.generateRetainerLines(acctA, YEAR, {}, null)).rejects.toThrow(
-      /monthly retainer/,
+  it('generates one line per fee per month, across every fee', async () => {
+    const a = await agreement(acctA, {
+      fees: [
+        { channel: 'managed_marketing_services', monthlyAmount: 2000 },
+        { channel: 'management_fee', monthlyAmount: 500 },
+      ],
+    });
+    const lines = await budget.generateAgreementFeeLines(a.id, YEAR, null);
+    expect(lines).toHaveLength(24);
+    expect(lines.filter((l) => l.channel === 'management_fee')).toHaveLength(12);
+    expect((await budget.getAccountSummary(acctA, YEAR)).totalCommitted).toBe(30_000);
+  });
+
+  it('lays out only the months of the year the term actually covers', async () => {
+    // An Apr-to-Mar term touches 9 months of YEAR and 3 of the next. Laying out
+    // 12 in either year would invent money outside the contract.
+    const a = await agreement(acctA, {
+      startDate: `${YEAR}-04-01`,
+      endDate: `${YEAR + 1}-03-31`,
+      fees: [{ channel: 'management_fee', monthlyAmount: 1000 }],
+    });
+    const thisYear = await budget.generateAgreementFeeLines(a.id, YEAR, null);
+    expect(thisYear).toHaveLength(9);
+    expect(thisYear[0].period).toBe(`${YEAR}-04`);
+
+    const nextYear = await budget.generateAgreementFeeLines(a.id, YEAR + 1, null);
+    expect(nextYear).toHaveLength(3);
+    expect(nextYear.at(-1)!.period).toBe(`${YEAR + 1}-03`);
+  });
+
+  it('refuses to generate for an agreement with no fees', async () => {
+    const a = await agreement(acctA, { committedAmount: 1000 });
+    await expect(budget.generateAgreementFeeLines(a.id, YEAR, null)).rejects.toThrow(
+      /no recurring fees/,
     );
   });
 

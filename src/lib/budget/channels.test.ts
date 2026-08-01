@@ -134,6 +134,7 @@ describe('server-safety', () => {
       'src/lib/budget/channels.ts',
       'src/lib/budget/period.ts',
       'src/lib/budget/settlement.ts',
+      'src/lib/budget/term.ts',
       'src/lib/services/budget.ts',
     ]) {
       const first = readFileSync(f, 'utf8').trimStart().slice(0, 20);

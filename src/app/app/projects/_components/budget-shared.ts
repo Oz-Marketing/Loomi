@@ -69,13 +69,33 @@ export type BudgetSummary = {
   uncostedAmount: number;
 };
 
-export type BudgetPlan = {
+export type AgreementFee = {
+  id?: string;
+  channel: string;
+  monthlyAmount: number;
+  label: string | null;
+};
+
+/**
+ * What the client signed, with real term dates. A term can straddle the new
+ * year, so `commitmentForYear` is its pro-rated share of the year being viewed
+ * — not the whole contract value.
+ */
+export type BudgetAgreement = {
+  id: string;
   accountKey: string;
-  year: number;
-  declaredTotal: number;
-  monthlyRetainer: number;
+  name: string;
+  startDate: string;
+  endDate: string;
+  committedAmount: number | null;
+  status: string;
   defaultMarkup: number | null;
   notes: string | null;
+  termMonths: number;
+  monthsInYear: number | null;
+  commitmentForYear: number | null;
+  monthlyFeeTotal: number;
+  fees: AgreementFee[];
 };
 
 export type BudgetLineEvent = {

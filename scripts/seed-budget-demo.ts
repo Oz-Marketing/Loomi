@@ -48,7 +48,7 @@ async function clear(): Promise<void> {
   const { count: lines } = await prisma.budgetLine.deleteMany({
     where: { OR: [{ accountKey: { in: keys } }, { spendAccountKey: { in: keys } }] },
   });
-  const { count: plans } = await prisma.budgetPlan.deleteMany({
+  const { count: plans } = await prisma.clientAgreement.deleteMany({
     where: { accountKey: { in: keys } },
   });
   // Only the tickets this script created — matched on the marker in their
@@ -75,7 +75,7 @@ async function clear(): Promise<void> {
   });
   if (ads) console.log(`cleared ${ads} demo pacer ads`);
   console.log(
-    `cleared: ${lines} lines, ${plans} plans, ${tasks} tasks, ${inits} initiatives`,
+    `cleared: ${lines} lines, ${plans} agreements, ${tasks} tasks, ${inits} initiatives`,
   );
 }
 
@@ -113,13 +113,22 @@ async function seedMain(userId: string | null): Promise<void> {
   // $18k/mo standing budget against $290k declared — the retainer plus the
   // year's add-ons and the contingency pool still leave headroom, so this
   // account reads healthy next to demoAccount002's over-allocation.
-  await budget.upsertPlan({
-    accountKey: key,
-    year: YEAR,
-    declaredTotal: 290_000,
-    monthlyRetainer: 18_000,
+  // A full-calendar-year agreement with two recurring fees — the shape most
+  // clients are on.
+  await budget.createAgreement(
+    {
+      accountKey: key,
+      name: `${YEAR} Annual Agreement`,
+      startDate: `${YEAR}-01-01`,
+      endDate: `${YEAR}-12-31`,
+      committedAmount: 290_000,
+      fees: [
+        { channel: 'managed_marketing_services', monthlyAmount: 4_000, label: 'Managed service' },
+        { channel: 'management_fee', monthlyAmount: 1_500, label: 'Management fee' },
+      ],
+    },
     userId,
-  });
+  );
 
   // The retainer, split across the two paced channels rather than one lump —
   // this is what a real digital retainer looks like on the grid.
@@ -243,13 +252,19 @@ async function seedMain(userId: string | null): Promise<void> {
 async function seedOver(userId: string | null): Promise<void> {
   const key = ACCOUNTS.over;
 
-  await budget.upsertPlan({
-    accountKey: key,
-    year: YEAR,
-    declaredTotal: 60_000,
-    monthlyRetainer: 5_000,
+  // Deliberately a MID-YEAR term, so the hub has to pro-rate: 9 of 12 months
+  // fall in YEAR, so its share of the $80k commitment is $60k.
+  await budget.createAgreement(
+    {
+      accountKey: key,
+      name: 'Apr–Mar Agreement',
+      startDate: `${YEAR}-04-01`,
+      endDate: `${YEAR + 1}-03-31`,
+      committedAmount: 80_000,
+      fees: [{ channel: 'management_fee', monthlyAmount: 1_000 }],
+    },
     userId,
-  });
+  );
 
   await budget.createLines(
     Array.from({ length: 12 }, (_, i) => ({
@@ -289,7 +304,16 @@ async function seedOver(userId: string | null): Promise<void> {
 async function seedTraditional(userId: string | null): Promise<void> {
   const key = ACCOUNTS.traditional;
 
-  await budget.upsertPlan({ accountKey: key, year: YEAR, declaredTotal: 150_000, userId });
+  await budget.createAgreement(
+    {
+      accountKey: key,
+      name: `${YEAR} Traditional Media Agreement`,
+      startDate: `${YEAR}-01-01`,
+      endDate: `${YEAR}-12-31`,
+      committedAmount: 150_000,
+    },
+    userId,
+  );
 
   // Non-paced channels: no platform to sync from, settled by hand. Radio runs
   // its own markup, which is what the per-line override is for.

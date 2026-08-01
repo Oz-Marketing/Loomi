@@ -11,7 +11,13 @@ import {
   type BudgetLineType,
   type PacerPlatform,
 } from '@/lib/budget/channels';
-import { isValidPeriod as isValidPeriodPure, resolveYear } from '@/lib/budget/period';
+import { isValidPeriod as isValidPeriodPure, periodOf, resolveYear } from '@/lib/budget/period';
+import {
+  commitmentForYear as termCommitmentForYear,
+  monthsInYear,
+  termMonths,
+  termMonthsInYear,
+} from '@/lib/budget/term';
 import {
   accountTimeZone,
   adPlatformWhere,
@@ -89,6 +95,7 @@ function assertAmount(amount: number, field = 'amount'): void {
 // here because callers of the service shouldn't need to know that.
 export { isValidPeriod, yearOfPeriod, periodOf } from '@/lib/budget/period';
 
+
 // ── Markup ──────────────────────────────────────────────────────────────────
 
 /**
@@ -103,16 +110,27 @@ export { isValidPeriod, yearOfPeriod, periodOf } from '@/lib/budget/period';
  * radio line whose margin differs from the account's digital rate).
  */
 export async function resolveMarkup(accountKey: string, year: number): Promise<number> {
-  const [plan, account, globalDefault] = await Promise.all([
-    prisma.budgetPlan.findUnique({
-      where: { accountKey_year: { accountKey, year } },
+  const [agreement, account, globalDefault] = await Promise.all([
+    // The agreement covering this year wins, when one sets a markup. Most
+    // specific first: a client can negotiate a rate for a term without it
+    // becoming the account's permanent default.
+    prisma.clientAgreement.findFirst({
+      where: {
+        accountKey,
+        status: 'active',
+        archivedAt: null,
+        defaultMarkup: { not: null },
+        startDate: { lte: new Date(Date.UTC(year, 11, 31)) },
+        endDate: { gte: new Date(Date.UTC(year, 0, 1)) },
+      },
       select: { defaultMarkup: true },
+      orderBy: { startDate: 'desc' },
     }),
     prisma.account.findUnique({ where: { key: accountKey }, select: { markup: true } }),
     getGlobalDefaultMarkup(),
   ]);
-  if (plan?.defaultMarkup != null) {
-    return accountMarginSetting(plan.defaultMarkup, globalDefault);
+  if (agreement?.defaultMarkup != null) {
+    return accountMarginSetting(agreement.defaultMarkup, globalDefault);
   }
   return accountMarginSetting(account?.markup ?? null, globalDefault);
 }
@@ -220,6 +238,7 @@ export function serializeLine(l: LineRow) {
     initiativeName: l.initiative?.name ?? null,
     taskId: l.taskId,
     taskTitle: l.task?.title ?? null,
+    agreementId: l.agreementId,
     batchId: l.batchId,
     externalId: l.externalId,
     linkedAssetType: l.linkedAssetType,
@@ -284,36 +303,197 @@ export async function listLineEvents(lineId: string) {
   }));
 }
 
-// ── Plans ───────────────────────────────────────────────────────────────────
+// ── Agreements ──────────────────────────────────────────────────────────────
+//
+// What the client signed up for. Budget lines draw down against it, and the
+// gap between the two is the number the hub exists to show.
 
-export async function getPlan(accountKey: string, year: number) {
-  return prisma.budgetPlan.findUnique({ where: { accountKey_year: { accountKey, year } } });
+// The term arithmetic itself lives in `@/lib/budget/term`, Prisma-free so it
+// can be unit-tested without a database. Re-exported here so callers have one
+// import for everything budget-service.
+export { monthsInYear, termMonths, termMonthsInYear } from '@/lib/budget/term';
+
+/** `commitmentForYear` over a Prisma row, whose amount is a Decimal. */
+export function commitmentForYear(
+  agreement: { startDate: Date; endDate: Date; committedAmount: Prisma.Decimal | null },
+  year: number,
+): number | null {
+  return termCommitmentForYear(
+    {
+      startDate: agreement.startDate,
+      endDate: agreement.endDate,
+      committedAmount: agreement.committedAmount == null ? null : toNumber(agreement.committedAmount),
+    },
+    year,
+  );
 }
 
-export async function upsertPlan(input: {
+export async function listAgreements(accountKey: string, opts: { year?: number } = {}) {
+  const rows = await prisma.clientAgreement.findMany({
+    where: {
+      accountKey,
+      archivedAt: null,
+      // A year filter means "overlaps this year", not "starts in it" — a
+      // Mar-to-Feb term is relevant to both years it touches.
+      ...(opts.year != null
+        ? {
+            startDate: { lte: new Date(Date.UTC(opts.year, 11, 31)) },
+            endDate: { gte: new Date(Date.UTC(opts.year, 0, 1)) },
+          }
+        : {}),
+    },
+    include: { fees: true },
+    orderBy: { startDate: 'desc' },
+  });
+  return rows.map((a) => serializeAgreement(a, opts.year));
+}
+
+type AgreementRow = Prisma.ClientAgreementGetPayload<{ include: { fees: true } }>;
+
+export function serializeAgreement(a: AgreementRow, year?: number) {
+  return {
+    id: a.id,
+    accountKey: a.accountKey,
+    name: a.name,
+    startDate: a.startDate.toISOString().slice(0, 10),
+    endDate: a.endDate.toISOString().slice(0, 10),
+    committedAmount: a.committedAmount == null ? null : toNumber(a.committedAmount),
+    status: a.status,
+    defaultMarkup: a.defaultMarkup,
+    notes: a.notes,
+    termMonths: termMonths(a.startDate, a.endDate),
+    monthsInYear: year == null ? null : monthsInYear(a.startDate, a.endDate, year),
+    commitmentForYear: year == null ? null : commitmentForYear(a, year),
+    monthlyFeeTotal: a.fees.reduce((sum, f) => sum + toNumber(f.monthlyAmount), 0),
+    fees: a.fees.map((f) => ({
+      id: f.id,
+      channel: f.channel,
+      monthlyAmount: toNumber(f.monthlyAmount),
+      label: f.label,
+    })),
+  };
+}
+
+export type AgreementDTO = ReturnType<typeof serializeAgreement>;
+
+export async function getAgreement(id: string) {
+  const row = await prisma.clientAgreement.findUnique({ where: { id }, include: { fees: true } });
+  return row ? serializeAgreement(row) : null;
+}
+
+export interface AgreementInput {
   accountKey: string;
-  year: number;
-  declaredTotal?: number | null;
-  monthlyRetainer?: number | null;
+  name: string;
+  startDate: string;
+  endDate: string;
+  committedAmount?: number | null;
+  status?: string;
   defaultMarkup?: number | null;
   notes?: string | null;
-  userId?: string | null;
-}) {
-  const { accountKey, year } = input;
-  if (input.declaredTotal != null) assertAmount(input.declaredTotal, 'declaredTotal');
-  if (input.monthlyRetainer != null) assertAmount(input.monthlyRetainer, 'monthlyRetainer');
+  fees?: { channel: string; monthlyAmount: number; label?: string | null }[];
+}
 
-  const data = {
-    declaredTotal: input.declaredTotal == null ? null : decimal(input.declaredTotal),
-    monthlyRetainer: input.monthlyRetainer == null ? null : decimal(input.monthlyRetainer),
-    defaultMarkup: input.defaultMarkup ?? null,
-    notes: input.notes ?? null,
-  };
-  return prisma.budgetPlan.upsert({
-    where: { accountKey_year: { accountKey, year } },
-    create: { accountKey, year, ...data, createdByUserId: input.userId ?? null },
-    update: data,
+function parseDate(iso: string, field: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) throw new Error(`${field} must be YYYY-MM-DD`);
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+}
+
+export async function createAgreement(input: AgreementInput, userId: string | null = null) {
+  const startDate = parseDate(input.startDate, 'startDate');
+  const endDate = parseDate(input.endDate, 'endDate');
+  if (endDate < startDate) throw new Error('endDate cannot be before startDate');
+  if (input.committedAmount != null) assertAmount(input.committedAmount, 'committedAmount');
+  for (const f of input.fees ?? []) {
+    if (!isBudgetChannel(f.channel)) throw new Error(`Unknown budget channel "${f.channel}"`);
+    assertAmount(f.monthlyAmount, 'monthlyAmount');
+  }
+
+  const row = await prisma.clientAgreement.create({
+    data: {
+      accountKey: input.accountKey,
+      name: input.name.trim() || `${startDate.getUTCFullYear()} Agreement`,
+      startDate,
+      endDate,
+      committedAmount: input.committedAmount == null ? null : decimal(input.committedAmount),
+      status: input.status ?? 'active',
+      defaultMarkup: input.defaultMarkup ?? null,
+      notes: input.notes ?? null,
+      createdByUserId: userId,
+      fees: {
+        create: (input.fees ?? []).map((f) => ({
+          channel: f.channel,
+          monthlyAmount: decimal(f.monthlyAmount),
+          label: f.label ?? null,
+        })),
+      },
+    },
+    include: { fees: true },
   });
+  return serializeAgreement(row);
+}
+
+export async function updateAgreement(
+  id: string,
+  input: Partial<AgreementInput>,
+): Promise<AgreementDTO | null> {
+  const existing = await prisma.clientAgreement.findUnique({ where: { id } });
+  if (!existing) return null;
+
+  const startDate = input.startDate ? parseDate(input.startDate, 'startDate') : existing.startDate;
+  const endDate = input.endDate ? parseDate(input.endDate, 'endDate') : existing.endDate;
+  if (endDate < startDate) throw new Error('endDate cannot be before startDate');
+  if (input.committedAmount != null) assertAmount(input.committedAmount, 'committedAmount');
+
+  // Fees are replaced wholesale when provided — a diff would need stable ids
+  // through the UI for no real benefit at this size.
+  if (input.fees) {
+    for (const f of input.fees) {
+      if (!isBudgetChannel(f.channel)) throw new Error(`Unknown budget channel "${f.channel}"`);
+      assertAmount(f.monthlyAmount, 'monthlyAmount');
+    }
+    await prisma.agreementFee.deleteMany({ where: { agreementId: id } });
+  }
+
+  const row = await prisma.clientAgreement.update({
+    where: { id },
+    data: {
+      ...(input.name !== undefined ? { name: input.name } : {}),
+      startDate,
+      endDate,
+      ...(input.committedAmount !== undefined
+        ? { committedAmount: input.committedAmount == null ? null : decimal(input.committedAmount) }
+        : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.defaultMarkup !== undefined ? { defaultMarkup: input.defaultMarkup } : {}),
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      ...(input.fees
+        ? {
+            fees: {
+              create: input.fees.map((f) => ({
+                channel: f.channel,
+                monthlyAmount: decimal(f.monthlyAmount),
+                label: f.label ?? null,
+              })),
+            },
+          }
+        : {}),
+    },
+    include: { fees: true },
+  });
+  return serializeAgreement(row);
+}
+
+export async function archiveAgreement(id: string): Promise<boolean> {
+  const existing = await prisma.clientAgreement.findUnique({ where: { id } });
+  if (!existing || existing.archivedAt) return false;
+  // Lines keep their money and simply lose the link (onDelete: SetNull is for
+  // deletes; archiving leaves the FK intact so history stays readable).
+  await prisma.clientAgreement.update({
+    where: { id },
+    data: { archivedAt: new Date(), status: 'cancelled' },
+  });
+  return true;
 }
 
 // ── Lines ───────────────────────────────────────────────────────────────────
@@ -331,6 +511,8 @@ export interface CreateLineInput {
   source?: string;
   status?: string;
   bucket?: string;
+  /** The agreement this line draws against, when there is one. */
+  agreementId?: string | null;
   /** Defaults from the channel; set explicitly when a line behaves unlike it. */
   lineType?: BudgetLineType;
   /** What it costs Oz. Required for a service/production line to show margin. */
@@ -423,6 +605,7 @@ export async function createLines(
         bucket: input.bucket ?? defaultBucket(source),
         lineType: input.lineType ?? channelLineType(channel),
         cost: input.cost == null ? null : decimal(input.cost),
+        agreementId: input.agreementId ?? null,
         initiativeId: input.initiativeId ?? null,
         taskId: input.taskId ?? null,
         batchId: input.batchId ?? batchId,
@@ -858,7 +1041,9 @@ export interface BudgetSummary {
   year: number;
   /** BudgetPlan.declaredTotal, or null when the account has no formal plan. */
   declaredTotal: number | null;
+  /** Σ of every active agreement's monthly fees. Null when there are none. */
   monthlyRetainer: number | null;
+  agreements: AgreementDTO[];
   /** Σ every counted line — placed and pooled. What the year actually holds. */
   totalCommitted: number;
   /** Σ counted lines that are fully placed (period AND channel set). */
@@ -903,8 +1088,17 @@ export async function getAccountSummary(
   accountKey: string,
   year: number,
 ): Promise<BudgetSummary> {
-  const [plan, lines] = await Promise.all([
-    getPlan(accountKey, year),
+  const [agreements, lines] = await Promise.all([
+    prisma.clientAgreement.findMany({
+      where: {
+        accountKey,
+        status: 'active',
+        archivedAt: null,
+        startDate: { lte: new Date(Date.UTC(year, 11, 31)) },
+        endDate: { gte: new Date(Date.UTC(year, 0, 1)) },
+      },
+      include: { fees: true },
+    }),
     prisma.budgetLine.findMany({
       where: {
         accountKey,
@@ -929,7 +1123,17 @@ export async function getAccountSummary(
   const allocated = toNumber(sumDecimal(placed.map((l) => l.amount)));
   const pool = toNumber(sumDecimal(pooled.map((l) => l.amount)));
   const totalCommitted = allocated + pool;
-  const declaredTotal = plan?.declaredTotal == null ? null : toNumber(plan.declaredTotal);
+  // The year's target is the sum of every active agreement's share of it. Null
+  // when no agreement carries a committed figure — the hub then shows no target
+  // rather than implying one derived from the lines themselves.
+  const shares = agreements
+    .map((a) => commitmentForYear(a, year))
+    .filter((v): v is number => v != null);
+  const declaredTotal = shares.length > 0 ? shares.reduce((a, b) => a + b, 0) : null;
+  const monthlyFeeTotal = agreements.reduce(
+    (sum, a) => sum + a.fees.reduce((s, f) => s + toNumber(f.monthlyAmount), 0),
+    0,
+  );
 
   const byChannelMap = new Map<string, { amount: number; spendTarget: number }>();
   const byPeriodMap = new Map<string, { amount: number; spendTarget: number }>();
@@ -985,7 +1189,8 @@ export async function getAccountSummary(
     accountKey,
     year,
     declaredTotal,
-    monthlyRetainer: plan?.monthlyRetainer == null ? null : toNumber(plan.monthlyRetainer),
+    monthlyRetainer: monthlyFeeTotal > 0 ? monthlyFeeTotal : null,
+    agreements: agreements.map((a) => serializeAgreement(a, year)),
     totalCommitted,
     allocated,
     pool,
@@ -1034,42 +1239,59 @@ export async function getPacerBudgetGoals(
 }
 
 /**
- * Stamp a year of retainer lines from BudgetPlan.monthlyRetainer — the
- * equivalent of oz-reports' bulk entry, and the reason batchId exists. Skips
- * months that already carry a retainer line so re-running is safe.
+ * Stamp budget lines for an agreement's recurring fees across a year.
+ *
+ * Replaces the old single-channel retainer generator. A client typically pays
+ * several distinct fees on different channels — management, managed service,
+ * contribution — and collapsing them into one number lost the breakdown the
+ * P&L needs.
+ *
+ * Only generates months the term actually covers, so a Mar–Feb agreement puts
+ * nothing in January or February of its first year. Skips any (channel, month)
+ * that already has a fee line from this agreement, so re-running never doubles
+ * a client's fees.
  */
-export async function generateRetainerLines(
-  accountKey: string,
+export async function generateAgreementFeeLines(
+  agreementId: string,
   year: number,
-  opts: { channel?: string | null; months?: number[] } = {},
   userId: string | null = null,
 ): Promise<BudgetLineDTO[]> {
-  const plan = await getPlan(accountKey, year);
-  const monthly = plan?.monthlyRetainer == null ? 0 : toNumber(plan.monthlyRetainer);
-  if (monthly <= 0) {
-    throw new Error('Set a monthly retainer on the budget plan before generating lines.');
+  const agreement = await prisma.clientAgreement.findUnique({
+    where: { id: agreementId },
+    include: { fees: true },
+  });
+  if (!agreement) throw new Error('Agreement not found');
+  if (agreement.fees.length === 0) {
+    throw new Error('This agreement has no recurring fees to lay out.');
   }
-  const months = opts.months?.length ? opts.months : Array.from({ length: 12 }, (_, i) => i + 1);
+
+  const months = termMonthsInYear(agreement.startDate, agreement.endDate, year);
+  if (months.length === 0) return [];
 
   const existing = await prisma.budgetLine.findMany({
-    where: { accountKey, year, source: 'retainer', ...NOT_ARCHIVED },
-    select: { period: true },
+    where: { agreementId, year, source: 'retainer', ...NOT_ARCHIVED },
+    select: { period: true, channel: true },
   });
-  const taken = new Set(existing.map((e) => e.period).filter(Boolean));
+  const taken = new Set(existing.map((e) => `${e.channel}|${e.period}`));
 
-  const inputs: CreateLineInput[] = months
-    .map((m) => `${year}-${String(m).padStart(2, '0')}`)
-    .filter((period) => !taken.has(period))
-    .map((period) => ({
-      accountKey,
-      year,
-      period,
-      channel: opts.channel ?? null,
-      amount: monthly,
-      source: 'retainer',
-      status: 'committed',
-      label: 'Managed Marketing Service',
-    }));
+  const inputs: CreateLineInput[] = [];
+  for (const fee of agreement.fees) {
+    for (const m of months) {
+      const period = periodOf(year, m);
+      if (taken.has(`${fee.channel}|${period}`)) continue;
+      inputs.push({
+        accountKey: agreement.accountKey,
+        year,
+        period,
+        channel: fee.channel,
+        amount: toNumber(fee.monthlyAmount),
+        source: 'retainer',
+        status: 'committed',
+        agreementId,
+        label: fee.label ?? 'Managed Marketing Service',
+      });
+    }
+  }
 
   return createLines(inputs, userId);
 }

@@ -529,9 +529,6 @@ export function BudgetHub() {
                           {Math.round((summary.addedTotal / summary.totalCommitted) * 100)}%
                         </span>
                       </span>
-                      <span className="text-[10px] text-[var(--muted-foreground)] opacity-70">
-                        The two goals the Ad Pacer receives on a managed month
-                      </span>
                     </div>
                   )}
                 </div>

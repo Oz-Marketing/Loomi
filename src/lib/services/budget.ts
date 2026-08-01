@@ -10,8 +10,15 @@ import {
   type PacerPlatform,
 } from '@/lib/budget/channels';
 import { isValidPeriod as isValidPeriodPure, resolveYear } from '@/lib/budget/period';
-import { isPeriodWritable } from '@/lib/meta-ads-pacer';
+import {
+  accountTimeZone,
+  adPlatformWhere,
+  isPeriodWritable,
+  monthState,
+} from '@/lib/meta-ads-pacer';
 import { writeAudit } from '@/lib/meta-ads-audit';
+import { adContribution } from '@/lib/ad-pacer/helpers';
+import { distributeActual } from '@/lib/budget/settlement';
 
 /**
  * Budget service — the media-dollar ledger (see docs/budget-module.md).
@@ -1137,4 +1144,297 @@ export async function getPeriodManagement(
     select: { managedByBudget: true, googleManagedByBudget: true },
   });
   return { meta: !!row?.managedByBudget, google: !!row?.googleManagedByBudget };
+}
+
+// ── Settlement (Phase 4) ────────────────────────────────────────────────────
+//
+// Closing a month: record what each line ACTUALLY cost and mark it settled.
+// This is what replaces oz-reports' `budget_utilization` — a second table
+// mirroring the budget table's shape, which drifted from it. Here it's a state
+// transition plus two fields on the line the money already lives on.
+//
+// `actualAmount` is in SPEND dollars, the same units as `spendTarget` — not
+// client gross. It comes from the platform (or a human) as spend, and
+// converting it back through a markup to compare against `amount` would invent
+// precision the number doesn't have.
+
+export interface SettlementResult {
+  settled: number;
+  /** Total actual spend attributed, in spend dollars. */
+  attributed: number;
+  /** Spend the platform reported that no committed line was there to absorb. */
+  orphaned: number;
+  skipped?: 'not_closed' | 'no_plan' | 'no_lines';
+}
+
+/**
+ * Settle one account/period/platform from the pacer's synced spend.
+ *
+ * Refuses to run until the month is CLOSED (past the pacer's grace window)
+ * unless forced — settling a live month would freeze a number that's still
+ * moving. Already-settled lines are left alone, so re-running is safe.
+ */
+export async function settlePlatformPeriod(
+  spendAccountKey: string,
+  period: string,
+  platform: PacerPlatform,
+  userId: string | null = null,
+  opts: { force?: boolean } = {},
+): Promise<SettlementResult> {
+  if (!isValidPeriodPure(period)) throw new Error(`Invalid period "${period}"`);
+
+  const empty: SettlementResult = { settled: 0, attributed: 0, orphaned: 0 };
+
+  if (!opts.force) {
+    const tz = await accountTimeZone(spendAccountKey);
+    if (monthState(period, tz) !== 'closed') {
+      return { ...empty, skipped: 'not_closed' };
+    }
+  }
+
+  const plan = await prisma.metaAdsPacerPlan.findUnique({
+    where: { accountKey: spendAccountKey },
+    select: { id: true },
+  });
+  if (!plan) return { ...empty, skipped: 'no_plan' };
+
+  // Actual spend for the month, split base vs added the same way the pacer
+  // splits it (adContribution handles the 'split' ads proportionally).
+  const ads = await prisma.metaAdsPacerAd.findMany({
+    where: { planId: plan.id, period, ...adPlatformWhere(platform) },
+    select: {
+      allocation: true,
+      pacerActual: true,
+      budgetSource: true,
+      splitBaseAmount: true,
+    },
+  });
+  const actualByBucket = { base: 0, added: 0 };
+  for (const ad of ads) {
+    const c = adContribution({
+      allocation: ad.allocation,
+      pacerActual: ad.pacerActual,
+      budgetSource: ad.budgetSource as 'base' | 'added' | 'split',
+      splitBaseAmount: ad.splitBaseAmount,
+    });
+    actualByBucket.base += c.baseSpent;
+    actualByBucket.added += c.addedSpent;
+  }
+
+  const lines = await prisma.budgetLine.findMany({
+    where: {
+      spendAccountKey,
+      period,
+      channel: { in: channelsForPlatform(platform) },
+      status: { in: ['committed', 'live'] },
+      ...NOT_ARCHIVED,
+    },
+    select: { id: true, amount: true, markupSnapshot: true, bucket: true, label: true },
+  });
+  if (lines.length === 0) {
+    const orphaned = actualByBucket.base + actualByBucket.added;
+    return { ...empty, orphaned, skipped: 'no_lines' };
+  }
+
+  const groupId = crypto.randomUUID();
+  let settled = 0;
+  let attributed = 0;
+  let orphaned = 0;
+
+  for (const bucket of ['base', 'added'] as const) {
+    const bucketLines = lines.filter((l) =>
+      bucket === 'base' ? l.bucket === 'base' : l.bucket !== 'base',
+    );
+    const bucketActual = actualByBucket[bucket];
+
+    // Spend in a bucket with no line behind it can't be attributed. Reported
+    // rather than silently folded into the other bucket — it usually means an
+    // ad was pointed at a budget source nothing funded.
+    if (bucketLines.length === 0) {
+      orphaned += bucketActual;
+      continue;
+    }
+
+    const shares = distributeActual(
+      bucketLines.map((l) => ({
+        id: l.id,
+        spendTarget: toNumber(l.amount) * l.markupSnapshot,
+      })),
+      bucketActual,
+    );
+
+    for (const share of shares) {
+      const line = bucketLines.find((l) => l.id === share.id)!;
+      const target = toNumber(line.amount) * line.markupSnapshot;
+      await prisma.budgetLine.update({
+        where: { id: share.id },
+        data: {
+          status: 'settled',
+          actualAmount: decimal(share.actual),
+          settledAt: new Date(),
+        },
+      });
+      const delta = share.actual - target;
+      await writeBudgetEvent({
+        lineId: share.id,
+        action: 'settled',
+        field: 'actualAmount',
+        toValue: String(share.actual),
+        summary:
+          `Settled at ${money(share.actual)} actual vs ${money(target)} target` +
+          (Math.abs(delta) < 0.005
+            ? ' — on target'
+            : delta > 0
+              ? ` — ${money(delta)} over`
+              : ` — ${money(-delta)} under`),
+        groupId,
+        authorUserId: userId,
+      });
+      settled++;
+      attributed += share.actual;
+    }
+  }
+
+  return { settled, attributed, orphaned };
+}
+
+/**
+ * Record what a line actually cost by hand. The only route for radio, print,
+ * TV, video and PR — they have no platform to sync from, so a human closes them
+ * out. Also the correction path for a platform line settled wrong.
+ */
+export async function settleLineManually(
+  id: string,
+  actualAmount: number,
+  userId: string | null = null,
+): Promise<BudgetLineDTO | null> {
+  assertAmount(actualAmount, 'actualAmount');
+  const existing = await prisma.budgetLine.findUnique({ where: { id } });
+  if (!existing || existing.archivedAt) return null;
+
+  const target = toNumber(existing.amount) * existing.markupSnapshot;
+  const previous = existing.actualAmount == null ? null : toNumber(existing.actualAmount);
+  const delta = actualAmount - target;
+
+  const row = await prisma.budgetLine.update({
+    where: { id },
+    data: {
+      status: 'settled',
+      actualAmount: decimal(actualAmount),
+      settledAt: existing.settledAt ?? new Date(),
+    },
+    include: LINE_INCLUDE,
+  });
+
+  await writeBudgetEvent({
+    lineId: id,
+    action: 'settled',
+    field: 'actualAmount',
+    fromValue: previous == null ? null : String(previous),
+    toValue: String(actualAmount),
+    summary:
+      (previous == null ? 'Settled' : 'Actual corrected') +
+      ` at ${money(actualAmount)} vs ${money(target)} target` +
+      (Math.abs(delta) < 0.005
+        ? ' — on target'
+        : delta > 0
+          ? ` — ${money(delta)} over`
+          : ` — ${money(-delta)} under`),
+    authorUserId: userId,
+  });
+
+  return serializeLine(row);
+}
+
+/**
+ * Reopen a settled line for correction: clears the actual and drops it back to
+ * committed. Kept explicit rather than letting a plain status edit do it, so
+ * the recorded actual can't be orphaned on a line that no longer claims to be
+ * settled.
+ */
+export async function unsettleLine(
+  id: string,
+  userId: string | null = null,
+): Promise<BudgetLineDTO | null> {
+  const existing = await prisma.budgetLine.findUnique({ where: { id } });
+  if (!existing || existing.status !== 'settled') return null;
+
+  const row = await prisma.budgetLine.update({
+    where: { id },
+    data: { status: 'committed', actualAmount: null, settledAt: null },
+    include: LINE_INCLUDE,
+  });
+  await writeBudgetEvent({
+    lineId: id,
+    action: 'edited',
+    field: 'status',
+    fromValue: 'settled',
+    toValue: 'committed',
+    summary: 'Reopened for correction — recorded actual cleared',
+    authorUserId: userId,
+  });
+  return serializeLine(row);
+}
+
+/**
+ * Daily pass: settle every closed month that still has committed lines on a
+ * paced channel. Piggybacks on the pacer alert scan, which already refreshes
+ * spend from the platforms first — settling before that sync would freeze
+ * yesterday's numbers.
+ *
+ * Bounded to the last `lookbackMonths` so a long-dormant account doesn't
+ * trigger a year of settlement on one cron run.
+ */
+export async function settleClosedMonths(
+  lookbackMonths = 3,
+): Promise<{ accounts: number; settled: number; orphaned: number; errors: string[] }> {
+  const errors: string[] = [];
+  let accounts = 0;
+  let settled = 0;
+  let orphaned = 0;
+
+  // Candidate (account, period) pairs: anything still committed on a paced
+  // channel, old enough to be closed.
+  const pacedChannels = [...channelsForPlatform('meta'), ...channelsForPlatform('google')];
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - lookbackMonths);
+  const cutoffPeriod = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, '0')}`;
+
+  const pending = await prisma.budgetLine.findMany({
+    where: {
+      channel: { in: pacedChannels },
+      status: { in: ['committed', 'live'] },
+      period: { not: null, gte: cutoffPeriod },
+      ...NOT_ARCHIVED,
+    },
+    select: { spendAccountKey: true, period: true, channel: true },
+    distinct: ['spendAccountKey', 'period', 'channel'],
+  });
+
+  // Collapse to (account, period, platform) — google and youtube share one.
+  const targets = new Map<string, { key: string; period: string; platform: PacerPlatform }>();
+  for (const row of pending) {
+    const platform = channelPacerPlatform(row.channel);
+    if (!platform || !row.period) continue;
+    targets.set(`${row.spendAccountKey}|${row.period}|${platform}`, {
+      key: row.spendAccountKey,
+      period: row.period,
+      platform,
+    });
+  }
+
+  for (const t of targets.values()) {
+    try {
+      const res = await settlePlatformPeriod(t.key, t.period, t.platform, null);
+      if (res.settled > 0) accounts++;
+      settled += res.settled;
+      orphaned += res.orphaned;
+    } catch (err) {
+      errors.push(
+        `${t.key} ${t.period} ${t.platform}: ${err instanceof Error ? err.message : 'failed'}`,
+      );
+    }
+  }
+
+  return { accounts, settled, orphaned, errors };
 }

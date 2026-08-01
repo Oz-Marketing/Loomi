@@ -585,4 +585,163 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     expect(entries.some((e) => e.summary.includes('managed by the budget ledger'))).toBe(true);
     expect(entries.some((e) => e.summary.includes('synced from ledger'))).toBe(true);
   });
+
+  // ── Phase 4: settlement ──
+
+  async function pacerAd(
+    planId: string,
+    period: string,
+    opts: { actual: number; source?: string; platform?: string; allocation?: number },
+  ) {
+    return prisma.metaAdsPacerAd.create({
+      data: {
+        planId,
+        period,
+        name: `vitest ad ${opts.actual}`,
+        platform: opts.platform ?? null,
+        budgetSource: opts.source ?? 'base',
+        allocation: String(opts.allocation ?? opts.actual),
+        pacerActual: String(opts.actual),
+      },
+      select: { id: true },
+    });
+  }
+
+  it('refuses to settle a month that has not closed', async () => {
+    await withPlan(acctA);
+    const current = new Date().toISOString().slice(0, 7);
+    await budget.createLine(
+      { accountKey: acctA, period: current, channel: 'meta', amount: 1000, status: 'committed' },
+      null,
+    );
+    const r = await budget.settlePlatformPeriod(acctA, current, 'meta', null);
+    expect(r.skipped).toBe('not_closed');
+    expect(r.settled).toBe(0);
+  });
+
+  it('splits actual across a bucket in proportion to spend target', async () => {
+    const plan = await withPlan(acctA);
+    // markup 0.8 → targets are 8000 and 2000, so a 5000 actual splits 4000/1000.
+    const a = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-01`, channel: 'meta', amount: 10_000, status: 'committed', source: 'retainer' },
+      null,
+    );
+    const b = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-01`, channel: 'meta', amount: 2_500, status: 'committed', source: 'retainer' },
+      null,
+    );
+    await pacerAd(plan.id, `${YEAR}-01`, { actual: 5000, source: 'base' });
+
+    // YEAR is in the future, so force past the closed-month guard.
+    const r = await budget.settlePlatformPeriod(acctA, `${YEAR}-01`, 'meta', null, { force: true });
+    expect(r.settled).toBe(2);
+    expect(r.attributed).toBeCloseTo(5000, 2);
+    expect(r.orphaned).toBe(0);
+
+    const after = await Promise.all([budget.getLine(a.id), budget.getLine(b.id)]);
+    expect(after[0]!.actualAmount).toBeCloseTo(4000, 2);
+    expect(after[1]!.actualAmount).toBeCloseTo(1000, 2);
+    expect(after.every((l) => l!.status === 'settled')).toBe(true);
+    // Every cent lands somewhere.
+    expect(after[0]!.actualAmount! + after[1]!.actualAmount!).toBeCloseTo(5000, 2);
+  });
+
+  it('keeps base and added spend in their own buckets', async () => {
+    const plan = await withPlan(acctA);
+    const base = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-02`, channel: 'meta', amount: 1000, status: 'committed', source: 'retainer' },
+      null,
+    );
+    const added = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-02`, channel: 'meta', amount: 1000, status: 'committed', source: 'task' },
+      null,
+    );
+    await pacerAd(plan.id, `${YEAR}-02`, { actual: 900, source: 'base' });
+    await pacerAd(plan.id, `${YEAR}-02`, { actual: 300, source: 'added' });
+
+    await budget.settlePlatformPeriod(acctA, `${YEAR}-02`, 'meta', null, { force: true });
+
+    // Cross-contamination here would misreport which work overspent.
+    expect((await budget.getLine(base.id))!.actualAmount).toBeCloseTo(900, 2);
+    expect((await budget.getLine(added.id))!.actualAmount).toBeCloseTo(300, 2);
+  });
+
+  it('reports spend with no line behind it as orphaned', async () => {
+    const plan = await withPlan(acctA);
+    await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-03`, channel: 'meta', amount: 1000, status: 'committed', source: 'retainer' },
+      null,
+    );
+    // Added-bucket spend with no added-bucket line to absorb it.
+    await pacerAd(plan.id, `${YEAR}-03`, { actual: 800, source: 'base' });
+    await pacerAd(plan.id, `${YEAR}-03`, { actual: 250, source: 'added' });
+
+    const r = await budget.settlePlatformPeriod(acctA, `${YEAR}-03`, 'meta', null, { force: true });
+    expect(r.settled).toBe(1);
+    expect(r.orphaned).toBeCloseTo(250, 2);
+  });
+
+  it('is safe to re-run — settled lines are left alone', async () => {
+    const plan = await withPlan(acctA);
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-04`, channel: 'meta', amount: 1000, status: 'committed', source: 'retainer' },
+      null,
+    );
+    await pacerAd(plan.id, `${YEAR}-04`, { actual: 700, source: 'base' });
+
+    const first = await budget.settlePlatformPeriod(acctA, `${YEAR}-04`, 'meta', null, { force: true });
+    const second = await budget.settlePlatformPeriod(acctA, `${YEAR}-04`, 'meta', null, { force: true });
+    expect(first.settled).toBe(1);
+    expect(second.settled).toBe(0);
+    expect((await budget.getLine(line.id))!.actualAmount).toBeCloseTo(700, 2);
+  });
+
+  it('settles a non-platform line by hand', async () => {
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-05`, channel: 'radio', amount: 5000, markup: 1, status: 'committed' },
+      null,
+    );
+    const settled = await budget.settleLineManually(line.id, 4800, null);
+    expect(settled!.status).toBe('settled');
+    expect(settled!.actualAmount).toBe(4800);
+    expect(settled!.settledAt).not.toBeNull();
+
+    const events = await budget.listLineEvents(line.id);
+    expect(events[0]!.summary).toContain('under');
+  });
+
+  it('reopening clears the recorded actual', async () => {
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-05`, channel: 'radio', amount: 1000, status: 'committed' },
+      null,
+    );
+    await budget.settleLineManually(line.id, 900, null);
+    const reopened = await budget.unsettleLine(line.id, null);
+    // Leaving the actual on a line that no longer claims to be settled would
+    // orphan the number in every rollup that reads it.
+    expect(reopened!.status).toBe('committed');
+    expect(reopened!.actualAmount).toBeNull();
+    expect(reopened!.settledAt).toBeNull();
+  });
+
+  it('refuses to reopen a line that was never settled', async () => {
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-05`, channel: 'radio', amount: 100, status: 'committed' },
+      null,
+    );
+    expect(await budget.unsettleLine(line.id, null)).toBeNull();
+  });
+
+  it('settled money still counts against the year', async () => {
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-06`, channel: 'radio', amount: 3000, status: 'committed' },
+      null,
+    );
+    await budget.settleLineManually(line.id, 2500, null);
+    const s = await budget.getAccountSummary(acctA, YEAR);
+    // Closing a month must not make the budget disappear from the year — the
+    // client still paid it.
+    expect(s.totalCommitted).toBe(3000);
+    expect(s.allocated).toBe(3000);
+  });
 });

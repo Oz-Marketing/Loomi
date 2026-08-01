@@ -4,9 +4,10 @@ Plan for moving client budgeting out of Oz Reports and into Loomi, so the Ad
 Pacer paces against a **real budget** instead of a hand-typed goal, and so a
 budget can be distributed at the moment work is requested.
 
-Status: **Phases 1–3 built** — the ledger, intake wiring, and the pacer
-binding. The manual retype is gone for any month switched to budget-managed.
-The budget hub UI (1b) and settlement (4) are not built. See §5.
+Status: **Built** — ledger, hub, intake wiring, pacer binding, settlement.
+The manual retype is gone for any month switched to budget-managed, and closed
+months settle themselves. Only 3b (distribute a month's target across pacer ad
+rows) is outstanding. See §5.
 
 ---
 
@@ -273,11 +274,11 @@ taking manual control of one month doesn't affect Google or any other month.
 | Phase | Scope | Status |
 |---|---|---|
 | **1 — Ledger** | The three models, channel registry, service layer, API | **Built** |
-| **1b — Hub UI** | Per-account annual view: declared total, retainer generator, pool, lines by channel × month | Not built — API is ready for it |
+| **1b — Hub UI** | Per-account annual view: declared total, retainer generator, pool, lines by channel × month, allocate-from-pool | **Built** |
 | **2 — Intake wiring** | Intake creates `BudgetLine`s; live remaining shown in the form; the six `Task.details` budget fields removed | **Built** |
 | **3 — Pacer binding** | `syncPeriodBudgetFromLines` writes the goal pair; per-platform opt-in; UI locks + unmanage; save route guarded | **Built** |
 | **3b — Distribute to ads** | "Distribute remaining" action allocating a month's target across pacer ad rows (the `adset_allocations` equivalent, both platforms) | Not built |
-| **4 — Settlement** | Platform lines settle from synced spend on month freeze; non-platform by hand | Not built |
+| **4 — Settlement** | Closed months settle from synced spend on the daily scan; non-platform by hand | **Built** |
 
 ### What exists
 
@@ -287,7 +288,9 @@ taking manual control of one month doesn't affect Google or any other month.
 | [`src/lib/budget/channels.ts`](../src/lib/budget/channels.ts) | The channel registry + pacer-platform mapping |
 | [`src/lib/budget/period.ts`](../src/lib/budget/period.ts) | Period helpers + `resolveYear` (the year/period invariant). Prisma-free so routes can validate without pulling in a DB client |
 | [`src/lib/services/budget.ts`](../src/lib/services/budget.ts) | Create / allocate / return-to-pool / settle, rollups, `getPacerBudgetGoals`, retainer generation |
-| `src/app/api/budget/*` | `summary`, `plan` (+`?generate=true`), `lines`, `lines/[id]`, `lines/[id]/allocate` |
+| `src/app/api/budget/*` | `summary`, `plan` (+`?generate=true`), `lines`, `lines/[id]`, `lines/[id]/allocate`, `lines/[id]/settle`, `settle-period` |
+| [`src/lib/budget/settlement.ts`](../src/lib/budget/settlement.ts) | Attribution math — exact-summing largest-remainder split, variance, attainment |
+| `src/app/app/projects/budget` + `_components/budget-*` | The hub, plan modal, add-line modal, line drawer |
 | `api/meta-ads-pacer/[k]/budget-managed` | GET state / POST manage-unmanage, per platform |
 | [`src/lib/projects/ui.ts`](../src/lib/projects/ui.ts) | `KIND_BUDGET_CHANNELS` — which channels each task Type can spend on |
 | `createTicket` in [`services/projects.ts`](../src/lib/services/projects.ts) | Turns a ticket's requested budget into lines |
@@ -295,6 +298,36 @@ taking manual control of one month doesn't affect Google or any other month.
 Tests: `budget/period.test.ts` + `budget/channels.test.ts` run always;
 `services/budget.db.test.ts` (33 cases — ledger arithmetic plus the pacer
 binding) self-skips unless `RUN_DB_TESTS=1`, matching `loomi-flows.db.test.ts`.
+
+### Settlement as built
+
+Replaces oz-reports' `budget_utilization` — a second table mirroring the budget
+table's shape, which drifted from it. Here it's a state transition plus two
+fields on the line the money already lives on.
+
+- **`actualAmount` is in SPEND dollars**, same units as `spendTarget`, not
+  client gross. It arrives as spend from the platform (or a human); grossing it
+  back up through a markup would invent precision it doesn't have.
+- **Attribution.** A month has N budget lines on a platform and M pacer ads,
+  with no one-to-one mapping. The pacer does know actual per BUCKET (each ad's
+  `budgetSource`), so settlement splits base/added first, then distributes each
+  bucket's actual across its own lines in proportion to spend target.
+- **Exact to the cent.** `distributeActual` uses largest-remainder in integer
+  cents, so the parts sum to the total. A settlement report that doesn't
+  reconcile to the penny is one nobody trusts.
+- **Orphan spend is reported, not hidden.** Actual in a bucket with no line
+  behind it usually means an ad was pointed at a budget source nothing funded —
+  it comes back as `orphaned` rather than being folded into the other bucket.
+- **Closed months only** (past the pacer's grace window) unless forced —
+  settling a live month freezes a number that's still moving.
+- **Re-running is safe.** Already-settled lines are skipped, which is what lets
+  the daily scan just try everything in its lookback window.
+- **Runs after the spend pre-sync** in the daily scan, never before. Ordering
+  matters: settling first would freeze yesterday's numbers.
+- **Settled money still counts against the year.** Closing a month must not
+  make the budget vanish from the rollup — the client still paid it.
+- **Reopening clears the actual.** Leaving it on a line that no longer claims to
+  be settled would orphan the number in every rollup that reads it.
 
 ### Pacer binding as built
 

@@ -200,6 +200,33 @@ export function BudgetLineDrawer({
                   {line.spendAccountDealer ?? line.spendAccountKey}.
                 </p>
               )}
+              {line.actualAmount != null && (
+                <div className="mt-2 flex items-baseline justify-between border-t border-[var(--border)] pt-2">
+                  <span className="text-xs text-[var(--muted-foreground)]">Actual spend</span>
+                  <span className="text-right">
+                    <span className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                      {usd2(line.actualAmount)}
+                    </span>
+                    {(() => {
+                      const delta = line.actualAmount! - line.spendTarget;
+                      if (Math.abs(delta) < 0.005) {
+                        return (
+                          <span className="ml-2 text-[11px] text-[var(--muted-foreground)]">
+                            on target
+                          </span>
+                        );
+                      }
+                      return (
+                        <span
+                          className={`ml-2 text-[11px] font-medium ${delta > 0 ? 'text-amber-600' : 'text-[var(--muted-foreground)]'}`}
+                        >
+                          {usd2(Math.abs(delta))} {delta > 0 ? 'over' : 'under'}
+                        </span>
+                      );
+                    })()}
+                  </span>
+                </div>
+              )}
               {line.channel && isPacedChannel(line.channel) && line.period && (
                 <p className="mt-2 text-[11px] text-[var(--muted-foreground)]">
                   Feeds the Ad Pacer&apos;s <strong>{bucketLabel(line.bucket)}</strong> budget for{' '}
@@ -349,6 +376,14 @@ export function BudgetLineDrawer({
                 {busy ? 'Saving…' : 'Save changes'}
               </button>
             </div>
+
+            <SettleBlock
+              line={line}
+              onDone={async () => {
+                await load();
+                onChanged();
+              }}
+            />
 
             {/* Release */}
             <div className="space-y-2 border-t border-[var(--border)] pt-4">
@@ -585,6 +620,135 @@ function AllocateBlock({
       >
         {busy ? 'Allocating…' : 'Allocate'}
       </button>
+    </div>
+  );
+}
+
+/**
+ * Close a line out, or reopen a settled one.
+ *
+ * Platform lines settle themselves from synced spend once the month closes —
+ * this is the manual route for the channels with nothing to sync from (radio,
+ * print, TV, video, PR) and the correction path when a synced figure is wrong.
+ */
+function SettleBlock({
+  line,
+  onDone,
+}: {
+  line: BudgetLine;
+  onDone: () => Promise<void>;
+}) {
+  const [actual, setActual] = useState('');
+  const [busy, setBusy] = useState(false);
+  const settled = line.status === 'settled';
+  // Settled WITHOUT a recorded actual is a real state — a status edit by hand,
+  // or a pre-Phase-4 line. Saying "recorded actual below" there points at an
+  // empty field.
+  const hasActual = line.actualAmount != null;
+  const paced = isPacedChannel(line.channel);
+
+  useEffect(() => {
+    setActual(line.actualAmount != null ? String(line.actualAmount) : '');
+  }, [line.actualAmount]);
+
+  async function settle() {
+    const n = Number(actual);
+    if (!Number.isFinite(n) || n < 0) {
+      toast.error('Enter what it actually cost');
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/budget/lines/${line.id}/settle`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ actualAmount: n }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Could not settle');
+      toast.success(settled ? 'Actual updated' : 'Line settled');
+      await onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not settle');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function reopen() {
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/budget/lines/${line.id}/settle`, { method: 'DELETE' });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Could not reopen');
+      toast.success('Reopened — recorded actual cleared');
+      await onDone();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not reopen');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2 border-t border-[var(--border)] pt-4">
+      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+        {settled && hasActual ? 'Settled' : 'Close out'}
+      </p>
+      <p className="text-[11px] text-[var(--muted-foreground)]">
+        {settled && hasActual
+          ? 'Recorded actual below. Correct it, or reopen to clear it.'
+          : settled
+            ? 'Marked settled, but nothing was recorded for what it cost. Enter it below.'
+            : paced
+              ? 'This channel settles on its own from synced spend once the month closes. Record it by hand only to override.'
+              : 'No platform to sync from — record what it actually cost when the month is done.'}
+      </p>
+
+      <div className="flex items-end gap-2">
+        <label className="flex-1">
+          <span className="text-xs text-[var(--muted-foreground)]">Actual spend</span>
+          <div className="relative mt-1">
+            <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[var(--muted-foreground)]">
+              $
+            </span>
+            <input
+              type="number"
+              min="0"
+              step="any"
+              inputMode="decimal"
+              placeholder={line.spendTarget.toFixed(2)}
+              value={actual}
+              onChange={(e) => setActual(e.target.value)}
+              className="loomi-input w-full !bg-[var(--input)] !pl-6"
+            />
+          </div>
+        </label>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void settle()}
+          className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50"
+        >
+          {hasActual ? 'Update' : 'Settle'}
+        </button>
+      </div>
+      {/* Spend dollars, not client gross — it's what hit the platform, and
+          grossing it back up through a markup would invent precision. */}
+      <p className="text-[11px] text-[var(--muted-foreground)]">
+        In spend dollars, against a {usd2(line.spendTarget)} target.
+      </p>
+
+      {settled && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void reopen()}
+          className="text-[11px] text-[var(--muted-foreground)] underline underline-offset-2 transition hover:text-[var(--foreground)] disabled:opacity-50"
+        >
+          Reopen for correction
+        </button>
+      )}
     </div>
   );
 }

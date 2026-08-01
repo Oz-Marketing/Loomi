@@ -4,6 +4,7 @@ import { scanPacerAlerts } from '@/lib/notifications/service';
 import { evaluateAlertRules } from '@/lib/alerts/engine';
 import { refreshLinkedAccountsForAlerts } from '@/lib/alerts/refresh';
 import { reconcileLinkedTaskStatuses, scanTaskDueDates } from '@/lib/services/projects';
+import { settleClosedMonths } from '@/lib/services/budget';
 
 /**
  * POST /api/internal/meta-pacer-alerts/scan
@@ -16,6 +17,9 @@ import { reconcileLinkedTaskStatuses, scanTaskDueDates } from '@/lib/services/pr
  *    stuck, dark, over-allocation, per-ad pacing) + per-recipient digest email.
  *  - evaluateAlertRules(): the §9 config-driven engine (account pace, budget
  *    burn — Google-metric rules join once §8 connects).
+ *  - settleClosedMonths(): budget Phase 4 — close out closed months from the
+ *    spend the pre-sync above just refreshed. Ordering matters: settling first
+ *    would freeze yesterday's numbers.
  * Both scan passes are idempotent within each alert's cooldown window, so daily
  * runs don't re-spam still-true conditions.
  */
@@ -57,15 +61,30 @@ export async function POST(req: NextRequest) {
     } catch (err) {
       taskDueDates = { errors: [err instanceof Error ? err.message : 'task due-date scan failed'] };
     }
+    // Budget: settle closed months from the freshly-synced spend. Independent
+    // and non-fatal like the rest — a settlement that doesn't run today runs
+    // tomorrow, since it only looks for lines still committed.
+    let budgetSettlement: Awaited<ReturnType<typeof settleClosedMonths>> | { errors: string[] };
+    try {
+      budgetSettlement = await settleClosedMonths();
+    } catch (err) {
+      budgetSettlement = {
+        errors: [err instanceof Error ? err.message : 'budget settlement failed'],
+      };
+    }
 
     const errorCount =
       (presync.errors?.length ?? 0) +
       scan.errors.length +
       (engine.errors?.length ?? 0) +
       ('errors' in projects ? projects.errors.length : 0) +
-      ('errors' in taskDueDates ? taskDueDates.errors.length : 0);
+      ('errors' in taskDueDates ? taskDueDates.errors.length : 0) +
+      (budgetSettlement.errors?.length ?? 0);
     const status = errorCount > 0 ? 207 : 200;
-    return NextResponse.json({ presync, scan, engine, projects, taskDueDates }, { status });
+    return NextResponse.json(
+      { presync, scan, engine, projects, taskDueDates, budgetSettlement },
+      { status },
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Failed to scan pacer alerts';
     return NextResponse.json({ error: message }, { status: 500 });

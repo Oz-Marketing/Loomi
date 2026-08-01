@@ -4,7 +4,6 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   DocumentTextIcon,
   BanknotesIcon,
-  ChevronDownIcon,
   ChevronRightIcon,
   ExclamationTriangleIcon,
   PlusIcon,
@@ -15,10 +14,10 @@ import { AccountAvatar } from '@/components/account-avatar';
 import {
   BUDGET_CHANNELS,
   LINE_TYPES,
-  channelLabel,
   isPacedChannel,
 } from '@/lib/budget/channels';
 import { ChannelIcon } from '@/components/icons/channel-icon';
+import { Collapse } from '@/components/ui/collapse';
 import { periodOf } from '@/lib/budget/period';
 import { useAccount } from '@/contexts/account-context';
 import { jsonFetcher } from './fetcher';
@@ -54,6 +53,7 @@ export function BudgetHub() {
   const [agreementsOpen, setAgreementsOpen] = useState(false);
   // The cell (channel × period) whose lines are being inspected, or 'pool'.
   const [openCell, setOpenCell] = useState<{ channel: string; period: string } | null>(null);
+  const [closingCell, setClosingCell] = useState(false);
   const [poolOpen, setPoolOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
@@ -133,6 +133,19 @@ export function BudgetHub() {
     for (const row of grid) row.months.forEach((v, i) => (t[i] += v));
     return t;
   }, [grid]);
+
+  /**
+   * Closing is two-stage: flip `closingCell` so the accordion animates shut,
+   * then drop the row. Clearing `openCell` outright would unmount the <tr>
+   * mid-transition and the panel would just vanish.
+   */
+  const closeCell = useCallback(() => {
+    setClosingCell(true);
+    setTimeout(() => {
+      setOpenCell(null);
+      setClosingCell(false);
+    }, 250);
+  }, []);
 
   const cellLines = useMemo(() => {
     if (!openCell) return [];
@@ -529,8 +542,16 @@ export function BudgetHub() {
                             </td>
                           </tr>
                         )}
-                        {section.rows.map((row) => (
-                      <tr key={row.channel} className="border-b border-[var(--border)] last:border-0">
+                        {section.rows.map((row) => {
+                          const openPeriod =
+                            openCell?.channel === row.channel ? openCell.period : null;
+                          return (
+                            <Fragment key={row.channel}>
+                      <tr
+                        className={`border-b border-[var(--border)] last:border-0 ${
+                          openPeriod ? 'bg-[var(--primary)]/[0.06]' : ''
+                        }`}
+                      >
                         <td className="whitespace-nowrap px-3 py-2">
                           <span className="inline-flex items-center gap-2">
                             <ChannelIcon
@@ -560,12 +581,19 @@ export function BudgetHub() {
                                 <button
                                   type="button"
                                   onClick={() =>
-                                    setOpenCell(isOpen ? null : { channel: row.channel, period })
-                                  }
-                                  className={`rounded px-1.5 py-0.5 transition hover:bg-[var(--muted)] ${
                                     isOpen
-                                      ? 'bg-[var(--muted)] font-semibold text-[var(--foreground)]'
-                                      : 'text-[var(--foreground)]'
+                                      ? closeCell()
+                                      : setOpenCell({ channel: row.channel, period })
+                                  }
+                                  className={`rounded-md px-1.5 py-0.5 transition ${
+                                    isOpen
+                                      ? // Solid primary, not a grey wash. The old
+                                        // active state was one muted step off the
+                                        // hover state, so on a 12-column grid you
+                                        // couldn't tell at a glance which cell the
+                                        // list below belonged to.
+                                        'bg-[var(--primary)] font-semibold text-white shadow-sm ring-2 ring-[var(--primary)]/30'
+                                      : 'text-[var(--foreground)] hover:bg-[var(--muted)]'
                                   }`}
                                 >
                                   {compact(v)}
@@ -578,7 +606,39 @@ export function BudgetHub() {
                           {compact(row.total)}
                         </td>
                       </tr>
-                        ))}
+
+                      {/* The cell's lines, expanded IN PLACE. They used to
+                          render in a panel under the whole table, which put
+                          them a scroll away from the number that opened them
+                          and left you re-reading the header to remember which
+                          cell you'd clicked. */}
+                      {openPeriod && (
+                        <tr className="border-b border-[var(--border)] last:border-0">
+                          <td colSpan={14} className="bg-[var(--primary)]/[0.04] p-0">
+                            <Collapse open={!closingCell} unmountOnClose>
+                              <div className="px-3 pb-3 pt-3">
+                                <div className="mb-2 flex items-center justify-between">
+                                  <span className="text-xs font-medium text-[var(--muted-foreground)]">
+                                    {MONTH_ABBR[monthIndexOf(openPeriod)]} {year} ·{' '}
+                                    {cellLines.length} line{cellLines.length === 1 ? '' : 's'}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={closeCell}
+                                    className="text-xs text-[var(--muted-foreground)] transition hover:text-[var(--foreground)]"
+                                  >
+                                    Close
+                                  </button>
+                                </div>
+                                <LineList lines={cellLines} onOpen={setActiveLineId} />
+                              </div>
+                            </Collapse>
+                          </td>
+                        </tr>
+                      )}
+                            </Fragment>
+                          );
+                        })}
                       </Fragment>
                     ))}
                     <tr className="bg-[var(--muted)]/40">
@@ -601,30 +661,6 @@ export function BudgetHub() {
                 </table>
               </div>
             )}
-
-            {/* Lines behind the selected cell */}
-            {openCell && (
-              <div className="mt-3 rounded-2xl border border-[var(--border)] bg-[var(--card)] p-4">
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
-                    <ChannelIcon
-                      channel={openCell.channel}
-                      className="h-4 w-4 text-[var(--muted-foreground)]"
-                    />
-                    {channelLabel(openCell.channel)} ·{' '}
-                    {MONTH_ABBR[monthIndexOf(openCell.period)]} {year}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setOpenCell(null)}
-                    className="text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-                  >
-                    Close
-                  </button>
-                </div>
-                <LineList lines={cellLines} onOpen={setActiveLineId} />
-              </div>
-            )}
           </div>
 
           {/* ── Pool ── */}
@@ -644,14 +680,14 @@ export function BudgetHub() {
                 <span className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
                   {usd0(summary.pool)}
                 </span>
-                {poolOpen ? (
-                  <ChevronDownIcon className="h-4 w-4 text-[var(--muted-foreground)]" />
-                ) : (
-                  <ChevronRightIcon className="h-4 w-4 text-[var(--muted-foreground)]" />
-                )}
+                <ChevronRightIcon
+                  className={`h-4 w-4 text-[var(--muted-foreground)] transition-transform duration-200 ${
+                    poolOpen ? 'rotate-90' : ''
+                  }`}
+                />
               </span>
             </button>
-            {poolOpen && (
+            <Collapse open={poolOpen} mountClosed={false}>
               <div className="border-t border-[var(--border)] p-4">
                 {poolLines.length === 0 ? (
                   <p className="text-sm text-[var(--muted-foreground)]">
@@ -662,7 +698,7 @@ export function BudgetHub() {
                   <LineList lines={poolLines} onOpen={setActiveLineId} />
                 )}
               </div>
-            )}
+            </Collapse>
           </div>
 
           {loading && (

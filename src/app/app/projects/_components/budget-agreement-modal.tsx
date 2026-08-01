@@ -62,13 +62,13 @@ export function BudgetAgreementModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[180] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+      className="animate-overlay-in fixed inset-0 z-[180] flex items-center justify-center bg-black/50 p-4"
       onMouseDown={() => {
         if (!busy) onClose();
       }}
     >
       <div
-        className="frost-heavy flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl shadow-2xl"
+        className="animate-modal-in frost-heavy flex max-h-[88vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
@@ -90,6 +90,8 @@ export function BudgetAgreementModal({
           </button>
         </div>
 
+        {/* Keyed so switching list ↔ form replays the entrance rather than
+            swapping content in place, which reads as a glitch at this size. */}
         {editing ? (
           <AgreementForm
             key={editing === 'new' ? 'new' : editing.id}
@@ -144,7 +146,7 @@ function AgreementList({
 
   return (
     <>
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+      <div className="animate-fade-in-up min-h-0 flex-1 overflow-y-auto px-5 py-4">
         <div className="space-y-2">
           {agreements.map((a) => (
             <button
@@ -296,7 +298,7 @@ function AgreementForm({
 
   return (
     <>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+      <div className="animate-fade-in-up min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
         <div>
           <label className="block text-xs font-medium text-[var(--foreground)]">Name</label>
           <input

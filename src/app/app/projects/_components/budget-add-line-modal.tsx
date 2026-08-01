@@ -67,13 +67,13 @@ export function BudgetAddLineModal({
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[180] flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+      className="animate-overlay-in fixed inset-0 z-[180] flex items-center justify-center bg-black/50 p-4"
       onMouseDown={() => {
         if (!saving) onClose();
       }}
     >
       <div
-        className="frost-heavy flex w-full max-w-md flex-col overflow-hidden rounded-2xl shadow-2xl"
+        className="animate-modal-in frost-heavy flex w-full max-w-md flex-col overflow-hidden rounded-2xl shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">

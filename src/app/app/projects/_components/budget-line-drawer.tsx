@@ -134,14 +134,14 @@ export function BudgetLineDrawer({
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        className="animate-overlay-in absolute inset-0 bg-black/50"
         onClick={onClose}
         aria-hidden
       />
       {/* frost-heavy, not bg-[var(--card)] — `--card` is 62% opaque by design
           for in-page surfaces, which makes a floating panel unreadable over
           the grid behind it. */}
-      <div className="frost-heavy relative flex h-full w-full max-w-md flex-col overflow-y-auto shadow-xl">
+      <div className="animate-slide-in-right frost-heavy relative flex h-full w-full max-w-md flex-col overflow-y-auto shadow-xl">
         <div className="sticky top-0 z-10 flex items-start justify-between gap-3 border-b border-[var(--border)] bg-inherit px-5 py-4">
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-[var(--foreground)]">

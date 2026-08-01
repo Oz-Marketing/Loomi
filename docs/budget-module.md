@@ -395,21 +395,89 @@ The Base/Added cards in the pacer offer "Spread $X across N unallocated ads":
 
 ---
 
-## 6. Migration / dual-run
+## 6. Migration from Oz Reports
 
-`dealer_map.loomi_account_key` already exists, so backfill is a join away.
-Same shape as the contact sync — one-way push from the Oz Reports host, which
-is where the mapping lives.
+**Built.** One-way push from the Oz Reports host into a Loomi ingest endpoint —
+same shape as the contact sync, and for the same reason: the budget tables and
+the `dealer_map.loomi_account_key` mapping both live there.
 
-1. Backfill historical `account_budgets` → `BudgetLine` (`status='settled'`,
-   `markupSnapshot` resolved from `margin_rules` **at the row's own date**, not
-   today's). Read-only history.
-2. Run parallel for one full year. Oz Reports stays system of record;
-   reconcile monthly.
-3. Cut over at a year boundary — carryover math is annual, so mid-year is
-   needless pain.
+```
+Oz Reports host                              Loomi
+───────────────                              ─────
+account_budgets  ┐
+margin_rules     ├─► GET /loomi/pushbudgets ─► POST /api/ingest/budget-lines
+special_budgets  │   (Loomi.php, Bearer secret)        │
+dealer_map       ┘   ?dry_run=1 ?dealer=KEY ?year=N     ▼
+                     ?deleted=1                     BudgetLine upsert
+```
 
----
+### What the source looks like (2026-07 snapshot)
+
+| | |
+|---|---|
+| Live lines | 8,097 |
+| Total budget | $11,403,231.54 |
+| Accounts with budget | 44 (**38 mapped** to Loomi) |
+| Years | 2025 – 2027 |
+| Pool lines (`for_month = 0`) | 4 |
+| Cross-account lines | 206 |
+| Soft-deleted rows | ~3,600 |
+
+**About half the money isn't media.** Contribution, Data Feed, Managed
+Marketing Services, Lead Provider, Management Fee and friends account for
+roughly $5.7M of the $11.4M. That's why `BUDGET_CHANNELS` mirrors all 44 Oz
+channels rather than the media-only set the module started with: a hub showing
+half a client's budget is worse than one showing none, because the first time
+anyone reconciles against Oz Reports the number stops being trusted.
+
+### Mapping
+
+| Oz Reports | Loomi | Note |
+|---|---|---|
+| `account_budgets.id` | `externalId` = `ozreports:account_budgets:<id>` | Unique — makes the import an upsert |
+| `account_id` → `loomi_account_key` | `accountKey` | Unmapped accounts are skipped and named |
+| `spend_account_id` → key | `spendAccountKey` | A co-op line whose SPEND side is unmapped is skipped, never guessed |
+| `budget` | `amount` | Client gross, exact |
+| `margin_rules[ch][acct]`, 999 fallback | `markupSnapshot` = `1 − margin` | Resolved on the Oz side; see the caveat |
+| `for_year` + `for_month` | `year` + `period` | `for_month = 0` → pool line (period null) |
+| `channel_id` | channel key via `ozIds` | Ids 30 + 40 (both "Management Fee") collapse to one |
+| `bulk_entry_id` | `batchId` | |
+| `campaign_name`, else special budget name | `label` | |
+
+### Decisions
+
+- **Live rows only.** Soft-deleted rows aren't imported. `?deleted=1` sends
+  their ids so lines imported earlier get retired — without it a dual-run
+  leaks, since a deleted row simply stops appearing in the push.
+- **Unmapped is reported, never guessed.** An Oz channel with no Loomi home,
+  or an account with no key, comes back with its line count and dollar weight.
+  Guessing a home is how money quietly lands in the wrong place.
+- **`channel_id = 0` exists** — 3 live lines, $120,000. It has no channel and
+  is reported like any other gap.
+- **Margins have no history.** `margin_rules` is current-state only, so a 2025
+  line gets today's margin and its spend target is an approximation. The gross
+  figures are exact. (An earlier draft of this doc said to resolve the margin
+  "at the row's own date" — that isn't possible.)
+- **`budget_utilization` is not imported.** It's in gross dollars while
+  `actualAmount` is spend dollars; settlement rebuilds actuals from the pacer
+  instead of converting through an already-approximate markup.
+
+### Running it
+
+```
+# See what would happen — writes nothing on either side
+GET /loomi/pushbudgets?dry_run=1
+
+# One dealer, one year, to sanity-check the shape
+GET /loomi/pushbudgets?dealer=youngHondaOgden&year=2026
+
+# The real thing, including retirement of deleted rows
+GET /loomi/pushbudgets?deleted=1
+```
+
+Idempotent — re-run as often as you like. The response summarises rows sent,
+created/updated/archived, unmapped dealers by name, and unmapped channels with
+their dollar weight.
 
 ## 7. Deliberately out of scope for v1
 

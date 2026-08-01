@@ -1,17 +1,27 @@
 import { describe, it, expect } from 'vitest';
 import {
   BUDGET_CHANNELS,
+  INTAKE_CHANNELS,
+  KIND_BUDGET_CHANNELS,
   budgetChannel,
-  channelLabel,
   channelCategory,
+  channelFromOzId,
+  channelLabel,
   channelPacerPlatform,
   channelsForPlatform,
   isBudgetChannel,
   isPacedChannel,
-  ADS_CHANNEL_OPTION_MAP,
-  KIND_DEFAULT_CHANNEL,
 } from './channels';
-import { KIND_BUDGET_CHANNELS } from '@/lib/projects/ui';
+
+/**
+ * The Oz Reports channel ids present in `channels` as of the 2026-07 export.
+ * Every one must resolve, or its budget lines land nowhere on import — which
+ * is silent money loss, so it's pinned here rather than trusted.
+ */
+const OZ_CHANNEL_IDS = [
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+  25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
+];
 
 describe('channel registry', () => {
   it('has unique keys', () => {
@@ -19,12 +29,36 @@ describe('channel registry', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
+  it('never maps one Oz id to two channels', () => {
+    const all = BUDGET_CHANNELS.flatMap((c) => c.ozIds);
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it('covers every Oz Reports channel id', () => {
+    const unmapped = OZ_CHANNEL_IDS.filter((id) => channelFromOzId(id) == null);
+    expect(unmapped).toEqual([]);
+  });
+
+  it('collapses the duplicated Management Fee ids onto one channel', () => {
+    // 30 and 40 are both "Management Fee" in Oz Reports — the table's one true
+    // duplicate. Two entries would show the same thing twice in the hub.
+    expect(channelFromOzId(30)).toBe('management_fee');
+    expect(channelFromOzId(40)).toBe('management_fee');
+  });
+
   it('resolves known keys and rejects unknown ones', () => {
     expect(isBudgetChannel('meta')).toBe(true);
-    expect(isBudgetChannel('tiktok')).toBe(false);
+    expect(isBudgetChannel('nope')).toBe(false);
     expect(isBudgetChannel(null)).toBe(false);
-    expect(isBudgetChannel('')).toBe(false);
     expect(budgetChannel('nope')).toBeNull();
+  });
+
+  it('returns null for an unmapped or absent Oz id', () => {
+    // Oz allows channel_id 0/NULL — three live lines carry it. The importer
+    // has to see null and report them, not guess a home for real money.
+    expect(channelFromOzId(0)).toBeNull();
+    expect(channelFromOzId(null)).toBeNull();
+    expect(channelFromOzId(999)).toBeNull();
   });
 
   it('labels an unassigned channel rather than returning a raw key', () => {
@@ -37,8 +71,8 @@ describe('channel registry', () => {
 
 describe('pacer platform mapping', () => {
   it('maps both Google-family channels onto the google pacer', () => {
-    // The pacer's grain is the Google campaign and YouTube/Demand Gen campaigns
-    // live in the same customer account, so the budget's planning split of
+    // The pacer's grain is the Google campaign and YouTube/Demand Gen live in
+    // the same customer account, so the budget's planning split of
     // google/youtube must collapse to ONE platform on the rollup.
     expect(channelPacerPlatform('google')).toBe('google');
     expect(channelPacerPlatform('youtube')).toBe('google');
@@ -49,32 +83,36 @@ describe('pacer platform mapping', () => {
     expect(channelsForPlatform('meta')).toEqual(['meta']);
   });
 
-  it('leaves non-digital channels unpaced', () => {
-    // These have no platform to sync spend from, so they settle by hand —
-    // getPacerBudgetGoals must never pick them up.
-    for (const key of ['radio', 'tv', 'billboard', 'print', 'video', 'pr', 'ott', 'email_sms']) {
-      expect(isPacedChannel(key)).toBe(false);
-    }
+  it('paces only the three ad channels', () => {
+    // Everything else — fees, services, traditional, production — has no
+    // platform to sync spend from and settles by hand.
+    const paced = BUDGET_CHANNELS.filter((c) => isPacedChannel(c.key)).map((c) => c.key);
+    expect(paced.sort()).toEqual(['google', 'meta', 'youtube']);
   });
 });
 
-describe('intake mappings point at real channels', () => {
-  it('every KIND_BUDGET_CHANNELS entry is a registered channel', () => {
-    // The one way intake can silently drop a rep's money: offer an input for a
-    // channel the server then rejects as unknown.
-    for (const [kind, channels] of Object.entries(KIND_BUDGET_CHANNELS)) {
-      for (const ch of channels) {
-        expect(isBudgetChannel(ch), `${kind} → ${ch}`).toBe(true);
-      }
+describe('intake subset', () => {
+  it('is a strict subset of the registry', () => {
+    expect(INTAKE_CHANNELS.length).toBeLessThan(BUDGET_CHANNELS.length);
+    for (const c of INTAKE_CHANNELS) expect(isBudgetChannel(c.key)).toBe(true);
+  });
+
+  it('never offers a fee or a vendor service to a rep', () => {
+    // A ticket is filed against work, not against an accounting bucket.
+    for (const c of INTAKE_CHANNELS) {
+      expect(['Fees', 'Services']).not.toContain(c.category);
     }
   });
 
-  it('every ads-option and kind-default mapping resolves', () => {
-    for (const ch of Object.values(ADS_CHANNEL_OPTION_MAP)) {
-      expect(isBudgetChannel(ch), ch).toBe(true);
-    }
-    for (const ch of Object.values(KIND_DEFAULT_CHANNEL)) {
-      expect(isBudgetChannel(ch), ch).toBe(true);
+  it('every KIND_BUDGET_CHANNELS entry is a real, rep-selectable channel', () => {
+    // The one way intake can silently drop a rep's money: offer an input for a
+    // channel the server then rejects as unknown.
+    const intakeKeys = new Set(INTAKE_CHANNELS.map((c) => c.key));
+    for (const [kind, channels] of Object.entries(KIND_BUDGET_CHANNELS)) {
+      for (const ch of channels) {
+        expect(isBudgetChannel(ch), `${kind} → ${ch}`).toBe(true);
+        expect(intakeKeys.has(ch), `${kind} → ${ch} is not rep-selectable`).toBe(true);
+      }
     }
   });
 });

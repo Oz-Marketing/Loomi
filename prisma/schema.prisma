@@ -2322,9 +2322,9 @@ model AdDisclaimerTemplate {
 // Field keys match the template's FieldSpec keys (camelCase). Global
 // (no accountKey) — OEM rules are brand-wide.
 model AdOemOfferRule {
-  id             String   @id @default(cuid())
-  make           String   @unique // vehicle make / OEM (case-insensitive lookup)
-  requiredFields String   @db.Text // JSON: { [offerType]: string[] }
+  id             String @id @default(cuid())
+  make           String @unique // vehicle make / OEM (case-insensitive lookup)
+  requiredFields String @db.Text // JSON: { [offerType]: string[] }
 
   /// Standing values for fields the offer feed doesn't carry, as JSON
   /// { [offerType]: { [field]: value } }.
@@ -2339,12 +2339,12 @@ model AdOemOfferRule {
   /// These are ASSERTIONS, not derivations. A draft built using one records that
   /// in its review notes, so an approver can see the value came from this table and
   /// not from the manufacturer's offer.
-  defaultValues  String?  @db.Text
+  defaultValues String? @db.Text
 
-  notes          String?
-  isActive       Boolean  @default(true)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  notes     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 // ─────────────────────────────────────────────────────
@@ -2506,7 +2506,7 @@ model AdCreative {
   // Soft delete. Deliberately a TIMESTAMP rather than a `status` value: status
   // carries draft/ready, and folding archive into it would lose which of the two
   // an ad was when it was put away — so restoring would have to guess.
-  archivedAt         DateTime?
+  archivedAt DateTime?
 
   // One draft per (sub-account, template, offer). Null fingerprints are exempt
   // in Postgres — hand-built ads all have null here and never collide.
@@ -2807,7 +2807,7 @@ model AdAutomationConfig {
   /// every size the template defines, which is the old behaviour and stays the
   /// default. A rooftop running only Meta feed placements shouldn't pay to render
   /// and store a story crop it never posts.
-  sizeIds       String?
+  sizeIds String?
 
   templateMap String? @db.Text
 
@@ -3273,6 +3273,13 @@ model BudgetLine {
   // oz-reports' bulk_entry_id: one UUID across every line from a single
   // submission (12 stores × 6 months), so the batch edits/deletes as a unit.
   batchId String?
+
+  // Stable identity in the system this line was imported FROM, e.g.
+  // "ozreports:account_budgets:8842". Unique, so the migration upserts instead
+  // of duplicating the whole ledger on a second run — and so a corrected row in
+  // Oz Reports can be re-pushed onto the same line. Null for anything created
+  // in Loomi, which is everything after the cutover.
+  externalId String? @unique
 
   // Soft link to the thing actually spending it. Polymorphic, no FK — same
   // pattern as Task.linkedAssetType/Id.

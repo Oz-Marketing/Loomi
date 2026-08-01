@@ -161,6 +161,7 @@ export function serializeLine(l: LineRow) {
     taskId: l.taskId,
     taskTitle: l.task?.title ?? null,
     batchId: l.batchId,
+    externalId: l.externalId,
     linkedAssetType: l.linkedAssetType,
     linkedAssetId: l.linkedAssetId,
     actualAmount: l.actualAmount == null ? null : toNumber(l.actualAmount),
@@ -273,6 +274,8 @@ export interface CreateLineInput {
   initiativeId?: string | null;
   taskId?: string | null;
   batchId?: string | null;
+  /** Source-system identity, e.g. "ozreports:account_budgets:8842". */
+  externalId?: string | null;
   label?: string | null;
   notes?: string | null;
 }
@@ -357,6 +360,7 @@ export async function createLines(
         initiativeId: input.initiativeId ?? null,
         taskId: input.taskId ?? null,
         batchId: input.batchId ?? batchId,
+        externalId: input.externalId ?? null,
         label: input.label ?? null,
         notes: input.notes ?? null,
         createdByUserId: userId,
@@ -1437,4 +1441,133 @@ export async function settleClosedMonths(
   }
 
   return { accounts, settled, orphaned, errors };
+}
+
+// ── Import (Oz Reports migration) ───────────────────────────────────────────
+
+export interface ImportResult {
+  created: number;
+  updated: number;
+  archived: number;
+  /** Rows the push sent that couldn't be placed, with why. */
+  rejected: { externalId: string; reason: string }[];
+}
+
+/**
+ * Upsert lines from an external system, keyed on `externalId`.
+ *
+ * Idempotent by construction: a second run updates in place rather than
+ * duplicating the ledger, which also means a corrected row in the source can
+ * simply be re-pushed. See docs/budget-module.md §6.
+ *
+ * `archivedExternalIds` retires lines whose source row has since been deleted.
+ * Without it a dual-run leaks: a budget deleted in Oz Reports would live on in
+ * Loomi forever, because a deleted row simply stops appearing in the push.
+ *
+ * A rejected row never aborts the batch — one bad line shouldn't strand the
+ * other 8,000. They come back named so the caller can report them.
+ */
+export async function upsertImportedLines(
+  inputs: (CreateLineInput & { externalId: string })[],
+  archivedExternalIds: string[] = [],
+  userId: string | null = null,
+): Promise<ImportResult> {
+  const result: ImportResult = { created: 0, updated: 0, archived: 0, rejected: [] };
+  const placements: { spendAccountKey: string; period: string | null; channel: string | null }[] = [];
+
+  // Resolve markup once per (account, year) — 8,000 lines across ~40 accounts
+  // would otherwise be thousands of identical lookups.
+  const markupCache = new Map<string, number>();
+
+  for (const input of inputs) {
+    try {
+      const year = resolveYear(input.period, input.year);
+      if (input.channel != null && !isBudgetChannel(input.channel)) {
+        throw new Error(`Unknown budget channel "${input.channel}"`);
+      }
+      assertAmount(input.amount);
+
+      let markup = input.markup ?? null;
+      if (markup == null) {
+        const cacheKey = `${input.accountKey}:${year}`;
+        if (!markupCache.has(cacheKey)) {
+          markupCache.set(cacheKey, await resolveMarkup(input.accountKey, year));
+        }
+        markup = markupCache.get(cacheKey)!;
+      }
+
+      const source = input.source ?? 'adhoc';
+      const data = {
+        accountKey: input.accountKey,
+        spendAccountKey: input.spendAccountKey || input.accountKey,
+        year,
+        period: input.period ?? null,
+        channel: input.channel ?? null,
+        category: channelCategory(input.channel ?? null),
+        amount: decimal(input.amount),
+        markupSnapshot: markup,
+        source,
+        status: input.status ?? 'committed',
+        bucket: input.bucket ?? defaultBucket(source),
+        batchId: input.batchId ?? null,
+        label: input.label ?? null,
+        notes: input.notes ?? null,
+      };
+
+      const existing = await prisma.budgetLine.findUnique({
+        where: { externalId: input.externalId },
+        select: { id: true, period: true, channel: true, spendAccountKey: true },
+      });
+
+      if (existing) {
+        // Re-sync the placement it's LEAVING as well as the one it lands on —
+        // an edit in Oz Reports can move a line between months.
+        placements.push({
+          spendAccountKey: existing.spendAccountKey,
+          period: existing.period,
+          channel: existing.channel,
+        });
+        await prisma.budgetLine.update({
+          where: { externalId: input.externalId },
+          // A re-import is the source correcting itself, so un-archive too.
+          data: { ...data, archivedAt: null },
+        });
+        result.updated++;
+      } else {
+        await prisma.budgetLine.create({
+          data: { ...data, externalId: input.externalId, createdByUserId: userId },
+        });
+        result.created++;
+      }
+      placements.push({
+        spendAccountKey: data.spendAccountKey,
+        period: data.period,
+        channel: data.channel,
+      });
+    } catch (err) {
+      result.rejected.push({
+        externalId: input.externalId,
+        reason: err instanceof Error ? err.message : 'failed',
+      });
+    }
+  }
+
+  if (archivedExternalIds.length > 0) {
+    const retiring = await prisma.budgetLine.findMany({
+      where: { externalId: { in: archivedExternalIds }, archivedAt: null },
+      select: { spendAccountKey: true, period: true, channel: true },
+    });
+    placements.push(...retiring);
+    const { count } = await prisma.budgetLine.updateMany({
+      where: { externalId: { in: archivedExternalIds }, archivedAt: null },
+      data: { archivedAt: new Date(), status: 'canceled' },
+    });
+    result.archived = count;
+  }
+
+  // One pass at the end rather than per line — an 8,000-line import would
+  // otherwise re-sync the same months thousands of times.
+  await syncPacerForPlacements(placements, userId);
+
+  return result;
 }

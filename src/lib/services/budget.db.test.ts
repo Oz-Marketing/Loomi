@@ -101,9 +101,11 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
   });
 
   it('rejects an unknown channel', async () => {
+    // Deliberately nonsense — 'tiktok' used to stand in here and became a real
+    // channel when the registry grew to mirror Oz Reports' 44.
     await expect(
       budget.createLine(
-        { accountKey: acctA, period: `${YEAR}-03`, channel: 'tiktok', amount: 100 },
+        { accountKey: acctA, period: `${YEAR}-03`, channel: 'carrier_pigeon', amount: 100 },
         null,
       ),
     ).rejects.toThrow(/Unknown budget channel/);

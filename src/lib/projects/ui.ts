@@ -207,26 +207,17 @@ export function fieldsForKind(kind: string): FieldDef[] {
 }
 
 // ── Budget ────────────────────────────────────────────────────────────────
+// Re-exported from the channel registry so the kind→channel map lives next to
+// the channels it names and the two can't drift apart.
+import { KIND_BUDGET_CHANNELS } from '@/lib/budget/channels';
+
+export { KIND_BUDGET_CHANNELS };
+
 // Money is NOT a per-type field. It used to be six unrelated `number` keys in
 // TYPE_FIELDS (mailerBudget, radioBudget, tvBudget, videoBudget,
 // sponsorshipAmount, budget) that nothing could sum, reconcile, or trace. It
 // is now a real ledger — see docs/budget-module.md. Intake collects one amount
 // per BUDGET CHANNEL and the server turns each into a BudgetLine.
-
-/**
- * The budget channels a task Type can spend on. Keys are BudgetChannel keys
- * (src/lib/budget/channels.ts) — never invent one here. A kind absent from this
- * map spends no media budget and gets no budget block at intake.
- */
-export const KIND_BUDGET_CHANNELS: Record<string, string[]> = {
-  ads: ['meta', 'google', 'youtube'],
-  print: ['print'],
-  email: ['email_sms'],
-  sms: ['email_sms'],
-  media_buy: ['radio', 'tv', 'billboard', 'ott'],
-  video: ['video'],
-  pr: ['pr'],
-};
 
 export function budgetChannelsForKind(kind: string): string[] {
   return KIND_BUDGET_CHANNELS[kind] ?? [];

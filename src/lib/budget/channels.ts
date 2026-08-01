@@ -1,50 +1,128 @@
+'use client';
+
 /**
- * The budget module's channel list — the spend axis every BudgetLine is
+ * The budget module's channel registry — the spend axis every BudgetLine is
  * eventually placed on.
+ *
+ * Mirrors Oz Reports' `channels` table one-for-one (see docs/budget-module.md
+ * §6). That table is the agency's real taxonomy and about half its dollars sit
+ * in categories that aren't media at all — fees, data feeds, lead providers,
+ * contributions. A media-only registry would make the hub show roughly half of
+ * each client's actual budget, which is worse than showing none: the moment
+ * anyone reconciles against Oz Reports the number stops being trusted.
+ *
+ * Three things a channel carries beyond its name:
+ *
+ *   `ozIds`  — the Oz Reports channel_id(s) this maps from, used by the import.
+ *              A list because ids 30 and 40 are both "Management Fee".
+ *   `pacer`  — the Ad Pacer platform its budget rolls into, when any. Only the
+ *              three ad channels have one; everything else settles by hand.
+ *   `intake` — whether a rep can pick it when filing a ticket. All 44 exist so
+ *              the hub reconciles; only the ones people actually request are
+ *              offered on the form. Nobody filing an ads ticket should be
+ *              choosing "Contribution".
  *
  * Client-safe (no server imports), in the shape of `ad-pacer/constants.ts`.
  * Channels are string KEYS, never numeric ids: oz-reports scattered
  * `$GOOGLE = 2; $FACEBOOK = 1; $YOUTUBE = 6` through its calc code and every
  * reader had to know the mapping. Nothing here or downstream may hardcode a
  * channel — look it up.
- *
- * A channel with a `pacer` platform is one the module can bind to an Ad Pacer
- * plan and (eventually) push a budget for. Everything else settles by hand.
  */
 
 export type PacerPlatform = 'meta' | 'google';
+
+export type BudgetChannelCategory =
+  | 'Digital'
+  | 'Traditional'
+  | 'Production'
+  | 'Services'
+  | 'Fees'
+  | 'Other';
 
 export interface BudgetChannel {
   key: string;
   label: string;
   /** Display grouping in the hub — purely presentational. */
-  category: 'Digital' | 'Traditional' | 'Production' | 'Other';
+  category: BudgetChannelCategory;
+  /** Oz Reports channel_id(s) this maps from. Empty = Loomi-only. */
+  ozIds: number[];
   /**
    * Ad Pacer platform this channel's budget rolls into, when any. Both
    * `google` and `youtube` map to the Google pacer: the pacer's grain is the
    * Google campaign, and YouTube/Demand Gen campaigns live in the same
    * customer account. Keeping them as separate BUDGET channels preserves the
-   * planning split the reps use (and that oz-reports modeled as channels 2/6)
-   * without pretending the pacer sees two accounts.
+   * planning split the reps use (Oz channels 2 and 6) without pretending the
+   * pacer sees two accounts.
    */
   pacer?: PacerPlatform;
+  /** Offered to reps on the Projects intake form. */
+  intake?: boolean;
 }
 
 export const BUDGET_CHANNELS: readonly BudgetChannel[] = [
-  { key: 'meta', label: 'Meta', category: 'Digital', pacer: 'meta' },
-  { key: 'google', label: 'Google Search', category: 'Digital', pacer: 'google' },
-  { key: 'youtube', label: 'YouTube', category: 'Digital', pacer: 'google' },
-  { key: 'ott', label: 'OTT / CTV', category: 'Digital' },
-  { key: 'email_sms', label: 'Email / SMS', category: 'Digital' },
-  { key: 'radio', label: 'Radio', category: 'Traditional' },
-  { key: 'tv', label: 'TV', category: 'Traditional' },
-  { key: 'billboard', label: 'Billboard', category: 'Traditional' },
-  { key: 'print', label: 'Print / Mailer', category: 'Traditional' },
-  { key: 'video', label: 'Video / Photo', category: 'Production' },
-  { key: 'pr', label: 'PR / Sponsorship', category: 'Other' },
+  // ── Digital ──
+  { key: 'meta', label: 'Meta', category: 'Digital', ozIds: [1], pacer: 'meta', intake: true },
+  { key: 'google', label: 'Google', category: 'Digital', ozIds: [2], pacer: 'google', intake: true },
+  { key: 'youtube', label: 'YouTube', category: 'Digital', ozIds: [6], pacer: 'google', intake: true },
+  { key: 'tiktok', label: 'TikTok', category: 'Digital', ozIds: [3], intake: true },
+  { key: 'ksl', label: 'KSL', category: 'Digital', ozIds: [4], intake: true },
+  { key: 'seo', label: 'SEO', category: 'Digital', ozIds: [5], intake: true },
+  { key: 'email', label: 'Email', category: 'Digital', ozIds: [7], intake: true },
+  { key: 'sms', label: 'Text / SMS', category: 'Digital', ozIds: [33], intake: true },
+  { key: 'ott', label: 'CTV / OTT', category: 'Digital', ozIds: [9], intake: true },
+  { key: 'organic_social', label: 'Organic Social', category: 'Digital', ozIds: [37], intake: true },
+  { key: 'conquest', label: 'Conquest', category: 'Digital', ozIds: [39] },
+
+  // ── Traditional ──
+  { key: 'tv', label: 'TV', category: 'Traditional', ozIds: [8], intake: true },
+  { key: 'radio', label: 'Radio', category: 'Traditional', ozIds: [10], intake: true },
+  { key: 'billboard', label: 'Billboard', category: 'Traditional', ozIds: [11], intake: true },
+  { key: 'transit_billboard', label: 'Transit Billboard', category: 'Traditional', ozIds: [35], intake: true },
+  { key: 'print', label: 'Print / Mailer', category: 'Traditional', ozIds: [43], intake: true },
+  { key: 'edd', label: 'EDDM', category: 'Traditional', ozIds: [13], intake: true },
+
+  // ── Production ──
+  { key: 'production', label: 'Production', category: 'Production', ozIds: [27], intake: true },
+
+  // ── Services ──
+  { key: 'data_feed', label: 'Data Feed', category: 'Services', ozIds: [16] },
+  { key: 'lead_provider', label: 'Lead Provider', category: 'Services', ozIds: [19] },
+  { key: 'conversion_provider', label: 'Conversion Provider', category: 'Services', ozIds: [18] },
+  { key: 'database', label: 'Database', category: 'Services', ozIds: [12] },
+  { key: 'reputation', label: 'Reputation Management', category: 'Services', ozIds: [20] },
+  { key: 'chat', label: 'Chat', category: 'Services', ozIds: [17] },
+  { key: 'development', label: 'Development', category: 'Services', ozIds: [31] },
+  { key: 'maintenance', label: 'Maintenance', category: 'Services', ozIds: [32] },
+  { key: 'marketing_analytics', label: 'Marketing & Analytics', category: 'Services', ozIds: [44] },
+
+  // ── Fees ──
+  // 30 and 40 are both "Management Fee" in Oz Reports — the one real duplicate
+  // in the table, collapsed here so the hub doesn't show the same thing twice.
+  { key: 'management_fee', label: 'Management Fee', category: 'Fees', ozIds: [30, 40] },
+  { key: 'managed_marketing_services', label: 'Managed Marketing Services', category: 'Fees', ozIds: [29] },
+  { key: 'contribution', label: 'Contribution', category: 'Fees', ozIds: [28] },
+
+  // ── Other ──
+  { key: 'pr', label: 'PR', category: 'Other', ozIds: [41], intake: true },
+  { key: 'sponsorship', label: 'Sponsorship', category: 'Other', ozIds: [36], intake: true },
+  { key: 'referral', label: 'Referral', category: 'Other', ozIds: [21] },
+  { key: 'yag', label: 'YAG', category: 'Other', ozIds: [22] },
+  { key: 'group_sale', label: 'Group Sale', category: 'Other', ozIds: [23] },
+  { key: 'store_sale', label: 'Store Sale', category: 'Other', ozIds: [24] },
+  { key: 'group_event', label: 'Group Event', category: 'Other', ozIds: [25] },
+  { key: 'store_event', label: 'Store Event', category: 'Other', ozIds: [26] },
+  { key: 'auxiliary', label: 'Auxiliary', category: 'Other', ozIds: [38] },
+  { key: 'new_clients', label: 'New Clients', category: 'Other', ozIds: [42] },
+  { key: 'other', label: 'Other', category: 'Other', ozIds: [34] },
 ] as const;
 
 const BY_KEY = new Map(BUDGET_CHANNELS.map((c) => [c.key, c]));
+
+/** Oz Reports channel_id → Loomi channel key. Built once from `ozIds`. */
+const BY_OZ_ID = new Map<number, string>();
+for (const c of BUDGET_CHANNELS) {
+  for (const id of c.ozIds) BY_OZ_ID.set(id, c.key);
+}
 
 export function budgetChannel(key: string | null | undefined): BudgetChannel | null {
   if (!key) return null;
@@ -80,26 +158,44 @@ export function isPacedChannel(key: string | null | undefined): boolean {
 }
 
 /**
- * Task kind (Projects intake) → the channel its budget defaults to. Kinds that
- * can span channels (`ads`) are deliberately absent: the intake form asks which
- * channels, and one line is created per selected channel.
+ * Resolve an Oz Reports channel_id during import. Returns null for an id with
+ * no mapping (and for 0/null, which Oz allows) so the importer can report it
+ * rather than guessing a home for real money.
  */
-export const KIND_DEFAULT_CHANNEL: Record<string, string> = {
-  print: 'print',
-  email: 'email_sms',
-  sms: 'email_sms',
-  video: 'video',
-  pr: 'pr',
-};
+export function channelFromOzId(ozId: number | null | undefined): string | null {
+  if (ozId == null) return null;
+  return BY_OZ_ID.get(ozId) ?? null;
+}
 
 /**
- * The `ads` intake field offers platform names; map them onto channel keys.
- * Unmapped selections (TikTok, KSL) have no budget channel yet and fall back to
- * a single generic Meta/Google-less line — see intake wiring.
+ * Channels a rep can choose on the intake form. Deliberately a subset: all 44
+ * exist so the hub reconciles against Oz Reports, but a ticket is never filed
+ * against "Contribution" or "Management Fee".
  */
-export const ADS_CHANNEL_OPTION_MAP: Record<string, string> = {
-  Facebook: 'meta',
-  Google: 'google',
-  SEM: 'google',
-  YouTube: 'youtube',
+export const INTAKE_CHANNELS: readonly BudgetChannel[] = BUDGET_CHANNELS.filter((c) => c.intake);
+
+/** Registry order, grouped for the hub's channel pickers. */
+export const CHANNEL_CATEGORY_ORDER: BudgetChannelCategory[] = [
+  'Digital',
+  'Traditional',
+  'Production',
+  'Services',
+  'Fees',
+  'Other',
+];
+
+/**
+ * Task kind (Projects intake) → the channels its budget can land on. Keys are
+ * BudgetChannel keys — never invent one here. A kind absent from this map
+ * spends no media budget and gets no budget block at intake.
+ */
+export const KIND_BUDGET_CHANNELS: Record<string, string[]> = {
+  ads: ['meta', 'google', 'youtube', 'tiktok', 'ksl'],
+  print: ['print', 'edd'],
+  email: ['email'],
+  sms: ['sms'],
+  media_buy: ['radio', 'tv', 'billboard', 'transit_billboard', 'ott'],
+  video: ['production'],
+  pr: ['pr', 'sponsorship'],
+  social: ['organic_social'],
 };

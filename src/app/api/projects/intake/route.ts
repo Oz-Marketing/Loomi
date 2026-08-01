@@ -2,12 +2,35 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import * as projects from '@/lib/services/projects';
+import { isBudgetChannel } from '@/lib/budget/channels';
+import { isValidPeriod } from '@/lib/services/budget';
+import type { BudgetEntry } from '@/lib/projects/ui';
 
 /**
  * POST /api/projects/intake — file a ticket. Creates (or attaches to) an
  * initiative for the account and spins up one task per selected team, firing
- * assignment / team notifications. Internal-staff only.
+ * assignment / team notifications, and records any requested media budget as
+ * BudgetLines (docs/budget-module.md). Internal-staff only.
  */
+
+/**
+ * Validate the per-department budget rows. Unknown channels and non-positive
+ * amounts are DROPPED rather than rejected: a malformed row shouldn't cost the
+ * rep the whole ticket, and the hub surfaces any money that didn't land.
+ */
+function parseBudgetEntries(raw: unknown): BudgetEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: BudgetEntry[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== 'object') continue;
+    const { channel, amount } = r as { channel?: unknown; amount?: unknown };
+    if (typeof channel !== 'string' || !isBudgetChannel(channel)) continue;
+    const n = typeof amount === 'number' ? amount : Number(amount);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    out.push({ channel, amount: n });
+  }
+  return out;
+}
 export async function POST(req: NextRequest) {
   const { session, error } = await requireRole(...MANAGEMENT_ROLES);
   if (error) return error;
@@ -19,22 +42,34 @@ export async function POST(req: NextRequest) {
     ? body.accountKeys.map(String).filter(Boolean)
     : [];
   const title = typeof body.title === 'string' ? body.title.trim() : '';
-  // Per-department type entries: [{ teamKey, kind, details }].
-  const departments: { teamKey: string; kind: string; details?: Record<string, unknown> }[] =
-    Array.isArray(body.departments)
-      ? body.departments
-          .filter((d: unknown): d is { teamKey: string; kind?: string; details?: unknown } =>
+  // Per-department type entries: [{ teamKey, kind, details, budget }].
+  type RawDept = {
+    teamKey: string;
+    kind?: string;
+    details?: unknown;
+    budget?: unknown;
+  };
+  const departments: {
+    teamKey: string;
+    kind: string;
+    details?: Record<string, unknown>;
+    budget?: BudgetEntry[];
+  }[] = Array.isArray(body.departments)
+    ? body.departments
+        .filter(
+          (d: unknown): d is RawDept =>
             !!d && typeof (d as { teamKey?: unknown }).teamKey === 'string',
-          )
-          .map((d: { teamKey: string; kind?: string; details?: unknown }) => ({
-            teamKey: d.teamKey,
-            kind: typeof d.kind === 'string' ? d.kind : 'generic',
-            details:
-              d.details && typeof d.details === 'object'
-                ? (d.details as Record<string, unknown>)
-                : undefined,
-          }))
-      : [];
+        )
+        .map((d: RawDept) => ({
+          teamKey: d.teamKey,
+          kind: typeof d.kind === 'string' ? d.kind : 'generic',
+          details:
+            d.details && typeof d.details === 'object'
+              ? (d.details as Record<string, unknown>)
+              : undefined,
+          budget: parseBudgetEntries(d.budget),
+        }))
+    : [];
 
   const meta =
     body.meta && typeof body.meta === 'object' ? (body.meta as Record<string, unknown>) : null;
@@ -63,6 +98,10 @@ export async function POST(req: NextRequest) {
       priority: typeof body.priority === 'string' ? body.priority : undefined,
       dueDate: body.dueDate ?? null,
       assigneeUserId: body.assigneeUserId ?? null,
+      budgetPeriod:
+        typeof body.budgetPeriod === 'string' && isValidPeriod(body.budgetPeriod)
+          ? body.budgetPeriod
+          : null,
       meta,
       billing,
     },

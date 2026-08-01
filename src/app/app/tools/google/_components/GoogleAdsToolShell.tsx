@@ -247,6 +247,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
             period,
             baseBudgetGoal: data.baseBudgetGoal ?? null,
             addedBudgetGoal: data.addedBudgetGoal ?? null,
+            budgetManaged: data.budgetManaged ?? false,
             markup: data.markup ?? null,
             timeZone: tz,
             frozen,
@@ -646,6 +647,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               goalKey="baseBudgetGoal"
               plan={plan}
               onChange={onPlanChange}
+              platform="google"
             />
             <BudgetPanel
               title="Added Budget"
@@ -654,6 +656,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               goalKey="addedBudgetGoal"
               plan={plan}
               onChange={onPlanChange}
+              platform="google"
             />
           </div>
         </div>

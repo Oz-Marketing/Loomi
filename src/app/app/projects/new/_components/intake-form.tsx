@@ -9,9 +9,13 @@ import {
   isCreativeKind,
   kindLabel,
   fieldsForKind,
+  budgetChannelsForKind,
+  kindSpendsBudget,
   BILLING_FIELDS,
   TEAM_KINDS,
 } from '@/lib/projects/ui';
+import { channelLabel } from '@/lib/budget/channels';
+import { ChannelIcon } from '@/components/icons/channel-icon';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { AccountAvatar } from '@/components/account-avatar';
@@ -21,6 +25,45 @@ import { MediaUpload, type UploadedFile } from '../../_components/media-upload';
 
 // Per-(department,type) field values, keyed `${teamKey}:${kind}` → { fieldKey: value }.
 type TypeDetails = Record<string, Record<string, FieldValue>>;
+
+// Per-(department,type) requested budget, keyed `${teamKey}:${kind}` →
+// { channelKey: rawInput }. Held as the raw string so a half-typed "1" doesn't
+// get coerced to a number mid-keystroke; parsed once at submit.
+type TypeBudgets = Record<string, Record<string, string>>;
+
+/** The account/year rollup shown live as the rep types (GET /api/budget/summary). */
+type BudgetSummary = {
+  declaredTotal: number | null;
+  totalCommitted: number;
+  allocated: number;
+  pool: number;
+  unplanned: number | null;
+  overAllocated: boolean;
+};
+
+const usd = (n: number) =>
+  n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+
+/** "2026-07" → "July 2026", for the budget-month label. */
+function periodLabel(period: string): string {
+  const [y, m] = period.split('-').map(Number);
+  if (!y || !m) return period;
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
+
+/** The 15 months from last month forward — the realistic window for a request. */
+function periodOptions(): { value: string; label: string }[] {
+  const out: { value: string; label: string }[] = [];
+  const base = new Date();
+  base.setDate(1);
+  base.setMonth(base.getMonth() - 1);
+  for (let i = 0; i < 15; i++) {
+    const d = new Date(base.getFullYear(), base.getMonth() + i, 1);
+    const value = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    out.push({ value, label: periodLabel(value) });
+  }
+  return out;
+}
 
 type Logos = { light?: string; dark?: string; white?: string; black?: string } | null;
 type Account = { key: string; dealer: string; slug: string | null; logos: Logos };
@@ -33,7 +76,7 @@ const PRIORITIES = ['low', 'medium', 'high', 'urgent'] as const;
 
 // Sizes the SearchableSelect/MultiSelect triggers to match the form's
 // `.loomi-input` fields (rounded-lg, py-2 px-3, text-sm, page background).
-const SELECT_TRIGGER = '!bg-[var(--background)] !rounded-lg !px-3 !py-2 !text-sm';
+const SELECT_TRIGGER = '!bg-[var(--input)] !rounded-lg !px-3 !py-2 !text-sm';
 
 // Project templates — pre-select the standard department set for common
 // engagements. Team keys are matched against the live team list, so a
@@ -108,6 +151,24 @@ export function IntakeForm() {
   const [billing, setBilling] = useState<Record<string, FieldValue>>({});
   const [submitting, setSubmitting] = useState(false);
 
+  // ── Budget ──
+  // Requested media dollars, per (department, type, channel). These become
+  // BudgetLines, not Task.details — see docs/budget-module.md.
+  const [budgets, setBudgets] = useState<TypeBudgets>({});
+  // The month the requested money is spent in. Defaults to the current month
+  // and follows the due date until the rep overrides it by hand.
+  const [budgetPeriod, setBudgetPeriod] = useState(() => new Date().toISOString().slice(0, 7));
+  const [budgetPeriodTouched, setBudgetPeriodTouched] = useState(false);
+  // The primary account's rollup for the chosen year, so the rep sees what's
+  // already spoken for before adding to it.
+  const [budgetSummary, setBudgetSummary] = useState<BudgetSummary | null>(null);
+
+  const setBudget = (tk: string, kind: string, channel: string, value: string) =>
+    setBudgets((prev) => ({
+      ...prev,
+      [`${tk}:${kind}`]: { ...(prev[`${tk}:${kind}`] ?? {}), [channel]: value },
+    }));
+
   const setDetail = (tk: string, kind: string, fieldKey: string, value: FieldValue) =>
     setTypeDetails((prev) => ({
       ...prev,
@@ -152,6 +213,61 @@ export function IntakeForm() {
 
   const primaryAccountKey = accountKeys[0] ?? '';
   const multiAccount = accountKeys.length > 1;
+
+  /** Requested budget for one (department, type), as valid channel/amount pairs. */
+  const budgetEntriesFor = (tk: string, kind: string) =>
+    Object.entries(budgets[`${tk}:${kind}`] ?? {})
+      .map(([channel, raw]) => ({ channel, amount: Number(raw) }))
+      .filter((e) => Number.isFinite(e.amount) && e.amount > 0);
+
+  // What ONE account is being asked for. The amounts a rep types are per
+  // account (a $1,000 ads request across three dealers is $1,000 each), so this
+  // is the figure that gets compared against a single account's remaining
+  // budget — multiplying by account count here would be wrong.
+  const requestedPerAccount = useMemo(() => {
+    let total = 0;
+    for (const byChannel of Object.values(budgets)) {
+      for (const raw of Object.values(byChannel)) {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n > 0) total += n;
+      }
+    }
+    return total;
+  }, [budgets]);
+
+  const budgetYear = Number(budgetPeriod.slice(0, 4));
+
+  // Keep the budget month tracking the due date until the rep picks one
+  // themselves — the due date is the best available guess, but overriding it
+  // has to stick.
+  useEffect(() => {
+    if (!budgetPeriodTouched && dueDate) setBudgetPeriod(dueDate.slice(0, 7));
+  }, [dueDate, budgetPeriodTouched]);
+
+  // Primary account's rollup. Refetched on account/year change only — the
+  // request being typed is layered on top client-side rather than round-tripped.
+  useEffect(() => {
+    if (!primaryAccountKey) {
+      setBudgetSummary(null);
+      return;
+    }
+    let active = true;
+    fetch(
+      `/api/budget/summary?accountKey=${encodeURIComponent(primaryAccountKey)}&year=${budgetYear}`,
+    )
+      .then((r) => (r.ok ? r.json() : Promise.reject()))
+      .then((d: { summary: BudgetSummary }) => {
+        if (active) setBudgetSummary(d.summary);
+      })
+      // A missing rollup is not worth blocking intake over — the block just
+      // hides its "remaining" line and the ticket still files.
+      .catch(() => {
+        if (active) setBudgetSummary(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [primaryAccountKey, budgetYear]);
 
   useEffect(() => {
     let active = true;
@@ -232,6 +348,7 @@ export function IntakeForm() {
           teamKey: tk,
           kind,
           details: typeDetails[`${tk}:${kind}`] ?? {},
+          budget: budgetEntriesFor(tk, kind),
         }));
       });
       const billingFilled = Object.values(billing).some(
@@ -248,6 +365,9 @@ export function IntakeForm() {
           creativeMode: showCreativeToggle ? creativeMode : 'unique',
           priority,
           dueDate: dueDate || null,
+          // Only sent when money was actually requested — otherwise the server
+          // would stamp a month onto a ticket that has no lines to place.
+          budgetPeriod: requestedPerAccount > 0 ? budgetPeriod : null,
           // Ticket-level timing + billing (stored on the initiative if one is
           // auto-created, else on the task).
           meta: {
@@ -266,8 +386,18 @@ export function IntakeForm() {
         }),
       });
       if (!res.ok) throw new Error();
-      const data = (await res.json()) as { initiativeId: string | null; tasks: { id: string }[] };
+      const data = (await res.json()) as {
+        initiativeId: string | null;
+        tasks: { id: string }[];
+        budgetError?: string | null;
+      };
       toast.success(`Submitted ${data.tasks.length} task${data.tasks.length === 1 ? '' : 's'}`);
+      // The tickets are created either way (budget failure is non-fatal on the
+      // server), but the rep has to know the money didn't land or they'll
+      // assume it's tracked.
+      if (data.budgetError) {
+        toast.error(`Tickets filed, but the budget wasn't recorded: ${data.budgetError}`);
+      }
       if (data.initiativeId) router.push(`/projects/initiatives/${data.initiativeId}`);
       else if (data.tasks.length === 1) router.push(`/projects/tasks/${data.tasks[0].id}`);
       else router.push('/projects');
@@ -442,7 +572,12 @@ export function IntakeForm() {
                 </div>
               )}
               {teamKeys.map((tk) => {
-                const kindsWithFields = (deptKinds[tk] ?? []).filter((k) => fieldsForKind(k).length > 0);
+                // A type earns a sub-card if it has intake fields OR spends
+                // media budget — SMS has no fields but does have a budget, and
+                // filtering on fields alone would silently hide its input.
+                const kindsWithFields = (deptKinds[tk] ?? []).filter(
+                  (k) => fieldsForKind(k).length > 0 || kindSpendsBudget(k),
+                );
                 const expanded = isDeptExpanded(tk);
                 const stats = deptFieldStats(tk);
                 const typeLabels = (deptKinds[tk] ?? []).map(kindLabel);
@@ -525,16 +660,67 @@ export function IntakeForm() {
                                 </span>
                               </button>
                               {tExpanded && (
-                                <div className="grid grid-cols-1 gap-3 border-t border-[var(--border)] p-3 sm:grid-cols-2">
-                                  {fieldsForKind(kind).map((f) => (
-                                    <FieldRenderer
-                                      key={f.key}
-                                      field={f}
-                                      value={typeDetails[`${tk}:${kind}`]?.[f.key]}
-                                      onChange={(v) => setDetail(tk, kind, f.key, v)}
-                                      accentColor={teamColor(tk)}
-                                    />
-                                  ))}
+                                <div className="border-t border-[var(--border)]">
+                                  {fieldsForKind(kind).length > 0 && (
+                                    <div className="grid grid-cols-1 gap-3 p-3 sm:grid-cols-2">
+                                      {fieldsForKind(kind).map((f) => (
+                                        <FieldRenderer
+                                          key={f.key}
+                                          field={f}
+                                          value={typeDetails[`${tk}:${kind}`]?.[f.key]}
+                                          onChange={(v) => setDetail(tk, kind, f.key, v)}
+                                          accentColor={teamColor(tk)}
+                                        />
+                                      ))}
+                                    </div>
+                                  )}
+                                  {/* Media budget — one input per channel this
+                                      type can spend on. Each becomes a real
+                                      BudgetLine, per account. */}
+                                  {kindSpendsBudget(kind) && (
+                                    <div
+                                      className={`p-3 ${fieldsForKind(kind).length > 0 ? 'border-t border-[var(--border)]' : ''}`}
+                                    >
+                                      <div className="mb-2 flex items-baseline gap-2">
+                                        <span className="text-[11px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
+                                          Budget
+                                        </span>
+                                        <span className="text-[11px] text-[var(--muted-foreground)]">
+                                          per account · {periodLabel(budgetPeriod)}
+                                        </span>
+                                      </div>
+                                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                                        {budgetChannelsForKind(kind).map((ch) => (
+                                          <label key={ch} className="flex items-center gap-2">
+                                            <span className="flex w-28 flex-shrink-0 items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+                                              <ChannelIcon
+                                                channel={ch}
+                                                className="h-3.5 w-3.5 flex-shrink-0"
+                                              />
+                                              <span className="truncate">{channelLabel(ch)}</span>
+                                            </span>
+                                            <span className="relative flex-1">
+                                              <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[var(--muted-foreground)]">
+                                                $
+                                              </span>
+                                              <input
+                                                type="number"
+                                                min="0"
+                                                step="any"
+                                                inputMode="decimal"
+                                                placeholder="0"
+                                                value={budgets[`${tk}:${kind}`]?.[ch] ?? ''}
+                                                onChange={(e) =>
+                                                  setBudget(tk, kind, ch, e.target.value)
+                                                }
+                                                className="loomi-input w-full !bg-[var(--input)] !pl-6"
+                                              />
+                                            </span>
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -606,8 +792,72 @@ export function IntakeForm() {
           </Field>
         </div>
 
+        {/* Budget — only once the rep has actually asked for money. Shows what
+            the account already has committed so a request isn't made blind, and
+            WARNS on over-allocation rather than blocking it (docs §8.3): a hard
+            block just gets routed around by inflating the declared total. */}
+        {requestedPerAccount > 0 && (
+          <div className="rounded-lg border border-[var(--border)] p-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-[minmax(0,220px)_1fr] sm:items-start">
+              <Field label="Budget month">
+                <SearchableSelect
+                  value={budgetPeriod}
+                  onChange={(v) => {
+                    setBudgetPeriod(v);
+                    setBudgetPeriodTouched(true);
+                  }}
+                  searchable={false}
+                  options={periodOptions()}
+                  className={SELECT_TRIGGER}
+                />
+              </Field>
+
+              <div className="text-sm">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <span className="font-medium text-[var(--foreground)]">
+                    {usd(requestedPerAccount)}
+                  </span>
+                  <span className="text-[var(--muted-foreground)]">
+                    requested{multiAccount ? ` per account · ${accountKeys.length} accounts` : ''}
+                  </span>
+                </div>
+
+                {budgetSummary && (
+                  <div className="mt-1.5 space-y-0.5 text-xs text-[var(--muted-foreground)]">
+                    <div>
+                      {options.accounts.find((a) => a.key === primaryAccountKey)?.dealer ??
+                        primaryAccountKey}{' '}
+                      · {budgetYear}: {usd(budgetSummary.totalCommitted)} committed
+                      {budgetSummary.declaredTotal != null && (
+                        <> of {usd(budgetSummary.declaredTotal)} planned</>
+                      )}
+                      {budgetSummary.pool > 0 && <> · {usd(budgetSummary.pool)} unassigned</>}
+                    </div>
+                    {budgetSummary.unplanned != null &&
+                      (() => {
+                        // What's left AFTER this request lands, since that's the
+                        // number the rep is actually deciding against.
+                        const after = budgetSummary.unplanned - requestedPerAccount;
+                        return after < 0 ? (
+                          <div className="font-medium text-[var(--warning,#f59e0b)]">
+                            This puts {primaryAccountKey} {usd(Math.abs(after))} over its planned
+                            budget. You can still submit — it&apos;ll show as over-allocated in the
+                            budget hub.
+                          </div>
+                        ) : (
+                          <div>{usd(after)} left after this request</div>
+                        );
+                      })()}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Billing — collapsed by default; deeper accounting handled internally. */}
         <div className="rounded-lg border border-[var(--border)]">
+
           <button
             type="button"
             onClick={() => setBillingOpen((o) => !o)}

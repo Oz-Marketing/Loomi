@@ -12,6 +12,24 @@ interface AccountAvatarProps {
   size?: number;
   className?: string;
   alt?: string;
+  /**
+   * Tailwind padding for a LOGO image inside the box. The 15% default keeps
+   * logos off the edge at the small sizes most callers use, but it shrinks a
+   * wide wordmark to almost nothing when the avatar is rendered large — pass a
+   * tighter value (e.g. "p-[6%]") at display sizes. No effect on the generated
+   * fallback, which is drawn to fill.
+   */
+  logoInsetClassName?: string;
+  /**
+   * 'square' (default) is the avatar treatment every list and table uses.
+   * 'auto' fixes the HEIGHT to `size` and lets the width follow the image's own
+   * aspect — a wide wordmark in a square box is capped by the box's width, so
+   * it renders a fraction of the height you asked for. Only meaningful for a
+   * real logo; the generated fallback is square either way.
+   */
+  aspect?: 'square' | 'auto';
+  /** Upper bound on width in 'auto' mode, so a very wide mark can't run away. */
+  maxWidth?: number;
 }
 
 export function AccountAvatar({
@@ -20,6 +38,9 @@ export function AccountAvatar({
   storefrontImage,
   logos,
   size = 48,
+  logoInsetClassName = 'p-[15%]',
+  aspect = 'square',
+  maxWidth,
   className = '',
   alt,
 }: AccountAvatarProps) {
@@ -43,17 +64,28 @@ export function AccountAvatar({
   const src = primarySrc && !hasImageError ? primarySrc : fallbackSrc;
   const isLogo = Boolean(themeLogoSrc) && !hasImageError;
 
+  // 'auto' only pays off for a real logo — the generated fallback is square, so
+  // letting it stretch would just distort it.
+  const freeWidth = aspect === 'auto' && isLogo;
+
   return (
     <span
       className={`inline-flex items-center justify-center overflow-hidden ${className}`}
-      style={{ width: size, height: size }}
+      style={
+        freeWidth
+          ? { height: size, maxWidth: maxWidth ?? size * 4 }
+          : { width: size, height: size }
+      }
     >
       <img
         src={src}
         alt={alt || (name ? `${name} account avatar` : 'Account avatar')}
-        width={size}
         height={size}
-        className={`w-full h-full ${isLogo ? 'object-contain p-[15%]' : 'object-cover'}`}
+        className={
+          freeWidth
+            ? `h-full w-auto object-contain ${logoInsetClassName}`
+            : `w-full h-full ${isLogo ? `object-contain ${logoInsetClassName}` : 'object-cover'}`
+        }
         onError={() => setHasImageError(true)}
       />
     </span>

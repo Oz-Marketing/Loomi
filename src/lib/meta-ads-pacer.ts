@@ -280,6 +280,11 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
       (platform === 'google' ? budget?.googleBaseBudgetGoal : budget?.baseBudgetGoal) ?? null,
     addedBudgetGoal:
       (platform === 'google' ? budget?.googleAddedBudgetGoal : budget?.addedBudgetGoal) ?? null,
+    // Budget-module ownership (docs/budget-module.md). When true the goal pair
+    // above is written from the BudgetLine ledger and the UI locks the inputs.
+    // Per-platform, same as the goals themselves.
+    budgetManaged:
+      (platform === 'google' ? budget?.googleManagedByBudget : budget?.managedByBudget) ?? false,
     // Opt-in carryover applied to each bucket's DERIVED spend target (Change 7).
     // Per-platform, same as the budget goals — Google reads its own pair.
     baseCarryover:

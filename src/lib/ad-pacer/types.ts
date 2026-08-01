@@ -150,6 +150,11 @@ export interface PacerPlan {
   period: string;
   baseBudgetGoal: string | null;
   addedBudgetGoal: string | null;
+  // The goal pair above is owned by the BudgetLine ledger for this month
+  // (docs/budget-module.md §4): the inputs render read-only and the values are
+  // written by syncPeriodBudgetFromLines. Per-platform and per-period — a
+  // specialist can unmanage a single month to take manual control back.
+  budgetManaged: boolean;
   // Per-account markup override (Account.markup). `null` → use the
   // platform default (the admin-configured agency markup). Drives the
   // gross↔actual conversion in the Budget Calculator's Client Budget mode.

@@ -74,7 +74,7 @@ export function BudgetAgreementModal({
         <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
           <div>
             <h3 className="text-sm font-semibold text-[var(--foreground)]">
-              {editing ? (editing === 'new' ? 'New Agreement' : 'Edit Agreement') : 'Agreements'}
+              {editing ? (editing === 'new' ? 'New Contract' : 'Edit Contract') : 'Contracts'}
             </h3>
             <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
               {accountName} · Viewing {year}
@@ -199,7 +199,7 @@ function AgreementList({
                 <span
                   role="button"
                   tabIndex={-1}
-                  aria-label="Archive agreement"
+                  aria-label="Archive contract"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (!busy) void onArchive(a.id);
@@ -259,7 +259,7 @@ function AgreementList({
           className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
         >
           <PlusIcon className="h-4 w-4" />
-          New Agreement
+          New Contract
         </button>
       </div>
     </>
@@ -357,7 +357,7 @@ function AgreementForm({
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={`${year} Annual Agreement`}
+            placeholder={`${year} Annual Contract`}
             className="loomi-input mt-1 w-full !bg-[var(--input)]"
           />
         </div>
@@ -533,7 +533,7 @@ function AgreementForm({
           onClick={() => void save(false)}
           className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
         >
-          {busy ? 'Saving…' : agreement ? 'Save Changes' : 'Create Agreement'}
+          {busy ? 'Saving…' : agreement ? 'Save Changes' : 'Create Contract'}
         </button>
       </div>
     </>

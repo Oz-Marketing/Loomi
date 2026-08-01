@@ -27,6 +27,7 @@ import { BudgetCategoriseModal } from './budget-categorise-modal';
 import { BudgetAddLineModal } from './budget-add-line-modal';
 import { StatusPill } from './budget-status-pill';
 import {
+  LINE_TYPE_COLOR,
   MONTH_ABBR,
   compactMoney as compact,
   monthIndexOf,
@@ -152,6 +153,25 @@ export function BudgetHub() {
     }, 250);
   }, []);
 
+  /**
+   * The line-type breakdown, sorted biggest first and carrying each type's
+   * share. Sorted rather than left in registry order so the bar reads
+   * largest-to-smallest, which is how a proportion is scanned.
+   */
+  const composition = useMemo(() => {
+    const parts = [...(summary?.byLineType ?? [])].sort((a, b) => b.amount - a.amount);
+    const total = parts.reduce((t, p) => t + p.amount, 0);
+    return {
+      total,
+      parts: parts.map((p) => ({
+        ...p,
+        label: LINE_TYPES.find((x) => x.key === p.lineType)?.label ?? p.lineType,
+        color: LINE_TYPE_COLOR[p.lineType] ?? 'bg-[var(--muted)]',
+        pct: total > 0 ? (p.amount / total) * 100 : 0,
+      })),
+    };
+  }, [summary]);
+
   /** Money on this account with no line type — what the triage modal fixes. */
   const untypedTotal = useMemo(
     () => summary?.byLineType.find((t) => t.lineType === 'unclassified')?.amount ?? 0,
@@ -184,17 +204,17 @@ export function BudgetHub() {
    * value is wrong.
    */
   const agreementSub = useMemo(() => {
-    if (agreements.length === 0) return 'Add an agreement to track against';
-    if (summary?.declaredTotal == null) return 'No commitment set on the agreement';
+    if (agreements.length === 0) return 'Add a contract to track against';
+    if (summary?.declaredTotal == null) return 'No total set on the contract';
     const fees = agreements.reduce((t, a) => t + a.monthlyFeeTotal, 0);
     const partial = agreements.filter((a) => a.monthsInYear != null && a.monthsInYear < a.termMonths);
     if (partial.length > 0) {
       return agreements.length === 1
         ? `${partial[0].monthsInYear} of ${partial[0].termMonths} months of the term fall in ${year}`
-        : `Pro-rated share of ${agreements.length} agreements`;
+        : `Pro-rated share of ${agreements.length} contracts`;
     }
     if (fees > 0) return `${usd0(fees)}/mo recurring`;
-    return agreements.length === 1 ? 'What the client signed up for' : `Across ${agreements.length} agreements`;
+    return agreements.length === 1 ? 'What the client signed up for' : `Across ${agreements.length} contracts`;
   }, [agreements, summary?.declaredTotal, year]);
 
   const yearOptions = useMemo(() => {
@@ -214,12 +234,12 @@ export function BudgetHub() {
         body: JSON.stringify({ accountKey, ...body }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || 'Could not save the agreement');
-      toast.success(id ? 'Agreement saved' : 'Agreement created');
+      if (!res.ok) throw new Error(data?.error || 'Could not save the contract');
+      toast.success(id ? 'Contract saved' : 'Contract created');
       await reload();
       return true;
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save the agreement');
+      toast.error(err instanceof Error ? err.message : 'Could not save the contract');
       return false;
     }
   }
@@ -244,14 +264,14 @@ export function BudgetHub() {
   async function archiveAgreement(id: string) {
     try {
       const res = await fetch(`/api/budget/agreements/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Could not archive the agreement');
+      if (!res.ok) throw new Error('Could not archive the contract');
       // Lines keep their money — archiving ends the commitment, it doesn't
       // unwind what's already been budgeted against it.
-      toast.success('Agreement archived · its budget lines are untouched');
+      toast.success('Contract archived · its budget lines are untouched');
       await reload();
       return true;
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not archive the agreement');
+      toast.error(err instanceof Error ? err.message : 'Could not archive the contract');
       return false;
     }
   }
@@ -364,7 +384,7 @@ export function BudgetHub() {
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50"
           >
             <DocumentTextIcon className="h-4 w-4" />
-            {agreements.length > 1 ? `Agreements · ${agreements.length}` : 'Agreement'}
+            {agreements.length > 1 ? `Contracts · ${agreements.length}` : 'Contract'}
           </button>
         </div>
       </div>
@@ -390,20 +410,20 @@ export function BudgetHub() {
               sentence rather than four unrelated figures. */}
           <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatCard
-              label="Committed by Agreement"
+              label="Total budget"
               value={summary.declaredTotal}
               empty="Not set"
               sub={agreementSub}
             />
             <StatCard
-              label="Committed"
+              label="Planned"
               value={summary.totalCommitted}
               tone={summary.overAllocated ? 'warn' : undefined}
               sub={
                 summary.declaredTotal
                   ? summary.overAllocated
                     ? `Scheduled + pool · ${usd0(Math.abs(summary.unplanned ?? 0))} over plan`
-                    : `Scheduled + pool · ${Math.round((summary.totalCommitted / summary.declaredTotal) * 100)}% of plan`
+                    : `Scheduled + pool · ${Math.round((summary.totalCommitted / summary.declaredTotal) * 100)}% of budget`
                   : 'Scheduled + pool'
               }
             />
@@ -428,101 +448,188 @@ export function BudgetHub() {
             />
           </div>
 
-          {/* Revenue split — the thing Oz Reports could never show: how much of
-              this client is media pass-through vs agency revenue. Only when
-              there's more than one kind of money; a media-only account learns
-              nothing from a one-row breakdown. */}
-          {summary.byLineType.length > 1 && (
-            <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
-              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-                <span className="text-xs font-medium text-[var(--foreground)]">
-                  What this client is made of
-                </span>
-                <span className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
-                  <span>
-                    {usd0(summary.knownRevenue)} gross revenue
-                    {summary.uncostedAmount > 0 && (
-                      <span className="text-amber-600">
-                        {' '}
-                        · {usd0(summary.uncostedAmount)} not costed yet
-                      </span>
-                    )}
-                  </span>
-                  {/* The way out of "not costed yet". Only offered when there
-                      IS something untyped — a button that always does nothing
-                      teaches people to stop pressing it. */}
-                  {untypedTotal > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setCategoriseOpen(true)}
-                      className="rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+          {/* ── The year at a glance ──
+              Two questions, one card: how much of the commitment is spoken
+              for, and what kind of money it is. They were two cards, which
+              put two unlabelled full-width bars back to back and made them
+              read as two versions of the same chart. */}
+          {(summary.declaredTotal != null || summary.byLineType.length > 1) && (
+            <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--card)]">
+              {/* Progress — relates the four stat cards above. Only meaningful
+                  once there's a commitment to measure against. */}
+              {summary.declaredTotal != null && (
+                <div className="px-4 py-3.5">
+                  <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                    <p className="text-sm font-semibold text-[var(--foreground)]">
+                      Against the total budget
+                    </p>
+                    <p className="text-xs tabular-nums text-[var(--muted-foreground)]">
+                      {Math.round((summary.totalCommitted / summary.declaredTotal) * 100)}% of{' '}
+                      {usd0(summary.declaredTotal)}
+                    </p>
+                  </div>
+                  <div className="mt-3">
+                    <ProgressBar
+                      declared={summary.declaredTotal}
+                      allocated={summary.allocated}
+                      pool={summary.pool}
+                    />
+                  </div>
+                  <div className="mt-2.5 flex flex-wrap items-center gap-x-5 gap-y-1 text-[11px] text-[var(--muted-foreground)]">
+                    <LegendDot
+                      className={summary.overAllocated ? 'bg-amber-500' : 'bg-[var(--primary)]'}
                     >
-                      Categorise {usd0(untypedTotal)}
-                    </button>
+                      Scheduled {usd0(summary.allocated)}
+                    </LegendDot>
+                    <LegendDot
+                      className={summary.overAllocated ? 'bg-amber-500/50' : 'bg-[var(--primary)]/40'}
+                    >
+                      Pool {usd0(summary.pool)}
+                    </LegendDot>
+                    <LegendDot
+                      className={
+                        summary.unplanned != null && summary.unplanned < 0
+                          ? 'bg-amber-600'
+                          : 'bg-[var(--border)]'
+                      }
+                    >
+                      {summary.unplanned != null && summary.unplanned >= 0 ? (
+                        <>Uncommitted {usd0(summary.unplanned)}</>
+                      ) : (
+                        <span className="font-medium text-amber-600">
+                          {usd0(Math.abs(summary.unplanned ?? 0))} over budget
+                        </span>
+                      )}
+                    </LegendDot>
+                  </div>
+
+                  {/* Base vs added — the OTHER way this money divides, and the
+                      one the Ad Pacer actually consumes: base is the client's
+                      standing budget, added is everything asked for on top, and
+                      they land in the pacer's two separate goal fields. It was
+                      computed inside the pacer sync and shown nowhere, so the
+                      hub couldn't explain a number the pacer was acting on. */}
+                  {summary.totalCommitted > 0 && (
+                    <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 border-t border-[var(--border)] pt-2.5">
+                      <span className="text-[11px] text-[var(--muted-foreground)]">
+                        Base{' '}
+                        <span className="font-medium tabular-nums text-[var(--foreground)]">
+                          {usd0(summary.baseTotal)}
+                        </span>
+                        <span className="ml-1 opacity-60">
+                          {Math.round((summary.baseTotal / summary.totalCommitted) * 100)}%
+                        </span>
+                      </span>
+                      <span className="text-[11px] text-[var(--muted-foreground)]">
+                        Added{' '}
+                        <span className="font-medium tabular-nums text-[var(--foreground)]">
+                          {usd0(summary.addedTotal)}
+                        </span>
+                        <span className="ml-1 opacity-60">
+                          {Math.round((summary.addedTotal / summary.totalCommitted) * 100)}%
+                        </span>
+                      </span>
+                      <span className="text-[10px] text-[var(--muted-foreground)] opacity-70">
+                        The two goals the Ad Pacer receives on a managed month
+                      </span>
+                    </div>
                   )}
-                </span>
-              </div>
-              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-4">
-                {summary.byLineType.map((t) => {
-                  const meta = LINE_TYPES.find((x) => x.key === t.lineType);
-                  return (
-                    <div key={t.lineType}>
-                      <p className="text-[11px] text-[var(--muted-foreground)]">
-                        {meta?.label ?? t.lineType}
+                </div>
+              )}
+
+              {/* Composition — the thing Oz Reports could never show: how much
+                  of this client is media pass-through vs agency revenue. Only
+                  when there's more than one kind of money; a media-only account
+                  learns nothing from a one-row breakdown. */}
+              {summary.byLineType.length > 1 && (
+                <div
+                  className={`px-4 py-3.5 ${
+                    summary.declaredTotal != null ? 'border-t border-[var(--border)]' : ''
+                  }`}
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+                    <div>
+                      <p className="text-sm font-semibold text-[var(--foreground)]">
+                        What this client is made of
                       </p>
-                      <p className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
-                        {usd0(t.amount)}
-                      </p>
-                      <p className="text-[10px] text-[var(--muted-foreground)]">
-                        {t.costKnown ? (
-                          <>{usd0(t.revenue)} revenue</>
-                        ) : (
-                          // Saying "0% margin" would be a lie; saying nothing
-                          // hides that a number is missing.
-                          <span className="text-amber-600">cost not entered</span>
+                      <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
+                        {usd0(composition.total)} billed ·{' '}
+                        <span className="text-[var(--foreground)]">
+                          {usd0(summary.knownRevenue)} revenue
+                        </span>
+                        {summary.uncostedAmount > 0 && (
+                          <span className="text-amber-600">
+                            {' '}
+                            · {usd0(summary.uncostedAmount)} still uncosted
+                          </span>
                         )}
                       </p>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+                    {/* The way out of "uncosted". Only offered when there IS
+                        something untyped — a button that always does nothing
+                        teaches people to stop pressing it. */}
+                    {untypedTotal > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setCategoriseOpen(true)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-medium text-amber-600 transition hover:bg-amber-500/20"
+                      >
+                        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
+                        Categorise {usd0(untypedTotal)}
+                      </button>
+                    )}
+                  </div>
 
-          {/* Progress strip — relates the four numbers above. Only meaningful
-              once there's a declared total to measure against. */}
-          {summary.declaredTotal != null && (
-            <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
-              <ProgressBar
-                declared={summary.declaredTotal}
-                allocated={summary.allocated}
-                pool={summary.pool}
-              />
-              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[var(--muted-foreground)]">
-                <LegendDot className={summary.overAllocated ? 'bg-amber-500' : 'bg-[var(--primary)]'}>
-                  Scheduled {usd0(summary.allocated)}
-                </LegendDot>
-                <LegendDot
-                  className={summary.overAllocated ? 'bg-amber-500/50' : 'bg-[var(--primary)]/40'}
-                >
-                  Pool {usd0(summary.pool)}
-                </LegendDot>
-                <LegendDot
-                  className={
-                    summary.unplanned != null && summary.unplanned < 0
-                      ? 'bg-amber-600'
-                      : 'bg-[var(--border)]'
-                  }
-                >
-                  {summary.unplanned != null && summary.unplanned >= 0 ? (
-                    <>Uncommitted {usd0(summary.unplanned)}</>
-                  ) : (
-                    <span className="font-medium text-amber-600">
-                      {usd0(Math.abs(summary.unplanned ?? 0))} beyond plan
-                    </span>
-                  )}
-                </LegendDot>
-              </div>
+                  {/* The composition itself. A row of numbers makes you do the
+                      division in your head; the bar IS the answer to "made of". */}
+                  <div className="mt-3 flex h-2.5 gap-0.5 overflow-hidden rounded-full">
+                    {composition.parts.map((t) => (
+                      <div
+                        key={t.lineType}
+                        title={`${t.label} · ${usd0(t.amount)} · ${t.pct.toFixed(1)}%`}
+                        className={`${t.color} transition-[flex-grow] duration-500`}
+                        style={{ flexGrow: t.amount, flexBasis: 0, minWidth: '4px' }}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Legend. Wrapping, with a min width but NOT flex-1 — two
+                      kinds of money stretched to half the page each looked
+                      like a layout bug, and five in a fixed four-column grid
+                      orphaned the last one on a row of its own. */}
+                  <div className="mt-3 flex flex-wrap gap-x-10 gap-y-3">
+                    {composition.parts.map((t) => (
+                      <div key={t.lineType} className="min-w-[132px]">
+                        <p className="flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)]">
+                          <span className={`h-2 w-2 flex-shrink-0 rounded-full ${t.color}`} />
+                          {t.label}
+                          <span className="tabular-nums opacity-60">{Math.round(t.pct)}%</span>
+                        </p>
+                        <p className="mt-0.5 text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                          {usd0(t.amount)}
+                        </p>
+                        <p className="text-[10px] tabular-nums">
+                          {t.costKnown ? (
+                            <span className="text-[var(--muted-foreground)]">
+                              {usd0(t.revenue)} revenue
+                              {t.amount > 0 && (
+                                <span className="opacity-60">
+                                  {' '}
+                                  · {Math.round((t.revenue / t.amount) * 100)}%
+                                </span>
+                              )}
+                            </span>
+                          ) : (
+                            // Saying "0% margin" would be a lie; saying nothing
+                            // hides that a number is missing.
+                            <span className="text-amber-600">Cost not entered</span>
+                          )}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -547,7 +654,7 @@ export function BudgetHub() {
                   Nothing scheduled for {year}
                 </p>
                 <p className="mx-auto mt-1 max-w-md text-sm text-[var(--muted-foreground)]">
-                  Add recurring fees to the client&rsquo;s agreement and lay out the year, or add a
+                  Add recurring fees to the client&rsquo;s contract and lay out the year, or add a
                   one-off line. Budget also lands here on its own when a rep files a funded ticket.
                 </p>
                 <button
@@ -556,7 +663,7 @@ export function BudgetHub() {
                   className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--foreground)] transition hover:bg-[var(--muted)]"
                 >
                   <DocumentTextIcon className="h-4 w-4" />
-                  {agreements.length > 0 ? 'Open Agreement' : 'Add an Agreement'}
+                  {agreements.length > 0 ? 'Open Contract' : 'Add a Contract'}
                 </button>
               </div>
             ) : (

@@ -753,6 +753,34 @@ and "who decided this was a fee" is a question that gets asked.
 
 ---
 
+## 12. Wording
+
+The UI and the code deliberately use different words in two places. Both are
+worth knowing before renaming anything.
+
+| Code / API | UI says | Why |
+|---|---|---|
+| `ClientAgreement` | **Contract** | "Agreement" tested badly — it reads as something softer than a signed commitment. The model name stays: renaming it is churn across the schema, the service, three routes and 80 tests for zero user benefit. |
+| `declaredTotal` | **Total budget** | It's the pot, and that's what people call it. |
+| `totalCommitted` | **Planned** | Everything that counts toward the year: scheduled + pool. |
+| status `planned` | **Draft** | The Planned *card* counts committed money, so a *status* called Planned that the Planned card excludes is a collision nobody stops tripping over. Only the label changed; the stored value is still `planned`. |
+
+### Base and added
+
+`BudgetLine.bucket` splits money into **base** (the client's standing budget)
+and **added** (anything requested on top). It's the division the Ad Pacer
+consumes — the two go into separate goal fields — and for a long time it was
+computed inside the pacer sync and displayed nowhere, so the hub couldn't
+explain a number the pacer was acting on. `getAccountSummary` now returns
+`baseTotal` / `addedTotal` and the hub shows both under the progress bar.
+
+Note this is a *different* decomposition from scheduled/pool, over the same
+total: base + added = scheduled + pool = `totalCommitted`. They answer different
+questions (what kind of budget is it, versus has it been placed yet), which is
+why they're two rows rather than one bar.
+
+---
+
 ## Appendix: Monday.com
 
 Recommendation: **don't integrate.**

@@ -57,6 +57,9 @@ export type BudgetSummary = {
   totalCommitted: number;
   allocated: number;
   pool: number;
+  /** The standing budget vs everything requested on top — the pacer's two goals. */
+  baseTotal: number;
+  addedTotal: number;
   unplanned: number | null;
   overAllocated: boolean;
   byChannel: { channel: string; amount: number; spendTarget: number }[];
@@ -158,6 +161,25 @@ export function monthIndexOf(period: string): number {
   return m >= 0 && m <= 11 ? m : -1;
 }
 
+/**
+ * One colour per kind of money, shared by the composition bar and its legend.
+ *
+ * Categorical, not a scale — these aren't more or less of anything, they're
+ * different things, so no ramp. `unclassified` is amber deliberately: it's the
+ * only one that means "something is missing", and it already reads as a warning
+ * everywhere else on the page.
+ *
+ * Tailwind palette rather than a CSS variable because these need to be five
+ * distinguishable hues, and the theme only defines one accent.
+ */
+export const LINE_TYPE_COLOR: Record<string, string> = {
+  media: 'bg-sky-500',
+  service: 'bg-violet-500',
+  fee: 'bg-emerald-500',
+  production: 'bg-fuchsia-500',
+  unclassified: 'bg-amber-500',
+};
+
 export const SOURCE_LABEL: Record<string, string> = {
   retainer: 'Managed Marketing Service',
   task: 'From a Ticket',
@@ -171,7 +193,11 @@ export const SOURCE_LABEL: Record<string, string> = {
  * screen.
  */
 export const STATUS_LABEL: Record<string, string> = {
-  planned: 'Planned',
+  // 'Draft' rather than 'Planned' — the hub's Planned card counts committed
+  // money, and a status called Planned that the Planned card EXCLUDES is the
+  // kind of collision nobody ever stops tripping over. The stored value is
+  // still 'planned'; only the word people read changed.
+  planned: 'Draft',
   committed: 'Committed',
   live: 'Live',
   settled: 'Settled',

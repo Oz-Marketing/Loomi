@@ -1231,6 +1231,13 @@ export interface BudgetSummary {
   allocated: number;
   /** Σ counted lines still missing a period or a channel. */
   pool: number;
+  /**
+   * The standing budget vs everything requested on top. This is the split the
+   * Ad Pacer writes into its two goal fields, so the hub has to be able to show
+   * the same division the pacer acts on.
+   */
+  baseTotal: number;
+  addedTotal: number;
   /** declaredTotal − totalCommitted. Negative = over-allocated. Null without a plan. */
   unplanned: number | null;
   /**
@@ -1294,6 +1301,7 @@ export async function getAccountSummary(
         channel: true,
         lineType: true,
         cost: true,
+        bucket: true,
       },
     }),
   ]);
@@ -1359,6 +1367,13 @@ export async function getAccountSummary(
     }
     typeAgg.set(l.lineType, entry);
   }
+  const baseTotal = lines
+    .filter((l) => l.bucket === 'base')
+    .reduce((sum, l) => sum + toNumber(l.amount), 0);
+  const addedTotal = lines
+    .filter((l) => l.bucket !== 'base')
+    .reduce((sum, l) => sum + toNumber(l.amount), 0);
+
   const byLineType = [...typeAgg.entries()]
     .map(([lineType, v]) => ({ lineType, ...v }))
     .sort((a, b) => b.amount - a.amount);
@@ -1375,6 +1390,11 @@ export async function getAccountSummary(
     totalCommitted,
     allocated,
     pool,
+    // Base vs added — the client's standing budget versus everything asked for
+    // on top. It's the split the Ad Pacer writes into its two goal fields, so
+    // the hub has to be able to show the same division the pacer acts on.
+    baseTotal,
+    addedTotal,
     unplanned: declaredTotal == null ? null : declaredTotal - totalCommitted,
     overAllocated: declaredTotal != null && totalCommitted > declaredTotal,
     byChannel: [...byChannelMap.entries()]

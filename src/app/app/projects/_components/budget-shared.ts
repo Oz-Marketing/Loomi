@@ -107,7 +107,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   retainer: 'Managed Marketing Service',
   task: 'From a Ticket',
   adhoc: 'Added Here',
-  pool: 'Returned to Pool',
+  pool: 'Pool',
 };
 
 /**

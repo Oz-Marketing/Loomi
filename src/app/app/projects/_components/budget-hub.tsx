@@ -22,9 +22,9 @@ import { BudgetPlanModal } from './budget-plan-modal';
 import { StatusPill } from './budget-status-pill';
 import {
   MONTH_ABBR,
-  SOURCE_LABEL,
   compactMoney as compact,
   monthIndexOf,
+  sourceLabel,
   usd0,
   usd2,
   type BudgetLine,
@@ -665,7 +665,17 @@ function LineList({
   }
   return (
     <ul className="divide-y divide-[var(--border)]">
-      {lines.map((l) => (
+      {lines.map((l) => {
+        // Skip the source when it just repeats the title — a Managed Marketing
+        // Service line labelled the same way was printing its own name twice.
+        const sub = [
+          sourceLabel(l.source) === (l.label ?? '') ? null : sourceLabel(l.source),
+          l.taskTitle,
+          l.isCrossAccount ? `Spends from ${l.spendAccountDealer ?? l.spendAccountKey}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        return (
         <li key={l.id}>
           <button
             type="button"
@@ -676,11 +686,11 @@ function LineList({
               <span className="block truncate text-sm text-[var(--foreground)]">
                 {l.label || l.taskTitle || 'Untitled line'}
               </span>
-              <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
-                {SOURCE_LABEL[l.source] ?? l.source}
-                {l.taskTitle && ` · ${l.taskTitle}`}
-                {l.isCrossAccount && ` · spends from ${l.spendAccountDealer ?? l.spendAccountKey}`}
-              </span>
+              {sub && (
+                <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
+                  {sub}
+                </span>
+              )}
             </span>
             <span className="flex flex-shrink-0 items-center gap-2">
               <StatusPill status={l.status} />
@@ -690,7 +700,8 @@ function LineList({
             </span>
           </button>
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }

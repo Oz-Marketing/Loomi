@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { PhotoIcon, TruckIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
-import { FontSelect, type FontSelectOption } from '@/components/font-select';
+import { Select, type SelectOption } from '@/components/select';
 import { composeDisclaimer } from '@/lib/ad-generator/disclaimer';
 import type { AdData, FieldSpec } from '@/lib/ad-generator/types';
 import { EvoxPickerModal } from './evox-picker';
@@ -32,7 +32,7 @@ export function Field({ field, value, onChange, allowVehiclePicker, evoxSeed }: 
     return (
       <div>
         {label}
-        <FontSelect value={value} onChange={onChange} options={field.options ?? []} previewFont={false} />
+        <Select value={value} onChange={onChange} options={field.options ?? []} previewFont={false} />
       </div>
     );
   }
@@ -215,7 +215,7 @@ export function DisclaimerField({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [composed]);
 
-  const templateOptions: FontSelectOption[] = [
+  const templateOptions: SelectOption[] = [
     { value: '', label: `Default (${offerType})` },
     ...templates.map((t) => ({
       value: t.id,
@@ -251,7 +251,7 @@ export function DisclaimerField({
             Manage
           </Link>
         </div>
-        <FontSelect
+        <Select
           value={selectedId}
           onChange={(v) => {
             editedRef.current = false; // re-selecting a template re-binds auto-fill

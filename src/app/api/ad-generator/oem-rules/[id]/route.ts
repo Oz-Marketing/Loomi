@@ -29,6 +29,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   if (body.requiredFields && typeof body.requiredFields === 'object') {
     data.requiredFields = JSON.stringify(body.requiredFields);
   }
+  // Standing per-programme values. Sent explicitly as `{}` to clear them, so the
+  // presence of the key — not its truthiness — decides whether to write.
+  if ('defaultValues' in body) {
+    const v = body.defaultValues;
+    data.defaultValues = v && typeof v === 'object' && Object.keys(v).length ? JSON.stringify(v) : null;
+  }
   if ('notes' in body) data.notes = typeof body.notes === 'string' ? body.notes.trim() || null : null;
   if (typeof body.isActive === 'boolean') data.isActive = body.isActive;
 

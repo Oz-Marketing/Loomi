@@ -77,6 +77,7 @@ interface Rule {
   id: string;
   make: string;
   requiredFields: Record<string, string[]>;
+  defaultValues?: Record<string, Record<string, string>>;
   notes: string | null;
   isActive: boolean;
 }
@@ -84,10 +85,12 @@ interface Draft {
   id?: string;
   make: string;
   requiredFields: Record<string, string[]>;
+  /** offer type → { field: standing value }. See `AdOemOfferRule.defaultValues`. */
+  defaultValues: Record<string, Record<string, string>>;
   notes: string;
   isActive: boolean;
 }
-const EMPTY: Draft = { make: '', requiredFields: {}, notes: '', isActive: true };
+const EMPTY: Draft = { make: '', requiredFields: {}, defaultValues: {}, notes: '', isActive: true };
 const TYPE_LABEL = Object.fromEntries(OFFER_TYPES.map((o) => [o.value, o.label]));
 
 export default function OemRulesPage() {
@@ -117,6 +120,20 @@ export default function OemRulesPage() {
   // Scoped to a subaccount's OEM → only that make's rule; admin sees every make.
   const visible = items && scopedOem ? items.filter((r) => r.make.toLowerCase() === scopedOem.toLowerCase()) : items;
 
+  /** Set (or clear) a standing value for one field of one offer type. */
+  function setDefault(type: string, key: string, value: string) {
+    setDraft((d) => {
+      if (!d) return d;
+      const forType = { ...(d.defaultValues[type] ?? {}) };
+      if (value.trim()) forType[key] = value;
+      else delete forType[key];
+      const next = { ...d.defaultValues };
+      if (Object.keys(forType).length) next[type] = forType;
+      else delete next[type];
+      return { ...d, defaultValues: next };
+    });
+  }
+
   function toggleField(type: string, key: string) {
     setDraft((d) => {
       if (!d) return d;
@@ -142,7 +159,13 @@ export default function OemRulesPage() {
         {
           method: isEdit ? 'PATCH' : 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ make: draft.make, requiredFields, notes: draft.notes, isActive: draft.isActive }),
+          body: JSON.stringify({
+            make: draft.make,
+            requiredFields,
+            defaultValues: draft.defaultValues,
+            notes: draft.notes,
+            isActive: draft.isActive,
+          }),
         },
       );
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
@@ -277,6 +300,38 @@ export default function OemRulesPage() {
                       );
                     })}
                   </div>
+
+                  {/* Standing values.
+                      Some required disclosures belong to the PROGRAMME rather than
+                      the offer, so the feed never carries them and generation is
+                      blocked forever without somewhere to assert them. Subaru §6x is
+                      the case in hand: the ad must state whether a security deposit
+                      is required, and "none required" satisfies it.
+
+                      Only offered for fields already marked required, and only for
+                      this offer type — a value here is applied to every generated ad
+                      of that type, and each draft records that it came from here. */}
+                  {selected.length > 0 && (
+                    <div className="mt-2 space-y-1.5 border-t border-[var(--border)] pt-2">
+                      <p className="text-[10px] text-[var(--muted-foreground)]">
+                        Standing values — used only when the offer doesn&rsquo;t carry the field. Leave blank to
+                        require it from the offer, which skips ads that lack it.
+                      </p>
+                      {selected.map((key) => (
+                        <div key={`def-${key}`} className="flex items-center gap-2">
+                          <span className="w-40 flex-shrink-0 truncate text-[11px] text-[var(--muted-foreground)]">
+                            {FIELD_LABELS[key] ?? key}
+                          </span>
+                          <input
+                            value={draft.defaultValues[t.value]?.[key] ?? ''}
+                            onChange={(e) => setDefault(t.value, key, e.target.value)}
+                            placeholder="from the offer"
+                            className="min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1 text-[11px] text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -330,7 +385,7 @@ export default function OemRulesPage() {
                   </div>
                   <div className="flex flex-shrink-0 items-center gap-1">
                     <button
-                      onClick={() => setDraft({ id: r.id, make: r.make, requiredFields: r.requiredFields, notes: r.notes ?? '', isActive: r.isActive })}
+                      onClick={() => setDraft({ id: r.id, make: r.make, requiredFields: r.requiredFields, defaultValues: r.defaultValues ?? {}, notes: r.notes ?? '', isActive: r.isActive })}
                       className="rounded p-1.5 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
                       aria-label="Edit"
                     >

@@ -20,7 +20,12 @@
  * out and it's a no-op, so it's safe to leave in the deploy pipeline.
  *
  * Raw SQL throughout — the generated client no longer knows these fields.
+ *
+ * Loads dotenv for the same reason as `drop-retired-ad-types`: it builds its own
+ * client, so without this `npm run db:sync` fails locally with
+ * `DatabaseDoesNotExist` from the libpq fallback.
  */
+import 'dotenv/config';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { PrismaClient } from '@prisma/client';

@@ -788,10 +788,10 @@ export function AddPlanButton({
             <PlusIcon className="w-4 h-4 text-[var(--primary)] flex-shrink-0 mt-0.5" />
             <div>
               <div className="text-xs font-semibold text-[var(--foreground)]">
-                Add ads
+                Add ad sets
               </div>
               <div className="text-[10px] text-[var(--muted-foreground)]">
-                Name, budget and flight dates — one row per ad
+                Name, budget and flight dates — one row per ad set
               </div>
             </div>
           </button>

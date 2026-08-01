@@ -70,7 +70,7 @@ import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-m
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
 import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
 import { availableCustomFonts, buildFontFaceCssFromUrls, usedFontFamilies } from '@/lib/ad-generator/fonts';
-import { FontSelect, type FontSelectOption } from '@/components/font-select';
+import { Select, type SelectOption } from '@/components/select';
 import { CornerBox, SpacingBox, NumberInput } from '@/lib/email/editor/PropertyControls';
 import { GOOGLE_FONTS, googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
 import { vehicleOfferDoc, vehicleOfferPreviewData } from '@/lib/ad-generator/templates/vehicle-offer-doc';
@@ -365,8 +365,8 @@ function buildContentSources(el: DocElement, fields: FieldSpec[]): SearchableSel
 }
 // Make/OEM options for the template-settings picker — the shared EVOX make list,
 // with a blank "None" so a template can be untagged.
-const MAKE_OPTIONS: FontSelectOption[] = [{ value: '', label: 'None' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
-const WEIGHT_OPTIONS: FontSelectOption[] = [
+const MAKE_OPTIONS: SelectOption[] = [{ value: '', label: 'None' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
+const WEIGHT_OPTIONS: SelectOption[] = [
   { value: '300', label: 'Light' },
   { value: '400', label: 'Regular' },
   { value: '500', label: 'Medium' },
@@ -979,7 +979,7 @@ export default function AdBuilderPage() {
   }, [accountKey, usedFamilyKey]);
   // URL faces + embedded faces (embedded last so it wins where present).
   const effectiveFontCss = [fontFaceCss, embeddedFontCss].filter(Boolean).join('\n');
-  const fontOptions = useMemo<FontSelectOption[]>(
+  const fontOptions = useMemo<SelectOption[]>(
     () => [
       { value: '', label: 'Brand default' },
       ...[...new Set(customFonts.map((f) => f.family))].map((fam) => ({ value: fam, label: fam, group: 'Uploaded' })),
@@ -3439,7 +3439,7 @@ export default function AdBuilderPage() {
                         <p className="mb-2 text-[11px] leading-snug text-[var(--muted-foreground)]">
                           Tie this template to an OEM — the Fields panel then flags any required compliance field it&apos;s missing.
                         </p>
-                        <FontSelect
+                        <Select
                           value={doc.make ?? ''}
                           onChange={(v) => setDoc((prev) => ({ ...prev, make: v || undefined }), 'make')}
                           options={MAKE_OPTIONS}
@@ -5064,7 +5064,7 @@ function MultiSelectPanel({
 }: {
   elements: DocElement[];
   sampleFontSize: number;
-  fontOptions: FontSelectOption[];
+  fontOptions: SelectOption[];
   /** Whether the template has an `offerType` field — gates the "Show for" control. */
   hasOfferField: boolean;
   onElAll: (patch: Partial<DocElement>) => void;
@@ -5133,7 +5133,7 @@ function MultiSelectPanel({
         {textEls.length > 0 ? (
           <>
             <PanelSection title={`Font · ${textEls.length} text ${textEls.length === 1 ? 'box' : 'boxes'}`}>
-              <FontSelect value={sample?.fontFamily ?? ''} onChange={(v) => onElAll({ fontFamily: v || undefined })} options={fontOptions} />
+              <Select value={sample?.fontFamily ?? ''} onChange={(v) => onElAll({ fontFamily: v || undefined })} options={fontOptions} />
               <div className="mt-2 flex items-center gap-2">
                 <div className="flex flex-1 items-center gap-1">
                   <BarBtn title="Smaller (all)" onClick={() => onBumpSize(-2)}>
@@ -5155,7 +5155,7 @@ function MultiSelectPanel({
                   </BarBtn>
                 </div>
                 <div className="w-28 shrink-0">
-                  <FontSelect value={String(sample?.fontWeight ?? 400)} onChange={(v) => onElAll({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} />
+                  <Select value={String(sample?.fontWeight ?? 400)} onChange={(v) => onElAll({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} />
                 </div>
               </div>
             </PanelSection>
@@ -5268,7 +5268,7 @@ function SelectionPanel({
   box: DocLayoutBox;
   sizeW: number;
   sizeH: number;
-  fontOptions: FontSelectOption[];
+  fontOptions: SelectOption[];
   brandLogos: { key: string; label: string; url: string }[];
   content: { mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly'; value: string; note?: string } | null;
   contentSources: SearchableSelectOption[];
@@ -5503,7 +5503,7 @@ function SelectionPanel({
         {el.type === 'text' && (
           <>
             <PanelSection title="Font">
-              <FontSelect value={el.fontFamily ?? ''} onChange={(v) => onEl({ fontFamily: v || undefined })} options={fontOptions} />
+              <Select value={el.fontFamily ?? ''} onChange={(v) => onEl({ fontFamily: v || undefined })} options={fontOptions} />
               <div className="mt-2 flex items-center gap-2">
                 {/* Fit to box: the font auto-scales to the frame, so instead of an
                     editable stepper we surface the measured auto size (grayed) so
@@ -5550,7 +5550,7 @@ function SelectionPanel({
                   </div>
                 )}
                 <div className="w-28 shrink-0">
-                  <FontSelect value={String(el.fontWeight ?? 400)} onChange={(v) => onEl({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} />
+                  <Select value={String(el.fontWeight ?? 400)} onChange={(v) => onEl({ fontWeight: Number(v) })} options={WEIGHT_OPTIONS} previewFont={false} />
                 </div>
               </div>
               {/* Uppercase — a font-casing toggle, so it lives under Font. */}

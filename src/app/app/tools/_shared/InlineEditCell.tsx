@@ -1,7 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { PencilSquareIcon } from '@heroicons/react/24/outline';
 import { usePacerReadOnly } from './pacer-read-only';
+import { Tooltip } from './Tooltip';
 
 // Same hover/focus chrome as the CellEditor triggers so an editable cell reads
 // the same whether it opens a dropdown or turns into a field.
@@ -11,6 +13,15 @@ const triggerClass =
 // keeps the row height — only the ring marks it as active.
 const fieldClass =
   'block w-[calc(100%+0.75rem)] -mx-1.5 -my-1 rounded-md bg-[var(--input)] px-1.5 py-1 text-[var(--foreground)] ring-1 ring-[var(--primary)] focus:outline-none';
+// Hugging variant: the field is only as wide as what's typed instead of filling
+// the cell. `field-sizing` does it exactly where supported; the `size` attribute
+// below is the fallback everywhere else.
+const hugFieldClass =
+  'block w-auto max-w-full -my-1 rounded-md bg-[var(--input)] px-1.5 py-1 text-[var(--foreground)] ring-1 ring-[var(--primary)] focus:outline-none [field-sizing:content]';
+// Trigger that shares its row with a pencil affordance, so it can't claim the
+// full cell width the way the standalone trigger does.
+const inlineTriggerClass =
+  'min-w-0 flex-1 -my-1 -ml-1.5 rounded-md px-1.5 py-1 text-left transition-colors hover:bg-[var(--muted)] focus:outline-none focus:ring-1 focus:ring-[var(--primary)]/50';
 
 /**
  * Text cell edited in place: click it and the text becomes an input right
@@ -29,6 +40,9 @@ export function InlineTextCell({
   inputClassName,
   onCommit,
   onEditingChange,
+  onTriggerClick,
+  editLabel = 'Rename',
+  hugContent,
 }: {
   value: string;
   placeholder?: string;
@@ -39,6 +53,17 @@ export function InlineTextCell({
   inputClassName?: string;
   onCommit: (next: string) => void;
   onEditingChange?: (editing: boolean) => void;
+  /**
+   * When set, clicking the cell does THIS instead of starting an edit, and a
+   * pencil (revealed on row hover) is what starts the edit. For cells whose
+   * primary action is something bigger than a rename — the ad name opens the
+   * full editor.
+   */
+  onTriggerClick?: () => void;
+  /** Tooltip/aria text for the pencil. */
+  editLabel?: string;
+  /** Size the field to its text instead of filling the cell. */
+  hugContent?: boolean;
 }) {
   const readOnly = usePacerReadOnly();
   const locked = disabled || readOnly;
@@ -80,6 +105,9 @@ export function InlineTextCell({
         value={draft}
         placeholder={placeholder}
         aria-label={ariaLabel}
+        // Fallback width for browsers without `field-sizing`: characters typed,
+        // with a floor so an empty field is still clickable.
+        size={hugContent ? Math.max(8, Math.min(draft.length + 2, 60)) : undefined}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => {
@@ -89,12 +117,12 @@ export function InlineTextCell({
             cancel();
           }
         }}
-        className={`${fieldClass} ${inputClassName ?? 'text-sm font-semibold'}`}
+        className={`${hugContent ? hugFieldClass : fieldClass} ${inputClassName ?? 'text-sm font-semibold'}`}
       />
     );
   }
 
-  return (
+  const trigger = (
     <button
       type="button"
       draggable
@@ -104,13 +132,40 @@ export function InlineTextCell({
       }}
       onClick={(e) => {
         e.stopPropagation();
-        setEditing(true);
+        if (onTriggerClick) onTriggerClick();
+        else setEditing(true);
       }}
       aria-label={ariaLabel}
-      className={triggerClass}
+      className={onTriggerClick ? inlineTriggerClass : triggerClass}
     >
       {display}
     </button>
+  );
+
+  if (!onTriggerClick) return trigger;
+
+  return (
+    <div className="flex min-w-0 items-center gap-1">
+      {trigger}
+      <Tooltip label={editLabel}>
+        <button
+          type="button"
+          draggable
+          onDragStart={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            setEditing(true);
+          }}
+          aria-label={editLabel}
+          className="flex-shrink-0 rounded p-1 text-[var(--muted-foreground)] opacity-0 transition-all hover:bg-[var(--muted)] hover:text-[var(--primary)] focus:opacity-100 group-hover:opacity-100"
+        >
+          <PencilSquareIcon className="h-3.5 w-3.5" />
+        </button>
+      </Tooltip>
+    </div>
   );
 }
 

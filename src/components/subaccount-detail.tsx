@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
-import { FontSelect } from '@/components/font-select';
+import { Select } from '@/components/select';
 import { createPortal } from 'react-dom';
 import { useParams, usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
@@ -1149,17 +1149,12 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
               <p className="text-[11px] text-[var(--muted-foreground)] mb-6 -mt-2">
                 Upload, choose from media library, or paste URLs for each logo variant. Used in email templates and previews.
               </p>
-              <div className="mb-6">
-                <LogoSlot
-                  accountKey={key}
-                  label="Storefront Image"
-                  variant="storefront"
-                  value={storefrontImage}
-                  onChange={setStorefrontImage}
-                  onUpload={(file) => handleLogoUpload('storefront', file)}
-                  required={false}
-                />
-              </div>
+              {/* The Storefront Image slot was removed from this tab. The VALUE is
+                  deliberately still loaded, saved and sent — a dozen surfaces read
+                  it (account health, media, contacts, flows, blast lists) and the
+                  `storefront_image` custom value is exposed as an ESP variable, so
+                  dropping the field would break them. Only the upload control is
+                  gone from Branding. */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {([
                   { label: 'Light Logo', variant: 'light' as const, value: logoLight, setter: setLogoLight, required: true },
@@ -1226,7 +1221,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                   uploaded custom font or a system family. */}
               <div className="mb-4">
                 <label className={labelClass}>Ad Generator brand font</label>
-                <FontSelect
+                <Select
                   value={brandDefaultFont}
                   onChange={setBrandDefaultFont}
                   previewFont={false}
@@ -1244,11 +1239,11 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className={labelClass}>Heading Font</label>
-                  <FontSelect value={brandHeadingFont} onChange={setBrandHeadingFont} options={WEBSAFE_FONTS} />
+                  <Select value={brandHeadingFont} onChange={setBrandHeadingFont} options={WEBSAFE_FONTS} />
                 </div>
                 <div>
                   <label className={labelClass}>Body Font</label>
-                  <FontSelect value={brandBodyFont} onChange={setBrandBodyFont} options={WEBSAFE_FONTS} />
+                  <Select value={brandBodyFont} onChange={setBrandBodyFont} options={WEBSAFE_FONTS} />
                 </div>
               </div>
 
@@ -1328,7 +1323,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className={labelClass}>Weight</label>
-                      <FontSelect
+                      <Select
                         previewFont={false}
                         value={fontUpload.weight}
                         onChange={(v) => setFontUpload((s) => ({ ...s, weight: v }))}
@@ -1337,7 +1332,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                     </div>
                     <div>
                       <label className={labelClass}>Style</label>
-                      <FontSelect
+                      <Select
                         previewFont={false}
                         value={fontUpload.style}
                         onChange={(v) => setFontUpload((s) => ({ ...s, style: v }))}

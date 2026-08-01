@@ -2,7 +2,7 @@
 
 // Read-only platform "Ad Status" pill — the campaign's actual delivery status
 // from Meta/Google, normalized. Display-only; never editable (the team edits
-// Task Status instead). Used in the editor modal and the pacer card.
+// the editable Ad Status instead). Used in the editor modal and the pacer card.
 
 import { COLORS } from '@/lib/ad-pacer/constants';
 import { normalizeAdStatus, adStatusTone } from '@/lib/ad-pacer/platform-status';

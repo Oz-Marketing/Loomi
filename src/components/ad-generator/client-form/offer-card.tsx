@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { isFieldVisible, type AdData, type FieldSpec } from '@/lib/ad-generator/types';
-import { FontSelect, type FontSelectOption } from '@/components/font-select';
+import { Select, type SelectOption } from '@/components/select';
 import { OemIncentivesPanel } from './oem-incentives-panel';
 import { VehicleColorPicker } from './vehicle-colors';
 import { EVOX_CURRENT_YEAR, EVOX_YEARS, EVOX_MAKES } from './evox-makes';
@@ -248,16 +248,16 @@ function ManualVehiclePicker({
   const [year, setYear] = useState(initial?.year || String(EVOX_CURRENT_YEAR));
   const [make, setMake] = useState(initial?.make || defaultMake || '');
   const [model, setModel] = useState(initial?.model || '');
-  const yearOptions: FontSelectOption[] = EVOX_YEARS.filter((y) => y >= 2020).map((y) => ({ value: String(y), label: String(y) }));
-  const makeOptions: FontSelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
+  const yearOptions: SelectOption[] = EVOX_YEARS.filter((y) => y >= 2020).map((y) => ({ value: String(y), label: String(y) }));
+  const makeOptions: SelectOption[] = [{ value: '', label: 'Select make…' }, ...EVOX_MAKES.map((m) => ({ value: m, label: m }))];
   return (
     <div>
       <label className="mb-1 block text-xs font-medium text-[var(--foreground)]">
         Vehicle <span className="font-normal text-[var(--muted-foreground)]">— sets the vehicle + loads its colors below</span>
       </label>
       <div className="grid grid-cols-3 gap-2">
-        <FontSelect value={year} onChange={(v) => { setYear(v); onChange({ year: v, make, model }); }} options={yearOptions} previewFont={false} />
-        <FontSelect value={make} onChange={(v) => { setMake(v); onChange({ year, make: v, model }); }} options={makeOptions} previewFont={false} />
+        <Select value={year} onChange={(v) => { setYear(v); onChange({ year: v, make, model }); }} options={yearOptions} previewFont={false} />
+        <Select value={make} onChange={(v) => { setMake(v); onChange({ year, make: v, model }); }} options={makeOptions} previewFont={false} />
         <input
           value={model}
           onChange={(e) => { setModel(e.target.value); onChange({ year, make, model: e.target.value }); }}

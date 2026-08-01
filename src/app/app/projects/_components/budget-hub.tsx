@@ -19,6 +19,7 @@ import { useProjectOptions } from './use-project-options';
 import { jsonFetcher } from './fetcher';
 import { BudgetLineDrawer } from './budget-line-drawer';
 import { BudgetPlanModal } from './budget-plan-modal';
+import { BudgetAddLineModal } from './budget-add-line-modal';
 import { StatusPill } from './budget-status-pill';
 import {
   MONTH_ABBR,
@@ -47,6 +48,7 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
   // The cell (channel × period) whose lines are being inspected, or 'pool'.
   const [openCell, setOpenCell] = useState<{ channel: string; period: string } | null>(null);
   const [poolOpen, setPoolOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
 
   // Once an account has any budget selected, default the picker to it so the
@@ -353,7 +355,14 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
           <div className="mt-6">
             <div className="mb-2 flex items-center justify-between">
               <h2 className="text-sm font-semibold text-[var(--foreground)]">By channel &amp; month</h2>
-              <AddLineButton year={year} onAdd={addLine} />
+              <button
+                type="button"
+                onClick={() => setAddOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+              >
+                <PlusIcon className="h-3.5 w-3.5" />
+                Add a line
+              </button>
             </div>
 
             {grid.length === 0 ? (
@@ -548,6 +557,15 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
         />
       )}
 
+      {addOpen && accountKey && (
+        <BudgetAddLineModal
+          year={year}
+          accountName={account?.dealer ?? accountKey}
+          onAdd={addLine}
+          onClose={() => setAddOpen(false)}
+        />
+      )}
+
       {activeLineId && (
         <BudgetLineDrawer
           lineId={activeLineId}
@@ -666,11 +684,14 @@ function LineList({
   return (
     <ul className="divide-y divide-[var(--border)]">
       {lines.map((l) => {
-        // Skip the source when it just repeats the title — a Managed Marketing
-        // Service line labelled the same way was printing its own name twice.
+        // Drop anything that just repeats the title. Both of these genuinely
+        // collide: a Managed Marketing Service line is labelled with its own
+        // source, and a ticket-sourced line takes the ticket's title as its
+        // label — so the row printed its own name twice in two different ways.
+        const title = l.label || l.taskTitle || '';
         const sub = [
-          sourceLabel(l.source) === (l.label ?? '') ? null : sourceLabel(l.source),
-          l.taskTitle,
+          sourceLabel(l.source) === title ? null : sourceLabel(l.source),
+          l.taskTitle === title ? null : l.taskTitle,
           l.isCrossAccount ? `Spends from ${l.spendAccountDealer ?? l.spendAccountKey}` : null,
         ]
           .filter(Boolean)
@@ -680,11 +701,11 @@ function LineList({
           <button
             type="button"
             onClick={() => onOpen(l.id)}
-            className="flex w-full items-center gap-3 py-2 text-left transition hover:bg-[var(--muted)]/50"
+            className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-[var(--muted)]/60"
           >
             <span className="min-w-0 flex-1">
               <span className="block truncate text-sm text-[var(--foreground)]">
-                {l.label || l.taskTitle || 'Untitled line'}
+                {title || 'Untitled line'}
               </span>
               {sub && (
                 <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
@@ -703,113 +724,6 @@ function LineList({
         );
       })}
     </ul>
-  );
-}
-
-/** One-off line entry — channel, month, amount. Everything else takes defaults. */
-function AddLineButton({
-  year,
-  onAdd,
-}: {
-  year: number;
-  onAdd: (body: Record<string, unknown>) => Promise<void>;
-}) {
-  const [open, setOpen] = useState(false);
-  const [channel, setChannel] = useState(BUDGET_CHANNELS[0]!.key);
-  const [month, setMonth] = useState(String(new Date().getMonth() + 1));
-  const [amount, setAmount] = useState('');
-  const [label, setLabel] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const submit = async () => {
-    const n = Number(amount);
-    if (!Number.isFinite(n) || n <= 0) {
-      toast.error('Enter an amount');
-      return;
-    }
-    setSaving(true);
-    await onAdd({
-      channel,
-      period: periodOf(year, Number(month)),
-      amount: n,
-      label: label.trim() || null,
-      source: 'adhoc',
-    });
-    setSaving(false);
-    setOpen(false);
-    setAmount('');
-    setLabel('');
-  };
-
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--foreground)] transition hover:bg-[var(--muted)]"
-      >
-        <PlusIcon className="h-3.5 w-3.5" />
-        Add a line
-      </button>
-    );
-  }
-
-  return (
-    <div className="flex flex-wrap items-end gap-2 rounded-lg border border-[var(--border)] bg-[var(--card)] p-2">
-      <div className="w-[150px]">
-        <SearchableSelect
-          value={channel}
-          onChange={setChannel}
-          searchable={false}
-          options={BUDGET_CHANNELS.map((c) => ({
-            value: c.key,
-            label: c.label,
-            icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
-          }))}
-          className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
-        />
-      </div>
-      <div className="w-[110px]">
-        <SearchableSelect
-          value={month}
-          onChange={setMonth}
-          searchable={false}
-          options={MONTH_ABBR.map((m, i) => ({ value: String(i + 1), label: m }))}
-          className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
-        />
-      </div>
-      <input
-        type="number"
-        min="0"
-        step="any"
-        placeholder="Amount"
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-        className="loomi-input w-[110px] !bg-[var(--input)] !py-1.5 !text-xs"
-      />
-      <input
-        type="text"
-        placeholder="Label (optional)"
-        value={label}
-        onChange={(e) => setLabel(e.target.value)}
-        className="loomi-input w-[160px] !bg-[var(--input)] !py-1.5 !text-xs"
-      />
-      <button
-        type="button"
-        disabled={saving}
-        onClick={() => void submit()}
-        className="rounded-lg bg-[var(--primary)] px-2.5 py-1.5 text-xs font-medium text-white transition hover:opacity-90 disabled:opacity-50"
-      >
-        {saving ? 'Adding…' : 'Add'}
-      </button>
-      <button
-        type="button"
-        onClick={() => setOpen(false)}
-        className="rounded-lg px-2 py-1.5 text-xs text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-      >
-        Cancel
-      </button>
-    </div>
   );
 }
 

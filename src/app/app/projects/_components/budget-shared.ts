@@ -102,6 +102,20 @@ export type BudgetAgreement = {
   fees: AgreementFee[];
 };
 
+/** A dated media buy, with the monthly lines it laid out. */
+export type BudgetFlight = {
+  flightId: string;
+  accountKey: string;
+  channel: string | null;
+  startDate: string;
+  endDate: string;
+  amount: number;
+  label: string | null;
+  months: { id: string; period: string | null; amount: number; status: string }[];
+  /** Months already closed out. These are never re-split. */
+  settledMonths: number;
+};
+
 export type BudgetLineEvent = {
   id: string;
   action: string;

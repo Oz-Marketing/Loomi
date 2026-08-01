@@ -424,6 +424,100 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     );
   });
 
+  // ── Categorising ──
+
+  it('groups what needs a type by channel, biggest money first', async () => {
+    await budget.createLines(
+      [
+        { accountKey: acctA, period: `${YEAR}-01`, channel: 'other', amount: 5000, status: 'committed', lineType: 'unclassified', label: 'Mystery spend' },
+        { accountKey: acctA, period: `${YEAR}-02`, channel: 'other', amount: 3000, status: 'committed', lineType: 'unclassified' },
+        { accountKey: acctA, period: `${YEAR}-01`, channel: 'referral', amount: 900, status: 'committed', lineType: 'unclassified' },
+        // Already typed — must not appear.
+        { accountKey: acctA, period: `${YEAR}-01`, channel: 'meta', amount: 50_000, status: 'committed' },
+      ],
+      null,
+    );
+
+    const groups = await budget.getUnclassified(acctA, YEAR);
+    expect(groups.map((g) => g.channel)).toEqual(['other', 'referral']);
+    expect(groups[0].lines).toBe(2);
+    expect(groups[0].amount).toBe(8000);
+    expect(groups[0].examples).toContain('Mystery spend');
+  });
+
+  it('types a whole channel at once and leaves the others alone', async () => {
+    await budget.createLines(
+      [
+        { accountKey: acctA, period: `${YEAR}-01`, channel: 'other', amount: 5000, status: 'committed', lineType: 'unclassified' },
+        { accountKey: acctA, period: `${YEAR}-02`, channel: 'other', amount: 3000, status: 'committed', lineType: 'unclassified' },
+        { accountKey: acctA, period: `${YEAR}-01`, channel: 'referral', amount: 900, status: 'committed', lineType: 'unclassified' },
+      ],
+      null,
+    );
+
+    expect(await budget.categoriseChannel(acctA, YEAR, 'other', 'service', null)).toBe(2);
+    const groups = await budget.getUnclassified(acctA, YEAR);
+    expect(groups.map((g) => g.channel)).toEqual(['referral']);
+  });
+
+  it('never overrules a type someone already set by hand', async () => {
+    // The safety property of a bulk action: it can only fill blanks. Otherwise
+    // one click could undo a morning of careful per-line work.
+    const [bulk, decided] = await budget.createLines(
+      [
+        { accountKey: acctA, period: `${YEAR}-01`, channel: 'other', amount: 1000, status: 'committed', lineType: 'unclassified' },
+        { accountKey: acctA, period: `${YEAR}-02`, channel: 'other', amount: 2000, status: 'committed', lineType: 'production' },
+      ],
+      null,
+    );
+
+    expect(await budget.categoriseChannel(acctA, YEAR, 'other', 'fee', null)).toBe(1);
+    const after = await budget.getLine(decided.id);
+    expect(after!.lineType).toBe('production');
+    expect((await budget.getLine(bulk.id))!.lineType).toBe('fee');
+  });
+
+  it('is idempotent — a second run finds nothing left to do', async () => {
+    await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-01`, channel: 'other', amount: 1000, status: 'committed', lineType: 'unclassified' },
+      null,
+    );
+    expect(await budget.categoriseChannel(acctA, YEAR, 'other', 'fee', null)).toBe(1);
+    expect(await budget.categoriseChannel(acctA, YEAR, 'other', 'fee', null)).toBe(0);
+  });
+
+  it('refuses to assign "unclassified" as a type', async () => {
+    await expect(
+      budget.categoriseChannel(acctA, YEAR, 'other', 'unclassified', null),
+    ).rejects.toThrow(/not a line type to assign/);
+  });
+
+  it('moves money out of uncosted once a type is assigned', async () => {
+    // The point of the whole exercise: an untyped line's margin is UNKNOWN, so
+    // it sits in `uncostedAmount` dragging the revenue figure's credibility
+    // down. Typing it as a fee resolves it to revenue with no cost.
+    await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-01`, channel: 'other', amount: 4000, status: 'committed', lineType: 'unclassified' },
+      null,
+    );
+    expect((await budget.getAccountSummary(acctA, YEAR)).uncostedAmount).toBe(4000);
+
+    await budget.categoriseChannel(acctA, YEAR, 'other', 'fee', null);
+    const after = await budget.getAccountSummary(acctA, YEAR);
+    expect(after.uncostedAmount).toBe(0);
+    expect(after.knownRevenue).toBe(4000);
+  });
+
+  it('records who decided, on every line it touched', async () => {
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-01`, channel: 'other', amount: 1000, status: 'committed', lineType: 'unclassified' },
+      null,
+    );
+    await budget.categoriseChannel(acctA, YEAR, 'other', 'fee', null);
+    const events = await budget.listLineEvents(line.id);
+    expect(events.some((e) => e.field === 'lineType' && e.toValue === 'fee')).toBe(true);
+  });
+
   // ── Flights ──
 
   it('lays a flight out across months, weighted by days, summing to the total', async () => {

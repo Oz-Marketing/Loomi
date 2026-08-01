@@ -10,6 +10,7 @@ import {
   isBudgetChannel,
   type BudgetLineType,
   type PacerPlatform,
+  isBudgetLineType,
 } from '@/lib/budget/channels';
 import { isValidPeriod as isValidPeriodPure, periodOf, resolveYear } from '@/lib/budget/period';
 import { splitFlight } from '@/lib/budget/flight';
@@ -711,6 +712,10 @@ export interface UpdateLineInput {
   channel?: string | null;
   status?: string;
   bucket?: string;
+  /** What KIND of money — the categorising decision. */
+  lineType?: BudgetLineType;
+  /** What it costs Oz. `null` puts it back to derived. */
+  cost?: number | null;
   label?: string | null;
   notes?: string | null;
   spendAccountKey?: string;
@@ -795,6 +800,38 @@ export async function updateLine(
       summary: `Spending from ${existing.spendAccountKey} → ${input.spendAccountKey}`,
     });
   }
+  // Categorising. Audited like any other money-affecting change, because it
+  // IS one: lineType decides whether the amount is treated as media (cost =
+  // amount × markup) or as revenue with no cost, and that moves the margin.
+  if (input.lineType && input.lineType !== existing.lineType) {
+    if (!isBudgetLineType(input.lineType)) {
+      throw new Error(`Unknown line type "${input.lineType}"`);
+    }
+    data.lineType = input.lineType;
+    events.push({
+      field: 'lineType',
+      from: existing.lineType,
+      to: input.lineType,
+      summary: `Type ${existing.lineType} → ${input.lineType}`,
+    });
+  }
+  if (input.cost !== undefined) {
+    const before = existing.cost == null ? null : toNumber(existing.cost);
+    if (input.cost !== before) {
+      if (input.cost != null) assertAmount(input.cost, 'cost');
+      data.cost = input.cost == null ? null : decimal(input.cost);
+      events.push({
+        field: 'cost',
+        from: before == null ? '' : String(before),
+        to: input.cost == null ? '' : String(input.cost),
+        summary:
+          input.cost == null
+            ? 'Cost cleared — back to derived'
+            : `Cost ${before == null ? 'unset' : money(before)} → ${money(input.cost)}`,
+      });
+    }
+  }
+
   if (input.label !== undefined) data.label = input.label;
   if (input.notes !== undefined) data.notes = input.notes;
 
@@ -1306,6 +1343,110 @@ export async function generateAgreementFeeLines(
   }
 
   return createLines(inputs, userId);
+}
+
+// ── Categorising ────────────────────────────────────────────────────────────
+//
+// Roughly 13% of the imported Oz Reports ledger arrived with no line type,
+// because Oz never had the concept — "Group Sale" and "YAG" say nothing about
+// whether the money is media, a fee, or a job. Until a line is typed its margin
+// is UNKNOWN rather than zero, which is the honest answer but not a useful one.
+//
+// Per-line editing exists in the drawer. This is the bulk path, because the
+// decision is almost never per line: everything on a channel is usually the
+// same kind of money, and 738 lines of "Other" is not a job anyone does one row
+// at a time.
+
+export interface UnclassifiedGroup {
+  channel: string | null;
+  lines: number;
+  amount: number;
+  /** Sample labels, so the channel name isn't the only clue to what it is. */
+  examples: string[];
+}
+
+/** What still needs a decision on an account, grouped by channel. */
+export async function getUnclassified(
+  accountKey: string,
+  year: number,
+): Promise<UnclassifiedGroup[]> {
+  const rows = await prisma.budgetLine.findMany({
+    where: {
+      accountKey,
+      year,
+      lineType: 'unclassified',
+      status: { notIn: ['canceled'] },
+      ...NOT_ARCHIVED,
+    },
+    select: { channel: true, amount: true, label: true },
+  });
+
+  const byChannel = new Map<string, UnclassifiedGroup>();
+  for (const r of rows) {
+    const key = r.channel ?? '';
+    let g = byChannel.get(key);
+    if (!g) {
+      g = { channel: r.channel, lines: 0, amount: 0, examples: [] };
+      byChannel.set(key, g);
+    }
+    g.lines += 1;
+    g.amount += toNumber(r.amount);
+    if (r.label && g.examples.length < 3 && !g.examples.includes(r.label)) {
+      g.examples.push(r.label);
+    }
+  }
+  return [...byChannel.values()].sort((a, b) => b.amount - a.amount);
+}
+
+/**
+ * Type every unclassified line on a channel at once.
+ *
+ * ONLY TOUCHES LINES STILL MARKED `unclassified`. A line someone already typed
+ * by hand is a decision, and a bulk action shouldn't quietly overrule it — so
+ * re-running this is safe, and it can't be used to mass-reassign a channel that
+ * has already been sorted out.
+ *
+ * Each line gets its own event, because a type change moves the margin and
+ * "who decided this was a fee" is a question that gets asked.
+ */
+export async function categoriseChannel(
+  accountKey: string,
+  year: number,
+  channel: string | null,
+  lineType: BudgetLineType,
+  userId: string | null = null,
+): Promise<number> {
+  if (!isBudgetLineType(lineType) || lineType === 'unclassified') {
+    throw new Error(`"${lineType}" is not a line type to assign`);
+  }
+
+  const where = {
+    accountKey,
+    year,
+    channel,
+    lineType: 'unclassified',
+    status: { notIn: ['canceled'] },
+    ...NOT_ARCHIVED,
+  };
+  const targets = await prisma.budgetLine.findMany({ where, select: { id: true } });
+  if (targets.length === 0) return 0;
+
+  await prisma.budgetLine.updateMany({ where, data: { lineType } });
+
+  const groupId = crypto.randomUUID();
+  for (const t of targets) {
+    await writeBudgetEvent({
+      lineId: t.id,
+      action: 'edited',
+      field: 'lineType',
+      fromValue: 'unclassified',
+      toValue: lineType,
+      summary: `Type unclassified → ${lineType} (categorised in bulk)`,
+      authorUserId: userId,
+      groupId,
+    });
+  }
+  return targets.length;
 }
 
 // ── Flights (Phase C) ───────────────────────────────────────────────────────

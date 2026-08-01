@@ -213,6 +213,11 @@ export const LINE_TYPE_LABEL: Record<string, string> = Object.fromEntries(
   LINE_TYPES.map((t) => [t.key, t.label]),
 );
 
+/** Guard for a value arriving from a request body. */
+export function isBudgetLineType(v: unknown): v is BudgetLineType {
+  return typeof v === 'string' && LINE_TYPES.some((t) => t.key === v);
+}
+
 /**
  * Channels a rep can choose on the intake form. Deliberately a subset: all 44
  * exist so the hub reconciles against Oz Reports, but a ticket is never filed

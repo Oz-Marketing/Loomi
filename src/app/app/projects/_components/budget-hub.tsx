@@ -23,6 +23,7 @@ import { useAccount } from '@/contexts/account-context';
 import { jsonFetcher } from './fetcher';
 import { BudgetLineDrawer } from './budget-line-drawer';
 import { BudgetAgreementModal } from './budget-agreement-modal';
+import { BudgetCategoriseModal } from './budget-categorise-modal';
 import { BudgetAddLineModal } from './budget-add-line-modal';
 import { StatusPill } from './budget-status-pill';
 import {
@@ -54,6 +55,10 @@ export function BudgetHub() {
   // The cell (channel × period) whose lines are being inspected, or 'pool'.
   const [openCell, setOpenCell] = useState<{ channel: string; period: string } | null>(null);
   const [closingCell, setClosingCell] = useState(false);
+  /** Line-type sections folded shut. Keyed by section, not index, so it
+   *  survives a channel appearing or disappearing. */
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [categoriseOpen, setCategoriseOpen] = useState(false);
   const [poolOpen, setPoolOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
@@ -145,6 +150,26 @@ export function BudgetHub() {
       setOpenCell(null);
       setClosingCell(false);
     }, 250);
+  }, []);
+
+  /** Money on this account with no line type — what the triage modal fixes. */
+  const untypedTotal = useMemo(
+    () => summary?.byLineType.find((t) => t.lineType === 'unclassified')?.amount ?? 0,
+    [summary],
+  );
+
+  const toggleSection = useCallback((key: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else {
+        next.add(key);
+        // An open detail row inside a section being folded away would keep
+        // rendering with nothing above it to explain what it belongs to.
+        setOpenCell(null);
+      }
+      return next;
+    });
   }, []);
 
   const cellLines = useMemo(() => {
@@ -413,13 +438,27 @@ export function BudgetHub() {
                 <span className="text-xs font-medium text-[var(--foreground)]">
                   What this client is made of
                 </span>
-                <span className="text-xs text-[var(--muted-foreground)]">
-                  {usd0(summary.knownRevenue)} gross revenue
-                  {summary.uncostedAmount > 0 && (
-                    <span className="text-amber-600">
-                      {' '}
-                      · {usd0(summary.uncostedAmount)} not costed yet
-                    </span>
+                <span className="flex items-center gap-2 text-xs text-[var(--muted-foreground)]">
+                  <span>
+                    {usd0(summary.knownRevenue)} gross revenue
+                    {summary.uncostedAmount > 0 && (
+                      <span className="text-amber-600">
+                        {' '}
+                        · {usd0(summary.uncostedAmount)} not costed yet
+                      </span>
+                    )}
+                  </span>
+                  {/* The way out of "not costed yet". Only offered when there
+                      IS something untyped — a button that always does nothing
+                      teaches people to stop pressing it. */}
+                  {untypedTotal > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setCategoriseOpen(true)}
+                      className="rounded-lg border border-[var(--border)] px-2 py-1 text-[11px] font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
+                    >
+                      Categorise {usd0(untypedTotal)}
+                    </button>
                   )}
                 </span>
               </div>
@@ -546,29 +585,54 @@ export function BudgetHub() {
                       <Fragment key={section.key}>
                         {/* Section header — only when there's more than one kind
                             of money, so a media-only account isn't given a
-                            header for the sake of it. */}
+                            header for the sake of it. Doubles as the collapse
+                            toggle; a 44-channel account is a long grid and
+                            most visits care about one kind of money. */}
                         {gridSections.length > 1 && (
-                          <tr className="border-b border-[var(--border)] bg-[var(--muted)]/25">
+                          <tr
+                            className="cursor-pointer border-b border-[var(--border)] bg-[var(--muted)]/25 transition hover:bg-[var(--muted)]/45"
+                            onClick={() => toggleSection(section.key)}
+                          >
                             <td
-                              colSpan={14}
+                              colSpan={13}
                               className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]"
                             >
-                              {section.label}
-                              <span className="ml-2 font-normal normal-case tracking-normal opacity-70">
-                                {section.blurb}
+                              <span className="inline-flex items-center gap-1.5">
+                                <ChevronRightIcon
+                                  className={`h-3 w-3 transition-transform duration-200 ${
+                                    collapsed.has(section.key) ? '' : 'rotate-90'
+                                  }`}
+                                />
+                                {section.label}
+                                <span className="font-normal normal-case tracking-normal opacity-70">
+                                  {collapsed.has(section.key)
+                                    ? `${section.rows.length} channel${section.rows.length === 1 ? '' : 's'} hidden`
+                                    : section.blurb}
+                                </span>
                               </span>
+                            </td>
+                            {/* The section's own total, so collapsing hides
+                                detail without hiding money. */}
+                            <td className="px-3 py-1.5 text-right text-[11px] font-semibold tabular-nums text-[var(--muted-foreground)]">
+                              {compact(section.rows.reduce((t, r) => t + r.total, 0))}
                             </td>
                           </tr>
                         )}
-                        {section.rows.map((row) => {
+                        {(collapsed.has(section.key) ? [] : section.rows).map((row, rowIndex) => {
                           const openPeriod =
                             openCell?.channel === row.channel ? openCell.period : null;
                           return (
                             <Fragment key={row.channel}>
+                      {/* Rows fade in on expand. A table row's height can't be
+                          transitioned the way `<Collapse>` does it — a <tr> has
+                          no box to grow — so the motion is opacity and offset,
+                          staggered so a long section unfolds rather than
+                          flashing. */}
                       <tr
-                        className={`border-b border-[var(--border)] last:border-0 ${
+                        className={`animate-fade-in-up border-b border-[var(--border)] last:border-0 ${
                           openPeriod ? 'bg-[var(--primary)]/[0.06]' : ''
                         }`}
+                        style={{ animationDelay: `${Math.min(rowIndex, 8) * 25}ms` }}
                       >
                         <td className="whitespace-nowrap px-3 py-2">
                           <span className="inline-flex items-center gap-2">
@@ -723,6 +787,16 @@ export function BudgetHub() {
             <p className="mt-3 text-xs text-[var(--muted-foreground)]">Refreshing…</p>
           )}
         </>
+      )}
+
+      {categoriseOpen && accountKey && (
+        <BudgetCategoriseModal
+          accountKey={accountKey}
+          year={year}
+          accountName={accountData?.dealer ?? accountKey}
+          onChanged={() => void reload()}
+          onClose={() => setCategoriseOpen(false)}
+        />
       )}
 
       {agreementsOpen && accountKey && (

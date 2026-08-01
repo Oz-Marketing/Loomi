@@ -296,9 +296,9 @@ taking manual control of one month doesn't affect Google or any other month.
 | [`src/lib/budget/term.ts`](../src/lib/budget/term.ts) | Agreement term arithmetic — `termMonths`, `monthsInYear`, `commitmentForYear`. Prisma-free, so the pro-rating that decides a client's target is unit-tested without a database |
 | [`src/lib/budget/flight.ts`](../src/lib/budget/flight.ts) | Flight splitting — `flightMonths`, `splitFlight`. Day-weighted, exact to the cent. Prisma-free, so the modal previews with the same code the server writes with |
 | [`src/lib/services/budget.ts`](../src/lib/services/budget.ts) | Agreement CRUD, create / allocate / return-to-pool / settle, rollups, `getPacerBudgetGoals`, fee-line generation |
-| `src/app/api/budget/*` | `summary`, `agreements`, `agreements/[id]` (+`?generate=YYYY`), `flights`, `flights/[id]`, `lines`, `lines/[id]`, `lines/[id]/allocate`, `lines/[id]/settle`, `settle-period` |
+| `src/app/api/budget/*` | `summary`, `agreements`, `agreements/[id]` (+`?generate=YYYY`), `flights`, `flights/[id]`, `categorise`, `lines`, `lines/[id]`, `lines/[id]/allocate`, `lines/[id]/settle`, `settle-period` |
 | [`src/lib/budget/settlement.ts`](../src/lib/budget/settlement.ts) | Attribution math — exact-summing largest-remainder split, variance, attainment |
-| `src/app/app/projects/budget` + `_components/budget-*` | The hub, agreement modal, add-line modal, line drawer |
+| `src/app/app/projects/budget` + `_components/budget-*` | The hub, agreement modal, categorise modal, add-line modal, line drawer |
 | `api/meta-ads-pacer/[k]/budget-managed` | GET state / POST manage-unmanage, per platform |
 | [`src/lib/projects/ui.ts`](../src/lib/projects/ui.ts) | `KIND_BUDGET_CHANNELS` — which channels each task Type can spend on |
 | `createTicket` in [`services/projects.ts`](../src/lib/services/projects.ts) | Turns a ticket's requested budget into lines |
@@ -306,9 +306,9 @@ taking manual control of one month doesn't affect Google or any other month.
 
 Tests: `budget/period.test.ts`, `budget/channels.test.ts`, `budget/term.test.ts`,
 `budget/flight.test.ts` and `budget/settlement.test.ts` run always (71 cases);
-`services/budget.db.test.ts` (65 cases — ledger arithmetic, agreements, flights,
-the pacer binding, settlement) self-skips unless `RUN_DB_TESTS=1`, matching
-`loomi-flows.db.test.ts`.
+`services/budget.db.test.ts` (72 cases — ledger arithmetic, agreements, flights,
+categorising, the pacer binding, settlement) self-skips unless `RUN_DB_TESTS=1`,
+matching `loomi-flows.db.test.ts`.
 
 ### Settlement as built
 
@@ -619,8 +619,6 @@ every future schema change.
 
 ### Still to do
 
-- **The 1,464 unclassified lines / $963k** from the Oz Reports import still need
-  a human pass; `lineType` can't be guessed from names like "Group Sale".
 - Agreements are not yet **auto-attached** to lines created from intake. A
   ticket's budget lands unlinked; the agreement link is set explicitly today.
 
@@ -681,6 +679,58 @@ The add-line modal computes the month split locally with `splitFlight`, the
 exact function the server writes with. No round trip, the months update as the
 dates are typed, and what you see before saving is what gets written. That's
 only possible because the math has no Prisma in it.
+
+---
+
+## 11. Categorising what the import left untyped
+
+Oz Reports had no concept of what KIND of money a line was, so 1,464 imported
+lines / **$963,126** came across as `unclassified`. Until a line has a type its
+margin is *unknown* rather than zero — which is the honest answer, and a useless
+one. This is the machinery for resolving it.
+
+### Two different problems
+
+Breaking the backlog down by channel makes clear it isn't one job:
+
+| Channel | Lines | Amount | Who decides |
+|---|---|---|---|
+| Other | 738 | $460,608 | **per line** — the name says nothing |
+| YAG | 335 | $55,308 | per channel |
+| Referral | 303 | $21,837 | per channel |
+| Group Sale | 77 | $139,672 | per channel |
+| Sponsorship | 6 | $171,000 | per channel |
+| Store Event/Sale | 4 | $14,701 | per channel |
+| Auxiliary | 1 | $100,000 | per channel |
+
+**The per-channel ones need no new code.** "YAG is a fee" is true everywhere, so
+the fix is a one-line edit to that channel's registry entry in
+[`channels.ts`](../src/lib/budget/channels.ts) — and
+[`backfill-budget-line-type.ts`](../scripts/backfill-budget-line-type.ts), which
+already runs on every deploy, applies it across the whole book automatically.
+That's a decision waiting on a human, not a feature waiting on a build.
+
+**"Other" is the real work** — 738 lines whose only clue is their label.
+
+### What was built
+
+- **Per line** — the drawer now edits `lineType` and, for the types where cost
+  isn't derivable (service, production, unclassified), the actual cost, with the
+  resulting revenue and margin shown live. Both were added in Phase A with no
+  way to set either, which is why the margin figures couldn't become real.
+- **Per channel** — `categoriseChannel` types every still-untyped line on a
+  channel at once, surfaced as a "Categorise $X" action next to the uncosted
+  warning in the hub.
+
+### It can only fill blanks
+
+`categoriseChannel` touches lines still marked `unclassified` and nothing else.
+A type someone set by hand in the drawer is a decision, and one click of a bulk
+action should never be able to undo a morning of careful per-line work. That
+also makes it idempotent and safe to re-run.
+
+Every line it touches gets its own audit event. A type change moves the margin,
+and "who decided this was a fee" is a question that gets asked.
 
 ---
 

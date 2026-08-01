@@ -2,10 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireRole, getAccountScope, forbidden } from '@/lib/api-auth';
 import { MANAGEMENT_ROLES } from '@/lib/auth';
 import * as budget from '@/lib/services/budget';
+import { isBudgetLineType } from '@/lib/budget/channels';
 
 /**
  * GET    /api/budget/lines/[id] — one line plus its event trail.
- * PATCH  /api/budget/lines/[id] — edit amount / placement / status / bucket.
+ * PATCH  /api/budget/lines/[id] — edit amount / placement / status / bucket /
+ *         line type / cost.
  * DELETE /api/budget/lines/[id] — cancel it. `?toPool=true` returns the money
  *        to the account's pool instead of just writing it off.
  */
@@ -59,6 +61,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         channel: 'channel' in body ? (body.channel ?? null) : undefined,
         status: typeof body.status === 'string' ? body.status : undefined,
         bucket: typeof body.bucket === 'string' ? body.bucket : undefined,
+        lineType: isBudgetLineType(body.lineType) ? body.lineType : undefined,
+        // `null` is meaningful — it puts the cost back to derived — so this
+        // has to test for presence, not truthiness.
+        cost: 'cost' in body ? (body.cost == null ? null : Number(body.cost)) : undefined,
         label: 'label' in body ? (body.label ?? null) : undefined,
         notes: 'notes' in body ? (body.notes ?? null) : undefined,
         spendAccountKey:

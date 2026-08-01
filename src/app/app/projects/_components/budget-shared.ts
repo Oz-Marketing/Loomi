@@ -22,6 +22,11 @@ export type BudgetLine = {
   category: string | null;
   amount: number;
   markupSnapshot: number;
+  lineType: string;
+  cost: number | null;
+  effectiveCost: number | null;
+  revenue: number | null;
+  margin: number | null;
   spendTarget: number;
   source: string;
   status: string;
@@ -52,6 +57,16 @@ export type BudgetSummary = {
   overAllocated: boolean;
   byChannel: { channel: string; amount: number; spendTarget: number }[];
   byPeriod: { period: string; amount: number; spendTarget: number }[];
+  byLineType: {
+    lineType: string;
+    amount: number;
+    cost: number;
+    revenue: number;
+    costKnown: boolean;
+    lines: number;
+  }[];
+  knownRevenue: number;
+  uncostedAmount: number;
 };
 
 export type BudgetPlan = {

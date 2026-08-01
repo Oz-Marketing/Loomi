@@ -4,9 +4,11 @@ import { accountMarginSetting } from '@/lib/ad-pacer/markup';
 import { getGlobalDefaultMarkup } from '@/lib/services/markup';
 import {
   channelCategory,
+  channelLineType,
   channelPacerPlatform,
   channelsForPlatform,
   isBudgetChannel,
+  type BudgetLineType,
   type PacerPlatform,
 } from '@/lib/budget/channels';
 import { isValidPeriod as isValidPeriodPure, resolveYear } from '@/lib/budget/period';
@@ -115,6 +117,50 @@ export async function resolveMarkup(accountKey: string, year: number): Promise<n
   return accountMarginSetting(account?.markup ?? null, globalDefault);
 }
 
+// ── Cost / revenue ──────────────────────────────────────────────────────────
+//
+// The one place cost is decided. Everything downstream — the DTO, the summary,
+// any future P&L view — reads through here so the four line types can't drift
+// apart across surfaces.
+
+/**
+ * What a line costs Oz, in the same dollars as `amount`.
+ *
+ * An explicitly stored cost always wins: for a resold service that number came
+ * off a vendor invoice, and no percentage should override it. Otherwise:
+ *   media  → amount × markup, the spend that reaches the platform
+ *   fee    → 0, there is no external cost
+ *   other  → null, genuinely unknown rather than assumed zero
+ *
+ * Null is meaningful and must stay null. Treating unknown cost as zero would
+ * report 100% margin on every un-costed service line, which is the most
+ * flattering possible lie.
+ */
+export function effectiveCost(line: {
+  amount: number;
+  markupSnapshot: number;
+  lineType: string;
+  cost: number | null;
+}): number | null {
+  if (line.cost != null) return line.cost;
+  if (line.lineType === 'media') return line.amount * line.markupSnapshot;
+  if (line.lineType === 'fee') return 0;
+  return null;
+}
+
+/** amount − cost, or null when the cost isn't known yet. */
+export function revenueOf(line: Parameters<typeof effectiveCost>[0]): number | null {
+  const c = effectiveCost(line);
+  return c == null ? null : line.amount - c;
+}
+
+/** Revenue as a share of what the client pays, or null when unknowable. */
+export function marginOf(line: Parameters<typeof effectiveCost>[0]): number | null {
+  const r = revenueOf(line);
+  if (r == null || line.amount <= 0) return null;
+  return r / line.amount;
+}
+
 // ── Serialization ───────────────────────────────────────────────────────────
 
 type LineRow = Prisma.BudgetLineGetPayload<{
@@ -135,6 +181,12 @@ const LINE_INCLUDE = {
 
 export function serializeLine(l: LineRow) {
   const amount = toNumber(l.amount);
+  const shape = {
+    amount,
+    markupSnapshot: l.markupSnapshot,
+    lineType: l.lineType,
+    cost: l.cost == null ? null : toNumber(l.cost),
+  };
   return {
     id: l.id,
     accountKey: l.accountKey,
@@ -150,8 +202,16 @@ export function serializeLine(l: LineRow) {
     category: l.category,
     amount,
     markupSnapshot: l.markupSnapshot,
+    lineType: l.lineType,
+    // What this costs Oz. Explicit when someone entered it, derived otherwise.
+    // Null means genuinely unknown — an un-costed service line, not free.
+    cost: shape.cost,
+    effectiveCost: effectiveCost(shape),
+    revenue: revenueOf(shape),
+    margin: marginOf(shape),
     // What should actually hit the platform. Derived, never stored — the
-    // stored pair (amount, markupSnapshot) is the record.
+    // stored pair (amount, markupSnapshot) is the record. Media-only in
+    // meaning; on a fee or service line it's an artefact, not a target.
     spendTarget: amount * l.markupSnapshot,
     source: l.source,
     status: l.status,
@@ -271,6 +331,10 @@ export interface CreateLineInput {
   source?: string;
   status?: string;
   bucket?: string;
+  /** Defaults from the channel; set explicitly when a line behaves unlike it. */
+  lineType?: BudgetLineType;
+  /** What it costs Oz. Required for a service/production line to show margin. */
+  cost?: number | null;
   initiativeId?: string | null;
   taskId?: string | null;
   batchId?: string | null;
@@ -357,6 +421,8 @@ export async function createLines(
         source,
         status: input.status ?? 'planned',
         bucket: input.bucket ?? defaultBucket(source),
+        lineType: input.lineType ?? channelLineType(channel),
+        cost: input.cost == null ? null : decimal(input.cost),
         initiativeId: input.initiativeId ?? null,
         taskId: input.taskId ?? null,
         batchId: input.batchId ?? batchId,
@@ -638,6 +704,9 @@ export async function allocateFromLine(
       source: src.source,
       status: src.status === 'planned' ? 'planned' : 'committed',
       bucket: src.bucket,
+      // A split inherits what kind of money it is; changing channel can change
+      // it, so re-derive when the child lands somewhere different.
+      lineType: channel === src.channel ? src.lineType : channelLineType(channel),
       initiativeId: input.initiativeId ?? src.initiativeId,
       taskId: input.taskId ?? src.taskId,
       batchId: src.batchId,
@@ -722,6 +791,7 @@ export async function returnToPool(
       source: 'pool',
       status: 'committed',
       bucket: src.bucket,
+      lineType: src.lineType,
       batchId: src.batchId,
       label: src.label,
       notes: reason ?? null,
@@ -804,6 +874,24 @@ export interface BudgetSummary {
   overAllocated: boolean;
   byChannel: { channel: string; amount: number; spendTarget: number }[];
   byPeriod: { period: string; amount: number; spendTarget: number }[];
+  /**
+   * The split Oz Reports could never produce: how much of the year is media,
+   * fees, resold services and production. `costKnown` is false for a type with
+   * any un-costed line, so the UI can say "at least $X" rather than implying a
+   * margin it can't actually compute.
+   */
+  byLineType: {
+    lineType: string;
+    amount: number;
+    cost: number;
+    revenue: number;
+    costKnown: boolean;
+    lines: number;
+  }[];
+  /** Σ revenue across types whose cost is fully known. */
+  knownRevenue: number;
+  /** Client dollars sitting on lines with no cost yet — margin is unknowable. */
+  uncostedAmount: number;
 }
 
 /**
@@ -829,6 +917,8 @@ export async function getAccountSummary(
         markupSnapshot: true,
         period: true,
         channel: true,
+        lineType: true,
+        cost: true,
       },
     }),
   ]);
@@ -852,6 +942,45 @@ export async function getAccountSummary(
     byPeriodMap.set(l.period!, { amount: pd.amount + amt, spendTarget: pd.spendTarget + spend });
   }
 
+  // Line-type rollup across EVERY counted line, placed or pooled — a fee sitting
+  // in the pool is still fee revenue.
+  const typeAgg = new Map<
+    string,
+    { amount: number; cost: number; revenue: number; costKnown: boolean; lines: number }
+  >();
+  let uncostedAmount = 0;
+  for (const l of lines) {
+    const amt = toNumber(l.amount);
+    const shape = {
+      amount: amt,
+      markupSnapshot: l.markupSnapshot,
+      lineType: l.lineType,
+      cost: l.cost == null ? null : toNumber(l.cost),
+    };
+    const c = effectiveCost(shape);
+    const entry = typeAgg.get(l.lineType) ?? {
+      amount: 0, cost: 0, revenue: 0, costKnown: true, lines: 0,
+    };
+    entry.amount += amt;
+    entry.lines += 1;
+    if (c == null) {
+      // One un-costed line makes the whole type's margin a guess. Say so rather
+      // than quietly reporting the costed subset as if it were everything.
+      entry.costKnown = false;
+      uncostedAmount += amt;
+    } else {
+      entry.cost += c;
+      entry.revenue += amt - c;
+    }
+    typeAgg.set(l.lineType, entry);
+  }
+  const byLineType = [...typeAgg.entries()]
+    .map(([lineType, v]) => ({ lineType, ...v }))
+    .sort((a, b) => b.amount - a.amount);
+  const knownRevenue = byLineType
+    .filter((t) => t.costKnown)
+    .reduce((sum, t) => sum + t.revenue, 0);
+
   return {
     accountKey,
     year,
@@ -868,6 +997,9 @@ export async function getAccountSummary(
     byPeriod: [...byPeriodMap.entries()]
       .map(([period, v]) => ({ period, ...v }))
       .sort((a, b) => a.period.localeCompare(b.period)),
+    byLineType,
+    knownRevenue,
+    uncostedAmount,
   };
 }
 
@@ -1509,6 +1641,8 @@ export async function upsertImportedLines(
         source,
         status: input.status ?? 'committed',
         bucket: input.bucket ?? defaultBucket(source),
+        lineType: input.lineType ?? channelLineType(input.channel ?? null),
+        cost: input.cost == null ? null : decimal(input.cost),
         batchId: input.batchId ?? null,
         label: input.label ?? null,
         notes: input.notes ?? null,

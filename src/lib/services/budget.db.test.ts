@@ -887,4 +887,114 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     expect(s.pool).toBe(4000);
     expect(s.allocated).toBe(0);
   });
+
+  // ── Line type + cost (Phase A) ──
+
+  it('derives cost from markup for media, and zero for a fee', async () => {
+    const media = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-01`, channel: 'meta', amount: 10_000, markup: 0.77, status: 'committed' },
+      null,
+    );
+    expect(media.lineType).toBe('media');
+    expect(media.effectiveCost).toBeCloseTo(7700, 2);
+    expect(media.revenue).toBeCloseTo(2300, 2);
+    expect(media.margin).toBeCloseTo(0.23, 4);
+
+    const fee = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-01`, channel: 'management_fee', amount: 2000, status: 'committed' },
+      null,
+    );
+    // A fee has no external cost — the whole amount is revenue, regardless of
+    // whatever markup the account happens to carry.
+    expect(fee.lineType).toBe('fee');
+    expect(fee.effectiveCost).toBe(0);
+    expect(fee.revenue).toBe(2000);
+    expect(fee.margin).toBe(1);
+  });
+
+  it("leaves a service line's cost UNKNOWN until someone enters it", async () => {
+    const svc = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-02`, channel: 'data_feed', amount: 5000, status: 'committed' },
+      null,
+    );
+    // The critical case: treating unknown cost as zero would report 100% margin
+    // on every un-costed service line — the most flattering possible lie.
+    expect(svc.lineType).toBe('service');
+    expect(svc.effectiveCost).toBeNull();
+    expect(svc.revenue).toBeNull();
+    expect(svc.margin).toBeNull();
+  });
+
+  it('uses an entered cost in preference to any derivation', async () => {
+    const svc = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-02`, channel: 'lead_provider', amount: 4000, cost: 2500, status: 'committed' },
+      null,
+    );
+    expect(svc.effectiveCost).toBe(2500);
+    expect(svc.revenue).toBe(1500);
+
+    // Even on media, where a markup exists — that number came off a vendor
+    // invoice and must not be overridden by a percentage.
+    const media = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-02`, channel: 'meta', amount: 1000, markup: 0.77, cost: 900, status: 'committed' },
+      null,
+    );
+    expect(media.effectiveCost).toBe(900);
+    expect(media.revenue).toBe(100);
+  });
+
+  it('defaults an unclassifiable channel to unclassified rather than guessing', async () => {
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-03`, channel: 'other', amount: 1000, status: 'committed' },
+      null,
+    );
+    expect(line.lineType).toBe('unclassified');
+    expect(line.effectiveCost).toBeNull();
+  });
+
+  it('splits the year by line type and flags what it cannot cost', async () => {
+    await budget.createLines(
+      [
+        { accountKey: acctA, period: `${YEAR}-04`, channel: 'meta', amount: 10_000, markup: 0.8, status: 'committed' },
+        { accountKey: acctA, period: `${YEAR}-04`, channel: 'contribution', amount: 5_000, status: 'committed' },
+        { accountKey: acctA, period: `${YEAR}-04`, channel: 'data_feed', amount: 3_000, status: 'committed' },
+        { accountKey: acctA, period: `${YEAR}-04`, channel: 'data_feed', amount: 1_000, cost: 400, status: 'committed' },
+      ],
+      null,
+    );
+    const s = await budget.getAccountSummary(acctA, YEAR);
+    const byType = Object.fromEntries(s.byLineType.map((t) => [t.lineType, t]));
+
+    expect(byType.media!.amount).toBe(10_000);
+    expect(byType.media!.revenue).toBeCloseTo(2000, 2);
+    expect(byType.media!.costKnown).toBe(true);
+
+    expect(byType.fee!.amount).toBe(5_000);
+    expect(byType.fee!.revenue).toBe(5_000);
+
+    // One un-costed line makes the whole type's margin a guess — reported as
+    // such rather than quietly showing the costed subset as if it were all.
+    expect(byType.service!.amount).toBe(4_000);
+    expect(byType.service!.costKnown).toBe(false);
+    expect(s.uncostedAmount).toBe(3_000);
+
+    // Known revenue excludes the type it can't compute.
+    expect(s.knownRevenue).toBeCloseTo(7000, 2);
+  });
+
+  it('re-derives line type when an allocation lands on a different channel', async () => {
+    const pool = await budget.createLine(
+      { accountKey: acctA, year: YEAR, amount: 8000, status: 'committed' },
+      null,
+    );
+    const res = await budget.allocateFromLine(
+      pool.id,
+      { amount: 3000, period: `${YEAR}-05`, channel: 'management_fee' },
+      null,
+    );
+    // Inheriting 'unclassified' from the pool would leave real fee revenue
+    // invisible in the P&L split.
+    expect(res!.allocated.lineType).toBe('fee');
+    expect(res!.allocated.revenue).toBe(3000);
+  });
 });

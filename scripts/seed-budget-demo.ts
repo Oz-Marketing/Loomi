@@ -326,7 +326,7 @@ async function seedTraditional(userId: string | null): Promise<void> {
       {
         accountKey: key,
         period: p(5),
-        channel: 'video',
+        channel: 'production',
         amount: 22_000,
         source: 'adhoc',
         status: 'settled',

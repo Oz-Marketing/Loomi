@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AdjustmentsHorizontalIcon,
   BanknotesIcon,
@@ -12,7 +12,12 @@ import {
 import { toast } from '@/lib/toast';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { AccountAvatar } from '@/components/account-avatar';
-import { BUDGET_CHANNELS, channelLabel, isPacedChannel } from '@/lib/budget/channels';
+import {
+  BUDGET_CHANNELS,
+  LINE_TYPES,
+  channelLabel,
+  isPacedChannel,
+} from '@/lib/budget/channels';
 import { ChannelIcon } from '@/components/icons/channel-icon';
 import { periodOf } from '@/lib/budget/period';
 import { useAccount } from '@/contexts/account-context';
@@ -96,16 +101,32 @@ export function BudgetHub() {
       row[m] += l.amount;
       byChannel.set(l.channel, row);
     }
-    // Registry order, so Digital sits above Traditional consistently rather
-    // than in whatever order money happened to be entered.
+    // Registry order, so the grid reads the same way every time rather than in
+    // whatever order money happened to be entered.
     return BUDGET_CHANNELS.filter((c) => byChannel.has(c.key)).map((c) => ({
       channel: c.key,
       label: c.label,
       category: c.category,
+      lineType: c.lineType,
       months: byChannel.get(c.key)!,
       total: byChannel.get(c.key)!.reduce((a, b) => a + b, 0),
     }));
   }, [placed]);
+
+  /**
+   * The grid grouped into Media / Services / Fees / Production / Needs
+   * categorising. A flat 44-row table mixes a Google buy with a management fee
+   * as if they were the same kind of thing — they aren't, and the sections are
+   * what make a long grid readable.
+   */
+  const gridSections = useMemo(
+    () =>
+      LINE_TYPES.map((t) => ({
+        ...t,
+        rows: grid.filter((r) => r.lineType === t.key),
+      })).filter((sec) => sec.rows.length > 0),
+    [grid],
+  );
 
   const monthTotals = useMemo(() => {
     const t = Array(12).fill(0);
@@ -310,6 +331,53 @@ export function BudgetHub() {
             />
           </div>
 
+          {/* Revenue split — the thing Oz Reports could never show: how much of
+              this client is media pass-through vs agency revenue. Only when
+              there's more than one kind of money; a media-only account learns
+              nothing from a one-row breakdown. */}
+          {summary.byLineType.length > 1 && (
+            <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--card)] px-4 py-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+                <span className="text-xs font-medium text-[var(--foreground)]">
+                  What this client is made of
+                </span>
+                <span className="text-xs text-[var(--muted-foreground)]">
+                  {usd0(summary.knownRevenue)} gross revenue
+                  {summary.uncostedAmount > 0 && (
+                    <span className="text-amber-600">
+                      {' '}
+                      · {usd0(summary.uncostedAmount)} not costed yet
+                    </span>
+                  )}
+                </span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 sm:grid-cols-4">
+                {summary.byLineType.map((t) => {
+                  const meta = LINE_TYPES.find((x) => x.key === t.lineType);
+                  return (
+                    <div key={t.lineType}>
+                      <p className="text-[11px] text-[var(--muted-foreground)]">
+                        {meta?.label ?? t.lineType}
+                      </p>
+                      <p className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                        {usd0(t.amount)}
+                      </p>
+                      <p className="text-[10px] text-[var(--muted-foreground)]">
+                        {t.costKnown ? (
+                          <>{usd0(t.revenue)} revenue</>
+                        ) : (
+                          // Saying "0% margin" would be a lie; saying nothing
+                          // hides that a number is missing.
+                          <span className="text-amber-600">cost not entered</span>
+                        )}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Progress strip — relates the four numbers above. Only meaningful
               once there's a declared total to measure against. */}
           {summary.declaredTotal != null && (
@@ -403,7 +471,25 @@ export function BudgetHub() {
                     </tr>
                   </thead>
                   <tbody>
-                    {grid.map((row) => (
+                    {gridSections.map((section) => (
+                      <Fragment key={section.key}>
+                        {/* Section header — only when there's more than one kind
+                            of money, so a media-only account isn't given a
+                            header for the sake of it. */}
+                        {gridSections.length > 1 && (
+                          <tr className="border-b border-[var(--border)] bg-[var(--muted)]/25">
+                            <td
+                              colSpan={14}
+                              className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]"
+                            >
+                              {section.label}
+                              <span className="ml-2 font-normal normal-case tracking-normal opacity-70">
+                                {section.blurb}
+                              </span>
+                            </td>
+                          </tr>
+                        )}
+                        {section.rows.map((row) => (
                       <tr key={row.channel} className="border-b border-[var(--border)] last:border-0">
                         <td className="whitespace-nowrap px-3 py-2">
                           <span className="inline-flex items-center gap-2">
@@ -452,6 +538,8 @@ export function BudgetHub() {
                           {compact(row.total)}
                         </td>
                       </tr>
+                        ))}
+                      </Fragment>
                     ))}
                     <tr className="bg-[var(--muted)]/40">
                       <td className="px-3 py-2 text-xs font-medium text-[var(--muted-foreground)]">

@@ -3242,7 +3242,26 @@ model BudgetLine {
   // The gross→spend factor frozen at creation: spend = amount × markupSnapshot.
   // Resolved once via accountMarginSetting() and never re-derived, so changing
   // an account's markup can't silently rewrite last quarter's targets.
+  //
+  // MEDIA ONLY as a cost mechanism. A percentage is the wrong model for a
+  // resold service (you know the vendor's actual price) or a fee (there is no
+  // external cost) — those carry `cost` directly. See `lineType` below.
   markupSnapshot Float
+
+  // What KIND of money this is — the dimension Oz Reports never had, and the
+  // one that makes gross margin computable. media | fee | service |
+  // production | unclassified. Defaults from the channel; overridable per line
+  // because a one-off can behave unlike its channel.
+  lineType String @default("unclassified")
+
+  // What this line COSTS Oz, in the same dollars as `amount`. Null = derive:
+  //   media  -> amount × markupSnapshot   (the spend that hits the platform)
+  //   fee    -> 0                          (agency revenue, no external cost)
+  //   other  -> unknown until entered      (a vendor's real price, a job cost)
+  // Stored rather than always derived because for a resold service the cost is
+  // a number someone was invoiced, not a percentage of what the client pays.
+  // revenue = amount − cost.
+  cost Decimal? @db.Decimal(12, 2)
 
   // Where the money came from. Drives the pacer bucket default and lets the hub
   // separate "the retainer" from "things people asked for".
@@ -3302,6 +3321,7 @@ model BudgetLine {
   events BudgetLineEvent[]
 
   @@index([accountKey, year])
+  @@index([accountKey, lineType])
   @@index([accountKey, period])
   @@index([spendAccountKey, period, channel])
   @@index([accountKey, status])

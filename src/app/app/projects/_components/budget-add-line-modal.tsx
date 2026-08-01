@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
@@ -8,32 +8,61 @@ import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { ChannelIcon } from '@/components/icons/channel-icon';
 import { BUDGET_CHANNELS } from '@/lib/budget/channels';
 import { periodOf } from '@/lib/budget/period';
-import { MONTH_ABBR } from './budget-shared';
+import { splitFlight } from '@/lib/budget/flight';
+import { MONTH_ABBR, usd0 } from './budget-shared';
 
 /**
- * One-off budget line — channel, month, amount. Everything else takes defaults.
+ * Budget in, one of two shapes.
+ *
+ * A SINGLE MONTH is the ordinary case — channel, month, amount.
+ *
+ * A FLIGHT is a media buy with real dates. It's one commercial fact (one
+ * insertion order, one total) that the ledger has to hold as one row per month,
+ * so entering it by hand means doing the day-weighted split in your head and
+ * then keeping three rows in sync every time the buy moves. Here you give the
+ * range and the total, and the months are derived.
+ *
+ * The preview is computed locally with the same `splitFlight` the server uses —
+ * pure, no round trip — so the months update as the dates are typed and what
+ * you see before saving is exactly what gets written.
  *
  * A modal rather than an inline panel: expanding in place pushed the grid down
- * and reflowed the page around a four-field form, so the thing you were
- * looking at moved the moment you went to add to it.
+ * and reflowed the page around the form, so the thing you were looking at moved
+ * the moment you went to add to it.
  */
 export function BudgetAddLineModal({
   year,
   accountName,
   onAdd,
+  onAddFlight,
   onClose,
 }: {
   year: number;
   accountName: string;
   onAdd: (body: Record<string, unknown>) => Promise<void>;
+  onAddFlight: (body: Record<string, unknown>) => Promise<void>;
   onClose: () => void;
 }) {
+  const [mode, setMode] = useState<'month' | 'flight'>('month');
   const [channel, setChannel] = useState(BUDGET_CHANNELS[0]!.key);
   const [month, setMonth] = useState(String(new Date().getMonth() + 1));
+  const [startDate, setStartDate] = useState(`${year}-01-01`);
+  const [endDate, setEndDate] = useState(`${year}-03-31`);
   const [amount, setAmount] = useState('');
   const [label, setLabel] = useState('');
   const [saving, setSaving] = useState(false);
   const [mounted, setMounted] = useState(false);
+
+  /** The months this flight would create. Recomputed as you type. */
+  const preview = useMemo(() => {
+    if (mode !== 'flight') return null;
+    const n = Number(amount);
+    const s = parseISO(startDate);
+    const e = parseISO(endDate);
+    if (!s || !e) return { error: 'Pick a start and end date.', months: [] };
+    if (e < s) return { error: 'The flight ends before it starts.', months: [] };
+    return { error: null, months: splitFlight(s, e, Number.isFinite(n) && n > 0 ? n : 0) };
+  }, [mode, startDate, endDate, amount]);
 
   useEffect(() => setMounted(true), []);
 
@@ -51,14 +80,28 @@ export function BudgetAddLineModal({
       toast.error('Enter an amount');
       return;
     }
+    if (mode === 'flight' && preview?.error) {
+      toast.error(preview.error);
+      return;
+    }
     setSaving(true);
-    await onAdd({
-      channel,
-      period: periodOf(year, Number(month)),
-      amount: n,
-      label: label.trim() || null,
-      source: 'adhoc',
-    });
+    if (mode === 'flight') {
+      await onAddFlight({
+        channel,
+        startDate,
+        endDate,
+        amount: n,
+        label: label.trim() || null,
+      });
+    } else {
+      await onAdd({
+        channel,
+        period: periodOf(year, Number(month)),
+        amount: n,
+        label: label.trim() || null,
+        source: 'adhoc',
+      });
+    }
     setSaving(false);
     onClose();
   }
@@ -94,8 +137,28 @@ export function BudgetAddLineModal({
         </div>
 
         <div className="space-y-4 px-5 py-4">
+          {/* Single month vs a dated flight. A segmented control rather than a
+              checkbox — these are two ways of entering budget, not one with a
+              modifier. */}
+          <div className="flex rounded-lg bg-[var(--muted)]/40 p-0.5">
+            {(['month', 'flight'] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                  mode === m
+                    ? 'bg-[var(--primary)] text-white shadow-sm'
+                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                {m === 'month' ? 'Single month' : 'Flight (date range)'}
+              </button>
+            ))}
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
-            <div>
+            <div className={mode === 'flight' ? 'col-span-2' : ''}>
               <label className="block text-xs font-medium text-[var(--foreground)]">Channel</label>
               <div className="mt-1">
                 <SearchableSelect
@@ -111,25 +174,56 @@ export function BudgetAddLineModal({
                 />
               </div>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-[var(--foreground)]">Month</label>
-              <div className="mt-1">
-                <SearchableSelect
-                  value={month}
-                  onChange={setMonth}
-                  searchable={false}
-                  options={MONTH_ABBR.map((m: string, i: number) => ({
-                    value: String(i + 1),
-                    label: m,
-                  }))}
-                  className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-2 !text-sm"
+            {mode === 'month' && (
+              <div>
+                <label className="block text-xs font-medium text-[var(--foreground)]">Month</label>
+                <div className="mt-1">
+                  <SearchableSelect
+                    value={month}
+                    onChange={setMonth}
+                    searchable={false}
+                    options={MONTH_ABBR.map((m: string, i: number) => ({
+                      value: String(i + 1),
+                      label: m,
+                    }))}
+                    className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-2 !text-sm"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {mode === 'flight' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-[var(--foreground)]">
+                  First day
+                </label>
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="loomi-input mt-1 w-full !bg-[var(--input)]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[var(--foreground)]">
+                  Last day
+                </label>
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(e) => setEndDate(e.target.value)}
+                  className="loomi-input mt-1 w-full !bg-[var(--input)]"
                 />
               </div>
             </div>
-          </div>
+          )}
 
           <div>
-            <label className="block text-xs font-medium text-[var(--foreground)]">Amount</label>
+            <label className="block text-xs font-medium text-[var(--foreground)]">
+              {mode === 'flight' ? 'Total for the flight' : 'Amount'}
+            </label>
             <div className="relative mt-1">
               <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[var(--muted-foreground)]">
                 $
@@ -147,6 +241,39 @@ export function BudgetAddLineModal({
               />
             </div>
           </div>
+
+          {/* What will actually be written. Shown because the day-weighted
+              split is the whole feature and is not what most people guess —
+              12 days of March is not a third of a three-month buy. */}
+          {mode === 'flight' && preview && (
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/25 px-3 py-2.5">
+              {preview.error ? (
+                <p className="text-[11px] text-red-500">{preview.error}</p>
+              ) : (
+                <>
+                  <p className="mb-1.5 text-[11px] font-medium text-[var(--muted-foreground)]">
+                    Creates {preview.months.length} line
+                    {preview.months.length === 1 ? '' : 's'}, split by days
+                  </p>
+                  <div className="space-y-0.5">
+                    {preview.months.map((m) => (
+                      <div key={m.period} className="flex items-center justify-between text-xs">
+                        <span className="text-[var(--muted-foreground)]">
+                          {MONTH_ABBR[Number(m.period.slice(5, 7)) - 1]} {m.period.slice(0, 4)}
+                          <span className="ml-1.5 opacity-60">
+                            {m.days} day{m.days === 1 ? '' : 's'}
+                          </span>
+                        </span>
+                        <span className="font-medium tabular-nums text-[var(--foreground)]">
+                          {usd0(m.amount)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-[var(--foreground)]">
@@ -177,11 +304,23 @@ export function BudgetAddLineModal({
             onClick={() => void submit()}
             className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
           >
-            {saving ? 'Adding…' : 'Add line'}
+            {saving
+              ? 'Adding…'
+              : mode === 'flight'
+                ? `Book ${preview && !preview.error ? preview.months.length : ''} month${
+                    preview && !preview.error && preview.months.length === 1 ? '' : 's'
+                  }`.replace('  ', ' ')
+                : 'Add line'}
           </button>
         </div>
       </div>
     </div>,
     document.body,
   );
+}
+
+function parseISO(iso: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return null;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
 }

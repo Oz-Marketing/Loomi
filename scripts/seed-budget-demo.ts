@@ -315,20 +315,27 @@ async function seedTraditional(userId: string | null): Promise<void> {
     userId,
   );
 
-  // Non-paced channels: no platform to sync from, settled by hand. Radio runs
-  // its own markup, which is what the per-line override is for.
+  // A real flight — 15 Jun to 15 Sep, entered once as a range. The months come
+  // out UNEVEN (16 days of June, 15 of September) which is the whole point:
+  // hand-entering this as four equal months is what everyone does, and it's
+  // wrong. Radio runs its own markup, which is what the override is for.
+  await budget.createFlight(
+    {
+      accountKey: key,
+      channel: 'radio',
+      startDate: `${YEAR}-06-15`,
+      endDate: `${YEAR}-09-15`,
+      amount: 48_000,
+      markup: 0.85,
+      status: 'committed',
+      label: 'Summer radio flight',
+    },
+    userId,
+  );
+
+  // Non-paced channels: no platform to sync from, settled by hand.
   await budget.createLines(
     [
-      ...[6, 7, 8, 9].map((m) => ({
-        accountKey: key,
-        period: p(m),
-        channel: 'radio',
-        amount: 12_000,
-        markup: 0.85,
-        source: 'adhoc',
-        status: 'committed',
-        label: 'Summer radio flight',
-      })),
       ...[7, 8].map((m) => ({
         accountKey: key,
         period: p(m),

@@ -235,6 +235,23 @@ export function BudgetLineDrawer({
               )}
             </div>
 
+            {/* Part of a flight. Worth saying explicitly: the amount on this
+                row is a DERIVED share of a bigger buy, so editing it in
+                isolation is almost never what someone means — the flight is
+                the thing to change. */}
+            {line.flightId && line.flightStart && line.flightEnd && (
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--muted)]/25 px-3 py-2.5">
+                <p className="text-xs font-medium text-[var(--foreground)]">
+                  One month of a flight
+                </p>
+                <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
+                  {fmtDay(line.flightStart)} – {fmtDay(line.flightEnd)}. This month&rsquo;s share is
+                  weighted by how many of the flight&rsquo;s days fall in it — change the flight
+                  rather than this line, or the parts stop adding up to the buy.
+                </p>
+              </div>
+            )}
+
             {/* Provenance */}
             <div className="space-y-1.5 text-xs">
               <Row label="Source" value={sourceLabel(line.source)} />
@@ -750,5 +767,15 @@ function SettleBlock({
         </button>
       )}
     </div>
+  );
+}
+
+/** `2026-03-20` → `Mar 20, 2026`. */
+function fmtDay(iso: string) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return iso;
+  return new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]))).toLocaleDateString(
+    'en-US',
+    { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' },
   );
 }

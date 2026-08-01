@@ -3347,6 +3347,25 @@ model BudgetLine {
   // submission (12 stores × 6 months), so the batch edits/deletes as a unit.
   batchId String?
 
+  // FLIGHT. A media buy is one commercial fact — one insertion order, one
+  // total, one date range — but the ledger is at month grain, so a 20 Mar –
+  // 10 May buy is three rows. These tie those rows back together.
+  //
+  // `flightId` groups them, so moving the dates or changing the total re-splits
+  // the whole buy instead of leaving someone to find and fix three lines by
+  // hand. `flightStart`/`flightEnd` are copied onto every child so the drawer
+  // and the grid can say what a row belongs to without a second query.
+  //
+  // Why not store the flight as ONE row and derive months at read time: every
+  // rollup, the pacer binding and settlement all assume a line sits in exactly
+  // one month, and settlement in particular has no sensible meaning for a row
+  // that is half-closed. Month grain stays the ledger's unit; the flight is the
+  // authoring concept above it. The split is by DAYS (see budget/flight.ts) —
+  // unlike an agreement's commitment, media spends daily.
+  flightId    String?
+  flightStart DateTime? @db.Date
+  flightEnd   DateTime? @db.Date
+
   // Stable identity in the system this line was imported FROM, e.g.
   // "ozreports:account_budgets:8842". Unique, so the migration upserts instead
   // of duplicating the whole ledger on a second run — and so a corrected row in
@@ -3383,6 +3402,7 @@ model BudgetLine {
   @@index([initiativeId])
   @@index([taskId])
   @@index([batchId])
+  @@index([flightId])
   @@index([archivedAt])
 }
 

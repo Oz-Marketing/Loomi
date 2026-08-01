@@ -284,7 +284,7 @@ taking manual control of one month doesn't affect Google or any other month.
 | **4 — Settlement** | Closed months settle from synced spend on the daily scan; non-platform by hand | **Built** |
 | **A — Line type + cost** | `lineType` on every line and channel; `cost` for resold services; margin per line type in the hub | **Built** |
 | **B — Agreements** | `ClientAgreement` + `AgreementFee` with real term dates; year targets pro-rated from the term | **Built** |
-| **C — Flight dates** | Start/end on a media line, with the monthly split derived rather than typed | Next |
+| **C — Flights** | A media buy entered as a date range; the monthly lines derived and day-weighted | **Built** |
 
 ### What exists
 
@@ -294,8 +294,9 @@ taking manual control of one month doesn't affect Google or any other month.
 | [`src/lib/budget/channels.ts`](../src/lib/budget/channels.ts) | The channel registry + pacer-platform mapping |
 | [`src/lib/budget/period.ts`](../src/lib/budget/period.ts) | Period helpers + `resolveYear` (the year/period invariant). Prisma-free so routes can validate without pulling in a DB client |
 | [`src/lib/budget/term.ts`](../src/lib/budget/term.ts) | Agreement term arithmetic — `termMonths`, `monthsInYear`, `commitmentForYear`. Prisma-free, so the pro-rating that decides a client's target is unit-tested without a database |
+| [`src/lib/budget/flight.ts`](../src/lib/budget/flight.ts) | Flight splitting — `flightMonths`, `splitFlight`. Day-weighted, exact to the cent. Prisma-free, so the modal previews with the same code the server writes with |
 | [`src/lib/services/budget.ts`](../src/lib/services/budget.ts) | Agreement CRUD, create / allocate / return-to-pool / settle, rollups, `getPacerBudgetGoals`, fee-line generation |
-| `src/app/api/budget/*` | `summary`, `agreements`, `agreements/[id]` (+`?generate=YYYY`), `lines`, `lines/[id]`, `lines/[id]/allocate`, `lines/[id]/settle`, `settle-period` |
+| `src/app/api/budget/*` | `summary`, `agreements`, `agreements/[id]` (+`?generate=YYYY`), `flights`, `flights/[id]`, `lines`, `lines/[id]`, `lines/[id]/allocate`, `lines/[id]/settle`, `settle-period` |
 | [`src/lib/budget/settlement.ts`](../src/lib/budget/settlement.ts) | Attribution math — exact-summing largest-remainder split, variance, attainment |
 | `src/app/app/projects/budget` + `_components/budget-*` | The hub, agreement modal, add-line modal, line drawer |
 | `api/meta-ads-pacer/[k]/budget-managed` | GET state / POST manage-unmanage, per platform |
@@ -303,10 +304,10 @@ taking manual control of one month doesn't affect Google or any other month.
 | `createTicket` in [`services/projects.ts`](../src/lib/services/projects.ts) | Turns a ticket's requested budget into lines |
 | [`scripts/migrate-budget-plans-to-agreements.ts`](../scripts/migrate-budget-plans-to-agreements.ts) | Deploy precursor: carries `BudgetPlan` rows into agreements and drops the table, because `db push` runs without `--accept-data-loss` and would otherwise fail the whole push |
 
-Tests: `budget/period.test.ts`, `budget/channels.test.ts`, `budget/term.test.ts`
-and `budget/settlement.test.ts` run always (55 cases);
-`services/budget.db.test.ts` (56 cases — ledger arithmetic, agreements, the
-pacer binding, settlement) self-skips unless `RUN_DB_TESTS=1`, matching
+Tests: `budget/period.test.ts`, `budget/channels.test.ts`, `budget/term.test.ts`,
+`budget/flight.test.ts` and `budget/settlement.test.ts` run always (71 cases);
+`services/budget.db.test.ts` (65 cases — ledger arithmetic, agreements, flights,
+the pacer binding, settlement) self-skips unless `RUN_DB_TESTS=1`, matching
 `loomi-flows.db.test.ts`.
 
 ### Settlement as built
@@ -620,11 +621,66 @@ every future schema change.
 
 - **The 1,464 unclassified lines / $963k** from the Oz Reports import still need
   a human pass; `lineType` can't be guessed from names like "Group Sale".
-- **Phase C — flight dates.** A media line still carries a period, not a
-  start/end. Deriving the monthly split from a flight is what makes a buy that
-  runs 20 March – 10 May a single line instead of three.
 - Agreements are not yet **auto-attached** to lines created from intake. A
   ticket's budget lands unlinked; the agreement link is set explicitly today.
+
+---
+
+## 10. Flights (Phase C)
+
+A media buy is one commercial fact — one insertion order, one total, one date
+range — and the ledger is at month grain. So a buy running 20 March – 10 May was
+three rows, with the split done in somebody's head, and every time the flight
+moved or the total changed all three had to be found and corrected together.
+Nobody does that reliably, and the failure is silent: the parts stop adding up
+to the buy and nothing says so.
+
+### Month grain stays the ledger's unit
+
+The tempting model is one row with a date range and the months derived at read
+time. It was rejected: every rollup, the pacer binding and settlement all assume
+a line sits in exactly one month, and "half-settled" has no meaning. A flight is
+therefore **N linked rows** — `flightId` groups them, `flightStart`/`flightEnd`
+are copied onto each so a row can say what buy it belongs to without a join.
+The flight is the *authoring* concept above the ledger, not a replacement for it.
+
+### Split by days, not months
+
+This is deliberately the opposite rule from an agreement's commitment (§9).
+
+| | Weighted by | Because |
+|---|---|---|
+| Agreement commitment | whole **months** | it's *billed* monthly — a term starting on the 17th still owes a full March |
+| Media flight | **days** | it *spends* daily — 12 days of March is 12 days of impressions |
+
+Giving March a full share of a 20 Mar – 10 May buy would overstate its pacing
+target by roughly a factor of two and understate April's. Shares are exact to
+the cent via the same largest-remainder `splitToCents` settlement uses, because
+a buy whose monthly lines total two cents under the insertion order is one
+somebody has to chase.
+
+A flight crossing the new year is ordinary and supported — each month's line
+carries its own year, which `resolveYear` already enforces per row.
+
+### Editing: settled months are never rewritten
+
+`updateFlight` re-splits when the dates move or the total changes, with one
+hard rule: **a settled month keeps its money.** It has a recorded actual and has
+been reported on; re-splitting it because a later month moved would change
+history to fix the future. Settled amounts come off the top and only the
+remainder spreads over the months still open, so the buy still adds up while
+what's closed stays closed. A new total below what settled months already hold
+is refused rather than silently clamped.
+
+A month that falls outside a shortened range is **canceled, not deleted** —
+canceled money is excluded from every rollup but the trail survives.
+
+### The preview is the same code
+
+The add-line modal computes the month split locally with `splitFlight`, the
+exact function the server writes with. No round trip, the months update as the
+dates are typed, and what you see before saving is what gets written. That's
+only possible because the math has no Prisma in it.
 
 ---
 

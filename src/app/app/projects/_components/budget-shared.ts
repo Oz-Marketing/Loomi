@@ -36,6 +36,10 @@ export type BudgetLine = {
   taskId: string | null;
   taskTitle: string | null;
   batchId: string | null;
+  /** Set when this line is one month of a dated media buy. */
+  flightId: string | null;
+  flightStart: string | null;
+  flightEnd: string | null;
   actualAmount: number | null;
   settledAt: string | null;
   label: string | null;

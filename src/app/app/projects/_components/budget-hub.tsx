@@ -231,6 +231,24 @@ export function BudgetHub() {
     }
   }
 
+  /** Book a dated media buy. The server derives the months. */
+  async function addFlight(body: Record<string, unknown>) {
+    try {
+      const res = await fetch('/api/budget/flights', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ accountKey, status: 'committed', ...body }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(data?.error || 'Could not book the flight');
+      const n = data?.lines?.length ?? 0;
+      toast.success(`Booked ${n} month${n === 1 ? '' : 's'}`);
+      await reload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not book the flight');
+    }
+  }
+
   async function addLine(body: Record<string, unknown>) {
     try {
       const res = await fetch('/api/budget/lines', {
@@ -724,6 +742,7 @@ export function BudgetHub() {
           year={year}
           accountName={accountData?.dealer ?? accountKey}
           onAdd={addLine}
+          onAddFlight={addFlight}
           onClose={() => setAddOpen(false)}
         />
       )}

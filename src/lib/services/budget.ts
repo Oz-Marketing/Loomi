@@ -12,6 +12,7 @@ import {
   type PacerPlatform,
 } from '@/lib/budget/channels';
 import { isValidPeriod as isValidPeriodPure, periodOf, resolveYear } from '@/lib/budget/period';
+import { splitFlight } from '@/lib/budget/flight';
 import {
   commitmentForYear as termCommitmentForYear,
   monthsInYear,
@@ -240,6 +241,10 @@ export function serializeLine(l: LineRow) {
     taskTitle: l.task?.title ?? null,
     agreementId: l.agreementId,
     batchId: l.batchId,
+    // Flight membership, so a row can say what buy it's a month of.
+    flightId: l.flightId,
+    flightStart: l.flightStart ? l.flightStart.toISOString().slice(0, 10) : null,
+    flightEnd: l.flightEnd ? l.flightEnd.toISOString().slice(0, 10) : null,
     externalId: l.externalId,
     linkedAssetType: l.linkedAssetType,
     linkedAssetId: l.linkedAssetId,
@@ -522,6 +527,10 @@ export interface CreateLineInput {
   batchId?: string | null;
   /** Source-system identity, e.g. "ozreports:account_budgets:8842". */
   externalId?: string | null;
+  /** Set by `createFlight` — one id shared by every month of a buy. */
+  flightId?: string | null;
+  flightStart?: Date | null;
+  flightEnd?: Date | null;
   label?: string | null;
   notes?: string | null;
 }
@@ -610,6 +619,9 @@ export async function createLines(
         taskId: input.taskId ?? null,
         batchId: input.batchId ?? batchId,
         externalId: input.externalId ?? null,
+        flightId: input.flightId ?? null,
+        flightStart: input.flightStart ?? null,
+        flightEnd: input.flightEnd ?? null,
         label: input.label ?? null,
         notes: input.notes ?? null,
         createdByUserId: userId,
@@ -1294,6 +1306,260 @@ export async function generateAgreementFeeLines(
   }
 
   return createLines(inputs, userId);
+}
+
+// ── Flights (Phase C) ───────────────────────────────────────────────────────
+//
+// A media buy is one commercial fact — one insertion order, one total, one date
+// range — but the ledger is at month grain. A flight is the authoring concept
+// above the ledger: enter the buy once, and it lays out the months, split by
+// DAYS (see budget/flight.ts), summing to the total exactly.
+//
+// Month grain stays the unit deliberately. Every rollup, the pacer binding and
+// settlement all assume a line sits in exactly one month, and "half-settled"
+// has no meaning. So a flight is N linked rows, not one row with a range.
+
+export interface FlightInput {
+  accountKey: string;
+  spendAccountKey?: string | null;
+  channel: string;
+  /** ISO `YYYY-MM-DD`, inclusive at both ends. */
+  startDate: string;
+  endDate: string;
+  /** The whole buy. Individual months are derived, never entered. */
+  amount: number;
+  markup?: number | null;
+  status?: string;
+  bucket?: string;
+  source?: string;
+  lineType?: BudgetLineType;
+  agreementId?: string | null;
+  initiativeId?: string | null;
+  taskId?: string | null;
+  label?: string | null;
+  notes?: string | null;
+}
+
+/** The months of a flight, with their shares, WITHOUT writing anything. */
+export function previewFlight(startDate: string, endDate: string, amount: number) {
+  const start = parseDate(startDate, 'startDate');
+  const end = parseDate(endDate, 'endDate');
+  if (end < start) throw new Error('The flight ends before it starts');
+  return splitFlight(start, end, amount);
+}
+
+export async function createFlight(
+  input: FlightInput,
+  userId: string | null = null,
+): Promise<BudgetLineDTO[]> {
+  const start = parseDate(input.startDate, 'startDate');
+  const end = parseDate(input.endDate, 'endDate');
+  if (end < start) throw new Error('The flight ends before it starts');
+  if (!isBudgetChannel(input.channel)) throw new Error(`Unknown budget channel "${input.channel}"`);
+  assertAmount(input.amount);
+
+  // A flight crossing the new year is legitimate — a December-into-January buy
+  // is ordinary — and each month's line simply carries its OWN year, which is
+  // what `resolveYear` already enforces per row.
+  const parts = splitFlight(start, end, input.amount);
+  if (parts.length === 0) throw new Error('That range covers no months');
+
+  const flightId = crypto.randomUUID();
+  const inputs: CreateLineInput[] = parts.map((part) => ({
+    accountKey: input.accountKey,
+    spendAccountKey: input.spendAccountKey ?? null,
+    period: part.period,
+    channel: input.channel,
+    amount: part.amount,
+    markup: input.markup ?? null,
+    status: input.status ?? 'committed',
+    bucket: input.bucket,
+    source: input.source ?? 'adhoc',
+    lineType: input.lineType,
+    agreementId: input.agreementId ?? null,
+    initiativeId: input.initiativeId ?? null,
+    taskId: input.taskId ?? null,
+    label: input.label ?? null,
+    notes: input.notes ?? null,
+    flightId,
+    flightStart: start,
+    flightEnd: end,
+  }));
+
+  return createLines(inputs, userId, { groupId: flightId });
+}
+
+export interface FlightDTO {
+  flightId: string;
+  accountKey: string;
+  channel: string | null;
+  startDate: string;
+  endDate: string;
+  /** Sum of the months, i.e. what the buy is currently worth. */
+  amount: number;
+  label: string | null;
+  months: { id: string; period: string | null; amount: number; status: string }[];
+  /** Months already closed out. These are never re-split. */
+  settledMonths: number;
+}
+
+export async function getFlight(flightId: string): Promise<FlightDTO | null> {
+  const lines = await prisma.budgetLine.findMany({
+    where: { flightId, ...NOT_ARCHIVED },
+    orderBy: { period: 'asc' },
+  });
+  if (lines.length === 0) return null;
+
+  const first = lines[0]!;
+  return {
+    flightId,
+    accountKey: first.accountKey,
+    channel: first.channel,
+    startDate: first.flightStart ? first.flightStart.toISOString().slice(0, 10) : '',
+    endDate: first.flightEnd ? first.flightEnd.toISOString().slice(0, 10) : '',
+    amount: lines.reduce((sum, l) => sum + toNumber(l.amount), 0),
+    label: first.label,
+    months: lines.map((l) => ({
+      id: l.id,
+      period: l.period,
+      amount: toNumber(l.amount),
+      status: l.status,
+    })),
+    settledMonths: lines.filter((l) => l.status === 'settled').length,
+  };
+}
+
+/**
+ * Move a flight's dates and/or change its total, re-splitting the months.
+ *
+ * SETTLED MONTHS ARE LEFT ALONE. A settled line has a recorded actual and has
+ * already been reported on; rewriting it because a later month moved would
+ * change history to fix the future. Their money is subtracted from the total
+ * first, and only the remainder is re-spread over the months that are still
+ * open — so the buy still adds up while what's closed stays closed.
+ *
+ * A month that drops out of the new range is CANCELED rather than deleted, so
+ * the audit trail survives.
+ */
+export async function updateFlight(
+  flightId: string,
+  patch: { startDate?: string; endDate?: string; amount?: number; label?: string | null },
+  userId: string | null = null,
+): Promise<FlightDTO | null> {
+  const existing = await prisma.budgetLine.findMany({
+    where: { flightId, ...NOT_ARCHIVED },
+    orderBy: { period: 'asc' },
+  });
+  if (existing.length === 0) return null;
+
+  const first = existing[0]!;
+  const start = patch.startDate
+    ? parseDate(patch.startDate, 'startDate')
+    : (first.flightStart ?? parseDate(`${first.year}-01-01`, 'startDate'));
+  const end = patch.endDate
+    ? parseDate(patch.endDate, 'endDate')
+    : (first.flightEnd ?? parseDate(`${first.year}-12-31`, 'endDate'));
+  if (end < start) throw new Error('The flight ends before it starts');
+
+  const currentTotal = existing.reduce((sum, l) => sum + toNumber(l.amount), 0);
+  const total = patch.amount ?? currentTotal;
+  assertAmount(total);
+
+  const settled = existing.filter((l) => l.status === 'settled');
+  const settledTotal = settled.reduce((sum, l) => sum + toNumber(l.amount), 0);
+  if (settledTotal > total) {
+    throw new Error(
+      `Settled months already account for $${settledTotal.toFixed(2)}, which is more than the new total.`,
+    );
+  }
+  const settledPeriods = new Set(settled.map((l) => l.period));
+
+  // Re-split only what isn't already closed, over only the months that are
+  // open — weighted by each month's days, same rule as the initial split.
+  const openParts = splitFlight(start, end, total).filter((p) => !settledPeriods.has(p.period));
+  const openShares = splitToCents(
+    openParts.map((p) => ({ id: p.period, spendTarget: p.days })),
+    total - settledTotal,
+  );
+  const shareByPeriod = new Map(openShares.map((sh) => [sh.id, sh.actual]));
+
+  const byPeriod = new Map(existing.map((l) => [l.period, l]));
+  const keep = new Set<string>(settledPeriods as Set<string>);
+
+  await prisma.$transaction(async (tx) => {
+    for (const part of openParts) {
+      keep.add(part.period);
+      const amount = shareByPeriod.get(part.period) ?? 0;
+      const row = byPeriod.get(part.period);
+      if (row) {
+        await tx.budgetLine.update({
+          where: { id: row.id },
+          data: {
+            amount: decimal(amount),
+            flightStart: start,
+            flightEnd: end,
+            ...(patch.label !== undefined ? { label: patch.label } : {}),
+          },
+        });
+      }
+    }
+    // Months no longer in range: cancel, don't delete.
+    for (const row of existing) {
+      if (row.period && !keep.has(row.period)) {
+        await tx.budgetLine.update({
+          where: { id: row.id },
+          data: { status: 'canceled' },
+        });
+      }
+    }
+    // Settled rows keep their money but follow the new dates, so the drawer
+    // doesn't show a settled month claiming a range it's no longer part of.
+    for (const row of settled) {
+      await tx.budgetLine.update({
+        where: { id: row.id },
+        data: { flightStart: start, flightEnd: end },
+      });
+    }
+  });
+
+  // Months the new range adds. Created outside the transaction because
+  // `createLines` resolves markup and writes its own events.
+  const missing = openParts.filter((p) => !byPeriod.has(p.period));
+  if (missing.length > 0) {
+    await createLines(
+      missing.map((part) => ({
+        accountKey: first.accountKey,
+        spendAccountKey: first.spendAccountKey,
+        period: part.period,
+        channel: first.channel,
+        amount: shareByPeriod.get(part.period) ?? 0,
+        status: first.status === 'settled' ? 'committed' : first.status,
+        bucket: first.bucket,
+        source: first.source,
+        lineType: first.lineType as BudgetLineType,
+        agreementId: first.agreementId,
+        initiativeId: first.initiativeId,
+        taskId: first.taskId,
+        label: patch.label !== undefined ? patch.label : first.label,
+        flightId,
+        flightStart: start,
+        flightEnd: end,
+      })),
+      userId,
+      { groupId: flightId },
+    );
+  }
+
+  return getFlight(flightId);
+}
+
+/** Cancel every open month of a flight. Settled months are left as history. */
+export async function cancelFlight(flightId: string): Promise<number> {
+  const { count } = await prisma.budgetLine.updateMany({
+    where: { flightId, status: { notIn: ['settled', 'canceled'] }, ...NOT_ARCHIVED },
+    data: { status: 'canceled' },
+  });
+  return count;
 }
 
 // ── Pacer binding (Phase 3) ─────────────────────────────────────────────────

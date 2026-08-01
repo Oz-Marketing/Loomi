@@ -424,6 +424,139 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     );
   });
 
+  // ── Flights ──
+
+  it('lays a flight out across months, weighted by days, summing to the total', async () => {
+    const lines = await budget.createFlight(
+      {
+        accountKey: acctA,
+        channel: 'radio',
+        startDate: `${YEAR}-03-20`,
+        endDate: `${YEAR}-05-10`,
+        amount: 52_000,
+        label: 'Spring Radio',
+      },
+      null,
+    );
+    expect(lines.map((l) => l.period)).toEqual([`${YEAR}-03`, `${YEAR}-04`, `${YEAR}-05`]);
+    // 12 / 30 / 10 days, not an even third each.
+    expect(lines.map((l) => l.amount)).toEqual([12_000, 30_000, 10_000]);
+    expect(new Set(lines.map((l) => l.flightId)).size).toBe(1);
+    expect(lines.every((l) => l.flightStart === `${YEAR}-03-20`)).toBe(true);
+
+    const s = await budget.getAccountSummary(acctA, YEAR);
+    expect(s.totalCommitted).toBe(52_000);
+  });
+
+  it('re-splits when the total changes', async () => {
+    const [line] = await budget.createFlight(
+      { accountKey: acctA, channel: 'radio', startDate: `${YEAR}-03-01`, endDate: `${YEAR}-04-30`, amount: 61_000 },
+      null,
+    );
+    const updated = await budget.updateFlight(line.flightId!, { amount: 122_000 }, null);
+    expect(updated!.amount).toBe(122_000);
+    // 31 and 30 days of a 61-day flight.
+    expect(updated!.months.map((m) => m.amount)).toEqual([62_000, 60_000]);
+  });
+
+  it('cancels months that fall outside a shortened range', async () => {
+    const [line] = await budget.createFlight(
+      { accountKey: acctA, channel: 'radio', startDate: `${YEAR}-03-01`, endDate: `${YEAR}-05-31`, amount: 92_000 },
+      null,
+    );
+    const updated = await budget.updateFlight(
+      line.flightId!,
+      { endDate: `${YEAR}-04-30` },
+      null,
+    );
+    // May is dropped from the range — canceled, not deleted, so the trail
+    // survives, and excluded from the rollup.
+    const may = updated!.months.find((m) => m.period === `${YEAR}-05`);
+    expect(may?.status).toBe('canceled');
+    const s = await budget.getAccountSummary(acctA, YEAR);
+    expect(s.totalCommitted).toBe(92_000);
+  });
+
+  it('extends into new months when the range grows', async () => {
+    const [line] = await budget.createFlight(
+      { accountKey: acctA, channel: 'radio', startDate: `${YEAR}-03-01`, endDate: `${YEAR}-03-31`, amount: 31_000 },
+      null,
+    );
+    const updated = await budget.updateFlight(line.flightId!, { endDate: `${YEAR}-04-30` }, null);
+    expect(updated!.months.filter((m) => m.status !== 'canceled')).toHaveLength(2);
+    expect(updated!.amount).toBe(31_000);
+  });
+
+  it('never rewrites a settled month, and spreads the rest around it', async () => {
+    // The rule that matters: a settled line has a recorded actual and has been
+    // reported on. Re-splitting it because a LATER month moved would change
+    // history to fix the future.
+    const lines = await budget.createFlight(
+      { accountKey: acctA, channel: 'radio', startDate: `${YEAR}-03-01`, endDate: `${YEAR}-04-30`, amount: 61_000 },
+      null,
+    );
+    const march = lines.find((l) => l.period === `${YEAR}-03`)!;
+    await budget.settleLineManually(march.id, 30_000, null);
+
+    const updated = await budget.updateFlight(lines[0].flightId!, { amount: 100_000 }, null);
+    const m = updated!.months.find((x) => x.period === `${YEAR}-03`)!;
+    const a = updated!.months.find((x) => x.period === `${YEAR}-04`)!;
+    expect(m.status).toBe('settled');
+    expect(m.amount).toBe(31_000); // untouched
+    expect(a.amount).toBe(69_000); // absorbs the whole change
+    expect(updated!.amount).toBe(100_000);
+  });
+
+  it('refuses a new total below what settled months already hold', async () => {
+    const lines = await budget.createFlight(
+      { accountKey: acctA, channel: 'radio', startDate: `${YEAR}-03-01`, endDate: `${YEAR}-04-30`, amount: 61_000 },
+      null,
+    );
+    await budget.settleLineManually(lines[0].id, 1000, null);
+    await expect(
+      budget.updateFlight(lines[0].flightId!, { amount: 5_000 }, null),
+    ).rejects.toThrow(/Settled months/);
+  });
+
+  it('cancels every open month but leaves settled ones as history', async () => {
+    const lines = await budget.createFlight(
+      { accountKey: acctA, channel: 'radio', startDate: `${YEAR}-03-01`, endDate: `${YEAR}-05-31`, amount: 92_000 },
+      null,
+    );
+    await budget.settleLineManually(lines[0].id, 1000, null);
+    expect(await budget.cancelFlight(lines[0].flightId!)).toBe(2);
+    const after = await budget.getFlight(lines[0].flightId!);
+    expect(after!.months.filter((m) => m.status === 'canceled')).toHaveLength(2);
+    expect(after!.settledMonths).toBe(1);
+  });
+
+  it('spans the new year, each month carrying its own year', async () => {
+    const lines = await budget.createFlight(
+      {
+        accountKey: acctA,
+        channel: 'radio',
+        startDate: `${YEAR}-12-15`,
+        endDate: `${YEAR + 1}-01-14`,
+        amount: 31_000,
+      },
+      null,
+    );
+    expect(lines.map((l) => l.year)).toEqual([YEAR, YEAR + 1]);
+    expect(lines.map((l) => l.amount)).toEqual([17_000, 14_000]);
+    // Each year's rollup sees only its own share.
+    expect((await budget.getAccountSummary(acctA, YEAR)).totalCommitted).toBe(17_000);
+    expect((await budget.getAccountSummary(acctA, YEAR + 1)).totalCommitted).toBe(14_000);
+  });
+
+  it('rejects a reversed range', async () => {
+    await expect(
+      budget.createFlight(
+        { accountKey: acctA, channel: 'radio', startDate: `${YEAR}-05-10`, endDate: `${YEAR}-03-01`, amount: 1000 },
+        null,
+      ),
+    ).rejects.toThrow(/ends before it starts/);
+  });
+
   // ── Editing ──
 
   it('placing a pool line records the allocation in its trail', async () => {

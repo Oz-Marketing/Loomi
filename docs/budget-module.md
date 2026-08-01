@@ -617,10 +617,29 @@ precursor it migrates both rows and pushes clean. Adding `--accept-data-loss`
 to the deploy would have fixed it once and then silently dropped columns on
 every future schema change.
 
+### Drawdown
+
+`BudgetLine.agreementId` is set automatically: a line placed in a month links to
+the agreement covering that month, and creating an agreement adopts the unlinked
+lines already sitting inside its term (budget is usually entered before the
+paperwork, and a new agreement reading 0% drawn while the year is visibly full
+of its money makes the number look broken).
+
+**Ambiguity means no link.** When two terms overlap a month — a renewal signed
+before the old one expires, which is how renewals normally happen — nothing is
+guessed. Attaching to the wrong one silently overstates that agreement's
+drawdown, and the drawdown is the whole point of the link. A wrongly linked line
+looks correct; an unlinked one is visibly unlinked. Pool lines are never linked
+either: money with no month hasn't been committed to anything yet.
+
+Adoption never re-points a line that already has an agreement.
+
+`listAgreements` returns `booked` per agreement — committed/live/settled lines
+in the year viewed — which the hub shows as a percentage and a bar.
+
 ### Still to do
 
-- Agreements are not yet **auto-attached** to lines created from intake. A
-  ticket's budget lands unlinked; the agreement link is set explicitly today.
+- Nothing outstanding on the agreement layer.
 
 ---
 

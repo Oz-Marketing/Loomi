@@ -424,6 +424,130 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     );
   });
 
+  // ── Agreement linkage ──
+
+  it('links a new line to the agreement covering its month', async () => {
+    const a = await agreement(acctA, { committedAmount: 120_000 });
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-05`, channel: 'meta', amount: 5000, status: 'committed' },
+      null,
+    );
+    expect(line.agreementId).toBe(a.id);
+  });
+
+  it('leaves a line unlinked when two agreements overlap the month', async () => {
+    // A renewal signed before the old term expires is the normal way renewals
+    // happen, and there's no defensible way to guess which one new money
+    // belongs to. A wrongly linked line looks correct; an unlinked one is
+    // visibly unlinked.
+    await agreement(acctA, { name: 'Original' });
+    await agreement(acctA, { name: 'Renewal', startDate: `${YEAR}-06-01`, endDate: `${YEAR + 1}-05-31` });
+
+    const overlapping = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-07`, channel: 'meta', amount: 1000, status: 'committed' },
+      null,
+    );
+    expect(overlapping.agreementId).toBeNull();
+
+    // A month only the first term covers still links cleanly.
+    const clean = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-02`, channel: 'meta', amount: 1000, status: 'committed' },
+      null,
+    );
+    expect(clean.agreementId).not.toBeNull();
+  });
+
+  it('leaves a line outside every term unlinked', async () => {
+    await agreement(acctA, { startDate: `${YEAR}-01-01`, endDate: `${YEAR}-03-31` });
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-09`, channel: 'meta', amount: 1000, status: 'committed' },
+      null,
+    );
+    expect(line.agreementId).toBeNull();
+  });
+
+  it('never auto-links a pool line', async () => {
+    // Money with no month hasn't been committed to anything yet; it picks up
+    // an agreement when it's placed.
+    await agreement(acctA, {});
+    const pool = await budget.createLine(
+      { accountKey: acctA, year: YEAR, amount: 9000, status: 'committed', source: 'pool' },
+      null,
+    );
+    expect(pool.agreementId).toBeNull();
+  });
+
+  it('honours an explicitly named agreement over the covering one', async () => {
+    const first = await agreement(acctA, { name: 'First' });
+    await agreement(acctA, { name: 'Second', startDate: `${YEAR}-06-01`, endDate: `${YEAR + 1}-05-31` });
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-07`, channel: 'meta', amount: 1000, status: 'committed', agreementId: first.id },
+      null,
+    );
+    expect(line.agreementId).toBe(first.id);
+  });
+
+  it('reports what has been booked against each agreement', async () => {
+    await agreement(acctA, { committedAmount: 120_000 });
+    await budget.createLines(
+      [
+        { accountKey: acctA, period: `${YEAR}-01`, channel: 'meta', amount: 30_000, status: 'committed' },
+        { accountKey: acctA, period: `${YEAR}-02`, channel: 'meta', amount: 20_000, status: 'committed' },
+        // Planned money isn't booked — it's excluded from every rollup.
+        { accountKey: acctA, period: `${YEAR}-03`, channel: 'meta', amount: 99_000, status: 'planned' },
+      ],
+      null,
+    );
+    const [listed] = await budget.listAgreements(acctA, { year: YEAR });
+    expect(listed.booked).toBe(50_000);
+    expect(listed.commitmentForYear).toBe(120_000);
+  });
+
+  it('counts a flight\'s months against the agreement they fall in', async () => {
+    const a = await agreement(acctA, { committedAmount: 100_000 });
+    await budget.createFlight(
+      { accountKey: acctA, channel: 'radio', startDate: `${YEAR}-03-01`, endDate: `${YEAR}-04-30`, amount: 61_000 },
+      null,
+    );
+    const [listed] = await budget.listAgreements(acctA, { year: YEAR });
+    expect(listed.booked).toBe(61_000);
+    expect(listed.id).toBe(a.id);
+  });
+
+  it('adopts budget that was already entered before the agreement existed', async () => {
+    // The ordinary sequence: money goes in first, paperwork follows. Without
+    // adoption a new agreement reads 0% drawn while the year is visibly full
+    // of its money, which makes the number look broken.
+    await budget.createLines(
+      [
+        { accountKey: acctA, period: `${YEAR}-01`, channel: 'meta', amount: 10_000, status: 'committed' },
+        { accountKey: acctA, period: `${YEAR}-02`, channel: 'meta', amount: 15_000, status: 'committed' },
+        { accountKey: acctA, year: YEAR, amount: 5_000, status: 'committed', source: 'pool' },
+      ],
+      null,
+    );
+    await agreement(acctA, { committedAmount: 100_000 });
+
+    const [listed] = await budget.listAgreements(acctA, { year: YEAR });
+    // The two placed lines, not the pool line — pool money isn't committed to
+    // anything until it's placed.
+    expect(listed.booked).toBe(25_000);
+  });
+
+  it('does not re-point a line already attached to another agreement', async () => {
+    const first = await agreement(acctA, { name: 'First', committedAmount: 50_000 });
+    await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-02`, channel: 'meta', amount: 8_000, status: 'committed' },
+      null,
+    );
+    // A second, wholly overlapping term. Adoption must not steal the line.
+    await agreement(acctA, { name: 'Second', committedAmount: 50_000 });
+
+    const all = await budget.listAgreements(acctA, { year: YEAR });
+    expect(all.find((a) => a.id === first.id)!.booked).toBe(8_000);
+    expect(all.find((a) => a.id !== first.id)!.booked).toBe(0);
+  });
+
   // ── Categorising ──
 
   it('groups what needs a type by channel, biggest money first', async () => {

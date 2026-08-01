@@ -167,6 +167,27 @@ function AgreementList({
                   <p className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
                     {a.commitmentForYear == null ? '—' : usd(a.commitmentForYear)}
                   </p>
+                  {/* Drawdown — the number the agreement exists to be measured
+                      against. A commitment with nothing booked on it is a
+                      figure in a contract, not a budget. */}
+                  {a.commitmentForYear != null && a.commitmentForYear > 0 ? (
+                    <p
+                      className={`text-[10px] ${
+                        a.booked > a.commitmentForYear
+                          ? 'font-medium text-amber-600'
+                          : 'text-[var(--muted-foreground)]'
+                      }`}
+                    >
+                      {usd(a.booked)} booked ·{' '}
+                      {Math.round((a.booked / a.commitmentForYear) * 100)}%
+                    </p>
+                  ) : (
+                    a.booked > 0 && (
+                      <p className="text-[10px] text-[var(--muted-foreground)]">
+                        {usd(a.booked)} booked
+                      </p>
+                    )
+                  )}
                   {/* Only worth saying when the term ISN'T the whole year —
                       otherwise it's noise on every row. */}
                   {a.monthsInYear != null && a.monthsInYear < a.termMonths && (
@@ -191,6 +212,37 @@ function AgreementList({
             </button>
           ))}
         </div>
+
+        {/* A bar per agreement, under the list, so several agreements can be
+            compared at a glance rather than by reading percentages. */}
+        {agreements.some((a) => (a.commitmentForYear ?? 0) > 0) && (
+          <div className="mt-3 space-y-2">
+            {agreements
+              .filter((a) => (a.commitmentForYear ?? 0) > 0)
+              .map((a) => {
+                const pct = Math.min(100, (a.booked / a.commitmentForYear!) * 100);
+                const over = a.booked > a.commitmentForYear!;
+                return (
+                  <div key={a.id}>
+                    <div className="flex items-baseline justify-between text-[10px] text-[var(--muted-foreground)]">
+                      <span className="truncate">{a.name}</span>
+                      <span className="tabular-nums">
+                        {usd(a.booked)} of {usd(a.commitmentForYear!)}
+                      </span>
+                    </div>
+                    <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-[var(--muted)]">
+                      <div
+                        className={`h-full rounded-full transition-[width] duration-500 ${
+                          over ? 'bg-amber-500' : 'bg-[var(--primary)]'
+                        }`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        )}
 
         {agreements.length > 1 && anyCommitted && (
           <div className="mt-3 flex justify-between border-t border-[var(--border)] pt-3 text-xs">

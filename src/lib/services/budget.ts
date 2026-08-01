@@ -137,6 +137,47 @@ export async function resolveMarkup(accountKey: string, year: number): Promise<n
   return accountMarginSetting(account?.markup ?? null, globalDefault);
 }
 
+/**
+ * The agreement a line placed in `period` draws against, if exactly one does.
+ *
+ * AMBIGUITY MEANS NO LINK, deliberately. When two agreements overlap a month —
+ * a renewal signed before the old term expires, which is the normal way
+ * renewals happen — there is no defensible way to guess which one a new line
+ * belongs to. Attaching it to the wrong one would silently overstate that
+ * agreement's drawdown, and the whole point of the link is that the drawdown
+ * number can be trusted. An unlinked line is visibly unlinked; a wrongly linked
+ * one looks correct.
+ *
+ * Pool lines (no period) are never auto-linked either: money with no month
+ * hasn't been committed to anything yet, and it picks up an agreement when it's
+ * placed.
+ */
+export async function resolveAgreementForPeriod(
+  accountKey: string,
+  period: string | null,
+): Promise<string | null> {
+  if (!period) return null;
+  const year = Number(period.slice(0, 4));
+  const month = Number(period.slice(5, 7));
+  if (!Number.isInteger(year) || !Number.isInteger(month)) return null;
+
+  const monthStart = new Date(Date.UTC(year, month - 1, 1));
+  const monthEnd = new Date(Date.UTC(year, month, 0));
+
+  const covering = await prisma.clientAgreement.findMany({
+    where: {
+      accountKey,
+      status: 'active',
+      archivedAt: null,
+      startDate: { lte: monthEnd },
+      endDate: { gte: monthStart },
+    },
+    select: { id: true },
+    take: 2,
+  });
+  return covering.length === 1 ? covering[0]!.id : null;
+}
+
 // ── Cost / revenue ──────────────────────────────────────────────────────────
 //
 // The one place cost is decided. Everything downstream — the DTO, the summary,
@@ -351,7 +392,30 @@ export async function listAgreements(accountKey: string, opts: { year?: number }
     include: { fees: true },
     orderBy: { startDate: 'desc' },
   });
-  return rows.map((a) => serializeAgreement(a, opts.year));
+  if (rows.length === 0) return [];
+
+  // What's actually been booked against each. This is the number the agreement
+  // exists to be measured against — a commitment with nothing drawn down on it
+  // is a number in a contract, not a budget.
+  const booked = await prisma.budgetLine.groupBy({
+    by: ['agreementId'],
+    where: {
+      agreementId: { in: rows.map((a) => a.id) },
+      ...(opts.year != null ? { year: opts.year } : {}),
+      status: { in: [...COUNTED_STATUSES] },
+      ...NOT_ARCHIVED,
+    },
+    _sum: { amount: true },
+  });
+  const bookedById = new Map(
+    booked.map((b) => [b.agreementId, b._sum?.amount == null ? 0 : toNumber(b._sum.amount)]),
+  );
+
+  return rows.map((a) => ({
+    ...serializeAgreement(a, opts.year),
+    /** Committed/live/settled lines linked to this agreement, in the year viewed. */
+    booked: bookedById.get(a.id) ?? 0,
+  }));
 }
 
 type AgreementRow = Prisma.ClientAgreementGetPayload<{ include: { fees: true } }>;
@@ -436,7 +500,57 @@ export async function createAgreement(input: AgreementInput, userId: string | nu
     },
     include: { fees: true },
   });
+
+  await adoptUnlinkedLines(row.id);
   return serializeAgreement(row);
+}
+
+/**
+ * Link existing unlinked lines that fall inside a new agreement's term.
+ *
+ * Budget is usually entered before the paperwork is in the system, so without
+ * this a freshly created agreement reads as 0% drawn down while the year is
+ * visibly full of its money — which makes the number look broken and teaches
+ * people to ignore it.
+ *
+ * Only touches lines with NO agreement (never re-points one that's already
+ * attached), and only months this agreement uniquely covers — the same
+ * ambiguity rule as `resolveAgreementForPeriod`, for the same reason: guessing
+ * wrong silently overstates someone's drawdown.
+ */
+async function adoptUnlinkedLines(agreementId: string): Promise<number> {
+  const agreement = await prisma.clientAgreement.findUnique({ where: { id: agreementId } });
+  if (!agreement) return 0;
+
+  const candidates = await prisma.budgetLine.findMany({
+    where: {
+      accountKey: agreement.accountKey,
+      agreementId: null,
+      period: { not: null },
+      status: { in: [...COUNTED_STATUSES] },
+      ...NOT_ARCHIVED,
+    },
+    select: { id: true, period: true },
+  });
+  if (candidates.length === 0) return 0;
+
+  // One resolve per distinct period, not per line.
+  const periods = [...new Set(candidates.map((c) => c.period!))];
+  const owned = new Set<string>();
+  for (const period of periods) {
+    if ((await resolveAgreementForPeriod(agreement.accountKey, period)) === agreementId) {
+      owned.add(period);
+    }
+  }
+
+  const ids = candidates.filter((c) => owned.has(c.period!)).map((c) => c.id);
+  if (ids.length === 0) return 0;
+
+  const { count } = await prisma.budgetLine.updateMany({
+    where: { id: { in: ids } },
+    data: { agreementId },
+  });
+  return count;
 }
 
 export async function updateAgreement(
@@ -572,11 +686,13 @@ export async function createLines(
   // Resolve markup once per (account, year) rather than per line — a 12-month
   // retainer fan-out would otherwise make 36 queries for one answer.
   const markupCache = new Map<string, number>();
+  const agreementCache = new Map<string, string | null>();
   const resolved: {
     input: CreateLineInput;
     year: number;
     markup: number;
     channel: string | null;
+    agreementId: string | null;
   }[] = [];
 
   for (const input of inputs) {
@@ -594,11 +710,27 @@ export async function createLines(
       }
       markup = markupCache.get(cacheKey)!;
     }
-    resolved.push({ input, year, markup, channel });
+
+    // Attach to the agreement covering this month, unless the caller named one.
+    // Cached per (account, period) — a 12-month fan-out would otherwise ask the
+    // same question twelve times.
+    let agreementId = input.agreementId ?? null;
+    if (agreementId === null && input.period) {
+      const cacheKey = `${input.accountKey}:${input.period}`;
+      if (!agreementCache.has(cacheKey)) {
+        agreementCache.set(
+          cacheKey,
+          await resolveAgreementForPeriod(input.accountKey, input.period),
+        );
+      }
+      agreementId = agreementCache.get(cacheKey)!;
+    }
+
+    resolved.push({ input, year, markup, channel, agreementId });
   }
 
   const created: BudgetLineDTO[] = [];
-  for (const { input, year, markup, channel } of resolved) {
+  for (const { input, year, markup, channel, agreementId } of resolved) {
     const source = input.source ?? 'adhoc';
     const row = await prisma.budgetLine.create({
       data: {
@@ -615,7 +747,7 @@ export async function createLines(
         bucket: input.bucket ?? defaultBucket(source),
         lineType: input.lineType ?? channelLineType(channel),
         cost: input.cost == null ? null : decimal(input.cost),
-        agreementId: input.agreementId ?? null,
+        agreementId,
         initiativeId: input.initiativeId ?? null,
         taskId: input.taskId ?? null,
         batchId: input.batchId ?? batchId,

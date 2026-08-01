@@ -100,6 +100,8 @@ export type BudgetAgreement = {
   commitmentForYear: number | null;
   monthlyFeeTotal: number;
   fees: AgreementFee[];
+  /** Committed/live/settled lines linked to this agreement, in the year viewed. */
+  booked: number;
 };
 
 /** A dated media buy, with the monthly lines it laid out. */

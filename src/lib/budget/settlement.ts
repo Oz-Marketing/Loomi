@@ -14,20 +14,23 @@
  * proportion to what they were targeting.
  */
 
-export interface SettlementShare {
+export interface CentSplit {
   id: string;
-  /** Actual spend dollars attributed to this line. */
+  /** Dollars assigned to this item. */
   actual: number;
 }
 
-export interface DistributableLine {
+export interface SplitWeight {
   id: string;
-  /** amount × markupSnapshot — the line's share of the month in spend dollars. */
+  /**
+   * Relative weight. In settlement it's the line's spendTarget; the pacer's
+   * distribute action passes 0 for every ad to get an even split.
+   */
   spendTarget: number;
 }
 
 /**
- * Split `total` across `lines` in proportion to spendTarget, in whole cents,
+ * Split `total` across `lines` in proportion to their weight, in whole cents,
  * such that the parts sum EXACTLY to the total.
  *
  * Uses largest-remainder: floor every share to a cent, then hand the leftover
@@ -40,10 +43,10 @@ export interface DistributableLine {
  *     because proportional is undefined and dropping the spend would hide it.
  *   - no lines → returns empty; the caller decides what to do with orphan spend.
  */
-export function distributeActual(
-  lines: DistributableLine[],
+export function splitToCents(
+  lines: SplitWeight[],
   total: number,
-): SettlementShare[] {
+): CentSplit[] {
   if (lines.length === 0) return [];
   if (!Number.isFinite(total) || total <= 0) {
     return lines.map((l) => ({ id: l.id, actual: 0 }));

@@ -17,12 +17,21 @@ import { Tooltip } from './Tooltip';
 import { Field, DollarInput, readonlyClass } from './inputs';
 import { MetricBox } from './metrics';
 import { usePacerReadOnly } from './pacer-read-only';
+import { splitToCents } from '@/lib/budget/settlement';
 
 // Collapsed-summary figures scale with the CARD (cqi = 1% of the container's
 // inline size), not the viewport — two cards share a row, so viewport width says
 // little about how much room a figure actually has. The grid below handles
 // wrapping (4 across → 2x2), so this only has to keep long figures like
 // $20,229.28 inside their column.
+/**
+ * Statuses that mean an ad's run is over. Distribute skips these — funding a
+ * finished or switched-off row just hides the money. Everything else (drafts,
+ * scheduled, pending design) is fair game: allocating ahead of launch is the
+ * normal case.
+ */
+const FINISHED_AD_STATUSES = new Set(['Completed Run', 'Off']);
+
 const STAT_VALUE_CLASS = 'font-bold tabular-nums leading-none';
 const STAT_VALUE_SIZE = { fontSize: 'clamp(1rem, 4cqi, 1.35rem)' } as const;
 
@@ -48,6 +57,9 @@ export function BudgetPanel({
    */
   platform?: 'meta' | 'google';
 }) {
+  // Frozen months are read-only; distribute must respect that the same way
+  // every other write on this card does.
+  const readOnly = usePacerReadOnly();
   const goal = num(plan[goalKey]);
   // Include split ads here too — their per-source portion contributes
   // to this pool's totals via adContribution. Pure-source ads only
@@ -86,6 +98,41 @@ export function BudgetPanel({
   // allocation bar (the live feedback you want while allocating), and expands
   // for the goal input, metric boxes, and per-ad legend.
   const [expanded, setExpanded] = useState(false);
+
+  // ── Distribute remaining (budget module §3b) ──
+  // Spread what's left of this pool's target across the ads that haven't been
+  // given an allocation yet. Evenly, not weighted: any weighting (by flight
+  // length, by last month's spend) is a guess the specialist can't see, and
+  // this is a starting point they're expected to adjust.
+  const distributable = srcAds.filter(
+    (a) =>
+      // Pure-source rows only. A 'split' ad's allocation spans both pools, so
+      // writing it from one pool's remaining would silently move the other's.
+      a.budgetSource === source &&
+      !FINISHED_AD_STATUSES.has(a.adStatus) &&
+      (num(a.allocation) ?? 0) === 0,
+  );
+  const canDistribute =
+    !readOnly && remaining != null && remaining > 0 && distributable.length > 0;
+
+  const distribute = () => {
+    if (!canDistribute || remaining == null) return;
+    const shares = splitToCents(
+      // Weight 0 across the board → an even split, exact to the cent.
+      distributable.map((a) => ({ id: a.id, spendTarget: 0 })),
+      remaining,
+    );
+    const byId = new Map(shares.map((sh) => [sh.id, sh.actual]));
+    onChange({
+      ...plan,
+      ads: plan.ads.map((a) =>
+        byId.has(a.id) ? { ...a, allocation: byId.get(a.id)!.toFixed(2) } : a,
+      ),
+    });
+    toast.success(
+      `Spread ${fmt(remaining)} across ${distributable.length} ad${distributable.length === 1 ? '' : 's'}`,
+    );
+  };
 
   // Hand this month's goals back to the specialist. The last synced value stays
   // put (reverting to a pre-handover number nobody has looked at since would be
@@ -359,6 +406,23 @@ export function BudgetPanel({
               />
             )}
           </div>
+
+          {/* Distribute — only offered when there's something to spread and
+              somewhere to put it, so it never sits there doing nothing. */}
+          {goal != null && remaining != null && remaining > 0 && (
+            <div className="mt-2.5" onClick={(e) => e.stopPropagation()}>
+              <button
+                type="button"
+                disabled={!canDistribute}
+                onClick={distribute}
+                className="w-full rounded-lg border border-[var(--border)] px-3 py-1.5 text-[11px] font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {distributable.length > 0
+                  ? `Spread ${fmt(remaining)} across ${distributable.length} unallocated ad${distributable.length === 1 ? '' : 's'}`
+                  : 'Nothing unallocated to spread this across'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

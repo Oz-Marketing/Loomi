@@ -4,10 +4,9 @@ Plan for moving client budgeting out of Oz Reports and into Loomi, so the Ad
 Pacer paces against a **real budget** instead of a hand-typed goal, and so a
 budget can be distributed at the moment work is requested.
 
-Status: **Built** — ledger, hub, intake wiring, pacer binding, settlement.
-The manual retype is gone for any month switched to budget-managed, and closed
-months settle themselves. Only 3b (distribute a month's target across pacer ad
-rows) is outstanding. See §5.
+Status: **Built** — ledger, hub, intake wiring, pacer binding, distribute, and
+settlement. The manual retype is gone for any month switched to budget-managed,
+and closed months settle themselves. See §5.
 
 ---
 
@@ -277,7 +276,7 @@ taking manual control of one month doesn't affect Google or any other month.
 | **1b — Hub UI** | Per-account annual view: declared total, retainer generator, pool, lines by channel × month, allocate-from-pool | **Built** |
 | **2 — Intake wiring** | Intake creates `BudgetLine`s; live remaining shown in the form; the six `Task.details` budget fields removed | **Built** |
 | **3 — Pacer binding** | `syncPeriodBudgetFromLines` writes the goal pair; per-platform opt-in; UI locks + unmanage; save route guarded | **Built** |
-| **3b — Distribute to ads** | "Distribute remaining" action allocating a month's target across pacer ad rows (the `adset_allocations` equivalent, both platforms) | Not built |
+| **3b — Distribute to ads** | "Spread the remaining across N unallocated ads" on the pacer's Base/Added cards (the `adset_allocations` equivalent, both platforms) | **Built** |
 | **4 — Settlement** | Closed months settle from synced spend on the daily scan; non-platform by hand | **Built** |
 
 ### What exists
@@ -350,8 +349,27 @@ fields on the line the money already lives on.
   truth; a briefly-stale pacer is recoverable (any later edit re-syncs it),
   whereas failing the budget write would lose it.
 - **Frozen months are skipped**, and the save route returns `409 budget_managed`
-  if a stale tab or direct API call tries to write a managed goal — rather than
-  accepting it and letting the next sync silently revert it.
+  if a stale tab or direct API call tries to CHANGE a managed goal — rather than
+  accepting it and letting the next sync silently revert it. The guard compares
+  **values, not key presence**: the planner's autosave always spreads the
+  current goals in alongside the ads, so rejecting on presence 409'd every ad
+  edit on a managed month and the client swallowed it. Pinned by a regression
+  test.
+
+#### Distributing to ads (§3b)
+
+The Base/Added cards in the pacer offer "Spread $X across N unallocated ads":
+
+- **Evenly, not weighted.** Any weighting (flight length, last month's spend) is
+  a guess the specialist can't see, and this is a starting point they adjust.
+  Uses the same exact-to-the-cent `splitToCents` as settlement.
+- **Skips finished rows** (`Completed Run`, `Off`) — funding those just hides
+  the money. Drafts and scheduled ads are fair game; allocating ahead of launch
+  is the normal case.
+- **Skips `split` ads.** Their allocation spans both pools, so writing one from
+  a single pool's remaining would silently move the other's.
+- **Only offered when it would do something** — there's remaining to spread and
+  somewhere to put it.
 
 ### Intake behavior as built
 

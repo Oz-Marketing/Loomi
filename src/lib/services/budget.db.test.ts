@@ -744,4 +744,37 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     expect(s.totalCommitted).toBe(3000);
     expect(s.allocated).toBe(3000);
   });
+
+  // ── Regression: the managed-period guard must compare VALUES ──
+
+  it('a managed month still accepts an ad-only save that echoes the goals', async () => {
+    // The planner's autosave always spreads the current goals into its payload
+    // alongside the ads. A guard that rejected on the PRESENCE of those keys
+    // 409'd every ad edit on a managed month — allocation, status, dates — and
+    // the client swallowed it, so work silently didn't save. This pins the
+    // stored value against an unchanged echo.
+    const plan = await withPlan(acctA);
+    await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-08`, channel: 'meta', amount: 4000, status: 'committed', source: 'retainer' },
+      null,
+    );
+    await budget.setPeriodManaged(acctA, `${YEAR}-08`, 'meta', true, null);
+
+    const before = await prisma.metaAdsPacerPeriodBudget.findUnique({
+      where: { planId_period: { planId: plan.id, period: `${YEAR}-08` } },
+    });
+    expect(Number(before!.baseBudgetGoal)).toBe(4000);
+    expect(before!.managedByBudget).toBe(true);
+
+    // A ledger change re-syncs it; the goal must track the lines, not freeze.
+    await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-08`, channel: 'meta', amount: 1000, status: 'committed', source: 'retainer' },
+      null,
+    );
+    const after = await prisma.metaAdsPacerPeriodBudget.findUnique({
+      where: { planId_period: { planId: plan.id, period: `${YEAR}-08` } },
+    });
+    expect(Number(after!.baseBudgetGoal)).toBe(5000);
+    expect(after!.managedByBudget).toBe(true);
+  });
 });

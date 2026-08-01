@@ -15,7 +15,7 @@ import { AccountAvatar } from '@/components/account-avatar';
 import { BUDGET_CHANNELS, channelLabel, isPacedChannel } from '@/lib/budget/channels';
 import { ChannelIcon } from '@/components/icons/channel-icon';
 import { periodOf } from '@/lib/budget/period';
-import { useProjectOptions } from './use-project-options';
+import { useAccount } from '@/contexts/account-context';
 import { jsonFetcher } from './fetcher';
 import { BudgetLineDrawer } from './budget-line-drawer';
 import { BudgetPlanModal } from './budget-plan-modal';
@@ -33,9 +33,11 @@ import {
   type BudgetSummary as Summary,
 } from './budget-shared';
 
-export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | null }) {
-  const options = useProjectOptions();
-  const [accountKey, setAccountKey] = useState(initialAccountKey ?? '');
+export function BudgetHub() {
+  // The account comes from the GLOBAL switcher, not a picker on this page.
+  // Two selectors for the same thing is a trap: whichever you didn't touch is
+  // silently wrong, and there's no way to tell which one the page is obeying.
+  const { accountKey, accountData, initialized } = useAccount();
   const [year, setYear] = useState(() => new Date().getFullYear());
 
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -50,12 +52,6 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
   const [poolOpen, setPoolOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
-
-  // Once an account has any budget selected, default the picker to it so the
-  // page isn't an empty prompt on every visit.
-  useEffect(() => {
-    if (!accountKey && options?.accounts.length) setAccountKey(options.accounts[0]!.key);
-  }, [options, accountKey]);
 
   const reload = useCallback(async () => {
     if (!accountKey) return;
@@ -122,12 +118,6 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
     return placed.filter((l) => l.channel === openCell.channel && l.period === openCell.period);
   }, [openCell, placed]);
 
-  const accountOptions = useMemo(
-    () => (options?.accounts ?? []).map((a) => ({ value: a.key, label: a.dealer })),
-    [options],
-  );
-  const account = options?.accounts.find((a) => a.key === accountKey) ?? null;
-
   const yearOptions = useMemo(() => {
     const now = new Date().getFullYear();
     return [now - 1, now, now + 1].map((y) => ({ value: String(y), label: String(y) }));
@@ -176,8 +166,27 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
     }
   }
 
-  if (!options) {
+  // Wait for the switcher to resolve before deciding there's no account —
+  // it defaults to admin mode for a tick on first load.
+  if (!initialized) {
     return <p className="py-10 text-sm text-[var(--muted-foreground)]">Loading…</p>;
+  }
+
+  // Admin / agency view has no single account to show a year for.
+  if (!accountKey) {
+    return (
+      <div className="py-6">
+        <h1 className="text-xl font-semibold text-[var(--foreground)]">Budget</h1>
+        <div className="mt-6 rounded-2xl border border-dashed border-[var(--border)] py-16 text-center">
+          <BanknotesIcon className="mx-auto h-9 w-9 text-[var(--muted-foreground)]" />
+          <p className="mt-3 text-sm font-medium text-[var(--foreground)]">Pick an account</p>
+          <p className="mx-auto mt-1 max-w-sm text-sm text-[var(--muted-foreground)]">
+            A budget belongs to one client. Choose an account from the switcher at the top of the
+            sidebar to see its year.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -188,23 +197,19 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
           pickers and Plan sit opposite as controls, not as page identity. */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex min-w-0 items-center gap-3.5">
-          {account ? (
-            <AccountAvatar
-              name={account.dealer}
-              accountKey={account.key}
-              logos={account.logos}
-              size={44}
-              aspect="auto"
-              maxWidth={200}
-              logoInsetClassName="p-0"
-              className="flex-shrink-0 rounded-lg"
-            />
-          ) : (
-            <div className="h-[44px] w-[44px] flex-shrink-0 rounded-lg bg-[var(--muted)]" />
-          )}
+          <AccountAvatar
+            name={accountData?.dealer ?? accountKey}
+            accountKey={accountKey}
+            logos={accountData?.logos ?? null}
+            size={44}
+            aspect="auto"
+            maxWidth={200}
+            logoInsetClassName="p-0"
+            className="flex-shrink-0 rounded-lg"
+          />
           <div className="min-w-0">
             <h1 className="truncate text-xl font-semibold text-[var(--foreground)]">
-              {account?.dealer ?? 'Select an account'}
+              {accountData?.dealer ?? accountKey}
             </h1>
             <p className="mt-0.5 flex flex-wrap items-center gap-2 text-sm text-[var(--muted-foreground)]">
               <span>Budget · {year}</span>
@@ -219,15 +224,6 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
         </div>
 
         <div className="flex items-center gap-2">
-          <div className="min-w-[200px]">
-            <SearchableSelect
-              value={accountKey}
-              onChange={setAccountKey}
-              options={accountOptions}
-              placeholder="Select account"
-              className="!bg-[var(--input)] !rounded-lg !px-3 !py-2 !text-sm"
-            />
-          </div>
           <div className="w-[96px]">
             <SearchableSelect
               value={String(year)}
@@ -550,7 +546,7 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
       {planOpen && accountKey && (
         <BudgetPlanModal
           year={year}
-          accountName={account?.dealer ?? accountKey}
+          accountName={accountData?.dealer ?? accountKey}
           plan={plan}
           onSave={savePlan}
           onClose={() => setPlanOpen(false)}
@@ -560,7 +556,7 @@ export function BudgetHub({ initialAccountKey }: { initialAccountKey: string | n
       {addOpen && accountKey && (
         <BudgetAddLineModal
           year={year}
-          accountName={account?.dealer ?? accountKey}
+          accountName={accountData?.dealer ?? accountKey}
           onAdd={addLine}
           onClose={() => setAddOpen(false)}
         />

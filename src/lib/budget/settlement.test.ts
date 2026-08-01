@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { attainment, distributeActual, variance } from './settlement';
+import { attainment, splitToCents, variance } from './settlement';
 
 const sum = (xs: { actual: number }[]) =>
   Math.round(xs.reduce((a, b) => a + b.actual, 0) * 100) / 100;
 
-describe('distributeActual', () => {
+describe('splitToCents', () => {
   it('splits proportionally to spend target', () => {
-    const out = distributeActual(
+    const out = splitToCents(
       [
         { id: 'a', spendTarget: 7500 },
         { id: 'b', spendTarget: 2500 },
@@ -22,7 +22,7 @@ describe('distributeActual', () => {
   it('sums to the total exactly when the split does not divide evenly', () => {
     // 100 / 3 is the classic case: naive rounding leaves a cent on the floor,
     // and a settlement that doesn't reconcile to the penny is untrustworthy.
-    const out = distributeActual(
+    const out = splitToCents(
       [
         { id: 'a', spendTarget: 1 },
         { id: 'b', spendTarget: 1 },
@@ -39,19 +39,19 @@ describe('distributeActual', () => {
       id: String(i),
       spendTarget: 100 + i * 37,
     }));
-    const out = distributeActual(lines, 9_999.99);
+    const out = splitToCents(lines, 9_999.99);
     expect(sum(out)).toBe(9_999.99);
   });
 
   it('gives the leftover cents to the largest fractions, deterministically', () => {
-    const a = distributeActual(
+    const a = splitToCents(
       [
         { id: 'a', spendTarget: 1 },
         { id: 'b', spendTarget: 2 },
       ],
       1,
     );
-    const b = distributeActual(
+    const b = splitToCents(
       [
         { id: 'a', spendTarget: 1 },
         { id: 'b', spendTarget: 2 },
@@ -65,7 +65,7 @@ describe('distributeActual', () => {
   it('splits evenly when no line had a target', () => {
     // Lines exist but were never funded. Proportional is undefined here, and
     // returning nothing would quietly drop real spend.
-    const out = distributeActual(
+    const out = splitToCents(
       [
         { id: 'a', spendTarget: 0 },
         { id: 'b', spendTarget: 0 },
@@ -79,7 +79,7 @@ describe('distributeActual', () => {
   });
 
   it('zeroes every line when there was no spend', () => {
-    const out = distributeActual(
+    const out = splitToCents(
       [
         { id: 'a', spendTarget: 100 },
         { id: 'b', spendTarget: 200 },
@@ -93,11 +93,11 @@ describe('distributeActual', () => {
   });
 
   it('returns nothing when there are no lines — orphan spend is the caller’s call', () => {
-    expect(distributeActual([], 1000)).toEqual([]);
+    expect(splitToCents([], 1000)).toEqual([]);
   });
 
   it('ignores negative targets rather than inverting a share', () => {
-    const out = distributeActual(
+    const out = splitToCents(
       [
         { id: 'a', spendTarget: -50 },
         { id: 'b', spendTarget: 100 },

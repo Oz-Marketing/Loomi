@@ -18,7 +18,7 @@ import {
 } from '@/lib/meta-ads-pacer';
 import { writeAudit } from '@/lib/meta-ads-audit';
 import { adContribution } from '@/lib/ad-pacer/helpers';
-import { distributeActual } from '@/lib/budget/settlement';
+import { splitToCents } from '@/lib/budget/settlement';
 
 /**
  * Budget service — the media-dollar ledger (see docs/budget-module.md).
@@ -1255,7 +1255,7 @@ export async function settlePlatformPeriod(
       continue;
     }
 
-    const shares = distributeActual(
+    const shares = splitToCents(
       bucketLines.map((l) => ({
         id: l.id,
         spendTarget: toNumber(l.amount) * l.markupSnapshot,

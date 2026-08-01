@@ -68,12 +68,20 @@ async function clear(): Promise<void> {
     where: { planId: { in: planIds.map((x) => x.id) } },
     data: { managedByBudget: false, googleManagedByBudget: false },
   });
+  // Only the pacer ads this script created — matched on the name prefix, so a
+  // real ad planned against a demo account survives a re-seed.
+  const { count: ads } = await prisma.metaAdsPacerAd.deleteMany({
+    where: { planId: { in: planIds.map((x) => x.id) }, name: { startsWith: AD_MARKER } },
+  });
+  if (ads) console.log(`cleared ${ads} demo pacer ads`);
   console.log(
     `cleared: ${lines} lines, ${plans} plans, ${tasks} tasks, ${inits} initiatives`,
   );
 }
 
 const SEED_MARKER = '[budget demo seed]';
+/** Prefixes the pacer ads this script creates, so clear() removes only its own. */
+const AD_MARKER = '[demo] ';
 
 /** File a real funded ticket so the line has genuine ticket provenance. */
 async function fundedTicket(
@@ -211,6 +219,17 @@ async function seedMain(userId: string | null): Promise<void> {
   if (hasPlan) {
     await budget.setPeriodManaged(key, p(8), 'meta', true, userId);
     await budget.setPeriodManaged(key, p(8), 'google', true, userId);
+
+    // Unallocated ad rows in the managed month, so the pacer's "Spread the
+    // remaining across N unallocated ads" action (§3b) has something to act on.
+    // The Completed Run one is deliberate: distribute must skip it.
+    await prisma.metaAdsPacerAd.createMany({
+      data: [
+        { planId: hasPlan.id, period: p(8), position: 0, name: `${AD_MARKER}Summer Retarget`, budgetSource: 'base', adStatus: 'Live' },
+        { planId: hasPlan.id, period: p(8), position: 1, name: `${AD_MARKER}Prospecting — Broad`, budgetSource: 'base', adStatus: 'In Draft' },
+        { planId: hasPlan.id, period: p(8), position: 2, name: `${AD_MARKER}Old Run`, budgetSource: 'base', adStatus: 'Completed Run' },
+      ],
+    });
   }
 
   const s = await budget.getAccountSummary(key, YEAR);

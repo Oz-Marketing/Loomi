@@ -226,23 +226,40 @@ export async function PUT(
 
   // Budget-managed periods are owned by the BudgetLine ledger
   // (docs/budget-module.md §4) — the UI renders the goal inputs read-only, so a
-  // write arriving here is either a stale tab or a direct API call. Reject it
+  // CHANGE arriving here is either a stale tab or a direct API call. Reject it
   // rather than let it land and get silently reverted by the next ledger sync:
   // two writers on one number is exactly the bug the binding removes. Unmanage
   // the month first (POST …/budget-managed) to take manual control.
+  //
+  // Crucially this compares VALUES, not the presence of the keys. The planner's
+  // autosave always spreads the current goals into its payload alongside the
+  // ads, so rejecting on presence alone would 409 every ad edit — allocation,
+  // status, dates — on any managed month, and the client would swallow it.
   const goalsManaged =
     postPlatform === 'google'
       ? !!existingBudget?.googleManagedByBudget
       : !!existingBudget?.managedByBudget;
-  if (goalsManaged && Object.keys(budgetData).length > 0) {
-    return NextResponse.json(
-      {
-        error:
-          'This month’s budget goals are managed by the budget ledger. Turn off budget management for the month to edit them by hand.',
-        code: 'budget_managed',
-      },
-      { status: 409 },
+  if (goalsManaged) {
+    const sameMoney = (a: string | null | undefined, b: string | null | undefined) => {
+      if (a == null || a === '') return b == null || b === '';
+      if (b == null || b === '') return false;
+      return Number(a) === Number(b);
+    };
+    const changed = Object.entries(budgetData).some(
+      ([col, value]) => !sameMoney(value, existingBudget?.[col as keyof typeof existingBudget] as string | null),
     );
+    if (changed) {
+      return NextResponse.json(
+        {
+          error:
+            'This month’s budget goals are managed by the budget ledger. Turn off budget management for the month to edit them by hand.',
+          code: 'budget_managed',
+        },
+        { status: 409 },
+      );
+    }
+    // Unchanged echo — drop it so the write is purely the ads.
+    for (const key of Object.keys(budgetData)) delete budgetData[key];
   }
 
   await prisma.$transaction(async (tx) => {

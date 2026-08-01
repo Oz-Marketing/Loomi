@@ -20,6 +20,8 @@ const acctA = `${PREFIX}a`;
 const acctB = `${PREFIX}b`;
 const YEAR = 2031; // far future — can't collide with real data
 
+const toN = (d: unknown) => Number(d);
+
 describe.skipIf(!RUN)('budget ledger — DB integration', () => {
   beforeAll(async () => {
     await prisma.account.deleteMany({ where: { key: { startsWith: PREFIX } } });
@@ -778,5 +780,111 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     });
     expect(Number(after!.baseBudgetGoal)).toBe(5000);
     expect(after!.managedByBudget).toBe(true);
+  });
+
+  // ── Import (Oz Reports migration) ──
+
+  it('creates on first run and updates on the second — never duplicates', async () => {
+    // The whole reason externalId is unique. A second push of 8,000 lines must
+    // correct the same ledger, not mint a parallel one.
+    const line = {
+      externalId: 'ozreports:account_budgets:1',
+      accountKey: acctA,
+      year: YEAR,
+      period: `${YEAR}-04`,
+      channel: 'meta',
+      amount: 1000,
+      markup: 0.77,
+      status: 'committed',
+    };
+    expect(await budget.upsertImportedLines([line], [], null)).toMatchObject({ created: 1, updated: 0 });
+    expect(await budget.upsertImportedLines([line], [], null)).toMatchObject({ created: 0, updated: 1 });
+
+    const all = await prisma.budgetLine.findMany({ where: { accountKey: acctA, year: YEAR } });
+    expect(all).toHaveLength(1);
+  });
+
+  it('applies a corrected source row onto the same line', async () => {
+    const base = {
+      externalId: 'ozreports:account_budgets:2',
+      accountKey: acctA,
+      year: YEAR,
+      period: `${YEAR}-04`,
+      channel: 'meta',
+      amount: 1000,
+      markup: 0.77,
+      status: 'committed',
+    };
+    await budget.upsertImportedLines([base], [], null);
+    await budget.upsertImportedLines(
+      [{ ...base, amount: 2500, channel: 'radio', period: `${YEAR}-05` }],
+      [],
+      null,
+    );
+    const row = await prisma.budgetLine.findUnique({ where: { externalId: base.externalId } });
+    expect(toN(row!.amount)).toBe(2500);
+    expect(row!.channel).toBe('radio');
+    expect(row!.period).toBe(`${YEAR}-05`);
+  });
+
+  it('retires lines whose source row was deleted', async () => {
+    // Without this a dual-run leaks: a budget deleted in Oz Reports just stops
+    // appearing in the push, so Loomi would keep it forever.
+    const line = {
+      externalId: 'ozreports:account_budgets:3',
+      accountKey: acctA,
+      year: YEAR,
+      period: `${YEAR}-06`,
+      channel: 'meta',
+      amount: 900,
+      markup: 0.77,
+      status: 'committed',
+    };
+    await budget.upsertImportedLines([line], [], null);
+    expect((await budget.getAccountSummary(acctA, YEAR)).totalCommitted).toBe(900);
+
+    const res = await budget.upsertImportedLines([], [line.externalId], null);
+    expect(res.archived).toBe(1);
+    expect((await budget.getAccountSummary(acctA, YEAR)).totalCommitted).toBe(0);
+  });
+
+  it('rejects one bad row without dropping the rest of the batch', async () => {
+    // 8,000 lines at a time — a single unusable row must not strand the others.
+    const good = {
+      externalId: 'ozreports:account_budgets:4',
+      accountKey: acctA,
+      year: YEAR,
+      period: `${YEAR}-07`,
+      channel: 'meta',
+      amount: 500,
+      markup: 0.77,
+      status: 'committed',
+    };
+    const bad = { ...good, externalId: 'ozreports:account_budgets:5', channel: 'carrier_pigeon' };
+    const res = await budget.upsertImportedLines([good, bad], [], null);
+    expect(res.created).toBe(1);
+    expect(res.rejected).toHaveLength(1);
+    expect(res.rejected[0]!.externalId).toBe(bad.externalId);
+    expect(res.rejected[0]!.reason).toMatch(/Unknown budget channel/);
+  });
+
+  it('imports an Oz pool row (for_month 0) as an unplaced line', async () => {
+    await budget.upsertImportedLines(
+      [{
+        externalId: 'ozreports:account_budgets:6',
+        accountKey: acctA,
+        year: YEAR,
+        period: null,
+        channel: null,
+        amount: 4000,
+        markup: 0.77,
+        status: 'committed',
+      }],
+      [],
+      null,
+    );
+    const s = await budget.getAccountSummary(acctA, YEAR);
+    expect(s.pool).toBe(4000);
+    expect(s.allocated).toBe(0);
   });
 });

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import {
   BUDGET_CHANNELS,
@@ -113,6 +114,30 @@ describe('intake subset', () => {
         expect(isBudgetChannel(ch), `${kind} → ${ch}`).toBe(true);
         expect(intakeKeys.has(ch), `${kind} → ${ch} is not rep-selectable`).toBe(true);
       }
+    }
+  });
+});
+
+describe('server-safety', () => {
+  it("is not marked 'use client'", () => {
+    // It was, once. Under Next's bundler that turns every export into a client
+    // reference which THROWS when a route handler calls it — so the Oz Reports
+    // import 500'd on all 19 batches while 988 tests passed, because vitest
+    // runs plain Node where the directive is inert.
+    const src = readFileSync('src/lib/budget/channels.ts', 'utf8');
+    expect(src.trimStart().startsWith("'use client'")).toBe(false);
+    expect(src.trimStart().startsWith('"use client"')).toBe(false);
+  });
+
+  it('keeps every server-imported budget module free of the directive', () => {
+    for (const f of [
+      'src/lib/budget/channels.ts',
+      'src/lib/budget/period.ts',
+      'src/lib/budget/settlement.ts',
+      'src/lib/services/budget.ts',
+    ]) {
+      const first = readFileSync(f, 'utf8').trimStart().slice(0, 20);
+      expect(first, f).not.toMatch(/^['"]use client['"]/);
     }
   });
 });

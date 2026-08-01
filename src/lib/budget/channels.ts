@@ -1,5 +1,3 @@
-'use client';
-
 /**
  * The budget module's channel registry — the spend axis every BudgetLine is
  * eventually placed on.
@@ -22,7 +20,15 @@
  *              offered on the form. Nobody filing an ads ticket should be
  *              choosing "Contribution".
  *
- * Client-safe (no server imports), in the shape of `ad-pacer/constants.ts`.
+ * UNIVERSAL — no 'use client', no server imports. Both sides need it: the hub
+ * and intake render channel labels and icons, and the Oz Reports import
+ * resolves `ozIds` on the server. Marking it 'use client' made every export a
+ * client reference that threw the moment a route handler called it, which is
+ * exactly how the first real import run failed — with 988 passing tests, because
+ * vitest runs plain Node where the directive is inert and only the bundler
+ * enforces it.
+ *
+ * In the shape of `ad-pacer/constants.ts`.
  * Channels are string KEYS, never numeric ids: oz-reports scattered
  * `$GOOGLE = 2; $FACEBOOK = 1; $YOUTUBE = 6` through its calc code and every
  * reader had to know the mapping. Nothing here or downstream may hardcode a

@@ -1,5 +1,6 @@
 'use client';
 
+import { brandLogoData, type AccountLogos } from '@/lib/ad-generator/brand-logos';
 import type { AdTemplate, AdData } from '@/lib/ad-generator/types';
 
 /**
@@ -47,15 +48,16 @@ export function AdPreviewThumb({
   );
 }
 
-/** Account branding merged into ad previews (dealer name, logo, brand color). */
+/** Account branding merged into ad previews (dealer name, logos, brand color). */
 export function brandingFromAccount(accountData: {
   dealer?: string;
-  logos?: { light?: string } | null;
+  logos?: AccountLogos;
   branding?: { colors?: { primary?: string } | null } | null;
 } | null | undefined): AdData {
   return {
     ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
-    ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
+    // All variants, so an element pinned to a specific logo renders it here too.
+    ...brandLogoData(accountData?.logos),
     ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
   };
 }

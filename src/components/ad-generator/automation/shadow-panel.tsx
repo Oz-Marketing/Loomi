@@ -716,10 +716,20 @@ export function ShadowPanel({
         drafts.length === 0 ? (
           <div className="glass-card rounded-2xl border border-dashed border-[var(--border)] p-12 text-center">
             <p className="text-sm text-[var(--muted-foreground)]">Nothing generated yet.</p>
-            <p className="mt-1 text-xs text-[var(--muted-foreground)]">
-              Build ads from the offers on file with{' '}
-              <strong>New ad → Generate from OEM offers</strong> on the Ad Generator.
-            </p>
+            {/* Generation is gated on a mapped template, so this used to point at
+                a menu item that wasn't rendered yet — name the missing piece
+                instead of sending people to look for a control that isn't there. */}
+            {report && !report.scope.templateMap.all ? (
+              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                No template is mapped yet, so a run would skip every vehicle. Pick one under{' '}
+                <strong>Settings → How ads are built</strong>.
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-[var(--muted-foreground)]">
+                Build ads from the offers on file with{' '}
+                <strong>New ad → Generate from OEM offers</strong> on the Ad Generator.
+              </p>
+            )}
           </div>
         ) : (
         <Card

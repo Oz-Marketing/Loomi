@@ -23,7 +23,7 @@ import { useAccount } from '@/contexts/account-context';
 import { jsonFetcher } from './fetcher';
 import { BudgetLineDrawer } from './budget-line-drawer';
 import { BudgetAgreementModal } from './budget-agreement-modal';
-import { BudgetCategoriseModal } from './budget-categorise-modal';
+import { BudgetCategorizeModal } from './budget-categorize-modal';
 import { BudgetAddLineModal } from './budget-add-line-modal';
 import { StatusPill } from './budget-status-pill';
 import {
@@ -59,7 +59,7 @@ export function BudgetHub() {
   /** Line-type sections folded shut. Keyed by section, not index, so it
    *  survives a channel appearing or disappearing. */
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [categoriseOpen, setCategoriseOpen] = useState(false);
+  const [categorizeOpen, setCategorizeOpen] = useState(false);
   const [poolOpen, setPoolOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
@@ -121,7 +121,7 @@ export function BudgetHub() {
 
   /**
    * The grid grouped into Media / Services / Fees / Production / Needs
-   * categorising. A flat 44-row table mixes a Google buy with a management fee
+   * categorizing. A flat 44-row table mixes a Google buy with a management fee
    * as if they were the same kind of thing — they aren't, and the sections are
    * what make a long grid readable.
    */
@@ -198,23 +198,23 @@ export function BudgetHub() {
   }, [openCell, placed]);
 
   /**
-   * The sub-line under "Committed by Agreement". A term that only partly
+   * The sub-line under "Total budget". A term that only partly
    * overlaps the year is the case worth explaining — the card's number is that
    * term's SHARE of the year, and without saying so it looks like the contract
    * value is wrong.
    */
   const agreementSub = useMemo(() => {
-    if (agreements.length === 0) return 'Add a contract to track against';
-    if (summary?.declaredTotal == null) return 'No total set on the contract';
+    if (agreements.length === 0) return 'Add a budget to track against';
+    if (summary?.declaredTotal == null) return 'No total set on the budget';
     const fees = agreements.reduce((t, a) => t + a.monthlyFeeTotal, 0);
     const partial = agreements.filter((a) => a.monthsInYear != null && a.monthsInYear < a.termMonths);
     if (partial.length > 0) {
       return agreements.length === 1
         ? `${partial[0].monthsInYear} of ${partial[0].termMonths} months of the term fall in ${year}`
-        : `Pro-rated share of ${agreements.length} contracts`;
+        : `Pro-rated share of ${agreements.length} budgets`;
     }
     if (fees > 0) return `${usd0(fees)}/mo recurring`;
-    return agreements.length === 1 ? 'What the client signed up for' : `Across ${agreements.length} contracts`;
+    return agreements.length === 1 ? 'What the client signed up for' : `Across ${agreements.length} budgets`;
   }, [agreements, summary?.declaredTotal, year]);
 
   const yearOptions = useMemo(() => {
@@ -234,12 +234,12 @@ export function BudgetHub() {
         body: JSON.stringify({ accountKey, ...body }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || 'Could not save the contract');
-      toast.success(id ? 'Contract saved' : 'Contract created');
+      if (!res.ok) throw new Error(data?.error || 'Could not save the budget');
+      toast.success(id ? 'Budget saved' : 'Budget created');
       await reload();
       return true;
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not save the contract');
+      toast.error(err instanceof Error ? err.message : 'Could not save the budget');
       return false;
     }
   }
@@ -264,14 +264,14 @@ export function BudgetHub() {
   async function archiveAgreement(id: string) {
     try {
       const res = await fetch(`/api/budget/agreements/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Could not archive the contract');
+      if (!res.ok) throw new Error('Could not archive the budget');
       // Lines keep their money — archiving ends the commitment, it doesn't
       // unwind what's already been budgeted against it.
-      toast.success('Contract archived · its budget lines are untouched');
+      toast.success('Budget archived · its lines are untouched');
       await reload();
       return true;
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not archive the contract');
+      toast.error(err instanceof Error ? err.message : 'Could not archive the budget');
       return false;
     }
   }
@@ -384,7 +384,7 @@ export function BudgetHub() {
             className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50"
           >
             <DocumentTextIcon className="h-4 w-4" />
-            {agreements.length > 1 ? `Contracts · ${agreements.length}` : 'Contract'}
+            {agreements.length === 0 ? 'Add Budget' : 'Manage Budgets'}
           </button>
         </div>
       </div>
@@ -568,11 +568,11 @@ export function BudgetHub() {
                     {untypedTotal > 0 && (
                       <button
                         type="button"
-                        onClick={() => setCategoriseOpen(true)}
+                        onClick={() => setCategorizeOpen(true)}
                         className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-[11px] font-medium text-amber-600 transition hover:bg-amber-500/20"
                       >
                         <ExclamationTriangleIcon className="h-3.5 w-3.5" />
-                        Categorise {usd0(untypedTotal)}
+                        Categorize {usd0(untypedTotal)}
                       </button>
                     )}
                   </div>
@@ -660,7 +660,7 @@ export function BudgetHub() {
                   className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--foreground)] transition hover:bg-[var(--muted)]"
                 >
                   <DocumentTextIcon className="h-4 w-4" />
-                  {agreements.length > 0 ? 'Open Contract' : 'Add a Contract'}
+                  {agreements.length > 0 ? 'Manage Budgets' : 'Add Budget'}
                 </button>
               </div>
             ) : (
@@ -893,13 +893,13 @@ export function BudgetHub() {
         </>
       )}
 
-      {categoriseOpen && accountKey && (
-        <BudgetCategoriseModal
+      {categorizeOpen && accountKey && (
+        <BudgetCategorizeModal
           accountKey={accountKey}
           year={year}
           accountName={accountData?.dealer ?? accountKey}
           onChanged={() => void reload()}
-          onClose={() => setCategoriseOpen(false)}
+          onClose={() => setCategorizeOpen(false)}
         />
       )}
 

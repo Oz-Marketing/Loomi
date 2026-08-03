@@ -34,7 +34,7 @@ type Group = {
  * the useful feedback is "that's done" — not the row vanishing and leaving you
  * to remember what you just did.
  */
-export function BudgetCategoriseModal({
+export function BudgetCategorizeModal({
   accountKey,
   year,
   accountName,
@@ -57,11 +57,11 @@ export function BudgetCategoriseModal({
   const load = useCallback(async () => {
     try {
       const d = await jsonFetcher(
-        `/api/budget/categorise?accountKey=${encodeURIComponent(accountKey)}&year=${year}`,
+        `/api/budget/categorize?accountKey=${encodeURIComponent(accountKey)}&year=${year}`,
       );
       setGroups(d.groups);
     } catch {
-      toast.error('Could not load what needs categorising');
+      toast.error('Could not load what needs categorizing');
       setGroups([]);
     }
   }, [accountKey, year]);
@@ -82,17 +82,17 @@ export function BudgetCategoriseModal({
     const key = channel ?? '';
     setBusy(key);
     try {
-      const res = await fetch('/api/budget/categorise', {
+      const res = await fetch('/api/budget/categorize', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ accountKey, year, channel, lineType }),
       });
       const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || 'Could not categorise those lines');
+      if (!res.ok) throw new Error(data?.error || 'Could not categorize those lines');
       setDone((d) => ({ ...d, [key]: { lineType, lines: data.updated } }));
       onChanged();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not categorise those lines');
+      toast.error(err instanceof Error ? err.message : 'Could not categorize those lines');
     } finally {
       setBusy(null);
     }
@@ -116,7 +116,7 @@ export function BudgetCategoriseModal({
       >
         <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
           <div>
-            <h3 className="text-sm font-semibold text-[var(--foreground)]">Categorise Budget</h3>
+            <h3 className="text-sm font-semibold text-[var(--foreground)]">Categorize Budget</h3>
             <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
               {accountName} · {year}
               {pending.length > 0 && <> · {usd0(totalPending)} still untyped</>}
@@ -139,7 +139,7 @@ export function BudgetCategoriseModal({
             <div className="py-10 text-center">
               <CheckIcon className="mx-auto h-8 w-8 text-emerald-500" />
               <p className="mt-2 text-sm font-medium text-[var(--foreground)]">
-                Everything is categorised
+                Everything is categorized
               </p>
               <p className="mt-1 text-sm text-[var(--muted-foreground)]">
                 Every line for {year} has a type, so the margin figures are real.

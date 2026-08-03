@@ -5,7 +5,7 @@ import { isBudgetLineType } from '@/lib/budget/channels';
 import * as budget from '@/lib/services/budget';
 
 /**
- * GET  /api/budget/categorise?accountKey=…&year=… — what still needs a type,
+ * GET  /api/budget/categorize?accountKey=…&year=… — what still needs a type,
  *      grouped by channel.
  * POST — assign a type to every still-unclassified line on a channel.
  *
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
   const channel = 'channel' in body ? (body.channel ?? null) : null;
 
   try {
-    const updated = await budget.categoriseChannel(
+    const updated = await budget.categorizeChannel(
       accountKey,
       year,
       channel,
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ updated });
   } catch (err) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : 'Could not categorise those lines' },
+      { error: err instanceof Error ? err.message : 'Could not categorize those lines' },
       { status: 400 },
     );
   }

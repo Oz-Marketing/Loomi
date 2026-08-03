@@ -1,8 +1,9 @@
 import { prisma } from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
-import { accountMarginSetting } from '@/lib/ad-pacer/markup';
-import { getGlobalDefaultMarkup } from '@/lib/services/markup';
+import { accountMarginSetting, isValidMarkup } from '@/lib/ad-pacer/markup';
+import { getBillingMarkups, getGlobalDefaultMarkup } from '@/lib/services/markup';
 import {
+  channelBillingCategory,
   channelCategory,
   channelLineType,
   channelPacerPlatform,
@@ -101,21 +102,34 @@ export { isValidPeriod, yearOfPeriod, periodOf } from '@/lib/budget/period';
 // ── Markup ──────────────────────────────────────────────────────────────────
 
 /**
- * The gross→spend factor to freeze onto a new line. Resolution order mirrors
- * the pacer's (docs §8.1 option a):
- *   1. BudgetPlan.defaultMarkup for the account+year
- *   2. Account.markup
- *   3. agency default (AppSetting)
+ * The markup a new line is stamped with. Resolved ONCE at creation and frozen
+ * onto the line, never re-derived — the same rule the pacer follows, so
+ * changing a rate can't rewrite money already committed.
+ *
+ * Most specific wins:
+ *   1. the budget's own override — a rate negotiated for this deal
+ *   2. the account's override — a rate negotiated with this client
+ *   3. the CHANNEL'S RATE CARD — what the agency charges for this kind of work
+ *   4. the agency default
+ *
+ * The rate card sits below the account override on purpose: an override is a
+ * rate somebody negotiated with a named client, and it should beat the standard
+ * price list. The trade-off worth knowing is that an account override applies
+ * to EVERYTHING — set one because a client gets a better digital rate and their
+ * swag silently moves to that rate too. No account carries one today.
+ *
  * An unconfigured markup resolves to 0, which surfaces as an obviously-broken
- * $0 spend target rather than a plausible wrong number — the same failure mode
- * `ad-pacer/markup.ts` is built around. Callers may override explicitly (a
- * radio line whose margin differs from the account's digital rate).
+ * $0 spend target rather than a plausible wrong number — the failure mode
+ * `ad-pacer/markup.ts` is built around. Callers may still override explicitly.
  */
-export async function resolveMarkup(accountKey: string, year: number): Promise<number> {
-  const [agreement, account, globalDefault] = await Promise.all([
-    // The agreement covering this year wins, when one sets a markup. Most
-    // specific first: a client can negotiate a rate for a term without it
-    // becoming the account's permanent default.
+export async function resolveMarkup(
+  accountKey: string,
+  year: number,
+  channel?: string | null,
+): Promise<number> {
+  const [agreement, account, globalDefault, rateCards] = await Promise.all([
+    // The budget covering this year wins, when one sets a markup. A client can
+    // negotiate a rate for a term without it becoming a permanent default.
     prisma.clientAgreement.findFirst({
       where: {
         accountKey,
@@ -130,11 +144,19 @@ export async function resolveMarkup(accountKey: string, year: number): Promise<n
     }),
     prisma.account.findUnique({ where: { key: accountKey }, select: { markup: true } }),
     getGlobalDefaultMarkup(),
+    getBillingMarkups(),
   ]);
+
   if (agreement?.defaultMarkup != null) {
     return accountMarginSetting(agreement.defaultMarkup, globalDefault);
   }
-  return accountMarginSetting(account?.markup ?? null, globalDefault);
+  if (isValidMarkup(account?.markup)) return account.markup;
+
+  const billing = channelBillingCategory(channel);
+  const cardRate = billing == null ? null : rateCards[billing];
+  if (isValidMarkup(cardRate)) return cardRate;
+
+  return accountMarginSetting(null, globalDefault);
 }
 
 /**
@@ -187,15 +209,25 @@ export async function resolveAgreementForPeriod(
 /**
  * What a line costs Oz, in the same dollars as `amount`.
  *
- * An explicitly stored cost always wins: for a resold service that number came
- * off a vendor invoice, and no percentage should override it. Otherwise:
- *   media  → amount × markup, the spend that reaches the platform
- *   fee    → 0, there is no external cost
- *   other  → null, genuinely unknown rather than assumed zero
+ * Order:
+ *   stored cost  → what a vendor actually invoiced. Always wins; no percentage
+ *                  should override a real number somebody was billed.
+ *   fee          → 0. Agency revenue with no external cost.
+ *   unclassified → null. Nobody has said what this money IS, so its rate is
+ *                  meaningless even though one is stamped on the line.
+ *   otherwise    → amount × markup, the rate card for that kind of work.
+ *
+ * THE LAST RULE USED TO BE MEDIA-ONLY. That was right when the agency had a
+ * single markup and it was Digital's — applying 0.77 to a swag order would have
+ * invented a cost. Now every billing category carries its own rate (Swag 0.70,
+ * Mass Media 0.85, Production 0.80…), so the markup frozen on a service or
+ * production line is a real expectation and using it is better than reporting
+ * the line as uncosted forever. An invoice still overrides it the moment one
+ * exists.
  *
  * Null is meaningful and must stay null. Treating unknown cost as zero would
- * report 100% margin on every un-costed service line, which is the most
- * flattering possible lie.
+ * report 100% margin on every un-costed line, which is the most flattering
+ * possible lie.
  */
 export function effectiveCost(line: {
   amount: number;
@@ -204,9 +236,9 @@ export function effectiveCost(line: {
   cost: number | null;
 }): number | null {
   if (line.cost != null) return line.cost;
-  if (line.lineType === 'media') return line.amount * line.markupSnapshot;
   if (line.lineType === 'fee') return 0;
-  return null;
+  if (line.lineType === 'unclassified') return null;
+  return isValidMarkup(line.markupSnapshot) ? line.amount * line.markupSnapshot : null;
 }
 
 /** amount − cost, or null when the cost isn't known yet. */
@@ -704,9 +736,12 @@ export async function createLines(
     }
     let markup = input.markup ?? null;
     if (markup == null) {
-      const cacheKey = `${input.accountKey}:${year}`;
+      // Keyed on CHANNEL too, now that rate cards exist — without it a batch
+      // spanning Meta and radio would stamp every line with whichever channel
+      // happened to be resolved first.
+      const cacheKey = `${input.accountKey}:${year}:${channel ?? ''}`;
       if (!markupCache.has(cacheKey)) {
-        markupCache.set(cacheKey, await resolveMarkup(input.accountKey, year));
+        markupCache.set(cacheKey, await resolveMarkup(input.accountKey, year, channel));
       }
       markup = markupCache.get(cacheKey)!;
     }
@@ -844,7 +879,7 @@ export interface UpdateLineInput {
   channel?: string | null;
   status?: string;
   bucket?: string;
-  /** What KIND of money — the categorising decision. */
+  /** What KIND of money — the categorizing decision. */
   lineType?: BudgetLineType;
   /** What it costs Oz. `null` puts it back to derived. */
   cost?: number | null;
@@ -932,7 +967,7 @@ export async function updateLine(
       summary: `Spending from ${existing.spendAccountKey} → ${input.spendAccountKey}`,
     });
   }
-  // Categorising. Audited like any other money-affecting change, because it
+  // Categorizing. Audited like any other money-affecting change, because it
   // IS one: lineType decides whether the amount is treated as media (cost =
   // amount × markup) or as revenue with no cost, and that moves the margin.
   if (input.lineType && input.lineType !== existing.lineType) {
@@ -1469,17 +1504,22 @@ export async function generateAgreementFeeLines(
   const months = termMonthsInYear(agreement.startDate, agreement.endDate, year);
   if (months.length === 0) return [];
 
+  // Keyed on the LABEL as well as channel and month. Two fees can share a
+  // channel — that's how one item splits into "Commercial" and "Kick-off" —
+  // and a channel|period key would silently skip the second one, so laying out
+  // the year would quietly drop half the budget.
   const existing = await prisma.budgetLine.findMany({
     where: { agreementId, year, source: 'retainer', ...NOT_ARCHIVED },
-    select: { period: true, channel: true },
+    select: { period: true, channel: true, label: true },
   });
-  const taken = new Set(existing.map((e) => `${e.channel}|${e.period}`));
+  const taken = new Set(existing.map((e) => `${e.channel}|${e.period}|${e.label ?? ''}`));
 
   const inputs: CreateLineInput[] = [];
   for (const fee of agreement.fees) {
+    const label = fee.label?.trim() || agreement.name;
     for (const m of months) {
       const period = periodOf(year, m);
-      if (taken.has(`${fee.channel}|${period}`)) continue;
+      if (taken.has(`${fee.channel}|${period}|${label}`)) continue;
       inputs.push({
         accountKey: agreement.accountKey,
         year,
@@ -1489,7 +1529,12 @@ export async function generateAgreementFeeLines(
         source: 'retainer',
         status: 'committed',
         agreementId,
-        label: fee.label ?? 'Managed Marketing Service',
+        // The fee's own name when it has one — that's how one item gets split
+        // into "Commercial" and "Kick-off video". Otherwise the BUDGET's name,
+        // because a line that says "Find Your Gold Sale" tells you what it
+        // belongs to. It used to fall back to the literal "Managed Marketing
+        // Service", which stamped that on every line of every budget.
+        label,
       });
     }
   }
@@ -1497,7 +1542,7 @@ export async function generateAgreementFeeLines(
   return createLines(inputs, userId);
 }
 
-// ── Categorising ────────────────────────────────────────────────────────────
+// ── Categorizing ────────────────────────────────────────────────────────────
 //
 // Roughly 13% of the imported Oz Reports ledger arrived with no line type,
 // because Oz never had the concept — "Group Sale" and "YAG" say nothing about
@@ -1561,7 +1606,7 @@ export async function getUnclassified(
  * Each line gets its own event, because a type change moves the margin and
  * "who decided this was a fee" is a question that gets asked.
  */
-export async function categoriseChannel(
+export async function categorizeChannel(
   accountKey: string,
   year: number,
   channel: string | null,
@@ -1593,7 +1638,7 @@ export async function categoriseChannel(
       field: 'lineType',
       fromValue: 'unclassified',
       toValue: lineType,
-      summary: `Type unclassified → ${lineType} (categorised in bulk)`,
+      summary: `Type unclassified → ${lineType} (categorized in bulk)`,
       authorUserId: userId,
       groupId,
     });

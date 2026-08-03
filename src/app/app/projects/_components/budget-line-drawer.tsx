@@ -61,6 +61,7 @@ export function BudgetLineDrawer({
   const [label, setLabel] = useState('');
   const [lineType, setLineType] = useState<BudgetLineType>('unclassified');
   const [cost, setCost] = useState('');
+  const [bucket, setBucket] = useState('added');
 
   const load = useCallback(async () => {
     try {
@@ -74,6 +75,7 @@ export function BudgetLineDrawer({
       setLabel(d.line.label ?? '');
       setLineType(d.line.lineType as BudgetLineType);
       setCost(d.line.cost == null ? '' : String(d.line.cost));
+      setBucket(d.line.bucket);
     } catch {
       setLoadError(true);
     }
@@ -112,6 +114,7 @@ export function BudgetLineDrawer({
           status,
           label: label.trim() || null,
           lineType,
+          bucket,
           // Empty means "derive it" — an explicit null, not an omission, or
           // the route can't tell it from "leave alone".
           cost: cost.trim() === '' ? null : Number(cost),
@@ -336,7 +339,25 @@ export function BudgetLineDrawer({
             {/* Provenance */}
             <div className="space-y-1.5 text-xs">
               <Row label="Source" value={sourceLabel(line.source)} />
-              <Row label="Pacer bucket" value={bucketLabel(line.bucket)} />
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="text-[var(--muted-foreground)]">Budget source</span>
+                {/* Editable, because it decides which of the Ad Pacer's two
+                    goals this money lands in and the default is only a guess
+                    from how the line was created. It was read-only text, which
+                    meant a wrong guess could never be corrected. */}
+                <div className="w-[150px]">
+                  <SearchableSelect
+                    value={bucket}
+                    onChange={setBucket}
+                    searchable={false}
+                    options={[
+                      { value: 'base', label: 'Base budget' },
+                      { value: 'added', label: 'Added budget' },
+                    ]}
+                    className="!bg-[var(--input)] !rounded-lg !px-2 !py-1 !text-xs"
+                  />
+                </div>
+              </div>
               {line.taskId && (
                 <div className="flex items-baseline justify-between gap-3">
                   <span className="text-[var(--muted-foreground)]">Ticket</span>

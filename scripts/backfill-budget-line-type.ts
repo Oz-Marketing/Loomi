@@ -10,7 +10,7 @@
  * roughly 13% of the imported ledger — stay unassigned. Nobody can tell from
  * the name whether "Group Sale" is media, a fee, or production, and guessing a
  * type for real money is worse than leaving it visibly unset: an unassigned
- * line shows up in the hub asking to be categorised, whereas a wrong one
+ * line shows up in the hub asking to be categorized, whereas a wrong one
  * quietly corrupts the margin figure for that client.
  *
  * Only touches rows still marked 'unclassified', so it never overrides a

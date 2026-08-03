@@ -74,7 +74,7 @@ export function BudgetAgreementModal({
         <div className="flex items-start justify-between gap-3 border-b border-[var(--border)] px-5 py-4">
           <div>
             <h3 className="text-sm font-semibold text-[var(--foreground)]">
-              {editing ? (editing === 'new' ? 'New Contract' : 'Edit Contract') : 'Contracts'}
+              {editing ? (editing === 'new' ? 'New Budget' : 'Edit Budget') : 'Budgets'}
             </h3>
             <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
               {accountName} · Viewing {year}
@@ -199,7 +199,7 @@ function AgreementList({
                 <span
                   role="button"
                   tabIndex={-1}
-                  aria-label="Archive contract"
+                  aria-label="Archive budget"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (!busy) void onArchive(a.id);
@@ -259,7 +259,7 @@ function AgreementList({
           className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)]"
         >
           <PlusIcon className="h-4 w-4" />
-          New Contract
+          New Budget
         </button>
       </div>
     </>
@@ -357,7 +357,7 @@ function AgreementForm({
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={`${year} Annual Contract`}
+            placeholder={`${year} Annual Budget`}
             className="loomi-input mt-1 w-full !bg-[var(--input)]"
           />
         </div>
@@ -372,7 +372,7 @@ function AgreementForm({
 
         <MoneyField
           label="Total commitment"
-          hint="The whole contract value, not the year's. Leave blank if there's no formal number — the page just won't show a target."
+          hint="The whole budget, not the year's share. Leave blank if there's no formal number — the page just won't show a target."
           value={committed}
           onChange={setCommitted}
         />
@@ -419,7 +419,8 @@ function AgreementForm({
               <p className="text-xs font-medium text-[var(--foreground)]">Recurring monthly fees</p>
               <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
                 Charged every month of the term. These become budget lines when you lay out the
-                year.
+                year. Add the same item twice with different names to split its budget — one
+                Video as &ldquo;Commercial&rdquo;, another as &ldquo;Kick-off&rdquo;.
               </p>
             </div>
             {monthlyFeeTotal > 0 && (
@@ -446,7 +447,20 @@ function AgreementForm({
                     className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
                   />
                 </div>
-                <div className="relative w-32">
+                {/* A name per row is what lets one item become several lines —
+                    two Videos as "Commercial" and "Kick-off", each with its own
+                    share of the budget. Without it they're two identical rows
+                    nobody can tell apart on the grid. */}
+                <input
+                  type="text"
+                  placeholder="Name — optional"
+                  value={f.label}
+                  onChange={(e) =>
+                    setFees((prev) => prev.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))
+                  }
+                  className="loomi-input w-[150px] !bg-[var(--input)] !py-1.5 !text-xs"
+                />
+                <div className="relative w-28">
                   <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-[var(--muted-foreground)]">
                     $
                   </span>
@@ -533,7 +547,7 @@ function AgreementForm({
           onClick={() => void save(false)}
           className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
         >
-          {busy ? 'Saving…' : agreement ? 'Save Changes' : 'Create Contract'}
+          {busy ? 'Saving…' : agreement ? 'Save Changes' : 'Create Budget'}
         </button>
       </div>
     </>

@@ -50,6 +50,7 @@ export function BudgetAddLineModal({
   const [endDate, setEndDate] = useState(`${year}-03-31`);
   const [amount, setAmount] = useState('');
   const [label, setLabel] = useState('');
+  const [bucket, setBucket] = useState<'base' | 'added'>('added');
   const [saving, setSaving] = useState(false);
   const [mounted, setMounted] = useState(false);
 
@@ -92,6 +93,7 @@ export function BudgetAddLineModal({
         endDate,
         amount: n,
         label: label.trim() || null,
+        bucket,
       });
     } else {
       await onAdd({
@@ -100,6 +102,7 @@ export function BudgetAddLineModal({
         amount: n,
         label: label.trim() || null,
         source: 'adhoc',
+        bucket,
       });
     }
     setSaving(false);
@@ -274,6 +277,51 @@ export function BudgetAddLineModal({
               )}
             </div>
           )}
+
+          {/* Base or added. Asked rather than inferred: the default comes from
+              how the line was created (anything typed here is "added"), and
+              that guess is wrong often enough to matter — this is the split the
+              Ad Pacer writes into its two goal fields, so getting it wrong sends
+              the wrong number to the platform. */}
+          <div>
+            <label className="block text-xs font-medium text-[var(--foreground)]">
+              Where does this money come from?
+            </label>
+            <div className="mt-1.5 grid grid-cols-2 gap-2">
+              {(
+                [
+                  {
+                    key: 'base' as const,
+                    title: 'Base budget',
+                    blurb: 'Part of what they already pay',
+                  },
+                  {
+                    key: 'added' as const,
+                    title: 'Added budget',
+                    blurb: 'Extra, on top of the base',
+                  },
+                ]
+              ).map((opt) => (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setBucket(opt.key)}
+                  className={`rounded-lg border px-3 py-2 text-left transition ${
+                    bucket === opt.key
+                      ? 'border-[var(--primary)] bg-[var(--primary)]/10'
+                      : 'border-[var(--border)] bg-[var(--input)] hover:bg-[var(--muted)]/40'
+                  }`}
+                >
+                  <span className="block text-xs font-medium text-[var(--foreground)]">
+                    {opt.title}
+                  </span>
+                  <span className="mt-0.5 block text-[10px] leading-snug text-[var(--muted-foreground)]">
+                    {opt.blurb}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div>
             <label className="block text-xs font-medium text-[var(--foreground)]">

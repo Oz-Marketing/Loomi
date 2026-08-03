@@ -18,6 +18,8 @@ const RUN = !!process.env.RUN_DB_TESTS;
 const PREFIX = '__vitest_budget_';
 const acctA = `${PREFIX}a`;
 const acctB = `${PREFIX}b`;
+/** No markup override — the only fixture where a rate card can be observed. */
+const acctC = `${PREFIX}c`;
 const YEAR = 2031; // far future — can't collide with real data
 
 const toN = (d: unknown) => Number(d);
@@ -40,6 +42,7 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
       data: [
         { key: acctA, dealer: 'Vitest Budget A', markup: 0.8 },
         { key: acctB, dealer: 'Vitest Budget B', markup: 0.5 },
+        { key: acctC, dealer: 'Vitest Budget C' },
       ],
     });
   });
@@ -548,7 +551,7 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     expect(all.find((a) => a.id !== first.id)!.booked).toBe(0);
   });
 
-  // ── Categorising ──
+  // ── Categorizing ──
 
   it('groups what needs a type by channel, biggest money first', async () => {
     await budget.createLines(
@@ -579,7 +582,7 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
       null,
     );
 
-    expect(await budget.categoriseChannel(acctA, YEAR, 'other', 'service', null)).toBe(2);
+    expect(await budget.categorizeChannel(acctA, YEAR, 'other', 'service', null)).toBe(2);
     const groups = await budget.getUnclassified(acctA, YEAR);
     expect(groups.map((g) => g.channel)).toEqual(['referral']);
   });
@@ -595,7 +598,7 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
       null,
     );
 
-    expect(await budget.categoriseChannel(acctA, YEAR, 'other', 'fee', null)).toBe(1);
+    expect(await budget.categorizeChannel(acctA, YEAR, 'other', 'fee', null)).toBe(1);
     const after = await budget.getLine(decided.id);
     expect(after!.lineType).toBe('production');
     expect((await budget.getLine(bulk.id))!.lineType).toBe('fee');
@@ -606,13 +609,13 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
       { accountKey: acctA, period: `${YEAR}-01`, channel: 'other', amount: 1000, status: 'committed', lineType: 'unclassified' },
       null,
     );
-    expect(await budget.categoriseChannel(acctA, YEAR, 'other', 'fee', null)).toBe(1);
-    expect(await budget.categoriseChannel(acctA, YEAR, 'other', 'fee', null)).toBe(0);
+    expect(await budget.categorizeChannel(acctA, YEAR, 'other', 'fee', null)).toBe(1);
+    expect(await budget.categorizeChannel(acctA, YEAR, 'other', 'fee', null)).toBe(0);
   });
 
   it('refuses to assign "unclassified" as a type', async () => {
     await expect(
-      budget.categoriseChannel(acctA, YEAR, 'other', 'unclassified', null),
+      budget.categorizeChannel(acctA, YEAR, 'other', 'unclassified', null),
     ).rejects.toThrow(/not a line type to assign/);
   });
 
@@ -626,7 +629,7 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     );
     expect((await budget.getAccountSummary(acctA, YEAR)).uncostedAmount).toBe(4000);
 
-    await budget.categoriseChannel(acctA, YEAR, 'other', 'fee', null);
+    await budget.categorizeChannel(acctA, YEAR, 'other', 'fee', null);
     const after = await budget.getAccountSummary(acctA, YEAR);
     expect(after.uncostedAmount).toBe(0);
     expect(after.knownRevenue).toBe(4000);
@@ -637,9 +640,99 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
       { accountKey: acctA, period: `${YEAR}-01`, channel: 'other', amount: 1000, status: 'committed', lineType: 'unclassified' },
       null,
     );
-    await budget.categoriseChannel(acctA, YEAR, 'other', 'fee', null);
+    await budget.categorizeChannel(acctA, YEAR, 'other', 'fee', null);
     const events = await budget.listLineEvents(line.id);
     expect(events.some((e) => e.field === 'lineType' && e.toValue === 'fee')).toBe(true);
+  });
+
+  // ── Rate cards ──
+
+  it('stamps each channel with its own billing category rate', async () => {
+    // acctC has no account override, so the rate card decides. The whole point:
+    // one batch, two channels, two different margins.
+    const lines = await budget.createLines(
+      [
+        { accountKey: acctC, period: `${YEAR}-01`, channel: 'meta', amount: 1000, status: 'committed' },
+        { accountKey: acctC, period: `${YEAR}-01`, channel: 'radio', amount: 1000, status: 'committed' },
+        { accountKey: acctC, period: `${YEAR}-01`, channel: 'swag', amount: 1000, status: 'committed' },
+      ],
+      null,
+    );
+    const [meta, radio, swag] = lines;
+    expect(meta.markupSnapshot).toBeCloseTo(0.77, 4); // Digital
+    expect(radio.markupSnapshot).toBeCloseTo(0.85, 4); // Mass Media
+    expect(swag.markupSnapshot).toBeCloseTo(0.7, 4); // Swag
+
+    // And the cost each derives is the rate card applied.
+    expect(swag.effectiveCost).toBeCloseTo(700, 2);
+    expect(swag.revenue).toBeCloseTo(300, 2);
+  });
+
+  it('lets an account override beat the rate card', async () => {
+    // acctA carries markup 0.8. A negotiated client rate is more specific than
+    // the agency's standard price list, so it wins on every channel.
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-01`, channel: 'swag', amount: 1000, status: 'committed' },
+      null,
+    );
+    expect(line.markupSnapshot).toBeCloseTo(0.8, 4);
+  });
+
+  it('falls back to the agency default for a channel with no rate card', async () => {
+    const line = await budget.createLine(
+      { accountKey: acctC, period: `${YEAR}-01`, channel: 'other', amount: 1000, status: 'committed' },
+      null,
+    );
+    expect(line.markupSnapshot).toBeGreaterThan(0);
+  });
+
+  it('caches per channel, not per account — a mixed batch keeps its rates apart', async () => {
+    // The cache key used to be (account, year). A batch spanning channels would
+    // then stamp every line with whichever channel resolved first.
+    const lines = await budget.createLines(
+      [
+        { accountKey: acctC, period: `${YEAR}-02`, channel: 'radio', amount: 500, status: 'committed' },
+        { accountKey: acctC, period: `${YEAR}-03`, channel: 'radio', amount: 500, status: 'committed' },
+        { accountKey: acctC, period: `${YEAR}-02`, channel: 'meta', amount: 500, status: 'committed' },
+      ],
+      null,
+    );
+    expect(lines[0].markupSnapshot).toBeCloseTo(0.85, 4);
+    expect(lines[1].markupSnapshot).toBeCloseTo(0.85, 4);
+    expect(lines[2].markupSnapshot).toBeCloseTo(0.77, 4);
+  });
+
+  // ── Named fees ──
+
+  it('lays out two fees on the SAME channel as separate named lines', async () => {
+    // The split case: one item, two named lines. Deduping on channel+period
+    // alone would silently drop the second one and lose half the budget.
+    const a = await agreement(acctA, {
+      startDate: `${YEAR}-01-01`,
+      endDate: `${YEAR}-01-31`,
+      fees: [
+        { channel: 'videos', monthlyAmount: 4_000, label: 'Commercial' },
+        { channel: 'videos', monthlyAmount: 1_500, label: 'Kick-off video' },
+      ],
+    });
+    const lines = await budget.generateAgreementFeeLines(a.id, YEAR, null);
+    expect(lines).toHaveLength(2);
+    expect(lines.map((l) => l.label).sort()).toEqual(['Commercial', 'Kick-off video']);
+    expect(lines.reduce((t, l) => t + l.amount, 0)).toBe(5_500);
+
+    // Still idempotent — the name is part of the identity, not a bypass of it.
+    expect(await budget.generateAgreementFeeLines(a.id, YEAR, null)).toHaveLength(0);
+  });
+
+  it('names an unnamed fee line after the budget, not a hardcoded string', async () => {
+    const a = await agreement(acctA, {
+      name: 'Find Your Gold Sale',
+      startDate: `${YEAR}-01-01`,
+      endDate: `${YEAR}-01-31`,
+      fees: [{ channel: 'management_fee', monthlyAmount: 900 }],
+    });
+    const [line] = await budget.generateAgreementFeeLines(a.id, YEAR, null);
+    expect(line.label).toBe('Find Your Gold Sale');
   });
 
   // ── Flights ──
@@ -1306,17 +1399,34 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     expect(fee.margin).toBe(1);
   });
 
-  it("leaves a service line's cost UNKNOWN until someone enters it", async () => {
+  it("costs a service line from its rate card until an invoice replaces it", async () => {
+    // This used to stay null until a human typed a cost. It changed when every
+    // billing category got its own rate: the markup frozen on a service line is
+    // now a real expectation, so using it beats reporting the line as uncosted
+    // forever. `data_feed` has no rate card, so it falls back to the account's
+    // 0.8 — the point is that SOME rate applies, not which.
     const svc = await budget.createLine(
       { accountKey: acctA, period: `${YEAR}-02`, channel: 'data_feed', amount: 5000, status: 'committed' },
       null,
     );
-    // The critical case: treating unknown cost as zero would report 100% margin
-    // on every un-costed service line — the most flattering possible lie.
     expect(svc.lineType).toBe('service');
-    expect(svc.effectiveCost).toBeNull();
-    expect(svc.revenue).toBeNull();
-    expect(svc.margin).toBeNull();
+    expect(svc.effectiveCost).toBeCloseTo(5000 * svc.markupSnapshot, 2);
+    expect(svc.revenue).toBeCloseTo(5000 * (1 - svc.markupSnapshot), 2);
+  });
+
+  it('leaves an UNCLASSIFIED line uncosted no matter what rate is stamped on it', async () => {
+    // The one type that must stay null. A rate is meaningless until someone
+    // says what kind of money this is, and treating unknown cost as zero would
+    // report 100% margin — the most flattering possible lie.
+    const line = await budget.createLine(
+      { accountKey: acctA, period: `${YEAR}-02`, channel: 'other', amount: 5000, status: 'committed' },
+      null,
+    );
+    expect(line.lineType).toBe('unclassified');
+    expect(line.markupSnapshot).toBeGreaterThan(0);
+    expect(line.effectiveCost).toBeNull();
+    expect(line.revenue).toBeNull();
+    expect(line.margin).toBeNull();
   });
 
   it('uses an entered cost in preference to any derivation', async () => {
@@ -1351,8 +1461,10 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
       [
         { accountKey: acctA, period: `${YEAR}-04`, channel: 'meta', amount: 10_000, markup: 0.8, status: 'committed' },
         { accountKey: acctA, period: `${YEAR}-04`, channel: 'contribution', amount: 5_000, status: 'committed' },
-        { accountKey: acctA, period: `${YEAR}-04`, channel: 'data_feed', amount: 3_000, status: 'committed' },
+        { accountKey: acctA, period: `${YEAR}-04`, channel: 'data_feed', amount: 3_000, markup: 0.6, status: 'committed' },
         { accountKey: acctA, period: `${YEAR}-04`, channel: 'data_feed', amount: 1_000, cost: 400, status: 'committed' },
+        // Only an unclassified line can't be costed now.
+        { accountKey: acctA, period: `${YEAR}-04`, channel: 'other', amount: 2_000, status: 'committed' },
       ],
       null,
     );
@@ -1366,14 +1478,18 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     expect(byType.fee!.amount).toBe(5_000);
     expect(byType.fee!.revenue).toBe(5_000);
 
+    // Both service lines cost out: one from its rate, one from its invoice.
+    expect(byType.service!.amount).toBe(4_000);
+    expect(byType.service!.costKnown).toBe(true);
+    expect(byType.service!.revenue).toBeCloseTo(3_000 * 0.4 + 600, 2);
+
     // One un-costed line makes the whole type's margin a guess — reported as
     // such rather than quietly showing the costed subset as if it were all.
-    expect(byType.service!.amount).toBe(4_000);
-    expect(byType.service!.costKnown).toBe(false);
-    expect(s.uncostedAmount).toBe(3_000);
+    expect(byType.unclassified!.costKnown).toBe(false);
+    expect(s.uncostedAmount).toBe(2_000);
 
     // Known revenue excludes the type it can't compute.
-    expect(s.knownRevenue).toBeCloseTo(7000, 2);
+    expect(s.knownRevenue).toBeCloseTo(2000 + 5000 + 1800, 2);
   });
 
   it('re-derives line type when an allocation lands on a different channel', async () => {

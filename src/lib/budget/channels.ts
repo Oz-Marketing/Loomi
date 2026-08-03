@@ -57,6 +57,51 @@ export type PacerPlatform = 'meta' | 'google';
  */
 export type BudgetLineType = 'media' | 'fee' | 'service' | 'production' | 'unclassified';
 
+/**
+ * How the agency prices a kind of work. This is the MARGIN axis, and it is
+ * deliberately separate from `category`, which is display grouping.
+ *
+ * They diverge in practice and both are right: KSL shows under Digital in the
+ * hub because that's where a rep looks for it, but it bills at the Mass Media
+ * rate. Email and SMS show under Digital and bill as Development. Collapsing
+ * the two would force one of those to be wrong.
+ *
+ * The rate per category is CONFIGURABLE (Settings → Markup), not hardcoded —
+ * the values here are only the seed. A rate that lives in code can't be
+ * corrected without a deploy, and this is a number the finance side owns.
+ */
+export type BillingCategory =
+  | 'digital'
+  | 'mass_media'
+  | 'pr'
+  | 'swag'
+  | 'print_event'
+  | 'production'
+  | 'development';
+
+export const BILLING_CATEGORIES: {
+  key: BillingCategory;
+  label: string;
+  /** Seed gross→spend factor. 0.77 = the agency keeps 23%. */
+  defaultMarkup: number;
+}[] = [
+  { key: 'digital', label: 'Digital', defaultMarkup: 0.77 },
+  { key: 'mass_media', label: 'Mass Media', defaultMarkup: 0.85 },
+  { key: 'pr', label: 'PR', defaultMarkup: 0.8 },
+  { key: 'swag', label: 'Swag', defaultMarkup: 0.7 },
+  { key: 'print_event', label: 'Print, Xtreme & Event', defaultMarkup: 0.8 },
+  { key: 'production', label: 'Production', defaultMarkup: 0.8 },
+  { key: 'development', label: 'Development', defaultMarkup: 0.8 },
+];
+
+export const BILLING_CATEGORY_LABEL: Record<string, string> = Object.fromEntries(
+  BILLING_CATEGORIES.map((c) => [c.key, c.label]),
+);
+
+export function isBillingCategory(v: unknown): v is BillingCategory {
+  return typeof v === 'string' && BILLING_CATEGORIES.some((c) => c.key === v);
+}
+
 export type BudgetChannelCategory =
   | 'Digital'
   | 'Traditional'
@@ -85,32 +130,39 @@ export interface BudgetChannel {
   intake?: boolean;
   /** Default line type for money on this channel. Overridable per line. */
   lineType: BudgetLineType;
+  /**
+   * Which rate card this channel bills at. Absent = no rate of its own; it
+   * falls back to the account override and then the agency default, which is
+   * exactly what every channel did before rate cards existed, so an unassigned
+   * channel never changes behaviour by being unassigned.
+   */
+  billing?: BillingCategory;
 }
 
 export const BUDGET_CHANNELS: readonly BudgetChannel[] = [
   // ── Digital ──
-  { key: 'meta', label: 'Meta', category: 'Digital', ozIds: [1], pacer: 'meta', intake: true, lineType: 'media' },
-  { key: 'google', label: 'Google', category: 'Digital', ozIds: [2], pacer: 'google', intake: true, lineType: 'media' },
-  { key: 'youtube', label: 'YouTube', category: 'Digital', ozIds: [6], pacer: 'google', intake: true, lineType: 'media' },
+  { key: 'meta', label: 'Meta', category: 'Digital', ozIds: [1], pacer: 'meta', intake: true, lineType: 'media', billing: 'digital' },
+  { key: 'google', label: 'Google', category: 'Digital', ozIds: [2], pacer: 'google', intake: true, lineType: 'media', billing: 'digital' },
+  { key: 'youtube', label: 'YouTube', category: 'Digital', ozIds: [6], pacer: 'google', intake: true, lineType: 'media', billing: 'digital' },
   { key: 'tiktok', label: 'TikTok', category: 'Digital', ozIds: [3], intake: true, lineType: 'media' },
-  { key: 'ksl', label: 'KSL', category: 'Digital', ozIds: [4], intake: true, lineType: 'media' },
+  { key: 'ksl', label: 'KSL', category: 'Digital', ozIds: [4], intake: true, lineType: 'media', billing: 'mass_media' },
   { key: 'seo', label: 'SEO', category: 'Digital', ozIds: [5], intake: true, lineType: 'service' },
-  { key: 'email', label: 'Email', category: 'Digital', ozIds: [7], intake: true, lineType: 'service' },
-  { key: 'sms', label: 'Text / SMS', category: 'Digital', ozIds: [33], intake: true, lineType: 'service' },
-  { key: 'ott', label: 'CTV / OTT', category: 'Digital', ozIds: [9], intake: true, lineType: 'media' },
+  { key: 'email', label: 'Email', category: 'Digital', ozIds: [7], intake: true, lineType: 'service', billing: 'development' },
+  { key: 'sms', label: 'Text / SMS', category: 'Digital', ozIds: [33], intake: true, lineType: 'service', billing: 'development' },
+  { key: 'ott', label: 'CTV / OTT', category: 'Digital', ozIds: [9], intake: true, lineType: 'media', billing: 'digital' },
   { key: 'organic_social', label: 'Organic Social', category: 'Digital', ozIds: [37], intake: true, lineType: 'service' },
   { key: 'conquest', label: 'Conquest', category: 'Digital', ozIds: [39], lineType: 'media' },
 
   // ── Traditional ──
-  { key: 'tv', label: 'TV', category: 'Traditional', ozIds: [8], intake: true, lineType: 'media' },
-  { key: 'radio', label: 'Radio', category: 'Traditional', ozIds: [10], intake: true, lineType: 'media' },
-  { key: 'billboard', label: 'Billboard', category: 'Traditional', ozIds: [11], intake: true, lineType: 'media' },
+  { key: 'tv', label: 'TV', category: 'Traditional', ozIds: [8], intake: true, lineType: 'media', billing: 'mass_media' },
+  { key: 'radio', label: 'Radio', category: 'Traditional', ozIds: [10], intake: true, lineType: 'media', billing: 'mass_media' },
+  { key: 'billboard', label: 'Billboard', category: 'Traditional', ozIds: [11], intake: true, lineType: 'media', billing: 'mass_media' },
   { key: 'transit_billboard', label: 'Transit Billboard', category: 'Traditional', ozIds: [35], intake: true, lineType: 'media' },
-  { key: 'print', label: 'Print / Mailer', category: 'Traditional', ozIds: [43], intake: true, lineType: 'media' },
+  { key: 'print', label: 'Print / Mailer', category: 'Traditional', ozIds: [43], intake: true, lineType: 'media', billing: 'print_event' },
   { key: 'edd', label: 'EDDM', category: 'Traditional', ozIds: [13], intake: true, lineType: 'media' },
 
   // ── Production ──
-  { key: 'production', label: 'Production', category: 'Production', ozIds: [27], intake: true, lineType: 'production' },
+  { key: 'production', label: 'Production', category: 'Production', ozIds: [27], intake: true, lineType: 'production', billing: 'production' },
 
   // ── Services ──
   { key: 'data_feed', label: 'Data Feed', category: 'Services', ozIds: [16], lineType: 'service' },
@@ -119,7 +171,7 @@ export const BUDGET_CHANNELS: readonly BudgetChannel[] = [
   { key: 'database', label: 'Database', category: 'Services', ozIds: [12], lineType: 'service' },
   { key: 'reputation', label: 'Reputation Management', category: 'Services', ozIds: [20], lineType: 'service' },
   { key: 'chat', label: 'Chat', category: 'Services', ozIds: [17], lineType: 'service' },
-  { key: 'development', label: 'Development', category: 'Services', ozIds: [31], lineType: 'service' },
+  { key: 'development', label: 'Development', category: 'Services', ozIds: [31], lineType: 'service', billing: 'development' },
   { key: 'maintenance', label: 'Maintenance', category: 'Services', ozIds: [32], lineType: 'service' },
   { key: 'marketing_analytics', label: 'Marketing & Analytics', category: 'Services', ozIds: [44], lineType: 'service' },
 
@@ -131,7 +183,7 @@ export const BUDGET_CHANNELS: readonly BudgetChannel[] = [
   { key: 'contribution', label: 'Contribution', category: 'Fees', ozIds: [28], lineType: 'fee' },
 
   // ── Other ──
-  { key: 'pr', label: 'PR', category: 'Other', ozIds: [41], intake: true, lineType: 'service' },
+  { key: 'pr', label: 'PR', category: 'Other', ozIds: [41], intake: true, lineType: 'service', billing: 'pr' },
   { key: 'sponsorship', label: 'Sponsorship', category: 'Other', ozIds: [36], intake: true, lineType: 'unclassified' },
   { key: 'referral', label: 'Referral', category: 'Other', ozIds: [21], lineType: 'unclassified' },
   { key: 'yag', label: 'YAG', category: 'Other', ozIds: [22], lineType: 'unclassified' },
@@ -142,6 +194,33 @@ export const BUDGET_CHANNELS: readonly BudgetChannel[] = [
   { key: 'auxiliary', label: 'Auxiliary', category: 'Other', ozIds: [38], lineType: 'unclassified' },
   { key: 'new_clients', label: 'New Clients', category: 'Other', ozIds: [42], lineType: 'unclassified' },
   { key: 'other', label: 'Other', category: 'Other', ozIds: [34], lineType: 'unclassified' },
+
+  // ── Loomi-only channels ──
+  // No `ozIds`: these are line items the agency bills for that Oz Reports never
+  // had a channel for, so they can only be entered here. Grouped by the rate
+  // card they bill at rather than by where they'd sit in the old taxonomy.
+  { key: 'shipping', label: 'Shipping', category: 'Other', ozIds: [], intake: true, lineType: 'service', billing: 'mass_media' },
+
+  { key: 'dashboard_post', label: 'Dashboard Post', category: 'Other', ozIds: [], intake: true, lineType: 'media', billing: 'pr' },
+  { key: 'brandview_article', label: 'Brandview Article', category: 'Other', ozIds: [], intake: true, lineType: 'media', billing: 'pr' },
+  { key: 'scripts', label: 'Scripts', category: 'Production', ozIds: [], intake: true, lineType: 'production', billing: 'pr' },
+
+  { key: 'swag', label: 'Swag', category: 'Other', ozIds: [], intake: true, lineType: 'service', billing: 'swag' },
+  { key: 'sunglasses', label: 'Sunglasses', category: 'Other', ozIds: [], intake: true, lineType: 'service', billing: 'swag' },
+  { key: 'shirts', label: 'Shirts', category: 'Other', ozIds: [], intake: true, lineType: 'service', billing: 'swag' },
+  { key: 'candy', label: 'Candy', category: 'Other', ozIds: [], intake: true, lineType: 'service', billing: 'swag' },
+  { key: 'toys', label: 'Toys', category: 'Other', ozIds: [], intake: true, lineType: 'service', billing: 'swag' },
+  { key: 'coozie', label: 'Coozie', category: 'Other', ozIds: [], intake: true, lineType: 'service', billing: 'swag' },
+
+  { key: 'flyers', label: 'Flyers', category: 'Traditional', ozIds: [], intake: true, lineType: 'production', billing: 'print_event' },
+  { key: 'posters', label: 'Posters', category: 'Traditional', ozIds: [], intake: true, lineType: 'production', billing: 'print_event' },
+  { key: 'postage', label: 'Postage', category: 'Traditional', ozIds: [], intake: true, lineType: 'service', billing: 'print_event' },
+
+  { key: 'videos', label: 'Videos', category: 'Production', ozIds: [], intake: true, lineType: 'production', billing: 'production' },
+  { key: 'content_management', label: 'Content Management', category: 'Production', ozIds: [], intake: true, lineType: 'production', billing: 'production' },
+  { key: 'editing', label: 'Editing', category: 'Production', ozIds: [], intake: true, lineType: 'production', billing: 'production' },
+
+  { key: 'landing_page', label: 'Landing Page', category: 'Digital', ozIds: [], intake: true, lineType: 'service', billing: 'development' },
 ] as const;
 
 const BY_KEY = new Map(BUDGET_CHANNELS.map((c) => [c.key, c]));
@@ -195,6 +274,16 @@ export function channelFromOzId(ozId: number | null | undefined): string | null 
   return BY_OZ_ID.get(ozId) ?? null;
 }
 
+/** The rate card a channel bills at, or null when it has none of its own. */
+export function channelBillingCategory(key: string | null | undefined): BillingCategory | null {
+  return budgetChannel(key)?.billing ?? null;
+}
+
+/** Channels with no rate card — they fall back to the account/agency default. */
+export function channelsWithoutBilling(): BudgetChannel[] {
+  return BUDGET_CHANNELS.filter((c) => !c.billing);
+}
+
 /** The line type money on this channel defaults to. */
 export function channelLineType(key: string | null | undefined): BudgetLineType {
   return budgetChannel(key)?.lineType ?? 'unclassified';
@@ -206,7 +295,7 @@ export const LINE_TYPES: { key: BudgetLineType; label: string; blurb: string }[]
   { key: 'service', label: 'Services', blurb: 'Resold or retained — enter the vendor cost' },
   { key: 'fee', label: 'Fees', blurb: 'Agency revenue, no external cost' },
   { key: 'production', label: 'Production', blurb: 'Job-costed creative' },
-  { key: 'unclassified', label: 'Needs categorising', blurb: 'No line type assigned yet' },
+  { key: 'unclassified', label: 'Needs categorizing', blurb: 'No line type assigned yet' },
 ];
 
 export const LINE_TYPE_LABEL: Record<string, string> = Object.fromEntries(

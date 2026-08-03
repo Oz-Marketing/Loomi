@@ -296,9 +296,9 @@ taking manual control of one month doesn't affect Google or any other month.
 | [`src/lib/budget/term.ts`](../src/lib/budget/term.ts) | Agreement term arithmetic — `termMonths`, `monthsInYear`, `commitmentForYear`. Prisma-free, so the pro-rating that decides a client's target is unit-tested without a database |
 | [`src/lib/budget/flight.ts`](../src/lib/budget/flight.ts) | Flight splitting — `flightMonths`, `splitFlight`. Day-weighted, exact to the cent. Prisma-free, so the modal previews with the same code the server writes with |
 | [`src/lib/services/budget.ts`](../src/lib/services/budget.ts) | Agreement CRUD, create / allocate / return-to-pool / settle, rollups, `getPacerBudgetGoals`, fee-line generation |
-| `src/app/api/budget/*` | `summary`, `agreements`, `agreements/[id]` (+`?generate=YYYY`), `flights`, `flights/[id]`, `categorise`, `lines`, `lines/[id]`, `lines/[id]/allocate`, `lines/[id]/settle`, `settle-period` |
+| `src/app/api/budget/*` | `summary`, `agreements`, `agreements/[id]` (+`?generate=YYYY`), `flights`, `flights/[id]`, `categorize`, `lines`, `lines/[id]`, `lines/[id]/allocate`, `lines/[id]/settle`, `settle-period` |
 | [`src/lib/budget/settlement.ts`](../src/lib/budget/settlement.ts) | Attribution math — exact-summing largest-remainder split, variance, attainment |
-| `src/app/app/projects/budget` + `_components/budget-*` | The hub, agreement modal, categorise modal, add-line modal, line drawer |
+| `src/app/app/projects/budget` + `_components/budget-*` | The hub, agreement modal, categorize modal, add-line modal, line drawer |
 | `api/meta-ads-pacer/[k]/budget-managed` | GET state / POST manage-unmanage, per platform |
 | [`src/lib/projects/ui.ts`](../src/lib/projects/ui.ts) | `KIND_BUDGET_CHANNELS` — which channels each task Type can spend on |
 | `createTicket` in [`services/projects.ts`](../src/lib/services/projects.ts) | Turns a ticket's requested budget into lines |
@@ -307,7 +307,7 @@ taking manual control of one month doesn't affect Google or any other month.
 Tests: `budget/period.test.ts`, `budget/channels.test.ts`, `budget/term.test.ts`,
 `budget/flight.test.ts` and `budget/settlement.test.ts` run always (71 cases);
 `services/budget.db.test.ts` (72 cases — ledger arithmetic, agreements, flights,
-categorising, the pacer binding, settlement) self-skips unless `RUN_DB_TESTS=1`,
+categorizing, the pacer binding, settlement) self-skips unless `RUN_DB_TESTS=1`,
 matching `loomi-flows.db.test.ts`.
 
 ### Settlement as built
@@ -701,7 +701,7 @@ only possible because the math has no Prisma in it.
 
 ---
 
-## 11. Categorising what the import left untyped
+## 11. Categorizing what the import left untyped
 
 Oz Reports had no concept of what KIND of money a line was, so 1,464 imported
 lines / **$963,126** came across as `unclassified`. Until a line has a type its
@@ -737,13 +737,13 @@ That's a decision waiting on a human, not a feature waiting on a build.
   isn't derivable (service, production, unclassified), the actual cost, with the
   resulting revenue and margin shown live. Both were added in Phase A with no
   way to set either, which is why the margin figures couldn't become real.
-- **Per channel** — `categoriseChannel` types every still-untyped line on a
-  channel at once, surfaced as a "Categorise $X" action next to the uncosted
+- **Per channel** — `categorizeChannel` types every still-untyped line on a
+  channel at once, surfaced as a "Categorize $X" action next to the uncosted
   warning in the hub.
 
 ### It can only fill blanks
 
-`categoriseChannel` touches lines still marked `unclassified` and nothing else.
+`categorizeChannel` touches lines still marked `unclassified` and nothing else.
 A type someone set by hand in the drawer is a decision, and one click of a bulk
 action should never be able to undo a morning of careful per-line work. That
 also makes it idempotent and safe to re-run.
@@ -778,6 +778,82 @@ Note this is a *different* decomposition from scheduled/pool, over the same
 total: base + added = scheduled + pool = `totalCommitted`. They answer different
 questions (what kind of budget is it, versus has it been placed yet), which is
 why they're two rows rather than one bar.
+
+---
+
+## 12. Rate cards
+
+Until this existed the agency had ONE markup and it was Digital's. Every radio
+buy, swag order and print run costed out at a 23% margin because 0.77 was the
+only number the system had.
+
+Each **billing category** now carries its own rate:
+
+| Category | Margin | Cost factor | Channels |
+|---|---|---|---|
+| Digital | 23% | 0.77 | Google, Meta, YouTube, CTV/OTT |
+| Mass Media | 15% | 0.85 | KSL, TV, Billboard, Radio, Shipping |
+| PR | 20% | 0.80 | Dashboard Post, Brandview Article, Scripts, PR |
+| Swag | 30% | 0.70 | Swag, Sunglasses, Shirts, Candy, Toys, Coozie |
+| Print, Xtreme & Event | 20% | 0.80 | Print/Mailer, Flyers, Posters, Postage |
+| Production | 20% | 0.80 | Videos, Content Management, Editing, Production |
+| Development | 20% | 0.80 | Email, Text/SMS, Landing Page |
+
+Rates are **configurable** in Settings → Markup, stored one `AppSetting` row per
+category. The values above are only the seed — a rate that lives in code can't
+be corrected without a deploy, and this is a number the finance side owns.
+
+### Billing category is NOT display category
+
+`BudgetChannel.billing` is a separate axis from `category`, and they diverge on
+purpose. KSL shows under **Digital** in the hub because that's where a rep looks
+for it, and bills at the **Mass Media** rate. Email and SMS show under Digital
+and bill as Development. Collapsing the two axes would force one of those to be
+wrong.
+
+### Resolution order
+
+    1. the line's explicit markup       — a one-off
+    2. the budget's override            — negotiated for this deal
+    3. the account's override           — negotiated with this client
+    4. the channel's RATE CARD          — the agency's standard price
+    5. the agency default               — everything else
+
+The rate card sits *below* the account override deliberately: an override is a
+rate somebody negotiated with a named client and should beat the standard price
+list. The trade-off worth knowing is that an account override applies to
+**everything** — set one because a client gets a better digital rate and their
+swag silently moves to that rate too. No account carries one today (0 of 36), so
+the rate cards are what actually price the book.
+
+A channel with **no** rate card falls through to the account/agency default,
+which is exactly what every channel did before rate cards existed — so an
+unassigned channel never changes behaviour by being unassigned. The Settings tab
+lists them rather than hiding them, because that fallback is the one-size-fits-
+all pricing this feature exists to replace.
+
+### Cost derivation changed with it
+
+`effectiveCost` used to apply the markup **only to media**, and that was right
+when the single rate was Digital's — applying 0.77 to a swag order would have
+invented a number. Now every category carries a real rate, so:
+
+    stored cost   → what a vendor invoiced. Always wins.
+    fee           → 0. Agency revenue, no external cost.
+    unclassified  → null. Nobody has said what this money IS, so its rate
+                    is meaningless even though one is stamped on the line.
+    otherwise     → amount × markup, the rate card for that kind of work.
+
+Service and production lines therefore cost out from their category rate instead
+of sitting uncosted forever, and an invoice still overrides the estimate the
+moment one exists.
+
+### Naming
+
+The UI says **Budget** where the model says `ClientAgreement`, and **Budgets**
+where it says agreements. The model name is unchanged: renaming it would touch
+the schema, service, four routes and ~90 tests for no user benefit. If the two
+ever need to agree, this paragraph is the record of why they don't.
 
 ---
 

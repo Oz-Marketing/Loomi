@@ -1046,10 +1046,12 @@ function ProgressBar({
 /**
  * A cell's contents: budgets first, then anything standalone.
  *
- * A budget shows as ONE row named after the budget, not as its pieces — the
- * same thing the month view leads with. Clicking it opens the panel holding
- * those pieces; a single-piece budget goes straight to the line, since a panel
- * listing one row is a step that teaches nothing.
+ * A budget shows as ONE row named after the budget, not as its pieces. The
+ * chevron peeks at what's inside without leaving the list — "what is this
+ * $3,000 going to" is a glance, not a task — while clicking the row opens the
+ * panel, which is where pieces are actually edited. A single-piece budget has
+ * no chevron and goes straight to the line; expanding to reveal one row you
+ * can already see teaches nothing.
  */
 function LineList({
   groups,
@@ -1062,6 +1064,13 @@ function LineList({
   onOpen: (id: string) => void;
   onOpenGroup: (title: string, rows: BudgetLine[]) => void;
 }) {
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (id: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
   if (groups.length === 0 && loose.length === 0) {
     return <p className="text-sm text-[var(--muted-foreground)]">No lines here.</p>;
   }
@@ -1069,28 +1078,80 @@ function LineList({
     <ul className="divide-y divide-[var(--border)]">
       {groups.map((g) => {
         const single = g.rows.length === 1;
+        const expanded = open.has(g.id);
         return (
           <li key={g.id}>
-            <button
-              type="button"
-              onClick={() => (single ? onOpen(g.rows[0]!.id) : onOpenGroup(g.name, g.rows))}
-              className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-[var(--muted)]/60"
-            >
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm text-[var(--foreground)]">{g.name}</span>
-                <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
-                  {single
-                    ? sourceLabel(g.rows[0]!.source)
-                    : `${g.rows.length} items · ${g.rows.map((r) => r.label || channelLabel(r.channel)).join(', ')}`}
+            <div className="-mx-2 flex w-[calc(100%+1rem)] items-center rounded-lg transition hover:bg-[var(--muted)]/60">
+              {/* Its own hit area, so peeking inside never opens the panel
+                  and opening the panel never collapses what you were reading. */}
+              {single ? (
+                <span className="w-7 flex-shrink-0" />
+              ) : (
+                <button
+                  type="button"
+                  aria-label={expanded ? `Hide ${g.name} items` : `Show ${g.name} items`}
+                  aria-expanded={expanded}
+                  onClick={() => toggle(g.id)}
+                  className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                >
+                  <ChevronRightIcon
+                    className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                      expanded ? 'rotate-90' : ''
+                    }`}
+                  />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => (single ? onOpen(g.rows[0]!.id) : onOpenGroup(g.name, g.rows))}
+                className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pr-2.5 text-left"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm text-[var(--foreground)]">{g.name}</span>
+                  <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
+                    {single
+                      ? sourceLabel(g.rows[0]!.source)
+                      : `${g.rows.length} items`}
+                  </span>
                 </span>
-              </span>
-              <span className="flex flex-shrink-0 items-center gap-2">
-                {single && <StatusPill status={g.rows[0]!.status} />}
-                <span className="text-sm font-medium tabular-nums text-[var(--foreground)]">
-                  {usd2(g.amount)}
+                <span className="flex flex-shrink-0 items-center gap-2">
+                  {single && <StatusPill status={g.rows[0]!.status} />}
+                  <span className="text-sm font-medium tabular-nums text-[var(--foreground)]">
+                    {usd2(g.amount)}
+                  </span>
                 </span>
-              </span>
-            </button>
+              </button>
+            </div>
+
+            {!single && (
+              <Collapse open={expanded}>
+                <ul className="ml-7 border-l border-[var(--border)] pb-1 pl-3">
+                  {g.rows.map((r) => (
+                    <li key={r.id}>
+                      <button
+                        type="button"
+                        onClick={() => onOpen(r.id)}
+                        className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition hover:bg-[var(--muted)]/60"
+                      >
+                        <ChannelIcon
+                          channel={r.channel}
+                          className="h-3.5 w-3.5 flex-shrink-0 text-[var(--muted-foreground)]"
+                        />
+                        <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--foreground)]">
+                          {r.label || channelLabel(r.channel)}
+                        </span>
+                        <span className="flex-shrink-0 text-[11px] text-[var(--muted-foreground)]">
+                          {channelLabel(r.channel)}
+                        </span>
+                        <span className="flex-shrink-0 text-[13px] tabular-nums text-[var(--foreground)]">
+                          {usd2(r.amount)}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </Collapse>
+            )}
           </li>
         );
       })}

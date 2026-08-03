@@ -1,9 +1,10 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { ChannelIcon } from '@/components/icons/channel-icon';
 import { channelLabel } from '@/lib/budget/channels';
+import { Collapse } from '@/components/ui/collapse';
 import { StatusPill } from './budget-status-pill';
 import { MONTH_ABBR, usd0, type BudgetAgreement, type BudgetLine } from './budget-shared';
 
@@ -48,6 +49,15 @@ export function BudgetMonthView({
   onOpenGroup: (title: string, lines: BudgetLine[]) => void;
 }) {
   const period = `${year}-${String(month).padStart(2, '0')}`;
+
+  /** Budgets peeked open in place. Keyed by budget so it survives a re-sort. */
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (id: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
 
   /**
    * The month's lines, grouped by the BUDGET they came from.
@@ -178,37 +188,74 @@ export function BudgetMonthView({
             // A budget with one piece has nothing to reveal — send it straight
             // to the line rather than through a panel listing one row.
             const single = group.rows.length === 1;
+            const expanded = open.has(group.id);
             return (
-              <button
+              <div
                 key={group.id}
-                type="button"
                 style={{ animationDelay: `${Math.min(gi, 8) * 25}ms` }}
-                onClick={() =>
-                  single ? onOpenLine(group.rows[0]!.id) : onOpenGroup(group.name, group.rows)
-                }
-                className="animate-fade-in-up flex w-full items-center gap-3 border-b border-[var(--border)] px-4 py-2.5 text-left transition last:border-0 hover:bg-[var(--muted)]/40"
+                className="animate-fade-in-up border-b border-[var(--border)] last:border-0"
               >
-                <ChannelIcon
-                  channel={single ? group.rows[0]!.channel : null}
-                  className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]"
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-medium text-[var(--foreground)]">
-                    {group.name}
-                  </span>
-                  <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
-                    {single
-                      ? channelLabel(group.rows[0]!.channel)
-                      : `${group.rows.length} items · ${[
-                          ...new Set(group.rows.map((r) => channelLabel(r.channel))),
-                        ].join(', ')}`}
-                  </span>
-                </span>
-                {single && <StatusPill status={group.rows[0]!.status} />}
-                <span className="w-24 text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
-                  {usd0(group.amount)}
-                </span>
-              </button>
+                <div className="flex w-full items-center transition hover:bg-[var(--muted)]/40">
+                  {/* Its own hit area. Peeking at what a budget is going
+                      towards shouldn't open the panel, and opening the panel
+                      shouldn't collapse what you were reading. */}
+                  {single ? (
+                    <span className="w-9 flex-shrink-0" />
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label={expanded ? `Hide ${group.name} items` : `Show ${group.name} items`}
+                      aria-expanded={expanded}
+                      onClick={() => toggle(group.id)}
+                      className="ml-2 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                    >
+                      <ChevronRightIcon
+                        className={`h-3.5 w-3.5 transition-transform duration-200 ${
+                          expanded ? 'rotate-90' : ''
+                        }`}
+                      />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      single ? onOpenLine(group.rows[0]!.id) : onOpenGroup(group.name, group.rows)
+                    }
+                    className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pr-4 text-left"
+                  >
+                    <ChannelIcon
+                      channel={single ? group.rows[0]!.channel : null}
+                      className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium text-[var(--foreground)]">
+                        {group.name}
+                      </span>
+                      <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
+                        {single
+                          ? channelLabel(group.rows[0]!.channel)
+                          : `${group.rows.length} items · ${[
+                              ...new Set(group.rows.map((r) => channelLabel(r.channel))),
+                            ].join(', ')}`}
+                      </span>
+                    </span>
+                    {single && <StatusPill status={group.rows[0]!.status} />}
+                    <span className="w-24 text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                      {usd0(group.amount)}
+                    </span>
+                  </button>
+                </div>
+
+                {!single && (
+                  <Collapse open={expanded}>
+                    <div className="ml-[3.25rem] border-l border-[var(--border)] pb-1.5">
+                      {group.rows.map((line) => (
+                        <PieceRow key={line.id} line={line} onOpen={onOpenLine} />
+                      ))}
+                    </div>
+                  </Collapse>
+                )}
+              </div>
             );
           })}
 

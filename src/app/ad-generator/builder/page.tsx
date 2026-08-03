@@ -88,6 +88,8 @@ import { buildLayerTree, flattenLayerTree, normalizeGroupZ, pruneEmptyGroups, ty
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon, CropIcon } from '@/components/ad-generator/builder-icons';
 import { VAlignTopIcon, VAlignMiddleIcon, VAlignBottomIcon, HAlignLeftIcon, HAlignCenterIcon, HAlignRightIcon } from '@/components/ad-generator/valign-icons';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
+import { addSizesToDoc, dedupeSizeIds, type SizeToAdd } from '@/lib/ad-generator/size-ids';
+import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVariant } from '@/lib/ad-generator/brand-logos';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
 import { type FieldSpec, type AdData, type AdSize } from '@/lib/ad-generator/types';
@@ -297,6 +299,11 @@ function isOfferElement(el: DocElement): boolean {
   return false;
 }
 
+
+/** Narrowing helper: is this element showing the account logo? */
+function isBrandLogoBinding(b: Binding | undefined): b is { kind: 'brand'; key: 'logoUrl'; variant?: LogoVariant } {
+  return b?.kind === 'brand' && b.key === 'logoUrl';
+}
 
 function bindingToSourceValue(b: Binding | undefined): string {
   if (!b || b.kind === 'static') return 'static';
@@ -1009,17 +1016,8 @@ export default function AdBuilderPage() {
   }, []);
 
   // The account's logo variants — offered in the selection panel so a designer
-  // can swap which logo a Logo element shows without leaving the canvas.
-  const brandLogos = useMemo<{ key: string; label: string; url: string }[]>(() => {
-    const l = accountData?.logos;
-    if (!l) return [];
-    return [
-      l.light && { key: 'light', label: 'Light', url: l.light },
-      l.dark && { key: 'dark', label: 'Dark', url: l.dark },
-      l.white && { key: 'white', label: 'White', url: l.white },
-      l.black && { key: 'black', label: 'Black', url: l.black },
-    ].filter((v): v is { key: string; label: string; url: string } => Boolean(v));
-  }, [accountData?.logos]);
+  // can pick WHICH logo an element bound to "Account logo" shows.
+  const brandLogos = useMemo(() => availableLogoVariants(accountData?.logos), [accountData?.logos]);
 
   // Whether the design actually uses offers — an element gated by offer type, or
   // bound to (or typing) a computed `_offer*` token. Gates the canvas-bar offer-
@@ -1051,7 +1049,9 @@ export default function AdBuilderPage() {
       ...(adData ?? {}), // ad mode: the ad's real content
       ...(effectiveFontCss ? { fontFaceCss: effectiveFontCss } : {}),
       ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
-      ...(accountData?.logos?.light ? { logoUrl: accountData.logos.light } : {}),
+      // Every logo variant, not just `light` — so an element pinned to the dark
+      // logo previews as the dark logo instead of silently falling back.
+      ...brandLogoData(accountData?.logos),
       ...(accountData?.branding?.colors?.primary ? { brandColor: accountData.branding.colors.primary } : {}),
     };
     // Preview the first offer type the design actually uses when the stored
@@ -1568,7 +1568,11 @@ export default function AdBuilderPage() {
     (el: DocElement | null | undefined): string | null => {
       if (!el?.binding) return null;
       if (el.binding.kind === 'static') return el.binding.value || null;
-      const v = previewData[el.binding.key];
+      // Match the renderer: a pinned logo variant reads its own key.
+      const key = isBrandLogoBinding(el.binding) && el.binding.variant
+        ? logoVariantDataKey(el.binding.variant)
+        : el.binding.key;
+      const v = previewData[key] || previewData[el.binding.key];
       return typeof v === 'string' && v ? v : null;
     },
     [previewData],
@@ -2402,19 +2406,25 @@ export default function AdBuilderPage() {
   }
 
   // New sizes start from the current size's layout so they're not empty.
-  function addSize(label: string, width: number, height: number) {
-    const base = `${width}x${height}`;
-    let id = base;
-    let n = 2;
-    while (doc.sizes.some((s) => s.id === id)) id = `${base}-${n++}`;
-    const src = doc.layouts[sizeId] ?? {};
-    setDoc((prev) => ({
-      ...prev,
-      sizes: [...prev.sizes, { id, label: `${label} ${width}×${height}`, width, height }],
-      layouts: { ...prev.layouts, [id]: structuredClone(src) },
-    }));
-    setSizeId(id);
+  //
+  // Ids are assigned inside the updater, against `prev.sizes`. Reading `doc.sizes`
+  // from the render closure instead meant a multi-size add — every call in one
+  // tick, all seeing the same pre-batch list — handed the catalog's three
+  // 1080×1920 entries (Facebook Story, Instagram Story, TikTok) the SAME id, and
+  // `doc.layouts` is keyed by that id.
+  // One call per batch — so this computes the whole result up front rather than
+  // folding size-by-size through state that hasn't landed yet.
+  function addSizes(sizes: SizeToAdd[]) {
+    if (!sizes.length) return;
+    const { doc: next, addedIds } = addSizesToDoc(doc, sizes, sizeId);
+    setDoc(next);
+    const lastId = addedIds[addedIds.length - 1];
+    if (lastId) setSizeId(lastId);
     setAddSizeOpen(false);
+  }
+
+  function addSize(label: string, width: number, height: number) {
+    addSizes([{ label, width, height }]);
   }
 
   // Create a NEW size in the shared library (anyone can), then add it here.
@@ -2571,12 +2581,27 @@ export default function AdBuilderPage() {
     }
   }
 
+  /** Every doc that arrives from the server goes through here: own the copy, and
+   *  repair colliding size ids so a doc saved before ids were assigned batch-wide
+   *  is editable (its pager could otherwise never leave the first of the twins).
+   *
+   *  Deterministic, so it produces the same ids on every load and needs no save to
+   *  take effect; saving anything else persists it. The repaired doc is what the
+   *  save baseline is taken from, so this never shows up as an unsaved edit. */
+  function hydrateDoc(incoming: TemplateDoc): TemplateDoc {
+    const { doc: fixed, changed } = dedupeSizeIds(structuredClone(incoming));
+    if (changed) {
+      toast.info('Some of these sizes were sharing one layout. They now have their own.');
+    }
+    return fixed;
+  }
+
   function loadTemplate(t: SavedTemplate) {
     if (!t.doc) {
       toast.error('That template could not be read');
       return;
     }
-    const loaded = structuredClone(t.doc);
+    const loaded = hydrateDoc(t.doc);
     const st = t.status === 'published' ? 'published' : 'draft';
     resetHistory(loaded);
     setTemplateId(t.id);
@@ -2629,6 +2654,7 @@ export default function AdBuilderPage() {
             toast.error("This ad's template can't be edited in the builder");
             return;
           }
+          d = hydrateDoc(d);
           resetHistory(d);
           setAdId(c.id);
           setAdData(c.data ?? {});
@@ -4526,7 +4552,7 @@ export default function AdBuilderPage() {
             sizeLabel={size.label}
             setSizeId={setSizeId}
             removeSize={removeSize}
-            addSize={addSize}
+            addSizes={addSizes}
             createLibrarySize={createLibrarySize}
             copyLayoutFrom={copyLayoutFrom}
             libSizes={libSizes}
@@ -5269,7 +5295,7 @@ function SelectionPanel({
   sizeW: number;
   sizeH: number;
   fontOptions: SelectOption[];
-  brandLogos: { key: string; label: string; url: string }[];
+  brandLogos: { key: LogoVariant; label: string; url: string }[];
   content: { mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly'; value: string; note?: string } | null;
   contentSources: SearchableSelectOption[];
   onContentChange: (value: string) => void;
@@ -5432,20 +5458,25 @@ function SelectionPanel({
           </PanelSection>
         )}
 
-        {/* Brand logo — swap which of the account's logo variants this Logo
-            element shows, without leaving the canvas. Picking a variant pins it;
-            "Account default" restores the brand-managed logo. */}
-        {el.type === 'logo' && brandLogos.length > 0 && (
-          <PanelSection title="Brand logo">
+        {/* Which logo — pick one of the account's variants for an element bound to
+            "Account logo". This pins the CHOICE, not the file: the template says
+            "the dark one" and every sub-account resolves its own, which a literal
+            URL couldn't do (it baked one dealer's logo into a shared template).
+            Shown for any element on the account logo, plus Logo elements pinned to
+            a static file, so those have a way back to the brand. */}
+        {brandLogos.length > 0
+          && (isBrandLogoBinding(el.binding) || (el.type === 'logo' && el.binding?.kind !== 'field')) && (
+          <PanelSection title="Which logo">
             <div className="flex flex-wrap gap-2">
               {brandLogos.map((lg) => {
-                const active = el.binding?.kind === 'static' && el.binding.value === lg.url;
+                const active = isBrandLogoBinding(el.binding) && el.binding.variant === lg.key;
                 return (
                   <button
                     key={lg.key}
                     type="button"
-                    title={lg.label}
-                    onClick={() => onEl({ binding: { kind: 'static', value: lg.url } })}
+                    title={`${lg.label} logo`}
+                    aria-pressed={active}
+                    onClick={() => onEl({ binding: { kind: 'brand', key: 'logoUrl', variant: lg.key } })}
                     className={`flex h-12 w-16 items-center justify-center overflow-hidden rounded-md border bg-[var(--muted)]/40 p-1 transition-colors ${
                       active ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]' : 'border-[var(--border)] hover:border-[var(--primary)]'
                     }`}
@@ -5456,14 +5487,33 @@ function SelectionPanel({
                 );
               })}
             </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-x-2">
+              {brandLogos.map((lg) => (
+                <span
+                  key={lg.key}
+                  className={`text-[10px] ${
+                    isBrandLogoBinding(el.binding) && el.binding.variant === lg.key
+                      ? 'font-medium text-[var(--primary)]'
+                      : 'text-[var(--muted-foreground)]'
+                  }`}
+                  style={{ width: '4rem' }}
+                >
+                  {lg.label}
+                </span>
+              ))}
+            </div>
             <button
               type="button"
               onClick={() => onEl({ binding: { kind: 'brand', key: 'logoUrl' } })}
               className={`mt-2 text-[11px] font-medium transition-colors ${
-                el.binding?.kind === 'brand' ? 'text-[var(--primary)]' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                isBrandLogoBinding(el.binding) && !el.binding.variant
+                  ? 'text-[var(--primary)]'
+                  : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
               }`}
             >
-              {el.binding?.kind === 'brand' ? '✓ Using account default' : 'Reset to account default'}
+              {isBrandLogoBinding(el.binding) && !el.binding.variant
+                ? "✓ Whichever logo the ad uses"
+                : 'Use whichever logo the ad uses'}
             </button>
           </PanelSection>
         )}
@@ -6716,7 +6766,7 @@ function SizesManager({
   sizeLabel,
   setSizeId,
   removeSize,
-  addSize,
+  addSizes,
   createLibrarySize,
   copyLayoutFrom,
   libSizes,
@@ -6737,7 +6787,7 @@ function SizesManager({
   sizeLabel: string;
   setSizeId: (id: string) => void;
   removeSize: (id: string) => void;
-  addSize: (label: string, width: number, height: number) => void;
+  addSizes: (sizes: SizeToAdd[]) => void;
   createLibrarySize: () => void;
   copyLayoutFrom: (id: string) => void;
   libSizes: { id: string; name: string; width: number; height: number }[];
@@ -6774,7 +6824,9 @@ function SizesManager({
     });
   const pickedCount = Object.keys(picked).length;
   const addPicked = () => {
-    Object.values(picked).forEach((s) => addSize(s.name, s.width, s.height));
+    // ONE call with the whole selection — adding them one by one gave same-ratio
+    // picks (the catalog's three 1080×1920 sizes) colliding ids.
+    addSizes(Object.values(picked).map((s) => ({ label: s.name, width: s.width, height: s.height })));
     setPicked({});
     setAddSizeOpen(false);
   };

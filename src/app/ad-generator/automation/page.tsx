@@ -70,6 +70,15 @@ const OFFER_TYPES = [
   { value: 'cash', label: 'Cash' },
 ] as const;
 
+const TABS = [
+  ['overview', 'Overview'],
+  ['inventory', 'Inventory'],
+  ['drafts', 'Generated drafts'],
+  ['runs', 'Run history'],
+  ['settings', 'Settings'],
+  ['dryrun', 'Dry run'],
+] as const;
+
 const STATUS_STYLE: Record<Status, { icon: typeof CheckCircleIcon; className: string; ring: string }> = {
   ok: { icon: CheckCircleIcon, className: 'text-emerald-500', ring: 'border-emerald-500/30 bg-emerald-500/5' },
   warn: { icon: ExclamationTriangleIcon, className: 'text-amber-500', ring: 'border-amber-500/30 bg-amber-500/5' },
@@ -188,6 +197,16 @@ export default function AutomationDryRunPage() {
   // Overview is the default: the day-to-day question is "is it healthy", and
   // the dry run is the diagnostic you reach for when the chain looks wrong.
   const [tab, setTab] = useState<AutomationView | 'dryrun'>('overview');
+
+  // `?tab=settings` lets the things that point here ("needs a template mapped")
+  // land on the tab that fixes it. Read after mount rather than in the initial
+  // state, so the server-rendered markup and the first client render agree.
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get('tab');
+    const match = TABS.find(([id]) => id === wanted);
+    if (match) setTab(match[0]);
+  }, []);
+
   // Owned here, not in the panel: the on/off switch lives in this header while
   // the settings form lives in a tab, and both need the same saved snapshot.
   const automation = useAutomation(accountKey);
@@ -301,14 +320,7 @@ export default function AutomationDryRunPage() {
 
       {/* ── view tabs ── */}
       <div className="mb-6 flex flex-wrap items-center gap-x-5 border-b border-[var(--border)]">
-        {([
-          ['overview', 'Overview'],
-          ['inventory', 'Inventory'],
-          ['drafts', 'Generated drafts'],
-          ['runs', 'Run history'],
-          ['settings', 'Settings'],
-          ['dryrun', 'Dry run'],
-        ] as const).map(([id, label]) => (
+        {TABS.map(([id, label]) => (
           <button
             key={id}
             onClick={() => setTab(id)}
@@ -325,7 +337,15 @@ export default function AutomationDryRunPage() {
 
       {tab !== 'dryrun' && <ShadowPanel accountKey={accountKey} view={tab} automation={automation} />}
 
-      <div className={tab === 'dryrun' ? 'grid gap-6 lg:grid-cols-[340px_1fr]' : 'hidden'}>
+      {/* The dry run keeps its DOM while other tabs are shown (`hidden`, not
+          unmounted) so a trace survives a detour to the other tabs. Its fields are
+          throwaway diagnostic parameters — nothing here is ever saved — so they're
+          exempt from the unsaved-changes guard, or typing a model here would leave
+          every later sub-account switch claiming there were edits to lose. */}
+      <div
+        data-unsaved-ignore="true"
+        className={tab === 'dryrun' ? 'grid gap-6 lg:grid-cols-[340px_1fr]' : 'hidden'}
+      >
         {/* ── Inputs ── */}
         <section className="glass-card h-fit rounded-2xl border border-[var(--border)] p-5">
           <h2 className="mb-4 text-xs font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">

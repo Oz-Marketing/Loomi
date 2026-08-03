@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import type { ShadowReport } from './types';
 
 /**
@@ -181,13 +182,26 @@ export function useAutomation(accountKey: string | null): Automation {
     [act, report?.enabled, form],
   );
 
+  const dirty = formKey(form) !== formKey(saved);
+
+  // Tell the navigation guard what's actually unsaved, rather than leaving it to
+  // infer it from raw DOM edits. Left to the heuristic it gets this wrong in both
+  // directions: it keeps flagging inputs whose values a save already committed
+  // (so switching sub-account prompts about edits that are safely on the server),
+  // and it never sees the Selects or the size chips, which aren't form controls.
+  const { markClean, markDirty } = useUnsavedChanges();
+  useEffect(() => {
+    if (dirty) markDirty();
+    else markClean();
+  }, [dirty, markClean, markDirty]);
+
   return {
     report,
     loading,
     busy,
     form,
     saved,
-    dirty: formKey(form) !== formKey(saved),
+    dirty,
     set: (key, value) => setForm((f) => ({ ...f, [key]: value })),
     reset: () => setForm(saved),
     reload,

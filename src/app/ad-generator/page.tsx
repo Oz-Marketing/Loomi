@@ -85,9 +85,16 @@ export default function AdGeneratorListPage() {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all');
   const [facetSel, setFacetSel] = useState<FacetSelection>({});
   const [offerWindow, setOfferWindow] = useState<OfferWindow>('all');
-  // Whether "Generate from OEM offers" is worth offering: automation has to be
-  // configured AND have a template mapped, or a run can only report zero.
-  const [automationReady, setAutomationReady] = useState(false);
+  // What's standing between this sub-account and a generate run. A run needs
+  // automation set up AND a template mapped, or it can only ever report zero —
+  // but the entry point stays visible either way and says which piece is missing.
+  // Hiding it outright sent people hunting for a menu item that wasn't there,
+  // including from the automation page's own "use New ad → Generate from OEM
+  // offers" empty state.
+  const [automationBlocker, setAutomationBlocker] = useState<'unconfigured' | 'no-template' | null>(
+    'unconfigured',
+  );
+  const automationReady = automationBlocker === null;
   const [generating, setGenerating] = useState(false);
   const [genOpen, setGenOpen] = useState(false);
   const [candidates, setCandidates] = useState<GenerateCandidate[]>([]);
@@ -173,7 +180,7 @@ export default function AdGeneratorListPage() {
   // admin-gated, and a 403 here should stay silent rather than toast.
   useEffect(() => {
     if (!accountKey || !isManager) {
-      setAutomationReady(false);
+      setAutomationBlocker('unconfigured');
       return;
     }
     let cancelled = false;
@@ -188,7 +195,9 @@ export default function AdGeneratorListPage() {
           } | null,
         ) => {
           if (cancelled) return;
-          setAutomationReady(!!d?.configured && !!d?.scope?.templateMap?.all);
+          setAutomationBlocker(
+            !d?.configured ? 'unconfigured' : !d.scope?.templateMap?.all ? 'no-template' : null,
+          );
           setMaxAdsPerRun(d?.scope?.maxAdsPerRun ?? 10);
           // Only vehicles that could actually produce an ad — on the lot with at
           // least one live offer. The dialog narrows further from there.
@@ -208,7 +217,7 @@ export default function AdGeneratorListPage() {
         },
       )
       .catch(() => {
-        if (!cancelled) setAutomationReady(false);
+        if (!cancelled) setAutomationBlocker('unconfigured');
       });
     return () => {
       cancelled = true;
@@ -600,29 +609,45 @@ export default function AdGeneratorListPage() {
                   </button>
                   {/* Generating from the OEM feed is a way of making ads, so it
                       belongs with the other two rather than on the automation
-                      dashboard. Hidden until automation is set up — without a
-                      template mapped it would only ever report "0 generated". */}
-                  {automationReady && (
-                    <>
-                      <div className="my-1 border-t border-[var(--border)]" />
-                      <button
-                        type="button"
-                        disabled={generating || !accountKey}
-                        onClick={() => {
-                          setNewOpen(false);
-                          setGenOpen(true);
-                        }}
-                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50"
-                      >
-                        <BoltIcon className={`w-4 h-4 flex-shrink-0 ${generating ? 'animate-pulse' : ''}`} />
-                        <span>
-                          Generate from OEM offers
-                          <span className="block text-[11px] text-[var(--muted-foreground)]">
-                            Pick the models and offer types, then build drafts.
-                          </span>
+                      dashboard. A run needs automation set up with a template
+                      mapped, or it can only ever report "0 generated" — but the
+                      entry point stays put and routes to the missing setup instead
+                      of vanishing, which just looked like the feature was absent. */}
+                  <div className="my-1 border-t border-[var(--border)]" />
+                  {automationReady ? (
+                    <button
+                      type="button"
+                      disabled={generating || !accountKey}
+                      onClick={() => {
+                        setNewOpen(false);
+                        setGenOpen(true);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors disabled:opacity-50"
+                    >
+                      <BoltIcon className={`w-4 h-4 flex-shrink-0 ${generating ? 'animate-pulse' : ''}`} />
+                      <span>
+                        Generate from OEM offers
+                        <span className="block text-[11px] text-[var(--muted-foreground)]">
+                          Pick the models and offer types, then build drafts.
                         </span>
-                      </button>
-                    </>
+                      </span>
+                    </button>
+                  ) : (
+                    <Link
+                      href={`/ad-generator/automation${accountKey ? `?account=${encodeURIComponent(accountKey)}` : ''}`}
+                      onClick={() => setNewOpen(false)}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] transition-colors"
+                    >
+                      <BoltIcon className="w-4 h-4 flex-shrink-0" />
+                      <span>
+                        Generate from OEM offers
+                        <span className="block text-[11px] text-[var(--muted-foreground)]">
+                          {automationBlocker === 'no-template'
+                            ? 'Needs a template mapped — open automation settings.'
+                            : 'Set up ad automation for this sub-account first.'}
+                        </span>
+                      </span>
+                    </Link>
                   )}
                 </div>
               )}

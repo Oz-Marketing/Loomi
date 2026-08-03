@@ -1,5 +1,6 @@
 import type { AdData, AdSize } from './types';
 import type { TemplateDoc, DocElement, DocLayoutBox, Binding, GradientFill } from './doc-types';
+import { logoVariantDataKey } from './brand-logos';
 import { cssSafeFamily } from './fonts';
 
 /**
@@ -26,6 +27,13 @@ function resolveBinding(b: Binding | undefined, data: AdData): string {
     case 'field':
       return data[b.key] ?? '';
     case 'brand':
+      // A pinned logo variant, falling back to whichever logo the ad is using —
+      // an account with no `dark` file on record still gets a logo rather than a
+      // hole. `brandLogoData` normally fills every variant key for exactly this
+      // reason; the fallback covers data assembled without it.
+      if (b.key === 'logoUrl' && b.variant) {
+        return data[logoVariantDataKey(b.variant)] || data.logoUrl || '';
+      }
       return data[b.key] ?? '';
   }
 }

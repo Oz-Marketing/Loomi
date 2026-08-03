@@ -29,6 +29,7 @@ import { MultiSelect } from '@/components/ui/multi-select';
 import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
+import { availableLogoVariants, brandLogoData, isLogoVariant } from '@/lib/ad-generator/brand-logos';
 import { availableCustomFonts, buildFontFaceCssFromUrls, usedFontFamilies } from '@/lib/ad-generator/fonts';
 import { googleFontsCssUrl, usedGoogleFontFamilies } from '@/lib/ad-generator/google-fonts';
 import { Select, type SelectOption } from '@/components/select';
@@ -41,12 +42,6 @@ import { VehicleColorPicker } from '@/components/ad-generator/client-form/vehicl
 const PREVIEW_W = 460;
 const PREVIEW_H = 560;
 
-const LOGO_VARIANTS = [
-  { key: 'light', label: 'Light' },
-  { key: 'dark', label: 'Dark' },
-  { key: 'white', label: 'White' },
-  { key: 'black', label: 'Black' },
-] as const;
 const COLOR_KEYS = [
   { key: 'primary', label: 'Primary' },
   { key: 'secondary', label: 'Secondary' },
@@ -161,13 +156,7 @@ export default function AdGeneratorPage() {
 
   // ── Branding from the active account ──
   const logos = accountData?.logos;
-  const logoVariants = useMemo(
-    () =>
-      LOGO_VARIANTS.map((v) => ({ key: v.key as string, label: v.label, url: logos?.[v.key] })).filter(
-        (v) => !!v.url,
-      ) as { key: string; label: string; url: string }[],
-    [logos],
-  );
+  const logoVariants = useMemo(() => availableLogoVariants(logos), [logos]);
   const colors = accountData?.branding?.colors;
   const colorSwatches = useMemo(
     () =>
@@ -272,7 +261,10 @@ export default function AdGeneratorPage() {
   const brandingData: AdData = useMemo(
     () => ({
       ...(accountData?.dealer ? { dealerName: accountData.dealer } : {}),
-      ...(logoUrl ? { logoUrl } : {}),
+      // The picked logo is this ad's default; every variant also rides along so a
+      // template element pinned to a specific one (a logo sitting on a dark panel,
+      // say) keeps rendering that one rather than following this pick.
+      ...brandLogoData(accountData?.logos, isLogoVariant(logoKey) ? logoKey : null),
       ...(brandColor ? { brandColor } : {}),
       // Always embed ALL account custom fonts so per-element brand fonts render
       // (not just a doc-level pick); a chosen brand font sets `fontFamily` too.

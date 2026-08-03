@@ -1,3 +1,4 @@
+import type { LogoVariant } from './brand-logos';
 import type { AdData, AdSize, FieldSpec } from './types';
 
 /**
@@ -14,7 +15,11 @@ import type { AdData, AdSize, FieldSpec } from './types';
 /** Where an element's value comes from. */
 export type Binding =
   | { kind: 'field'; key: string } // a user-filled field → data[key]
-  | { kind: 'brand'; key: 'dealerName' | 'logoUrl' | 'brandColor' } // from the account
+  // From the account. `variant` applies to `logoUrl` only: it pins WHICH of the
+  // account's logos this element shows (so a logo on a dark panel can ask for
+  // the light-on-dark file), and each account still resolves its own. Absent =
+  // whichever logo the ad is using.
+  | { kind: 'brand'; key: 'dealerName' | 'logoUrl' | 'brandColor'; variant?: LogoVariant }
   | { kind: 'static'; value: string }; // a literal baked into the template
 
 export type DocElementType = 'text' | 'image' | 'logo' | 'shape' | 'background';

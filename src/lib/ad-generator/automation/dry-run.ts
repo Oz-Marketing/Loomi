@@ -4,6 +4,7 @@ import { evoxConfigured } from '@/lib/integrations/evox';
 import { resolveJellybean } from '@/lib/integrations/evox-jellybean';
 import { incentiveToFieldPatch } from '../incentive-apply';
 import { resolveDisclaimerText } from '../disclaimer-resolve';
+import { brandLogoData } from '../brand-logos';
 import { parseOemRule, type OemOfferRule } from '../compliance';
 import { loadActiveCoopPack } from '../coop-pack-store';
 import { splitCoopPack, type CoopRulePack } from '../coop-rules';
@@ -268,7 +269,7 @@ export async function dryRunOneVehicle(input: DryRunInput): Promise<DryRunResult
     ...data,
     dealerName: account.dealer,
     brandColor: branding?.colors?.primary ?? '',
-    logoUrl: logos?.light ?? logos?.dark ?? '',
+    ...brandLogoData(logos),
   };
 
   // ── 6. Vehicle image ──

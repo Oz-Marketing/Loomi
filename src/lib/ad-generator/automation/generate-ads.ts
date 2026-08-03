@@ -3,6 +3,7 @@ import { evoxConfigured } from '@/lib/integrations/evox';
 import { resolveJellybean } from '@/lib/integrations/evox-jellybean';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
 import { createNotification } from '@/lib/notifications/service';
+import { brandLogoData } from '../brand-logos';
 import { applyOemDefaults, parseOemRule, requiredFieldsFor, type OemOfferRule } from '../compliance';
 import { loadActiveCoopPack } from '../coop-pack-store';
 import type { CoopRulePack } from '../coop-rules';
@@ -400,7 +401,9 @@ export async function generateForAccount(
     });
     data.dealerName = account?.dealer ?? '';
     data.brandColor = branding?.colors?.primary ?? '';
-    data.logoUrl = logos?.light ?? logos?.dark ?? '';
+    // Every logo variant, so a template element pinned to one (e.g. the logo on a
+    // dark panel) renders that file instead of falling back to the default.
+    Object.assign(data, brandLogoData(logos));
 
     // A specific unit, so makes whose rules demand a VIN can finally be automated.
     const oemRule = oemRules.get(g.make) ?? null;

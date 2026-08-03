@@ -551,6 +551,105 @@ describe.skipIf(!RUN)('budget ledger — DB integration', () => {
     expect(all.find((a) => a.id !== first.id)!.booked).toBe(0);
   });
 
+  // ── Standing vs named budgets ──
+
+  it('names an unnamed budget\'s lines after their channel', async () => {
+    // No name means this IS the standing budget, so "Meta Base" is what the
+    // line is. It used to inherit the budget's name, which stamped the same
+    // string on twelve months of every channel.
+    const a = await budget.createAgreement(
+      {
+        accountKey: acctA,
+        name: '',
+        startDate: `${YEAR}-01-01`,
+        endDate: `${YEAR}-12-31`,
+        fees: [
+          { channel: 'meta', monthlyAmount: 11_000 },
+          { channel: 'radio', monthlyAmount: 4_000 },
+        ],
+      },
+      null,
+    );
+    expect(a.name).toBeNull();
+
+    const lines = await budget.generateAgreementFeeLines(a.id, YEAR, null);
+    const meta = lines.find((l) => l.channel === 'meta')!;
+    const radio = lines.find((l) => l.channel === 'radio')!;
+    expect(meta.label).toBe('Meta Base');
+    // "Base" only where the pacer reads it — "Radio Base" implies a
+    // distinction radio doesn't have.
+    expect(radio.label).toBe('Radio');
+  });
+
+  it('puts an unnamed budget in base and a named one in added, on paced channels only', async () => {
+    const standing = await budget.createAgreement(
+      {
+        accountKey: acctA,
+        name: '',
+        startDate: `${YEAR}-01-01`,
+        endDate: `${YEAR}-01-31`,
+        fees: [
+          { channel: 'meta', monthlyAmount: 1000 },
+          { channel: 'radio', monthlyAmount: 500 },
+        ],
+      },
+      null,
+    );
+    const event = await budget.createAgreement(
+      {
+        accountKey: acctA,
+        name: 'Summer Sales Event',
+        startDate: `${YEAR}-01-01`,
+        endDate: `${YEAR}-01-31`,
+        fees: [
+          { channel: 'meta', monthlyAmount: 2000 },
+          { channel: 'radio', monthlyAmount: 700 },
+        ],
+      },
+      null,
+    );
+
+    const base = await budget.generateAgreementFeeLines(standing.id, YEAR, null);
+    const added = await budget.generateAgreementFeeLines(event.id, YEAR, null);
+
+    expect(base.find((l) => l.channel === 'meta')!.bucket).toBe('base');
+    expect(added.find((l) => l.channel === 'meta')!.bucket).toBe('added');
+    // Radio has no pacer to divide, so it never lands in added.
+    expect(added.find((l) => l.channel === 'radio')!.bucket).toBe('base');
+  });
+
+  it('counts base and added on the paced channels only', async () => {
+    // A radio buy padding "base" made the split describe money the pacer will
+    // never see.
+    await budget.createLines(
+      [
+        { accountKey: acctA, period: `${YEAR}-01`, channel: 'meta', amount: 10_000, status: 'committed', bucket: 'base' },
+        { accountKey: acctA, period: `${YEAR}-01`, channel: 'google', amount: 4_000, status: 'committed', bucket: 'added' },
+        { accountKey: acctA, period: `${YEAR}-01`, channel: 'radio', amount: 50_000, status: 'committed', bucket: 'base' },
+      ],
+      null,
+    );
+    const s = await budget.getAccountSummary(acctA, YEAR);
+    expect(s.baseTotal).toBe(10_000);
+    expect(s.addedTotal).toBe(4_000);
+    expect(s.totalCommitted).toBe(64_000);
+  });
+
+  it('keeps a piece\'s own name ahead of both fallbacks', async () => {
+    const a = await budget.createAgreement(
+      {
+        accountKey: acctA,
+        name: '',
+        startDate: `${YEAR}-01-01`,
+        endDate: `${YEAR}-01-31`,
+        fees: [{ channel: 'google', monthlyAmount: 1500, label: 'PMAX' }],
+      },
+      null,
+    );
+    const [line] = await budget.generateAgreementFeeLines(a.id, YEAR, null);
+    expect(line.label).toBe('PMAX');
+  });
+
   // ── Categorizing ──
 
   it('groups what needs a type by channel, biggest money first', async () => {

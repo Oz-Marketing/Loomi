@@ -159,7 +159,9 @@ function AgreementList({
               className="group flex w-full items-start justify-between gap-4 rounded-xl border border-[var(--border)] bg-[var(--muted)]/25 px-4 py-3 text-left transition hover:bg-[var(--muted)]/50"
             >
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-[var(--foreground)]">{a.name}</p>
+                <p className="truncate text-sm font-medium text-[var(--foreground)]">
+                  {budgetTitle(a)}
+                </p>
                 <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
                   {fmtDate(a.startDate)} – {fmtDate(a.endDate)} · {a.termMonths} mo
                   {a.monthlyFeeTotal > 0 && <> · {usd(a.monthlyFeeTotal)}/mo recurring</>}
@@ -228,7 +230,7 @@ function AgreementList({
                 return (
                   <div key={a.id}>
                     <div className="flex items-baseline justify-between text-[10px] text-[var(--muted-foreground)]">
-                      <span className="truncate">{a.name}</span>
+                      <span className="truncate">{budgetTitle(a)}</span>
                       <span className="tabular-nums">
                         {usd(a.booked)} of {usd(a.commitmentForYear!)}
                       </span>
@@ -303,7 +305,7 @@ function AgreementForm({
   onDone: () => void;
   canCancel: boolean;
 }) {
-  const [name, setName] = useState(agreement?.name ?? `${year} Budget`);
+  const [name, setName] = useState(agreement?.name ?? '');
   // Months, not dates. A budget runs for whole months — asking for a start and
   // end DAY made people pick 03/23–03/28 and get a one-month budget they didn't
   // mean, and the extra precision never reached the ledger anyway.
@@ -415,14 +417,33 @@ function AgreementForm({
     <>
       <div className="animate-fade-in-up min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
         <div>
-          <label className="block text-xs font-medium text-[var(--foreground)]">Name</label>
+          <label className="block text-xs font-medium text-[var(--foreground)]">
+            Name{' '}
+            <span className="font-normal text-[var(--muted-foreground)]">— optional</span>
+          </label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder={`${year} Annual Budget`}
+            placeholder="Leave blank for the standing budget"
             className="loomi-input mt-1 w-full !bg-[var(--input)]"
           />
+          {/* The blank case is the common one and its consequence is real, so
+              it's spelled out rather than left to be discovered. */}
+          <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
+            {name.trim() ? (
+              <>
+                A named budget is an occasion — an event or a push. Its items sit on top of the
+                standing budget, and on Meta and Google they pace as <strong>added</strong>.
+              </>
+            ) : (
+              <>
+                No name means this is the client&rsquo;s standing budget. Items are listed by
+                channel — <strong>Meta Base</strong>, <strong>Google Base</strong> — and on Meta and
+                Google they pace as <strong>base</strong>.
+              </>
+            )}
+          </p>
         </div>
 
         {/* One month or several. Months, not dates — the ledger only ever
@@ -850,4 +871,19 @@ function monthOptions(year: number): { value: string; label: string }[] {
     }
   }
   return out;
+}
+
+/**
+ * What to call a budget in a list.
+ *
+ * An unnamed budget is the standing spend, and "Untitled" would read as a
+ * mistake rather than a category. It's named after what it covers instead.
+ */
+function budgetTitle(a: BudgetAgreement): string {
+  const own = a.name?.trim();
+  if (own) return own;
+  const channels = [...new Set(a.fees.map((f) => channelLabel(f.channel)))];
+  if (channels.length === 0) return 'Standing budget';
+  if (channels.length <= 2) return `${channels.join(' + ')} Base`;
+  return `Standing budget · ${channels.length} channels`;
 }

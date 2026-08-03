@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react';
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { ChannelIcon } from '@/components/icons/channel-icon';
-import { channelLabel } from '@/lib/budget/channels';
+import { channelLabel, isPacedChannel } from '@/lib/budget/channels';
 import { Collapse } from '@/components/ui/collapse';
 import { StatusPill } from './budget-status-pill';
 import { MONTH_ABBR, usd0, type BudgetAgreement, type BudgetLine } from './budget-shared';
@@ -81,9 +81,17 @@ export function BudgetMonthView({
         unlinked.push(l);
         continue;
       }
-      const rows = byBudget.get(l.agreementId) ?? [];
+      // An UNNAMED budget is the client's standing spend, and "the standing
+      // budget" is not a thing anyone looks for as one row — you look for what
+      // Meta is getting. So it breaks apart by channel and each channel leads
+      // its own row, while a NAMED budget stays whole because the name is
+      // exactly what you're looking for.
+      const budget = budgets.find((b) => b.id === l.agreementId);
+      const key =
+        budget && !budget.name?.trim() ? `${l.agreementId}|${l.channel ?? ''}` : l.agreementId;
+      const rows = byBudget.get(key) ?? [];
       rows.push(l);
-      byBudget.set(l.agreementId, rows);
+      byBudget.set(key, rows);
     }
 
     const named = [...byBudget.entries()]
@@ -91,7 +99,11 @@ export function BudgetMonthView({
         id,
         // A budget can be archived while its money stays on the year, so fall
         // back to the lines' own label rather than rendering a blank row.
-        name: budgets.find((b) => b.id === id)?.name ?? rows[0]?.label ?? 'Budget',
+        name:
+          budgets.find((b) => b.id === id.split('|')[0])?.name?.trim() ||
+          channelBaseLabel(rows[0]) ||
+          rows[0]?.label ||
+          'Budget',
         rows: rows.sort((a, b) => b.amount - a.amount),
         amount: rows.reduce((t, r) => t + r.amount, 0),
       }))
@@ -326,13 +338,31 @@ function PieceRow({
           co-op
         </span>
       )}
-      <span className="hidden whitespace-nowrap text-[11px] text-[var(--muted-foreground)] sm:inline">
-        {line.bucket === 'base' ? 'Base' : 'Added'}
-      </span>
+      {/* Only where the split is real. Meta and Google feed the pacer's two
+          goals; a radio line's bucket is a column value nothing reads. */}
+      {line.channel && isPacedChannel(line.channel) && (
+        <span className="hidden whitespace-nowrap text-[11px] text-[var(--muted-foreground)] sm:inline">
+          {line.bucket === 'base' ? 'Base' : 'Added'}
+        </span>
+      )}
       <StatusPill status={line.status} />
       <span className="w-24 text-right text-sm tabular-nums text-[var(--foreground)]">
         {usd0(line.amount)}
       </span>
     </button>
   );
+}
+
+/**
+ * What an unnamed budget's channel group is called: "Meta Base", "Radio".
+ *
+ * "Base" is only appended on the paced channels, where the word means
+ * something the pacer acts on. "Radio Base" would imply a distinction radio
+ * doesn't have.
+ */
+function channelBaseLabel(line: BudgetLine | undefined): string | null {
+  if (!line?.channel) return null;
+  return isPacedChannel(line.channel)
+    ? `${channelLabel(line.channel)} Base`
+    : channelLabel(line.channel);
 }

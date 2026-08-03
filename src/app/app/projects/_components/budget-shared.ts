@@ -93,7 +93,8 @@ export type AgreementFee = {
 export type BudgetAgreement = {
   id: string;
   accountKey: string;
-  name: string;
+  /** Null when this is the client's standing budget rather than an occasion. */
+  name: string | null;
   startDate: string;
   endDate: string;
   committedAmount: number | null;

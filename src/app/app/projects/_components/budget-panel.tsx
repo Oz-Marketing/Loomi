@@ -5,7 +5,7 @@ import { TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { ChannelIcon } from '@/components/icons/channel-icon';
-import { BUDGET_CHANNELS, channelLabel } from '@/lib/budget/channels';
+import { BUDGET_CHANNELS, channelLabel, isPacedChannel } from '@/lib/budget/channels';
 import { MONTH_ABBR, monthIndexOf, usd2, type BudgetLine } from './budget-shared';
 
 /**
@@ -230,19 +230,23 @@ export function BudgetPanel({
                   </span>
                   {/* Base vs added decides which of the Ad Pacer's two goals
                       this money lands in, so it belongs next to the amount
-                      rather than behind another click. */}
-                  <div className="w-[128px]">
-                    <SearchableSelect
-                      value={line.bucket}
-                      onChange={(v) => void patch(line, { bucket: v }, 'budget source')}
-                      searchable={false}
-                      options={[
-                        { value: 'base', label: 'Base budget' },
-                        { value: 'added', label: 'Added budget' },
-                      ]}
-                      className="!bg-[var(--input)] !rounded-lg !px-2 !py-1 !text-[11px]"
-                    />
-                  </div>
+                      rather than behind another click — but ONLY on the
+                      channels the pacer reads. Offering the choice on a radio
+                      buy invites a decision that changes nothing. */}
+                  {line.channel && isPacedChannel(line.channel) && (
+                    <div className="w-[128px]">
+                      <SearchableSelect
+                        value={line.bucket}
+                        onChange={(v) => void patch(line, { bucket: v }, 'budget source')}
+                        searchable={false}
+                        options={[
+                          { value: 'base', label: 'Base budget' },
+                          { value: 'added', label: 'Added budget' },
+                        ]}
+                        className="!bg-[var(--input)] !rounded-lg !px-2 !py-1 !text-[11px]"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             );

@@ -12,6 +12,8 @@ import {
   type BudgetLineType,
   type PacerPlatform,
   isBudgetLineType,
+  isPacedChannel,
+  channelLabel,
 } from '@/lib/budget/channels';
 import { isValidPeriod as isValidPeriodPure, periodOf, resolveYear } from '@/lib/budget/period';
 import { splitFlight } from '@/lib/budget/flight';
@@ -514,7 +516,9 @@ export async function createAgreement(input: AgreementInput, userId: string | nu
   const row = await prisma.clientAgreement.create({
     data: {
       accountKey: input.accountKey,
-      name: input.name.trim() || `${startDate.getUTCFullYear()} Agreement`,
+      // No invented name. Blank means "the standing budget", which is a real
+      // answer — filling in "2026 Agreement" would erase the distinction.
+      name: input.name?.trim() || null,
       startDate,
       endDate,
       committedAmount: input.committedAmount == null ? null : decimal(input.committedAmount),
@@ -688,6 +692,44 @@ export interface CreateLineInput {
  * (added). An explicit bucket always wins — reps need somewhere to put the
  * exception, which is why this is a stored column and not a derived value.
  */
+/**
+ * What a budget's line is called.
+ *
+ * The piece's own name when it has one — that's how one item splits into
+ * "Commercial" and "Kick-off video". Then the BUDGET's name, so a line reads
+ * "Find Your Gold Sale" and you know what it belongs to. And when the budget
+ * has no name it IS the standing budget, so the line is named after its
+ * channel: "Meta Base", "Google Base".
+ */
+export function feeLineLabel(
+  feeLabel: string | null | undefined,
+  channel: string,
+  agreementName: string | null,
+): string {
+  const own = feeLabel?.trim();
+  if (own) return own;
+  const named = agreementName?.trim();
+  if (named) return named;
+  return isPacedChannel(channel) ? `${channelLabel(channel)} Base` : channelLabel(channel);
+}
+
+/**
+ * Which pacer bucket a budget's line lands in.
+ *
+ * ONLY MEANINGFUL ON THE PACED CHANNELS. Meta and Google (and YouTube, which
+ * spends out of the same Google account) are the only places the split is read
+ * — the pacer writes it into two goal fields. Radio has no such thing, so its
+ * bucket is a value the column requires and nothing consumes.
+ *
+ * An unnamed budget is the client's standing spend, which is what "base" means.
+ * A named one is an event or a push, which is what "added" means. Overridable
+ * per line in the panel, because a rule this convenient will be wrong sometimes.
+ */
+export function defaultBucketFor(channel: string, agreementName: string | null): 'base' | 'added' {
+  if (!isPacedChannel(channel)) return 'base';
+  return agreementName?.trim() ? 'added' : 'base';
+}
+
 export function defaultBucket(source: string): 'base' | 'added' {
   return source === 'retainer' ? 'base' : 'added';
 }
@@ -1402,10 +1444,15 @@ export async function getAccountSummary(
     }
     typeAgg.set(l.lineType, entry);
   }
-  const baseTotal = lines
+  // PACED CHANNELS ONLY. Base vs added is the Ad Pacer's two goal fields, and
+  // nothing outside Meta/Google/YouTube reads it — counting a radio buy as
+  // "base" padded the split with money the pacer will never see and made the
+  // percentages describe something that doesn't exist.
+  const paced = lines.filter((l) => l.channel != null && isPacedChannel(l.channel));
+  const baseTotal = paced
     .filter((l) => l.bucket === 'base')
     .reduce((sum, l) => sum + toNumber(l.amount), 0);
-  const addedTotal = lines
+  const addedTotal = paced
     .filter((l) => l.bucket !== 'base')
     .reduce((sum, l) => sum + toNumber(l.amount), 0);
 
@@ -1516,7 +1563,7 @@ export async function generateAgreementFeeLines(
 
   const inputs: CreateLineInput[] = [];
   for (const fee of agreement.fees) {
-    const label = fee.label?.trim() || agreement.name;
+    const label = feeLineLabel(fee.label, fee.channel, agreement.name);
     for (const m of months) {
       const period = periodOf(year, m);
       if (taken.has(`${fee.channel}|${period}|${label}`)) continue;
@@ -1529,12 +1576,8 @@ export async function generateAgreementFeeLines(
         source: 'retainer',
         status: 'committed',
         agreementId,
-        // The fee's own name when it has one — that's how one item gets split
-        // into "Commercial" and "Kick-off video". Otherwise the BUDGET's name,
-        // because a line that says "Find Your Gold Sale" tells you what it
-        // belongs to. It used to fall back to the literal "Managed Marketing
-        // Service", which stamped that on every line of every budget.
         label,
+        bucket: defaultBucketFor(fee.channel, agreement.name),
       });
     }
   }

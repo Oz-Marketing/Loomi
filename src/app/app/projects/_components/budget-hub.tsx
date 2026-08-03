@@ -175,6 +175,12 @@ export function BudgetHub() {
     };
   }, [summary]);
 
+  /**
+   * Everything on the paced channels. The denominator for base vs added,
+   * because that split only exists where the Ad Pacer reads it.
+   */
+  const pacedTotal = (summary?.baseTotal ?? 0) + (summary?.addedTotal ?? 0);
+
   /** Money on this account with no line type — what the triage modal fixes. */
   const untypedTotal = useMemo(
     () => summary?.byLineType.find((t) => t.lineType === 'unclassified')?.amount ?? 0,
@@ -536,7 +542,11 @@ export function BudgetHub() {
                       they land in the pacer's two separate goal fields. It was
                       computed inside the pacer sync and shown nowhere, so the
                       hub couldn't explain a number the pacer was acting on. */}
-                  {summary.totalCommitted > 0 && (
+                  {/* Percentages of the PACED money, not of the year. Base is
+                      9% of everything on this account but 100% of what the
+                      pacer sees, and the second number is the one that means
+                      something. */}
+                  {pacedTotal > 0 && (
                     <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-1 border-t border-[var(--border)] pt-2.5">
                       <span className="text-[11px] text-[var(--muted-foreground)]">
                         Base{' '}
@@ -544,7 +554,7 @@ export function BudgetHub() {
                           {usd0(summary.baseTotal)}
                         </span>
                         <span className="ml-1 opacity-60">
-                          {Math.round((summary.baseTotal / summary.totalCommitted) * 100)}%
+                          {Math.round((summary.baseTotal / pacedTotal) * 100)}%
                         </span>
                       </span>
                       <span className="text-[11px] text-[var(--muted-foreground)]">
@@ -553,8 +563,11 @@ export function BudgetHub() {
                           {usd0(summary.addedTotal)}
                         </span>
                         <span className="ml-1 opacity-60">
-                          {Math.round((summary.addedTotal / summary.totalCommitted) * 100)}%
+                          {Math.round((summary.addedTotal / pacedTotal) * 100)}%
                         </span>
+                      </span>
+                      <span className="text-[11px] text-[var(--muted-foreground)] opacity-70">
+                        of {usd0(pacedTotal)} on Meta &amp; Google
                       </span>
                     </div>
                   )}

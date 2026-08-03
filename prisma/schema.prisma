@@ -3193,8 +3193,15 @@ model ClientAgreement {
   accountKey String
   account    Account @relation(fields: [accountKey], references: [key], onDelete: Cascade)
 
-  /// Human label — "2026 Annual Agreement", "Summer Event Addendum".
-  name String
+  /// Human label — "Summer Sales Event", "Q4 Brand Push".
+  ///
+  /// OPTIONAL, and its absence is meaningful. A budget with no name is the
+  /// client's STANDING budget: the recurring per-channel spend that has nothing
+  /// to name because it isn't an occasion. Its lines are labelled from their
+  /// channel instead ("Meta Base") and, on the paced channels, default to the
+  /// pacer's base bucket. A named budget is a thing that happened — an event, a
+  /// push — and sits on top as added.
+  name String?
 
   /// The term. Inclusive of both ends, date-only (no time-of-day semantics).
   startDate DateTime @db.Date

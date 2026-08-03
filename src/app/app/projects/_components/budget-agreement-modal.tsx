@@ -36,9 +36,9 @@ export function BudgetAgreementModal({
   agreements: BudgetAgreement[];
   /** Open straight into the form — set when the chooser already asked. */
   startNew?: boolean;
-  onSave: (body: Record<string, unknown>, id: string | null) => Promise<boolean>;
+  onSave: (body: Record<string, unknown>, id: string | null) => Promise<string | null>;
   onArchive: (id: string) => Promise<boolean>;
-  onGenerate: (id: string) => Promise<void>;
+  onGenerate: (id: string, quiet?: boolean) => Promise<void>;
   onClose: () => void;
 }) {
   const [editing, setEditing] = useState<BudgetAgreement | 'new' | null>(
@@ -298,8 +298,8 @@ function AgreementForm({
   agreement: BudgetAgreement | null;
   busy: boolean;
   setBusy: (v: boolean) => void;
-  onSave: (body: Record<string, unknown>, id: string | null) => Promise<boolean>;
-  onGenerate: (id: string) => Promise<void>;
+  onSave: (body: Record<string, unknown>, id: string | null) => Promise<string | null>;
+  onGenerate: (id: string, quiet?: boolean) => Promise<void>;
   onDone: () => void;
   canCancel: boolean;
 }) {
@@ -394,12 +394,21 @@ function AgreementForm({
     }),
   });
 
-  const save = async (thenGenerate: boolean) => {
+  /**
+   * Save and lay the year out, always.
+   *
+   * Laying out used to be a separate "Save & lay out" button that only existed
+   * when EDITING — so creating a budget wrote the items and produced no lines
+   * at all, and the chart stayed empty with nothing to explain why. The items
+   * and the term already say what the lines are; generation is idempotent, so
+   * there's nothing to gain from asking.
+   */
+  const save = async () => {
     setBusy(true);
-    const ok = await onSave(body(), agreement?.id ?? null);
-    if (ok && thenGenerate && agreement?.id) await onGenerate(agreement.id);
+    const id = await onSave(body(), agreement?.id ?? null);
+    if (id) await onGenerate(id, true);
     setBusy(false);
-    if (ok) onDone();
+    if (id) onDone();
   };
 
   return (
@@ -685,28 +694,6 @@ function AgreementForm({
         </div>
       </div>
 
-      {/* Lay out the year — an action, not a field, so it gets its own block
-          rather than sitting beside Save as a peer. Only offered on an
-          agreement that already exists; there's no id to generate against
-          until the first save. */}
-      {agreement && (
-        <div className="border-t border-[var(--border)] bg-[var(--muted)]/30 px-5 py-4">
-          <p className="text-xs font-medium text-[var(--foreground)]">Lay out {year}</p>
-          <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
-            {monthlyFeeTotal === 0
-              ? 'Add a recurring fee above to enable this.'
-              : `Creates a line for each fee in each of the ${term.inYear} month${term.inYear === 1 ? '' : 's'} of ${year} this term covers, skipping any that already exist — safe to re-run.`}
-          </p>
-          <button
-            type="button"
-            disabled={!canSave || monthlyFeeTotal === 0}
-            onClick={() => void save(true)}
-            className="mt-2.5 rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-1.5 text-xs font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50"
-          >
-            Save &amp; lay out
-          </button>
-        </div>
-      )}
 
       <div className="flex justify-end gap-2 border-t border-[var(--border)] px-5 py-3.5">
         {canCancel && (
@@ -722,7 +709,7 @@ function AgreementForm({
         <button
           type="button"
           disabled={!canSave}
-          onClick={() => void save(false)}
+          onClick={() => void save()}
           className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
         >
           {busy ? 'Saving…' : agreement ? 'Save Changes' : 'Create Budget'}

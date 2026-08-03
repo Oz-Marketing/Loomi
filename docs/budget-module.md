@@ -919,6 +919,31 @@ create: the named pieces, plus the unattributed remainder as an unnamed row. So
 the item's total survives the round trip instead of shrinking to whatever
 happened to be named.
 
+### Budgets are the row; pieces are inside them
+
+A budget's items are laid out as one line per piece, so a Google buy split into
+SEM and Search is two rows in the ledger. That's correct — the pacer needs
+channel-level money — but it's the wrong thing to LEAD with. What somebody
+entered was "Some Sales Event"; the split is detail inside it.
+
+So the month view groups by `agreementId`: the budget's name is the row, its
+pieces expand underneath. A budget with one piece has no disclosure arrow —
+opening it to reveal a single identical row would be a lie about there being
+more. Money with no budget behind it (one-offs, ticket money, the Oz Reports
+import) gets its own "Not part of a budget" section rather than being folded
+into one it doesn't belong to.
+
+### No pool, no separate "committed"
+
+Both were removed. Every line is committed the moment its budget is saved, so
+"Planned" was always the same number as "Scheduled" — two cards that always
+agree teach people to read neither. The pool was a bucket that nothing landed
+in once budgets became the way money is entered.
+
+`BudgetLine` can still be pooled (null period/channel) and the service still
+computes `pool`; the hub just doesn't offer it as a place to put money. Removing
+the column would break the Oz Reports import, which has genuinely unplaced rows.
+
 ### Year and month
 
 The same money, two shapes:

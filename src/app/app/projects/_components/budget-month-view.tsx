@@ -1,11 +1,12 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { ChannelIcon } from '@/components/icons/channel-icon';
-import { LINE_TYPES, channelLabel } from '@/lib/budget/channels';
+import { channelLabel } from '@/lib/budget/channels';
+import { Collapse } from '@/components/ui/collapse';
 import { StatusPill } from './budget-status-pill';
-import { MONTH_ABBR, usd0, type BudgetLine } from './budget-shared';
+import { MONTH_ABBR, usd0, type BudgetAgreement, type BudgetLine } from './budget-shared';
 
 const MONTH_FULL = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -31,6 +32,7 @@ export function BudgetMonthView({
   year,
   month,
   lines,
+  budgets,
   onMonthChange,
   onOpenLine,
 }: {
@@ -38,25 +40,66 @@ export function BudgetMonthView({
   /** 1–12. */
   month: number;
   lines: BudgetLine[];
+  /** Used to name a group — a line only carries its budget's id. */
+  budgets: BudgetAgreement[];
   onMonthChange: (month: number) => void;
   onOpenLine: (id: string) => void;
 }) {
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const toggle = (id: string) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   const period = `${year}-${String(month).padStart(2, '0')}`;
 
-  const { sections, total, spendTarget } = useMemo(() => {
+  /**
+   * The month's lines, grouped by the BUDGET they came from.
+   *
+   * A budget's items are laid out as one line per piece, so a Google buy split
+   * into SEM and Search is two rows in the ledger — correct, because the pacer
+   * needs channel-level money. But it's the wrong thing to lead with: what
+   * someone put in was "Some Sales Event", and the split is detail inside it.
+   * So the budget is the row and its pieces are behind it.
+   *
+   * Lines with no budget — one-offs, ticket money, anything imported — are
+   * their own group at the end rather than being hidden inside a fake one.
+   */
+  const { groups, loose, total, spendTarget } = useMemo(() => {
     const inMonth = lines.filter((l) => l.period === period && l.status !== 'canceled');
-    const byType = LINE_TYPES.map((t) => ({
-      ...t,
-      rows: inMonth
-        .filter((l) => l.lineType === t.key)
-        .sort((a, b) => b.amount - a.amount),
-    })).filter((s) => s.rows.length > 0);
+    const byBudget = new Map<string, BudgetLine[]>();
+    const unlinked: BudgetLine[] = [];
+
+    for (const l of inMonth) {
+      if (!l.agreementId) {
+        unlinked.push(l);
+        continue;
+      }
+      const rows = byBudget.get(l.agreementId) ?? [];
+      rows.push(l);
+      byBudget.set(l.agreementId, rows);
+    }
+
+    const named = [...byBudget.entries()]
+      .map(([id, rows]) => ({
+        id,
+        // A budget can be archived while its money stays on the year, so fall
+        // back to the lines' own label rather than rendering a blank row.
+        name: budgets.find((b) => b.id === id)?.name ?? rows[0]?.label ?? 'Budget',
+        rows: rows.sort((a, b) => b.amount - a.amount),
+        amount: rows.reduce((t, r) => t + r.amount, 0),
+      }))
+      .sort((a, b) => b.amount - a.amount);
+
     return {
-      sections: byType,
+      groups: named,
+      loose: unlinked.sort((a, b) => b.amount - a.amount),
       total: inMonth.reduce((sum, l) => sum + l.amount, 0),
       spendTarget: inMonth.reduce((sum, l) => sum + l.spendTarget, 0),
     };
-  }, [lines, period]);
+  }, [lines, period, budgets]);
 
   /** Which months have anything, so the strip shows where the money is. */
   const monthTotals = useMemo(() => {
@@ -131,65 +174,144 @@ export function BudgetMonthView({
         </p>
       </div>
 
-      {sections.length === 0 ? (
+      {groups.length === 0 && loose.length === 0 ? (
         <p className="px-4 py-10 text-center text-sm text-[var(--muted-foreground)]">
           Nothing budgeted for {MONTH_FULL[month - 1]}.
         </p>
       ) : (
         <div>
-          {sections.map((section) => (
-            <div key={section.key}>
-              <div className="flex items-baseline justify-between border-b border-[var(--border)] bg-[var(--muted)]/25 px-4 py-1.5">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                  {section.label}
-                </span>
-                <span className="text-[11px] font-semibold tabular-nums text-[var(--muted-foreground)]">
-                  {usd0(section.rows.reduce((t, r) => t + r.amount, 0))}
-                </span>
-              </div>
-
-              {section.rows.map((line, i) => (
+          {groups.map((group, gi) => {
+            const expanded = open.has(group.id);
+            // A budget with one piece has nothing to reveal — showing a
+            // disclosure arrow that opens a single identical row is a lie
+            // about there being more.
+            const single = group.rows.length === 1;
+            return (
+              <div
+                key={group.id}
+                style={{ animationDelay: `${Math.min(gi, 8) * 25}ms` }}
+                className="animate-fade-in-up border-b border-[var(--border)] last:border-0"
+              >
                 <button
-                  key={line.id}
                   type="button"
-                  onClick={() => onOpenLine(line.id)}
-                  style={{ animationDelay: `${Math.min(i, 8) * 25}ms` }}
-                  className="animate-fade-in-up flex w-full items-center gap-3 border-b border-[var(--border)] px-4 py-2.5 text-left transition last:border-0 hover:bg-[var(--muted)]/40"
+                  onClick={() => (single ? onOpenLine(group.rows[0]!.id) : toggle(group.id))}
+                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-[var(--muted)]/40"
                 >
-                  <ChannelIcon
-                    channel={line.channel}
-                    className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]"
-                  />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm text-[var(--foreground)]">
-                      {line.label || channelLabel(line.channel)}
-                    </span>
-                    {/* The channel only when the name isn't already it —
-                        "Radio / Radio" is a row that says one thing twice. */}
-                    {line.label && line.label !== channelLabel(line.channel) && (
-                      <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
-                        {channelLabel(line.channel)}
-                      </span>
-                    )}
-                  </span>
-                  {line.isCrossAccount && (
-                    <span className="hidden whitespace-nowrap rounded-md bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)] sm:inline">
-                      co-op
-                    </span>
+                  {single ? (
+                    <ChannelIcon
+                      channel={group.rows[0]!.channel}
+                      className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]"
+                    />
+                  ) : (
+                    <ChevronRightIcon
+                      className={`h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)] transition-transform duration-200 ${
+                        expanded ? 'rotate-90' : ''
+                      }`}
+                    />
                   )}
-                  <span className="hidden whitespace-nowrap text-[11px] text-[var(--muted-foreground)] sm:inline">
-                    {line.bucket === 'base' ? 'Base' : 'Added'}
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium text-[var(--foreground)]">
+                      {group.name}
+                    </span>
+                    <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
+                      {single
+                        ? channelLabel(group.rows[0]!.channel)
+                        : `${group.rows.length} items`}
+                    </span>
                   </span>
-                  <StatusPill status={line.status} />
-                  <span className="w-24 text-right text-sm font-medium tabular-nums text-[var(--foreground)]">
-                    {usd0(line.amount)}
+                  {single && <StatusPill status={group.rows[0]!.status} />}
+                  <span className="w-24 text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                    {usd0(group.amount)}
                   </span>
                 </button>
+
+                {!single && (
+                  <Collapse open={expanded}>
+                    <div className="border-t border-[var(--border)] bg-[var(--muted)]/15 pb-1 pl-6">
+                      {group.rows.map((line) => (
+                        <PieceRow key={line.id} line={line} onOpen={onOpenLine} />
+                      ))}
+                    </div>
+                  </Collapse>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Money that isn't part of a budget — one-offs, ticket money,
+              anything imported. Its own section rather than hidden inside a
+              budget it doesn't belong to. */}
+          {loose.length > 0 && (
+            <div>
+              {groups.length > 0 && (
+                <div className="flex items-baseline justify-between border-y border-[var(--border)] bg-[var(--muted)]/25 px-4 py-1.5">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                    Not part of a budget
+                  </span>
+                  <span className="text-[11px] font-semibold tabular-nums text-[var(--muted-foreground)]">
+                    {usd0(loose.reduce((t, r) => t + r.amount, 0))}
+                  </span>
+                </div>
+              )}
+              {loose.map((line) => (
+                <div key={line.id} className="border-b border-[var(--border)] last:border-0">
+                  <PieceRow line={line} onOpen={onOpenLine} indent={false} />
+                </div>
               ))}
             </div>
-          ))}
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+/** One line inside a budget — the channel-level money the pacer actually reads. */
+function PieceRow({
+  line,
+  onOpen,
+  indent = true,
+}: {
+  line: BudgetLine;
+  onOpen: (id: string) => void;
+  indent?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(line.id)}
+      className={`flex w-full items-center gap-3 py-2 pr-4 text-left transition hover:bg-[var(--muted)]/40 ${
+        indent ? 'pl-3' : 'px-4'
+      }`}
+    >
+      <ChannelIcon
+        channel={line.channel}
+        className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]"
+      />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm text-[var(--foreground)]">
+          {line.label || channelLabel(line.channel)}
+        </span>
+        {/* The channel only when the name isn't already it — "Radio / Radio"
+            is a row that says one thing twice. */}
+        {line.label && line.label !== channelLabel(line.channel) && (
+          <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
+            {channelLabel(line.channel)}
+          </span>
+        )}
+      </span>
+      {line.isCrossAccount && (
+        <span className="hidden whitespace-nowrap rounded-md bg-[var(--muted)] px-1.5 py-0.5 text-[10px] text-[var(--muted-foreground)] sm:inline">
+          co-op
+        </span>
+      )}
+      <span className="hidden whitespace-nowrap text-[11px] text-[var(--muted-foreground)] sm:inline">
+        {line.bucket === 'base' ? 'Base' : 'Added'}
+      </span>
+      <StatusPill status={line.status} />
+      <span className="w-24 text-right text-sm tabular-nums text-[var(--foreground)]">
+        {usd0(line.amount)}
+      </span>
+    </button>
   );
 }

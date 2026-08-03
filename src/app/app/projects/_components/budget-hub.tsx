@@ -23,9 +23,7 @@ import { jsonFetcher } from './fetcher';
 import { BudgetLineDrawer } from './budget-line-drawer';
 import { BudgetAgreementModal } from './budget-agreement-modal';
 import { BudgetCategorizeModal } from './budget-categorize-modal';
-import { BudgetAddChooser } from './budget-add-chooser';
 import { BudgetMonthView } from './budget-month-view';
-import { BudgetAddLineModal } from './budget-add-line-modal';
 import { StatusPill } from './budget-status-pill';
 import {
   LINE_TYPE_COLOR,
@@ -53,9 +51,11 @@ export function BudgetHub() {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
-  // One entry point for adding budget. `choose` asks one-time vs recurring;
-  // the rest are the forms it hands off to.
-  const [addFlow, setAddFlow] = useState<'choose' | 'line' | 'new-budget' | 'budgets' | null>(null);
+  // One entry point for adding budget, straight into the form. There was a
+  // chooser asking one-time vs recurring; a one-off is just a budget that runs
+  // for one month, so the question was asking people to classify something the
+  // form already handles.
+  const [addFlow, setAddFlow] = useState<'new-budget' | 'budgets' | null>(null);
   // The cell (channel × period) whose lines are being inspected, or 'pool'.
   const [openCell, setOpenCell] = useState<{ channel: string; period: string } | null>(null);
   const [closingCell, setClosingCell] = useState(false);
@@ -66,7 +66,6 @@ export function BudgetHub() {
   /** Year grid vs one month in full. */
   const [view, setView] = useState<'year' | 'month'>('year');
   const [focusMonth, setFocusMonth] = useState(() => new Date().getMonth() + 1);
-  const [poolOpen, setPoolOpen] = useState(false);
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
@@ -100,7 +99,6 @@ export function BudgetHub() {
   // mostly dashes.
   const activeLines = useMemo(() => lines.filter((l) => l.status !== 'canceled'), [lines]);
   const placed = useMemo(() => activeLines.filter((l) => !l.isPool), [activeLines]);
-  const poolLines = useMemo(() => activeLines.filter((l) => l.isPool), [activeLines]);
 
   const grid = useMemo(() => {
     const byChannel = new Map<string, number[]>();
@@ -229,9 +227,12 @@ export function BudgetHub() {
 
   // ── Mutations ──
 
-  /** Create or update an agreement. Returns whether it stuck, so the modal
-   *  knows not to close over an error. */
-  async function saveAgreement(body: Record<string, unknown>, id: string | null) {
+  /** Create or update a budget. Returns its id so the caller can lay it out,
+   *  or null if the save failed — the modal must not close over an error. */
+  async function saveAgreement(
+    body: Record<string, unknown>,
+    id: string | null,
+  ): Promise<string | null> {
     try {
       const res = await fetch(id ? `/api/budget/agreements/${id}` : '/api/budget/agreements', {
         method: id ? 'PATCH' : 'POST',
@@ -241,28 +242,40 @@ export function BudgetHub() {
       const data = await res.json().catch(() => null);
       if (!res.ok) throw new Error(data?.error || 'Could not save the budget');
       toast.success(id ? 'Budget saved' : 'Budget created');
-      await reload();
-      return true;
+      return id ?? data?.agreement?.id ?? null;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not save the budget');
-      return false;
+      return null;
     }
   }
 
-  async function generateFees(id: string) {
+  /**
+   * Turn a budget's items into the actual lines for the year.
+   *
+   * Runs on every save, not behind a button. A budget whose items and term are
+   * both set already says what the lines should be, and making that a separate
+   * step meant creating a budget put nothing on the chart — the page looked
+   * broken. Idempotent, so re-saving doesn't duplicate anything.
+   */
+  async function generateFees(id: string, quiet = false) {
     try {
       const res = await fetch(`/api/budget/agreements/${id}?generate=${year}`, { method: 'POST' });
       const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || 'Could not lay out the year');
+      // A budget with no items yet has nothing to lay out; that's a fine state
+      // to save in, not an error worth interrupting someone over.
+      if (!res.ok) {
+        if (!quiet) throw new Error(data?.error || 'Could not lay out the year');
+        return;
+      }
       const n = data?.generated?.length ?? 0;
-      toast.success(
-        n > 0
-          ? `Created ${n} fee line${n === 1 ? '' : 's'}`
-          : 'Every month already has its fee lines',
-      );
-      await reload();
+      if (n > 0) toast.success(`Added ${n} line${n === 1 ? '' : 's'} to the year`);
+      else if (!quiet) toast.success('Every month already has its lines');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not lay out the year');
+    } finally {
+      // Always — this is the last step of every save, and it's what puts the
+      // new budget and its lines on the page.
+      await reload();
     }
   }
 
@@ -281,39 +294,6 @@ export function BudgetHub() {
     }
   }
 
-  /** Book a dated media buy. The server derives the months. */
-  async function addFlight(body: Record<string, unknown>) {
-    try {
-      const res = await fetch('/api/budget/flights', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ accountKey, status: 'committed', ...body }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || 'Could not book the flight');
-      const n = data?.lines?.length ?? 0;
-      toast.success(`Booked ${n} month${n === 1 ? '' : 's'}`);
-      await reload();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not book the flight');
-    }
-  }
-
-  async function addLine(body: Record<string, unknown>) {
-    try {
-      const res = await fetch('/api/budget/lines', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ accountKey, year, status: 'committed', ...body }),
-      });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(data?.error || 'Could not add the line');
-      toast.success('Budget line added');
-      await reload();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not add the line');
-    }
-  }
 
   // Wait for the switcher to resolve before deciding there's no account —
   // it defaults to admin mode for a tick on first load.
@@ -385,7 +365,7 @@ export function BudgetHub() {
           <button
             type="button"
             disabled={!accountKey}
-            onClick={() => setAddFlow('choose')}
+            onClick={() => setAddFlow('new-budget')}
             className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
           >
             <PlusIcon className="h-4 w-4" />
@@ -413,42 +393,30 @@ export function BudgetHub() {
               Four peers, each its own card. The sub-line under each number is
               where the relationship between them lives, so the row reads as a
               sentence rather than four unrelated figures. */}
-          <div className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div className="mt-6 grid grid-cols-2 gap-3">
             <StatCard
               label="Total budget"
               value={summary.declaredTotal}
               empty="Not set"
               sub={agreementSub}
             />
+            {/* There were four cards. "Planned" and "Unassigned pool" both
+                went: with every line committed on creation, planned was the
+                same number as scheduled, and the pool was a bucket nothing
+                ever landed in. Two cards that always agree teach people to
+                read neither. */}
             <StatCard
-              label="Planned"
-              value={summary.totalCommitted}
+              label="Scheduled"
+              value={summary.allocated}
               tone={summary.overAllocated ? 'warn' : undefined}
               sub={
                 summary.declaredTotal
                   ? summary.overAllocated
-                    ? `Scheduled + pool · ${usd0(Math.abs(summary.unplanned ?? 0))} over plan`
-                    : `Scheduled + pool · ${Math.round((summary.totalCommitted / summary.declaredTotal) * 100)}% of budget`
-                  : 'Scheduled + pool'
-              }
-            />
-            <StatCard
-              label="Scheduled"
-              value={summary.allocated}
-              sub={
-                grid.length > 0
-                  ? `Placed across ${grid.length} channel${grid.length === 1 ? '' : 's'}`
-                  : 'Nothing placed yet'
-              }
-            />
-            <StatCard
-              label="Unassigned pool"
-              value={summary.pool}
-              tone={summary.pool > 0 ? 'accent' : undefined}
-              sub={
-                summary.pool > 0
-                  ? 'Committed, no channel or month yet'
-                  : 'Everything is placed'
+                    ? `${usd0(Math.abs(summary.unplanned ?? 0))} over the total budget`
+                    : `${Math.round((summary.allocated / summary.declaredTotal) * 100)}% of the total budget`
+                  : grid.length > 0
+                    ? `Placed across ${grid.length} channel${grid.length === 1 ? '' : 's'}`
+                    : 'Nothing placed yet'
               }
             />
           </div>
@@ -485,11 +453,6 @@ export function BudgetHub() {
                       className={summary.overAllocated ? 'bg-amber-500' : 'bg-[var(--primary)]'}
                     >
                       Scheduled {usd0(summary.allocated)}
-                    </LegendDot>
-                    <LegendDot
-                      className={summary.overAllocated ? 'bg-amber-500/50' : 'bg-[var(--primary)]/40'}
-                    >
-                      Pool {usd0(summary.pool)}
                     </LegendDot>
                     <LegendDot
                       className={
@@ -666,6 +629,7 @@ export function BudgetHub() {
                 year={year}
                 month={focusMonth}
                 lines={activeLines}
+                budgets={agreements}
                 onMonthChange={setFocusMonth}
                 onOpenLine={setActiveLineId}
               />
@@ -681,7 +645,7 @@ export function BudgetHub() {
                 </p>
                 <button
                   type="button"
-                  onClick={() => setAddFlow('choose')}
+                  onClick={() => setAddFlow('new-budget')}
                   className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--foreground)] transition hover:bg-[var(--muted)]"
                 >
                   <PlusIcon className="h-4 w-4" />
@@ -874,44 +838,6 @@ export function BudgetHub() {
             )}
           </div>
 
-          {/* ── Pool ── */}
-          <div className="mt-6 rounded-2xl border border-[var(--border)] bg-[var(--card)]">
-            <button
-              type="button"
-              onClick={() => setPoolOpen((o) => !o)}
-              className="flex w-full items-center justify-between px-4 py-3 text-left"
-            >
-              <span className="flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
-                Unassigned pool
-                <span className="rounded-full bg-[var(--muted)] px-2 py-0.5 text-[11px] font-medium text-[var(--muted-foreground)]">
-                  {poolLines.length}
-                </span>
-              </span>
-              <span className="flex items-center gap-3">
-                <span className="text-sm font-semibold tabular-nums text-[var(--foreground)]">
-                  {usd0(summary.pool)}
-                </span>
-                <ChevronRightIcon
-                  className={`h-4 w-4 text-[var(--muted-foreground)] transition-transform duration-200 ${
-                    poolOpen ? 'rotate-90' : ''
-                  }`}
-                />
-              </span>
-            </button>
-            <Collapse open={poolOpen} mountClosed={false}>
-              <div className="border-t border-[var(--border)] p-4">
-                {poolLines.length === 0 ? (
-                  <p className="text-sm text-[var(--muted-foreground)]">
-                    Nothing unassigned. Money lands here when a line is released back, or when
-                    budget is committed without a channel and month yet.
-                  </p>
-                ) : (
-                  <LineList lines={poolLines} onOpen={setActiveLineId} />
-                )}
-              </div>
-            </Collapse>
-          </div>
-
           {loading && (
             <p className="mt-3 text-xs text-[var(--muted-foreground)]">Refreshing…</p>
           )}
@@ -928,18 +854,6 @@ export function BudgetHub() {
         />
       )}
 
-      {addFlow === 'choose' && accountKey && (
-        <BudgetAddChooser
-          year={year}
-          accountName={accountData?.dealer ?? accountKey}
-          agreements={agreements}
-          onOneTime={() => setAddFlow('line')}
-          onRecurring={() => setAddFlow('new-budget')}
-          onEdit={() => setAddFlow('budgets')}
-          onClose={() => setAddFlow(null)}
-        />
-      )}
-
       {(addFlow === 'budgets' || addFlow === 'new-budget') && accountKey && (
         <BudgetAgreementModal
           year={year}
@@ -949,16 +863,6 @@ export function BudgetHub() {
           onSave={saveAgreement}
           onArchive={archiveAgreement}
           onGenerate={generateFees}
-          onClose={() => setAddFlow(null)}
-        />
-      )}
-
-      {addFlow === 'line' && accountKey && (
-        <BudgetAddLineModal
-          year={year}
-          accountName={accountData?.dealer ?? accountKey}
-          onAdd={addLine}
-          onAddFlight={addFlight}
           onClose={() => setAddFlow(null)}
         />
       )}

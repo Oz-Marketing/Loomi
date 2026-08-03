@@ -36,6 +36,8 @@ export type BudgetLine = {
   taskId: string | null;
   taskTitle: string | null;
   batchId: string | null;
+  /** The budget this line was laid out from, when it came from one. */
+  agreementId: string | null;
   /** Set when this line is one month of a dated media buy. */
   flightId: string | null;
   flightStart: string | null;
@@ -181,7 +183,11 @@ export const LINE_TYPE_COLOR: Record<string, string> = {
 };
 
 export const SOURCE_LABEL: Record<string, string> = {
-  retainer: 'Managed Marketing Service',
+  // `retainer` is the stored value; it predates budgets and every line laid out
+  // from one still carries it. It used to read "Managed Marketing Service",
+  // which was true when the only recurring thing was that fee and misleading
+  // the moment budgets could hold anything.
+  retainer: 'From a Budget',
   task: 'From a Ticket',
   adhoc: 'Added Here',
   pool: 'Pool',

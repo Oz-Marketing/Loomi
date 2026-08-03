@@ -5,7 +5,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ExclamationTriangleIcon } from '@heroicons/react/24/outline';
 import PrimaryButton from '@/components/primary-button';
 
-type TrackableElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLElement;
+export type TrackableElement = HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLElement;
 
 interface PendingNavigation {
   action: () => void;
@@ -68,6 +68,32 @@ function elementKey(element: TrackableElement): string {
   return element.textContent || '';
 }
 
+/**
+ * Take out of the dirty set everything that isn't dirty any more: elements that
+ * left the DOM, and elements whose value has returned to what we first saw.
+ *
+ * The second case is why this can't just be a prune-detached pass. Membership is
+ * otherwise only ever revised by an `input`/`change` event, and a form that
+ * clears itself after a successful submit does so through React — no event — so
+ * nothing would take those entries back out. The guard would then keep insisting
+ * there were edits to lose long after they were saved.
+ */
+export function pruneResolvedElements(
+  dirtyElements: Set<TrackableElement>,
+  initialValues: WeakMap<TrackableElement, string>,
+): void {
+  for (const element of Array.from(dirtyElements)) {
+    if (!element.ownerDocument.contains(element)) {
+      dirtyElements.delete(element);
+      continue;
+    }
+    const initialValue = initialValues.get(element);
+    if (initialValue !== undefined && initialValue === elementKey(element)) {
+      dirtyElements.delete(element);
+    }
+  }
+}
+
 export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -79,6 +105,11 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const initialValuesRef = useRef<WeakMap<TrackableElement, string>>(new WeakMap());
   const dirtyElementsRef = useRef<Set<TrackableElement>>(new Set());
   const hasUnsavedChangesRef = useRef(false);
+  // Set by markDirty(), cleared by markClean(). Kept separate from the DOM-derived
+  // set so a page that tracks its own dirty state can say so authoritatively —
+  // custom controls (Loomi's button-based Select, toggle chips) fire no `input`
+  // event, so the heuristic below can't see them at all.
+  const manualDirtyRef = useRef(false);
   const bypassGuardRef = useRef(false);
   const restoringHistoryRef = useRef(false);
 
@@ -86,13 +117,9 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
 
   const syncDirtyState = useCallback(() => {
     const dirtyElements = dirtyElementsRef.current;
-    for (const element of Array.from(dirtyElements)) {
-      if (!document.contains(element)) {
-        dirtyElements.delete(element);
-      }
-    }
+    pruneResolvedElements(dirtyElements, initialValuesRef.current);
 
-    const nextDirty = dirtyElements.size > 0;
+    const nextDirty = manualDirtyRef.current || dirtyElements.size > 0;
     hasUnsavedChangesRef.current = nextDirty;
     // Defer the React state update so it doesn't cause a synchronous flush
     // during input/change event processing. On <select> elements the browser
@@ -107,11 +134,13 @@ export function UnsavedChangesProvider({ children }: { children: ReactNode }) {
   const markClean = useCallback(() => {
     initialValuesRef.current = new WeakMap();
     dirtyElementsRef.current.clear();
+    manualDirtyRef.current = false;
     hasUnsavedChangesRef.current = false;
     setHasUnsavedChanges(false);
   }, []);
 
   const markDirty = useCallback(() => {
+    manualDirtyRef.current = true;
     hasUnsavedChangesRef.current = true;
     setHasUnsavedChanges(true);
   }, []);

@@ -8,6 +8,7 @@ import {
 } from './offer-timing';
 import { runWindowFor, type AutomationConfigRow } from './poll-offers';
 import { selectOffer, type SelectableOfferType } from './select-offer';
+import type { SkippedVehicle } from './skip-reasons';
 
 /**
  * Shadow-mode reporting — everything the Phase 1 dashboard shows, read from the
@@ -30,6 +31,30 @@ function jsonArray(raw: string | null): string[] {
   } catch {
     return [];
   }
+}
+
+function safeJson<T>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+/** The `skipped` entries out of a run's `detail`, defensively — the column is
+ *  free-form JSON written by whichever build recorded the run. Capped so one bad
+ *  run over a big feed can't bloat the report. */
+function parseSkips(raw: unknown): SkippedVehicle[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((s): s is SkippedVehicle => {
+      if (!s || typeof s !== 'object') return false;
+      const r = s as Record<string, unknown>;
+      return typeof r.vehicle === 'string' && typeof r.reason === 'string';
+    })
+    .slice(0, 20)
+    .map((s) => ({ vehicle: s.vehicle, reason: s.reason, detail: typeof s.detail === 'string' ? s.detail : '' }));
 }
 
 function parseIncentive(payload: string): MarketCheckIncentive | null {
@@ -112,6 +137,12 @@ export interface RunSummary {
   vehiclesSeen: number;
   issueCount: number;
   error: string | null;
+  /** Why a generate run passed vehicles over — read back out of the run's own
+   *  `detail`, which has recorded this since generation shipped. Without it the
+   *  history could only say "1 skipped", which answers nothing. */
+  skipped: SkippedVehicle[];
+  /** How many ads the run produced, for runs that recorded it. */
+  generatedCount: number | null;
 }
 
 export interface ShadowReport {
@@ -391,19 +422,24 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
   const runRows = await prisma.adAutomationRun
     .findMany({ where: { OR: [{ accountKey }, { accountKey: null }] }, orderBy: { startedAt: 'desc' }, take: 15 })
     .catch(() => []);
-  const runs: RunSummary[] = runRows.map((r) => ({
-    id: r.id,
-    kind: r.kind,
-    startedAt: r.startedAt.toISOString(),
-    finishedAt: r.finishedAt?.toISOString() ?? null,
-    scopesChecked: r.scopesChecked,
-    offersSeen: r.offersSeen,
-    offersNew: r.offersNew,
-    offersEnded: r.offersEnded,
-    vehiclesSeen: r.vehiclesSeen,
-    issueCount: r.issueCount,
-    error: r.error,
-  }));
+  const runs: RunSummary[] = runRows.map((r) => {
+    const detail = safeJson<{ skipped?: unknown; generated?: unknown }>(r.detail);
+    return {
+      id: r.id,
+      kind: r.kind,
+      startedAt: r.startedAt.toISOString(),
+      finishedAt: r.finishedAt?.toISOString() ?? null,
+      scopesChecked: r.scopesChecked,
+      offersSeen: r.offersSeen,
+      offersNew: r.offersNew,
+      offersEnded: r.offersEnded,
+      vehiclesSeen: r.vehiclesSeen,
+      issueCount: r.issueCount,
+      error: r.error,
+      skipped: parseSkips(detail?.skipped),
+      generatedCount: Array.isArray(detail?.generated) ? detail.generated.length : null,
+    };
+  });
 
   // ── templates in scope + the auto-generated review queue ──
   const templateRows = await prisma.adTemplateDoc

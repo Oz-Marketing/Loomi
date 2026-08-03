@@ -45,6 +45,12 @@ export interface LeadTimeStat {
   n: number;
 }
 
+export interface RunSkip {
+  vehicle: string;
+  reason: string;
+  detail: string;
+}
+
 export interface RunSummary {
   id: string;
   kind: string;
@@ -57,6 +63,9 @@ export interface RunSummary {
   vehiclesSeen: number;
   issueCount: number;
   error: string | null;
+  /** Why vehicles were passed over — the run's own record of it. */
+  skipped: RunSkip[];
+  generatedCount: number | null;
 }
 
 export interface ShadowScope {

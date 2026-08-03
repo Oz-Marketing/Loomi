@@ -857,6 +857,53 @@ ever need to agree, this paragraph is the record of why they don't.
 
 ---
 
+## 13. Adding budget, and the two views
+
+### One button, one question
+
+There were two buttons — "Add a line" by the grid and "Add Budget" in the
+header — and choosing between them meant knowing that one made a single row and
+the other made a repeating charge. That's an implementation detail. The question
+a person actually has is *does this happen once, or every month?*, so it's one
+button and that question, in
+[`budget-add-chooser.tsx`](../src/app/app/projects/_components/budget-add-chooser.tsx).
+
+Existing budgets are listed in the chooser too. Editing one otherwise needs a
+second entry point, which is the two-button problem again somewhere else.
+
+### Items and their pieces
+
+A budget's recurring charges are **items** (a channel) with optional **pieces**
+under them. Splitting Videos into "Commercial" and "Kick-off" divides that
+item's budget between two named lines.
+
+The stored shape is still FLAT — one `AgreementFee` row per line the layout will
+create — and the grouping exists only in the form. The first version shipped
+that flat shape *as the UI*, with a name column on each row: functionally the
+same thing, and nobody found it, because a list of rows doesn't read as
+splitting an item. The hierarchy is the affordance.
+
+Splitting a whole item for the first time names the existing row after its
+channel, so neither piece is left anonymous.
+
+### Year and month
+
+The same money, two shapes:
+
+- **Year** — channels × twelve columns of totals. Answers *how is this client's
+  money spread out.*
+- **Month** — every line in one month, grouped by kind, with its name, base/added
+  and status on the row. Answers *what exactly are we running in March* — which
+  the year grid can't, because a cell is a sum and each line behind it is a
+  separate click.
+
+The month view derives entirely from the lines the hub already loaded for the
+year; a view that refetched would be a second source of truth for the same
+numbers. Its month strip shows each month's total, so you can see where the
+money is before picking one.
+
+---
+
 ## Appendix: Monday.com
 
 Recommendation: **don't integrate.**

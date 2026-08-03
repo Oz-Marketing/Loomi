@@ -2,7 +2,6 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  DocumentTextIcon,
   BanknotesIcon,
   ChevronRightIcon,
   ExclamationTriangleIcon,
@@ -24,6 +23,8 @@ import { jsonFetcher } from './fetcher';
 import { BudgetLineDrawer } from './budget-line-drawer';
 import { BudgetAgreementModal } from './budget-agreement-modal';
 import { BudgetCategorizeModal } from './budget-categorize-modal';
+import { BudgetAddChooser } from './budget-add-chooser';
+import { BudgetMonthView } from './budget-month-view';
 import { BudgetAddLineModal } from './budget-add-line-modal';
 import { StatusPill } from './budget-status-pill';
 import {
@@ -52,7 +53,9 @@ export function BudgetHub() {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
 
-  const [agreementsOpen, setAgreementsOpen] = useState(false);
+  // One entry point for adding budget. `choose` asks one-time vs recurring;
+  // the rest are the forms it hands off to.
+  const [addFlow, setAddFlow] = useState<'choose' | 'line' | 'new-budget' | 'budgets' | null>(null);
   // The cell (channel × period) whose lines are being inspected, or 'pool'.
   const [openCell, setOpenCell] = useState<{ channel: string; period: string } | null>(null);
   const [closingCell, setClosingCell] = useState(false);
@@ -60,8 +63,10 @@ export function BudgetHub() {
    *  survives a channel appearing or disappearing. */
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [categorizeOpen, setCategorizeOpen] = useState(false);
+  /** Year grid vs one month in full. */
+  const [view, setView] = useState<'year' | 'month'>('year');
+  const [focusMonth, setFocusMonth] = useState(() => new Date().getMonth() + 1);
   const [poolOpen, setPoolOpen] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
   const [activeLineId, setActiveLineId] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
@@ -380,11 +385,11 @@ export function BudgetHub() {
           <button
             type="button"
             disabled={!accountKey}
-            onClick={() => setAgreementsOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition hover:bg-[var(--muted)] disabled:opacity-50"
+            onClick={() => setAddFlow('choose')}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
           >
-            <DocumentTextIcon className="h-4 w-4" />
-            {agreements.length === 0 ? 'Add Budget' : 'Manage Budgets'}
+            <PlusIcon className="h-4 w-4" />
+            Add Budget
           </button>
         </div>
       </div>
@@ -630,21 +635,41 @@ export function BudgetHub() {
             </div>
           )}
 
-          {/* ── Channel × month grid ── */}
+          {/* ── The ledger ── */}
           <div className="mt-6">
-            <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-[var(--foreground)]">By channel &amp; month</h2>
-              <button
-                type="button"
-                onClick={() => setAddOpen(true)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--foreground)] transition hover:bg-[var(--muted)]"
-              >
-                <PlusIcon className="h-3.5 w-3.5" />
-                Add a line
-              </button>
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-[var(--foreground)]">
+                {view === 'year' ? 'By channel & month' : 'Month detail'}
+              </h2>
+              {/* Two shapes of the same money: the year answers "how is it
+                  spread", the month answers "what exactly are we running". */}
+              <div className="flex rounded-lg bg-[var(--muted)]/40 p-0.5">
+                {(['year', 'month'] as const).map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setView(v)}
+                    className={`rounded-md px-3 py-1 text-xs font-medium capitalize transition ${
+                      view === v
+                        ? 'bg-[var(--primary)] text-white shadow-sm'
+                        : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    {v}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {grid.length === 0 ? (
+            {view === 'month' ? (
+              <BudgetMonthView
+                year={year}
+                month={focusMonth}
+                lines={activeLines}
+                onMonthChange={setFocusMonth}
+                onOpenLine={setActiveLineId}
+              />
+            ) : grid.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-[var(--border)] py-14 text-center">
                 <BanknotesIcon className="mx-auto h-9 w-9 text-[var(--muted-foreground)]" />
                 <p className="mt-3 text-sm font-medium text-[var(--foreground)]">
@@ -656,11 +681,11 @@ export function BudgetHub() {
                 </p>
                 <button
                   type="button"
-                  onClick={() => setAgreementsOpen(true)}
+                  onClick={() => setAddFlow('choose')}
                   className="mt-4 inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--foreground)] transition hover:bg-[var(--muted)]"
                 >
-                  <DocumentTextIcon className="h-4 w-4" />
-                  {agreements.length > 0 ? 'Manage Budgets' : 'Add Budget'}
+                  <PlusIcon className="h-4 w-4" />
+                  Add Budget
                 </button>
               </div>
             ) : (
@@ -903,25 +928,38 @@ export function BudgetHub() {
         />
       )}
 
-      {agreementsOpen && accountKey && (
+      {addFlow === 'choose' && accountKey && (
+        <BudgetAddChooser
+          year={year}
+          accountName={accountData?.dealer ?? accountKey}
+          agreements={agreements}
+          onOneTime={() => setAddFlow('line')}
+          onRecurring={() => setAddFlow('new-budget')}
+          onEdit={() => setAddFlow('budgets')}
+          onClose={() => setAddFlow(null)}
+        />
+      )}
+
+      {(addFlow === 'budgets' || addFlow === 'new-budget') && accountKey && (
         <BudgetAgreementModal
           year={year}
           accountName={accountData?.dealer ?? accountKey}
           agreements={agreements}
+          startNew={addFlow === 'new-budget'}
           onSave={saveAgreement}
           onArchive={archiveAgreement}
           onGenerate={generateFees}
-          onClose={() => setAgreementsOpen(false)}
+          onClose={() => setAddFlow(null)}
         />
       )}
 
-      {addOpen && accountKey && (
+      {addFlow === 'line' && accountKey && (
         <BudgetAddLineModal
           year={year}
           accountName={accountData?.dealer ?? accountKey}
           onAdd={addLine}
           onAddFlight={addFlight}
-          onClose={() => setAddOpen(false)}
+          onClose={() => setAddFlow(null)}
         />
       )}
 

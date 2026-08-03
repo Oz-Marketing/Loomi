@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom';
 import { PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { ChannelIcon } from '@/components/icons/channel-icon';
-import { BUDGET_CHANNELS } from '@/lib/budget/channels';
+import { BUDGET_CHANNELS, channelLabel } from '@/lib/budget/channels';
 import { usd0 as usd, type AgreementFee, type BudgetAgreement } from './budget-shared';
 
 /**
@@ -25,6 +25,7 @@ export function BudgetAgreementModal({
   year,
   accountName,
   agreements,
+  startNew = false,
   onSave,
   onArchive,
   onGenerate,
@@ -33,15 +34,17 @@ export function BudgetAgreementModal({
   year: number;
   accountName: string;
   agreements: BudgetAgreement[];
+  /** Open straight into the form — set when the chooser already asked. */
+  startNew?: boolean;
   onSave: (body: Record<string, unknown>, id: string | null) => Promise<boolean>;
   onArchive: (id: string) => Promise<boolean>;
   onGenerate: (id: string) => Promise<void>;
   onClose: () => void;
 }) {
   const [editing, setEditing] = useState<BudgetAgreement | 'new' | null>(
-    // Straight into the form when there's nothing to list — an empty list with
-    // a button in it is one click of pure ceremony.
-    agreements.length === 0 ? 'new' : null,
+    // Straight into the form when the chooser already asked, or when there's
+    // nothing to list — an empty list with a button in it is pure ceremony.
+    startNew || agreements.length === 0 ? 'new' : null,
   );
   const [busy, setBusy] = useState(false);
   const [mounted, setMounted] = useState(false);
@@ -307,6 +310,25 @@ function AgreementForm({
   );
 
   const term = useMemo(() => describeTerm(startDate, endDate, year), [startDate, endDate, year]);
+
+  /**
+   * Fees grouped by channel, in first-appearance order. The stored shape stays
+   * FLAT — one row per line the layout will create — because that's what the
+   * server needs; the grouping exists only so the form can show pieces nested
+   * under the item they belong to.
+   */
+  const items = useMemo(() => {
+    const order: string[] = [];
+    const byChannel = new Map<string, number[]>();
+    fees.forEach((f, i) => {
+      if (!byChannel.has(f.channel)) {
+        byChannel.set(f.channel, []);
+        order.push(f.channel);
+      }
+      byChannel.get(f.channel)!.push(i);
+    });
+    return order.map((channel) => ({ channel, rows: byChannel.get(channel)! }));
+  }, [fees]);
   const monthlyFeeTotal = fees.reduce((s, f) => s + (Number(f.monthlyAmount) || 0), 0);
 
   const committedNum = committed === '' ? null : Number(committed);
@@ -412,15 +434,19 @@ function AgreementForm({
           </p>
         </div>
 
-        {/* ── Recurring fees ── */}
+        {/* ── Line items ──
+            Grouped by item, with sub-items under it. A flat list of rows with
+            a name column technically allows the same thing — two Videos rows
+            named differently — but it doesn't READ as splitting an item, so
+            nobody finds it. The hierarchy is the affordance. */}
         <div className="border-t border-[var(--border)] pt-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-medium text-[var(--foreground)]">Recurring monthly fees</p>
+              <p className="text-xs font-medium text-[var(--foreground)]">Line items</p>
               <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
-                Charged every month of the term. These become budget lines when you lay out the
-                year. Add the same item twice with different names to split its budget — one
-                Video as &ldquo;Commercial&rdquo;, another as &ldquo;Kick-off&rdquo;.
+                Charged every month of the term. Split an item to divide its budget between
+                named pieces — one Video as &ldquo;Commercial&rdquo;, another as
+                &ldquo;Kick-off&rdquo;.
               </p>
             </div>
             {monthlyFeeTotal > 0 && (
@@ -431,64 +457,131 @@ function AgreementForm({
           </div>
 
           <div className="mt-2.5 space-y-2">
-            {fees.map((f, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <div className="min-w-0 flex-1">
-                  <SearchableSelect
-                    value={f.channel}
-                    onChange={(v) =>
-                      setFees((prev) => prev.map((x, j) => (j === i ? { ...x, channel: v } : x)))
-                    }
-                    options={BUDGET_CHANNELS.map((c) => ({
-                      value: c.key,
-                      label: c.label,
-                      icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
-                    }))}
-                    className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
-                  />
-                </div>
-                {/* A name per row is what lets one item become several lines —
-                    two Videos as "Commercial" and "Kick-off", each with its own
-                    share of the budget. Without it they're two identical rows
-                    nobody can tell apart on the grid. */}
-                <input
-                  type="text"
-                  placeholder="Name — optional"
-                  value={f.label}
-                  onChange={(e) =>
-                    setFees((prev) => prev.map((x, j) => (j === i ? { ...x, label: e.target.value } : x)))
-                  }
-                  className="loomi-input w-[150px] !bg-[var(--input)] !py-1.5 !text-xs"
-                />
-                <div className="relative w-28">
-                  <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-[var(--muted-foreground)]">
-                    $
-                  </span>
-                  <input
-                    type="number"
-                    min="0"
-                    step="any"
-                    inputMode="decimal"
-                    placeholder="0"
-                    value={f.monthlyAmount}
-                    onChange={(e) =>
-                      setFees((prev) =>
-                        prev.map((x, j) => (j === i ? { ...x, monthlyAmount: e.target.value } : x)),
-                      )
-                    }
-                    className="loomi-input w-full !bg-[var(--input)] !py-1.5 !pl-6 !text-xs"
-                  />
-                </div>
-                <button
-                  type="button"
-                  aria-label="Remove fee"
-                  onClick={() => setFees((prev) => prev.filter((_, j) => j !== i))}
-                  className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-red-500"
+            {items.map((item) => {
+              const itemTotal = item.rows.reduce(
+                (t, r) => t + (Number(fees[r].monthlyAmount) || 0),
+                0,
+              );
+              const split = item.rows.length > 1;
+              return (
+                <div
+                  key={item.channel}
+                  className="animate-fade-in-up rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 px-3 py-2.5"
                 >
-                  <TrashIcon className="h-4 w-4" />
-                </button>
-              </div>
-            ))}
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <SearchableSelect
+                        value={item.channel}
+                        onChange={(v) =>
+                          setFees((prev) =>
+                            prev.map((f, j) =>
+                              item.rows.includes(j) ? { ...f, channel: v } : f,
+                            ),
+                          )
+                        }
+                        options={BUDGET_CHANNELS.map((c) => ({
+                          value: c.key,
+                          label: c.label,
+                          icon: <ChannelIcon channel={c.key} className="h-4 w-4" />,
+                        }))}
+                        className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
+                      />
+                    </div>
+
+                    {/* A split item's own amount lives on its sub-items, so the
+                        header shows the total instead of an input you'd expect
+                        to be able to type in. */}
+                    {split ? (
+                      <span className="w-28 text-right text-xs font-semibold tabular-nums text-[var(--foreground)]">
+                        {usd(itemTotal)}
+                      </span>
+                    ) : (
+                      <MoneyInput
+                        value={fees[item.rows[0]]!.monthlyAmount}
+                        onChange={(v) =>
+                          setFees((prev) =>
+                            prev.map((f, j) => (j === item.rows[0] ? { ...f, monthlyAmount: v } : f)),
+                          )
+                        }
+                      />
+                    )}
+
+                    <button
+                      type="button"
+                      aria-label="Remove item"
+                      onClick={() =>
+                        setFees((prev) => prev.filter((_, j) => !item.rows.includes(j)))
+                      }
+                      className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-red-500"
+                    >
+                      <TrashIcon className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  {split && (
+                    <div className="mt-2 space-y-1.5 border-l border-[var(--border)] pl-3">
+                      {item.rows.map((rowIndex) => (
+                        <div key={rowIndex} className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            placeholder="Name this piece"
+                            value={fees[rowIndex]!.label}
+                            onChange={(e) =>
+                              setFees((prev) =>
+                                prev.map((f, j) =>
+                                  j === rowIndex ? { ...f, label: e.target.value } : f,
+                                ),
+                              )
+                            }
+                            className="loomi-input min-w-0 flex-1 !bg-[var(--input)] !py-1.5 !text-xs"
+                          />
+                          <MoneyInput
+                            value={fees[rowIndex]!.monthlyAmount}
+                            onChange={(v) =>
+                              setFees((prev) =>
+                                prev.map((f, j) => (j === rowIndex ? { ...f, monthlyAmount: v } : f)),
+                              )
+                            }
+                          />
+                          <button
+                            type="button"
+                            aria-label="Remove piece"
+                            onClick={() => setFees((prev) => prev.filter((_, j) => j !== rowIndex))}
+                            className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-red-500"
+                          >
+                            <XMarkIcon className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setFees((prev) => {
+                        const next = [...prev];
+                        // Splitting a whole item for the first time names the
+                        // existing row after its channel, so neither piece is
+                        // left anonymous.
+                        if (!split && !next[item.rows[0]]!.label.trim()) {
+                          next[item.rows[0]] = {
+                            ...next[item.rows[0]]!,
+                            label: channelLabel(item.channel),
+                          };
+                        }
+                        next.push({ channel: item.channel, monthlyAmount: '', label: '' });
+                        return next;
+                      })
+                    }
+                    className="mt-1.5 inline-flex items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                  >
+                    <PlusIcon className="h-3 w-3" />
+                    {split ? 'Add another piece' : 'Split this item'}
+                  </button>
+                </div>
+              );
+            })}
           </div>
 
           <button
@@ -496,13 +589,13 @@ function AgreementForm({
             onClick={() =>
               setFees((prev) => [
                 ...prev,
-                { channel: 'managed_marketing_services', monthlyAmount: '', label: '' },
+                { channel: nextUnusedChannel(prev), monthlyAmount: '', label: '' },
               ])
             }
             className="mt-2 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
           >
             <PlusIcon className="h-3.5 w-3.5" />
-            Add a fee
+            Add an item
           </button>
         </div>
       </div>
@@ -649,3 +742,33 @@ function MoneyField({
 }
 
 export type { AgreementFee };
+
+function MoneyInput({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="relative w-28 flex-shrink-0">
+      <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-[var(--muted-foreground)]">
+        $
+      </span>
+      <input
+        type="number"
+        min="0"
+        step="any"
+        inputMode="decimal"
+        placeholder="0"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="loomi-input w-full !bg-[var(--input)] !py-1.5 !pl-6 !text-xs"
+      />
+    </div>
+  );
+}
+
+/**
+ * A channel not already on the budget, so "Add an item" doesn't silently
+ * produce a second row of the same thing — which would render as a SPLIT of
+ * the existing item rather than the new item the user asked for.
+ */
+function nextUnusedChannel(fees: FeeDraft[]): string {
+  const used = new Set(fees.map((f) => f.channel));
+  return (BUDGET_CHANNELS.find((c) => !used.has(c.key)) ?? BUDGET_CHANNELS[0]!).key;
+}

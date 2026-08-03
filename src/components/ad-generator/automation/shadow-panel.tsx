@@ -20,6 +20,7 @@ import Link from 'next/link';
 import {
   ArrowPathIcon,
   CheckCircleIcon,
+  ChevronRightIcon,
   ClockIcon,
   Cog6ToothIcon,
   ExclamationTriangleIcon,
@@ -32,7 +33,8 @@ import { Select } from '@/components/select';
 import { HelpTip } from '@/components/ui/help-tip';
 import { aspectLabel } from '@/lib/ad-generator/ad-size-catalog';
 import { windowPreview } from '@/lib/ad-generator/automation/window-preview';
-import type { CycleState } from './types';
+import { skipReasonFix, skipReasonLabel, summarizeSkips } from '@/lib/ad-generator/automation/skip-reasons';
+import type { CycleState, RunSummary } from './types';
 import { type Automation } from './use-automation';
 
 /** Cycle-state presentation. `expiring_unrenewed` is amber, NOT red: the OEM
@@ -177,6 +179,124 @@ function Stat({
  * now" are questions you have regardless of which table you're reading.
  */
 export type AutomationView = 'overview' | 'inventory' | 'drafts' | 'runs' | 'settings';
+
+/**
+ * One run in the history, expandable when it passed vehicles over.
+ *
+ * The count alone ("1 skipped") was a dead end: the generate toast sends you here
+ * to find out why, and the reason was sitting unread in the run's own record. Each
+ * skip now names the vehicle, what stopped it, the generator's own detail, and
+ * where to go to fix it.
+ */
+function RunRow({ run: r }: { run: RunSummary }) {
+  const [open, setOpen] = useState(false);
+  const skips = r.skipped ?? [];
+  const expandable = skips.length > 0;
+
+  return (
+    <div
+      className={`rounded-lg border text-[11px] ${
+        r.error ? 'border-red-500/30 bg-red-500/5' : 'border-[var(--border)]'
+      }`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+        <div className="flex items-center gap-2">
+          {expandable ? (
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              aria-expanded={open}
+              className="-ml-1 inline-flex items-center gap-1 rounded px-1 py-0.5 font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)]"
+            >
+              <ChevronRightIcon className={`h-3 w-3 transition-transform ${open ? 'rotate-90' : ''}`} />
+              <span className="rounded bg-[var(--muted)] px-1.5 py-0.5">{r.kind.replace('_', ' ')}</span>
+            </button>
+          ) : (
+            <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 font-medium text-[var(--muted-foreground)]">
+              {r.kind.replace('_', ' ')}
+            </span>
+          )}
+          <span className="text-[var(--muted-foreground)]">{relTime(r.startedAt)}</span>
+        </div>
+        <div className="flex flex-wrap gap-x-3 text-[var(--muted-foreground)]">
+          {r.kind === 'offer_poll' ? (
+            <>
+              <span>{r.scopesChecked} scopes</span>
+              <span>{r.offersSeen} seen</span>
+              <span className="text-[var(--foreground)]">{r.offersNew} new</span>
+              <span>{r.offersEnded} ended</span>
+            </>
+          ) : r.kind === 'generate' ? (
+            /* A generate run counts VEHICLE GROUPS in `scopesChecked` and
+               never sets `vehiclesSeen`, so the feed-sync labels below
+               read "8 feeds · 0 vehicles" — wrong on every column. */
+            <>
+              <span className="text-[var(--foreground)]">{r.scopesChecked} vehicles</span>
+              <span>{r.offersSeen} offers</span>
+              {r.generatedCount != null && r.generatedCount > 0 && (
+                <span className="text-emerald-500">{r.generatedCount} built</span>
+              )}
+              {r.issueCount > 0 && (
+                <span className="text-amber-500">
+                  {r.issueCount} skipped
+                  {expandable && !open && <span className="ml-1 opacity-70">— why?</span>}
+                </span>
+              )}
+            </>
+          ) : (
+            <>
+              <span>{r.scopesChecked} feeds</span>
+              <span className="text-[var(--foreground)]">{r.vehiclesSeen} vehicles</span>
+              {r.issueCount > 0 && <span className="text-amber-500">{r.issueCount} issues</span>}
+            </>
+          )}
+        </div>
+        {r.error && (
+          <p className="w-full break-words text-red-500">
+            <ExclamationTriangleIcon className="mr-1 inline h-3 w-3" />
+            {r.error}
+          </p>
+        )}
+        {/* The reasons matter most when a run built nothing, so don't make that
+            case a click: say it on the row and let the panel carry the detail. */}
+        {expandable && !open && (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="w-full text-left text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+          >
+            {summarizeSkips(skips)}
+          </button>
+        )}
+      </div>
+
+      {open && expandable && (
+        <div className="space-y-1.5 border-t border-[var(--border)] px-3 py-2">
+          {skips.map((s, i) => {
+            const fix = skipReasonFix(s.reason);
+            return (
+              <div key={`${s.vehicle}-${i}`} className="rounded-md bg-[var(--muted)]/25 px-2.5 py-2">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <span className="font-medium text-[var(--foreground)]">{s.vehicle}</span>
+                  <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500">
+                    {skipReasonLabel(s.reason)}
+                  </span>
+                </div>
+                {s.detail && <p className="mt-1 break-words text-[var(--muted-foreground)]">{s.detail}</p>}
+                {fix && <p className="mt-1 text-[10px] text-[var(--muted-foreground)]/80">{fix}</p>}
+              </div>
+            );
+          })}
+          {r.issueCount > skips.length && (
+            <p className="text-[10px] text-[var(--muted-foreground)]">
+              Showing {skips.length} of {r.issueCount}.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function ShadowPanel({
   accountKey,
@@ -852,52 +972,7 @@ export function ShadowPanel({
       >
         {report?.runs.length ? (
           <div className="space-y-1.5">
-            {report.runs.map((r) => (
-              <div
-                key={r.id}
-                className={`flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-[11px] ${
-                  r.error ? 'border-red-500/30 bg-red-500/5' : 'border-[var(--border)]'
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-[var(--muted)] px-1.5 py-0.5 font-medium text-[var(--muted-foreground)]">
-                    {r.kind.replace('_', ' ')}
-                  </span>
-                  <span className="text-[var(--muted-foreground)]">{relTime(r.startedAt)}</span>
-                </div>
-                <div className="flex flex-wrap gap-x-3 text-[var(--muted-foreground)]">
-                  {r.kind === 'offer_poll' ? (
-                    <>
-                      <span>{r.scopesChecked} scopes</span>
-                      <span>{r.offersSeen} seen</span>
-                      <span className="text-[var(--foreground)]">{r.offersNew} new</span>
-                      <span>{r.offersEnded} ended</span>
-                    </>
-                  ) : r.kind === 'generate' ? (
-                    /* A generate run counts VEHICLE GROUPS in `scopesChecked` and
-                       never sets `vehiclesSeen`, so the feed-sync labels below
-                       read "8 feeds · 0 vehicles" — wrong on every column. */
-                    <>
-                      <span className="text-[var(--foreground)]">{r.scopesChecked} vehicles</span>
-                      <span>{r.offersSeen} offers</span>
-                      {r.issueCount > 0 && <span className="text-amber-500">{r.issueCount} skipped</span>}
-                    </>
-                  ) : (
-                    <>
-                      <span>{r.scopesChecked} feeds</span>
-                      <span className="text-[var(--foreground)]">{r.vehiclesSeen} vehicles</span>
-                      {r.issueCount > 0 && <span className="text-amber-500">{r.issueCount} issues</span>}
-                    </>
-                  )}
-                </div>
-                {r.error && (
-                  <p className="w-full break-words text-red-500">
-                    <ExclamationTriangleIcon className="mr-1 inline h-3 w-3" />
-                    {r.error}
-                  </p>
-                )}
-              </div>
-            ))}
+            {report.runs.map((r) => <RunRow key={r.id} run={r} />)}
           </div>
         ) : (
           <p className="text-xs text-[var(--muted-foreground)]">No runs yet.</p>

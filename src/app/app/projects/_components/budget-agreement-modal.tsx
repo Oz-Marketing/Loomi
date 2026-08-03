@@ -6,7 +6,7 @@ import { PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { ChannelIcon } from '@/components/icons/channel-icon';
 import { BUDGET_CHANNELS, channelLabel } from '@/lib/budget/channels';
-import { usd0 as usd, type AgreementFee, type BudgetAgreement } from './budget-shared';
+import { MONTH_ABBR, usd0 as usd, type AgreementFee, type BudgetAgreement } from './budget-shared';
 
 /**
  * The account's agreements — what the client actually signed, with real term
@@ -271,7 +271,18 @@ function AgreementList({
 
 // ── Form ────────────────────────────────────────────────────────────────────
 
-type FeeDraft = { channel: string; monthlyAmount: string; label: string };
+type PieceDraft = { label: string; amount: string };
+
+/**
+ * One line item being edited, with its total held SEPARATELY from its pieces.
+ *
+ * This is the whole point of the shape. If the item's amount were just the sum
+ * of its pieces, then splitting a $3,000 Google buy and typing "Search 500"
+ * would silently make it a $3,500 buy — the number somebody committed to would
+ * move because someone else got granular. The total is what was agreed; pieces
+ * divide it, and anything not yet attributed stays visible as a remainder.
+ */
+type ItemDraft = { channel: string; total: string; pieces: PieceDraft[] };
 
 function AgreementForm({
   year,
@@ -292,59 +303,63 @@ function AgreementForm({
   onDone: () => void;
   canCancel: boolean;
 }) {
-  const [name, setName] = useState(agreement?.name ?? `${year} Agreement`);
-  const [startDate, setStartDate] = useState(agreement?.startDate ?? `${year}-01-01`);
-  const [endDate, setEndDate] = useState(agreement?.endDate ?? `${year}-12-31`);
-  const [committed, setCommitted] = useState(
-    agreement?.committedAmount != null ? String(agreement.committedAmount) : '',
+  const [name, setName] = useState(agreement?.name ?? `${year} Budget`);
+  // Months, not dates. A budget runs for whole months — asking for a start and
+  // end DAY made people pick 03/23–03/28 and get a one-month budget they didn't
+  // mean, and the extra precision never reached the ledger anyway.
+  const [startMonth, setStartMonth] = useState(
+    agreement ? agreement.startDate.slice(0, 7) : `${year}-01`,
   );
-  const [markup, setMarkup] = useState(
-    agreement?.defaultMarkup != null ? String(agreement.defaultMarkup) : '',
+  const [endMonth, setEndMonth] = useState(
+    agreement ? agreement.endDate.slice(0, 7) : `${year}-12`,
   );
-  const [fees, setFees] = useState<FeeDraft[]>(
-    agreement?.fees.map((f) => ({
-      channel: f.channel,
-      monthlyAmount: String(f.monthlyAmount),
-      label: f.label ?? '',
-    })) ?? [],
+  const [spansMonths, setSpansMonths] = useState(
+    agreement ? agreement.startDate.slice(0, 7) !== agreement.endDate.slice(0, 7) : true,
   );
+  const [items, setItems] = useState<ItemDraft[]>(() => groupFees(agreement?.fees ?? []));
+
+  // A one-month budget ends where it starts; the end select is only meaningful
+  // when the budget actually runs across months.
+  const effectiveEnd = spansMonths ? endMonth : startMonth;
+  const startDate = `${startMonth}-01`;
+  const endDate = lastDayOf(effectiveEnd);
 
   const term = useMemo(() => describeTerm(startDate, endDate, year), [startDate, endDate, year]);
 
-  /**
-   * Fees grouped by channel, in first-appearance order. The stored shape stays
-   * FLAT — one row per line the layout will create — because that's what the
-   * server needs; the grouping exists only so the form can show pieces nested
-   * under the item they belong to.
-   */
-  const items = useMemo(() => {
-    const order: string[] = [];
-    const byChannel = new Map<string, number[]>();
-    fees.forEach((f, i) => {
-      if (!byChannel.has(f.channel)) {
-        byChannel.set(f.channel, []);
-        order.push(f.channel);
-      }
-      byChannel.get(f.channel)!.push(i);
-    });
-    return order.map((channel) => ({ channel, rows: byChannel.get(channel)! }));
-  }, [fees]);
-  const monthlyFeeTotal = fees.reduce((s, f) => s + (Number(f.monthlyAmount) || 0), 0);
+  /** Each item's own numbers: what it's worth, and how much is attributed. */
+  const itemMath = useMemo(
+    () =>
+      items.map((it) => {
+        const total = Number(it.total) || 0;
+        const assigned = it.pieces.reduce((t, p) => t + (Number(p.amount) || 0), 0);
+        return { total, assigned, remainder: total - assigned };
+      }),
+    [items],
+  );
+  // The budget's monthly cost is the sum of the ITEMS' totals, not of the
+  // pieces — an item that hasn't been fully attributed still costs its total.
+  const monthlyFeeTotal = itemMath.reduce((s, m) => s + m.total, 0);
+  const overAssigned = itemMath.some((m) => m.remainder < -0.005);
 
-  const committedNum = committed === '' ? null : Number(committed);
+  /**
+   * The budget's whole value, DERIVED rather than typed.
+   *
+   * There used to be a "total commitment" field next to the items, which meant
+   * the same number existed twice and could disagree with itself. A recurring
+   * budget IS its items across its months, so that's what this is. Falls back
+   * to whatever was stored when there are no items yet, so editing an old
+   * budget can't silently zero its total.
+   */
+  const committedNum =
+    monthlyFeeTotal > 0 && term.valid
+      ? round2(monthlyFeeTotal * term.total)
+      : (agreement?.committedAmount ?? null);
   const yearShare =
     committedNum != null && term.valid && term.total > 0
       ? (committedNum * term.inYear) / term.total
       : null;
 
-  // A markup under 0.5 means the agency keeps more than half the budget, which
-  // is possible but rare — far more often it's a margin (0.23) typed where the
-  // spend factor (0.77) belongs.
-  const markupNum = markup === '' ? null : Number(markup);
-  const markupValid = markupNum != null && Number.isFinite(markupNum) && markupNum > 0;
-  const markupSuspicious = markupValid && markupNum < 0.5;
-
-  const feesValid = fees.every((f) => f.channel && Number(f.monthlyAmount) > 0);
+  const feesValid = items.every((it) => it.channel && Number(it.total) > 0);
   const canSave = name.trim() !== '' && term.valid && feesValid && !busy;
 
   const body = () => ({
@@ -352,14 +367,31 @@ function AgreementForm({
     startDate,
     endDate,
     committedAmount: committedNum,
-    defaultMarkup: markup === '' ? null : Number(markup),
-    fees: fees
-      .filter((f) => f.channel && Number(f.monthlyAmount) > 0)
-      .map((f) => ({
-        channel: f.channel,
-        monthlyAmount: Number(f.monthlyAmount),
-        label: f.label.trim() || null,
-      })),
+    // No longer editable here — a per-budget rate is a rare exception and the
+    // rate cards cover the normal case. Passed through unchanged so editing a
+    // budget that has one doesn't wipe it.
+    defaultMarkup: agreement?.defaultMarkup ?? null,
+    // Flattened back to one row per line the layout will create. An item with
+    // no pieces is a single row; a split one contributes its pieces PLUS the
+    // unattributed remainder, so the item's total survives the round trip
+    // instead of shrinking to whatever happened to be named.
+    fees: items.flatMap((it, i) => {
+      if (!it.channel || itemMath[i]!.total <= 0) return [];
+      const named = it.pieces
+        .filter((p) => Number(p.amount) > 0)
+        .map((p) => ({
+          channel: it.channel,
+          monthlyAmount: Number(p.amount),
+          label: p.label.trim() || null,
+        }));
+      if (named.length === 0) {
+        return [{ channel: it.channel, monthlyAmount: itemMath[i]!.total, label: null }];
+      }
+      const remainder = itemMath[i]!.remainder;
+      return remainder > 0.005
+        ? [...named, { channel: it.channel, monthlyAmount: round2(remainder), label: null }]
+        : named;
+    }),
   });
 
   const save = async (thenGenerate: boolean) => {
@@ -384,53 +416,76 @@ function AgreementForm({
           />
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <DateField label="Starts" value={startDate} onChange={setStartDate} />
-          <DateField label="Ends" value={endDate} onChange={setEndDate} />
-        </div>
-        <p className={`-mt-2 text-[11px] ${term.valid ? 'text-[var(--muted-foreground)]' : 'text-red-500'}`}>
-          {term.text}
-        </p>
-
-        <MoneyField
-          label="Total commitment"
-          hint="The whole budget, not the year's share. Leave blank if there's no formal number — the page just won't show a target."
-          value={committed}
-          onChange={setCommitted}
-        />
-        {/* The pro-rated share, live. A term that crosses the new year is the
-            whole reason this model exists, and showing the split at entry is
-            what stops someone typing the year's number into the term field. */}
-        {yearShare != null && term.inYear < term.total && (
-          <p className="-mt-2 text-[11px] text-[var(--muted-foreground)]">
-            {usd(yearShare)} of that falls in {year} ({term.inYear} of {term.total} months).
-          </p>
-        )}
-
+        {/* One month or several. Months, not dates — the ledger only ever
+            holds whole months, and asking for days invited precision that
+            nothing downstream uses. */}
         <div>
-          <label className="block text-xs font-medium text-[var(--foreground)]">Markup override</label>
-          <input
-            type="number"
-            step="0.01"
-            min="0"
-            max="1"
-            placeholder="Account default"
-            value={markup}
-            onChange={(e) => setMarkup(e.target.value)}
-            className="loomi-input mt-1 w-full !bg-[var(--input)]"
-          />
-          <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">
-            Spend = budget × markup, frozen onto each new line — changing it never rewrites money
-            already committed.
-            {markupValid && (
-              <>
-                {' '}
-                <span className={markupSuspicious ? 'font-medium text-amber-600' : ''}>
-                  A {usd(10_000)} budget would target {usd(10_000 * markupNum)} in spend
-                  {markupSuspicious ? ` — did you mean ${(1 - markupNum).toFixed(2)}?` : '.'}
-                </span>
-              </>
+          <label className="block text-xs font-medium text-[var(--foreground)]">
+            How long does it run?
+          </label>
+          <div className="mt-1.5 flex rounded-lg bg-[var(--muted)]/40 p-0.5">
+            {(
+              [
+                { key: false, label: 'One month' },
+                { key: true, label: 'Multiple months' },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={String(opt.key)}
+                type="button"
+                onClick={() => setSpansMonths(opt.key)}
+                className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                  spansMonths === opt.key
+                    ? 'bg-[var(--primary)] text-white shadow-sm'
+                    : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <div className={`mt-2 grid gap-3 ${spansMonths ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            <div>
+              <label className="block text-[11px] font-medium text-[var(--muted-foreground)]">
+                {spansMonths ? 'From' : 'Month'}
+              </label>
+              <div className="mt-1">
+                <SearchableSelect
+                  value={startMonth}
+                  onChange={(v) => {
+                    setStartMonth(v);
+                    // Keep the range sane rather than letting it go backwards.
+                    if (spansMonths && v > effectiveEnd) setEndMonth(v);
+                  }}
+                  searchable={false}
+                  options={monthOptions(year)}
+                  className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
+                />
+              </div>
+            </div>
+            {spansMonths && (
+              <div>
+                <label className="block text-[11px] font-medium text-[var(--muted-foreground)]">
+                  Through
+                </label>
+                <div className="mt-1">
+                  <SearchableSelect
+                    value={effectiveEnd}
+                    onChange={setEndMonth}
+                    searchable={false}
+                    options={monthOptions(year).filter((o) => o.value >= startMonth)}
+                    className="!bg-[var(--input)] !rounded-lg !px-2.5 !py-1.5 !text-xs"
+                  />
+                </div>
+              </div>
             )}
+          </div>
+
+          <p
+            className={`mt-1.5 text-[11px] ${term.valid ? 'text-[var(--muted-foreground)]' : 'text-red-500'}`}
+          >
+            {term.text}
           </p>
         </div>
 
@@ -450,35 +505,50 @@ function AgreementForm({
               </p>
             </div>
             {monthlyFeeTotal > 0 && (
-              <span className="whitespace-nowrap text-xs font-semibold tabular-nums text-[var(--foreground)]">
-                {usd(monthlyFeeTotal)}/mo
+              <span className="whitespace-nowrap text-right">
+                <span className="block text-xs font-semibold tabular-nums text-[var(--foreground)]">
+                  {usd(monthlyFeeTotal)}/mo
+                </span>
+                {/* The whole budget, derived. This replaced a "total
+                    commitment" field, which meant the same number existed
+                    twice and could disagree with itself. */}
+                {committedNum != null && term.valid && (
+                  <span className="mt-0.5 block text-[10px] text-[var(--muted-foreground)]">
+                    {usd(committedNum)} over {term.total} month{term.total === 1 ? '' : 's'}
+                    {yearShare != null && term.inYear < term.total && (
+                      <> · {usd(yearShare)} in {year}</>
+                    )}
+                  </span>
+                )}
+                {/* Warn, don't block — the same rule the rest of the module
+                    follows. An over-split item is usually a typo, but it's not
+                    this form's place to refuse someone's number. */}
+                {overAssigned && (
+                  <span className="mt-0.5 block text-[10px] font-medium text-amber-600">
+                    An item is split past its total
+                  </span>
+                )}
               </span>
             )}
           </div>
 
           <div className="mt-2.5 space-y-2">
-            {items.map((item) => {
-              const itemTotal = item.rows.reduce(
-                (t, r) => t + (Number(fees[r].monthlyAmount) || 0),
-                0,
-              );
-              const split = item.rows.length > 1;
+            {items.map((item, i) => {
+              const math = itemMath[i]!;
+              const split = item.pieces.length > 0;
+              const set = (patch: Partial<ItemDraft>) =>
+                setItems((prev) => prev.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+
               return (
                 <div
-                  key={item.channel}
+                  key={i}
                   className="animate-fade-in-up rounded-xl border border-[var(--border)] bg-[var(--muted)]/20 px-3 py-2.5"
                 >
                   <div className="flex items-center gap-2">
                     <div className="min-w-0 flex-1">
                       <SearchableSelect
                         value={item.channel}
-                        onChange={(v) =>
-                          setFees((prev) =>
-                            prev.map((f, j) =>
-                              item.rows.includes(j) ? { ...f, channel: v } : f,
-                            ),
-                          )
-                        }
+                        onChange={(v) => set({ channel: v })}
                         options={BUDGET_CHANNELS.map((c) => ({
                           value: c.key,
                           label: c.label,
@@ -488,30 +558,16 @@ function AgreementForm({
                       />
                     </div>
 
-                    {/* A split item's own amount lives on its sub-items, so the
-                        header shows the total instead of an input you'd expect
-                        to be able to type in. */}
-                    {split ? (
-                      <span className="w-28 text-right text-xs font-semibold tabular-nums text-[var(--foreground)]">
-                        {usd(itemTotal)}
-                      </span>
-                    ) : (
-                      <MoneyInput
-                        value={fees[item.rows[0]]!.monthlyAmount}
-                        onChange={(v) =>
-                          setFees((prev) =>
-                            prev.map((f, j) => (j === item.rows[0] ? { ...f, monthlyAmount: v } : f)),
-                          )
-                        }
-                      />
-                    )}
+                    {/* Stays editable when split. The item's total is what was
+                        agreed; pieces divide it. If this became a read-only sum
+                        of the pieces, adding one would move the committed
+                        number, which is nobody's intent. */}
+                    <MoneyInput value={item.total} onChange={(v) => set({ total: v })} />
 
                     <button
                       type="button"
                       aria-label="Remove item"
-                      onClick={() =>
-                        setFees((prev) => prev.filter((_, j) => !item.rows.includes(j)))
-                      }
+                      onClick={() => setItems((prev) => prev.filter((_, j) => j !== i))}
                       className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-red-500"
                     >
                       <TrashIcon className="h-4 w-4" />
@@ -519,59 +575,88 @@ function AgreementForm({
                   </div>
 
                   {split && (
-                    <div className="mt-2 space-y-1.5 border-l border-[var(--border)] pl-3">
-                      {item.rows.map((rowIndex) => (
-                        <div key={rowIndex} className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            placeholder="Name this piece"
-                            value={fees[rowIndex]!.label}
-                            onChange={(e) =>
-                              setFees((prev) =>
-                                prev.map((f, j) =>
-                                  j === rowIndex ? { ...f, label: e.target.value } : f,
-                                ),
-                              )
-                            }
-                            className="loomi-input min-w-0 flex-1 !bg-[var(--input)] !py-1.5 !text-xs"
-                          />
-                          <MoneyInput
-                            value={fees[rowIndex]!.monthlyAmount}
-                            onChange={(v) =>
-                              setFees((prev) =>
-                                prev.map((f, j) => (j === rowIndex ? { ...f, monthlyAmount: v } : f)),
-                              )
-                            }
-                          />
-                          <button
-                            type="button"
-                            aria-label="Remove piece"
-                            onClick={() => setFees((prev) => prev.filter((_, j) => j !== rowIndex))}
-                            className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-red-500"
-                          >
-                            <XMarkIcon className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
+                    <>
+                      <div className="mt-2 space-y-1.5 border-l border-[var(--border)] pl-3">
+                        {item.pieces.map((piece, pi) => (
+                          <div key={pi} className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              placeholder="Name this piece"
+                              value={piece.label}
+                              onChange={(e) =>
+                                set({
+                                  pieces: item.pieces.map((x, k) =>
+                                    k === pi ? { ...x, label: e.target.value } : x,
+                                  ),
+                                })
+                              }
+                              className="loomi-input min-w-0 flex-1 !bg-[var(--input)] !py-1.5 !text-xs"
+                            />
+                            <MoneyInput
+                              value={piece.amount}
+                              onChange={(v) =>
+                                set({
+                                  pieces: item.pieces.map((x, k) =>
+                                    k === pi ? { ...x, amount: v } : x,
+                                  ),
+                                })
+                              }
+                            />
+                            <button
+                              type="button"
+                              aria-label="Remove piece"
+                              onClick={() =>
+                                set({ pieces: item.pieces.filter((_, k) => k !== pi) })
+                              }
+                              className="rounded-lg p-1.5 text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-red-500"
+                            >
+                              <XMarkIcon className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Where the item's money actually stands. Splitting is
+                          the moment someone might accidentally change a number
+                          they only meant to describe, so the arithmetic is on
+                          screen rather than in their head. */}
+                      <p
+                        className={`mt-1.5 pl-3 text-[11px] tabular-nums ${
+                          math.remainder < -0.005
+                            ? 'font-medium text-amber-600'
+                            : 'text-[var(--muted-foreground)]'
+                        }`}
+                      >
+                        {math.remainder < -0.005 ? (
+                          <>
+                            Pieces come to {usd(math.assigned)} — {usd(-math.remainder)} more than
+                            the {usd(math.total)} set for this item.
+                          </>
+                        ) : math.remainder > 0.005 ? (
+                          <>
+                            {usd(math.assigned)} of {usd(math.total)} split ·{' '}
+                            {usd(math.remainder)} stays as {channelLabel(item.channel)}
+                          </>
+                        ) : (
+                          <>Fully split across {item.pieces.length} pieces</>
+                        )}
+                      </p>
+                    </>
                   )}
 
                   <button
                     type="button"
                     onClick={() =>
-                      setFees((prev) => {
-                        const next = [...prev];
-                        // Splitting a whole item for the first time names the
-                        // existing row after its channel, so neither piece is
-                        // left anonymous.
-                        if (!split && !next[item.rows[0]]!.label.trim()) {
-                          next[item.rows[0]] = {
-                            ...next[item.rows[0]]!,
-                            label: channelLabel(item.channel),
-                          };
-                        }
-                        next.push({ channel: item.channel, monthlyAmount: '', label: '' });
-                        return next;
+                      set({
+                        pieces: [
+                          ...item.pieces,
+                          // The first split seeds a piece with the whole amount
+                          // so nothing has to be re-typed and the total is
+                          // visibly unchanged; the next one starts empty.
+                          ...(split
+                            ? [{ label: '', amount: '' }]
+                            : [{ label: channelLabel(item.channel), amount: item.total }]),
+                        ],
                       })
                     }
                     className="mt-1.5 inline-flex items-center gap-1 rounded-lg px-1.5 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
@@ -587,9 +672,9 @@ function AgreementForm({
           <button
             type="button"
             onClick={() =>
-              setFees((prev) => [
+              setItems((prev) => [
                 ...prev,
-                { channel: nextUnusedChannel(prev), monthlyAmount: '', label: '' },
+                { channel: nextUnusedChannel(prev), total: '', pieces: [] },
               ])
             }
             className="mt-2 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-medium text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
@@ -685,61 +770,7 @@ function fmtDate(iso: string) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
 }
 
-function DateField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div>
-      <label className="block text-xs font-medium text-[var(--foreground)]">{label}</label>
-      <input
-        type="date"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="loomi-input mt-1 w-full !bg-[var(--input)]"
-      />
-    </div>
-  );
-}
 
-function MoneyField({
-  label,
-  hint,
-  value,
-  onChange,
-}: {
-  label: string;
-  hint?: string;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <div>
-      <label className="block text-xs font-medium text-[var(--foreground)]">{label}</label>
-      <div className="relative mt-1">
-        <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-sm text-[var(--muted-foreground)]">
-          $
-        </span>
-        <input
-          type="number"
-          min="0"
-          step="any"
-          inputMode="decimal"
-          placeholder="0"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="loomi-input w-full !bg-[var(--input)] !pl-6"
-        />
-      </div>
-      {hint && <p className="mt-1 text-[11px] text-[var(--muted-foreground)]">{hint}</p>}
-    </div>
-  );
-}
 
 export type { AgreementFee };
 
@@ -768,7 +799,68 @@ function MoneyInput({ value, onChange }: { value: string; onChange: (v: string) 
  * produce a second row of the same thing — which would render as a SPLIT of
  * the existing item rather than the new item the user asked for.
  */
-function nextUnusedChannel(fees: FeeDraft[]): string {
-  const used = new Set(fees.map((f) => f.channel));
+function nextUnusedChannel(items: ItemDraft[]): string {
+  const used = new Set(items.map((i) => i.channel));
   return (BUDGET_CHANNELS.find((c) => !used.has(c.key)) ?? BUDGET_CHANNELS[0]!).key;
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Stored fee rows → the nested shape the form edits.
+ *
+ * A channel with one unnamed row is an unsplit item. Anything else is split,
+ * and its total is the sum of what's stored — which is exactly what was saved,
+ * remainder included, so a round trip through the form is lossless.
+ */
+function groupFees(fees: AgreementFee[]): ItemDraft[] {
+  const order: string[] = [];
+  const byChannel = new Map<string, AgreementFee[]>();
+  for (const f of fees) {
+    if (!byChannel.has(f.channel)) {
+      byChannel.set(f.channel, []);
+      order.push(f.channel);
+    }
+    byChannel.get(f.channel)!.push(f);
+  }
+  return order.map((channel) => {
+    const rows = byChannel.get(channel)!;
+    const total = String(round2(rows.reduce((t, r) => t + r.monthlyAmount, 0)));
+    const unsplit = rows.length === 1 && !rows[0]!.label;
+    return {
+      channel,
+      total,
+      pieces: unsplit
+        ? []
+        : rows.map((r) => ({ label: r.label ?? '', amount: String(r.monthlyAmount) })),
+    };
+  });
+}
+
+/** `2026-03` → `2026-03-31`. The ledger runs on whole months. */
+function lastDayOf(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  return `${month}-${String(new Date(Date.UTC(y!, m!, 0)).getUTCDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Selectable months: the year being viewed and the next one.
+ *
+ * Next year is included because a budget crossing the calendar boundary is the
+ * ordinary case — a twelve-month term signed in April ends the following March
+ * — and it's the whole reason budgets carry real terms rather than a year.
+ */
+function monthOptions(year: number): { value: string; label: string }[] {
+  const out: { value: string; label: string }[] = [];
+  for (const y of [year, year + 1]) {
+    for (let m = 1; m <= 12; m++) {
+      out.push({
+        value: `${y}-${String(m).padStart(2, '0')}`,
+        label: `${MONTH_ABBR[m - 1]} ${y}`,
+      });
+    }
+  }
+  return out;
 }

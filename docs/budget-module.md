@@ -871,6 +871,26 @@ button and that question, in
 Existing budgets are listed in the chooser too. Editing one otherwise needs a
 second entry point, which is the two-button problem again somewhere else.
 
+### The budget form
+
+Name, how long it runs, and its line items. That's all of it.
+
+**Months, not dates.** A budget runs for whole months, so it's a From/Through
+month pair (One month collapses it to a single select). Asking for a start and
+end *day* invited precision nothing downstream uses, and produced 03/23–03/28
+budgets nobody meant. The stored term is still real dates — first of the start
+month to the last day of the end month — so §9's pro-rating is untouched.
+
+**No total-commitment field.** The budget's value is DERIVED: monthly items ×
+term months. It used to be typed in a field right next to the items, which
+meant the same number existed twice and could disagree with itself. Editing a
+budget with no items falls back to whatever was stored, so an old one can't be
+silently zeroed.
+
+**No markup override field.** A per-budget rate is a rare exception and the rate
+cards (§12) cover the normal case. The column still exists and is passed through
+untouched on save, so a budget that has one doesn't lose it.
+
 ### Items and their pieces
 
 A budget's recurring charges are **items** (a channel) with optional **pieces**
@@ -885,6 +905,19 @@ splitting an item. The hierarchy is the affordance.
 
 Splitting a whole item for the first time names the existing row after its
 channel, so neither piece is left anonymous.
+
+**The item's total is held separately from its pieces, and it is the
+authoritative number.** If the total were just the sum of the pieces, then
+splitting a $3,000 Google buy and typing "Search 500" would silently make it a
+$3,500 buy — the committed number would move because somebody else got granular.
+Instead the total stays put, pieces divide it, and the gap is shown: *"$1,500 of
+$3,000 split · $1,500 stays as Google."* Over-splitting warns rather than blocks,
+matching §8.3.
+
+On save the nesting flattens back to one fee row per line the layout will
+create: the named pieces, plus the unattributed remainder as an unnamed row. So
+the item's total survives the round trip instead of shrinking to whatever
+happened to be named.
 
 ### Year and month
 

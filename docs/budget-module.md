@@ -926,12 +926,23 @@ SEM and Search is two rows in the ledger. That's correct — the pacer needs
 channel-level money — but it's the wrong thing to LEAD with. What somebody
 entered was "Some Sales Event"; the split is detail inside it.
 
-So the month view groups by `agreementId`: the budget's name is the row, its
-pieces expand underneath. A budget with one piece has no disclosure arrow —
-opening it to reveal a single identical row would be a lie about there being
-more. Money with no budget behind it (one-offs, ticket money, the Oz Reports
-import) gets its own "Not part of a budget" section rather than being folded
-into one it doesn't belong to.
+So **both** views group by `agreementId` and the budget's name is the row. The
+year grid's cell used to list the raw pieces while the month view showed the
+budget — the same money reading two different ways depending on where you
+clicked is its own kind of wrong.
+
+The pieces live in the **side panel**, not in an inline dropdown. Expanding a
+row in place pushed everything below it down and left the pieces nowhere to be
+edited; the panel has room for real fields, and it's where every other detail on
+this page already opens. Each piece's amount saves on blur — one field per row,
+so a Save button per row is more chrome than the edit deserves, and per-piece
+saves keep one mistyped field from writing four audit events. An arrow on each
+piece opens the full line drawer for type, cost, status and history.
+
+A budget with one piece goes straight to that line: a panel listing a single row
+is a step that teaches nothing. Money with no budget behind it (one-offs, ticket
+money, the Oz Reports import) keeps its own section rather than being folded into
+a budget it doesn't belong to.
 
 ### No pool, no separate "committed"
 

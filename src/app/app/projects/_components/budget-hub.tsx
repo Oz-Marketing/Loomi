@@ -11,6 +11,7 @@ import { toast } from '@/lib/toast';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { AccountAvatar } from '@/components/account-avatar';
 import {
+  channelLabel,
   BUDGET_CHANNELS,
   LINE_TYPES,
   isPacedChannel,
@@ -24,6 +25,7 @@ import { BudgetLineDrawer } from './budget-line-drawer';
 import { BudgetAgreementModal } from './budget-agreement-modal';
 import { BudgetCategorizeModal } from './budget-categorize-modal';
 import { BudgetMonthView } from './budget-month-view';
+import { BudgetGroupDrawer } from './budget-group-drawer';
 import { StatusPill } from './budget-status-pill';
 import {
   LINE_TYPE_COLOR,
@@ -199,6 +201,49 @@ export function BudgetHub() {
     if (!openCell) return [];
     return placed.filter((l) => l.channel === openCell.channel && l.period === openCell.period);
   }, [openCell, placed]);
+
+  /**
+   * The open cell's lines rolled up by the budget they came from — the same
+   * shape the month view shows. A cell held the raw pieces (SEM, Search) while
+   * the month view showed "Some Sales Event"; the same money reading two
+   * different ways depending on where you clicked is its own kind of wrong.
+   */
+  const cellGroups = useMemo(() => {
+    const byBudget = new Map<string, BudgetLine[]>();
+    const loose: BudgetLine[] = [];
+    for (const l of cellLines) {
+      if (!l.agreementId) {
+        loose.push(l);
+        continue;
+      }
+      const rows = byBudget.get(l.agreementId) ?? [];
+      rows.push(l);
+      byBudget.set(l.agreementId, rows);
+    }
+    return {
+      budgets: [...byBudget.entries()]
+        .map(([id, rows]) => ({
+          id,
+          name: agreements.find((a) => a.id === id)?.name ?? rows[0]?.label ?? 'Budget',
+          rows,
+          amount: rows.reduce((t, r) => t + r.amount, 0),
+        }))
+        .sort((a, b) => b.amount - a.amount),
+      loose,
+    };
+  }, [cellLines, agreements]);
+
+  /** The budget pieces shown in the side panel, when one is open. */
+  const [activeGroup, setActiveGroup] = useState<{ title: string; lineIds: string[] } | null>(null);
+  const activeGroupLines = useMemo(
+    () =>
+      activeGroup
+        ? activeGroup.lineIds
+            .map((id) => activeLines.find((l) => l.id === id))
+            .filter((l): l is BudgetLine => !!l)
+        : [],
+    [activeGroup, activeLines],
+  );
 
   /**
    * The sub-line under "Total budget". A term that only partly
@@ -632,6 +677,9 @@ export function BudgetHub() {
                 budgets={agreements}
                 onMonthChange={setFocusMonth}
                 onOpenLine={setActiveLineId}
+                onOpenGroup={(title, rows) =>
+                  setActiveGroup({ title, lineIds: rows.map((r) => r.id) })
+                }
               />
             ) : grid.length === 0 ? (
               <div className="rounded-2xl border border-dashed border-[var(--border)] py-14 text-center">
@@ -805,7 +853,14 @@ export function BudgetHub() {
                                     Close
                                   </button>
                                 </div>
-                                <LineList lines={cellLines} onOpen={setActiveLineId} />
+                                <LineList
+                                  groups={cellGroups.budgets}
+                                  loose={cellGroups.loose}
+                                  onOpen={setActiveLineId}
+                                  onOpenGroup={(title, rows) =>
+                                    setActiveGroup({ title, lineIds: rows.map((r) => r.id) })
+                                  }
+                                />
                               </div>
                             </Collapse>
                           </td>
@@ -864,6 +919,20 @@ export function BudgetHub() {
           onArchive={archiveAgreement}
           onGenerate={generateFees}
           onClose={() => setAddFlow(null)}
+        />
+      )}
+
+      {activeGroup && activeGroupLines.length > 0 && (
+        <BudgetGroupDrawer
+          title={activeGroup.title}
+          period={activeGroupLines[0]!.period ?? ''}
+          lines={activeGroupLines}
+          onClose={() => setActiveGroup(null)}
+          onOpenLine={(id) => {
+            setActiveGroup(null);
+            setActiveLineId(id);
+          }}
+          onChanged={() => void reload()}
         />
       )}
 
@@ -972,23 +1041,63 @@ function ProgressBar({
   );
 }
 
+/**
+ * A cell's contents: budgets first, then anything standalone.
+ *
+ * A budget shows as ONE row named after the budget, not as its pieces — the
+ * same thing the month view leads with. Clicking it opens the panel holding
+ * those pieces; a single-piece budget goes straight to the line, since a panel
+ * listing one row is a step that teaches nothing.
+ */
 function LineList({
-  lines,
+  groups,
+  loose,
   onOpen,
+  onOpenGroup,
 }: {
-  lines: BudgetLine[];
+  groups: { id: string; name: string; rows: BudgetLine[]; amount: number }[];
+  loose: BudgetLine[];
   onOpen: (id: string) => void;
+  onOpenGroup: (title: string, rows: BudgetLine[]) => void;
 }) {
-  if (lines.length === 0) {
+  if (groups.length === 0 && loose.length === 0) {
     return <p className="text-sm text-[var(--muted-foreground)]">No lines here.</p>;
   }
   return (
     <ul className="divide-y divide-[var(--border)]">
-      {lines.map((l) => {
+      {groups.map((g) => {
+        const single = g.rows.length === 1;
+        return (
+          <li key={g.id}>
+            <button
+              type="button"
+              onClick={() => (single ? onOpen(g.rows[0]!.id) : onOpenGroup(g.name, g.rows))}
+              className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-[var(--muted)]/60"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-[var(--foreground)]">{g.name}</span>
+                <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
+                  {single
+                    ? sourceLabel(g.rows[0]!.source)
+                    : `${g.rows.length} items · ${g.rows.map((r) => r.label || channelLabel(r.channel)).join(', ')}`}
+                </span>
+              </span>
+              <span className="flex flex-shrink-0 items-center gap-2">
+                {single && <StatusPill status={g.rows[0]!.status} />}
+                <span className="text-sm font-medium tabular-nums text-[var(--foreground)]">
+                  {usd2(g.amount)}
+                </span>
+              </span>
+            </button>
+          </li>
+        );
+      })}
+
+      {loose.map((l) => {
         // Drop anything that just repeats the title. Both of these genuinely
-        // collide: a Managed Marketing Service line is labelled with its own
-        // source, and a ticket-sourced line takes the ticket's title as its
-        // label — so the row printed its own name twice in two different ways.
+        // collide: a budget-sourced line is labelled with its own source, and
+        // a ticket-sourced line takes the ticket's title as its label — so the
+        // row printed its own name twice in two different ways.
         const title = l.label || l.taskTitle || '';
         const sub = [
           sourceLabel(l.source) === title ? null : sourceLabel(l.source),
@@ -998,30 +1107,30 @@ function LineList({
           .filter(Boolean)
           .join(' · ');
         return (
-        <li key={l.id}>
-          <button
-            type="button"
-            onClick={() => onOpen(l.id)}
-            className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-[var(--muted)]/60"
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-sm text-[var(--foreground)]">
-                {title || 'Untitled line'}
-              </span>
-              {sub && (
-                <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
-                  {sub}
+          <li key={l.id}>
+            <button
+              type="button"
+              onClick={() => onOpen(l.id)}
+              className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-lg px-2.5 py-2.5 text-left transition hover:bg-[var(--muted)]/60"
+            >
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm text-[var(--foreground)]">
+                  {title || 'Untitled line'}
                 </span>
-              )}
-            </span>
-            <span className="flex flex-shrink-0 items-center gap-2">
-              <StatusPill status={l.status} />
-              <span className="text-sm font-medium tabular-nums text-[var(--foreground)]">
-                {usd2(l.amount)}
+                {sub && (
+                  <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
+                    {sub}
+                  </span>
+                )}
               </span>
-            </span>
-          </button>
-        </li>
+              <span className="flex flex-shrink-0 items-center gap-2">
+                <StatusPill status={l.status} />
+                <span className="text-sm font-medium tabular-nums text-[var(--foreground)]">
+                  {usd2(l.amount)}
+                </span>
+              </span>
+            </button>
+          </li>
         );
       })}
     </ul>

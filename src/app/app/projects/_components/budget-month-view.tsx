@@ -1,10 +1,9 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { ChannelIcon } from '@/components/icons/channel-icon';
 import { channelLabel } from '@/lib/budget/channels';
-import { Collapse } from '@/components/ui/collapse';
 import { StatusPill } from './budget-status-pill';
 import { MONTH_ABBR, usd0, type BudgetAgreement, type BudgetLine } from './budget-shared';
 
@@ -35,6 +34,7 @@ export function BudgetMonthView({
   budgets,
   onMonthChange,
   onOpenLine,
+  onOpenGroup,
 }: {
   year: number;
   /** 1–12. */
@@ -44,15 +44,9 @@ export function BudgetMonthView({
   budgets: BudgetAgreement[];
   onMonthChange: (month: number) => void;
   onOpenLine: (id: string) => void;
+  /** Opens the panel holding a budget's pieces for this month. */
+  onOpenGroup: (title: string, lines: BudgetLine[]) => void;
 }) {
-  const [open, setOpen] = useState<Set<string>>(new Set());
-  const toggle = (id: string) =>
-    setOpen((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
   const period = `${year}-${String(month).padStart(2, '0')}`;
 
   /**
@@ -181,60 +175,40 @@ export function BudgetMonthView({
       ) : (
         <div>
           {groups.map((group, gi) => {
-            const expanded = open.has(group.id);
-            // A budget with one piece has nothing to reveal — showing a
-            // disclosure arrow that opens a single identical row is a lie
-            // about there being more.
+            // A budget with one piece has nothing to reveal — send it straight
+            // to the line rather than through a panel listing one row.
             const single = group.rows.length === 1;
             return (
-              <div
+              <button
                 key={group.id}
+                type="button"
                 style={{ animationDelay: `${Math.min(gi, 8) * 25}ms` }}
-                className="animate-fade-in-up border-b border-[var(--border)] last:border-0"
+                onClick={() =>
+                  single ? onOpenLine(group.rows[0]!.id) : onOpenGroup(group.name, group.rows)
+                }
+                className="animate-fade-in-up flex w-full items-center gap-3 border-b border-[var(--border)] px-4 py-2.5 text-left transition last:border-0 hover:bg-[var(--muted)]/40"
               >
-                <button
-                  type="button"
-                  onClick={() => (single ? onOpenLine(group.rows[0]!.id) : toggle(group.id))}
-                  className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-[var(--muted)]/40"
-                >
-                  {single ? (
-                    <ChannelIcon
-                      channel={group.rows[0]!.channel}
-                      className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]"
-                    />
-                  ) : (
-                    <ChevronRightIcon
-                      className={`h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)] transition-transform duration-200 ${
-                        expanded ? 'rotate-90' : ''
-                      }`}
-                    />
-                  )}
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-[var(--foreground)]">
-                      {group.name}
-                    </span>
-                    <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
-                      {single
-                        ? channelLabel(group.rows[0]!.channel)
-                        : `${group.rows.length} items`}
-                    </span>
+                <ChannelIcon
+                  channel={single ? group.rows[0]!.channel : null}
+                  className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-[var(--foreground)]">
+                    {group.name}
                   </span>
-                  {single && <StatusPill status={group.rows[0]!.status} />}
-                  <span className="w-24 text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
-                    {usd0(group.amount)}
+                  <span className="block truncate text-[11px] text-[var(--muted-foreground)]">
+                    {single
+                      ? channelLabel(group.rows[0]!.channel)
+                      : `${group.rows.length} items · ${[
+                          ...new Set(group.rows.map((r) => channelLabel(r.channel))),
+                        ].join(', ')}`}
                   </span>
-                </button>
-
-                {!single && (
-                  <Collapse open={expanded}>
-                    <div className="border-t border-[var(--border)] bg-[var(--muted)]/15 pb-1 pl-6">
-                      {group.rows.map((line) => (
-                        <PieceRow key={line.id} line={line} onOpen={onOpenLine} />
-                      ))}
-                    </div>
-                  </Collapse>
-                )}
-              </div>
+                </span>
+                {single && <StatusPill status={group.rows[0]!.status} />}
+                <span className="w-24 text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                  {usd0(group.amount)}
+                </span>
+              </button>
             );
           })}
 

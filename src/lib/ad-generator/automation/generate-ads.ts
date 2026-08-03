@@ -16,6 +16,7 @@ import { isS3Configured } from '@/lib/s3';
 import { resolveDisclaimerText } from '../disclaimer-resolve';
 import type { AdData } from '../types';
 import { creativeOfferKey, offerFingerprint } from './fingerprint';
+import type { SkippedVehicle } from './skip-reasons';
 import {
   chooseVehicleImage,
   pickStockUnit,
@@ -54,20 +55,9 @@ import { selectOffer, type SelectableOfferType } from './select-offer';
 
 const NOTIFY_LINK = '/ad-generator';
 
-export type SkipReason =
-  | 'stock_gate'
-  | 'no_eligible_offer'
-  | 'no_template'
-  /** EVOX has no licensed imagery for the model, and dealer photos are never
-   *  used. Reported separately from `preflight_failed` because it's the one skip
-   *  reason with a purely commercial fix — extending EVOX coverage — rather than
-   *  anything to change in the data or the template. */
-  | 'no_vehicle_imagery'
-  /** A required OEM sales-event mark has no element to render into. */
-  | 'no_event_slot'
-  | 'preflight_failed'
-  | 'render_failed'
-  | 'cap_reached';
+// The reason vocabulary lives in `skip-reasons` so the run-history UI can label a
+// skip without importing this server-only module.
+export type { SkipReason, SkippedVehicle } from './skip-reasons';
 
 export interface GeneratedAd {
   creativeId: string;
@@ -88,12 +78,6 @@ export interface GeneratedAd {
   warnings: string[];
   /** True when this run updated an existing draft rather than creating one. */
   updated: boolean;
-}
-
-export interface SkippedVehicle {
-  vehicle: string;
-  reason: SkipReason;
-  detail: string;
 }
 
 export interface GenerateResult {

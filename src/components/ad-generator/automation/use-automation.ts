@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
+import { summarizeSkips } from '@/lib/ad-generator/automation/skip-reasons';
 import type { ShadowReport } from './types';
 
 /**
@@ -151,11 +152,23 @@ export function useAutomation(accountKey: string | null): Automation {
         } else if (action === 'poll_offers') {
           toast.success(`Polled ${json.scopes} vehicle(s): ${json.offersNew} new, ${json.offersEnded} ended`);
         } else if (action === 'generate') {
-          const skipped = (json.skipped ?? []).length;
-          toast[json.created || json.refreshed ? 'success' : 'warning'](
-            json.created || json.refreshed
-              ? `${json.created} new draft(s), ${json.refreshed} refreshed${skipped ? `, ${skipped} skipped` : ''}`
-              : `No ads generated — ${skipped} vehicle(s) skipped.`,
+          // Name the reasons here rather than only counting them. The response
+          // carries them, so "see Run history" was making people go and look up
+          // something we already had in hand.
+          const skips = (json.skipped ?? []) as { vehicle: string; reason: string; detail: string }[];
+          const built = json.created || json.refreshed;
+          toast[built ? 'success' : 'warning'](
+            built
+              ? `${json.created} new draft(s), ${json.refreshed} refreshed${skips.length ? `, ${skips.length} skipped` : ''}`
+              : `No ads generated — ${summarizeSkips(skips) || `${skips.length} vehicle(s) skipped`}.`,
+            skips.length
+              ? {
+                  description: built
+                    ? summarizeSkips(skips)
+                    : skips[0].detail || 'Open Run history for the full detail.',
+                  duration: 10_000,
+                }
+              : undefined,
           );
         } else {
           toast.success('Saved');

@@ -931,7 +931,19 @@ year grid's cell used to list the raw pieces while the month view showed the
 budget — the same money reading two different ways depending on where you
 clicked is its own kind of wrong.
 
-The pieces live in the **side panel**, not in an inline dropdown. Expanding a
+The pieces live in the **side panel**, not in an inline dropdown, and there is
+only ONE panel. It briefly had two — a group view listing pieces and a line
+drawer you drilled into — so the same click landed you somewhere different
+depending on how many pieces a budget had, and the drawer spent most of its
+height on Status / Save changes / Close out / Release while the pieces had
+nowhere to be edited. A single line is now a group of one: same component, no
+branch, no drill-through.
+
+Each piece carries its name, amount, channel and base/added inline. Nothing is
+batched behind a Save button — names and amounts commit on blur, selects on
+change — because each piece is its own ledger line with its own audit trail, and
+one button writing four lines turns a single mistyped field into four events
+nobody can read back. Expanding a
 row in place pushed everything below it down and left the pieces nowhere to be
 edited; the panel has room for real fields, and it's where every other detail on
 this page already opens. Each piece's amount saves on blur — one field per row,

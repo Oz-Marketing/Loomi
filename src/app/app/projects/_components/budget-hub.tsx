@@ -21,11 +21,10 @@ import { Collapse } from '@/components/ui/collapse';
 import { periodOf } from '@/lib/budget/period';
 import { useAccount } from '@/contexts/account-context';
 import { jsonFetcher } from './fetcher';
-import { BudgetLineDrawer } from './budget-line-drawer';
 import { BudgetAgreementModal } from './budget-agreement-modal';
 import { BudgetCategorizeModal } from './budget-categorize-modal';
 import { BudgetMonthView } from './budget-month-view';
-import { BudgetGroupDrawer } from './budget-group-drawer';
+import { BudgetPanel } from './budget-panel';
 import { StatusPill } from './budget-status-pill';
 import {
   LINE_TYPE_COLOR,
@@ -68,7 +67,6 @@ export function BudgetHub() {
   /** Year grid vs one month in full. */
   const [view, setView] = useState<'year' | 'month'>('year');
   const [focusMonth, setFocusMonth] = useState(() => new Date().getMonth() + 1);
-  const [activeLineId, setActiveLineId] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     if (!accountKey) return;
@@ -233,8 +231,24 @@ export function BudgetHub() {
     };
   }, [cellLines, agreements]);
 
-  /** The budget pieces shown in the side panel, when one is open. */
+  /**
+   * What the side panel is showing: a title and the lines under it. A single
+   * line is a group of one, so there's one panel rather than a group view and
+   * a line view that each handle half the job.
+   */
   const [activeGroup, setActiveGroup] = useState<{ title: string; lineIds: string[] } | null>(null);
+  const openLine = useCallback(
+    (id: string) => {
+      const line = activeLines.find((l) => l.id === id);
+      if (line) {
+        setActiveGroup({
+          title: line.label || line.taskTitle || channelLabel(line.channel),
+          lineIds: [id],
+        });
+      }
+    },
+    [activeLines],
+  );
   const activeGroupLines = useMemo(
     () =>
       activeGroup
@@ -676,7 +690,7 @@ export function BudgetHub() {
                 lines={activeLines}
                 budgets={agreements}
                 onMonthChange={setFocusMonth}
-                onOpenLine={setActiveLineId}
+                onOpenLine={openLine}
                 onOpenGroup={(title, rows) =>
                   setActiveGroup({ title, lineIds: rows.map((r) => r.id) })
                 }
@@ -856,7 +870,7 @@ export function BudgetHub() {
                                 <LineList
                                   groups={cellGroups.budgets}
                                   loose={cellGroups.loose}
-                                  onOpen={setActiveLineId}
+                                  onOpen={openLine}
                                   onOpenGroup={(title, rows) =>
                                     setActiveGroup({ title, lineIds: rows.map((r) => r.id) })
                                   }
@@ -923,27 +937,15 @@ export function BudgetHub() {
       )}
 
       {activeGroup && activeGroupLines.length > 0 && (
-        <BudgetGroupDrawer
+        <BudgetPanel
           title={activeGroup.title}
           period={activeGroupLines[0]!.period ?? ''}
           lines={activeGroupLines}
           onClose={() => setActiveGroup(null)}
-          onOpenLine={(id) => {
-            setActiveGroup(null);
-            setActiveLineId(id);
-          }}
           onChanged={() => void reload()}
         />
       )}
 
-      {activeLineId && (
-        <BudgetLineDrawer
-          lineId={activeLineId}
-          year={year}
-          onClose={() => setActiveLineId(null)}
-          onChanged={() => void reload()}
-        />
-      )}
     </div>
   );
 }

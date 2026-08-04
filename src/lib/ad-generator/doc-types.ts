@@ -82,6 +82,9 @@ export interface GradientFill {
  * live PER SIZE in `layouts` (so a designer tunes each aspect ratio
  * independently) — an element is the same thing across sizes, just placed
  * differently.
+ *
+ * Style here is the value used by EVERY size unless that size overrides it in
+ * `TemplateDoc.overrides` — see {@link TemplateDoc.overrides}.
  */
 export interface DocElement {
   id: string;
@@ -289,5 +292,16 @@ export interface TemplateDoc {
   groups?: { id: string; name: string; parentId?: string; collapsed?: boolean }[];
   /** sizeId → (elementId → placement). */
   layouts: Record<string, Record<string, DocLayoutBox>>;
+  /**
+   * sizeId → (elementId → style that differs ON THAT SIZE).
+   *
+   * Placement was always per size while STYLE was always shared, so a designer
+   * could tune the square's layout freely but couldn't make its headline a
+   * different colour without changing all fifteen boards. These are the opt-out:
+   * only the keys a size actually diverges on are stored, and the renderer merges
+   * them over the element. Absent (as on every doc written before this existed)
+   * means every size uses the shared style — so there's nothing to migrate.
+   */
+  overrides?: Record<string, Record<string, Partial<DocElement>>>;
   defaults: AdData;
 }

@@ -41,7 +41,10 @@ import {
   type BudgetChange,
   type HealthHoverDay,
 } from '@/lib/ad-pacer/pacing-engine';
-import { OVERAGE_ALLOWANCE_DEFAULT } from '@/lib/ad-pacer/constants';
+import {
+  OVERAGE_ALLOWANCE_DEFAULT,
+  RAISE_STEP_CAP,
+} from '@/lib/ad-pacer/constants';
 import { zonedTodayIso } from '@/lib/timezone';
 import {
   GooglePacingBadges,
@@ -538,16 +541,24 @@ export function PacerRow({
   // decides whether the box shows a number or the word "No change".
   const dailyDelta = calc.recDaily - calc.dailyBudget;
 
-  // Health-based accent colors the left stripe AND the compact pacing badge in
-  // the summary row. On Meta daily lines the direction comes from the ENGINE
-  // (§6.1/§6.4) so the badge can never contradict the recommendation; lifetime
-  // and Google lines pass no direction and keep the legacy classification.
-  const health = useMemo(
+  // The one over/under verdict for this row: the engine's band and warm-up /
+  // delivery gates applied to the projection the card DISPLAYS (calc.projected
+  // — the Projected Spend box). Badge, footer message and its dollar figure all
+  // read this, so the three can't tell three different stories. null = no call
+  // (warm-up); undefined = not a Meta daily line (lifetime / Google keep the
+  // legacy classification).
+  const metaDirection = useMemo(
     () =>
       metaRec != null
-        ? classifyPacerHealth(ad, calc, pacingDirection(metaRec, calc.budget))
-        : classifyPacerHealth(ad, calc),
-    [ad, calc, metaRec],
+        ? pacingDirection(metaRec, calc.budget, calc.projected)
+        : undefined,
+    [metaRec, calc.budget, calc.projected],
+  );
+  // Health-based accent colors the left stripe AND the compact pacing badge in
+  // the summary row.
+  const health = useMemo(
+    () => classifyPacerHealth(ad, calc, metaDirection),
+    [ad, calc, metaDirection],
   );
 
   // Resolved = the user billed the ad's full run in its own month
@@ -1560,9 +1571,14 @@ export function PacerRow({
           );
         }
         // The state descriptor speaks (the rec box already showed the number):
-        // on-track reassures, adjust explains the raise/trim, delivery-low says
-        // a bigger budget won't fix a delivery problem. Falls back to the plain
-        // projection bands without a target.
+        // on-track reassures, over/under explains the raise/trim, delivery-low
+        // says a bigger budget won't fix a delivery problem. Falls back to the
+        // plain projection bands without a target.
+        //
+        // The two GATES (warm-up, delivery) are read off the engine state; the
+        // arithmetic over/under call is read off `metaDirection`, i.e. the
+        // Projected Spend box measured against the engine's band — the same
+        // verdict driving the badge, so badge and prose always agree.
         if (metaRec != null) {
           switch (metaRec.state) {
             case 'warmup':
@@ -1614,34 +1630,50 @@ export function PacerRow({
                   rejection, and feed freshness, then re-evaluate.
                 </p>
               );
-            case 'adjust':
-              return metaRec.direction === 'trim' ? (
-                <p
-                  className="m-0 text-[11px] leading-relaxed"
-                  style={{ color: COLORS.warn }}
-                >
-                  Projected to overspend by{' '}
-                  {fmt(Math.max(0, metaRec.projectedRunrate - calc.budget))} by{' '}
-                  {fmtDate(effectiveEnd)}. Lower the daily budget to{' '}
-                  {fmt(calc.recDaily)} to stay on target
-                  {metaRec.largeJump ? ' — a large change, monitor it' : ''}.
-                </p>
-              ) : (
-                <p
-                  className="m-0 text-[11px] leading-relaxed"
-                  style={{ color: COLORS.lifetime }}
-                >
-                  On pace to underspend by{' '}
-                  {fmt(Math.max(0, calc.budget - metaRec.projectedRunrate))} —
-                  setting the daily budget to {fmt(calc.recDaily)} uses the
-                  full target by {fmtDate(effectiveEnd)}
-                  {metaRec.largeJump
-                    ? ' (a large jump — stage it and monitor)'
-                    : ''}
-                  .
-                </p>
-              );
-            case 'on_track':
+            // on_track / adjust — the purely arithmetic call, and the one place
+            // the engine's own state is NOT what speaks. The direction and the
+            // dollar figure both come from `calc.projected` (the Projected
+            // Spend box) measured against the engine's band, so the prose, the
+            // figure and the badge are one verdict. Reading the engine's
+            // run-rate projection here is what put "underspend by $54.73" under
+            // a box showing $376.69 of a $385 target.
+            default: {
+              // Re-derived rather than read off metaRec.largeJump: the engine
+              // only sets that flag on its own `adjust` states, so a row the
+              // box calls off-band while the run rate reads on-track would
+              // otherwise lose the "stage it" caveat.
+              const largeJump =
+                calc.dailyBudget > 0 &&
+                Math.abs(calc.recDaily - calc.dailyBudget) / calc.dailyBudget >
+                  RAISE_STEP_CAP;
+              if (metaDirection === 'over') {
+                return (
+                  <p
+                    className="m-0 text-[11px] leading-relaxed"
+                    style={{ color: COLORS.warn }}
+                  >
+                    Projected to overspend by{' '}
+                    {fmt(calc.projected - calc.budget)} by{' '}
+                    {fmtDate(effectiveEnd)}. Lower the daily budget to{' '}
+                    {fmt(calc.recDaily)} to stay on target
+                    {largeJump ? ' — a large change, monitor it' : ''}.
+                  </p>
+                );
+              }
+              if (metaDirection === 'under') {
+                return (
+                  <p
+                    className="m-0 text-[11px] leading-relaxed"
+                    style={{ color: COLORS.lifetime }}
+                  >
+                    On pace to underspend by{' '}
+                    {fmt(calc.budget - calc.projected)} — setting the daily
+                    budget to {fmt(calc.recDaily)} uses the full target by{' '}
+                    {fmtDate(effectiveEnd)}
+                    {largeJump ? ' (a large jump — stage it and monitor)' : ''}.
+                  </p>
+                );
+              }
               return (
                 <p
                   className="m-0 text-[11px] leading-relaxed"
@@ -1650,6 +1682,7 @@ export function PacerRow({
                   On track for {fmtDate(effectiveEnd)} — no change needed.
                 </p>
               );
+            }
           }
         }
         const overspendThreshold = calc.budget * 1.05;

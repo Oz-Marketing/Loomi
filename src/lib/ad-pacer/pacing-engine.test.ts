@@ -882,6 +882,86 @@ describe('pacingDirection', () => {
   });
 });
 
+describe('pacingDirection on the DISPLAYED projection', () => {
+  // The reported card: $385 target, $34.78 spent, $12.42/day, 27.53 days left,
+  // 86% delivery ("light"). Two projections disagreed on screen — the box showed
+  // $376.69 (budget rate) while the badge and message spoke for the engine's
+  // efficiency-weighted $328.84, hence "underspend by $54.73" under a box that
+  // was $8.31 short. Passing the box projection makes one verdict of it.
+  const CARD = {
+    target: 385,
+    actualSpend: 34.78,
+    daysRemaining: 27.53,
+    totalDays: 31,
+    dailyBudget: 12.42,
+    // 86% delivery — 'soft' (the card labels it "light"), NOT the 'low' verdict
+    // that would trip the delivery gate.
+    health: healthAtRate(12.42, 12.42 * 0.8642, { verdict: 'soft' }),
+    overageAllowance: 0.75,
+    flightLengthDays: 31,
+  };
+  /** What the Projected Spend box shows — current daily × days left. */
+  const boxProjection = CARD.actualSpend + CARD.dailyBudget * CARD.daysRemaining;
+
+  it('the two projections really are far apart on this card', () => {
+    const rec = buildMetaRecommendation(CARD)!;
+    expect(boxProjection).toBeCloseTo(376.69, 1);
+    expect(rec.projectedRunrate).toBeCloseTo(330.27, 1);
+    // $54.73 vs $8.31 — the variance the operator couldn't reconcile.
+    expect(CARD.target - rec.projectedRunrate).toBeCloseTo(54.73, 1);
+    expect(CARD.target - boxProjection).toBeCloseTo(8.3, 1);
+  });
+
+  it('reads the displayed projection against the band, not the run rate', () => {
+    const rec = buildMetaRecommendation(CARD)!;
+    // The engine still wants a raise off its own projection…
+    expect(rec.state).toBe('adjust');
+    expect(rec.direction).toBe('raise');
+    expect(pacingDirection(rec, CARD.target)).toBe('under');
+    // …but $8.31 on $385 with 27.53 of 31 days left is inside the ±4.4% band,
+    // so what the card SHOWS is on target. Badge and message follow the card.
+    expect(pacingDirection(rec, CARD.target, boxProjection)).toBe('on_target');
+  });
+
+  it('still calls a genuine box-projected shortfall under', () => {
+    const rec = buildMetaRecommendation(CARD)!;
+    // Same ad at a $6/day budget: box projection 34.78 + 6 × 27.53 = $199.96.
+    expect(pacingDirection(rec, CARD.target, 34.78 + 6 * 27.53)).toBe('under');
+  });
+
+  it('calls a box-projected overspend over', () => {
+    const rec = buildMetaRecommendation(CARD)!;
+    expect(pacingDirection(rec, CARD.target, 34.78 + 20 * 27.53)).toBe('over');
+  });
+
+  it('delivery-low is not overridden by the arithmetic — it stays under', () => {
+    // Half its budget delivering, while the box projection lands dead on
+    // target. A green badge here would be a lie: the ad is not spending it.
+    const rec = buildMetaRecommendation({
+      ...CARD,
+      health: healthAtRate(CARD.dailyBudget, CARD.dailyBudget * 0.5, {
+        verdict: 'low',
+      }),
+    })!;
+    expect(rec.state).toBe('delivery_low');
+    expect(pacingDirection(rec, CARD.target, CARD.target)).toBe('under');
+  });
+
+  it('warm-up still withholds the call regardless of the projection', () => {
+    const rec = buildMetaRecommendation({
+      ...CARD,
+      health: healthAtRate(CARD.dailyBudget, CARD.dailyBudget, { daysLive: 1 }),
+    })!;
+    expect(rec.state).toBe('warmup');
+    expect(pacingDirection(rec, CARD.target, boxProjection)).toBeNull();
+  });
+
+  it('ignores a non-finite projection and falls back to the run rate', () => {
+    const rec = buildMetaRecommendation(CARD)!;
+    expect(pacingDirection(rec, CARD.target, NaN)).toBe('under');
+  });
+});
+
 describe('badge ↔ recommendation agreement (§6.1)', () => {
   const calc = (over: Partial<Parameters<typeof classifyPacerHealth>[1]> = {}) => ({
     budget: 300,

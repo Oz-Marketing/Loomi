@@ -33,7 +33,6 @@ interface MonthAd {
   // §3: a lifetime ad still running — excluded from the over/under base (both
   // its actual slice AND its allocation) while in progress; books its single
   // variance once it completes. Still counted in total month spend.
-  lifetimeInProgress: boolean;
   // §2a: the YYYY-MM the ad's full run was counted in (resolved straddler), or
   // null. Drives the 'full run → applied to [month]' badge on the row.
   fullRunAppliedToMonth: string | null;
@@ -146,7 +145,6 @@ function OverUnderMonthView({
                 pacerActual?: string | null;
                 pacerRunSpend?: string | null;
                 fullRunAppliedToMonth?: string | null;
-                lifetimeInProgress?: boolean;
                 variance?: {
                   inMonthSpend: number;
                   billedActual: number;
@@ -174,7 +172,6 @@ function OverUnderMonthView({
                   // Display/total = what actually spent THIS month (the slice);
                   // the over/under uses billedActual from `variance` below.
                   actual: a.variance?.inMonthSpend ?? effectiveActual(eff),
-                  lifetimeInProgress: a.lifetimeInProgress === true,
                   fullRunAppliedToMonth: a.fullRunAppliedToMonth ?? null,
                   variance: a.variance,
                 };
@@ -204,7 +201,6 @@ function OverUnderMonthView({
                     splitBaseAmount: null,
                     allocation: row.clientBudget,
                     actual: row.actual,
-                    lifetimeInProgress: false,
                     fullRunAppliedToMonth: null,
                   },
                 ]
@@ -238,17 +234,10 @@ function OverUnderMonthView({
   //  • totalInMonth — what actually spent THIS calendar month (every ad's
   //    in-month slice). The honest "total spend".
   //  • overUnderActual — what the over/under is BILLED on: the full run for an
-  //    ad the user billed cross-month (variance.billedActual), and $0 for an
-  //    in-progress lifetime ad (§3, books on completion) — so both are handled
-  //    without a separate subtraction.
+  //    ad the user billed cross-month (variance.billedActual), else its slice.
+  //    A running lifetime ad is NOT held out — it spends close to its set budget
+  //    whether or not the run has closed, so it counts here the whole time.
   const allAds = data?.ads ?? [];
-  const inProgressLifetime = allAds.filter((a) => a.lifetimeInProgress);
-  // Of those, the cross-month runs deferred to a future month (vs single-month
-  // lifetime ads that settle at this month's close — Prompt 2).
-  const deferredLifetimeCount = inProgressLifetime.filter(
-    (a) => a.variance?.settlesThisMonth === false,
-  ).length;
-  const ipLifeAlloc = inProgressLifetime.reduce((s, a) => s + a.allocation, 0);
   const totalInMonth = allAds.reduce((s, a) => s + a.actual, 0);
   const overUnderActual = allAds.reduce(
     (s, a) => s + (a.variance?.billedActual ?? a.actual),
@@ -256,13 +245,11 @@ function OverUnderMonthView({
   );
   const daysIn = daysInPeriod(period);
   const daysElapsed = daysElapsedInPeriod(period);
-  // Target nets out an in-progress lifetime ad's allocation (§3).
-  const shouldHaveSpent = budgetActual - ipLifeAlloc;
+  const shouldHaveSpent = budgetActual;
   const variance = overUnderActual - shouldHaveSpent;
 
-  // What explains total ≠ over/under basis: cross-month-billed runs (billed here
-  // but spent in another month) + in-progress lifetime spend (spent this month,
-  // not yet booked).
+  // What explains total ≠ over/under basis: cross-month-billed runs — billed
+  // here but spent in another month.
   const billedElsewhere = allAds.reduce(
     (s, a) =>
       a.variance?.klass === 'billed-cross-month'
@@ -270,7 +257,6 @@ function OverUnderMonthView({
         : s,
     0,
   );
-  const heldOutLifetime = inProgressLifetime.reduce((s, a) => s + a.actual, 0);
   const crossMonthCount = allAds.filter(
     (a) => a.variance?.klass === 'billed-cross-month',
   ).length;
@@ -343,26 +329,15 @@ function OverUnderMonthView({
                               {' · '}
                               {ad.allocation > 0 ? fmt(ad.allocation) : '—'}
                             </span>
-                            {ad.lifetimeInProgress && (
-                              ad.variance?.settlesThisMonth === false ? (
-                                <Tooltip label="Cross-month lifetime run — its variance settles in a future month at flight completion (excluded here, still counted in total spend).">
-                                <span
-                                  className="ml-1 font-semibold"
-                                  style={{ color: COLORS.lifetime }}
-                                >
-                                  · lifetime · settles on completion
-                                </span>
-                                </Tooltip>
-                              ) : (
-                                <Tooltip label="Lifetime ad — not paceable (Meta controls delivery). It settles at this month's close, not a future month.">
-                                <span
-                                  className="ml-1 font-semibold"
-                                  style={{ color: COLORS.lifetime }}
-                                >
-                                  · lifetime · settles at month end
-                                </span>
-                                </Tooltip>
-                              )
+                            {ad.budgetType === 'Lifetime' && (
+                              <Tooltip label="Lifetime ad — Meta controls delivery, so there's no daily lever to pace. Its spend counts toward this month's over/under while it runs, like any other line.">
+                              <span
+                                className="ml-1 font-semibold"
+                                style={{ color: COLORS.lifetime }}
+                              >
+                                · lifetime
+                              </span>
+                              </Tooltip>
                             )}
                             {ad.fullRunAppliedToMonth && (
                               <Tooltip label="Full run counted in this month — the over/under compares the full run to the full target.">
@@ -448,9 +423,6 @@ function OverUnderMonthView({
                   </div>
                   <div className="text-[10px] text-[var(--muted-foreground)] mt-0.5">
                     {`${fmt(budgetGross)} × ${effectiveMarkup}`}
-                    {ipLifeAlloc > 0
-                      ? ` − ${fmt(ipLifeAlloc)} lifetime in progress`
-                      : ''}
                   </div>
                 </div>
               </div>
@@ -497,23 +469,6 @@ function OverUnderMonthView({
                   </span>{' '}
                   of the billed spend landed in another month (total spent this month{' '}
                   {fmt(totalInMonth)})
-                </div>
-                </Tooltip>
-              )}
-              {inProgressLifetime.length > 0 && (
-                <Tooltip label="A lifetime ad still running is excluded from the over/under — both its spend and its target — until its run completes, when its single variance books once. Its spend is still counted in the tracked total above.">
-                <div
-                  className="text-[10px] mt-1"
-                  style={{ color: COLORS.lifetime }}
-                >
-                  Excludes {inProgressLifetime.length} lifetime ad
-                  {inProgressLifetime.length === 1 ? '' : 's'} in progress ·{' '}
-                  {fmt(heldOutLifetime)} spent ·{' '}
-                  {deferredLifetimeCount === inProgressLifetime.length
-                    ? 'settles on completion'
-                    : deferredLifetimeCount === 0
-                      ? 'settles at month end'
-                      : `${deferredLifetimeCount} settle on completion, the rest at month end`}
                 </div>
                 </Tooltip>
               )}

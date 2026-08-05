@@ -275,6 +275,17 @@ the arithmetic end to end.
 `fullRunAppliedToMonth` and never `budgetType`, so a daily straddler is handled
 identically to a lifetime one.
 
+**No lifetime hold-out.** A running lifetime ad is not excluded from its month's
+over/under. It spends close to its set budget whether or not the run has closed,
+so its spend counts the whole time it is live, like a daily line (which is also
+only part-delivered mid-month — elapsed-time pacing, not exclusion, accounts for
+that). The genuine case that motivated the old hold-out — a budget deliberately
+spread across two months that Meta under-delivers in the first — is handled by
+the split-run settlement and by this ledger, both keyed on an explicit user mark
+rather than on "is it still running". That matters here: an exclusion keyed on
+run state silently dropped real spend out of a month's variance, and a run whose
+status never flipped dropped it forever.
+
 **Precedence against the split mechanism.** A run marked "split across months"
 settles by the *other* mechanism (once on its final month, against
 `metaLifetimeBudget`), so split members are excluded from this ledger. Two

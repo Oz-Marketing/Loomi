@@ -55,9 +55,6 @@ interface ReconMonth {
   appliedOut: number;
   unapplied: number;
   appliedIn: number;
-  // §3: month has a lifetime ad still running — excluded from the over/under
-  // base (books once on completion); drives the 'lifetime · in progress' badge.
-  hasLifetimeInProgress: boolean;
   // CM4: per-ad over/under contributions for this month — the row drill-down.
   ads?: {
     name: string;
@@ -560,19 +557,6 @@ export function ReconciliationPanel({
                               className="text-[9px] font-medium uppercase tracking-wider rounded px-1.5 py-0.5 bg-[var(--muted)] text-[var(--muted-foreground)]"
                             >
                               Backfilled
-                            </span>
-                            </Tooltip>
-                          )}
-                          {m.hasLifetimeInProgress && (
-                            <Tooltip label="A lifetime ad is still running this month — excluded from the over/under base (its single variance books once when the run completes). Its spend still shows in the Pacer's total spend.">
-                            <span
-                              className="text-[9px] font-medium uppercase tracking-wider rounded px-1.5 py-0.5"
-                              style={{
-                                background: 'rgba(167,139,250,0.15)',
-                                color: COLORS.lifetime,
-                              }}
-                            >
-                              Lifetime in progress
                             </span>
                             </Tooltip>
                           )}

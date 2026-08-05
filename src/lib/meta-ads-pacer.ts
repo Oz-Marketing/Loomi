@@ -18,7 +18,6 @@ import { getGlobalDefaultMarkup } from '@/lib/services/markup';
 // §3: the ONE "lifetime ad still running" predicate, shared with the client so
 // the over/under base excludes the same ads everywhere.
 import {
-  isLifetimeInProgress,
   effectiveActual,
   classifyAdVariance,
   computeSplitRunSettlement,
@@ -316,9 +315,6 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
     overageAllowance,
     ads: ads.map((ad) => ({
       ...ad,
-      // §3: lifetime ad still running — the Over/Under view excludes it from the
-      // settle-able base while it runs (it still shows in total spend).
-      lifetimeInProgress: isLifetimeInProgress(ad, nowMs, tz),
       // Cross-month clarity: this ad's over/under contribution + WHY it differs
       // from plan (real vs cross-month timing). Computed here so the Pacer card,
       // the Over/Under page, and reconciliation all agree (§0.4).
@@ -801,14 +797,10 @@ export async function getPeriodPlanView(
 /**
  * Re-derive the per-ad "as of now" flags over whatever the view produced.
  *
- * `lifetimeInProgress` and `variance` describe a run's state RIGHT NOW — they are
- * not part of the historical record, so a frozen month must not serve the values
- * baked into its snapshot at freeze time. A June snapshot taken while a lifetime
- * ad was mid-run kept `lifetimeInProgress: true` (and `klass:
- * 'lifetime-in-progress'`, contribution $0) forever, so months after the run
- * ended the Over/Under view still badged it as running and still counted none of
- * its spend. Same reasoning as re-resolving `markup` live above. Idempotent on
- * the live branches, which just computed these from the same inputs.
+ * `variance` describes an ad's state RIGHT NOW — it is not part of the historical
+ * record, so a frozen month must not serve the value baked into its snapshot at
+ * freeze time. Same reasoning as re-resolving `markup` live above. Idempotent on
+ * the live branches, which just computed it from the same inputs.
  */
 function refreshDerivedAdFlags(ads: unknown, period: string, tz: string): unknown {
   if (!Array.isArray(ads)) return ads;
@@ -817,7 +809,6 @@ function refreshDerivedAdFlags(ads: unknown, period: string, tz: string): unknow
     const row = ad as Parameters<typeof classifyAdVariance>[0];
     return {
       ...(ad as Record<string, unknown>),
-      lifetimeInProgress: isLifetimeInProgress(row, nowMs, tz),
       variance: classifyAdVariance(row, period, nowMs, tz),
     };
   });
@@ -1273,13 +1264,6 @@ export interface ReconciliationMonth {
   appliedOut: number; // Σ ledger amount sourced FROM this month (consumed)
   unapplied: number; // carryover − appliedOut (still reconcilable)
   appliedIn: number; // Σ ledger amount applied INTO this month
-  /**
-   * §3: this month has ≥1 LIFETIME ad still running — excluded from the
-   * over/under base (its variance books once when the run completes). Drives
-   * the 'lifetime · in progress' badge and explains why, for the live month,
-   * total spend can differ from the settle-able over/under.
-   */
-  hasLifetimeInProgress: boolean;
   /** CM4: per-ad over/under contributions for this month — powers the
    *  Reconciliation row drill-down (which ads drove the variance). */
   ads: ReconAdVariance[];
@@ -1477,13 +1461,6 @@ export async function getYearReconciliation(
   const budgetByPeriod = new Map(budgets.map((b) => [b.period, b]));
   const adCountByPeriod = new Map<string, number>();
   const actualByPeriod = new Map<string, number>(); // Σ all pacerActual (total spend)
-  // §3: per-period sums for LIFETIME ads still in progress — excluded from the
-  // settle-able over/under base (both actual slice AND allocation) so a running
-  // lifetime ad contributes $0 variance; it still counts toward total spend and
-  // books its single variance once it completes (re-enters the base naturally).
-  const ipLifeActualByPeriod = new Map<string, number>();
-  const ipLifeAllocByPeriod = new Map<string, number>();
-  const ipLifePeriods = new Set<string>();
   // CM4: per-ad over/under contribution + timing class, grouped by month, for
   // the Reconciliation row drill-down (same classifier the Over/Under page uses).
   const adVarByPeriod = new Map<string, ReconAdVariance[]>();
@@ -1549,17 +1526,6 @@ export async function getYearReconciliation(
           },
     );
     adVarByPeriod.set(a.period, list);
-    // Split-run members are excluded via the split maps above (their whole run
-    // is held out of every month's base + settled once on the final month), so
-    // don't ALSO fold them into the in-progress hold-out — that would double-count.
-    if (isLifetimeInProgress(a, reconNowMs, tz) && !splitMemberIds.has(a.id)) {
-      ipLifePeriods.add(a.period);
-      ipLifeActualByPeriod.set(a.period, (ipLifeActualByPeriod.get(a.period) ?? 0) + n);
-      const alloc = Number(a.allocation ?? 0);
-      if (!isNaN(alloc)) {
-        ipLifeAllocByPeriod.set(a.period, (ipLifeAllocByPeriod.get(a.period) ?? 0) + alloc);
-      }
-    }
   }
   const appliedOutByPeriod = new Map<string, number>();
   const appliedInByPeriod = new Map<string, number>();
@@ -1591,25 +1557,14 @@ export async function getYearReconciliation(
     const hasActual = tracked ? actualByPeriod.has(period) : isBackfilled;
     const appliedIn = appliedInByPeriod.get(period) ?? 0;
     const spendTarget = effectiveSpendTarget(clientBudget, markup);
-    // §3: exclude any LIFETIME ad still in progress from the SETTLE-ABLE base —
-    // both its actual slice and its allocation — so it contributes $0 to the
-    // over/under while running (it books its single variance on completion).
-    // `actual`/`spendTarget` displayed stay the honest totals; only `variance`
-    // uses the base. Settled months have no in-progress lifetime ad, so for them
-    // base == total and nothing changes.
-    const hasLifetimeInProgress = ipLifePeriods.has(period);
-    // Remove both the §3 in-progress lifetime ads AND any cross-month SPLIT run
-    // members from this month's settle-able base (actual + allocation). A split
-    // run never measures against the month's client budget — it settles once,
-    // against its Meta lifetime budget, on its final month (added below).
-    const baseActual =
-      actual -
-      (ipLifeActualByPeriod.get(period) ?? 0) -
-      (splitExcludeActualByPeriod.get(period) ?? 0);
-    const baseTarget =
-      spendTarget -
-      (ipLifeAllocByPeriod.get(period) ?? 0) -
-      (splitExcludeAllocByPeriod.get(period) ?? 0);
+    // A running LIFETIME ad is NOT held out: it spends close to its set budget
+    // whether or not the run has closed, so it counts toward the month's
+    // over/under the whole time it is live, like any daily line. Only a
+    // cross-month SPLIT run leaves the base — that one never measures against a
+    // month's client budget at all, because it settles once against its Meta
+    // lifetime budget on its final month (added below).
+    const baseActual = actual - (splitExcludeActualByPeriod.get(period) ?? 0);
+    const baseTarget = spendTarget - (splitExcludeAllocByPeriod.get(period) ?? 0);
     // The live month's target includes carryover applied INTO it, mirroring the
     // Pacer's adjusted target (base × markup + carryover). Past months never
     // receive carryover (appliedIn = 0), so theirs is unchanged.
@@ -1649,7 +1604,6 @@ export async function getYearReconciliation(
       appliedOut,
       unapplied: carryover - appliedOut,
       appliedIn,
-      hasLifetimeInProgress,
       ads: adVarByPeriod.get(period) ?? [],
       rawSpend: counted.rawSpend,
       crossMonthOut: counted.out,

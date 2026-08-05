@@ -37,7 +37,6 @@ import {
 import {
   buildAdCalc,
   buildPacerCalc,
-  isLifetimeInProgress,
   effectiveActual,
 } from '@/lib/ad-pacer/pacer-calc';
 import type {
@@ -943,15 +942,10 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
     const carry =
       (num(plan.baseCarryover) ?? 0) + (num(plan.addedCarryover) ?? 0);
     const target = effectiveSpendTarget(gross, effMarkupOf(plan.markup), carry);
-    let ipLifeActual = 0;
-    let ipLifeAlloc = 0;
-    for (const ad of plan.ads) {
-      if (!isLifetimeInProgress(ad, nowMs, plan.timeZone)) continue;
-      ipLifeActual += effectiveActual(ad);
-      ipLifeAlloc += num(ad.allocation) ?? 0;
-    }
-    const baseTarget = target - ipLifeAlloc;
-    const baseSpent = totals.actual - ipLifeActual;
+    // Running lifetime ads are included: their spend counts toward the account's
+    // progress the whole time they're live, like any daily line.
+    const baseTarget = target;
+    const baseSpent = totals.actual;
     if (baseTarget <= 0) return null;
     if (plan.frozen) {
       const pct = (baseSpent / baseTarget) * 100;

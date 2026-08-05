@@ -80,7 +80,8 @@ export async function POST(
 
   const ad = await prisma.metaAdsPacerAd.findFirst({
     where: { id: adId, planId: plan.id, period },
-    select: { id: true, name: true },
+    // Flight end bounds which month the run may be billed in.
+    select: { id: true, name: true, metaEndDate: true, flightEnd: true },
   });
   if (!ad) {
     return NextResponse.json({ error: 'Ad not found in this period' }, { status: 404 });
@@ -88,19 +89,48 @@ export async function POST(
 
   let summary = '';
   if (action === 'apply_full_run') {
-    // v1: own-month only. The full run is counted in the ad's own period; the
-    // adjacent month has no row for this ad, so nothing to zero there.
-    if (body?.month && body.month !== period) {
+    // The month the full run BILLS in. Defaults to the ad's own period (the
+    // original single-month straddler resolution). A LATER month is now allowed:
+    // that is the cross-month case the spend spec is built on — a flight running
+    // Jun 26 – Jul 3 that invoices entirely in July posts an Out against June and
+    // an In against July, so the run is counted once, in the month it bills.
+    // The ledger derives those postings from this one field; nothing else stores
+    // the movement (see cross-month-ledger.ts).
+    const billedMonth = typeof body?.month === 'string' && body.month ? body.month : period;
+    if (!isValidPeriod(billedMonth)) {
       return NextResponse.json(
-        { error: "The full run can only be counted in the ad's own month." },
+        { error: 'month must be YYYY-MM' },
+        { status: 400 },
+      );
+    }
+    if (billedMonth < period) {
+      return NextResponse.json(
+        {
+          error:
+            "A flight can't bill before the month it ran in. Pick the ad's own month or a later one.",
+        },
+        { status: 400 },
+      );
+    }
+    // Billing must land no later than the month the run actually finishes in —
+    // otherwise the dollars would sit in limbo past the invoice they belong to.
+    const runEndMonth = (ad.metaEndDate ?? ad.flightEnd)?.slice(0, 7) ?? null;
+    if (runEndMonth && billedMonth > runEndMonth) {
+      return NextResponse.json(
+        {
+          error: `This flight ends in ${runEndMonth}, so it can't bill in ${billedMonth}. Bill it in ${runEndMonth} or earlier.`,
+        },
         { status: 400 },
       );
     }
     await prisma.metaAdsPacerAd.update({
       where: { id: ad.id },
-      data: { fullRunAppliedToMonth: period, lifetimeMonthSplit: null },
+      data: { fullRunAppliedToMonth: billedMonth, lifetimeMonthSplit: null },
     });
-    summary = `Counted the full run in ${period} for "${ad.name}"`;
+    summary =
+      billedMonth === period
+        ? `Counted the full run in ${period} for "${ad.name}"`
+        : `Billed the full run in ${billedMonth} for "${ad.name}" (ran from ${period})`;
   } else if (action === 'split') {
     const raw = body?.splitMap;
     if (!raw || typeof raw !== 'object') {

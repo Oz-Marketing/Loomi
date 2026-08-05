@@ -523,6 +523,38 @@ export type SplitRunAdLike = AdScheduleLike & {
   metaLifetimeBudget?: string | null;
 };
 
+/**
+ * Group ads into logical FLIGHTS (runs): one entry per physical flight, keyed by
+ * the linked Meta ad-set id (the synced auto-chain) or, for a manual chain, the
+ * root of the `linkedPrevAdId` pointers. A flight's members are its per-month
+ * rows. This is the ONE grouping — the split-run settlement below and the
+ * cross-month ledger (cross-month-ledger.ts) both build on it, so they can never
+ * disagree about what counts as one flight.
+ */
+export function groupFlightRuns<T extends { id: string; metaObjectId?: string | null; linkedPrevAdId?: string | null }>(
+  ads: T[],
+): Map<string, T[]> {
+  const byId = new Map(ads.map((a) => [a.id, a]));
+  const runKeyOf = (a: T): string => {
+    if (a.metaObjectId) return `meta:${a.metaObjectId}`;
+    let cur = a;
+    const seen = new Set<string>();
+    while (cur.linkedPrevAdId && byId.has(cur.linkedPrevAdId) && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      cur = byId.get(cur.linkedPrevAdId)!;
+    }
+    return `link:${cur.id}`;
+  };
+  const runs = new Map<string, T[]>();
+  for (const a of ads) {
+    const k = runKeyOf(a);
+    const list = runs.get(k);
+    if (list) list.push(a);
+    else runs.set(k, [a]);
+  }
+  return runs;
+}
+
 export interface SplitRunSettlement {
   /** Ad ids in a marked split run — held out of every month's settle-able base. */
   memberIds: Set<string>;
@@ -560,22 +592,7 @@ export function computeSplitRunSettlement(
     excludeAllocByPeriod: new Map<string, number>(),
     settlementByPeriod: new Map<string, number>(),
   };
-  const byId = new Map(ads.map((a) => [a.id, a]));
-  const runKeyOf = (a: SplitRunAdLike): string => {
-    if (a.metaObjectId) return `meta:${a.metaObjectId}`;
-    let cur = a;
-    const seen = new Set<string>();
-    while (cur.linkedPrevAdId && byId.has(cur.linkedPrevAdId) && !seen.has(cur.id)) {
-      seen.add(cur.id);
-      cur = byId.get(cur.linkedPrevAdId)!;
-    }
-    return `link:${cur.id}`;
-  };
-  const runs = new Map<string, SplitRunAdLike[]>();
-  for (const a of ads) {
-    const k = runKeyOf(a);
-    (runs.get(k) ?? runs.set(k, []).get(k)!).push(a);
-  }
+  const runs = groupFlightRuns(ads);
   const add = (m: Map<string, number>, k: string, v: number) =>
     m.set(k, (m.get(k) ?? 0) + v);
   for (const members of runs.values()) {

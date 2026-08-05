@@ -302,6 +302,9 @@ export function BudgetPacerPanel({
       action: 'apply_full_run' | 'split' | 'clear' | 'link',
       splitMap?: Record<string, number>,
       linkedPrevAdId?: string,
+      /** apply_full_run: the month the run BILLS in. Defaults to this month; a
+       *  later month makes it cross-month (Out here, In there). */
+      billedMonth?: string,
     ) => {
       // The CTA is disabled when frozen and the endpoint rejects a frozen
       // month (409), so no client-side readOnly guard is needed here.
@@ -315,7 +318,9 @@ export function BudgetPacerPanel({
                 // Mirror the server: bill / split / link are mutually exclusive;
                 // link seeds the split mark so the run is detected as split.
                 fullRunAppliedToMonth:
-                  action === 'apply_full_run' ? plan.period : null,
+                  action === 'apply_full_run'
+                    ? billedMonth ?? plan.period
+                    : null,
                 lifetimeMonthSplit:
                   action === 'split'
                     ? JSON.stringify(splitMap ?? {})
@@ -343,6 +348,9 @@ export function BudgetPacerPanel({
               action,
               ...(action === 'split' ? { splitMap } : {}),
               ...(action === 'link' ? { linkedPrevAdId } : {}),
+              ...(action === 'apply_full_run' && billedMonth
+                ? { month: billedMonth }
+                : {}),
             }),
           },
         );
@@ -526,8 +534,8 @@ export function BudgetPacerPanel({
               updateAd({ ...ad, alertsMuted: !ad.alertsMuted })
             }
             onPushDailyBudget={(value) => pushDailyBudget(ad.id, value)}
-            onResolveCrossMonth={(action, splitMap, linkedPrevAdId) =>
-              resolveCrossMonth(ad.id, action, splitMap, linkedPrevAdId)
+            onResolveCrossMonth={(action, splitMap, linkedPrevAdId, billedMonth) =>
+              resolveCrossMonth(ad.id, action, splitMap, linkedPrevAdId, billedMonth)
             }
             prevMonthAds={prevMonthAds}
             siblings={plan.siblingsByName?.[ad.name] ?? null}

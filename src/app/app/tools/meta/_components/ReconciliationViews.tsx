@@ -24,7 +24,7 @@ import {
   sourceTint,
   sourceLabel,
 } from '@/lib/ad-pacer/helpers';
-import { fmtPeriodLong, currentPeriod } from '@/lib/ad-pacer/period';
+import { fmtPeriodLong, fmtPeriodShort, currentPeriod } from '@/lib/ad-pacer/period';
 import { type PlanFilters, applyFilters, activeFilterCount } from '@/lib/ad-pacer/filters';
 import {
   Tooltip,
@@ -67,6 +67,47 @@ interface ReconMonth {
     klass: 'real' | 'billed-cross-month' | 'lifetime-in-progress';
     settlesThisMonth?: boolean;
   }[];
+  // Cross-month spend chain (spec §2): raw is the immutable anchor, counted is
+  // derived as raw − out + in, and every adjustment is its own visible column.
+  rawSpend: number;
+  crossMonthOut: number;
+  crossMonthIn: number;
+  countedSpend: number;
+  pendingForward: number;
+  crossMonthLines: CrossMonthLine[];
+}
+/** One flight line behind a month's Out / In / Pending cell (spec §6). */
+interface CrossMonthLine {
+  flightId: string;
+  flightName: string;
+  runStart: string | null;
+  runEnd: string | null;
+  billedMonth: string;
+  flightTotal: number;
+  amount: number;
+  status: 'pending' | 'settled';
+  direction: 'out' | 'in' | 'pending';
+}
+/** The conservation invariant (spec §5) — proves no dollar was lost or doubled. */
+interface ConservationCheck {
+  sumOut: number;
+  sumIn: number;
+  carryIn: number;
+  carryOut: number;
+  delta: number;
+  balanced: boolean;
+}
+interface CrossMonthFlight {
+  flightId: string;
+  flightName: string;
+  runStart: string | null;
+  runEnd: string | null;
+  billedMonth: string;
+  flightTotal: number;
+  status: 'pending' | 'settled';
+  budgetCap: number | null;
+  exceedsBudgetCap: boolean;
+  runSpendMismatch: number | null;
 }
 interface CarryoverApplication {
   id: string;
@@ -91,6 +132,21 @@ interface ReconData {
   appliedThisMonth: { base: number; added: number; total: number };
   // §5: individual ledger entries, newest first — powers both-ends provenance.
   applications: CarryoverApplication[];
+  // Cross-month spend spec §3/§5: the per-flight ledger and the trust check.
+  crossMonthFlights?: CrossMonthFlight[];
+  conservation?: ConservationCheck;
+}
+
+/** "→ Jul 2026" for the pending-forward hint: where these dollars will land. */
+function pendingTargetLabel(lines: CrossMonthLine[] | undefined): string {
+  const months = Array.from(
+    new Set(
+      (lines ?? [])
+        .filter((l) => l.direction === 'pending')
+        .map((l) => l.billedMonth),
+    ),
+  ).sort();
+  return months.length ? months.map((m) => fmtPeriodShort(m)).join(', ') : 'a later month';
 }
 
 /**
@@ -125,6 +181,13 @@ export function ReconciliationPanel({
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   // CM4: which month rows are expanded to their per-ad variance breakdown.
   const [expandedMonths, setExpandedMonths] = useState<Set<string>>(new Set());
+  const toggleMonth = (period: string) =>
+    setExpandedMonths((s) => {
+      const next = new Set(s);
+      if (next.has(period)) next.delete(period);
+      else next.add(period);
+      return next;
+    });
 
   const load = useCallback(() => {
     setData(null);
@@ -225,6 +288,13 @@ export function ReconciliationPanel({
         ? { text: `${fmt(v)} over`, color: COLORS.warn }
         : { text: `${fmt(-v)} under`, color: COLORS.lifetime };
 
+  // The cross-month columns only appear when this year actually has a flight
+  // that invoices outside the month it delivered in — most accounts have none,
+  // and three empty columns would be pure noise.
+  const flights = data?.crossMonthFlights ?? [];
+  const hasCrossMonth = flights.length > 0;
+  const colCount = hasCrossMonth ? 8 : 5;
+  const conservation = data?.conservation;
   const net = data?.ytdUnapplied ?? 0;
   const netReconciled = Math.abs(net) < 0.005;
   const canApply = !!data?.targetPeriod && !netReconciled;
@@ -402,7 +472,34 @@ export function ReconciliationPanel({
                 <tr className="border-b border-[var(--border)] text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
                   <th className="text-left font-semibold px-3 py-2.5">Month</th>
                   <th className="text-right font-semibold px-3 py-2.5">Spend Target</th>
-                  <th className="text-right font-semibold px-3 py-2.5">Actual</th>
+                  <th className="text-right font-semibold px-3 py-2.5">
+                    {hasCrossMonth ? (
+                      <Tooltip label="Raw Meta spend, dated to the day of delivery. Immutable — pulled from Meta and never adjusted. Every other number is checked against it.">
+                        <span className="border-b border-dotted border-current">Raw Spend</span>
+                      </Tooltip>
+                    ) : (
+                      'Actual'
+                    )}
+                  </th>
+                  {hasCrossMonth && (
+                    <>
+                      <th className="text-right font-semibold px-3 py-2.5">
+                        <Tooltip label="Origin-month dollars LEAVING this month because their flight invoices in a later month. Settled flights only. Click a figure for the flights behind it.">
+                          <span className="border-b border-dotted border-current">Cross-Month Out (−)</span>
+                        </Tooltip>
+                      </th>
+                      <th className="text-right font-semibold px-3 py-2.5">
+                        <Tooltip label="Dollars ARRIVING here from earlier months, because this is the month their flight invoices in. Settled flights only.">
+                          <span className="border-b border-dotted border-current">Cross-Month In (+)</span>
+                        </Tooltip>
+                      </th>
+                      <th className="text-right font-semibold px-3 py-2.5">
+                        <Tooltip label="Raw − Out + In. Derived, never entered — this is the spend the over/under is measured against.">
+                          <span className="border-b border-dotted border-current">Counted Spend</span>
+                        </Tooltip>
+                      </th>
+                    </>
+                  )}
                   <th className="text-right font-semibold px-3 py-2.5">Over / Under</th>
                   <th className="text-right font-semibold px-3 py-2.5 w-[200px]">Reconcile</th>
                 </tr>
@@ -410,7 +507,7 @@ export function ReconciliationPanel({
               <tbody>
                 {data.months.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="px-3 py-8 text-center text-[var(--muted-foreground)]">
+                    <td colSpan={colCount} className="px-3 py-8 text-center text-[var(--muted-foreground)]">
                       No months to show for {year} yet.
                     </td>
                   </tr>
@@ -421,7 +518,8 @@ export function ReconciliationPanel({
                   const needsTarget = m.isBackfilled && !m.hasTarget;
                   const applied = Math.abs(m.appliedOut) >= 0.005;
                   const ou = overUnder(m.variance);
-                  const hasAdDetail = (m.ads?.length ?? 0) > 0;
+                  const hasAdDetail =
+                    (m.ads?.length ?? 0) > 0 || (m.crossMonthLines?.length ?? 0) > 0;
                   const expanded = expandedMonths.has(m.period);
                   return (
                     <Fragment key={m.period}>
@@ -555,8 +653,70 @@ export function ReconciliationPanel({
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-right tabular-nums text-[var(--foreground)]">
-                        {m.hasActual ? fmt(m.actual) : <span className="text-[var(--muted-foreground)]">—</span>}
+                        {m.hasActual ? (
+                          <>
+                            <div>{fmt(hasCrossMonth ? m.rawSpend : m.actual)}</div>
+                            {/* Pending Forward (spec §2 col 10): informational —
+                                these dollars are still counted HERE until the
+                                flight settles, so the month never looks light
+                                for money that hasn't arrived anywhere yet. */}
+                            {Math.abs(m.pendingForward ?? 0) >= 0.005 && (
+                              <Tooltip
+                                label={`${fmt(m.pendingForward)} of this month's raw spend belongs to a flight that will invoice later. It stays counted here until the run ends and its billed month arrives — nothing has moved yet.`}
+                              >
+                                <div
+                                  className="text-[9px] font-semibold"
+                                  style={{ color: COLORS.warn }}
+                                >
+                                  {fmt(m.pendingForward)} pending →{' '}
+                                  {pendingTargetLabel(m.crossMonthLines)}
+                                </div>
+                              </Tooltip>
+                            )}
+                          </>
+                        ) : (
+                          <span className="text-[var(--muted-foreground)]">—</span>
+                        )}
                       </td>
+                      {hasCrossMonth && (
+                        <>
+                          <td className="px-3 py-2.5 text-right tabular-nums">
+                            {Math.abs(m.crossMonthOut ?? 0) >= 0.005 ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleMonth(m.period)}
+                                className="font-semibold hover:underline"
+                                style={{ color: COLORS.warn }}
+                              >
+                                −{fmt(m.crossMonthOut)}
+                              </button>
+                            ) : (
+                              <span className="text-[var(--muted-foreground)]">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums">
+                            {Math.abs(m.crossMonthIn ?? 0) >= 0.005 ? (
+                              <button
+                                type="button"
+                                onClick={() => toggleMonth(m.period)}
+                                className="font-semibold hover:underline"
+                                style={{ color: COLORS.lifetime }}
+                              >
+                                +{fmt(m.crossMonthIn)}
+                              </button>
+                            ) : (
+                              <span className="text-[var(--muted-foreground)]">—</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-[var(--foreground)]">
+                            {m.hasActual ? (
+                              fmt(m.countedSpend)
+                            ) : (
+                              <span className="text-[var(--muted-foreground)]">—</span>
+                            )}
+                          </td>
+                        </>
+                      )}
                       <td className="px-3 py-2.5 text-right tabular-nums">
                         {noData || !m.hasTarget || !m.hasActual ? (
                           <span className="text-[var(--muted-foreground)]">—</span>
@@ -630,7 +790,66 @@ export function ReconciliationPanel({
                     </tr>
                     {expanded && hasAdDetail && (
                       <tr className={isLive ? 'bg-[var(--primary)]/5' : ''}>
-                        <td colSpan={5} className="px-3 pb-3 pt-0">
+                        <td colSpan={colCount} className="px-3 pb-3 pt-0 space-y-2">
+                          {/* Spec §6: the Out / In / Pending cells must never be
+                              bare numbers — expand to the flights behind them so
+                              a reader sees WHY the month counts what it counts. */}
+                          {(m.crossMonthLines?.length ?? 0) > 0 && (
+                            <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)]/20 overflow-hidden">
+                              <div className="px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-[var(--muted-foreground)] border-b border-[var(--border)]">
+                                Cross-month flights
+                              </div>
+                              <div className="divide-y divide-[var(--border)]/60">
+                                {m.crossMonthLines.map((l, i) => {
+                                  const color =
+                                    l.direction === 'in'
+                                      ? COLORS.lifetime
+                                      : l.direction === 'pending'
+                                        ? COLORS.warn
+                                        : COLORS.warn;
+                                  const sign = l.direction === 'in' ? '+' : '−';
+                                  return (
+                                    <div
+                                      key={`${m.period}-cm-${i}`}
+                                      className="flex items-center justify-between gap-3 px-3 py-1.5"
+                                    >
+                                      <div className="min-w-0">
+                                        <div className="text-[11px] text-[var(--foreground)] truncate">
+                                          {l.flightName || 'Untitled flight'}
+                                        </div>
+                                        <div className="text-[9px] text-[var(--muted-foreground)]">
+                                          {l.runStart ? fmtDate(l.runStart) : '—'} –{' '}
+                                          {l.runEnd ? fmtDate(l.runEnd) : '—'} · bills{' '}
+                                          <span className="font-semibold text-[var(--foreground)]">
+                                            {fmtPeriodShort(l.billedMonth)}
+                                          </span>{' '}
+                                          · flight total {fmt(l.flightTotal)} ·{' '}
+                                          {l.status === 'settled' ? 'settled' : 'pending'}
+                                        </div>
+                                      </div>
+                                      <div className="flex-shrink-0 text-right">
+                                        <div
+                                          className="text-[11px] font-semibold tabular-nums"
+                                          style={{ color }}
+                                        >
+                                          {sign}
+                                          {fmt(l.amount)}
+                                        </div>
+                                        <div className="text-[9px] text-[var(--muted-foreground)]">
+                                          {l.direction === 'in'
+                                            ? 'in to here'
+                                            : l.direction === 'out'
+                                              ? 'out from here'
+                                              : 'will leave at settlement'}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                          {(m.ads?.length ?? 0) > 0 && (
                           <div className="rounded-lg border border-[var(--border)] bg-[var(--muted)]/20 overflow-hidden">
                             <div className="px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-[var(--muted-foreground)] border-b border-[var(--border)]">
                               Variance by ad
@@ -698,6 +917,7 @@ export function ReconciliationPanel({
                               })}
                             </div>
                           </div>
+                          )}
                         </td>
                       </tr>
                     )}
@@ -707,6 +927,99 @@ export function ReconciliationPanel({
               </tbody>
             </table>
           </div>
+          {/* Spec §5 — the trust check. Σ Out must equal Σ In (± the window's
+              carry-in/carry-out). If it doesn't, a slice is orphaned or double
+              counted and the reconciliation is FLAGGED rather than silently
+              passed: this check is the answer to "can I trust the counted
+              number". Shown as a quiet confirmation when it balances, because a
+              proof nobody can see is not a proof. */}
+          {hasCrossMonth && conservation && (
+            <div
+              className={`mt-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-[11px] ${
+                conservation.balanced
+                  ? 'border-[var(--border)] bg-[var(--muted)]/30 text-[var(--muted-foreground)]'
+                  : 'border-red-500/40 bg-red-500/10 text-red-400'
+              }`}
+            >
+              {conservation.balanced ? (
+                <CheckIcon
+                  className="mt-0.5 h-3.5 w-3.5 flex-shrink-0"
+                  style={{ color: COLORS.success }}
+                />
+              ) : (
+                <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+              )}
+              <span>
+                {conservation.balanced ? (
+                  <>
+                    Cross-month dollars balance: {fmt(conservation.sumOut)} out,{' '}
+                    {fmt(conservation.sumIn)} in
+                    {Math.abs(conservation.carryOut) >= 0.005 && (
+                      <>, {fmt(conservation.carryOut)} carried out past {data.year}</>
+                    )}
+                    {Math.abs(conservation.carryIn) >= 0.005 && (
+                      <>, {fmt(conservation.carryIn)} carried in from before {data.year}</>
+                    )}
+                    . Every dollar counted exactly once.
+                  </>
+                ) : (
+                  <>
+                    <span className="font-semibold">
+                      Cross-month dollars don&apos;t balance — off by{' '}
+                      {fmt(Math.abs(conservation.delta))}.
+                    </span>{' '}
+                    {fmt(conservation.sumOut)} left their origin month but{' '}
+                    {fmt(conservation.sumIn)} arrived. A slice is orphaned or double
+                    counted, so the counted figures above are not trustworthy yet.
+                    Check the flights in the expanded rows.
+                  </>
+                )}
+              </span>
+            </div>
+          )}
+          {/* §8a sanity flag: Meta does not permit lifetime overspend, so a
+              settled flight computing over its cap signals a bad split entry
+              rather than real spend. */}
+          {flights.some((f) => f.exceedsBudgetCap || f.runSpendMismatch != null) && (
+            <div className="mt-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-2 text-[11px] text-[var(--muted-foreground)] space-y-1">
+              {flights
+                .filter((f) => f.exceedsBudgetCap)
+                .map((f) => (
+                  <div key={`cap-${f.flightId}`} className="flex items-start gap-2">
+                    <ExclamationTriangleIcon
+                      className="mt-0.5 h-3.5 w-3.5 flex-shrink-0"
+                      style={{ color: COLORS.warn }}
+                    />
+                    <span>
+                      <span className="font-semibold text-[var(--foreground)]">
+                        {f.flightName || 'Untitled flight'}
+                      </span>{' '}
+                      computes {fmt(f.flightTotal)} against a {fmt(f.budgetCap ?? 0)}{' '}
+                      lifetime budget. Meta doesn&apos;t allow lifetime overspend, so
+                      review the month split rather than treating this as real spend.
+                    </span>
+                  </div>
+                ))}
+              {flights
+                .filter((f) => f.runSpendMismatch != null)
+                .map((f) => (
+                  <div key={`drift-${f.flightId}`} className="flex items-start gap-2">
+                    <ExclamationTriangleIcon
+                      className="mt-0.5 h-3.5 w-3.5 flex-shrink-0"
+                      style={{ color: COLORS.warn }}
+                    />
+                    <span>
+                      <span className="font-semibold text-[var(--foreground)]">
+                        {f.flightName || 'Untitled flight'}
+                      </span>
+                      : Meta reports {fmt(f.runSpendMismatch ?? 0)} for the full run but
+                      its month rows sum to {fmt(f.flightTotal)}. A month row is missing
+                      or stale — the slices are what the ledger counts.
+                    </span>
+                  </div>
+                ))}
+            </div>
+          )}
           <p className="mt-3 text-[10px] text-[var(--muted-foreground)] leading-relaxed">
             Over/under is measured against the margin-adjusted spend target
             (client budget × {Math.round(data.markup * 100)}%). Applying a month

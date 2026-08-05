@@ -400,9 +400,16 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     action: 'apply_full_run' | 'split' | 'clear' | 'link',
     splitMap?: Record<string, number>,
     linkedPrevAdId?: string,
+    /** The month the run BILLS in; a later month makes it a cross-month flight. */
+    billedMonth?: string,
   ) => {
     if (action === 'apply_full_run')
-      updateAd({ ...ad, fullRunAppliedToMonth: ad.period, lifetimeMonthSplit: null, linkedPrevAdId: null });
+      updateAd({
+        ...ad,
+        fullRunAppliedToMonth: billedMonth ?? ad.period,
+        lifetimeMonthSplit: null,
+        linkedPrevAdId: null,
+      });
     else if (action === 'split')
       updateAd({
         ...ad,
@@ -792,8 +799,8 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               onDailyBudgetChange={(v) => updateAd({ ...ad, pacerDailyBudget: v })}
               onMuteToggle={() => updateAd({ ...ad, alertsMuted: !ad.alertsMuted })}
               onPushDailyBudget={(value) => pushDailyBudget(ad.id, value)}
-              onResolveCrossMonth={(action, splitMap, linkedPrevAdId) =>
-                resolveCrossMonth(ad, action, splitMap, linkedPrevAdId)
+              onResolveCrossMonth={(action, splitMap, linkedPrevAdId, billedMonth) =>
+                resolveCrossMonth(ad, action, splitMap, linkedPrevAdId, billedMonth)
               }
               siblings={data?.siblingsByName?.[ad.name] ?? null}
               synced={!!ad.googleCampaignId && !!ad.pacerSyncedAt}

@@ -23,6 +23,19 @@ import {
   classifyAdVariance,
   computeSplitRunSettlement,
 } from '@/lib/ad-pacer/pacer-calc';
+// The cross-month spend chain (raw → out → in → counted), its per-flight ledger
+// and the conservation invariant. Derived on read from the ad rows; the only
+// stored intent is each flight's billed month (fullRunAppliedToMonth).
+import {
+  buildFlightLedger,
+  checkConservation,
+  countedSpendRow,
+  rawMonthSpend,
+  rollupCrossMonth,
+  type ConservationCheck,
+  type CrossMonthLine,
+  type FlightLedgerEntry,
+} from '@/lib/ad-pacer/cross-month-ledger';
 import { deriveOverageAllowance } from '@/lib/ad-pacer/pacing-engine';
 import { OVERAGE_ALLOWANCE_DEFAULT } from '@/lib/ad-pacer/constants';
 import { writeAudit } from '@/lib/meta-ads-audit';
@@ -1270,6 +1283,26 @@ export interface ReconciliationMonth {
   /** CM4: per-ad over/under contributions for this month — powers the
    *  Reconciliation row drill-down (which ads drove the variance). */
   ads: ReconAdVariance[];
+  // ── Cross-month spend chain (spec §2 columns 5–8, 10) ──
+  // The auditable decomposition of `actual`: a reader can trace raw → adjustment
+  // → counted without anything moving behind the curtain. `rawSpend` is the
+  // immutable anchor; `countedSpend` is derived and is what `variance` measures.
+  /** Immutable Σ of the month's own Meta-dated spend. Never adjusted. */
+  rawSpend: number;
+  /** Σ settled origin-month slices LEAVING this month (billed later). */
+  crossMonthOut: number;
+  /** Σ settled slices ARRIVING here from earlier months (billed this month). */
+  crossMonthIn: number;
+  /** `rawSpend − crossMonthOut + crossMonthIn`. Derived, never entered. */
+  countedSpend: number;
+  /**
+   * Σ UNSETTLED cross-month slices sitting in this month's raw that will leave
+   * at settlement. Informational — does NOT affect countedSpend yet, so no month
+   * ever goes light for dollars that have not arrived (spec §4).
+   */
+  pendingForward: number;
+  /** The flight lines behind the Out / In / Pending cells (spec §6). */
+  crossMonthLines: CrossMonthLine[];
 }
 
 /**
@@ -1289,6 +1322,14 @@ export interface CarryoverApplication {
 export interface YearReconciliation {
   year: number;
   markup: number;
+  /**
+   * The per-flight cross-month ledger behind the Out / In / Pending columns
+   * (spec §3), and the conservation check that proves no dollar was orphaned or
+   * double counted (spec §5). `conservation.balanced === false` must FLAG the
+   * reconciliation rather than silently pass.
+   */
+  crossMonthFlights: FlightLedgerEntry[];
+  conservation: ConservationCheck;
   /** The live month carryovers land in; '' when the year has no live month. */
   targetPeriod: string;
   months: ReconciliationMonth[];
@@ -1368,6 +1409,15 @@ export async function getYearReconciliation(
       unappliedMonths: [],
       appliedThisMonth: { base: 0, added: 0, total: 0 },
       applications: [],
+      crossMonthFlights: [],
+      conservation: {
+        sumOut: 0,
+        sumIn: 0,
+        carryIn: 0,
+        carryOut: 0,
+        delta: 0,
+        balanced: true,
+      },
     };
   }
 
@@ -1448,6 +1498,24 @@ export async function getYearReconciliation(
     excludeAllocByPeriod: splitExcludeAllocByPeriod,
     settlementByPeriod: runSettlementByPeriod,
   } = computeSplitRunSettlement(adRows, reconNowMs, tz);
+
+  // Cross-month spend chain (spec §2/§3/§5). Built over EVERY row in the window
+  // because a flight's origin slice and its billed month live in different rows.
+  // `actualByPeriod` below stays Σ effectiveActual — the two agree for a settled
+  // flight with consistent Meta data, and where they diverge it is precisely the
+  // case the ledger exists to expose (a pending flight, or Meta's run figure
+  // disagreeing with the month slices).
+  // Split-marked runs settle by the OTHER mechanism (Prompt 1: once on the final
+  // month against the Meta lifetime budget), so they are kept out of this ledger
+  // — two settlement mechanisms must never both move the same flight's dollars.
+  // Same precedence the in-progress hold-out already applies below.
+  const flightLedger = buildFlightLedger(
+    adRows.filter((a) => !splitMemberIds.has(a.id)),
+    reconNowMs,
+    tz,
+  );
+  const crossMonthByPeriod = rollupCrossMonth(flightLedger, periods);
+  const conservation = checkConservation(flightLedger, periods);
 
   for (const a of adRows) {
     adCountByPeriod.set(a.period, (adCountByPeriod.get(a.period) ?? 0) + 1);
@@ -1552,6 +1620,19 @@ export async function getYearReconciliation(
       baseActual - (baseTarget + appliedIn) + (runSettlementByPeriod.get(period) ?? 0);
     const carryover = -variance;
     const appliedOut = appliedOutByPeriod.get(period) ?? 0;
+    // The cross-month chain for this month. `rawSpend` is deliberately Σ
+    // pacerActual — the UNADJUSTED anchor — not `actual` (Σ effectiveActual),
+    // which already has the cross-month substitution folded in; using `actual`
+    // here would apply the adjustment twice. A backfilled month has no rows, so
+    // its raw is the historical figure.
+    const counted = countedSpendRow(
+      tracked
+        ? rawMonthSpend(adRows.filter((a) => a.period === period))
+        : isBackfilled
+          ? (histActual as number)
+          : 0,
+      crossMonthByPeriod.get(period),
+    );
     return {
       period,
       state: monthState(period, tz),
@@ -1570,6 +1651,12 @@ export async function getYearReconciliation(
       appliedIn,
       hasLifetimeInProgress,
       ads: adVarByPeriod.get(period) ?? [],
+      rawSpend: counted.rawSpend,
+      crossMonthOut: counted.out,
+      crossMonthIn: counted.in,
+      countedSpend: counted.countedSpend,
+      pendingForward: counted.pendingForward,
+      crossMonthLines: crossMonthByPeriod.get(period)?.lines ?? [],
     };
   });
 
@@ -1630,6 +1717,8 @@ export async function getYearReconciliation(
     markup,
     targetPeriod,
     months,
+    crossMonthFlights: flightLedger,
+    conservation,
     ytdVariance,
     ytdCarryover,
     ytdUnapplied,

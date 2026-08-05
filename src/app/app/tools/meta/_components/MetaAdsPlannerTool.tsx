@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -42,13 +43,12 @@ import {
 import type {
   DirectoryUser,
   ActivityEntry,
-  PacerAd,
   PacerPlan,
-  PriorOverUnder,
   PeriodSummary,
   SaveStatus,
 } from '@/lib/ad-pacer/types';
 import { effectiveSpendTarget } from '@/lib/ad-pacer/markup';
+import { isPlanAlignedWith, serializePlanSave } from '@/lib/ad-pacer/plan-save';
 import {
   fmt,
   fmtSyncedAgo,
@@ -344,9 +344,84 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
       });
   }, []);
 
+  // ── Plan installation (the ONE way `plan` is set) ──
+  // Autosave is a full-replace PUT scoped to the account + month in the query
+  // string, so `plan` must never hold a different view's data: doing so would
+  // wipe the month on screen and re-parent the other month's rows into it. Every
+  // response that carries a plan (load, Meta sync, import, copy, reopen/freeze)
+  // therefore installs through here, which drops anything that arrived for an
+  // account/period the user has already left. `plan.accountKey`/`plan.period`
+  // are stamped from the request scope so `isPlanAlignedWith` is authoritative.
+  const activeKeyRef = useRef<string | null>(activeKey);
+  activeKeyRef.current = activeKey;
+  const periodRef = useRef(period);
+  periodRef.current = period;
+  // Serialized body of the last successful save — the autosave dedupe baseline.
+  const lastSavedRef = useRef<string>('');
+  const installPlan = useCallback(
+    (raw: unknown, forKey: string, forPeriod: string) => {
+      if (forKey !== activeKeyRef.current || forPeriod !== periodRef.current) return;
+      const data = (raw ?? {}) as Partial<PacerPlan>;
+      // The server echoes the period it served; a mismatch means we'd be showing
+      // (and later saving) a month other than the one that was asked for.
+      if (data.period && data.period !== forPeriod) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[meta-ads-pacer] dropped a plan for ${data.period} served against ${forPeriod}`,
+        );
+        return;
+      }
+      const next: PacerPlan = {
+        accountKey: forKey,
+        period: forPeriod,
+        baseBudgetGoal: data.baseBudgetGoal ?? null,
+        addedBudgetGoal: data.addedBudgetGoal ?? null,
+        // Goals owned by the BudgetLine ledger for this month (the inputs render
+        // read-only and the route 409s a hand edit) — default false so a
+        // response that omits it can't hand manual control back by accident.
+        budgetManaged: data.budgetManaged === true,
+        markup:
+          typeof data.markup === 'number' && Number.isFinite(data.markup)
+            ? data.markup
+            : null,
+        timeZone:
+          typeof data.timeZone === 'string' && data.timeZone
+            ? data.timeZone
+            : DEFAULT_TIME_ZONE,
+        // Server-derived Meta single-day flexibility for the recommendation
+        // engine — carried through so the pacer cards use the account's real
+        // allowance instead of silently falling back to the default.
+        overageAllowance:
+          typeof data.overageAllowance === 'number' &&
+          Number.isFinite(data.overageAllowance)
+            ? data.overageAllowance
+            : undefined,
+        frozen: data.frozen === true,
+        frozenAt: data.frozenAt ?? null,
+        reopened: data.reopened === true,
+        baseCarryover: data.baseCarryover ?? null,
+        addedCarryover: data.addedCarryover ?? null,
+        priorOverUnder: data.priorOverUnder ?? null,
+        ads: Array.isArray(data.ads) ? data.ads : [],
+        siblingsByName: data.siblingsByName,
+      };
+      setPlan(next);
+      // Baseline the autosave dedupe against what the server just gave us, so a
+      // freshly loaded month isn't echoed straight back as a full replace and
+      // only a real user edit triggers a write.
+      lastSavedRef.current = serializePlanSave(next);
+    },
+    [],
+  );
+
   // ── Load plan whenever active account or period changes ──
+  // `loadSeq` makes the LATEST request win rather than the last to respond:
+  // scrolling through months fires overlapping GETs, and a slow earlier one
+  // resolving afterwards used to leave `plan` holding the wrong month.
+  const loadSeqRef = useRef(0);
   useEffect(() => {
     if (!activeKey) {
+      loadSeqRef.current += 1;
       setPlan(null);
       setLoadError(null);
       setLoaded(true);
@@ -354,9 +429,13 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
       setFilters(EMPTY_FILTERS);
       return;
     }
+    const seq = ++loadSeqRef.current;
     setLoaded(false);
     setLoadError(null);
     setFilters(EMPTY_FILTERS);
+    // Let go of the previous month's plan while the new one loads — keeping it
+    // is what left a stale plan sitting under a switched period.
+    setPlan(null);
 
     Promise.all([
       fetch(`/api/meta-ads-pacer/${activeKey}?period=${period}`).then(async (r) => {
@@ -371,42 +450,21 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
         .catch(() => ({ periods: [] })) as Promise<{ periods: PeriodSummary[] }>,
     ])
       .then(([planData, periodsData]) => {
-        setPlan({
-          accountKey: planData.accountKey ?? activeKey,
-          period: planData.period ?? period,
-          baseBudgetGoal: planData.baseBudgetGoal ?? null,
-          addedBudgetGoal: planData.addedBudgetGoal ?? null,
-          budgetManaged: planData.budgetManaged ?? false,
-          markup:
-            typeof planData.markup === 'number' &&
-            Number.isFinite(planData.markup)
-              ? planData.markup
-              : null,
-          timeZone:
-            typeof planData.timeZone === 'string' && planData.timeZone
-              ? planData.timeZone
-              : DEFAULT_TIME_ZONE,
-          frozen: planData.frozen === true,
-          frozenAt: planData.frozenAt ?? null,
-          reopened: planData.reopened === true,
-          baseCarryover: planData.baseCarryover ?? null,
-          addedCarryover: planData.addedCarryover ?? null,
-          priorOverUnder: planData.priorOverUnder ?? null,
-          ads: Array.isArray(planData.ads) ? planData.ads : [],
-          siblingsByName: planData.siblingsByName,
-        });
+        if (seq !== loadSeqRef.current) return; // superseded by a newer load
+        installPlan(planData, activeKey, period);
         setPeriodSummaries(
           Array.isArray(periodsData?.periods) ? periodsData.periods : [],
         );
         setLoaded(true);
       })
       .catch((err) => {
+        if (seq !== loadSeqRef.current) return;
         // eslint-disable-next-line no-console
         console.error('[meta-ads-pacer] failed to load plan', err);
         setLoadError(err instanceof Error ? err.message : 'Failed to load plan');
         setLoaded(true);
       });
-  }, [activeKey, period]);
+  }, [activeKey, period, installPlan]);
 
   // §5: pull the unreconciled-to-date ledger (same data the Reconciliation tab
   // shows) so the planner banner reflects the live outstanding pool — most
@@ -457,25 +515,61 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
 
   // ── Debounced save (PUT) ──
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSavedRef = useRef<string>('');
-  // Reset save dedupe when account/period changes so the first edit triggers a save
+  // A debounced save that hasn't been dispatched yet, with the exact URL it must
+  // go to. Held here so leaving the month can FLUSH it instead of dropping it —
+  // the request is self-consistent (body + target both come from the plan it was
+  // built from), so it lands on the right month even after the switch.
+  const pendingSaveRef = useRef<{ url: string; body: string } | null>(null);
+  // Drop the previous scope's baseline the moment the account/period changes so
+  // it can never be compared against another month's payload. `installPlan`
+  // sets the real baseline when that month's data lands.
   useEffect(() => {
     lastSavedRef.current = '';
   }, [activeKey, period]);
 
+  // Flush on the way out: switching month/account (or unmounting) cancels the
+  // debounce timer, which used to throw away an edit made in the last 600ms —
+  // the month then looked like it had lost the change, and the unsaved-changes
+  // guard stayed stuck dirty. Only ever fires for a real pending edit: with no
+  // edit outstanding there is nothing to flush, so plain month-scrolling still
+  // issues no writes at all.
+  useEffect(
+    () => () => {
+      const pending = pendingSaveRef.current;
+      if (!pending) return;
+      pendingSaveRef.current = null;
+      fetch(pending.url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: pending.body,
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          markClean();
+        })
+        .catch(() => {
+          toast.error(
+            "Your last change didn't save. Go back to that month and re-apply it.",
+          );
+        });
+    },
+    [activeKey, period, markClean],
+  );
+
   useEffect(() => {
     if (!loaded || !activeKey || !plan) return;
+    // The plan in state must be the one this account + month is showing. If it
+    // isn't, the save would full-replace the WRONG month — deleting its rows and
+    // dragging this plan's rows in with them. Skip; the in-flight load owns the
+    // next save.
+    if (!isPlanAlignedWith(plan, activeKey, period)) return;
     // A frozen (closed) month is read-only — never autosave it. The server
     // also rejects the write, but suppressing here avoids failed-save churn.
     if (plan.frozen) return;
     // Pause autosave while the editor modal is open so partial drafts aren't
     // persisted; the modal commits via its own Save handler instead.
     if (editorOpen) return;
-    const serialized = JSON.stringify({
-      baseBudgetGoal: plan.baseBudgetGoal,
-      addedBudgetGoal: plan.addedBudgetGoal,
-      ads: plan.ads.map((a, i) => ({ ...a, position: i, period })),
-    });
+    const serialized = serializePlanSave(plan);
     if (serialized === lastSavedRef.current) return;
 
     // Local plan diverged from the last-saved baseline — flag the global
@@ -483,21 +577,37 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
     markDirty();
     setSaveStatus('saving');
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    // plan.period, not the selected period — the guard above proves they match,
+    // and pinning the target to the data being sent is what makes this request
+    // safe to flush after the user has moved to another month.
+    const url = `/api/meta-ads-pacer/${activeKey}?period=${plan.period}`;
+    pendingSaveRef.current = { url, body: serialized };
     saveTimer.current = setTimeout(async () => {
+      // Dispatching now — from here the request completes on its own, so it must
+      // not also be flushed by the leave-the-month cleanup.
+      pendingSaveRef.current = null;
       // Retries the PUT once with backoff before surfacing an error so
       // a transient blip (network hiccup, cold lambda) doesn't strand the
       // user with a red dot. Both attempts use the same serialized body —
       // saves are idempotent at this granularity.
       const attemptSave = async (attempt = 0): Promise<boolean> => {
         try {
-          const res = await fetch(
-            `/api/meta-ads-pacer/${activeKey}?period=${period}`,
-            {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: serialized,
-            },
-          );
+          const res = await fetch(url, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: serialized,
+          });
+          // 409 = the server refused the write (frozen month, or a payload whose
+          // rows don't belong to this month/account). Retrying can't fix either,
+          // and staying silent would lose the edit without telling anyone.
+          if (res.status === 409) {
+            const conflict = await res.json().catch(() => null);
+            toast.error(
+              conflict?.error ||
+                'This month could not be saved. Reload the page and try again.',
+            );
+            return false;
+          }
           if (!res.ok) throw new Error('save failed');
           // Don't replace local state with the server response — the user may
           // have typed more during the 600ms debounce + network round-trip,
@@ -549,29 +659,9 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
         if (!auto) toast.error(data?.error || 'Meta sync failed.');
         return;
       }
-      setPlan({
-        accountKey: data.accountKey ?? activeKey,
-        period: data.period ?? period,
-        baseBudgetGoal: data.baseBudgetGoal ?? null,
-        addedBudgetGoal: data.addedBudgetGoal ?? null,
-        budgetManaged: data.budgetManaged ?? false,
-        markup:
-          typeof data.markup === 'number' && Number.isFinite(data.markup)
-            ? data.markup
-            : null,
-        timeZone:
-          typeof data.timeZone === 'string' && data.timeZone
-            ? data.timeZone
-            : DEFAULT_TIME_ZONE,
-        frozen: data.frozen === true,
-        frozenAt: data.frozenAt ?? null,
-        reopened: data.reopened === true,
-        baseCarryover: data.baseCarryover ?? null,
-        addedCarryover: data.addedCarryover ?? null,
-        priorOverUnder: data.priorOverUnder ?? null,
-        ads: Array.isArray(data.ads) ? data.ads : [],
-        siblingsByName: data.siblingsByName,
-      });
+      // Dropped if the user changed month/account mid-sync — the spend still
+      // landed server-side; the next load of that month picks it up.
+      installPlan(data, activeKey, period);
       // Background refresh: the rows just updated silently — no toasts.
       if (auto) return;
       const sync = data.sync as
@@ -640,30 +730,8 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
   // The import route returns the same period view as a sync, so the rows drop
   // straight into state (the modal owns its own toast + close).
   const handleImported = (raw: unknown) => {
-    const data = (raw ?? {}) as Record<string, unknown>;
-    setPlan({
-      accountKey: (data.accountKey as string) ?? activeKey ?? '',
-      period: (data.period as string) ?? period,
-      baseBudgetGoal: (data.baseBudgetGoal as string | null) ?? null,
-      addedBudgetGoal: (data.addedBudgetGoal as string | null) ?? null,
-      budgetManaged: (data.budgetManaged as boolean | undefined) ?? false,
-      markup:
-        typeof data.markup === 'number' && Number.isFinite(data.markup)
-          ? (data.markup as number)
-          : null,
-      timeZone:
-        typeof data.timeZone === 'string' && data.timeZone
-          ? (data.timeZone as string)
-          : DEFAULT_TIME_ZONE,
-      frozen: data.frozen === true,
-      frozenAt: (data.frozenAt as string | null) ?? null,
-      reopened: data.reopened === true,
-      baseCarryover: (data.baseCarryover as string | null) ?? null,
-      addedCarryover: (data.addedCarryover as string | null) ?? null,
-      priorOverUnder: (data.priorOverUnder as PriorOverUnder | null) ?? null,
-      ads: Array.isArray(data.ads) ? (data.ads as PacerAd[]) : [],
-      siblingsByName: data.siblingsByName as PacerPlan['siblingsByName'],
-    });
+    if (!activeKey) return;
+    installPlan(raw, activeKey, period);
   };
 
   // ── Reopen a frozen (closed) month for correction (admin escape hatch) ──
@@ -680,31 +748,9 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
         toast.error(data?.error || 'Could not reopen this month.');
         return;
       }
-      setPlan({
-        accountKey: data.accountKey ?? activeKey,
-        period: data.period ?? period,
-        baseBudgetGoal: data.baseBudgetGoal ?? null,
-        addedBudgetGoal: data.addedBudgetGoal ?? null,
-        budgetManaged: data.budgetManaged ?? false,
-        markup:
-          typeof data.markup === 'number' && Number.isFinite(data.markup)
-            ? data.markup
-            : null,
-        timeZone:
-          typeof data.timeZone === 'string' && data.timeZone
-            ? data.timeZone
-            : DEFAULT_TIME_ZONE,
-        frozen: data.frozen === true,
-        frozenAt: data.frozenAt ?? null,
-        reopened: data.reopened === true,
-        baseCarryover: data.baseCarryover ?? null,
-        addedCarryover: data.addedCarryover ?? null,
-        priorOverUnder: data.priorOverUnder ?? null,
-        ads: Array.isArray(data.ads) ? data.ads : [],
-        siblingsByName: data.siblingsByName,
-      });
-      // Re-enable autosave from the reopened baseline.
-      lastSavedRef.current = '';
+      // Installing rebaselines autosave against the reopened month, so the next
+      // edit is what triggers a write.
+      installPlan(data, activeKey, period);
       toast.success(
         `${fmtPeriodLong(period)} reopened for editing. The original snapshot is kept; it re-freezes on the next close.`,
       );
@@ -729,29 +775,7 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
         toast.error(data?.error || 'Could not re-freeze this month.');
         return;
       }
-      setPlan({
-        accountKey: data.accountKey ?? activeKey,
-        period: data.period ?? period,
-        baseBudgetGoal: data.baseBudgetGoal ?? null,
-        addedBudgetGoal: data.addedBudgetGoal ?? null,
-        budgetManaged: data.budgetManaged ?? false,
-        markup:
-          typeof data.markup === 'number' && Number.isFinite(data.markup)
-            ? data.markup
-            : null,
-        timeZone:
-          typeof data.timeZone === 'string' && data.timeZone
-            ? data.timeZone
-            : DEFAULT_TIME_ZONE,
-        frozen: data.frozen === true,
-        frozenAt: data.frozenAt ?? null,
-        reopened: data.reopened === true,
-        baseCarryover: data.baseCarryover ?? null,
-        addedCarryover: data.addedCarryover ?? null,
-        priorOverUnder: data.priorOverUnder ?? null,
-        ads: Array.isArray(data.ads) ? data.ads : [],
-        siblingsByName: data.siblingsByName,
-      });
+      installPlan(data, activeKey, period);
       toast.success(`${fmtPeriodLong(period)} re-frozen.`);
     } catch {
       toast.error('Could not re-freeze this month.');
@@ -782,34 +806,9 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
       });
       if (!res.ok) throw new Error('copy failed');
       const updated = (await res.json()) as PacerPlan;
-      setPlan({
-        accountKey: updated.accountKey ?? activeKey,
-        period: updated.period ?? period,
-        baseBudgetGoal: updated.baseBudgetGoal ?? null,
-        addedBudgetGoal: updated.addedBudgetGoal ?? null,
-        budgetManaged: updated.budgetManaged ?? false,
-        markup:
-          typeof updated.markup === 'number' && Number.isFinite(updated.markup)
-            ? updated.markup
-            : null,
-        timeZone:
-          typeof updated.timeZone === 'string' && updated.timeZone
-            ? updated.timeZone
-            : DEFAULT_TIME_ZONE,
-        frozen: updated.frozen === true,
-        frozenAt: updated.frozenAt ?? null,
-        reopened: updated.reopened === true,
-        baseCarryover: updated.baseCarryover ?? null,
-        addedCarryover: updated.addedCarryover ?? null,
-        priorOverUnder: updated.priorOverUnder ?? null,
-        ads: Array.isArray(updated.ads) ? updated.ads : [],
-        siblingsByName: updated.siblingsByName,
-      });
-      lastSavedRef.current = JSON.stringify({
-        baseBudgetGoal: updated.baseBudgetGoal,
-        addedBudgetGoal: updated.addedBudgetGoal,
-        ads: (updated.ads ?? []).map((a, i) => ({ ...a, position: i, period })),
-      });
+      // The copy is already persisted server-side; installing rebaselines
+      // autosave so it isn't immediately written back as a full replace.
+      installPlan(updated, activeKey, period);
       // Refresh periods list (target now has ads)
       fetch(`/api/meta-ads-pacer/${activeKey}/periods`)
         .then((r) => (r.ok ? r.json() : { periods: [] }))

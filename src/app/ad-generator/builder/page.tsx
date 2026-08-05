@@ -79,7 +79,7 @@ import { blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { DatePicker, type DateRange } from '@/components/ui/date-picker';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
-import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
+import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
 import { enrichOfferFields, OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
 import { SYSTEM_FIELDS } from '@/lib/ad-generator/system-fields';
@@ -472,6 +472,8 @@ type SavedTemplate = {
   status: string;
   /** null = global; an account key = only that account sees it in the picker. */
   accountKey?: string | null;
+  /** Sub-accounts granted access on top of the owner. */
+  sharedAccountKeys?: string[];
   updatedAt: string;
   doc: TemplateDoc | null;
 };
@@ -898,6 +900,8 @@ export default function AdBuilderPage() {
   const publishRef = useRef<HTMLDivElement>(null);
   // Deploy-to-subaccounts modal.
   const [deployOpen, setDeployOpen] = useState(false);
+  /** Which sub-accounts the OPEN template is shared with (for the Share modal). */
+  const [sharedAccountKeys, setSharedAccountKeys] = useState<string[]>([]);
   // The canvas (Background) settings panel is shown only when the canvas itself
   // is focused — clicking the empty artboard selects "the canvas". It never
   // appears just because no element is selected (so it stays hidden on load).
@@ -2736,6 +2740,7 @@ export default function AdBuilderPage() {
     setTemplateName(t.name);
     setStatus(st);
     setScopeAccount(t.accountKey ?? null);
+    setSharedAccountKeys(t.sharedAccountKeys ?? []);
     setSizeId(loaded.sizes[0]?.id ?? '');
     clearSelection();
     savedRef.current = serializeDoc(loaded, t.name, st);
@@ -2794,7 +2799,17 @@ export default function AdBuilderPage() {
         }
         const res = await fetch(`/api/ad-generator/templates-doc/${tid}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = (await res.json()) as { template?: { id: string; name: string; description: string | null; status: string; accountKey?: string | null; doc: TemplateDoc | null } };
+        const json = (await res.json()) as {
+          template?: {
+            id: string;
+            name: string;
+            description: string | null;
+            status: string;
+            accountKey?: string | null;
+            sharedAccountKeys?: string[];
+            doc: TemplateDoc | null;
+          };
+        };
         const t = json.template;
         if (!t?.doc) {
           toast.error('That template could not be opened');
@@ -2804,7 +2819,18 @@ export default function AdBuilderPage() {
         // unsaved draft (clear the id so the first save creates a fresh template
         // instead of overwriting the source).
         const copy = params.get('copy') === '1';
-        loadTemplate({ id: t.id, name: copy ? `${t.name} copy` : t.name, description: t.description, status: copy ? 'draft' : t.status, accountKey: t.accountKey ?? null, updatedAt: '', doc: t.doc });
+        loadTemplate({
+          id: t.id,
+          name: copy ? `${t.name} copy` : t.name,
+          description: t.description,
+          status: copy ? 'draft' : t.status,
+          accountKey: t.accountKey ?? null,
+          // A copy starts unshared — access is granted per template, and silently
+          // inheriting the source's list would hand out a template nobody reviewed.
+          sharedAccountKeys: copy ? [] : t.sharedAccountKeys ?? [],
+          updatedAt: '',
+          doc: t.doc,
+        });
         if (copy) {
           setTemplateId(null);
           savedRef.current = '';
@@ -3616,15 +3642,21 @@ export default function AdBuilderPage() {
                     )}
 
                     <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+                      {/* Access is stored on the template row, so there has to BE a
+                          row — an unsaved draft has nothing to share yet. */}
                       <button
                         onClick={() => {
+                          if (!templateId) {
+                            toast.error('Save this template first, then you can share it.');
+                            return;
+                          }
                           setDeployOpen(true);
                           setSettingsOpen(false);
                         }}
                         className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
                       >
                         <RocketLaunchIcon className="h-4 w-4" />
-                        Copy to Subaccounts
+                        Share with sub-accounts
                       </button>
                       {templateId && (
                         <button
@@ -4765,7 +4797,16 @@ export default function AdBuilderPage() {
 
       {helpOpen && <ShortcutsModal onClose={() => setHelpOpen(false)} />}
 
-      {deployOpen && <DeployTemplateModal name={templateName} doc={doc} excludeKey={scopeAccount} onClose={() => setDeployOpen(false)} />}
+      {deployOpen && templateId && (
+        <ShareTemplateModal
+          templateId={templateId}
+          name={templateName}
+          ownerKey={scopeAccount}
+          sharedWith={sharedAccountKeys}
+          onClose={() => setDeployOpen(false)}
+          onSaved={setSharedAccountKeys}
+        />
+      )}
       {cropModal && (
         <CropEditorModal
           file={{ url: cropModal.url, name: cropModal.name }}

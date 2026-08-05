@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession, requireRole } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
+import { parseSharedKeys, serializeSharedKeys } from '@/lib/ad-generator/template-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,7 +28,15 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       doc = null;
     }
     return NextResponse.json({
-      template: { id: row.id, name: row.name, description: row.description, status: row.status, accountKey: row.accountKey, doc },
+      template: {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        status: row.status,
+        accountKey: row.accountKey,
+        sharedAccountKeys: parseSharedKeys(row.sharedAccountKeys),
+        doc,
+      },
     });
   } catch (err) {
     console.warn('[api/ad-generator/templates-doc/[id]] GET failed:', err);
@@ -42,7 +51,19 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   const session = await getAuthSession();
 
   const { id } = await params;
-  let body: { name?: string; description?: string; doc?: unknown; status?: string; isActive?: boolean; accountKey?: string | null; category?: string | null; tags?: string[] };
+  let body: {
+    name?: string;
+    description?: string;
+    doc?: unknown;
+    status?: string;
+    isActive?: boolean;
+    accountKey?: string | null;
+    category?: string | null;
+    tags?: string[];
+    sharedAccountKeys?: string[];
+    /** Set the publish window without sending the whole doc. */
+    schedule?: { start?: string | null; end?: string | null } | null;
+  };
   try {
     body = await req.json();
   } catch {
@@ -59,6 +80,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   // Shared taxonomy — direct inline edits from the template card.
   if ('category' in body) data.category = typeof body.category === 'string' && body.category.trim() ? body.category.trim() : null;
   if ('tags' in body) data.tags = Array.isArray(body.tags) ? JSON.stringify(body.tags) : null;
+  // Which subaccounts can use this template. Replaces the whole list, so
+  // un-ticking one revokes it.
+  if ('sharedAccountKeys' in body) data.sharedAccountKeys = serializeSharedKeys(body.sharedAccountKeys);
   if (body.doc && typeof body.doc === 'object' && Array.isArray((body.doc as { sizes?: unknown }).sizes)) {
     const u = session?.user as { name?: string | null; email?: string | null; image?: string | null } | undefined;
     data.doc = JSON.stringify(body.doc);
@@ -69,6 +93,24 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     data.createdByName = u?.name ?? null;
     data.createdByEmail = u?.email ?? null;
     data.createdByImage = u?.image ?? null;
+  }
+
+  // A schedule-only edit (from the library card) merges into the stored doc here
+  // rather than making the client PATCH a whole doc — that path also rewrites the
+  // createdBy* columns, so setting a date would silently reassign authorship.
+  if ('schedule' in body && !data.doc) {
+    try {
+      const current = await prisma.adTemplateDoc.findUnique({ where: { id }, select: { doc: true } });
+      if (!current) return NextResponse.json({ error: 'Not found' }, { status: 404 });
+      const parsed = JSON.parse(current.doc) as Record<string, unknown>;
+      const start = body.schedule?.start?.trim() || null;
+      const end = body.schedule?.end?.trim() || null;
+      if (start || end) parsed.schedule = { start, end };
+      else delete parsed.schedule;
+      data.doc = JSON.stringify(parsed);
+    } catch {
+      return NextResponse.json({ error: 'This template could not be read' }, { status: 422 });
+    }
   }
 
   try {

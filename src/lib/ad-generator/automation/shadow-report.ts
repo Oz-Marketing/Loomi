@@ -9,6 +9,7 @@ import {
 import { runWindowFor, type AutomationConfigRow } from './poll-offers';
 import { selectOffer, type SelectableOfferType } from './select-offer';
 import type { SkippedVehicle } from './skip-reasons';
+import { templatesForAccount } from '../template-access';
 
 /**
  * Shadow-mode reporting — everything the Phase 1 dashboard shows, read from the
@@ -444,8 +445,9 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
   // ── templates in scope + the auto-generated review queue ──
   const templateRows = await prisma.adTemplateDoc
     .findMany({
-      where: { status: 'published', isActive: true, OR: [{ accountKey }, { accountKey: null }] },
-      select: { id: true, name: true, accountKey: true, doc: true },
+      // Shared-with counts as in scope; a shared global one no longer does.
+      where: { status: 'published', isActive: true },
+      select: { id: true, name: true, accountKey: true, sharedAccountKeys: true, doc: true },
       orderBy: { updatedAt: 'desc' },
     })
     .catch(() => []);
@@ -497,7 +499,7 @@ export async function buildShadowReport(accountKey: string, now = new Date()): P
       offerTypePriority: jsonArray(config?.offerTypePriority ?? null),
       mode: config?.mode ?? 'draft',
     },
-    templates: templateRows.map((t) => ({
+    templates: templatesForAccount(templateRows, { accountKey }).map((t) => ({
       id: t.id,
       name: t.name,
       owned: t.accountKey === accountKey,

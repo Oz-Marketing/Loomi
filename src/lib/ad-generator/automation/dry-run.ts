@@ -5,6 +5,7 @@ import { resolveJellybean } from '@/lib/integrations/evox-jellybean';
 import { incentiveToFieldPatch } from '../incentive-apply';
 import { resolveDisclaimerText } from '../disclaimer-resolve';
 import { brandLogoData } from '../brand-logos';
+import { templatesForAccount } from '../template-access';
 import { parseOemRule, type OemOfferRule } from '../compliance';
 import { loadActiveCoopPack } from '../coop-pack-store';
 import { splitCoopPack, type CoopRulePack } from '../coop-rules';
@@ -115,10 +116,11 @@ async function resolveAutomationTemplate(
     if (!row) return null;
     return { doc: JSON.parse(row.doc) as TemplateDoc, id: row.id, name: row.name, how: 'explicitly selected' };
   }
-  const rows = await prisma.adTemplateDoc.findMany({
-    where: { status: 'published', isActive: true, OR: [{ accountKey }, { accountKey: null }] },
+  const all = await prisma.adTemplateDoc.findMany({
+    where: { status: 'published', isActive: true },
     orderBy: { updatedAt: 'desc' },
   });
+  const rows = templatesForAccount(all, { accountKey });
   // Sub-account-owned templates outrank globals.
   const row = rows.find((r) => r.accountKey === accountKey) ?? rows[0];
   if (!row) return null;

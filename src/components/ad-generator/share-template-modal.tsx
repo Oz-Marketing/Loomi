@@ -3,49 +3,60 @@
 import { useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { XMarkIcon, CheckIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
+import { XMarkIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { AccountAvatar } from '@/components/account-avatar';
-import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
 /**
- * Deploy an ad template into one or more subaccounts. Each selected account gets
- * its own PUBLISHED copy in its template library (a scoped clone of the doc) — so
- * teams can push a master layout out to the accounts that should have it. Shared
- * by the /templates Ads-tab row menu and the builder's settings cog.
+ * Who can use this template.
+ *
+ * Replaces "Copy to Subaccounts", which cloned the doc into each account: the
+ * copies diverged the moment anyone touched one, an edit to the master reached
+ * none of them, and access could never be taken back. This grants access to the
+ * ONE template instead — so a toggle off is a real revoke, and a later edit
+ * reaches everyone at once.
+ *
+ * Toggles are applied on Save, not per click, so a mis-tap doesn't briefly publish
+ * a template into a dealer's library.
  */
-export function DeployTemplateModal({
+export function ShareTemplateModal({
+  templateId,
   name,
-  doc,
+  ownerKey,
+  sharedWith,
   onClose,
-  onDeployed,
-  excludeKey,
+  onSaved,
 }: {
+  templateId: string;
   name: string;
-  doc: TemplateDoc;
+  /** The template's own account scope — always has access, shown as such. */
+  ownerKey: string | null;
+  /** Accounts currently shared with. */
+  sharedWith: string[];
   onClose: () => void;
-  onDeployed?: () => void;
-  /** Hide one account (e.g. the template's own scope) from the list. */
-  excludeKey?: string | null;
+  onSaved?: (keys: string[]) => void;
 }) {
   const { accounts } = useAccount();
   const list = useMemo(
     () =>
       Object.entries(accounts)
-        .filter(([key]) => key !== excludeKey)
+        .filter(([key]) => key !== ownerKey)
         .map(([key, a]) => ({ key, label: a.dealer || key, logos: a.logos, storefrontImage: a.storefrontImage }))
         .sort((a, b) => a.label.localeCompare(b.label)),
-    [accounts, excludeKey],
+    [accounts, ownerKey],
   );
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(sharedWith));
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return q ? list.filter((a) => a.label.toLowerCase().includes(q)) : list;
   }, [list, query]);
-  // "Select all" acts on what's currently visible (the filtered set).
   const allSelected = filtered.length > 0 && filtered.every((a) => selected.has(a.key));
+  const changed =
+    selected.size !== sharedWith.length || sharedWith.some((k) => !selected.has(k));
 
   const toggle = (k: string) =>
     setSelected((prev) => {
@@ -62,26 +73,27 @@ export function DeployTemplateModal({
       return next;
     });
 
-  const deploy = async () => {
-    if (!selected.size) return;
+  const save = async () => {
     setBusy(true);
+    const keys = [...selected];
     try {
-      const results = await Promise.all(
-        [...selected].map((accountKey) =>
-          fetch('/api/ad-generator/templates-doc', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, doc: { ...doc, name }, status: 'published', accountKey }),
-          }),
-        ),
+      const res = await fetch(`/api/ad-generator/templates-doc/${templateId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sharedAccountKeys: keys }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      toast.success(
+        keys.length
+          ? `Shared with ${keys.length} sub-account${keys.length === 1 ? '' : 's'}`
+          : ownerKey
+            ? 'Sharing removed — only its own sub-account can use it'
+            : 'Sharing removed — back in the shared library for everyone',
       );
-      const failed = results.filter((r) => !r.ok).length;
-      if (failed) throw new Error(`${failed} of ${results.length} could not be created`);
-      toast.success(`Copied to ${selected.size} ${selected.size === 1 ? 'account' : 'accounts'}`);
-      onDeployed?.();
+      onSaved?.(keys);
       onClose();
     } catch (err) {
-      toast.error(`Couldn't copy: ${err instanceof Error ? err.message : 'unknown error'}`);
+      toast.error(`Couldn't update sharing: ${err instanceof Error ? err.message : 'unknown error'}`);
       setBusy(false);
     }
   };
@@ -95,9 +107,10 @@ export function DeployTemplateModal({
       >
         <div className="mb-3 flex items-start justify-between gap-2">
           <div className="min-w-0">
-            <h2 className="text-sm font-bold text-[var(--foreground)]">Copy to Subaccounts</h2>
+            <h2 className="text-sm font-bold text-[var(--foreground)]">Share template</h2>
             <p className="mt-0.5 text-xs text-[var(--muted-foreground)]">
-              Copies &ldquo;{name}&rdquo; into each selected account&rsquo;s template library.
+              Pick which sub-accounts can use &ldquo;{name}&rdquo;. They all use this one template, so
+              your edits reach every one of them.
             </p>
           </div>
           <button onClick={onClose} title="Close" aria-label="Close" className="rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]">
@@ -105,28 +118,61 @@ export function DeployTemplateModal({
           </button>
         </div>
 
+        {/* What "nothing selected" means depends on whether the template is owned
+            by a sub-account, so say it rather than leaving it to be inferred. */}
+        {!ownerKey && selected.size > 0 && (
+          <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[11px] leading-snug text-amber-500">
+            This is a shared-library template. Sharing it with specific sub-accounts also limits it
+            to them — clear the list to offer it to everyone again.
+          </p>
+        )}
+
         {list.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-8 text-center text-xs text-[var(--muted-foreground)]">No subaccounts available to copy to.</p>
+          <p className="rounded-lg border border-dashed border-[var(--border)] px-3 py-8 text-center text-xs text-[var(--muted-foreground)]">
+            No other sub-accounts to share with.
+          </p>
         ) : (
           <>
-            {/* Search */}
             <div className="relative mb-2">
               <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted-foreground)]" />
               <input
                 autoFocus
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search subaccounts…"
+                placeholder="Search sub-accounts…"
                 className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] py-2 pl-8 pr-3 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
               />
             </div>
             <div className="mb-2 flex items-center justify-between">
-              <span className="text-[11px] text-[var(--muted-foreground)]">{selected.size} selected</span>
+              <span className="text-[11px] text-[var(--muted-foreground)]">
+                {selected.size ? `${selected.size} with access` : 'No one added yet'}
+              </span>
               <button onClick={toggleAll} disabled={!filtered.length} className="text-[11px] font-medium text-[var(--primary)] transition-opacity hover:opacity-80 disabled:opacity-40">
                 {allSelected ? 'Clear all' : 'Select all'}
               </button>
             </div>
+
             <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
+              {/* The owner is listed but not toggleable — it can't lose access to
+                  its own template, and a dead switch is worse than a stated fact. */}
+              {ownerKey && (
+                <div className="flex w-full items-center gap-2.5 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-2">
+                  <AccountAvatar
+                    name={accounts[ownerKey]?.dealer || ownerKey}
+                    accountKey={ownerKey}
+                    logos={accounts[ownerKey]?.logos}
+                    storefrontImage={accounts[ownerKey]?.storefrontImage}
+                    size={28}
+                    className="flex-shrink-0 rounded-md border border-[var(--border)]"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-sm text-[var(--foreground)]">
+                    {accounts[ownerKey]?.dealer || ownerKey}
+                  </span>
+                  <span className="flex-shrink-0 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--muted-foreground)]">
+                    owner
+                  </span>
+                </div>
+              )}
               {filtered.length === 0 ? (
                 <p className="py-6 text-center text-xs text-[var(--muted-foreground)]">No matches for &ldquo;{query}&rdquo;.</p>
               ) : (
@@ -136,30 +182,38 @@ export function DeployTemplateModal({
                     <button
                       key={a.key}
                       onClick={() => toggle(a.key)}
-                      aria-pressed={on}
+                      role="switch"
+                      aria-checked={on}
                       className={`flex w-full items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors ${on ? 'border-[var(--primary)] bg-[var(--primary)]/10' : 'border-[var(--border)] hover:border-[var(--primary)]'}`}
                     >
-                      {/* Shared account avatar: logo → storefront → generated Loomi avatar. */}
                       <AccountAvatar name={a.label} accountKey={a.key} logos={a.logos} storefrontImage={a.storefrontImage} size={28} className="flex-shrink-0 rounded-md border border-[var(--border)]" />
                       <span className={`min-w-0 flex-1 truncate text-sm ${on ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>{a.label}</span>
-                      <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[4px] border ${on ? 'border-[var(--primary)] bg-[var(--primary)] text-white' : 'border-[var(--muted-foreground)]/50'}`}>
-                        {on && <CheckIcon className="h-3 w-3" strokeWidth={3} />}
+                      {/* A switch, not a checkbox: this is a state you leave on. */}
+                      <span
+                        className={`relative h-4 w-7 flex-shrink-0 rounded-full transition-colors ${
+                          on ? 'bg-[var(--primary)]' : 'bg-[var(--muted)] border border-[var(--border)]'
+                        }`}
+                      >
+                        <span
+                          className={`absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full bg-white shadow transition-all ${on ? 'left-[0.9rem]' : 'left-0.5'}`}
+                        />
                       </span>
                     </button>
                   );
                 })
               )}
             </div>
+
             <div className="mt-3 flex justify-end gap-2 border-t border-[var(--border)] pt-3">
               <button onClick={onClose} disabled={busy} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50">
                 Cancel
               </button>
               <button
-                onClick={deploy}
-                disabled={busy || !selected.size}
+                onClick={save}
+                disabled={busy || !changed}
                 className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
               >
-                {busy ? 'Copying…' : `Copy${selected.size ? ` to ${selected.size}` : ''}`}
+                {busy ? 'Saving…' : changed ? 'Save access' : 'Saved'}
               </button>
             </div>
           </>

@@ -179,17 +179,23 @@ export function clearElementOverride(
  */
 const BROADCAST_BOX_KEYS = ['x', 'y', 'w', 'h'] as const;
 
+/** Font size clamp, matching the builder's own stepper bounds. */
+const MIN_FONT = 4;
+const MAX_FONT = 400;
+
 /**
  * Write a placement at the chosen scope.
  *
- * Under `'all'`, only the fractional geometry travels. Deliberately left on the
- * board it was set on:
- *   - `fontSize` — absolute px. Pushing a 1080-square's 108px headline onto a
- *     300×250 banner would bury the banner. Use "Copy layout from" to move type
- *     scale between two boards you know are comparable.
- *   - `z`, `hidden` — stacking and per-board omission are per-size by design.
- *   - `objectX/Y/Scale` — the whole point of per-size framing is that a cover
- *     image crops differently for square vs story.
+ * Under `'all'`:
+ *   - fractional `x/y/w/h` are COPIED — a fraction means the same relative
+ *     placement on any aspect ratio.
+ *   - `fontSize` travels PROPORTIONALLY: each board's own size moves by the same
+ *     ratio this one just changed by. Copying the number outright would push a
+ *     1080-square's 108px headline onto a 300×250 banner and bury it, but "make it
+ *     20% bigger everywhere" is exactly what asking for all sizes means.
+ *   - `z`, `hidden`, `objectX/Y/Scale` stay on the board they were set on.
+ *     Stacking and per-board omission are per-size by design, and per-size framing
+ *     is the entire point of per-size framing.
  *
  * A size with no placement for the element yet is skipped rather than gaining
  * one: broadcasting a move shouldn't add the element to boards a designer
@@ -209,6 +215,12 @@ export function applyBox(
     };
   }
 
+  // How much the edited board's type just changed by, if it changed at all.
+  const wasFont = doc.layouts[sizeId]?.[elId]?.fontSize;
+  const nowFont = box.fontSize;
+  const fontRatio =
+    wasFont && nowFont && wasFont > 0 && nowFont !== wasFont ? nowFont / wasFont : null;
+
   const layouts: TemplateDoc['layouts'] = {};
   for (const [sid, byEl] of Object.entries(doc.layouts)) {
     const prior = byEl[elId];
@@ -222,6 +234,9 @@ export function applyBox(
     }
     const next = { ...prior };
     for (const k of BROADCAST_BOX_KEYS) next[k] = box[k];
+    if (fontRatio && prior.fontSize) {
+      next.fontSize = Math.min(MAX_FONT, Math.max(MIN_FONT, Math.round(prior.fontSize * fontRatio)));
+    }
     layouts[sid] = { ...byEl, [elId]: next };
   }
   return { ...doc, layouts };

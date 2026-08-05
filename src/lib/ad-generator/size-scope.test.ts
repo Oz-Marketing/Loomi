@@ -152,13 +152,41 @@ describe('applyBox', () => {
     expect(d.layouts.story.headline).toMatchObject(moved);
   });
 
-  it('scope "all" leaves per-size font size, stacking and omission alone', () => {
+  it('scope "all" leaves stacking and omission alone', () => {
     const d = applyBox(doc(), 'headline', { ...moved, fontSize: 108, z: 2 }, 'all', 'square');
-    // A 108px headline pushed onto a banner would bury it; z and hidden are
-    // per-board by design.
-    expect(d.layouts.story.headline.fontSize).toBe(72);
     expect(d.layouts.story.headline.z).toBe(5);
     expect(d.layouts.story.headline.hidden).toBe(true);
+  });
+
+  it('scope "all" leaves font size alone when it did not change', () => {
+    const d = applyBox(doc(), 'headline', { ...moved, fontSize: 108, z: 2 }, 'all', 'square');
+    expect(d.layouts.story.headline.fontSize).toBe(72);
+  });
+
+  it('scope "all" scales type by the same PROPORTION, not to the same number', () => {
+    // Square 108 → 216 is a doubling, so story's 72 doubles to 144. Copying 216
+    // onto a story (or a 300×250 banner) would bury the board.
+    const d = applyBox(doc(), 'headline', { ...moved, fontSize: 216, z: 2 }, 'all', 'square');
+    expect(d.layouts.square.headline.fontSize).toBe(216);
+    expect(d.layouts.story.headline.fontSize).toBe(144);
+  });
+
+  it('scope "all" scales type down as well', () => {
+    const d = applyBox(doc(), 'headline', { ...moved, fontSize: 54 }, 'all', 'square');
+    expect(d.layouts.story.headline.fontSize).toBe(36);
+  });
+
+  it('scope "all" keeps a scaled font size inside the stepper bounds', () => {
+    const d = applyBox(doc(), 'headline', { ...moved, fontSize: 400 }, 'all', 'square');
+    expect(d.layouts.story.headline.fontSize).toBeLessThanOrEqual(400);
+    expect(d.layouts.story.headline.fontSize).toBeGreaterThanOrEqual(4);
+  });
+
+  it('scope "all" does not invent a font size for a board that had none', () => {
+    const base = doc();
+    delete base.layouts.story.headline.fontSize;
+    const d = applyBox(base, 'headline', { ...moved, fontSize: 216 }, 'all', 'square');
+    expect(d.layouts.story.headline.fontSize).toBeUndefined();
   });
 
   it('scope "all" does not add the element to a board it is absent from', () => {

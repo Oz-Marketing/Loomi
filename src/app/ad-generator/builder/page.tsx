@@ -1996,21 +1996,29 @@ export default function AdBuilderPage() {
   // Patch the current-size BOX of every selected element (fontSize lives here).
   const patchSelectedBoxes = useCallback((patch: Partial<DocLayoutBox>) => {
     const ids = selectedIds;
-    setDoc((prev) => {
-      const lay = { ...(prev.layouts[size.id] ?? {}) };
-      for (const id of ids) if (lay[id]) lay[id] = { ...lay[id], ...patch };
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-    }, `bulkbox:${Object.keys(patch).sort().join(',')}`);
-  }, [selectedIds, size.id]);
+    setDoc(
+      (prev) =>
+        ids.reduce((acc, id) => {
+          const prior = acc.layouts[size.id]?.[id];
+          return prior ? applyBox(acc, id, { ...prior, ...patch }, effectiveScope, size.id) : acc;
+        }, prev),
+      `bulkbox:${Object.keys(patch).sort().join(',')}`,
+    );
+  }, [selectedIds, size.id, effectiveScope]);
   // Nudge each selected element's font size by delta, keeping their relative sizes.
   const bumpSelectedFontSize = useCallback((delta: number) => {
     const ids = selectedIds;
-    setDoc((prev) => {
-      const lay = { ...(prev.layouts[size.id] ?? {}) };
-      for (const id of ids) if (lay[id]) lay[id] = { ...lay[id], fontSize: clamp(Math.round((lay[id].fontSize ?? 48) + delta), 4, 400) };
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-    }, 'bulkbox:fontSize');
-  }, [selectedIds, size.id]);
+    setDoc(
+      (prev) =>
+        ids.reduce((acc, id) => {
+          const prior = acc.layouts[size.id]?.[id];
+          if (!prior) return acc;
+          const fontSize = clamp(Math.round((prior.fontSize ?? 48) + delta), 4, 400);
+          return applyBox(acc, id, { ...prior, fontSize }, effectiveScope, size.id);
+        }, prev),
+      'bulkbox:fontSize',
+    );
+  }, [selectedIds, size.id, effectiveScope]);
 
   // Fit a text box to its rendered content on the given axis — the explicit
   // action behind double-clicking a resize handle (n/s → height, e/w → width,
@@ -2937,11 +2945,12 @@ export default function AdBuilderPage() {
       // Commit the drag as-is — text/button boxes size freely (no auto-hug).
       setBox(d.sizeId, d.elId, d.live);
     } else if (d?.kind === 'group' || d?.kind === 'groupresize') {
-      setDoc((prev) => {
-        const lay = { ...(prev.layouts[d.sizeId] ?? {}) };
-        for (const id of Object.keys(d.live)) lay[id] = d.live[id];
-        return { ...prev, layouts: { ...prev.layouts, [d.sizeId]: lay } };
-      });
+      // Through the scope, same as a single drag — moving a group of five under
+      // "All sizes" has to reach the other boards too, or the switch would quietly
+      // apply to some drags and not others.
+      setDoc((prev) =>
+        Object.keys(d.live).reduce((acc, id) => applyBox(acc, id, d.live[id], effectiveScope, d.sizeId), prev),
+      );
     } else if (d?.kind === 'marquee') {
       const r = d.rect;
       if (r.w > 0.01 || r.h > 0.01) {
@@ -3211,11 +3220,10 @@ export default function AdBuilderPage() {
 
   // ── align / distribute the multi-selection ──
   function applyBoxes(patch: Record<string, DocLayoutBox>) {
-    setDoc((prev) => {
-      const lay = { ...(prev.layouts[size.id] ?? {}) };
-      for (const id of Object.keys(patch)) lay[id] = patch[id];
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-    });
+    // Align/distribute is a move like any other, so it obeys the scope too.
+    setDoc((prev) =>
+      Object.keys(patch).reduce((acc, id) => applyBox(acc, id, patch[id], effectiveScope, size.id), prev),
+    );
   }
 
   function alignSelected(edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') {
@@ -3296,18 +3304,18 @@ export default function AdBuilderPage() {
       else if (e.key === 'ArrowDown') dy = step;
       else return;
       e.preventDefault();
-      setDoc((prev) => {
-        const lay = { ...(prev.layouts[size.id] ?? {}) };
-        for (const id of selectedIds) {
-          const b = lay[id];
-          if (b) lay[id] = { ...b, x: clamp(b.x + dx, 0, 1 - b.w), y: clamp(b.y + dy, 0, 1 - b.h) };
-        }
-        return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-      });
+      setDoc((prev) =>
+        selectedIds.reduce((acc, id) => {
+          const b = acc.layouts[size.id]?.[id];
+          if (!b) return acc;
+          const moved = { ...b, x: clamp(b.x + dx, 0, 1 - b.w), y: clamp(b.y + dy, 0, 1 - b.h) };
+          return applyBox(acc, id, moved, effectiveScope, size.id);
+        }, prev),
+      );
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedIds, size.id, deleteElement, setDoc, clearSelection]);
+  }, [selectedIds, size.id, effectiveScope, deleteElement, setDoc, clearSelection]);
 
   // ⌘Z / ⌘⇧Z undo-redo + ⌘G / ⌘⇧G group/ungroup, plus the bare M (margins) / O
   // (outlines) view-guide toggles — global, but defer to the browser inside text
@@ -4018,7 +4026,7 @@ export default function AdBuilderPage() {
                       [
                         'all',
                         'All sizes',
-                        `Changes affect all ${doc.sizes.length} sizes. Position and size travel; font size, stacking, and image framing stay per size (a 108px headline would bury a 300×250 banner).`,
+                        `Changes affect all ${doc.sizes.length} sizes. Position and size travel, and type scales by the same proportion on each board; stacking and image framing stay per size.`,
                       ],
                     ] as const).map(([value, label, hint]) => (
                       <button

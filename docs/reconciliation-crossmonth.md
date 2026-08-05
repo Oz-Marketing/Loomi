@@ -295,6 +295,23 @@ settlement mechanisms must never both move the same flight's dollars.
 counted table to the cent, net +$12.80, the Mar row at −3.16, and the
 naive-vs-correct gap of exactly $8.58 (acceptance check 7).
 
+### Carryover interaction
+
+The two systems are orthogonal by construction: `Out`/`In` move dollars on the
+SPEND side, an applied carryover moves dollars on the TARGET side
+(`adjustedSpendTarget = spendTarget + appliedIn`, and `variance` nets `appliedIn`
+out). Nothing in the ledger feeds `variance` today, so applying over/under
+behaves exactly as it did before this change.
+
+One property worth knowing: a month's `unapplied` is `carryover − appliedOut`,
+where `carryover` is recomputed live and `appliedOut` is the fixed dollar amount
+of the ledger entry. So if a month's spend changes AFTER its over/under was
+applied — a cross-month flight settles, or one gets marked — the difference
+resurfaces as unapplied on that month rather than being silently lost. Nothing
+double-counts; you just reconcile that month twice. The `Pending Forward` column
+and the "not final yet" caution on Apply exist so this is a choice rather than a
+surprise.
+
 ### Not yet done
 
 `Variance / Carryforward` still measures against the pre-existing base

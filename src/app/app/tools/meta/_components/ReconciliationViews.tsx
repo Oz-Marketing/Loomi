@@ -24,7 +24,12 @@ import {
   sourceTint,
   sourceLabel,
 } from '@/lib/ad-pacer/helpers';
-import { fmtPeriodLong, fmtPeriodShort, currentPeriod } from '@/lib/ad-pacer/period';
+import {
+  fmtPeriodLong,
+  fmtPeriodShort,
+  currentPeriod,
+  monthRangeLabel,
+} from '@/lib/ad-pacer/period';
 import { type PlanFilters, applyFilters, activeFilterCount } from '@/lib/ad-pacer/filters';
 import {
   Tooltip,
@@ -296,14 +301,16 @@ export function ReconciliationPanel({
   const netReconciled = Math.abs(net) < 0.005;
   const canApply = !!data?.targetPeriod && !netReconciled;
   // §4: name the settled months still carrying unapplied over/under.
-  const unappliedMonthsLabel = (data?.unappliedMonths ?? [])
-    .map((p) =>
-      new Date(Number(p.slice(0, 4)), Number(p.slice(5, 7)) - 1, 1).toLocaleDateString(
-        'en-US',
-        { month: 'short' },
-      ),
+  const unappliedMonthsLabel = monthRangeLabel(data?.unappliedMonths ?? []);
+  // Reconcilable months whose spend can still move (an unsettled cross-month
+  // flight is sitting in them) — their over/under isn't final.
+  const pendingMonths = (data?.months ?? [])
+    .filter(
+      (m) =>
+        Math.abs(m.pendingForward ?? 0) >= 0.005 &&
+        m.period !== data?.targetPeriod,
     )
-    .join(', ');
+    .map((m) => m.period);
 
   return (
     <div>
@@ -450,6 +457,23 @@ export function ReconciliationPanel({
                   ? 'Applying…'
                   : `Apply all unapplied → ${bucket === 'base' ? 'Base' : 'Added'}`}
               </button>
+              {/* A month with dollars still waiting to move has an over/under
+                  that isn't final: when the flight settles, that month's spend
+                  changes and the difference resurfaces as unapplied. Applying
+                  early isn't wrong (nothing double-counts — the ledger entry
+                  keeps its amount and the delta comes back), but it means a
+                  second pass, so say so before they click. */}
+              {pendingMonths.length > 0 && (
+                <Tooltip label="A cross-month flight hasn't settled yet, so these months' spend can still change. Applying now is safe — the difference just comes back as unapplied when it settles — but you'll reconcile them twice.">
+                  <span
+                    className="inline-flex items-center gap-1 text-[10px] font-semibold text-right"
+                    style={{ color: COLORS.warn }}
+                  >
+                    <ExclamationTriangleIcon className="h-3 w-3 flex-shrink-0" />
+                    {monthRangeLabel(pendingMonths)} not final yet
+                  </span>
+                </Tooltip>
+              )}
               <span className="text-[10px] text-[var(--muted-foreground)] text-right max-w-[200px]">
                 Carryover lands in the {bucket === 'base' ? 'Base' : 'Added'} bucket of the live month.
               </span>

@@ -16,6 +16,9 @@ import type { PacerAd } from './types';
 // so "today" resolves to 2026-06-15 and a June flight starting on the 1st is
 // already running while one starting on the 20th has not begun.
 const NOW = Date.UTC(2026, 5, 15, 18, 0, 0); // 2026-06-15 12:00 MDT
+// Two months on: the June period is long closed. Used for the settlement checks
+// below — "in progress" has to mean still running, not merely started.
+const NOW_AUG = Date.UTC(2026, 7, 5, 18, 0, 0); // 2026-08-05 12:00 MDT
 const TZ = 'America/Denver';
 const PERIOD = '2026-06';
 
@@ -132,6 +135,45 @@ describe('isLifetimeInProgress (§3)', () => {
         TZ,
       ),
     ).toBe(false);
+  });
+
+  // A closed month keeps whatever status its rows had at close
+  // (reconcileCompletedRuns only touches writable periods), so a June ad left on
+  // "Live" must not read as in-progress in August — that held its spend and
+  // allocation out of June's settle-able base forever and kept the
+  // "lifetime · in progress" badge on the June reconciliation row.
+  it('does NOT flag a FINISHED run still sitting on Live (June row, viewed in August)', () => {
+    expect(
+      isLifetimeInProgress(
+        mk({ budgetType: 'Lifetime', adStatus: 'Live' }),
+        NOW_AUG,
+        TZ,
+      ),
+    ).toBe(false);
+  });
+
+  it('does NOT flag an undated lifetime run once its pacing month is over', () => {
+    expect(
+      isLifetimeInProgress(
+        mk({ budgetType: 'Lifetime', adStatus: 'Live', flightEnd: null }),
+        NOW_AUG,
+        TZ,
+      ),
+    ).toBe(false);
+  });
+
+  // The bike-night pattern: a June-period run that finishes in early July is
+  // genuinely still running on Jul 1 — the origin month's edge must not settle it
+  // early — and is finished by August.
+  it('keeps a cross-month run in progress past its origin month, then settles it', () => {
+    const crossMonth = mk({
+      budgetType: 'Lifetime',
+      adStatus: 'Live',
+      flightStart: '2026-06-26',
+      flightEnd: '2026-07-03',
+    });
+    expect(isLifetimeInProgress(crossMonth, Date.UTC(2026, 6, 1, 18), TZ)).toBe(true);
+    expect(isLifetimeInProgress(crossMonth, NOW_AUG, TZ)).toBe(false);
   });
 });
 

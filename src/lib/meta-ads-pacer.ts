@@ -773,7 +773,41 @@ export async function getPeriodPlanView(
   };
   })();
 
-  return { ...view, markup: liveMarkup, siblingsByName };
+  return {
+    ...view,
+    markup: liveMarkup,
+    siblingsByName,
+    ads: refreshDerivedAdFlags(
+      (view as { ads?: unknown }).ads,
+      period,
+      tz,
+    ),
+  };
+}
+
+/**
+ * Re-derive the per-ad "as of now" flags over whatever the view produced.
+ *
+ * `lifetimeInProgress` and `variance` describe a run's state RIGHT NOW — they are
+ * not part of the historical record, so a frozen month must not serve the values
+ * baked into its snapshot at freeze time. A June snapshot taken while a lifetime
+ * ad was mid-run kept `lifetimeInProgress: true` (and `klass:
+ * 'lifetime-in-progress'`, contribution $0) forever, so months after the run
+ * ended the Over/Under view still badged it as running and still counted none of
+ * its spend. Same reasoning as re-resolving `markup` live above. Idempotent on
+ * the live branches, which just computed these from the same inputs.
+ */
+function refreshDerivedAdFlags(ads: unknown, period: string, tz: string): unknown {
+  if (!Array.isArray(ads)) return ads;
+  const nowMs = Date.now();
+  return ads.map((ad) => {
+    const row = ad as Parameters<typeof classifyAdVariance>[0];
+    return {
+      ...(ad as Record<string, unknown>),
+      lifetimeInProgress: isLifetimeInProgress(row, nowMs, tz),
+      variance: classifyAdVariance(row, period, nowMs, tz),
+    };
+  });
 }
 
 // ─── Carryover (Change 7) ──────────────────────────────────────────────────

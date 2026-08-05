@@ -227,6 +227,16 @@ export function isEligibleForLivePacing(
  * single-period ad equals fullRunActual − fullLifetimeTarget per the spec.
  * Multi-month lifetime ads are handled later by §1/§2 (cross-month split).
  * This is the ONE predicate every over/under-base sum + the badge consult.
+ *
+ * "Still running" means started AND not yet finished. Status alone can't carry
+ * that: `reconcileCompletedRuns` only auto-completes ads on WRITABLE periods, so
+ * a closed month's rows keep whatever status they had at close — a June lifetime
+ * ad left on "Live" read as in-progress forever, holding its spend and
+ * allocation out of June's settle-able base months after the run ended. June
+ * then showed the "lifetime · in progress" badge in August, its variance was
+ * computed on an incomplete base, and it could never settle or roll forward.
+ * So the run's own end date decides, which is also the spec's pending→settled
+ * trigger (run_end has passed).
  */
 export function isLifetimeInProgress(
   ad: AdScheduleLike,
@@ -235,9 +245,17 @@ export function isLifetimeInProgress(
 ): boolean {
   if (ad.budgetType !== 'Lifetime') return false;
   if (!ACTIVE_STATUSES.includes(ad.adStatus)) return false; // completed/off books normally
-  const { effectiveStart } = clampToMonth(ad);
+  const { effectiveStart, effectiveEnd } = clampToMonth(ad);
   if (!effectiveStart) return false;
-  return effectiveStart <= zonedTodayIso(nowMs, timeZone); // has started
+  const today = zonedTodayIso(nowMs, timeZone);
+  if (effectiveStart > today) return false; // hasn't started
+  // The UNCLAMPED end when the flight declares one, so a cross-month run stays
+  // in progress until its ACTUAL finish (a Jun 26 – Jul 3 run is still running
+  // on Jul 1) rather than looking done at its origin month's edge. With no end
+  // date at all, the pacing month's end bounds it — an undated run must not stay
+  // "in progress" indefinitely.
+  const runEnd = (ad.period ? runEndIso(ad, ad.period) : null) ?? effectiveEnd;
+  return runEnd == null || today <= runEnd; // hasn't finished
 }
 
 /**
@@ -362,19 +380,25 @@ export function lifetimeSettlesThisMonth(
   ad: AdScheduleLike,
   asMonth: string,
 ): boolean {
-  // Resolve the run's real end the same way clampToMonth does — including its
-  // stale-metaEndDate guard: a Meta end BEFORE this month is stale (a recurring
-  // ad set still carrying a prior run's stop date), so defer to the planner's
-  // flightEnd (the forward intent). Without this, a genuine cross-month run with
-  // a stale Meta end would be misread as "ends this month". Compare the UNCLAMPED
-  // end month (clampToMonth's effectiveEnd is capped at month-end, which would
-  // hide the "extends past the month" signal we need here).
+  const endMonth = runEndIso(ad, asMonth)?.slice(0, 7) ?? null;
+  return endMonth == null ? true : endMonth <= asMonth;
+}
+
+/**
+ * The run's real (UNCLAMPED) end date, or null when the flight declares none.
+ * Resolved the same way clampToMonth does — including its stale-metaEndDate
+ * guard: a Meta end BEFORE this month is stale (a recurring ad set still
+ * carrying a prior run's stop date), so defer to the planner's flightEnd (the
+ * forward intent). Without that guard a genuine cross-month run with a stale
+ * Meta end reads as "ends this month". Unclamped on purpose — clampToMonth's
+ * effectiveEnd is capped at month-end, which hides both the "extends past the
+ * month" signal and the run's actual finish date.
+ */
+export function runEndIso(ad: AdScheduleLike, asMonth: string): string | null {
   const bounds = monthBoundsIso(asMonth);
   const metaEndStale =
     bounds != null && ad.metaEndDate != null && ad.metaEndDate < bounds.start;
-  const rawEnd = metaEndStale ? ad.flightEnd : ad.metaEndDate ?? ad.flightEnd;
-  const endMonth = rawEnd?.slice(0, 7) ?? null;
-  return endMonth == null ? true : endMonth <= asMonth;
+  return metaEndStale ? ad.flightEnd : ad.metaEndDate ?? ad.flightEnd;
 }
 
 /**

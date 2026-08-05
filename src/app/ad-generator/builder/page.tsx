@@ -89,6 +89,16 @@ import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIc
 import { VAlignTopIcon, VAlignMiddleIcon, VAlignBottomIcon, HAlignLeftIcon, HAlignCenterIcon, HAlignRightIcon } from '@/components/ad-generator/valign-icons';
 import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
 import { addSizesToDoc, dedupeSizeIds, type SizeToAdd } from '@/lib/ad-generator/size-ids';
+import {
+  applyBox,
+  applyElementPatch,
+  clearElementOverride,
+  effectiveElement,
+  overriddenKeys,
+  styleVariants,
+  type EditScope,
+} from '@/lib/ad-generator/size-scope';
+import { withPreviewPlaceholders } from '@/lib/ad-generator/preview-placeholders';
 import { availableLogoVariants, brandLogoData, logoVariantDataKey, type LogoVariant } from '@/lib/ad-generator/brand-logos';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import type { TemplateDoc, DocElement, DocElementType, DocLayoutBox, GradientFill, GradientStop, BlendMode, Binding } from '@/lib/ad-generator/doc-types';
@@ -118,6 +128,30 @@ function useElementSize<T extends HTMLElement>() {
 
 const HISTORY_LIMIT = 60;
 const COALESCE_MS = 450; // window in which same-key edits (typing, a slider drag) merge
+// Remembered across sessions: a designer who works one board at a time (or always
+// pushes globally) shouldn't re-pick on every open.
+const EDIT_SCOPE_KEY = 'loomi.adBuilder.editScope';
+/** Human names for the style keys a size can diverge on (for the override note). */
+const STYLE_KEY_LABEL: Record<string, string> = {
+  fontFamily: 'font',
+  fontWeight: 'weight',
+  letterSpacing: 'letter spacing',
+  lineHeight: 'line height',
+  uppercase: 'uppercase',
+  color: 'colour',
+  bg: 'text background',
+  align: 'alignment',
+  vAlign: 'vertical alignment',
+  padding: 'padding',
+  fit: 'image fit',
+  fill: 'fill',
+  gradientFill: 'gradient',
+  opacity: 'opacity',
+  blendMode: 'blend mode',
+  radius: 'corner radius',
+  shapeKind: 'shape',
+  shrink: 'text sizing',
+};
 
 type Hist = { past: TemplateDoc[]; present: TemplateDoc; future: TemplateDoc[] };
 
@@ -929,6 +963,29 @@ export default function AdBuilderPage() {
 
   const size = useMemo(() => doc.sizes.find((s) => s.id === sizeId) ?? doc.sizes[0], [doc, sizeId]);
 
+  /**
+   * Whether an edit lands on this board or on all of them.
+   *
+   * Defaults to THIS SIZE, and is remembered per browser: editing one artboard
+   * must never silently rewrite the other fourteen, and per-aspect-ratio placement
+   * is hand-tuned work to lose. Flip it deliberately to push a change everywhere.
+   */
+  // Show every offer block at once (off-type ghosted) vs only the previewed type.
+  const [showAllOfferTypes, setShowAllOfferTypes] = useState(false);
+  const [editScope, setEditScope] = useState<EditScope>('size');
+  useEffect(() => {
+    const stored = window.localStorage.getItem(EDIT_SCOPE_KEY);
+    if (stored === 'all' || stored === 'size') setEditScope(stored);
+  }, []);
+  const chooseScope = useCallback((next: EditScope) => {
+    setEditScope(next);
+    window.localStorage.setItem(EDIT_SCOPE_KEY, next);
+  }, []);
+  // Multi-size templates only: with one board there's nothing to broadcast to, so
+  // the control would be a switch that does nothing.
+  const scopeApplies = doc.sizes.length > 1;
+  const effectiveScope: EditScope = scopeApplies ? editScope : 'size';
+
   // Account custom fonts: drive both the dropdown and the @font-face the canvas
   // needs so a chosen family actually renders.
   // Admins get the roll-up (union of every subaccount's fonts); clients get only
@@ -947,7 +1004,7 @@ export default function AdBuilderPage() {
   // resolves to (see previewData). Included in the embed set so its face loads.
   const brandDefaultFont = accountData?.branding?.fonts?.brandDefault || '';
   const usedFamilies = useMemo(
-    () => usedFontFamilies(doc.elements, [doc.defaults?.fontFamily, adData?.fontFamily, brandDefaultFont]).filter((fam) => customFamilySet.has(fam)),
+    () => usedFontFamilies(styleVariants(doc), [doc.defaults?.fontFamily, adData?.fontFamily, brandDefaultFont]).filter((fam) => customFamilySet.has(fam)),
     [doc.elements, doc.defaults?.fontFamily, adData, brandDefaultFont, customFamilySet],
   );
   const usedFamilyKey = usedFamilies.join('');
@@ -1063,12 +1120,29 @@ export default function AdBuilderPage() {
     const base = enrichOfferFields(merged);
     // Load only the Google families this doc actually uses into the canvas iframe.
     const googleUrl = googleFontsCssUrl(
-      usedGoogleFontFamilies(doc.elements, typeof base.fontFamily === 'string' ? base.fontFamily : undefined),
+      usedGoogleFontFamilies(styleVariants(doc), typeof base.fontFamily === 'string' ? base.fontFamily : undefined),
     );
     return googleUrl ? { ...base, googleFontsUrl: googleUrl } : base;
   }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData, usedOfferTypes]);
 
-  const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
+  /**
+   * What the CANVAS renders: the real preview data, plus a sample vehicle in any
+   * unfilled vehicle-image slot. A dashed "Image" box says nothing about how the ad
+   * reads, since the design hangs off the car's silhouette.
+   *
+   * Kept separate from `previewData` on purpose — the tools that resolve an
+   * element's actual image (crop, background pan, the inspector thumbnail) read the
+   * unsubstituted data, so nobody ends up cropping a placeholder.
+   */
+  const canvasData = useMemo(
+    () => withPreviewPlaceholders(previewData, doc.fields),
+    [previewData, doc.fields],
+  );
+
+  const html = useMemo(
+    () => renderDoc(doc, canvasData, size, { preview: true, dimOffType: showAllOfferTypes }),
+    [doc, canvasData, size, showAllOfferTypes],
+  );
 
   // Patch the canvas iframe's document IN PLACE on every edit instead of swapping
   // `srcDoc` (which navigates the iframe → a white flash on every change). Replacing
@@ -1442,8 +1516,18 @@ export default function AdBuilderPage() {
   // Single-selection shorthand — the per-element toolbar, handles, and action
   // tab only show when exactly one element is selected.
   const selectedId = selectedIds.length === 1 ? selectedIds[0] : null;
-  const selected = selectedId ? doc.elements.find((e) => e.id === selectedId) ?? null : null;
+  // The element AS THIS BOARD RENDERS IT — shared style with this size's overrides
+  // merged in. The inspector reads dozens of fields off this, so resolving once
+  // here means every control shows what the canvas is actually showing.
+  const selected = selectedId
+    ? (() => {
+        const base = doc.elements.find((e) => e.id === selectedId);
+        return base ? effectiveElement(base, doc.overrides, size.id) : null;
+      })()
+    : null;
   const selectedBox = selectedId ? layout[selectedId] : undefined;
+  /** Style keys this board diverges from the shared element on. */
+  const selectedOverrides = selectedId ? overriddenKeys(doc, size.id, selectedId) : [];
   // Live readout of the auto-scaled font size for the selected Fit-to-box text.
   // The font is computed at render time (fitTextNode), never stored on the box,
   // so we measure the rendered node's computed size and surface it (grayed) in
@@ -1631,25 +1715,15 @@ export default function AdBuilderPage() {
   // `coalesceKey` (optional): repeated calls with the same key inside the coalesce
   // window merge into one undo step (holding a stepper, dragging a slider). Omit
   // it for discrete actions (a drag/resize commit) so each is its own step.
+  // Both writes route through the scope, so every edit — drag, inspector field,
+  // bulk multi-select — obeys the same This size / All sizes choice.
   const setBox = useCallback((sid: string, elId: string, box: DocLayoutBox, coalesceKey?: string) => {
-    setDoc(
-      (prev) => ({
-        ...prev,
-        layouts: { ...prev.layouts, [sid]: { ...prev.layouts[sid], [elId]: box } },
-      }),
-      coalesceKey,
-    );
-  }, []);
+    setDoc((prev) => applyBox(prev, elId, box, effectiveScope, sid), coalesceKey);
+  }, [effectiveScope]);
 
   const setElement = useCallback((id: string, patch: Partial<DocElement>, coalesceKey?: string) => {
-    setDoc(
-      (prev) => ({
-        ...prev,
-        elements: prev.elements.map((e) => (e.id === id ? { ...e, ...patch } : e)),
-      }),
-      coalesceKey,
-    );
-  }, []);
+    setDoc((prev) => applyElementPatch(prev, id, patch, effectiveScope, sizeId), coalesceKey);
+  }, [effectiveScope, sizeId]);
 
   // ── inline text editing (double-click a text element) ──
   // Editable when the element binds to a STATIC literal or a plain FIELD.
@@ -1913,27 +1987,38 @@ export default function AdBuilderPage() {
   // ── bulk edits across the current multi-selection ──
   // Patch a property on every selected ELEMENT (font, weight, color, align, …).
   const patchSelectedElements = useCallback((patch: Partial<DocElement>) => {
-    const ids = new Set(selectedIds);
-    setDoc((prev) => ({ ...prev, elements: prev.elements.map((el) => (ids.has(el.id) ? { ...el, ...patch } : el)) }), `bulkel:${Object.keys(patch).sort().join(',')}`);
-  }, [selectedIds]);
+    const ids = selectedIds;
+    setDoc(
+      (prev) => ids.reduce((d, id) => applyElementPatch(d, id, patch, effectiveScope, sizeId), prev),
+      `bulkel:${Object.keys(patch).sort().join(',')}`,
+    );
+  }, [selectedIds, effectiveScope, sizeId]);
   // Patch the current-size BOX of every selected element (fontSize lives here).
   const patchSelectedBoxes = useCallback((patch: Partial<DocLayoutBox>) => {
     const ids = selectedIds;
-    setDoc((prev) => {
-      const lay = { ...(prev.layouts[size.id] ?? {}) };
-      for (const id of ids) if (lay[id]) lay[id] = { ...lay[id], ...patch };
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-    }, `bulkbox:${Object.keys(patch).sort().join(',')}`);
-  }, [selectedIds, size.id]);
+    setDoc(
+      (prev) =>
+        ids.reduce((acc, id) => {
+          const prior = acc.layouts[size.id]?.[id];
+          return prior ? applyBox(acc, id, { ...prior, ...patch }, effectiveScope, size.id) : acc;
+        }, prev),
+      `bulkbox:${Object.keys(patch).sort().join(',')}`,
+    );
+  }, [selectedIds, size.id, effectiveScope]);
   // Nudge each selected element's font size by delta, keeping their relative sizes.
   const bumpSelectedFontSize = useCallback((delta: number) => {
     const ids = selectedIds;
-    setDoc((prev) => {
-      const lay = { ...(prev.layouts[size.id] ?? {}) };
-      for (const id of ids) if (lay[id]) lay[id] = { ...lay[id], fontSize: clamp(Math.round((lay[id].fontSize ?? 48) + delta), 4, 400) };
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-    }, 'bulkbox:fontSize');
-  }, [selectedIds, size.id]);
+    setDoc(
+      (prev) =>
+        ids.reduce((acc, id) => {
+          const prior = acc.layouts[size.id]?.[id];
+          if (!prior) return acc;
+          const fontSize = clamp(Math.round((prior.fontSize ?? 48) + delta), 4, 400);
+          return applyBox(acc, id, { ...prior, fontSize }, effectiveScope, size.id);
+        }, prev),
+      'bulkbox:fontSize',
+    );
+  }, [selectedIds, size.id, effectiveScope]);
 
   // Fit a text box to its rendered content on the given axis — the explicit
   // action behind double-clicking a resize handle (n/s → height, e/w → width,
@@ -2860,11 +2945,12 @@ export default function AdBuilderPage() {
       // Commit the drag as-is — text/button boxes size freely (no auto-hug).
       setBox(d.sizeId, d.elId, d.live);
     } else if (d?.kind === 'group' || d?.kind === 'groupresize') {
-      setDoc((prev) => {
-        const lay = { ...(prev.layouts[d.sizeId] ?? {}) };
-        for (const id of Object.keys(d.live)) lay[id] = d.live[id];
-        return { ...prev, layouts: { ...prev.layouts, [d.sizeId]: lay } };
-      });
+      // Through the scope, same as a single drag — moving a group of five under
+      // "All sizes" has to reach the other boards too, or the switch would quietly
+      // apply to some drags and not others.
+      setDoc((prev) =>
+        Object.keys(d.live).reduce((acc, id) => applyBox(acc, id, d.live[id], effectiveScope, d.sizeId), prev),
+      );
     } else if (d?.kind === 'marquee') {
       const r = d.rect;
       if (r.w > 0.01 || r.h > 0.01) {
@@ -3134,11 +3220,10 @@ export default function AdBuilderPage() {
 
   // ── align / distribute the multi-selection ──
   function applyBoxes(patch: Record<string, DocLayoutBox>) {
-    setDoc((prev) => {
-      const lay = { ...(prev.layouts[size.id] ?? {}) };
-      for (const id of Object.keys(patch)) lay[id] = patch[id];
-      return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-    });
+    // Align/distribute is a move like any other, so it obeys the scope too.
+    setDoc((prev) =>
+      Object.keys(patch).reduce((acc, id) => applyBox(acc, id, patch[id], effectiveScope, size.id), prev),
+    );
   }
 
   function alignSelected(edge: 'left' | 'hcenter' | 'right' | 'top' | 'vmiddle' | 'bottom') {
@@ -3219,18 +3304,18 @@ export default function AdBuilderPage() {
       else if (e.key === 'ArrowDown') dy = step;
       else return;
       e.preventDefault();
-      setDoc((prev) => {
-        const lay = { ...(prev.layouts[size.id] ?? {}) };
-        for (const id of selectedIds) {
-          const b = lay[id];
-          if (b) lay[id] = { ...b, x: clamp(b.x + dx, 0, 1 - b.w), y: clamp(b.y + dy, 0, 1 - b.h) };
-        }
-        return { ...prev, layouts: { ...prev.layouts, [size.id]: lay } };
-      });
+      setDoc((prev) =>
+        selectedIds.reduce((acc, id) => {
+          const b = acc.layouts[size.id]?.[id];
+          if (!b) return acc;
+          const moved = { ...b, x: clamp(b.x + dx, 0, 1 - b.w), y: clamp(b.y + dy, 0, 1 - b.h) };
+          return applyBox(acc, id, moved, effectiveScope, size.id);
+        }, prev),
+      );
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedIds, size.id, deleteElement, setDoc, clearSelection]);
+  }, [selectedIds, size.id, effectiveScope, deleteElement, setDoc, clearSelection]);
 
   // ⌘Z / ⌘⇧Z undo-redo + ⌘G / ⌘⇧G group/ungroup, plus the bare M (margins) / O
   // (outlines) view-guide toggles — global, but defer to the browser inside text
@@ -3886,15 +3971,36 @@ export default function AdBuilderPage() {
                 <div className="flex items-center gap-1.5">
                   <span className="text-[11px] font-medium text-[var(--muted-foreground)]">Preview</span>
                   <div className="flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
+                    {/* All: every offer block on the board at once, the off-type ones
+                        ghosted — for finding and editing a block that belongs to a
+                        type you're not previewing. Picking a single type shows ONLY
+                        that type, which is the honest answer to "how will this look". */}
+                    <button
+                      type="button"
+                      onClick={() => setShowAllOfferTypes(true)}
+                      title="Show every offer block at once — off-type blocks are ghosted"
+                      aria-pressed={showAllOfferTypes}
+                      className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                        showAllOfferTypes
+                          ? 'bg-[var(--muted)] text-[var(--foreground)]'
+                          : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                      }`}
+                    >
+                      All
+                    </button>
                     {usedOfferTypes.map((t) => {
                       const color = OFFER_TYPE_COLOR[t.value] ?? '#64748b';
-                      const active = String(previewData.offerType ?? 'lease') === t.value;
+                      const active =
+                        !showAllOfferTypes && String(previewData.offerType ?? 'lease') === t.value;
                       return (
                         <button
                           key={t.value}
                           type="button"
-                          onClick={() => writeFieldValue('offerType', t.value)}
-                          title={`Preview as ${t.label}`}
+                          onClick={() => {
+                            setShowAllOfferTypes(false);
+                            writeFieldValue('offerType', t.value);
+                          }}
+                          title={`Preview as ${t.label} — only ${t.label} blocks show`}
                           aria-pressed={active}
                           className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
                             active ? '' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
@@ -3906,6 +4012,40 @@ export default function AdBuilderPage() {
                         </button>
                       );
                     })}
+                  </div>
+                </div>
+              )}
+
+              {/* Where an edit lands. Only meaningful with more than one board. */}
+              {scopeApplies && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] font-medium text-[var(--muted-foreground)]">Edits apply to</span>
+                  <div className="flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--card)] p-0.5">
+                    {([
+                      ['size', 'This size', 'Changes affect only the board you are looking at.'],
+                      [
+                        'all',
+                        'All sizes',
+                        `Changes affect all ${doc.sizes.length} sizes. Position and size travel, and type scales by the same proportion on each board; stacking and image framing stay per size.`,
+                      ],
+                    ] as const).map(([value, label, hint]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        onClick={() => chooseScope(value)}
+                        title={hint}
+                        aria-pressed={editScope === value}
+                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                          editScope === value
+                            ? value === 'all'
+                              ? 'bg-amber-500/15 text-amber-500'
+                              : 'bg-[var(--muted)] text-[var(--foreground)]'
+                            : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
               )}
@@ -4200,7 +4340,7 @@ export default function AdBuilderPage() {
                       >
                         {/* Detached elements are clipped out of the iframe, so
                             render their actual content here on the canvas. */}
-                        {detached && <DetachedVisual el={el} box={b} scale={scale} previewData={previewData} resolveUrl={resolveBindingUrl} />}
+                        {detached && <DetachedVisual el={el} box={b} scale={scale} previewData={canvasData} resolveUrl={resolveBindingUrl} />}
                         {/* Selection ring + fill. Hidden while editing this element:
                             the stored box can't resize mid-keystroke, so it'd sit
                             stale around the live-shrinking text. The editing effect's
@@ -4310,7 +4450,8 @@ export default function AdBuilderPage() {
                     <PreviewBoard
                       key={s.id}
                       doc={doc}
-                      previewData={previewData}
+                      previewData={canvasData}
+                      dimOffType={showAllOfferTypes}
                       size={s}
                       scale={scale}
                       order={i}
@@ -4479,6 +4620,11 @@ export default function AdBuilderPage() {
                 <SelectionPanel
                   el={selected}
                   box={selectedBox}
+                  overriddenOnThisSize={selectedOverrides}
+                  sizeLabel={size.label.split(' ')[0]}
+                  onResetOverride={() =>
+                    setDoc((prev) => clearElementOverride(prev, selected.id, size.id), `unoverride:${selected.id}`)
+                  }
                   collapsed={inspectorCollapsed}
                   onCollapse={() => setInspectorCollapsed(true)}
                   sizeW={size.width}
@@ -5269,6 +5415,9 @@ function MultiSelectPanel({
 function SelectionPanel({
   el,
   box,
+  overriddenOnThisSize,
+  sizeLabel,
+  onResetOverride,
   sizeW,
   sizeH,
   fontOptions,
@@ -5295,6 +5444,10 @@ function SelectionPanel({
   sizeW: number;
   sizeH: number;
   fontOptions: SelectOption[];
+  /** Style keys this board has diverged from the shared element on. */
+  overriddenOnThisSize: string[];
+  sizeLabel: string;
+  onResetOverride: () => void;
   brandLogos: { key: LogoVariant; label: string; url: string }[];
   content: { mode: 'none' | 'text-edit' | 'text-readonly' | 'image-edit' | 'image-readonly'; value: string; note?: string } | null;
   contentSources: SearchableSelectOption[];
@@ -5387,6 +5540,25 @@ function SelectionPanel({
           </button>
         </div>
       </div>
+
+      {/* Per-size divergence, stated rather than left to be discovered. Without
+          this, a value that looks global (it sits in the same field as every other)
+          would quietly be local to one board, and there'd be no way back. */}
+      {overriddenOnThisSize.length > 0 && (
+        <div className="mx-3 mt-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2">
+          <p className="text-[11px] leading-snug text-amber-500">
+            <span className="font-medium">{sizeLabel} only:</span>{' '}
+            {overriddenOnThisSize.map((k) => STYLE_KEY_LABEL[k] ?? k).join(', ')}
+          </p>
+          <button
+            type="button"
+            onClick={onResetOverride}
+            className="mt-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+          >
+            Match the other sizes
+          </button>
+        </div>
+      )}
 
       <div className="flex flex-col divide-y divide-[var(--border)] px-3 py-0.5">
         {/* Content — for IMAGES, pick what the element shows (a field / brand /
@@ -6719,12 +6891,14 @@ function PreviewBoard({
   doc,
   previewData,
   size,
+  dimOffType,
   scale,
   order,
   onActivate,
 }: {
   doc: TemplateDoc;
   previewData: AdData;
+  dimOffType: boolean;
   size: AdSize;
   scale: number;
   order: number;
@@ -6732,7 +6906,10 @@ function PreviewBoard({
 }) {
   // Render this size's HTML once per (doc, previewData, size) — it feeds an
   // <iframe srcDoc>, so recomputing on every zoom tick would reload the iframe.
-  const html = useMemo(() => renderDoc(doc, previewData, size, { preview: true }), [doc, previewData, size]);
+  const html = useMemo(
+    () => renderDoc(doc, previewData, size, { preview: true, dimOffType }),
+    [doc, previewData, size, dimOffType],
+  );
   return (
     <div className="flex flex-col items-center gap-1.5" style={{ order }}>
       <button

@@ -68,7 +68,7 @@ import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
 import { MediaPickerModal } from '@/components/media-picker-modal';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { SidebarTooltip } from '@/components/sidebar-collapsed-ui';
-import { renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
+import { isElementVisibleFor, renderDoc, SHAPE_CLIP } from '@/lib/ad-generator/doc-renderer';
 import { availableCustomFonts, buildFontFaceCssFromUrls, usedFontFamilies } from '@/lib/ad-generator/fonts';
 import { Select, type SelectOption } from '@/components/select';
 import { CornerBox, SpacingBox, NumberInput } from '@/lib/email/editor/PropertyControls';
@@ -79,7 +79,7 @@ import { blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { DatePicker, type DateRange } from '@/components/ui/date-picker';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
-import { DeployTemplateModal } from '@/components/ad-generator/deploy-template-modal';
+import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
 import { enrichOfferFields, OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
 import { SYSTEM_FIELDS } from '@/lib/ad-generator/system-fields';
@@ -472,6 +472,8 @@ type SavedTemplate = {
   status: string;
   /** null = global; an account key = only that account sees it in the picker. */
   accountKey?: string | null;
+  /** Sub-accounts granted access on top of the owner. */
+  sharedAccountKeys?: string[];
   updatedAt: string;
   doc: TemplateDoc | null;
 };
@@ -898,6 +900,8 @@ export default function AdBuilderPage() {
   const publishRef = useRef<HTMLDivElement>(null);
   // Deploy-to-subaccounts modal.
   const [deployOpen, setDeployOpen] = useState(false);
+  /** Which sub-accounts the OPEN template is shared with (for the Share modal). */
+  const [sharedAccountKeys, setSharedAccountKeys] = useState<string[]>([]);
   // The canvas (Background) settings panel is shown only when the canvas itself
   // is focused — clicking the empty artboard selects "the canvas". It never
   // appears just because no element is selected (so it stays hidden on load).
@@ -1126,6 +1130,31 @@ export default function AdBuilderPage() {
   }, [accountData, effectiveFontCss, doc.defaults, doc.elements, adData, usedOfferTypes]);
 
   /**
+   * A real vehicle from this sub-account's own stock, for unfilled vehicle slots.
+   * Resolved server-side (EVOX jellybean → the dealer's feed photo → nothing); when
+   * it comes back empty the canvas falls back to the drawn silhouette.
+   */
+  const [sampleVehicle, setSampleVehicle] = useState<{ url: string; label: string } | null>(null);
+  useEffect(() => {
+    if (!accountKey) {
+      setSampleVehicle(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/ad-generator/sample-vehicle?accountKey=${encodeURIComponent(accountKey)}`)
+      .then((r) => (r.ok ? r.json() : { vehicle: null }))
+      .then((j: { vehicle?: { url: string; label: string } | null }) => {
+        if (!cancelled) setSampleVehicle(j.vehicle ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setSampleVehicle(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accountKey]);
+
+  /**
    * What the CANVAS renders: the real preview data, plus a sample vehicle in any
    * unfilled vehicle-image slot. A dashed "Image" box says nothing about how the ad
    * reads, since the design hangs off the car's silhouette.
@@ -1135,8 +1164,8 @@ export default function AdBuilderPage() {
    * unsubstituted data, so nobody ends up cropping a placeholder.
    */
   const canvasData = useMemo(
-    () => withPreviewPlaceholders(previewData, doc.fields),
-    [previewData, doc.fields],
+    () => withPreviewPlaceholders(previewData, doc.fields, sampleVehicle?.url),
+    [previewData, doc.fields, sampleVehicle],
   );
 
   const html = useMemo(
@@ -1366,14 +1395,32 @@ export default function AdBuilderPage() {
   }
 
   const layout = doc.layouts[size.id] ?? {};
-  const placed = useMemo(
-    () =>
-      doc.elements
-        .map((el) => ({ el, box: layout[el.id] }))
-        .filter((x): x is { el: DocElement; box: DocLayoutBox } => Boolean(x.box))
-        .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0)),
-    [doc.elements, layout],
-  );
+  /**
+   * Elements the canvas is currently showing — the basis for outlines, hit-testing,
+   * marquee and drag.
+   *
+   * Excludes wrong-offer-type elements unless the All tab is on, matching what the
+   * renderer draws. Without this, previewing one offer type still left the OTHER
+   * types' empty frames outlined on the artboard: the boxes you couldn't see the
+   * content of, but could still click.
+   */
+  const placed = useMemo(() => {
+    return doc.elements
+      .filter((el) => showAllOfferTypes || isElementVisibleFor(el, previewData))
+      .map((el) => ({ el, box: layout[el.id] }))
+      .filter((x): x is { el: DocElement; box: DocLayoutBox } => Boolean(x.box))
+      .sort((a, b) => (a.box.z ?? 0) - (b.box.z ?? 0));
+  }, [doc.elements, layout, previewData, showAllOfferTypes]);
+
+  // Switching to a single offer type can hide what was selected; keep the panel
+  // honest by dropping any selection the canvas is no longer showing.
+  useEffect(() => {
+    if (showAllOfferTypes || !selectedIds.length) return;
+    const shown = new Set(placed.map((p) => p.el.id));
+    const stillThere = selectedIds.filter((id) => shown.has(id));
+    if (stillThere.length !== selectedIds.length) setSelectedIds(stillThere);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [placed, showAllOfferTypes]);
 
   // Panning is disabled on a fresh/empty artboard — there's nothing to pan to,
   // and it kept the onboarding card from feeling anchored. Re-enabled the moment
@@ -2693,6 +2740,7 @@ export default function AdBuilderPage() {
     setTemplateName(t.name);
     setStatus(st);
     setScopeAccount(t.accountKey ?? null);
+    setSharedAccountKeys(t.sharedAccountKeys ?? []);
     setSizeId(loaded.sizes[0]?.id ?? '');
     clearSelection();
     savedRef.current = serializeDoc(loaded, t.name, st);
@@ -2751,7 +2799,17 @@ export default function AdBuilderPage() {
         }
         const res = await fetch(`/api/ad-generator/templates-doc/${tid}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = (await res.json()) as { template?: { id: string; name: string; description: string | null; status: string; accountKey?: string | null; doc: TemplateDoc | null } };
+        const json = (await res.json()) as {
+          template?: {
+            id: string;
+            name: string;
+            description: string | null;
+            status: string;
+            accountKey?: string | null;
+            sharedAccountKeys?: string[];
+            doc: TemplateDoc | null;
+          };
+        };
         const t = json.template;
         if (!t?.doc) {
           toast.error('That template could not be opened');
@@ -2761,7 +2819,18 @@ export default function AdBuilderPage() {
         // unsaved draft (clear the id so the first save creates a fresh template
         // instead of overwriting the source).
         const copy = params.get('copy') === '1';
-        loadTemplate({ id: t.id, name: copy ? `${t.name} copy` : t.name, description: t.description, status: copy ? 'draft' : t.status, accountKey: t.accountKey ?? null, updatedAt: '', doc: t.doc });
+        loadTemplate({
+          id: t.id,
+          name: copy ? `${t.name} copy` : t.name,
+          description: t.description,
+          status: copy ? 'draft' : t.status,
+          accountKey: t.accountKey ?? null,
+          // A copy starts unshared — access is granted per template, and silently
+          // inheriting the source's list would hand out a template nobody reviewed.
+          sharedAccountKeys: copy ? [] : t.sharedAccountKeys ?? [],
+          updatedAt: '',
+          doc: t.doc,
+        });
         if (copy) {
           setTemplateId(null);
           savedRef.current = '';
@@ -3573,15 +3642,21 @@ export default function AdBuilderPage() {
                     )}
 
                     <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+                      {/* Access is stored on the template row, so there has to BE a
+                          row — an unsaved draft has nothing to share yet. */}
                       <button
                         onClick={() => {
+                          if (!templateId) {
+                            toast.error('Save this template first, then you can share it.');
+                            return;
+                          }
                           setDeployOpen(true);
                           setSettingsOpen(false);
                         }}
                         className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
                       >
                         <RocketLaunchIcon className="h-4 w-4" />
-                        Copy to Subaccounts
+                        Share with sub-accounts
                       </button>
                       {templateId && (
                         <button
@@ -4722,7 +4797,16 @@ export default function AdBuilderPage() {
 
       {helpOpen && <ShortcutsModal onClose={() => setHelpOpen(false)} />}
 
-      {deployOpen && <DeployTemplateModal name={templateName} doc={doc} excludeKey={scopeAccount} onClose={() => setDeployOpen(false)} />}
+      {deployOpen && templateId && (
+        <ShareTemplateModal
+          templateId={templateId}
+          name={templateName}
+          ownerKey={scopeAccount}
+          sharedWith={sharedAccountKeys}
+          onClose={() => setDeployOpen(false)}
+          onSaved={setSharedAccountKeys}
+        />
+      )}
       {cropModal && (
         <CropEditorModal
           file={{ url: cropModal.url, name: cropModal.name }}

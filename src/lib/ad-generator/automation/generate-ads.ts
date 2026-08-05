@@ -4,6 +4,7 @@ import { resolveJellybean } from '@/lib/integrations/evox-jellybean';
 import type { MarketCheckIncentive } from '@/lib/integrations/marketcheck';
 import { createNotification } from '@/lib/notifications/service';
 import { brandLogoData } from '../brand-logos';
+import { templatesForAccount } from '../template-access';
 import { applyOemDefaults, parseOemRule, requiredFieldsFor, type OemOfferRule } from '../compliance';
 import { loadActiveCoopPack } from '../coop-pack-store';
 import type { CoopRulePack } from '../coop-rules';
@@ -209,12 +210,14 @@ export async function generateForAccount(
   const branding = safeJson<{ colors?: Record<string, string> }>(account?.branding ?? null);
   const logos = safeJson<Record<string, string>>(account?.logos ?? null);
 
-  // Candidate templates: published + active, this sub-account's own or global.
+  // Candidate templates: published + active, and in scope for this sub-account —
+  // its own, the shared library, or one shared with it.
   const templateRows = await prisma.adTemplateDoc
     .findMany({
-      where: { status: 'published', isActive: true, OR: [{ accountKey: config.accountKey }, { accountKey: null }] },
-      select: { id: true, name: true, accountKey: true, doc: true, updatedAt: true },
+      where: { status: 'published', isActive: true },
+      select: { id: true, name: true, accountKey: true, sharedAccountKeys: true, doc: true, updatedAt: true },
     })
+    .then((rows) => templatesForAccount(rows, { accountKey: config.accountKey }))
     .catch(() => []);
   const candidates: TemplateCandidate[] = [];
   for (const r of templateRows) {

@@ -20,6 +20,12 @@ import { getAuthSession, getAccountScope, requireRole } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
 import { getAncestorAccountKeys } from '@/lib/services/accounts';
+import {
+  parseSharedKeys,
+  serializeSharedKeys,
+  templatesForAccount,
+  templatesForAnyAccount,
+} from '@/lib/ad-generator/template-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,6 +38,7 @@ type Row = {
   status: string;
   isActive: boolean;
   accountKey: string | null;
+  sharedAccountKeys: string | null;
   category: string | null;
   tags: string | null;
   updatedAt: Date;
@@ -79,6 +86,8 @@ function shape(r: Row) {
     status: r.status,
     isActive: r.isActive,
     accountKey: r.accountKey,
+    // The share list, so the Share modal opens with the current state ticked.
+    sharedAccountKeys: parseSharedKeys(r.sharedAccountKeys),
     category: r.category,
     tags: parseTags(r.tags),
     updatedAt: r.updatedAt,
@@ -127,37 +136,28 @@ export async function GET(req: NextRequest) {
       const allowed = accountKey ? (keys.includes(accountKey) ? [accountKey] : []) : keys;
       // Inherit templates authored at any ancestor (group) account.
       const inherited = await ancestorsForAccounts(allowed);
+      // Scoping is partly in a JSON column (`sharedAccountKeys`), so the final cut
+      // happens in JS against one shared rule — the alternative is a `where` that
+      // has to be kept in step across five call sites, and a template leaking into
+      // the wrong account's library is not a mistake worth risking for a narrower
+      // query. The table is small and already filtered to published + active.
       const rows = (await prisma.adTemplateDoc.findMany({
-        where: {
-          status: 'published',
-          isActive: true,
-          OR: [
-            { accountKey: null },
-            ...(allowed.length ? [{ accountKey: { in: allowed } }] : []),
-            ...(inherited.length ? [{ accountKey: { in: inherited } }] : []),
-          ],
-        },
+        where: { status: 'published', isActive: true },
         orderBy: { name: 'asc' },
       })) as Row[];
-      return NextResponse.json({ templates: rows.map(shape).filter((t) => t.doc) });
+      const visible = templatesForAnyAccount(rows, allowed, inherited);
+      return NextResponse.json({ templates: visible.map(shape).filter((t) => t.doc) });
     }
 
     // Admins+: global templates + the active account's own + ancestors' own.
     const inherited = accountKey ? await ancestorsForAccounts([accountKey]) : [];
     const rows = (await prisma.adTemplateDoc.findMany({
-      where: {
-        status: 'published',
-        isActive: true,
-        OR: [
-          { accountKey: null },
-          ...(accountKey ? [{ accountKey }] : []),
-          ...(inherited.length ? [{ accountKey: { in: inherited } }] : []),
-        ],
-      },
+      where: { status: 'published', isActive: true },
       orderBy: { name: 'asc' },
     })) as Row[];
+    const visible = templatesForAccount(rows, { accountKey: accountKey ?? null, ancestorKeys: inherited });
     // Only return rows whose doc parses to a usable shape.
-    return NextResponse.json({ templates: rows.map(shape).filter((t) => t.doc) });
+    return NextResponse.json({ templates: visible.map(shape).filter((t) => t.doc) });
   } catch (err) {
     console.warn('[api/ad-generator/templates-doc] falling back to []:', err);
     return NextResponse.json({ templates: [] });
@@ -170,7 +170,14 @@ export async function POST(req: NextRequest) {
   if (error) return error;
   const session = await getAuthSession();
 
-  let body: { name?: string; description?: string; doc?: unknown; status?: string; accountKey?: string | null };
+  let body: {
+    name?: string;
+    description?: string;
+    doc?: unknown;
+    status?: string;
+    accountKey?: string | null;
+    sharedAccountKeys?: string[];
+  };
   try {
     body = await req.json();
   } catch {
@@ -196,6 +203,7 @@ export async function POST(req: NextRequest) {
         doc: JSON.stringify(doc),
         status,
         accountKey,
+        sharedAccountKeys: serializeSharedKeys(body.sharedAccountKeys),
         // Shared taxonomy — read off the doc (the builder stores category/tags there)
         // so the columns stay in sync for library filtering.
         category: typeof (doc as { category?: unknown }).category === 'string' ? (doc as { category: string }).category.trim() || null : null,

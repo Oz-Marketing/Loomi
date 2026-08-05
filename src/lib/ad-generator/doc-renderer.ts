@@ -233,14 +233,24 @@ interface RenderCtx {
   numberKeys: Set<string>;
 }
 
+/**
+ * Conditional visibility (`visibleWhen`): the element shows only when the gating
+ * field's value is in the allowed set (e.g. a `%` badge only for `offerType: apr`).
+ *
+ * Exported because the builder needs the SAME answer to decide which elements to
+ * outline and hit-test. Two copies of this rule is how the canvas ended up drawing
+ * frames for blocks it wasn't rendering.
+ */
+export function isElementVisibleFor(el: DocElement, data: AdData): boolean {
+  if (!el.visibleWhen) return true;
+  return el.visibleWhen.in.includes(String(data[el.visibleWhen.field] ?? ''));
+}
+
 function renderElement(el: DocElement, box: DocLayoutBox, data: AdData, ctx: RenderCtx): string {
   const { width, height, brand, brandStack } = ctx;
-  // Conditional visibility (`visibleWhen`): the element shows only when the gating
-  // field's value is in the allowed set (e.g. a `%` badge only for `offerType: apr`).
-  // On export the wrong-type element is omitted entirely; in the builder it's kept
-  // but dimmed (like a per-size hidden element) so the designer can still edit it.
-  const condHidden =
-    !!el.visibleWhen && !el.visibleWhen.in.includes(String(data[el.visibleWhen.field] ?? ''));
+  // On export a wrong-type element is omitted entirely; in the builder it's kept
+  // but dimmed when the All tab asks to see every type at once.
+  const condHidden = !isElementVisibleFor(el, data);
   // Omitted on export, and in preview too unless the builder asked to see every
   // offer type at once. Four offer blocks occupying one spot read as a smear when
   // they're all kept, which defeated the point of previewing a single type.

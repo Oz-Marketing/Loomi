@@ -35,8 +35,17 @@ describe('VEHICLE_PLACEHOLDER_URL', () => {
     expect(svg.replace(/xmlns="[^"]*"/g, '')).not.toContain('http');
   });
 
-  it('says it is a sample, so it cannot be mistaken for the real render', () => {
-    expect(decodeURIComponent(VEHICLE_PLACEHOLDER_URL)).toContain('SAMPLE VEHICLE');
+  it('is a flat translucent shape, so it cannot be mistaken for a rendered car', () => {
+    const svg = decodeURIComponent(VEHICLE_PLACEHOLDER_URL);
+    // No baked-in label (it collided with the design), no photo — just a shape
+    // drawn translucent, which is what makes it read as "a car goes here".
+    expect(svg).not.toContain('<text');
+    expect(svg).not.toContain('<image');
+    expect(svg).toContain('fill-opacity');
+  });
+
+  it('is sized like the transparent PNGs the real slot takes, so `contain` behaves the same', () => {
+    expect(decodeURIComponent(VEHICLE_PLACEHOLDER_URL)).toContain('viewBox="0 0 1200 600"');
   });
 });
 
@@ -61,6 +70,22 @@ describe('withPreviewPlaceholders', () => {
   it('leaves other empty image slots reading as empty', () => {
     // A blank logo or badge slot is honest information; a fake car is not.
     expect(withPreviewPlaceholders({}, FIELDS).badgeImageUrl).toBeUndefined();
+  });
+
+  it('prefers a real vehicle image when one was resolved', () => {
+    const out = withPreviewPlaceholders({}, FIELDS, 'https://cdn/evox-crosstrek.png');
+    expect(out.vehicleImageUrl).toBe('https://cdn/evox-crosstrek.png');
+    expect(out.o2_vehicleImageUrl).toBe('https://cdn/evox-crosstrek.png');
+  });
+
+  it('falls back to the drawn silhouette when no real image was resolved', () => {
+    expect(withPreviewPlaceholders({}, FIELDS, null).vehicleImageUrl).toBe(VEHICLE_PLACEHOLDER_URL);
+    expect(withPreviewPlaceholders({}, FIELDS, '   ').vehicleImageUrl).toBe(VEHICLE_PLACEHOLDER_URL);
+  });
+
+  it('still never displaces a real vehicle image, sample or not', () => {
+    const out = withPreviewPlaceholders({ vehicleImageUrl: 'https://cdn/real.png' }, FIELDS, 'https://cdn/sample.png');
+    expect(out.vehicleImageUrl).toBe('https://cdn/real.png');
   });
 
   it('returns the same object when there is nothing to fill', () => {

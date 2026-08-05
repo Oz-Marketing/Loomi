@@ -28,7 +28,7 @@ import {
   fmtDaysLeft,
   fmtDaysBasisPhrase,
 } from '@/lib/ad-pacer/helpers';
-import { fmtPeriodLong } from '@/lib/ad-pacer/period';
+import { fmtPeriodLong, fmtPeriodShort } from '@/lib/ad-pacer/period';
 import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
 import { buildGooglePacingCard } from '@/lib/ad-pacer/google-pacer-calc';
 import {
@@ -353,6 +353,10 @@ export function PacerRow({
     action: 'apply_full_run' | 'split' | 'clear' | 'link',
     splitMap?: Record<string, number>,
     linkedPrevAdId?: string,
+    /** apply_full_run: the month the run BILLS in. Omit for the ad's own month;
+     *  a LATER month makes it a cross-month flight, which posts an Out against
+     *  this month and an In against that one in the reconciliation ledger. */
+    billedMonth?: string,
   ) => void;
   /** Prior-period ads for the manual "continues a prior-month run" picker, each
    *  { id, name, period }. Shown only for an unsynced split run (synced runs
@@ -608,6 +612,18 @@ export function PacerRow({
   const cmSelValue: '' | 'split' | 'bill' = resolvedFullRun
     ? 'bill'
     : ad.lifetimeMonthSplit != null
+      ? 'split'
+      : '';
+  // The months the run could bill in: its own month plus any LATER month it
+  // reaches. Billing in a later month is the cross-month case — the run's
+  // origin-month dollars move to the month that invoices them.
+  const cmBillMonths = cmMonths.filter((mm) => mm >= ad.period);
+  const cmBillOptions = cmBillMonths.length > 1 ? cmBillMonths : [ad.period];
+  // The <select>'s own value carries WHICH month was chosen, so a run billed in
+  // a later month shows that month rather than a generic "Bill in one month".
+  const cmSelectValue = resolvedFullRun
+    ? `bill:${ad.fullRunAppliedToMonth}`
+    : cmSelValue === 'split'
       ? 'split'
       : '';
   // Cross-month accounting is opt-in per ad via a footer toggle — the dropdown
@@ -1054,12 +1070,19 @@ export function PacerRow({
           <div className="flex w-full flex-col gap-2 sm:w-[260px] flex-shrink-0">
             <select
               id={`cm-${ad.id}`}
-              value={cmSelValue}
+              value={cmSelectValue}
               disabled={readOnly}
               onChange={(e) => {
                 const v = e.target.value;
-                if (v === 'bill') {
-                  onResolveCrossMonth('apply_full_run');
+                if (v.startsWith('bill')) {
+                  // "bill:YYYY-MM" — the month the whole run invoices in.
+                  const month = v.slice('bill:'.length);
+                  onResolveCrossMonth(
+                    'apply_full_run',
+                    undefined,
+                    undefined,
+                    month && month !== ad.period ? month : undefined,
+                  );
                 } else if (v === 'split') {
                   // Seed an even-split map so the single-row reference has values;
                   // sibling rows override it when the ad spans months (#58).
@@ -1080,7 +1103,16 @@ export function PacerRow({
                 Cross-Month Accounting
               </option>
               <option value="split">Split across months</option>
-              <option value="bill">Bill in one month</option>
+              {cmBillOptions.length > 1 ? (
+                cmBillOptions.map((mm) => (
+                  <option key={mm} value={`bill:${mm}`}>
+                    Bill all in {fmtPeriodShort(mm)}
+                    {mm === ad.period ? ' (this month)' : ''}
+                  </option>
+                ))
+              ) : (
+                <option value={`bill:${ad.period}`}>Bill in one month</option>
+              )}
             </select>
             {cmSelValue === 'bill' && (
               <div

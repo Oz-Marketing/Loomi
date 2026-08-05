@@ -211,6 +211,7 @@ function DocMenu({
   label,
   disabled,
   className = '',
+  downloadUrl,
   onRename,
   onReplace,
   onRemove,
@@ -218,6 +219,8 @@ function DocMenu({
   label: string;
   disabled?: boolean;
   className?: string;
+  /** Omitted for a document registered by hash with no stored copy. */
+  downloadUrl?: string | null;
   onRename: () => void;
   onReplace: () => void;
   onRemove: () => void;
@@ -278,6 +281,22 @@ function DocMenu({
       </button>
       {open && (
         <div role="menu" className="glass-dropdown absolute right-0 top-full z-50 mt-1 w-36 p-1 shadow-lg">
+          {/* An anchor rather than a menu button, so cmd-click and "open in new
+              tab" keep working — a button would have to reimplement both. */}
+          {downloadUrl && (
+            <a
+              href={downloadUrl}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => {
+                e.stopPropagation();
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-xs text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+            >
+              Download
+            </a>
+          )}
           {item('Rename', onRename)}
           {item('Replace', onReplace)}
           {item('Remove', onRemove, true)}
@@ -713,22 +732,15 @@ export function CoopGuidelinesTab() {
                                 <span className="font-mono">{d.previousHash.slice(0, 8)}</span>
                               </p>
                             )}
+                            {/* Download moved into the menu with the rest of the
+                                actions — leaving it inline as well would have put
+                                the same command in two places on one card. */}
                             <div className="mt-2 flex items-center gap-2">
-                              {d.sourceUrl && (
-                                <a
-                                  href={d.sourceUrl}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="text-[11px] font-medium text-[var(--muted-foreground)] hover:underline"
-                                >
-                                  Download
-                                </a>
-                              )}
                               <DocMenu
                                 className="ml-auto"
                                 label={d.title}
                                 disabled={!!busy}
+                                downloadUrl={d.sourceUrl}
                                 onRename={() => setRenaming({ id: d.id, title: d.title })}
                                 onReplace={() => setDocDraft({ ...emptyDocDraft(active.make), title: d.title })}
                                 onRemove={() => act('delete_doc', { docId: d.id }, `dd-${d.id}`, 'Document removed')}

@@ -22,7 +22,7 @@ import { TaskExtraDetails } from './details-view';
 import { MentionTextarea, MentionText, extractMentions } from './mention-textarea';
 import { MediaUpload, type UploadedFile } from './media-upload';
 
-const PROP_TRIGGER = '!bg-[var(--background)] !rounded-lg !px-2.5 !py-1.5 !text-sm';
+const PROP_TRIGGER = '!bg-[var(--input)] !rounded-lg !px-2.5 !py-1.5 !text-sm';
 const propDot = (color: string) => (
   <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />
 );

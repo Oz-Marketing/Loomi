@@ -16,6 +16,7 @@ import {
   notifyAssignment,
   notifyApprovalChange,
 } from '@/lib/notifications/service';
+import { misplacedAdRows } from '@/lib/ad-pacer/plan-save';
 import {
   type AuditInput,
   diffTrackedAdFields,
@@ -169,6 +170,45 @@ export async function PUT(
   const incomingAds: IncomingAd[] = Array.isArray(body.ads) ? body.ads : [];
   const incomingIds = incomingAds.map((ad) => ad.id).filter(Boolean) as string[];
 
+  // ── Wrong-scope write guard ──
+  // This PUT is a full replace for (plan, period, platform): rows of that scope
+  // missing from the payload are deleted, and every row in it gets `period`
+  // written to the target. So a payload carrying rows that live elsewhere is
+  // doubly destructive — it wipes THIS month and re-parents the other month's
+  // (or account's, or platform's) rows into it, emptying that side too. No
+  // legitimate flow moves an ad row between scopes (copy-from creates new rows),
+  // so this can only be a stale client. Fail loudly instead of shredding both.
+  if (incomingIds.length > 0) {
+    const owners = await prisma.metaAdsPacerAd.findMany({
+      where: { id: { in: incomingIds } },
+      select: { id: true, planId: true, period: true, platform: true },
+    });
+    const misplaced = misplacedAdRows(owners, {
+      planId: plan.id,
+      period,
+      platform: postPlatform,
+    });
+    if (misplaced.length > 0) {
+      const otherPeriods = [
+        ...new Set(
+          misplaced
+            .filter((row) => row.planId === plan.id && row.period !== period)
+            .map((row) => row.period),
+        ),
+      ].sort();
+      const origin = otherPeriods.length
+        ? otherPeriods.join(', ')
+        : 'another account or platform';
+      return NextResponse.json(
+        {
+          error: `This save carried ${misplaced.length} ad row(s) belonging to ${origin} — refusing to move them into ${period}. Reload the page and try again.`,
+          code: 'period_mismatch',
+        },
+        { status: 409 },
+      );
+    }
+  }
+
   // Snapshot the current state of ALL ads in this period before the upsert so
   // we can (a) detect assignment/approval changes for notifications and (b)
   // diff tracked fields for the automatic audit log (Change 10), including
@@ -203,6 +243,8 @@ export async function PUT(
       addedBudgetGoal: true,
       googleBaseBudgetGoal: true,
       googleAddedBudgetGoal: true,
+      managedByBudget: true,
+      googleManagedByBudget: true,
     },
   });
   const accountDealer =
@@ -221,6 +263,44 @@ export async function PUT(
   const budgetData: Record<string, string | null> = {};
   if ('baseBudgetGoal' in body) budgetData[baseCol] = nullable(body.baseBudgetGoal);
   if ('addedBudgetGoal' in body) budgetData[addedCol] = nullable(body.addedBudgetGoal);
+
+  // Budget-managed periods are owned by the BudgetLine ledger
+  // (docs/budget-module.md §4) — the UI renders the goal inputs read-only, so a
+  // CHANGE arriving here is either a stale tab or a direct API call. Reject it
+  // rather than let it land and get silently reverted by the next ledger sync:
+  // two writers on one number is exactly the bug the binding removes. Unmanage
+  // the month first (POST …/budget-managed) to take manual control.
+  //
+  // Crucially this compares VALUES, not the presence of the keys. The planner's
+  // autosave always spreads the current goals into its payload alongside the
+  // ads, so rejecting on presence alone would 409 every ad edit — allocation,
+  // status, dates — on any managed month, and the client would swallow it.
+  const goalsManaged =
+    postPlatform === 'google'
+      ? !!existingBudget?.googleManagedByBudget
+      : !!existingBudget?.managedByBudget;
+  if (goalsManaged) {
+    const sameMoney = (a: string | null | undefined, b: string | null | undefined) => {
+      if (a == null || a === '') return b == null || b === '';
+      if (b == null || b === '') return false;
+      return Number(a) === Number(b);
+    };
+    const changed = Object.entries(budgetData).some(
+      ([col, value]) => !sameMoney(value, existingBudget?.[col as keyof typeof existingBudget] as string | null),
+    );
+    if (changed) {
+      return NextResponse.json(
+        {
+          error:
+            'This month’s budget goals are managed by the budget ledger. Turn off budget management for the month to edit them by hand.',
+          code: 'budget_managed',
+        },
+        { status: 409 },
+      );
+    }
+    // Unchanged echo — drop it so the write is purely the ads.
+    for (const key of Object.keys(budgetData)) delete budgetData[key];
+  }
 
   await prisma.$transaction(async (tx) => {
     // Period budget — upsert only when the caller manages budget goals.

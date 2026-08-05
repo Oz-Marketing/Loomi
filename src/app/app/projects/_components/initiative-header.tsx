@@ -20,7 +20,7 @@ const INIT_STATUS: Record<string, { label: string; color: string }> = {
   archived: { label: 'Archived', color: '#94a3b8' },
 };
 const PRIORITIES: PriorityKey[] = ['low', 'medium', 'high', 'urgent'];
-const TRIGGER = '!bg-[var(--background)] !rounded-lg !px-2.5 !py-1.5 !text-sm';
+const TRIGGER = '!bg-[var(--input)] !rounded-lg !px-2.5 !py-1.5 !text-sm';
 
 function dot(color: string) {
   return <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color }} />;

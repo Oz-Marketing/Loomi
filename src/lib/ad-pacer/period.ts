@@ -40,6 +40,32 @@ export function fmtPeriodShort(period: string): string {
 }
 
 /**
+ * Name a set of months compactly: consecutive ones collapse into a range, so
+ * seven months read "Jan–Jul" rather than as a comma-separated list. Gaps stay
+ * visible ("Jan–Mar, Jun"); past a few disjoint groups the count is clearer than
+ * the names. Empty in, empty out.
+ */
+export function monthRangeLabel(periods: string[]): string {
+  const sorted = Array.from(new Set(periods)).filter(isValidPeriod).sort();
+  if (sorted.length === 0) return '';
+  const short = (p: string) =>
+    new Date(Number(p.slice(0, 4)), Number(p.slice(5, 7)) - 1, 1).toLocaleDateString(
+      'en-US',
+      { month: 'short' },
+    );
+  const groups: string[][] = [];
+  for (const p of sorted) {
+    const run = groups[groups.length - 1];
+    if (run && shiftPeriod(run[run.length - 1], 1) === p) run.push(p);
+    else groups.push([p]);
+  }
+  if (groups.length > 3) return `${sorted.length} months`;
+  return groups
+    .map((g) => (g.length === 1 ? short(g[0]) : `${short(g[0])}–${short(g[g.length - 1])}`))
+    .join(', ');
+}
+
+/**
  * Flight-date presets scoped to the ad's planning period (YYYY-MM).
  * Lets the user one-click "fill the whole month" instead of clicking
  * through the calendar.

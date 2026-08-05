@@ -20,6 +20,7 @@ import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
 import { CustomFieldBlueprintsTab } from '@/components/settings/custom-field-blueprints-tab';
 import { IndustriesTab } from '@/components/settings/industries-tab';
 import { DefaultMarkupTab } from '@/components/settings/default-markup-tab';
+import { RateCardsTab } from '@/components/settings/rate-cards-tab';
 import { AlertRulesTab } from '@/components/settings/alert-rules-tab';
 import { TeamsTab } from '@/components/settings/teams-tab';
 import { CoopGuidelinesTab } from '@/components/settings/coop-guidelines-tab';
@@ -145,7 +146,15 @@ export default function SettingsPage() {
       {activeTab === 'teams' && hasAdminAccess && <TeamsTab />}
       {activeTab === 'knowledge' && hasAdminAccess && isAdmin && <KnowledgeBaseTab />}
       {activeTab === 'industries' && isElevated && isAdmin && <IndustriesTab />}
-      {activeTab === 'markup' && isElevated && isAdmin && <DefaultMarkupTab />}
+      {/* Rate cards lead: they're what actually prices work now. The single
+          agency default below them is only the fallback for a channel with no
+          card, so it reads as the footnote it has become. */}
+      {activeTab === 'markup' && isElevated && isAdmin && (
+        <div className="space-y-4">
+          <RateCardsTab />
+          <DefaultMarkupTab />
+        </div>
+      )}
       {activeTab === 'alerts' && isElevated && isAdmin && <AlertRulesTab />}
       {activeTab === 'coop-guidelines' && hasAdminAccess && isAdmin && <CoopGuidelinesTab />}
       {activeTab === 'notifications' && <NotificationsTab />}

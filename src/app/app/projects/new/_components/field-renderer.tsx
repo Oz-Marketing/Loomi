@@ -8,7 +8,7 @@ import type { FieldDef } from '@/lib/projects/ui';
 // <div> wrapper, NOT <label>, so clicks don't forward to the first control
 // (same trap as the main Field component).
 
-const INPUT = '!bg-[var(--background)] !rounded-lg !px-3 !py-2 !text-sm';
+const INPUT = '!bg-[var(--input)] !rounded-lg !px-3 !py-2 !text-sm';
 
 // Trigger class so the DatePicker matches the form's `.loomi-input` fields
 // (page background, rounded-lg, py-2 px-3, text-sm). Shared with the form's

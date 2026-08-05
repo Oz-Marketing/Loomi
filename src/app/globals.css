@@ -1090,7 +1090,13 @@ body {
   width: 100%;
   border-radius: 0.5rem;
   border: 1px solid var(--border);
-  background: var(--background);
+  /* `--input` (a translucent lift over whatever is behind it), NOT
+     `--background`. The page background in dark mode is near-black, so an
+     input painted with it reads as a hole punched in the surface rather than
+     a raised control. `--input` is what the rest of the app already uses
+     directly (clients, ad-generator, the pacer panels); this brings the shared
+     class in line with it. */
+  background: var(--input);
   padding: 0.5rem 0.75rem;
   font-size: 0.875rem;
   color: var(--foreground);
@@ -2015,6 +2021,18 @@ button.glass-card:hover,
   backdrop-filter: blur(8px) saturate(120%);
 }
 
+/* ── Entrance animations, unbundled ──
+   `.glass-modal` and `.glass-dropdown` already animate, but they also impose
+   their own background, blur and border. A surface that styles itself — the
+   `frost-heavy` panels, an inline accordion — needs the motion WITHOUT the
+   look, so these carry the animation and nothing else. */
+.animate-modal-in {
+  animation: modal-content-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-dropdown-in {
+  animation: dropdown-in 0.15s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
 /* ── Page Content Entrance ── */
 .animate-fade-in-up {
   animation: fade-in-up 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -2069,6 +2087,16 @@ input, select, textarea {
    (e.g. Tools open → Meta closed but its children still visible). */
 .collapsible-wrapper[data-open="true"] > .collapsible-inner {
   overflow: visible;
+}
+/* Opt out of that. `overflow: visible` flips the instant the wrapper opens,
+   while the grid row is still growing — so the content renders at full height
+   over whatever sits below it for the length of the transition. Invisible when
+   the panel is the last thing on screen, obvious when it's an accordion row in
+   the middle of a table. Use this whenever the content holds no dropdown or
+   popover that needs to escape the box. */
+.collapsible-wrapper.collapsible-clip > .collapsible-inner,
+.collapsible-wrapper.collapsible-clip[data-open="true"] > .collapsible-inner {
+  overflow: hidden;
 }
 
 /* ── Range Slider (Elementor-style) ── */
@@ -2150,6 +2178,9 @@ input, select, textarea {
   .animate-overlay-in,
   .animate-slide-in-right,
   .animate-chat-panel-in,
+  .animate-modal-in,
+  .animate-dropdown-in,
+  .animate-drawer-slide-in,
   .collapsible-wrapper {
     animation: none !important;
     transition: none !important;

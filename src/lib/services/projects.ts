@@ -9,7 +9,8 @@ import {
   notifyTaskDueSoon,
   notifyTaskOverdue,
 } from '@/lib/notifications/projects';
-import { isCreativeKind } from '@/lib/projects/ui';
+import { isCreativeKind, type BudgetEntry } from '@/lib/projects/ui';
+import { createLines, type CreateLineInput } from '@/lib/services/budget';
 import {
   sendDigestNotificationEmail,
   type NotificationEmailItem,
@@ -798,8 +799,18 @@ export async function createTicket(
     templateKey?: string | null;
     // One entry per involved department, each with its own task Type + the
     // per-type field values (FieldDef.key → value) captured at intake. Empty =
-    // a single team-less generic task.
-    departments: { teamKey: string; kind: string; details?: Record<string, unknown> }[];
+    // a single team-less generic task. `budget` is the money the rep is
+    // requesting for that department, split by BudgetChannel — it becomes
+    // BudgetLines, never Task.details (docs/budget-module.md).
+    departments: {
+      teamKey: string;
+      kind: string;
+      details?: Record<string, unknown>;
+      budget?: BudgetEntry[];
+    }[];
+    // Month the requested budget is spent in ("YYYY-MM"). Defaults to the
+    // ticket's due-date month, else the current month.
+    budgetPeriod?: string | null;
     // Multi-account creative handling: 'shared' makes ONE creative task reused
     // across all accounts; 'unique' (default) makes one per account.
     creativeMode?: 'shared' | 'unique';
@@ -837,14 +848,23 @@ export async function createTicket(
   const accountNames = accountKeys.map((k) => accountNameByKey.get(k) ?? k);
 
   // Departments → tasks. No departments selected = one generic team-less task.
-  const departments: { teamKey: string | null; kind: string; details?: Record<string, unknown> }[] =
-    input.departments.length
-      ? input.departments.map((d) => ({
-          teamKey: d.teamKey || null,
-          kind: d.kind || 'generic',
-          details: d.details,
-        }))
-      : [{ teamKey: null, kind: 'generic' }];
+  const departments: {
+    teamKey: string | null;
+    kind: string;
+    details?: Record<string, unknown>;
+    budget?: BudgetEntry[];
+  }[] = input.departments.length
+    ? input.departments.map((d) => ({
+        teamKey: d.teamKey || null,
+        kind: d.kind || 'generic',
+        details: d.details,
+        // Drop zero/blank rows here so an untouched budget input can't mint an
+        // empty $0 line for every channel the type offers.
+        budget: (d.budget ?? []).filter(
+          (b) => b && b.channel && Number.isFinite(b.amount) && b.amount > 0,
+        ),
+      }))
+    : [{ teamKey: null, kind: 'generic' }];
 
   // Ticket-level details (timing + billing) — stored once, on the initiative if
   // grouped, else stashed on the task(s).
@@ -886,7 +906,19 @@ export async function createTicket(
     }
   }
 
+  // The month requested budget lands in. An explicit choice wins; otherwise the
+  // due-date's month is the best available signal, and today's month is the
+  // last resort. Never guessed from the fiscal year — a line has to be placed
+  // on a real month to reach the pacer.
+  const budgetPeriod =
+    input.budgetPeriod ??
+    (input.dueDate ? input.dueDate.slice(0, 7) : new Date().toISOString().slice(0, 7));
+
   const tasks: TaskDTO[] = [];
+  // Budget lines are collected across the whole fan-out and written once, so
+  // the entire submission shares a single batchId (oz-reports' bulk_entry_id)
+  // and can later be edited or released as one unit.
+  const budgetInputs: CreateLineInput[] = [];
   // Monotonic so the fan-out's tasks get distinct, ordered positions (plain
   // Date.now() would collide within the same millisecond → unstable board order).
   let posSeq = Date.now();
@@ -895,6 +927,12 @@ export async function createTicket(
     // account, brief notes all accounts); everything else fans out per account.
     const shared = creativeShared && dept.teamKey != null && isCreativeKind(dept.kind);
     const targetKeys = shared ? [primaryKey] : accountKeys;
+    // Money follows the ACCOUNTS even when the creative collapses to one task:
+    // a shared ad still gets billed to each dealer running it. The amount the
+    // rep typed is per account (same as the unshared case), so three dealers on
+    // a $1,000 request means three $1,000 lines — the hub re-splits if the deal
+    // was actually "$1,000 total". All of them point at the one shared task.
+    const budgetKeys = accountKeys;
 
     // Per-type field values for this department's task(s). When the ticket isn't
     // grouped, ticket-level meta/billing rides along on the task under `_ticket`.
@@ -903,6 +941,10 @@ export async function createTicket(
     const taskDetails = Object.keys(baseDetails).length
       ? (baseDetails as Prisma.InputJsonValue)
       : undefined;
+
+    // accountKey → the task that department created for it, so budget lines can
+    // point at the right ticket without re-deriving it from array positions.
+    const taskIdByAccount = new Map<string, string>();
 
     for (const acctKey of targetKeys) {
       const description = shared
@@ -957,7 +999,50 @@ export async function createTicket(
           });
         }
       }
+      taskIdByAccount.set(acctKey, row.id);
       tasks.push(serializeTask(row));
+    }
+
+    // One line per (account × channel) for this department's request. Created
+    // as `committed` — filing a funded ticket IS the commitment, and anything
+    // less would leave the pool math (and the remaining-budget figure the rep
+    // just read on this form) understating what's been spoken for. Releasing it
+    // is an explicit action in the hub.
+    //
+    // A shared creative made one task under the primary account, so every
+    // account's line points at that single ticket.
+    if (dept.budget?.length) {
+      for (const acctKey of budgetKeys) {
+        const taskId = taskIdByAccount.get(acctKey) ?? taskIdByAccount.get(primaryKey) ?? null;
+        for (const entry of dept.budget) {
+          budgetInputs.push({
+            accountKey: acctKey,
+            period: budgetPeriod,
+            channel: entry.channel,
+            amount: entry.amount,
+            source: 'task',
+            status: 'committed',
+            initiativeId,
+            taskId,
+            label: input.title.trim(),
+          });
+        }
+      }
+    }
+  }
+
+  // Budget last: a failure here must not roll back the tickets (they're the
+  // primary artifact and the rep is watching for them), so it's caught and
+  // reported rather than thrown. A ticket with a missing line is recoverable in
+  // the hub; a lost ticket is not.
+  let budgetError: string | null = null;
+  if (budgetInputs.length > 0) {
+    try {
+      await createLines(budgetInputs, requesterUserId);
+    } catch (err) {
+      budgetError = err instanceof Error ? err.message : 'Failed to record budget';
+      // eslint-disable-next-line no-console
+      console.error('[projects] budget line creation failed for ticket', input.title, err);
     }
   }
 
@@ -969,5 +1054,5 @@ export async function createTicket(
     });
   }
 
-  return { initiativeId, tasks };
+  return { initiativeId, tasks, budgetError };
 }

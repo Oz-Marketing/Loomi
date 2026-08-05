@@ -80,19 +80,42 @@ async function main() {
         CONSTRAINT "AgreementFee_pkey" PRIMARY KEY ("id")
       )`);
 
+    // A database that has never carried the budget module has no BudgetLine yet
+    // — `db push` creates it, with `agreementId` and its FK, a few steps after
+    // this script. `ADD COLUMN IF NOT EXISTS` guards the COLUMN, not the TABLE,
+    // so touching BudgetLine here would abort the whole deploy on such a
+    // database (42P01). Everything BudgetLine-related is therefore skipped when
+    // the table is absent, the same way ensure-budgetline-external-id-unique
+    // does. Nothing is lost: with no table there are no rows to carry.
+    const [{ hasBudgetLine }] = await prisma.$queryRawUnsafe<
+      { hasBudgetLine: boolean }[]
+    >(`SELECT to_regclass('public."BudgetLine"') IS NOT NULL AS "hasBudgetLine"`);
+    if (!hasBudgetLine) {
+      console.log(
+        '[migrate-budget-plans-to-agreements] BudgetLine does not exist yet — db push will create it with agreementId',
+      );
+    }
+
     for (const sql of [
       `CREATE INDEX IF NOT EXISTS "ClientAgreement_accountKey_status_idx" ON "ClientAgreement"("accountKey", "status")`,
       `CREATE INDEX IF NOT EXISTS "ClientAgreement_accountKey_startDate_endDate_idx" ON "ClientAgreement"("accountKey", "startDate", "endDate")`,
       `CREATE INDEX IF NOT EXISTS "ClientAgreement_archivedAt_idx" ON "ClientAgreement"("archivedAt")`,
       `CREATE INDEX IF NOT EXISTS "AgreementFee_agreementId_idx" ON "AgreementFee"("agreementId")`,
-      `ALTER TABLE "BudgetLine" ADD COLUMN IF NOT EXISTS "agreementId" TEXT`,
-      `CREATE INDEX IF NOT EXISTS "BudgetLine_agreementId_idx" ON "BudgetLine"("agreementId")`,
+      ...(hasBudgetLine
+        ? [
+            `ALTER TABLE "BudgetLine" ADD COLUMN IF NOT EXISTS "agreementId" TEXT`,
+            `CREATE INDEX IF NOT EXISTS "BudgetLine_agreementId_idx" ON "BudgetLine"("agreementId")`,
+          ]
+        : []),
     ]) {
       await prisma.$executeRawUnsafe(sql);
     }
 
-    // Foreign keys have no IF NOT EXISTS, so each is guarded by name.
-    for (const [table, name, ddl] of [
+    // Foreign keys have no IF NOT EXISTS, so each is guarded by name. The
+    // BudgetLine one is skipped entirely when the table is absent — its
+    // existence probe matches nothing either way, so it would try the DDL and
+    // fail rather than no-op.
+    for (const [table, name, ddl] of ([
       [
         'ClientAgreement',
         'ClientAgreement_accountKey_fkey',
@@ -111,7 +134,7 @@ async function main() {
         `ALTER TABLE "BudgetLine" ADD CONSTRAINT "BudgetLine_agreementId_fkey"
            FOREIGN KEY ("agreementId") REFERENCES "ClientAgreement"("id") ON DELETE SET NULL ON UPDATE CASCADE`,
       ],
-    ] as const) {
+    ] as const).filter(([table]) => hasBudgetLine || table !== 'BudgetLine')) {
       const existing = await prisma.$queryRawUnsafe<{ conname: string }[]>(
         `SELECT conname FROM pg_constraint WHERE conname = $1 AND conrelid = to_regclass($2)`,
         name,

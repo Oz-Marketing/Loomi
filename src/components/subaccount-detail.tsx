@@ -1411,15 +1411,23 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
               role="dialog"
               aria-modal="true"
             >
+              {/* A column, not one big scroll box: the brand band and the actions
+                  stay put while only the FIELDS scroll. This modal is long enough
+                  to hit the 90vh cap, and when the whole thing scrolled together
+                  the cap clipped straight through whichever field happened to be
+                  at the edge — and pushed Save out of reach. */}
               <div
-                className="glass-modal w-[560px] max-w-[calc(100vw-2rem)] max-h-[90vh] overflow-y-auto"
+                className="glass-modal flex w-[560px] max-w-[calc(100vw-2rem)] max-h-[90vh] flex-col overflow-hidden"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="relative h-28 w-full overflow-hidden bg-[#f5f5f7]">
+                {/* `object-contain` with padding, not `object-cover`: the source is
+                    a wide logo, so cover cropped it and scaled what was left up to
+                    fill a 112px band. */}
+                <div className="relative h-16 w-full flex-shrink-0 overflow-hidden bg-[#f5f5f7]">
                   <img
                     src={META_LOGO_URL}
                     alt="Meta Ads"
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-contain px-6 py-3.5"
                   />
                   <button
                     type="button"
@@ -1431,7 +1439,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                   </button>
                 </div>
 
-                <div className="p-6">
+                <div className="min-h-0 flex-1 overflow-y-auto p-6">
                   <div className="flex items-center justify-between gap-3">
                     <h3 className="text-lg font-bold text-[var(--foreground)]">Meta Ads</h3>
                     <span
@@ -1529,23 +1537,25 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                     name; use the per-row dropdown to fix any mismatches.
                   </div>
 
-                  <div className="mt-6 flex justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setActiveIntegration(null)}
-                      className="h-10 rounded-lg border border-[var(--border)] bg-[var(--card)] px-4 text-sm hover:border-[var(--muted-foreground)]"
-                    >
-                      Close
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleSaveIntegration}
-                      disabled={savingIntegration}
-                      className="h-10 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--primary)]/90 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      {savingIntegration ? 'Saving…' : 'Save'}
-                    </button>
-                  </div>
+                </div>
+
+                {/* Pinned, so Save is reachable however long the fields get. */}
+                <div className="flex flex-shrink-0 justify-end gap-2 border-t border-[var(--border)] p-4">
+                  <button
+                    type="button"
+                    onClick={() => setActiveIntegration(null)}
+                    className="h-10 rounded-lg border border-[var(--border)] bg-[var(--card)] px-4 text-sm hover:border-[var(--muted-foreground)]"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveIntegration}
+                    disabled={savingIntegration}
+                    className="h-10 rounded-lg border border-[var(--primary)] bg-[var(--primary)] px-4 text-sm font-semibold text-white hover:bg-[var(--primary)]/90 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {savingIntegration ? 'Saving…' : 'Save'}
+                  </button>
                 </div>
               </div>
             </div>,

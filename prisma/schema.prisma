@@ -2725,6 +2725,75 @@ model AdGuidelineDoc {
 }
 
 // ─────────────────────────────────────────────────────
+// Ad Generator — one publish attempt
+// ─────────────────────────────────────────────────────
+//
+// Written BEFORE the first platform call, so a retry finds the in-flight row
+// instead of creating a second ad that spends a second budget. Same lesson as the
+// rest of the pipeline: any table fronting a side effect needs the row to exist
+// before the effect.
+//
+// A row exists for every attempt INCLUDING failures, because a launch that
+// silently didn't happen is the failure mode that matters — and because a failed
+// row is what a retry needs to find.
+//
+// TWO DEFECTS IN THE ORIGINAL SPEC, FIXED HERE:
+//
+// 1. It keyed on the bare `offerFingerprint`, which reproduces the Silverado
+//    collision: one GM 4.9%/60mo programme covers the 2500HD and the 3500HD, so
+//    the same fingerprint means the second vehicle's launch would look like a
+//    duplicate of the first's. `offerKey` is the VEHICLE-scoped value
+//    (creativeOfferKey) for that reason.
+// 2. Uniqueness must not cover terminal failures, or a failed launch permanently
+//    blocks its own retry. Postgres can express that as a partial unique index
+//    and Prisma cannot, so it lives in scripts/ensure-adlaunch-unique.ts —
+//    exactly why ensure-adcreative-offer-unique.ts exists. There is deliberately
+//    NO @@unique here; the script owns it.
+model AdLaunch {
+  id         String @id @default(cuid())
+  accountKey String
+  platform   String // "meta" | "google"
+
+  /// attach_existing | create_new — which verb produced this launch.
+  mode String @default("attach_existing")
+
+  /// JSON string[] of AdCreative ids. One launch is one campaign with one ad per
+  /// creative, so this is plural while platformCampaignId is singular.
+  creativeIds String @db.Text
+  /// Vehicle-scoped offer key (see creativeOfferKey), NOT the bare fingerprint.
+  offerKey    String?
+
+  /// queued | publishing | published | failed | cancelled
+  status String @default("queued")
+
+  /// Frozen resolved preset + copy + creative URLs at launch time, so "what did we
+  /// actually publish" survives later preset edits.
+  payload String? @db.Text
+
+  /// Platform result, filled in as each object is created so a partial failure is
+  /// diagnosable rather than opaque.
+  platformCampaignId String?
+  platformAdSetId    String?
+  /// JSON map of creativeId → platform ad id. A map, not a scalar: there is
+  /// genuinely one ad object per creative.
+  platformAdIds      String? @db.Text
+  /// JSON — Meta adimages hashes / Google asset resource names.
+  platformImageRefs  String? @db.Text
+
+  /// The pacer row created by the back-link, for round-tripping.
+  pacerAdId String?
+
+  requestedById   String?
+  requestedByName String?
+  startedAt       DateTime  @default(now())
+  finishedAt      DateTime?
+  error           String?   @db.Text
+
+  @@index([accountKey, status])
+  @@index([offerKey])
+}
+
+// ─────────────────────────────────────────────────────
 // Ad Generator — per-account campaign shape for a launch
 // ─────────────────────────────────────────────────────
 //
@@ -2747,6 +2816,19 @@ model AdLaunchPreset {
   platform   String // "meta" | "google"
 
   /// e.g. OUTCOME_TRAFFIC, OUTCOME_LEADS.
+  /// attach_existing | create_new.
+  ///
+  /// Per sub-account because rooftops genuinely differ: some run evergreen
+  /// campaigns whose creative gets refreshed monthly, others spin up a campaign
+  /// per offer push. Attaching to a proven ad set avoids a learning-phase reset
+  /// and budget fragmentation, so it's the better default where it applies.
+  launchMode String @default("attach_existing")
+  /// For attach_existing: the ad set new creative is added to. Discovered via
+  /// fetchAdSets and confirmed by a person — the same reasoning as metaPageId, since
+  /// attaching to the wrong ad set spends someone else's budget on this offer.
+  targetAdSetId   String?
+  targetAdSetName String?
+
   objective   String  @default("OUTCOME_TRAFFIC")
   bidStrategy String?
   /// Whole currency units as a string, matching MetaAdsPacerAd.allocation.

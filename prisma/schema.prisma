@@ -2700,6 +2700,61 @@ model AdGuidelineDoc {
 }
 
 // ─────────────────────────────────────────────────────
+// Ad Generator — co-op PRE-APPROVAL of a template (human sign-off)
+// ─────────────────────────────────────────────────────
+//
+// Distinct from AdTemplateCoopCheck below, which is what the RULE ENGINE thinks.
+// This is what the manufacturer's co-op programme actually said — a person sent
+// the plate to the OEM, the OEM approved it, and every ad generated from it
+// inherits that approval. It is what makes unattended launching defensible with
+// no per-ad reviewer: the artifact a human approved is the template, and the ads
+// are that template with the month's numbers in it.
+//
+// The two can disagree in both directions, and both directions are legitimate:
+// the engine may have no rules on file for a make yet still have a real approval
+// from it, and the engine may flag a rule the OEM chose to waive.
+//
+// SCOPED TO A DESIGN, NOT A TEMPLATE ID. `docHash` is the render-relevant design
+// hash (see designHash in template-sync.ts), so editing the template moves the
+// hash and the approval stops applying. Without that, "pre-approved" would be a
+// permanent rubber stamp that survives an arbitrary redesign — which is precisely
+// the exposure co-op approval is supposed to remove.
+//
+// APPEND-ONLY. Re-approving after a redesign adds a row; withdrawing sets
+// `revokedAt` rather than deleting, because "approved, then withdrawn" is a
+// different fact from "never approved", and a reimbursement dispute is exactly
+// when somebody has to produce the history. No unique index, deliberately — it
+// keeps this additive through `db push` with no ensure-script.
+model AdTemplateCoopApproval {
+  id         String @id @default(cuid())
+  templateId String
+  /// The make whose programme granted it. A shared plate can be approved by
+  /// several manufacturers independently, so this is per (template, make).
+  make       String
+
+  /// The design the approval covers. Mismatch ⇒ the approval no longer applies.
+  docHash String
+
+  /// Guideline edition in force when it was granted. A reissue makes the approval
+  /// STALE rather than wrong — someone re-confirms against the new edition.
+  packVersion String?
+
+  /// Evidence: the co-op portal case number, or the email that granted it.
+  reference String?
+  note      String? @db.Text
+
+  approvedById   String?
+  approvedByName String?
+  approvedAt     DateTime @default(now())
+
+  revokedAt     DateTime?
+  revokedByName String?
+
+  @@index([templateId])
+  @@index([make])
+}
+
+// ─────────────────────────────────────────────────────
 // Ad Generator — design-time co-op verdict per template
 // ─────────────────────────────────────────────────────
 //

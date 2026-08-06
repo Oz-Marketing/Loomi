@@ -26,6 +26,9 @@ import {
   templatesForAccount,
   templatesForAnyAccount,
 } from '@/lib/ad-generator/template-access';
+import { approvalStatesForTemplates } from '@/lib/ad-generator/coop-approval-store';
+import type { ApprovalStatus } from '@/lib/ad-generator/coop-approval';
+import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -64,6 +67,34 @@ function parseTags(raw: string | null): string[] {
     return Array.isArray(v) ? v.filter((t): t is string => typeof t === 'string') : [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * Attach each template's co-op approval standing.
+ *
+ * Folded into the list rather than fetched per card: the library renders dozens of
+ * templates, and the approval is the one thing on a card that decides whether ads
+ * from it can run unattended — so it can't be behind a second request that the
+ * list might skip. One query for the whole page (see approvalStatesForTemplates).
+ */
+async function withApprovals<T extends { id: string; doc: unknown }>(
+  templates: T[],
+): Promise<(T & { coopApproval?: ApprovalStatus })[]> {
+  // `shape()` types doc as unknown (it's parsed JSON), so narrow here rather than
+  // widening the caller.
+  const withDocs = templates.flatMap((t) => {
+    const doc = t.doc as TemplateDoc | null;
+    return doc && Array.isArray(doc.sizes) ? [{ id: t.id, doc, make: doc.make ?? null }] : [];
+  });
+  if (!withDocs.length) return templates;
+  try {
+    const states = await approvalStatesForTemplates(withDocs);
+    return templates.map((t) => ({ ...t, coopApproval: states[t.id] }));
+  } catch (err) {
+    // An unpushed table must not take out the library.
+    console.warn('[api/ad-generator/templates-doc] approvals unavailable:', err);
+    return templates;
   }
 }
 
@@ -113,7 +144,7 @@ export async function GET(req: NextRequest) {
         ...(ownerKey ? { where: { accountKey: ownerKey } } : {}),
         orderBy: { updatedAt: 'desc' },
       })) as Row[];
-      return NextResponse.json({ templates: rows.map(shape) });
+      return NextResponse.json({ templates: await withApprovals(rows.map(shape)) });
     } catch (err) {
       console.warn('[api/ad-generator/templates-doc] all → []:', err);
       return NextResponse.json({ templates: [] });
@@ -146,7 +177,7 @@ export async function GET(req: NextRequest) {
         orderBy: { name: 'asc' },
       })) as Row[];
       const visible = templatesForAnyAccount(rows, allowed, inherited);
-      return NextResponse.json({ templates: visible.map(shape).filter((t) => t.doc) });
+      return NextResponse.json({ templates: await withApprovals(visible.map(shape).filter((t) => t.doc)) });
     }
 
     // Admins+: global templates + the active account's own + ancestors' own.
@@ -157,7 +188,7 @@ export async function GET(req: NextRequest) {
     })) as Row[];
     const visible = templatesForAccount(rows, { accountKey: accountKey ?? null, ancestorKeys: inherited });
     // Only return rows whose doc parses to a usable shape.
-    return NextResponse.json({ templates: visible.map(shape).filter((t) => t.doc) });
+    return NextResponse.json({ templates: await withApprovals(visible.map(shape).filter((t) => t.doc)) });
   } catch (err) {
     console.warn('[api/ad-generator/templates-doc] falling back to []:', err);
     return NextResponse.json({ templates: [] });

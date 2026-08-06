@@ -8,6 +8,8 @@ import { createNotification } from '@/lib/notifications/service';
 import { brandLogoData } from '../brand-logos';
 import { templatesForAccount } from '../template-access';
 import { applyOemDefaults, parseOemRule, requiredFieldsFor, type OemOfferRule } from '../compliance';
+import { approvalIsCurrent } from '../coop-approval';
+import { approvalStatusFor } from '../coop-approval-store';
 import { loadActiveCoopPack } from '../coop-pack-store';
 import type { CoopRulePack } from '../coop-rules';
 import { resolveTemplateCoopCheck } from '../coop-template-check-store';
@@ -605,17 +607,44 @@ export async function generateForAccount(
       continue;
     }
 
-    // ── status: `ready` requires a VERIFIED co-op pack ──
+    // ── status: what makes an ad `ready` without a person looking at it ──
+    //
+    // Two independent forms of evidence, either of which is sufficient:
+    //
+    //   1. The manufacturer PRE-APPROVED this template's current design. This is
+    //      the real-world path: co-op signs off on the plate, and every ad from it
+    //      inherits that. The approval is design-scoped, so a template edited
+    //      since approval falls back to a draft rather than riding a stale sign-off.
+    //   2. A VERIFIED co-op rule pack exists and preflight passed against it —
+    //      the machine-checked path, and the original gate.
+    //
+    // Neither on file means nobody and nothing has vouched for this ad, so it
+    // stays a draft and says why. Note that until packs are transcribed, (1) is
+    // the ONLY path that can produce a `ready` ad — which is the point of it.
+    const approval = await approvalStatusFor({
+      templateId: tpl.id,
+      doc: activeDoc,
+      make: g.make,
+      activePackVersion: coopPack?.version ?? null,
+    });
     let status: 'draft' | 'ready' = 'draft';
     if (config.mode === 'ready') {
-      if (coopPack?.verified) status = 'ready';
+      if (approvalIsCurrent(approval)) status = 'ready';
+      else if (coopPack?.verified) status = 'ready';
       else {
         warnings.push(
-          coopPack
-            ? `Held as a draft: the ${g.make} co-op pack (${coopPack.version}) is not marked verified.`
-            : `Held as a draft: no ${g.make} co-op pack is on file, so no manufacturer advertising rules were checked.`,
+          `Held as a draft: ${approval.reason}` +
+            (coopPack
+              ? ` The ${g.make} co-op pack (${coopPack.version}) is also not marked verified.`
+              : ` No ${g.make} co-op pack is on file either, so no manufacturer advertising rules were checked.`),
         );
       }
+    }
+    // Recorded even when it didn't change the status, because "this ad rode a
+    // template approval" is the answer to who permitted it, and a reviewer must be
+    // able to see a stale approval on an ad that is otherwise fine.
+    if (approval.state !== 'none' && approval.state !== 'current') {
+      warnings.push(approval.reason);
     }
 
     // ── render ──

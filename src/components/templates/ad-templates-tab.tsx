@@ -20,10 +20,13 @@ import {
   RocketLaunchIcon,
   CalendarDaysIcon,
   CheckCircleIcon,
+  CheckBadgeIcon,
   ArrowUturnLeftIcon,
 } from '@heroicons/react/24/outline';
 import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
 import { ScheduleTemplateModal } from '@/components/ad-generator/schedule-template-modal';
+import { CoopApprovalModal } from '@/components/ad-generator/coop-approval-modal';
+import { approvalLabel, type ApprovalStatus } from '@/lib/ad-generator/coop-approval';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { TemplateHeaderActions } from '@/components/templates/template-header-actions';
@@ -50,6 +53,8 @@ type DocTemplate = {
   createdByEmail: string | null;
   createdByImage: string | null;
   doc: TemplateDoc | null;
+  /** Co-op sign-off standing — what lets ads from this template run unattended. */
+  coopApproval?: ApprovalStatus;
 };
 
 const fetcher = async (url: string) => {
@@ -135,6 +140,7 @@ export function AdTemplatesTab({
   const [renameValue, setRenameValue] = useState('');
   const [shareFor, setShareFor] = useState<DocTemplate | null>(null);
   const [scheduleFor, setScheduleFor] = useState<DocTemplate | null>(null);
+  const [approveFor, setApproveFor] = useState<DocTemplate | null>(null);
   const [newOpen, setNewOpen] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -349,6 +355,15 @@ export function AdTemplatesTab({
     shareAction(t),
     // The publish WINDOW, without a trip through the builder.
     { key: 'schedule', label: 'Schedule…', icon: CalendarDaysIcon, run: () => setScheduleFor(t) },
+    // Co-op sign-off. Deliberately alongside the other template-level actions
+    // rather than buried in the builder: approval is granted for the PLATE, and
+    // it's the difference between ads that run and ads that queue as drafts.
+    {
+      key: 'coop',
+      label: t.coopApproval?.state === 'current' ? 'Co-op approval ✓' : 'Co-op approval…',
+      icon: CheckBadgeIcon,
+      run: () => setApproveFor(t),
+    },
     // Inside a subaccount you can also USE the template (make an ad from it).
     ...(accountKey
       ? [{ key: 'use', label: 'Use this template', icon: ArrowUpRightIcon, run: () => void useTemplate(t) } as TemplateCardAction]
@@ -432,6 +447,22 @@ export function AdTemplatesTab({
                         {badge && (
                           <span className="inline-block rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
                             {badge}
+                          </span>
+                        )}
+                        {/* Co-op standing. Green only when it can actually vouch for
+                            the current design — a stale approval has to look
+                            different from a live one, or the badge is worse than
+                            nothing. */}
+                        {t.coopApproval && t.coopApproval.state !== 'none' && (
+                          <span
+                            title={t.coopApproval.reason}
+                            className={`inline-block rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
+                              t.coopApproval.state === 'current'
+                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                                : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
+                            }`}
+                          >
+                            {approvalLabel(t.coopApproval.state)}
                           </span>
                         )}
                       </>
@@ -538,6 +569,16 @@ export function AdTemplatesTab({
       )}
 
       {/* When it's offered in the library */}
+      {approveFor && (
+        <CoopApprovalModal
+          templateId={approveFor.id}
+          templateName={approveFor.name}
+          defaultMake={approveFor.doc?.make ?? null}
+          onClose={() => setApproveFor(null)}
+          onSaved={() => void mutate()}
+        />
+      )}
+
       {scheduleFor && (
         <ScheduleTemplateModal
           templateId={scheduleFor.id}

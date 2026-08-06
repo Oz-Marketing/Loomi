@@ -1453,3 +1453,112 @@ export async function importAdSets(
 
   return { ok: true, imported, skipped };
 }
+
+// ─────────────────────────────────────────────────────
+// Publishing identity discovery (Ad Generator → campaign launch)
+// ─────────────────────────────────────────────────────
+//
+// Reporting only ever needed the ad ACCOUNT. Publishing needs to know who the ad
+// is FROM: a Meta ad creative requires `object_story_spec.page_id`, so a rooftop
+// with no Page on file cannot be launched at all.
+//
+// This LISTS what the agency token can see so a person can confirm one per
+// sub-account. It deliberately does not choose: across a multi-brand group the
+// wrong Page publishes a Ford store's ad from the Chevy store's Page, and a
+// name-similarity match is exactly the kind of guess that produces that.
+
+export interface MetaAssetOption {
+  id: string;
+  name: string;
+}
+
+export interface MetaAssets {
+  pages: MetaAssetOption[];
+  instagramAccounts: MetaAssetOption[];
+  pixels: MetaAssetOption[];
+  /**
+   * Per-edge failures, by edge name. Partial results are useful — a token that
+   * can see Pages but not pixels should still let someone set the Page — so one
+   * permission gap must not present as "nothing found".
+   */
+  errors: Record<string, string>;
+}
+
+/** Run one Graph read, recording a failure instead of throwing. */
+async function tryEdge<T>(
+  errors: Record<string, string>,
+  edge: string,
+  run: () => Promise<T>,
+  empty: T,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    errors[edge] = err instanceof Error ? err.message : 'Unknown Graph error';
+    return empty;
+  }
+}
+
+/**
+ * Pages, Instagram accounts and pixels usable with one ad account.
+ *
+ * `promote_pages` is the right edge rather than `/me/accounts`: it answers "which
+ * Pages may this ad account advertise", which is the question that matters, and it
+ * excludes the hundreds of unrelated Pages an agency System User can otherwise see.
+ */
+export async function discoverMetaAssets(adAccountId: string): Promise<MetaAssets> {
+  const cfg = getMetaConfig();
+  if (!cfg) {
+    return {
+      pages: [],
+      instagramAccounts: [],
+      pixels: [],
+      errors: { config: 'META_SYSTEM_USER_TOKEN is not configured in this environment.' },
+    };
+  }
+  const account = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+  const errors: Record<string, string> = {};
+
+  const pages = await tryEdge(
+    errors,
+    'pages',
+    () =>
+      metaGraphFetchAll<MetaAssetOption>(cfg, `${account}/promote_pages`, { fields: 'id,name' }),
+    [],
+  );
+
+  const pixels = await tryEdge(
+    errors,
+    'pixels',
+    () => metaGraphFetchAll<MetaAssetOption>(cfg, `${account}/adspixels`, { fields: 'id,name' }),
+    [],
+  );
+
+  // IG accounts hang off a Page, so this needs the Pages first. Each Page is asked
+  // separately and a failure on one doesn't lose the others.
+  const instagramAccounts: MetaAssetOption[] = [];
+  for (const page of pages) {
+    const linked = await tryEdge(
+      errors,
+      `instagram:${page.id}`,
+      () =>
+        metaGraphFetch<{ instagram_business_account?: { id: string; username?: string } }>(
+          cfg,
+          page.id,
+          { fields: 'instagram_business_account{id,username}' },
+        ),
+      {},
+    );
+    const ig = linked.instagram_business_account;
+    if (ig?.id) {
+      instagramAccounts.push({
+        id: ig.id,
+        // The username is what a person recognizes; the Page name is the fallback
+        // so an unnamed account is still distinguishable.
+        name: ig.username ? `@${ig.username} (${page.name})` : `Instagram for ${page.name}`,
+      });
+    }
+  }
+
+  return { pages, instagramAccounts, pixels, errors };
+}

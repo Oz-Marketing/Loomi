@@ -8,6 +8,7 @@ import type { TemplateDoc } from './doc-types';
 import { preflight, summarizePreflight, type CoopDesignVerdict } from './preflight';
 import { mergeRenderData, renderCreativeSizes, renderCreativeToS3 } from './render-creative';
 import { designHash, resolveSyncState } from './template-sync';
+import { vehicleFromData } from './vehicle-fields';
 import type { AdData } from './types';
 
 /**
@@ -194,7 +195,11 @@ export async function applyTemplateDocToCreative(
   const data = safeJson<AdData>(row.data) ?? ({} as AdData);
   // The make drives which OEM + co-op rules apply. The ad's own value wins over
   // the template's: a shared multi-make plate carries no make of its own.
-  const make = (data.make ?? templateDoc.make ?? '').trim();
+  //
+  // Read through vehicleFromData, NOT `data.make` — the stored key is `_vehMake`.
+  // Getting this wrong silently disables the manufacturer half of the re-preflight
+  // below, because an empty make reads as "no rules apply" everywhere.
+  const make = (vehicleFromData(data).make || templateDoc.make || '').trim();
   const oemRule = make ? await cache.oemRule(make) : null;
   const coopEntry = make ? await cache.coopPack(make) : null;
   const coopDesign = await cache.designVerdict(row.templateId, templateDoc, coopEntry);

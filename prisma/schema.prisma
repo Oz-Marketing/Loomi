@@ -173,6 +173,31 @@ model Account {
   // pull spend. The access token itself is a single agency-wide System User
   // token in env (META_SYSTEM_USER_TOKEN), not per-account.
   metaAdAccountId           String?
+  // ── Publishing identity (Ad Generator → campaign launch) ──
+  //
+  // Reporting only ever needed the ad ACCOUNT. Publishing needs to know who the
+  // ad is FROM: a Meta ad creative cannot be created without
+  // `object_story_spec.page_id`, so without this the launch path is blocked
+  // outright.
+  //
+  // Confirmed per sub-account, never bulk-matched. Across a 38-rooftop
+  // multi-brand group the wrong Page publishes a Ford store's ad from the Chevy
+  // store's Page — a brand-compliance incident that looks like a Loomi bug and
+  // is invisible until someone spots it in the feed.
+  metaPageId                String?
+  /// Instagram actor for IG placements. Optional: without it the ad runs on
+  /// Facebook placements only rather than failing.
+  metaInstagramActorId      String?
+  /// Pixel + the event to optimize toward, for anything past a traffic campaign.
+  metaPixelId               String?
+  metaDefaultConversionEvent String?
+  /// Google conversion action resource name, the equivalent for Google launches.
+  googleConversionAction    String?
+  /// Who confirmed the Page/IG/pixel above, and when. Recorded because "which
+  /// Page does this rooftop post from" is exactly the decision someone will need
+  /// to re-verify later, and an unattributed id is not re-verifiable.
+  metaAssetsConfirmedBy     String?
+  metaAssetsConfirmedAt     DateTime?
   // Reporting margin (percent, 0–100) applied to Meta media-cost fields in the
   // Ads report: billed = actual / (1 - margin/100). Ported from Oz Dealer
   // Tools' per-org `facebook_ads_margin`. Distinct from `markup` above (the
@@ -2697,6 +2722,63 @@ model AdGuidelineDoc {
 
   @@unique([make, title])
   @@index([make, isActive])
+}
+
+// ─────────────────────────────────────────────────────
+// Ad Generator — per-account campaign shape for a launch
+// ─────────────────────────────────────────────────────
+//
+// A creative implies nothing about objective, geo, bid strategy, budget, flight or
+// destination. Without a saved shape a "launch" is a twelve-field form, and nobody
+// fills that in twice — so the preset is what makes launching one click.
+//
+// One row per (account, platform): a rooftop's Meta launches all look alike, and
+// the variation that matters — the offer — comes from the creative.
+//
+// NOTE what is deliberately NOT here: `specialAdCategories`. Meta's
+// FINANCIAL_PRODUCTS_SERVICES category is not a preference, it is a consequence of
+// what the ad says, so it is DERIVED per launch from the offer and its text (see
+// specialAdCategoriesFor in launch-preset.ts). Storing it as a settable field
+// would let someone turn off a restriction that Meta applies regardless — and
+// then be rejected at publish, or worse, not be.
+model AdLaunchPreset {
+  id         String @id @default(cuid())
+  accountKey String
+  platform   String // "meta" | "google"
+
+  /// e.g. OUTCOME_TRAFFIC, OUTCOME_LEADS.
+  objective   String  @default("OUTCOME_TRAFFIC")
+  bidStrategy String?
+  /// Whole currency units as a string, matching MetaAdsPacerAd.allocation.
+  dailyBudget String?
+  flightDays  Int     @default(30)
+
+  geoZip String?
+  /// Miles. FLOORED AT 15 at resolve time when a financial-products category
+  /// applies — Meta enforces that minimum and rejects tighter targeting.
+  geoRadiusMiles Int     @default(25)
+  audienceSpec   String? @db.Text // JSON — saved audiences / interests
+
+  /// dealer_site | loomi_lp | loomi_lp_inventory. Only dealer_site is implemented;
+  /// the Loomi-hosted destination is Phase D.
+  destinationMode String  @default("dealer_site")
+  /// For dealer_site. Supports {{year}} {{make}} {{model}} {{vin}} so one preset
+  /// covers every nameplate without a row per model.
+  urlTemplate     String? @db.Text
+  lpTemplateId    String?
+  lpFormId        String?
+
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+
+  /// JSON string[] of size ids to publish. Null/empty = every size the ad has.
+  sizeIds String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([accountKey, platform])
 }
 
 // ─────────────────────────────────────────────────────

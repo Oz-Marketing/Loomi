@@ -19,7 +19,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { toast } from 'sonner';
-import { ArrowDownTrayIcon, ExclamationTriangleIcon, PencilIcon, ArrowLeftIcon, ArrowRightIcon, ArrowPathIcon, CheckIcon, CloudIcon, BookmarkSquareIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, ExclamationTriangleIcon, PencilIcon, ArrowLeftIcon, ArrowRightIcon, ArrowPathIcon, CheckIcon, CloudIcon, BookmarkSquareIcon, RocketLaunchIcon } from '@heroicons/react/24/outline';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { useAccount } from '@/contexts/account-context';
 import { useUnsavedChanges } from '@/contexts/unsaved-changes-context';
@@ -514,6 +514,35 @@ export default function AdGeneratorPage() {
 
   // One ZIP for every size — browsers block the N sequential downloads the old
   // per-size loop fired, and the server renders all sizes in one Chromium session.
+  /**
+   * The campaign-ready bundle.
+   *
+   * A GET rather than a POST of the current form state, deliberately: the kit must
+   * describe the ad AS SAVED, since that's what the copy was frozen against and
+   * what a co-op approval covers. Handing over a kit built from unsaved edits
+   * would produce a campaign that doesn't match the record.
+   */
+  async function downloadLaunchKit() {
+    setBusy('kit');
+    try {
+      const res = await fetch(`/api/ad-generator/launch-kit/${creativeId}`);
+      if (!res.ok) {
+        throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${creativeName.trim() || creativeId}-launch-kit.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error(`Couldn't build the kit: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function downloadAll() {
     setBusy('all');
     try {
@@ -1006,6 +1035,20 @@ export default function AdGeneratorPage() {
                 className="w-full rounded-lg border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {busy === 'all' ? 'Rendering ZIP…' : busy ? 'Rendering…' : `Download all ${selectedSizeIds.length} size${selectedSizeIds.length !== 1 ? 's' : ''} (ZIP)`}
+              </button>
+              {/* The Launch Kit is the campaign-ready bundle rather than just the
+                  artwork: creative + copy already fitted to each platform's limits
+                  + the targeting sheet, including the restrictions Meta forces on
+                  a financing ad. Distinct enough from "download the PNGs" to be
+                  its own action. */}
+              <button
+                onClick={downloadLaunchKit}
+                disabled={busy !== null}
+                title="Creative, copy and targeting as one archive, ready to build the campaign from"
+                className="flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--border)] px-4 py-2 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <RocketLaunchIcon className="h-3.5 w-3.5" />
+                {busy === 'kit' ? 'Building kit…' : 'Launch Kit (ZIP)'}
               </button>
             </div>
           </div>

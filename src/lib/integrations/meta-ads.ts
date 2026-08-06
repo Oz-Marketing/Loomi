@@ -1562,3 +1562,204 @@ export async function discoverMetaAssets(adAccountId: string): Promise<MetaAsset
 
   return { pages, instagramAccounts, pixels, errors };
 }
+
+// ─────────────────────────────────────────────────────
+// Publishing (Ad Generator → campaign launch)
+// ─────────────────────────────────────────────────────
+//
+// The write primitives for creating ad objects. Payload SHAPES are built and
+// tested in `ad-generator/meta-publish.ts` — this layer only posts them and
+// returns what Meta says, so the part that needs a live token is as thin as it can
+// be and the part that carries the judgement is unit-tested.
+//
+// Nested payload values (object_story_spec, targeting) must be JSON-encoded
+// strings in a form-encoded body; Meta rejects them otherwise.
+
+/** Like metaGraphPost but returns the parsed body — creates need the new id. */
+async function metaGraphPostJson<T>(
+  cfg: MetaConfig,
+  path: string,
+  params: Record<string, unknown>,
+): Promise<T> {
+  const body = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null) continue;
+    body.set(key, typeof value === 'object' ? JSON.stringify(value) : String(value));
+  }
+  body.set('access_token', cfg.token);
+  if (cfg.appSecret) body.set('appsecret_proof', appSecretProof(cfg.token, cfg.appSecret));
+
+  let res: Response;
+  try {
+    res = await fetch(`${GRAPH_BASE}/${metaApiVersion()}/${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+      body: body.toString(),
+    });
+  } catch (err) {
+    throw new MetaSyncError(graphNetworkError(err), 'graph_error');
+  }
+  const json = (await res.json().catch(() => null)) as (T & GraphErrorBody) | null;
+  if (!res.ok || (json && json.error)) {
+    const msg = json?.error?.message || `Graph API HTTP ${res.status}`;
+    throw new MetaSyncError(`Facebook: ${msg}`, 'graph_error', res.status);
+  }
+  return json as T;
+}
+
+function normalizeAccount(adAccountId: string): string {
+  return adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+}
+
+/**
+ * Upload one PNG to the ad account's image library, returning its hash.
+ *
+ * Meta takes the bytes base64-encoded in a form field rather than as multipart
+ * here, which is why this doesn't need a multipart helper. Re-uploading identical
+ * bytes is idempotent on Meta's side — the same hash comes back — so a retry
+ * doesn't litter the library.
+ */
+export async function uploadAdImage(
+  cfg: MetaConfig,
+  adAccountId: string,
+  png: Buffer,
+  filename: string,
+): Promise<{ hash: string; url: string | null }> {
+  const res = await metaGraphPostJson<{
+    images?: Record<string, { hash?: string; url?: string }>;
+  }>(cfg, `${normalizeAccount(adAccountId)}/adimages`, { bytes: png.toString('base64'), name: filename });
+
+  // Meta keys the result by ITS filename, not ours, so take the first entry
+  // rather than looking ours up and getting undefined.
+  const first = Object.values(res.images ?? {})[0];
+  if (!first?.hash) {
+    throw new MetaSyncError('Facebook accepted the image upload but returned no hash.', 'graph_error');
+  }
+  return { hash: first.hash, url: first.url ?? null };
+}
+
+export interface MetaAdSetSummary {
+  id: string;
+  name: string;
+  status: string;
+  effectiveStatus: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+  /** Read from the CAMPAIGN — the category lives there, not on the ad set. */
+  specialAdCategories: string[];
+}
+
+/**
+ * One ad set plus the campaign facts a launch has to check before attaching.
+ *
+ * The special ad categories come from the campaign because that is where Meta
+ * stores them, and they cannot be changed after creation — so this is the read
+ * that decides whether a credit ad may legally join this ad set.
+ */
+export async function fetchAdSetForPublish(cfg: MetaConfig, adSetId: string): Promise<MetaAdSetSummary> {
+  const row = await metaGraphFetch<{
+    id: string;
+    name?: string;
+    status?: string;
+    effective_status?: string;
+    campaign?: { id?: string; name?: string; special_ad_categories?: string[] };
+  }>(cfg, adSetId, {
+    fields: 'id,name,status,effective_status,campaign{id,name,special_ad_categories}',
+  });
+  return {
+    id: row.id,
+    name: row.name ?? row.id,
+    status: row.status ?? 'UNKNOWN',
+    effectiveStatus: row.effective_status ?? null,
+    campaignId: row.campaign?.id ?? null,
+    campaignName: row.campaign?.name ?? null,
+    specialAdCategories: row.campaign?.special_ad_categories ?? [],
+  };
+}
+
+/** Ad sets an account can be launched into, newest-usable first. */
+export async function listAdSetsForPublish(
+  cfg: MetaConfig,
+  adAccountId: string,
+): Promise<MetaAdSetSummary[]> {
+  const rows = await metaGraphFetchAll<{
+    id: string;
+    name?: string;
+    status?: string;
+    effective_status?: string;
+    campaign?: { id?: string; name?: string; special_ad_categories?: string[] };
+  }>(cfg, `${normalizeAccount(adAccountId)}/adsets`, {
+    fields: 'id,name,status,effective_status,campaign{id,name,special_ad_categories}',
+  });
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name ?? row.id,
+    status: row.status ?? 'UNKNOWN',
+    effectiveStatus: row.effective_status ?? null,
+    campaignId: row.campaign?.id ?? null,
+    campaignName: row.campaign?.name ?? null,
+    specialAdCategories: row.campaign?.special_ad_categories ?? [],
+  }));
+}
+
+export async function createAdCreative(
+  cfg: MetaConfig,
+  adAccountId: string,
+  payload: Record<string, unknown>,
+): Promise<string> {
+  const res = await metaGraphPostJson<{ id?: string }>(
+    cfg,
+    `${normalizeAccount(adAccountId)}/adcreatives`,
+    payload,
+  );
+  if (!res.id) throw new MetaSyncError('Facebook created no ad creative id.', 'graph_error');
+  return res.id;
+}
+
+export async function createAd(
+  cfg: MetaConfig,
+  adAccountId: string,
+  payload: Record<string, unknown>,
+): Promise<string> {
+  const res = await metaGraphPostJson<{ id?: string }>(cfg, `${normalizeAccount(adAccountId)}/ads`, payload);
+  if (!res.id) throw new MetaSyncError('Facebook created no ad id.', 'graph_error');
+  return res.id;
+}
+
+export async function createCampaign(
+  cfg: MetaConfig,
+  adAccountId: string,
+  payload: Record<string, unknown>,
+): Promise<string> {
+  const res = await metaGraphPostJson<{ id?: string }>(
+    cfg,
+    `${normalizeAccount(adAccountId)}/campaigns`,
+    payload,
+  );
+  if (!res.id) throw new MetaSyncError('Facebook created no campaign id.', 'graph_error');
+  return res.id;
+}
+
+export async function createAdSet(
+  cfg: MetaConfig,
+  adAccountId: string,
+  payload: Record<string, unknown>,
+): Promise<string> {
+  const res = await metaGraphPostJson<{ id?: string }>(cfg, `${normalizeAccount(adAccountId)}/adsets`, payload);
+  if (!res.id) throw new MetaSyncError('Facebook created no ad set id.', 'graph_error');
+  return res.id;
+}
+
+/**
+ * Flip an ad / ad set / campaign between PAUSED and ACTIVE.
+ *
+ * Deliberately narrow: this is the only status write, so "start spending" is one
+ * auditable call rather than a general-purpose object editor.
+ */
+export async function setObjectStatus(
+  cfg: MetaConfig,
+  objectId: string,
+  status: 'ACTIVE' | 'PAUSED',
+): Promise<void> {
+  await metaGraphPost(cfg, objectId, { status });
+}

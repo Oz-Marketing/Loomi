@@ -98,9 +98,20 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ acco
     'utmSource',
     'utmMedium',
     'utmCampaign',
+    // The attach target. Stored so a rooftop's ad set is chosen once rather than
+    // re-picked every month.
+    'targetAdSetId',
+    'targetAdSetName',
   ]) {
     const v = str(k);
     if (v !== undefined) data[k] = v;
+  }
+  const launchMode = str('launchMode');
+  if (launchMode !== undefined) {
+    if (launchMode && launchMode !== 'attach_existing' && launchMode !== 'create_new') {
+      return NextResponse.json({ error: `Unknown launchMode "${launchMode}"` }, { status: 400 });
+    }
+    data.launchMode = launchMode ?? 'attach_existing';
   }
   const destinationMode = str('destinationMode');
   if (destinationMode !== undefined) {

@@ -39,6 +39,7 @@ import { missingRequired, type OemOfferRule } from '@/lib/ad-generator/complianc
 import { OfferCard, type VehicleSlot } from '@/components/ad-generator/client-form/offer-card';
 import { Field, DisclaimerField, evoxSeedFor } from '@/components/ad-generator/client-form/fields';
 import { VehicleColorPicker } from '@/components/ad-generator/client-form/vehicle-colors';
+import { LaunchModal } from '@/components/ad-generator/launch-modal';
 
 const PREVIEW_W = 460;
 const PREVIEW_H = 560;
@@ -84,6 +85,8 @@ export default function AdGeneratorPage() {
     editedAt: null,
   });
   const [syncing, setSyncing] = useState(false);
+  /** The Launch-to-Meta dialog. */
+  const [launchOpen, setLaunchOpen] = useState(false);
   useEffect(() => {
     let cancelled = false;
     fetch('/api/ad-generator/templates-doc')
@@ -1050,10 +1053,33 @@ export default function AdGeneratorPage() {
                 <RocketLaunchIcon className="h-3.5 w-3.5" />
                 {busy === 'kit' ? 'Building kit…' : 'Launch Kit (ZIP)'}
               </button>
+              {/* Publishing to Meta from here rather than in Ads Manager is the
+                  point of the whole pipeline — so it's the prominent action, and
+                  the ZIP above it is the fallback rather than the route. Managers
+                  only: it spends money. */}
+              {isManager && (
+                <button
+                  onClick={() => setLaunchOpen(true)}
+                  disabled={busy !== null}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <RocketLaunchIcon className="h-4 w-4" />
+                  Launch to Meta
+                </button>
+              )}
             </div>
           </div>
         </div>
       </div>
+
+      {launchOpen && accountKey && (
+        <LaunchModal
+          creativeId={creativeId}
+          adName={creativeName.trim() || 'Untitled ad'}
+          accountKey={accountKey}
+          onClose={() => setLaunchOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -2789,6 +2789,15 @@ model AdLaunch {
   finishedAt      DateTime?
   error           String?   @db.Text
 
+  /// Whether the published ad is currently spending, and who last flipped it.
+  /// Separate from `status` — `status` is about whether the PUBLISH succeeded, this
+  /// is about whether the result is live. Attribution matters here more than
+  /// anywhere else in the pipeline: this is the field that answers "who started
+  /// spending money", which a Graph audit log nobody can reach does not.
+  liveStatus      String? // "ACTIVE" | "PAUSED"
+  liveChangedAt   DateTime?
+  liveChangedBy   String?
+
   @@index([accountKey, status])
   @@index([offerKey])
 }

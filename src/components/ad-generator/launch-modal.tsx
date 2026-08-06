@@ -42,6 +42,22 @@ interface Blocker {
   reason: string;
 }
 
+/**
+ * Where to go and fix each blocker.
+ *
+ * Every blocker here is a configuration gap rather than a fault, so the useful
+ * thing to show alongside the reason is the screen that fixes it — otherwise the
+ * reader is told what's wrong and left to search for where.
+ */
+const FIX_LOCATION: Record<string, string> = {
+  metaAdAccountId: 'Sub-account → Integrations → Meta Ads',
+  metaPageId: 'Sub-account → Integrations → Meta Ads → Publishing identity',
+  destinationUrl: "The launch preset's URL template, or the sub-account's website",
+  targetAdSetId: 'Pick an ad set above',
+  copy: 'Open the ad and add copy, or re-run generation',
+  specialAdCategories: 'Choose an ad set whose campaign carries the right category',
+};
+
 interface LaunchResult {
   launchId: string | null;
   status: 'published' | 'failed' | 'blocked';
@@ -249,8 +265,12 @@ export function LaunchModal({
               <ul className="space-y-1.5">
                 {result.blockers.map((b) => (
                   <li key={b.field} className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5 text-[11px]">
-                    <div className="font-semibold text-[var(--foreground)]">{b.field}</div>
-                    <div className="mt-0.5 text-[var(--muted-foreground)]">{b.reason}</div>
+                    <div className="text-[var(--foreground)]">{b.reason}</div>
+                    {FIX_LOCATION[b.field] && (
+                      <div className="mt-1 text-[var(--muted-foreground)]">
+                        Fix in: <span className="font-medium">{FIX_LOCATION[b.field]}</span>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

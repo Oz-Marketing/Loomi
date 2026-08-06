@@ -56,6 +56,7 @@ import {
 } from '@/lib/account-resolvers';
 import { useIndustries } from '@/lib/hooks/use-industries';
 import { organizationOptions, subAccountCount } from '@/lib/organization-options';
+import { MetaPublishingCard } from '@/components/ad-generator/meta-publishing-card';
 
 const WEBSAFE_FONTS = [
   { label: 'Arial', value: 'Arial, Helvetica, sans-serif' },
@@ -1470,6 +1471,14 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
                         className={`${inputClass} max-w-[280px]`}
                       />
                     </div>
+
+                    {/* Publishing needs more than the ad account — it needs to know
+                        which Page the ads come FROM. Sits here because it depends on
+                        the ad account above: the lists are read through it, so
+                        setting one without the other is the wrong order. Saves
+                        itself rather than joining this form's Save, since it writes
+                        a confirmation with attribution. */}
+                    {key && <MetaPublishingCard accountKey={key} />}
 
                     <div>
                       <label className={labelClass} style={{ marginBottom: 0 }}>

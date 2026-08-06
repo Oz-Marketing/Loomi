@@ -2514,6 +2514,19 @@ model AdCreative {
   // an ad was when it was put away — so restoring would have to guess.
   archivedAt DateTime?
 
+  // ── Launch copy ──
+  //
+  // AdCopyVariation JSON (meta + google captions), written ONCE at generation and
+  // frozen. Frozen because two launches of one ad must not say different things —
+  // and safe to freeze because an offer whose numbers move gets a different
+  // fingerprint, so a row's copy can never outlive the offer it describes.
+  //
+  // `copySource` records whether the words were drafted by AI (and passed the
+  // numeric-provenance + co-op checks) or assembled deterministically from the
+  // offer. A reviewer has to be able to tell which, without re-deriving it.
+  copy       String? @db.Text
+  copySource String? // "ai" | "deterministic"
+
   // ── Template link (design sync) ──
   //
   // Whether this ad still FOLLOWS its source template's design. "synced" means a

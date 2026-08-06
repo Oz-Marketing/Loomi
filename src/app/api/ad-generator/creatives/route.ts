@@ -9,6 +9,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession, getAccountScope, canAccessAccount, forbidden } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
+import { designHash, resolveSyncState } from '@/lib/ad-generator/template-sync';
+import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,6 +29,9 @@ type Row = {
   expiresAt: Date | null;
   reviewNotes: string | null;
   archivedAt: Date | null;
+  templateSync: string | null;
+  templateDocHash: string | null;
+  docEditedAt: Date | null;
 };
 
 function shape(r: Row) {
@@ -62,6 +67,13 @@ function shape(r: Row) {
     archivedAt: r.archivedAt,
     /** Why the generator held it back, when it did. */
     reviewNotes: r.reviewNotes,
+    // Template link. `templateSync` is resolved (never null) so the client never
+    // has to repeat the auto-vs-hand-built default; the hash lets the list say
+    // "this ad is behind its template" by comparing against the template docs it
+    // already loaded, with no extra request.
+    templateSync: resolveSyncState(r),
+    templateDocHash: r.templateDocHash,
+    docEditedAt: r.docEditedAt,
     doc,
     data,
   };
@@ -127,6 +139,18 @@ export async function POST(req: NextRequest) {
       docSnapshot = null;
     }
   }
+  // Which template revision this copy came from. The ad is DETACHED (copy-on-use
+  // is unchanged for hand-built ads), but recording the revision still matters:
+  // it's what lets an untouched copy be told a fix landed upstream and offered
+  // the update, instead of quietly sitting on a stale design forever.
+  let docHash: string | null = null;
+  if (docSnapshot) {
+    try {
+      docHash = designHash(JSON.parse(docSnapshot) as TemplateDoc);
+    } catch {
+      docHash = null;
+    }
+  }
 
   try {
     const row = await prisma.adCreative.create({
@@ -139,6 +163,8 @@ export async function POST(req: NextRequest) {
         status: body.status === 'ready' ? 'ready' : 'draft',
         createdById: u.id ?? null,
         createdByName: u.name ?? null,
+        templateSync: 'detached',
+        templateDocHash: docHash,
       },
     });
     return NextResponse.json({ creative: { id: row.id, name: row.name } });

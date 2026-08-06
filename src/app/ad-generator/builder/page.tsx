@@ -80,6 +80,7 @@ import { DatePicker, type DateRange } from '@/components/ui/date-picker';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { Tooltip } from '@/app/app/tools/_shared/Tooltip';
 import { ShareTemplateModal } from '@/components/ad-generator/share-template-modal';
+import { TemplateSyncModal, shouldPromptSync, type SyncImpact } from '@/components/ad-generator/template-sync-modal';
 import { enrichOfferFields, OFFER_TYPES } from '@/lib/ad-generator/offer-text';
 import { EVOX_MAKES } from '@/components/ad-generator/client-form/evox-makes';
 import { SYSTEM_FIELDS } from '@/lib/ad-generator/system-fields';
@@ -108,6 +109,26 @@ import { SearchableSelect, type SearchableSelectOption } from '@/components/flow
 
 const CANVAS_PAD = 48; // breathing room around the ad inside the canvas pane
 const MIN_FRAC = 0.03; // smallest element edge as a fraction of the canvas
+
+/**
+ * What saving this design would do to the ads already built from this template.
+ *
+ * Best-effort by design: this is the input to an OPTIONAL prompt, so a failure
+ * here must never stop a designer saving their work. Null simply means no prompt.
+ */
+async function fetchSyncImpact(templateId: string, doc: TemplateDoc): Promise<SyncImpact | null> {
+  try {
+    const res = await fetch(`/api/ad-generator/templates-doc/${templateId}/sync-impact`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ doc }),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as SyncImpact;
+  } catch {
+    return null;
+  }
+}
 
 /** Track an element's content-box size via ResizeObserver (for fit-to-pane). */
 function useElementSize<T extends HTMLElement>() {
@@ -900,6 +921,10 @@ export default function AdBuilderPage() {
   const publishRef = useRef<HTMLDivElement>(null);
   // Deploy-to-subaccounts modal.
   const [deployOpen, setDeployOpen] = useState(false);
+  /** Set after a save that would affect ads following this template (see save()). */
+  const [syncImpact, setSyncImpact] = useState<SyncImpact | null>(null);
+  /** Ad mode: whether the open ad still follows its source template. */
+  const [adSync, setAdSync] = useState<'synced' | 'detached'>('detached');
   /** Which sub-accounts the OPEN template is shared with (for the Share modal). */
   const [sharedAccountKeys, setSharedAccountKeys] = useState<string[]>([]);
   // The canvas (Background) settings panel is shown only when the canvas itself
@@ -2629,6 +2654,62 @@ export default function AdBuilderPage() {
   // ── industries (which accounts this template is offered to) ──
   const allIndustries = useIndustries();
 
+  /**
+   * Ad mode: react to the ad having just stopped following its template.
+   *
+   * The server decides this — it detaches when a save actually CHANGES the design
+   * (not when one merely changes field values), which is a comparison only it can
+   * make against the stored doc. Told, not asked: autosave persists design edits
+   * within a second or so, so a blocking confirm would either arrive after the
+   * fact or mean gating autosave and lying about "Saved". The action offers the
+   * way back, and names its cost.
+   */
+  function noteAdSync(json: { creative?: { templateSync?: string } } | null) {
+    const next = json?.creative?.templateSync;
+    if (next !== 'detached' || adSync !== 'synced') return;
+    setAdSync('detached');
+    toast.info('This ad now keeps its own design — future template updates will skip it.', {
+      duration: 10000,
+      action: {
+        label: 'Undo',
+        onClick: () => void revertAdToTemplate(),
+      },
+    });
+  }
+
+  /** Put this ad back on its template's design, discarding the local change. */
+  async function revertAdToTemplate() {
+    if (!adId) return;
+    const ok = await confirm({
+      title: 'Follow the template again?',
+      message:
+        "This replaces the ad's design with the template's current one, discarding your design change. The offer values you filled in are kept.",
+      confirmLabel: 'Reset to template',
+      cancelLabel: 'Keep my design',
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/ad-generator/creatives/${adId}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: true }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      const { result } = (await res.json()) as { result?: { outcome: string; detail?: string } };
+      if (result?.outcome !== 'updated') {
+        toast.error(result?.detail || "That ad couldn't be reset to its template");
+        return;
+      }
+      toast.success('Reset to the template — reloading');
+      // Reload rather than patching state: the ad's doc, thumbnail and review
+      // notes all changed server-side, and re-reading is the only way to be sure
+      // the canvas matches what was stored.
+      window.location.reload();
+    } catch (err) {
+      toast.error(`Couldn't reset: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  }
+
   // ── save / load ──
   async function save(asNew = false) {
     // Ad mode — persist the design to THIS ad (not a template).
@@ -2642,6 +2723,7 @@ export default function AdBuilderPage() {
           body: JSON.stringify({ name, doc: { ...doc, name }, ...(adData ? { data: adData } : {}) }),
         });
         if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+        noteAdSync((await res.json().catch(() => null)) as { creative?: { templateSync?: string } } | null);
         savedRef.current = serializeDoc(doc, name, status, adData);
         setSaveStatus('saved');
         toast.success('Saved to this ad');
@@ -2662,6 +2744,10 @@ export default function AdBuilderPage() {
     try {
       const payload = { name, doc: { ...doc, name }, status, accountKey: scopeAccount };
       const useId = templateId && !asNew;
+      // Ask what this save would do to existing ads BEFORE writing it — the
+      // classification compares the stored design against the incoming one, so
+      // once the PATCH lands there is nothing left to compare against.
+      const impact = useId ? await fetchSyncImpact(templateId, { ...doc, name }) : null;
       const res = await fetch(useId ? `/api/ad-generator/templates-doc/${templateId}` : '/api/ad-generator/templates-doc', {
         method: useId ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2673,6 +2759,9 @@ export default function AdBuilderPage() {
       savedRef.current = serializeDoc(doc, name, status);
       setSaveStatus('saved');
       toast.success(status === 'published' ? 'Saved & published' : 'Saved as draft');
+      // The template is saved either way; the prompt is only about whether ads
+      // already built from it should follow.
+      if (shouldPromptSync(impact)) setSyncImpact(impact);
     } catch (err) {
       setSaveStatus('error');
       toast.error(`Couldn't save: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -2763,9 +2852,21 @@ export default function AdBuilderPage() {
           // Ad mode — edit THIS ad's own design copy, saving back to the ad.
           const res = await fetch(`/api/ad-generator/creatives/${adParam}`);
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const json = (await res.json()) as { creative?: { id: string; name: string; templateId: string; data: AdData; doc: TemplateDoc | null } };
+          const json = (await res.json()) as {
+            creative?: {
+              id: string;
+              name: string;
+              templateId: string;
+              data: AdData;
+              doc: TemplateDoc | null;
+              templateSync?: 'synced' | 'detached';
+            };
+          };
           const c = json.creative;
           if (!c) throw new Error('not found');
+          // Whether this ad still follows its template — decides whether the
+          // first design edit needs to warn that it will stop.
+          setAdSync(c.templateSync ?? 'detached');
           let d = c.doc;
           if (!d) {
             // No snapshot yet — resolve the source doc. Code offer templates
@@ -3454,6 +3555,9 @@ export default function AdBuilderPage() {
           body: JSON.stringify(body),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // An autosaved design edit is what usually detaches an ad, so this is the
+        // path that has to report it.
+        if (adId) noteAdSync((await res.json().catch(() => null)) as { creative?: { templateSync?: string } } | null);
         savedRef.current = snapshot;
         setSaveStatus('saved');
       } catch {
@@ -4796,6 +4900,15 @@ export default function AdBuilderPage() {
       )}
 
       {helpOpen && <ShortcutsModal onClose={() => setHelpOpen(false)} />}
+
+      {/* Shown after a template save when ads are following this template. */}
+      {syncImpact && (
+        <TemplateSyncModal
+          impact={syncImpact}
+          templateName={templateName}
+          onClose={() => setSyncImpact(null)}
+        />
+      )}
 
       {deployOpen && templateId && (
         <ShareTemplateModal

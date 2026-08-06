@@ -28,6 +28,7 @@ import { AccountLogo } from '@/components/account-logo';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { AD_TEMPLATES, ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc } from '@/lib/ad-generator/doc-template';
+import { designHash, isBehindTemplate } from '@/lib/ad-generator/template-sync';
 import type { TemplateDoc } from '@/lib/ad-generator/doc-types';
 import { availableLogoVariants, brandLogoData, isLogoVariant } from '@/lib/ad-generator/brand-logos';
 import { availableCustomFonts, buildFontFaceCssFromUrls, usedFontFamilies } from '@/lib/ad-generator/fonts';
@@ -69,24 +70,37 @@ export default function AdGeneratorPage() {
   // incentives, vehicle, offer, legal — with the disclaimer read-only). Branding
   // (logo/color/font) + background image are admin-only; clients get brand defaults.
   const isManager = !!userRole && MANAGEMENT_ROLES.includes(userRole);
-  const { prompt } = useLoomiDialog();
+  const { prompt, confirm } = useLoomiDialog();
   const [savingTemplate, setSavingTemplate] = useState(false);
 
   // Published builder templates (DB) joined with the code-defined ones.
   const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
+  /** templateId → design hash of its current design. */
+  const [templateHashes, setTemplateHashes] = useState<Record<string, string>>({});
+  /** This ad's template link, for the "template updated" banner. */
+  const [link, setLink] = useState<{ sync: 'synced' | 'detached'; hash: string | null; editedAt: string | null }>({
+    sync: 'detached',
+    hash: null,
+    editedAt: null,
+  });
+  const [syncing, setSyncing] = useState(false);
   useEffect(() => {
     let cancelled = false;
     fetch('/api/ad-generator/templates-doc')
       .then((r) => (r.ok ? r.json() : { templates: [] }))
       .then((d: { templates?: { id: string; doc: TemplateDoc | null }[] }) => {
         if (cancelled) return;
-        const built = (d.templates ?? [])
-          .filter((t) => t.doc)
-          .map((t) => adTemplateFromDoc(t.id, t.doc as TemplateDoc));
-        setDbTemplates(built);
+        const withDocs = (d.templates ?? []).filter((t) => t.doc);
+        setDbTemplates(withDocs.map((t) => adTemplateFromDoc(t.id, t.doc as TemplateDoc)));
+        // Current design of each template, so this ad can be told its source has
+        // moved on. Pure + already-loaded data, so it costs no extra request.
+        setTemplateHashes(Object.fromEntries(withDocs.map((t) => [t.id, designHash(t.doc as TemplateDoc)])));
       })
       .catch(() => {
-        if (!cancelled) setDbTemplates([]);
+        if (!cancelled) {
+          setDbTemplates([]);
+          setTemplateHashes({});
+        }
       });
     return () => {
       cancelled = true;
@@ -133,10 +147,26 @@ export default function AdGeneratorPage() {
     let cancelled = false;
     fetch(`/api/ad-generator/creatives/${creativeId}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((d: { creative?: { name: string; templateId: string; status: string; data: AdData; doc?: TemplateDoc | null } }) => {
+      .then((d: {
+        creative?: {
+          name: string;
+          templateId: string;
+          status: string;
+          data: AdData;
+          doc?: TemplateDoc | null;
+          templateSync?: 'synced' | 'detached';
+          templateDocHash?: string | null;
+          docEditedAt?: string | null;
+        };
+      }) => {
         if (cancelled || !d.creative) return;
         const c = d.creative;
         setTemplateId(c.templateId);
+        setLink({
+          sync: c.templateSync ?? 'detached',
+          hash: c.templateDocHash ?? null,
+          editedAt: c.docEditedAt ?? null,
+        });
         if (c.doc && Array.isArray(c.doc.sizes) && Array.isArray(c.doc.elements) && c.doc.layouts) setDocSnapshot(c.doc);
         setData({ ...c.data });
         setCreativeName(c.name);
@@ -520,6 +550,50 @@ export default function AdGeneratorPage() {
   // Promote this ad's design into the reusable template library. Uses the ad's
   // frozen doc snapshot (the design, not the filled-in values); always creates a
   // fresh AdTemplateDoc scoped to the active account.
+  /**
+   * Take the source template's current design into this ad.
+   *
+   * `force` is the reset of a customized ad — it discards that ad's own design,
+   * so it asks first. Reloads afterwards: the doc, thumbnail and review notes all
+   * changed server-side, and re-reading is the only way the page is sure to match.
+   */
+  async function syncFromTemplate(force: boolean) {
+    if (force) {
+      const ok = await confirm({
+        title: 'Reset to template?',
+        message:
+          "This ad has its own design. Resetting replaces it with the template's current design and discards those changes. The offer values you filled in are kept.",
+        confirmLabel: 'Reset to template',
+        cancelLabel: 'Keep its design',
+      });
+      if (!ok) return;
+    }
+    setSyncing(true);
+    try {
+      const res = await fetch(`/api/ad-generator/creatives/${creativeId}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      const { result } = (await res.json()) as { result?: { outcome: string; detail?: string } };
+      if (result?.outcome === 'updated') {
+        toast.success('Updated to the template design');
+        window.location.reload();
+        return;
+      }
+      if (result?.outcome === 'blocked') {
+        toast.warning(`Kept its current design: ${result.detail ?? 'the update fails preflight for this ad.'}`);
+      } else {
+        toast.error(result?.detail ?? "That ad couldn't be updated");
+      }
+    } catch (err) {
+      toast.error(`Couldn't update: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   async function saveAsTemplate() {
     if (!docSnapshot) {
       toast.error('Open “Edit design” once so this ad has a saved design, then try again.');
@@ -617,6 +691,36 @@ export default function AdGeneratorPage() {
           )}
         </div>
       </div>
+
+      {/* The source template has changed since this ad was built. Offered, not
+          applied — and for a customized ad it costs them their design, so the
+          wording has to make that the visible difference.
+          Amber, not brand: this is a notice that needs to be noticed, and the
+          primary colour is already carrying so much of this page that anything
+          wearing it reads as chrome. */}
+      {isBehindTemplate(
+        { doc: docSnapshot, templateDocHash: link.hash, templateSync: link.sync },
+        templateHashes[templateId] ?? null,
+      ) && (
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3">
+          <div className="min-w-0 text-xs text-[var(--foreground)]">
+            <strong className="font-semibold">This ad&apos;s template has been updated.</strong>{' '}
+            <span className="text-[var(--muted-foreground)]">
+              {link.editedAt
+                ? "This ad has its own design, so the update wasn't applied. Taking it now replaces your design changes."
+                : 'Apply it to bring this ad up to the current design. Your offer values are kept either way.'}
+            </span>
+          </div>
+          <button
+            onClick={() => void syncFromTemplate(!!link.editedAt)}
+            disabled={syncing}
+            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-orange-500 disabled:opacity-50"
+          >
+            <ArrowPathIcon className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Updating…' : link.editedAt ? 'Reset to template' : 'Apply update'}
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
         {/* Form */}

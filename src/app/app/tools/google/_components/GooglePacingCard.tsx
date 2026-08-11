@@ -382,25 +382,6 @@ export function GooglePacingCard({
           <span className="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">
             {view.activeLabel ?? 'Account'} Allocation
           </span>
-          {/* The unit belongs to the allocation, not to the table's toolbar —
-              it shows the current one and switches on click. */}
-          <Tooltip
-            label={
-              mode === 'pct'
-                ? 'Allocating by percent of the month’s actual spend — click to switch to dollar amounts.'
-                : 'Allocating by fixed dollar amounts — click to switch to percent of actual spend.'
-            }
-          >
-            <button
-              type="button"
-              onClick={() => switchMode(mode === 'pct' ? 'amt' : 'pct')}
-              disabled={readOnly}
-              aria-label={`Allocating by ${mode === 'pct' ? 'percent' : 'dollars'} — switch unit`}
-              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--card)] text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {mode === 'pct' ? '%' : '$'}
-            </button>
-          </Tooltip>
           {/* Expands the two numbers that drive the day's work. */}
           <button
             type="button"
@@ -481,7 +462,7 @@ export function GooglePacingCard({
         {/* The two numbers the day's work actually turns on, at a size you can
             read across a desk. Collapsed by default so the panel stays a bar. */}
         {spendOpen && (
-          <div className="mt-4 grid grid-cols-1 gap-3 border-t border-[var(--border)] pt-4 sm:grid-cols-2">
+          <div className="mt-4 grid grid-cols-1 gap-3 border-t border-[var(--border)] pt-4 sm:grid-cols-3">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
                 Left to spend
@@ -505,9 +486,19 @@ export function GooglePacingCard({
                 <span className="text-base font-semibold text-[var(--muted-foreground)]">/day</span>
               </div>
               <div className="mt-1 text-xs text-[var(--muted-foreground)]">
-                across {view.visible.filter((l) => l.dailyControllable).length} campaign
-                {view.visible.filter((l) => l.dailyControllable).length === 1 ? '' : 's'} — what
-                Google Ads Manager should total after applying
+                Across {view.visible.filter((l) => l.dailyControllable).length} campaign
+                {view.visible.filter((l) => l.dailyControllable).length === 1 ? '' : 's'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                Days left
+              </div>
+              <div className="mt-1 text-3xl font-bold tabular-nums leading-tight text-[var(--foreground)]">
+                {Math.max(0, clock.daysInMonth - clock.dataEdgeDay)}
+              </div>
+              <div className="mt-1 text-xs text-[var(--muted-foreground)]">
+                of {clock.daysInMonth} — counted from the data edge, whole days
               </div>
             </div>
           </div>
@@ -518,9 +509,11 @@ export function GooglePacingCard({
           actions on their own row. Two rows so nothing sits on top of anything
           else, and the two identity facts share a baseline. */}
       <div className="mb-3 mt-6 flex flex-wrap items-start justify-between gap-4">
-        <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
-          Campaigns · {periodLabel(period)}{' '}
-          <span className="font-normal text-[var(--muted-foreground)]">({ads.length})</span>
+        <span className="text-lg font-bold tracking-tight text-[var(--foreground)]">
+          {ads.length} Campaign{ads.length === 1 ? '' : 's'}{' '}
+          <span className="font-normal text-[var(--muted-foreground)]">
+            · {periodLabel(period)}
+          </span>
         </span>
         <div className="text-right">
           <div className="flex items-center justify-end gap-2">
@@ -631,15 +624,38 @@ export function GooglePacingCard({
               <tr className="border-b border-[var(--border)] bg-[var(--muted)]">
                 <th className="w-10 px-2 py-2" />
                 <Th align="left">Campaign</Th>
-                <Th className="w-[150px]">Allocation</Th>
+                <Th className="w-[170px]">
+                  <span className="inline-flex items-center gap-1.5">
+                    Allocation
+                    {/* The unit belongs to this column — it shows the current
+                        one and switches on click. */}
+                    <Tooltip
+                      label={
+                        mode === 'pct'
+                          ? 'Allocating by percent of the month’s actual spend — click to switch to dollar amounts.'
+                          : 'Allocating by fixed dollar amounts — click to switch to percent of actual spend.'
+                      }
+                    >
+                      <button
+                        type="button"
+                        onClick={() => switchMode(mode === 'pct' ? 'amt' : 'pct')}
+                        disabled={readOnly}
+                        aria-label={`Allocating by ${mode === 'pct' ? 'percent' : 'dollars'} — switch unit`}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-[var(--border)] bg-[var(--card)] text-[11px] font-bold text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {mode === 'pct' ? '%' : '$'}
+                      </button>
+                    </Tooltip>
+                  </span>
+                </Th>
                 <Th>Monthly Target</Th>
                 <Th>Spent MTD</Th>
                 <Th tooltip="Target × (flight days elapsed ÷ total flight days) — what should have been spent by now at an even pace.">
                   Expected MTD
                 </Th>
                 <Th align="left">Pace</Th>
-                <Th tooltip="Monthly target ÷ flight days. A steady reference — it ignores spend so far.">
-                  Even Pace
+                <Th tooltip="The average daily budget this campaign currently has in Google. The New Daily Budget beside it is what it should be — the gap is what a push would change.">
+                  Current Daily
                 </Th>
                 <Th
                   hero
@@ -698,7 +714,7 @@ export function GooglePacingCard({
                 </td>
                 <td />
                 <td className="px-3 py-3 text-right text-sm font-bold tabular-nums text-[var(--muted-foreground)]">
-                  {fmt(view.totals.evenDaily)}
+                  {fmt(view.visible.reduce((sum, l) => sum + l.currentDaily, 0))}
                 </td>
                 <td className="bg-[var(--muted)]/40 px-3 py-3 text-right">
                   <span
@@ -979,11 +995,13 @@ function Row({
   // up, down means it has to ease off. Purely directional — the number is the
   // instruction.
   const trend =
-    line.recommendedDaily > line.evenDaily * 1.02
-      ? 'up'
-      : line.recommendedDaily < line.evenDaily * 0.98
-        ? 'down'
-        : 'flat';
+    line.currentDaily <= 0
+      ? 'flat'
+      : line.recommendedDaily > line.currentDaily * 1.02
+        ? 'up'
+        : line.recommendedDaily < line.currentDaily * 0.98
+          ? 'down'
+          : 'flat';
 
   return (
     <tr
@@ -1156,7 +1174,13 @@ function Row({
       </td>
 
       <td className="px-3 py-2.5 text-right align-middle text-sm tabular-nums text-[var(--muted-foreground)]">
-        {fmt(line.evenDaily)}
+        {line.currentDaily > 0 ? (
+          fmt(line.currentDaily)
+        ) : (
+          <Tooltip label="No daily budget synced from Google yet — import or sync this campaign.">
+            <span>—</span>
+          </Tooltip>
+        )}
       </td>
 
       <td className="bg-[var(--muted)]/40 px-3 py-2.5 text-right align-middle">
@@ -1169,8 +1193,8 @@ function Row({
               <Tooltip
                 label={
                   trend === 'up'
-                    ? 'Above its even pace — it has ground to make up over the days left.'
-                    : 'Below its even pace — it is ahead and should ease off to land on target.'
+                    ? 'Higher than the daily currently set in Google — raise it to land on target.'
+                    : 'Lower than the daily currently set in Google — ease it off to land on target.'
                 }
               >
                 {trend === 'up' ? (

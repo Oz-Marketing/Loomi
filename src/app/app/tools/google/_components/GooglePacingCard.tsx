@@ -330,7 +330,7 @@ export function GooglePacingCard({
                 filtered table, looking authoritative. */}
             {view.activeLabel ? (
               <Stat
-                label={view.denominatorKind === 'eventBudget' ? 'Event Budget' : 'Tagged Total'}
+                label={view.denominatorKind === 'eventBudget' ? 'Event Budget' : 'Campaign Total'}
                 value={fmt(view.totals.denominator)}
                 tooltip={
                   view.denominatorKind === 'eventBudget'
@@ -369,7 +369,7 @@ export function GooglePacingCard({
               tooltip="What should have been spent by now, at an even pace across each campaign's own flight days."
             />
             <Stat
-              label={view.activeLabel ? 'Label Pace' : 'Account Pace'}
+              label={view.activeLabel ? 'Campaign Pace' : 'Account Pace'}
               value={PACE_LABELS[view.totals.paceStatus]}
               color={PACE_COLORS[view.totals.paceStatus]}
               tooltip={
@@ -559,7 +559,7 @@ export function GooglePacingCard({
               <tr className="border-t-2 border-[var(--border)] bg-[var(--muted)]/60">
                 <td />
                 <td className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                  {view.activeLabel ? 'Label total' : 'Account total'}
+                  {view.activeLabel ? 'Campaign total' : 'Account total'}
                 </td>
                 <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
                   {mode === 'pct'
@@ -685,7 +685,7 @@ function denominatorNoun(view: AllocatorView): string {
     ? 'payable'
     : view.denominatorKind === 'eventBudget'
       ? 'event budget'
-      : 'tagged total';
+      : 'campaign total';
 }
 
 /** Right-aligned stat in the allocation panel's cluster — same chrome as Meta's
@@ -1143,8 +1143,11 @@ function BalanceButton({
       >
         <ChevronDownIcon className="h-4 w-4" />
       </button>
+      {/* Same opaque surface as the card's other dropdowns — this opens over the
+          campaign table, where a translucent panel reads straight through
+          (unlike the full modals, which sit on a dimmed overlay). */}
       {open && (
-        <div className="glass-modal absolute bottom-full left-0 z-40 mb-1.5 w-64 rounded-xl border border-[var(--border)] p-1">
+        <div className="animate-dropdown-in absolute bottom-full left-0 z-40 mb-1.5 w-64 rounded-lg border border-[var(--border)] bg-[var(--card-strong)] p-1 shadow-xl backdrop-blur-2xl backdrop-saturate-150">
           {(
             [
               ['proportional', 'Keep proportions', 'Scale unlocked lines, hold their shape', true],

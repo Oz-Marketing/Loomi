@@ -616,6 +616,8 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
           importIcon={<GoogleAdsBrandIcon className="h-4 w-4" />}
           importLabel="Import from Google"
           importHint="Bring existing Google campaigns in as rows"
+          createLabel="Add campaign"
+          createHint="Name, budget and flight dates — one row per campaign"
           hasOtherPeriods={otherPeriodsWithAds}
         />
       )}

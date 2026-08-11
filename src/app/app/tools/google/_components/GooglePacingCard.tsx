@@ -463,8 +463,14 @@ export function GooglePacingCard({
         </div>
       </div>
 
-      {/* ── Controls: allocation unit + label view ── */}
+      {/* ── Toolbar: what the table shows and how it's allocated, plus the
+          actions that operate on it. One row so everything shares a baseline —
+          two stacked strips of different widths read as misaligned. */}
       <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+        <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
+          Campaigns{' '}
+          <span className="font-normal text-[var(--muted-foreground)]">({rows.length})</span>
+        </span>
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
             Allocate by
@@ -500,6 +506,7 @@ export function GooglePacingCard({
           onChange={setActiveLabel}
           className="mb-0"
         />
+        {tableActions && <div className="ml-auto">{tableActions}</div>}
       </div>
 
       {/* Event budget check — only meaningful inside a label view (§9). */}
@@ -521,13 +528,6 @@ export function GooglePacingCard({
       )}
 
       {/* ── The campaign table ── */}
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-        <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
-          Campaigns{' '}
-          <span className="font-normal text-[var(--muted-foreground)]">({rows.length})</span>
-        </span>
-        {tableActions}
-      </div>
       <div className="glass-table">
         <div className="overflow-x-auto">
           <table className="w-full min-w-[1040px]">

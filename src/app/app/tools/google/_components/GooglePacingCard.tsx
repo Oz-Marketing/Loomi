@@ -26,10 +26,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowPathIcon,
+  ArrowSmallDownIcon,
+  ArrowSmallUpIcon,
   ArrowUturnLeftIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  ChevronUpIcon,
   InformationCircleIcon,
   LockClosedIcon,
   LockOpenIcon,
@@ -1072,13 +1073,13 @@ function Row({
                 }
               >
                 {trend === 'up' ? (
-                  <ChevronUpIcon
+                  <ArrowSmallUpIcon
                     className="h-3.5 w-3.5 stroke-[2.5]"
                     style={{ color: COLORS.lifetime }}
                     aria-label="above even pace"
                   />
                 ) : (
-                  <ChevronDownIcon
+                  <ArrowSmallDownIcon
                     className="h-3.5 w-3.5 stroke-[2.5]"
                     style={{ color: COLORS.warn }}
                     aria-label="below even pace"

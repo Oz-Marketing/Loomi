@@ -59,7 +59,12 @@ import {
   type MoveSource,
 } from '@/lib/ad-pacer/google-allocator';
 import type { PacerAd, PacerPlan } from '@/lib/ad-pacer/types';
-import { LabelChips, LabelFilterBar, Tooltip } from '@/app/app/tools/_shared';
+import {
+  InlineMoneyCell,
+  LabelChips,
+  LabelFilterBar,
+  Tooltip,
+} from '@/app/app/tools/_shared';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { zonedTodayIso } from '@/lib/timezone';
 import { toast } from '@/lib/toast';
@@ -648,7 +653,7 @@ export function GooglePacingCard({
                     </Tooltip>
                   </span>
                 </Th>
-                <Th>Monthly Target</Th>
+                <Th>Target Spend</Th>
                 <Th>Spent MTD</Th>
                 <Th tooltip="Target × (flight days elapsed ÷ total flight days) — what should have been spent by now at an even pace.">
                   Expected MTD
@@ -971,26 +976,6 @@ function Row({
   onTagsChange: (tags: string[]) => void;
   onOpenHealth: () => void;
 }) {
-  const [draft, setDraft] = useState(formatInput(line.input, mode));
-  // Follow the row when the value changes from anywhere else (balance, move,
-  // undo, a mode switch) — but never while the field has focus, or a rebuild
-  // would yank the cursor mid-type.
-  const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (document.activeElement !== inputRef.current) {
-      setDraft(formatInput(line.input, mode));
-    }
-  }, [line.input, mode]);
-
-  const commit = () => {
-    const parsed = Number(draft);
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      setDraft(formatInput(line.input, mode));
-      return;
-    }
-    if (Math.abs(parsed - line.input) > 0.0001) onInput(parsed);
-  };
-
   // The recommended daily read against the even pace: up means it has to catch
   // up, down means it has to ease off. Purely directional — the number is the
   // instruction.
@@ -1098,31 +1083,30 @@ function Row({
 
       <td className="px-3 py-2.5 text-right align-middle">
         <div className="inline-flex items-center justify-end gap-1.5">
-          <div className="relative">
-            {mode === 'amt' && (
-              <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-[var(--muted-foreground)]">
-                $
-              </span>
-            )}
-            <input
-              ref={inputRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onBlur={commit}
-              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          {/* Borderless until hovered or focused, like the planner's cells — a
+              column of filled inputs reads as a form, not as a table of numbers. */}
+          <span className="w-[86px]">
+            <InlineMoneyCell
+              value={formatInput(line.input, mode)}
+              ariaLabel={`${mode === 'pct' ? 'Percent' : 'Dollar'} allocation for ${line.name}`}
               disabled={readOnly}
-              inputMode="decimal"
-              aria-label={`${mode === 'pct' ? 'Percent' : 'Dollar'} allocation for ${line.name}`}
-              className={`w-[78px] rounded-lg border border-[var(--border)] bg-[var(--input)] py-1.5 pr-2 text-right text-sm tabular-nums text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none disabled:opacity-60 ${
-                mode === 'amt' ? 'pl-5' : 'pl-2'
-              }`}
+              display={
+                <span className="block text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                  {mode === 'pct'
+                    ? `${Number(line.input.toFixed(2))}%`
+                    : money2(line.input)}
+                </span>
+              }
+              onCommit={(next) => {
+                const parsed = Number(next);
+                if (next == null || !Number.isFinite(parsed) || parsed < 0) return;
+                if (Math.abs(parsed - line.input) > 0.0001) onInput(parsed);
+              }}
             />
-          </div>
-          {mode === 'pct' ? (
-            <span className="w-2 text-xs text-[var(--muted-foreground)]">%</span>
-          ) : (
+          </span>
+          {mode === 'amt' && (
             // §3 companion readout: in dollar mode each line still shows its
-            // share of payable, so the plan stays legible without switching unit.
+            // share of actual spend, so the plan stays legible without switching.
             <Tooltip label="Share of the month's actual spend">
               <span className="w-9 text-left text-[10px] tabular-nums text-[var(--muted-foreground)]">
                 {payable > 0 ? `${line.percentOfPayable.toFixed(1)}%` : '—'}

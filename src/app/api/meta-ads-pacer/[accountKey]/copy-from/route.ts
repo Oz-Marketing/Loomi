@@ -149,12 +149,25 @@ export async function POST(
           dueDate: copy.dates ? src.dueDate : null,
           dateCompleted: null,
           allocation: copy.budgets ? src.allocation : null,
+          // The percent input travels with the budget group — a percent split is
+          // the shape of the plan, and copying dollars without it would leave a
+          // percent-mode card with dollar targets it can't re-derive.
+          allocationPercent: copy.budgets ? src.allocationPercent : null,
           splitBaseAmount: copy.budgets ? src.splitBaseAmount : null,
           pacerDailyBudget: copy.budgets ? src.pacerDailyBudget : null,
-          // Actual spend + pacer cursors never copy.
+          // A lock is part of the allocation shape, so it rides the budget group.
+          pacerLocked: copy.budgets ? src.pacerLocked : false,
+          // Labels are planning identity (this campaign IS the branding line), so
+          // they copy unconditionally — same rule as name/channel above.
+          pacerTags: src.pacerTags,
+          // Actual spend + pacer cursors never copy. The flight OVERRIDE is a
+          // statement about one specific month's funding, so it never copies
+          // either — the new month re-derives from Google's own dates.
           pacerActual: null,
           pacerTodayDate: null,
           pacerEndDate: null,
+          googleFlightStartOverride: null,
+          googleFlightEndOverride: null,
         },
       });
     }

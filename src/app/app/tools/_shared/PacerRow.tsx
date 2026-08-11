@@ -58,6 +58,7 @@ import { usePacerReadOnly } from './pacer-read-only';
 import { Tooltip } from './Tooltip';
 import { DollarInput, Field, readonlyClass, labelClass } from './inputs';
 import { MetricBox } from './metrics';
+import { LabelChips } from './LabelChips';
 
 /**
  * Bar color for a day's delivery ratio (spend ÷ that-day's-budget): green when
@@ -335,6 +336,8 @@ export function PacerRow({
   pushIcon,
   statusMismatch,
   overageAllowance,
+  allLabels,
+  onTagsChange,
 }: {
   ad: PacerAd;
   index: number;
@@ -386,6 +389,11 @@ export function PacerRow({
   /** Per-account Meta single-day flexibility (0.25–0.75) for the
    *  recommendation engine's shortfall boundary (server-derived). */
   overageAllowance?: number;
+  /** The account's label vocabulary (§9), so the add-label popover offers what
+   *  already exists instead of inviting near-duplicates. */
+  allLabels?: readonly string[];
+  /** Omit to hide the label control entirely (surfaces that don't tag). */
+  onTagsChange?: (nextTags: string[]) => void;
 }) {
   const isLifetime = ad.budgetType === 'Lifetime';
   const typeColor = budgetTypeColor(ad.budgetType);
@@ -862,6 +870,18 @@ export function PacerRow({
                 );
               })()}
             </div>
+            {/* Labels (§9) — editable here rather than in the collapsed header,
+                which is a single click target for expanding the row and can't
+                hold a popover. Independent of Base/Added above: a label says
+                which push a line belongs to, not which pool pays for it. */}
+            {onTagsChange && (
+              <LabelChips
+                tags={ad.pacerTags}
+                allLabels={allLabels ?? []}
+                readOnly={readOnly}
+                onChange={onTagsChange}
+              />
+            )}
           </div>
         </div>
         {/* Right cluster: the Flight window. The platform Ad Status used to sit

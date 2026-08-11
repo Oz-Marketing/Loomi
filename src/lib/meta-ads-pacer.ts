@@ -21,6 +21,7 @@ import {
   effectiveActual,
   classifyAdVariance,
   computeSplitRunSettlement,
+  scheduleEndpoints,
 } from '@/lib/ad-pacer/pacer-calc';
 // The cross-month spend chain (raw → out → in → counted), its per-flight ledger
 // and the conservation invariant. Derived on read from the ad rows; the only
@@ -36,6 +37,7 @@ import {
   type FlightLedgerEntry,
 } from '@/lib/ad-pacer/cross-month-ledger';
 import { deriveOverageAllowance } from '@/lib/ad-pacer/pacing-engine';
+import { parseEventBudgets } from '@/lib/ad-pacer/labels';
 import { OVERAGE_ALLOWANCE_DEFAULT } from '@/lib/ad-pacer/constants';
 import { writeAudit } from '@/lib/meta-ads-audit';
 
@@ -303,6 +305,12 @@ export async function fetchPeriodPlan(planId: string, period: string, platform?:
       (platform === 'google' ? budget?.googleBaseCarryover : budget?.baseCarryover) ?? null,
     addedCarryover:
       (platform === 'google' ? budget?.googleAddedCarryover : budget?.addedCarryover) ?? null,
+    // Google allocator (spec §3/§9). Google-only: the allocator doesn't exist on
+    // the Meta card, so Meta gets nulls rather than a mode it can't honor.
+    // Percent is the default mode for a plan that has never set one.
+    allocationMode:
+      platform === 'google' ? (budget?.googleAllocationMode === 'amt' ? 'amt' : 'pct') : null,
+    eventBudgets: platform === 'google' ? parseEventBudgets(budget?.googleEventBudgets) : null,
     // §0.1: resolved at this single boundary — Account.markup override, else
     // the agency default — so every consumer (client + getPriorOverUnder) gets
     // a concrete factor and never re-resolves or holds a literal.
@@ -552,13 +560,26 @@ export async function reconcileCompletedRuns(
       id: true,
       name: true,
       adStatus: true,
+      budgetType: true,
+      period: true,
+      flightStart: true,
       flightEnd: true,
+      liveDate: true,
+      metaStartDate: true,
       metaEndDate: true,
       platform: true,
+      // Google rows end on their Google dates, not Meta's — omit these and a
+      // Google campaign whose flight ended never auto-completes.
+      googleStartDate: true,
+      googleEndDate: true,
+      googleFlightStartOverride: true,
+      googleFlightEndOverride: true,
     },
   });
+  // Same end-date precedence the pacing window uses, so "auto-marked Completed
+  // Run" and "this flight is over" can never disagree.
   const toComplete = ads.filter((a) => {
-    const end = a.metaEndDate ?? a.flightEnd;
+    const end = scheduleEndpoints(a).rawEnd;
     return end != null && todayIso > end; // strictly past the last flight day
   });
   if (toComplete.length === 0) return 0;

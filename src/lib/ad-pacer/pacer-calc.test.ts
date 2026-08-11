@@ -516,6 +516,102 @@ describe('clampToMonth — Meta end vs planner flight', () => {
   });
 });
 
+// google-pacing-card spec §6 — a Google line's flight AUTO-DERIVES from the
+// campaign's own synced dates (previously ignored: only the meta*/planner fields
+// were read, so a mid-month launch paced from the 1st and read as behind all
+// month). The manual override is for a funding window the API can't express.
+describe('scheduleEndpoints / clampToMonth — Google lines (§6)', () => {
+  const g = (overrides: Partial<PacerAd>) =>
+    mk({ platform: 'google', flightStart: null, flightEnd: null, ...overrides });
+
+  it("uses the Google campaign's start, not the month start (AC 4)", () => {
+    const { effectiveStart, effectiveEnd } = clampToMonth(
+      g({ googleStartDate: '2026-06-06', googleEndDate: null }),
+    );
+    expect(effectiveStart).toBe('2026-06-06');
+    // No Google end + no planner flight = paces to month end.
+    expect(effectiveEnd).toBe('2026-06-30');
+  });
+
+  it('gives a long-running campaign the FULL month, never its lifetime start (AC 5)', () => {
+    // Started two years ago and still running: June must read as Jun 1–30, which
+    // is what the clamp produces — the lifetime start is only ever an input to it.
+    const { effectiveStart, effectiveEnd } = clampToMonth(
+      g({ googleStartDate: '2024-03-11', googleEndDate: null }),
+    );
+    expect(effectiveStart).toBe('2026-06-01');
+    expect(effectiveEnd).toBe('2026-06-30');
+  });
+
+  it('clamps a Google end that runs past the month to the month end', () => {
+    const { effectiveEnd } = clampToMonth(
+      g({ googleStartDate: '2026-01-01', googleEndDate: '2026-09-30' }),
+    );
+    expect(effectiveEnd).toBe('2026-06-30');
+  });
+
+  it('honors a mid-month Google end date', () => {
+    const { effectiveEnd } = clampToMonth(
+      g({ googleStartDate: '2026-06-01', googleEndDate: '2026-06-18' }),
+    );
+    expect(effectiveEnd).toBe('2026-06-18');
+  });
+
+  it('lets a manual override win over the synced dates (funded mid-month)', () => {
+    // The campaign existed on the 1st, but the money did not arrive until the
+    // 12th — Google cannot express that, so the desk states it.
+    const { effectiveStart, effectiveEnd } = clampToMonth(
+      g({
+        googleStartDate: '2026-06-01',
+        googleEndDate: null,
+        googleFlightStartOverride: '2026-06-12',
+        googleFlightEndOverride: '2026-06-25',
+      }),
+    );
+    expect(effectiveStart).toBe('2026-06-12');
+    expect(effectiveEnd).toBe('2026-06-25');
+  });
+
+  it('ignores a stale override end left over from a prior month', () => {
+    // An override copied/left from May must not zero out June's flight.
+    const { effectiveEnd } = clampToMonth(
+      g({
+        googleStartDate: '2026-06-01',
+        googleEndDate: '2026-06-30',
+        googleFlightEndOverride: '2026-05-20',
+      }),
+    );
+    expect(effectiveEnd).toBe('2026-06-30');
+  });
+
+  it('falls back to the planner flight when Google sent no dates (manual row)', () => {
+    const { effectiveStart, effectiveEnd } = clampToMonth(
+      g({ flightStart: '2026-06-05', flightEnd: '2026-06-22' }),
+    );
+    expect(effectiveStart).toBe('2026-06-05');
+    expect(effectiveEnd).toBe('2026-06-22');
+  });
+
+  it('leaves Meta rows on the Meta precedence (no cross-contamination)', () => {
+    // googleStartDate set on a Meta row (shouldn't happen, but must not leak).
+    const { effectiveStart } = clampToMonth(
+      mk({
+        platform: 'meta',
+        metaStartDate: '2026-06-03',
+        googleStartDate: '2026-06-20',
+      }),
+    );
+    expect(effectiveStart).toBe('2026-06-03');
+  });
+
+  it('excludes a Google campaign whose own start is later this month', () => {
+    // Launches on the 20th, today is the 15th — not yet pacing.
+    expect(
+      isEligibleForLivePacing(g({ googleStartDate: '2026-06-20' }), NOW, TZ),
+    ).toBe(false);
+  });
+});
+
 describe('computeSplitRunSettlement (cross-month split runs)', () => {
   it('settles a marked, completed split run once on the final month', () => {
     // April+May linked lifetime run, marked split, both completed. Run actual

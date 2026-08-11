@@ -162,22 +162,68 @@ export type AdScheduleLike = {
   flightStart: string | null;
   metaEndDate: string | null;
   flightEnd: string | null;
+  // Google rows resolve their schedule from the Google campaign's own dates
+  // instead of Meta's. Optional so a caller with a narrow Prisma select still
+  // satisfies the type — but a Google-row caller that omits them silently falls
+  // back to the planner's dates, so select them whenever platform can be
+  // 'google' (see scheduleEndpoints).
+  platform?: string | null;
+  googleStartDate?: string | null;
+  googleEndDate?: string | null;
+  googleFlightStartOverride?: string | null;
+  googleFlightEndOverride?: string | null;
 };
+
+/**
+ * The raw (pre-clamp) schedule endpoints for an ad, by platform.
+ *
+ * Precedence is "most authoritative statement about THIS run first":
+ *   Meta:   metaStartDate → liveDate → flightStart   /   metaEndDate → flightEnd
+ *   Google: manual override → the Google campaign's own dates → liveDate →
+ *           the planner's flight
+ *
+ * The Google branch exists because the pacer used to read only the Meta and
+ * planner fields, so a synced `googleStartDate` never reached the pacing window: a
+ * campaign that launched on the 6th paced from the 1st and read as behind for the
+ * rest of the month (google-pacing-card spec §6 — dates auto-derive from the API,
+ * and the manual override is only for a funding window the API can't express).
+ *
+ * END STALENESS: a platform end date that falls before the pacing month opens is
+ * a PRIOR run's end (a recurring campaign whose linked object still carries last
+ * month's stop date). Honoring it would mark the month completed even though the
+ * flight was extended into it, so a stale candidate is skipped in favor of the
+ * next one. If every candidate is stale we return the last one anyway — that ad
+ * really has ended, and inventing a month-end flight would resurrect it.
+ */
+export function scheduleEndpoints(ad: AdScheduleLike): {
+  rawStart: string | null;
+  rawEnd: string | null;
+} {
+  const bounds = ad.period ? monthBoundsIso(ad.period) : null;
+  const isGoogle = ad.platform === 'google';
+  const present = (v: string | null | undefined): v is string => v != null && v !== '';
+
+  const startCandidates = isGoogle
+    ? [ad.googleFlightStartOverride, ad.googleStartDate, ad.liveDate, ad.flightStart]
+    : [ad.metaStartDate, ad.liveDate, ad.flightStart];
+  const endCandidates = isGoogle
+    ? [ad.googleFlightEndOverride, ad.googleEndDate, ad.flightEnd]
+    : [ad.metaEndDate, ad.flightEnd];
+
+  const ends = endCandidates.filter(present);
+  const stale = (v: string) => bounds != null && v < bounds.start;
+  return {
+    rawStart: startCandidates.find(present) ?? null,
+    rawEnd: ends.find((v) => !stale(v)) ?? ends[ends.length - 1] ?? null,
+  };
+}
 
 export function clampToMonth(ad: AdScheduleLike): {
   effectiveStart: string | null;
   effectiveEnd: string | null;
 } {
-  const rawStart = ad.metaStartDate ?? ad.liveDate ?? ad.flightStart;
+  const { rawStart, rawEnd } = scheduleEndpoints(ad);
   const bounds = ad.period ? monthBoundsIso(ad.period) : null;
-  // Meta's end normally wins over the planner's, BUT a Meta end that falls
-  // before this pacing month is stale — e.g. a recurring ad whose linked ad set
-  // still carries a PRIOR run's end date. Honoring it would mark the month
-  // "completed" even after the planner flight was extended into the month, so in
-  // that case defer to the planner's flightEnd (the user's forward intent).
-  const metaEndStale =
-    bounds != null && ad.metaEndDate != null && ad.metaEndDate < bounds.start;
-  const rawEnd = metaEndStale ? ad.flightEnd : (ad.metaEndDate ?? ad.flightEnd);
   if (!bounds) return { effectiveStart: rawStart, effectiveEnd: rawEnd };
   return {
     // max(rawStart, month_start) — never start before the month opens.

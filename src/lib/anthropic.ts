@@ -11,6 +11,17 @@ export function getAnthropicClient(): Anthropic {
   return client;
 }
 
+/**
+ * Is a key configured?
+ *
+ * For callers that must DECIDE whether to use AI rather than assume it — an
+ * unattended job can't let a missing key throw, and "no key" is a legitimate
+ * environment (local dev, a self-hosted install) rather than an error.
+ */
+export function anthropicConfigured(): boolean {
+  return !!process.env.ANTHROPIC_API_KEY;
+}
+
 export const ANTHROPIC_MODEL = 'claude-sonnet-4-5-20250929';
 
 // Opus 4.7 for the flow builder's "Iris" assistant — the model

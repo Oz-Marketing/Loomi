@@ -173,6 +173,31 @@ model Account {
   // pull spend. The access token itself is a single agency-wide System User
   // token in env (META_SYSTEM_USER_TOKEN), not per-account.
   metaAdAccountId           String?
+  // ── Publishing identity (Ad Generator → campaign launch) ──
+  //
+  // Reporting only ever needed the ad ACCOUNT. Publishing needs to know who the
+  // ad is FROM: a Meta ad creative cannot be created without
+  // `object_story_spec.page_id`, so without this the launch path is blocked
+  // outright.
+  //
+  // Confirmed per sub-account, never bulk-matched. Across a 38-rooftop
+  // multi-brand group the wrong Page publishes a Ford store's ad from the Chevy
+  // store's Page — a brand-compliance incident that looks like a Loomi bug and
+  // is invisible until someone spots it in the feed.
+  metaPageId                String?
+  /// Instagram actor for IG placements. Optional: without it the ad runs on
+  /// Facebook placements only rather than failing.
+  metaInstagramActorId      String?
+  /// Pixel + the event to optimize toward, for anything past a traffic campaign.
+  metaPixelId               String?
+  metaDefaultConversionEvent String?
+  /// Google conversion action resource name, the equivalent for Google launches.
+  googleConversionAction    String?
+  /// Who confirmed the Page/IG/pixel above, and when. Recorded because "which
+  /// Page does this rooftop post from" is exactly the decision someone will need
+  /// to re-verify later, and an unattributed id is not re-verifiable.
+  metaAssetsConfirmedBy     String?
+  metaAssetsConfirmedAt     DateTime?
   // Reporting margin (percent, 0–100) applied to Meta media-cost fields in the
   // Ads report: billed = actual / (1 - margin/100). Ported from Oz Dealer
   // Tools' per-org `facebook_ads_margin`. Distinct from `markup` above (the
@@ -1907,6 +1932,19 @@ model MetaAdsPacerPeriodBudget {
   // Σ ad pacerActual). The client budget for these months is entered later into
   // baseBudgetGoal, so over/under = historicalActual − baseBudgetGoal × markup.
   historicalActual      String?
+  // ── Google allocator (google-pacing-card spec §3/§9) ──
+  // The unit the WHOLE Google card allocates in: "pct" (percent of payable) or
+  // "amt" (dollar amounts). One unit for every line, deliberately — mixed units
+  // per line were the source of the toggle-drift and pool-shrink bugs. Google
+  // only; Meta's card has no allocator. Null = "pct" (the default).
+  googleAllocationMode  String?
+  // Optional intended budget per LABEL, as JSON Record<label, number> — e.g.
+  // {"Summer Sales Event": 1200}. Used only in a filtered (label) view, where
+  // the tagged campaigns' allocation is checked against it so added sales
+  // dollars can be confirmed fully allocated rather than absorbed into regular
+  // budget. Never the account denominator: unfiltered, allocation is always
+  // checked against payable.
+  googleEventBudgets    String?
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
 
@@ -1982,6 +2020,14 @@ model MetaAdsPacerAd {
 
   // Money (string to mirror form input, parsed at calc time)
   allocation            String?
+  // Google allocator (spec §3): the line's PERCENT-OF-PAYABLE input, kept only
+  // while the card is in percent mode. `allocation` above stays the authoritative
+  // dollar target in BOTH modes — everything downstream (reconciliation, the
+  // over/under, the budget panels) reads dollars and must not learn about modes.
+  // This exists so a percent survives a change to the account payable: in percent
+  // mode the dollar target is RE-DERIVED as percent ÷ 100 × payable, which is
+  // impossible from a stored dollar alone. Null on Meta rows and in dollar mode.
+  allocationPercent     String?
   pacerActual           String?
   pacerDailyBudget      String?
   // Full-run actual spend across the linked ad set's entire flight (Meta
@@ -2097,6 +2143,28 @@ model MetaAdsPacerAd {
   // budget change this holds the segment-summed ceiling; otherwise it's just
   // current daily × 30.4. Null until first sync / for total-budget campaigns.
   googleProratedCeiling        String?
+  // Google allocator flight override (spec §6). Flight dates AUTO-DERIVE from
+  // the campaign's own googleStartDate/googleEndDate intersected with the month;
+  // these two exist for the case the API can't express — the campaign existed on
+  // the 1st but wasn't FUNDED until mid-month, or the desk is pacing a custom
+  // window. Deliberately separate from flightStart/flightEnd (the planner's
+  // intent, which the Ad Planner owns) so a pacing override never rewrites the
+  // plan. YYYY-MM-DD; always re-clamped to the month in view, so a stale
+  // override from another month clamps away instead of corrupting the window.
+  googleFlightStartOverride    String?
+  googleFlightEndOverride      String?
+  // Google allocator lock (spec §4): a fixed carve-out, protected from Balance
+  // and from Move as either source or destination. Locking changes NO numbers —
+  // it only sets this flag — and never creates an unallocated gap on its own.
+  // It does not exempt the line from a budget push: the rate it needs is still
+  // the rate it needs.
+  pacerLocked                  Boolean  @default(false)
+  // Free-text labels as a JSON array of strings, e.g. ["Summer Sales Event"].
+  // A view/tracking dimension only, INDEPENDENT of budgetSource (base/added):
+  // tagging a base-funded campaign into an event must not move money between
+  // pools. Shared with Meta — the label/filter bar is cross-platform even though
+  // the allocator is Google-only.
+  pacerTags                    String?
   // Per-ad alert mute (Change 9): when true, the pacing-family scanners
   // (underspend/overpace, went-dark, flight-ending) skip this ad so a
   // known-acceptable case stops pinging. Workflow alerts are unaffected.
@@ -2514,6 +2582,42 @@ model AdCreative {
   // an ad was when it was put away — so restoring would have to guess.
   archivedAt DateTime?
 
+  // ── Launch copy ──
+  //
+  // AdCopyVariation JSON (meta + google captions), written ONCE at generation and
+  // frozen. Frozen because two launches of one ad must not say different things —
+  // and safe to freeze because an offer whose numbers move gets a different
+  // fingerprint, so a row's copy can never outlive the offer it describes.
+  //
+  // `copySource` records whether the words were drafted by AI (and passed the
+  // numeric-provenance + co-op checks) or assembled deterministically from the
+  // offer. A reviewer has to be able to tell which, without re-deriving it.
+  copy       String? @db.Text
+  copySource String? // "ai" | "deterministic"
+
+  // ── Template link (design sync) ──
+  //
+  // Whether this ad still FOLLOWS its source template's design. "synced" means a
+  // template edit may be pushed into it; "detached" means the ad owns its design
+  // and nothing may overwrite it. Copy-on-use stays the default for hand-built
+  // ads — the link exists for the automated ones, where the template is the only
+  // place a person can fix fifty ads at once.
+  //
+  // NULL is meaningful and is why this needs no backfill: it means "never set",
+  // read as synced for an auto-generated ad and detached for a hand-built one —
+  // exactly what each already did. See resolveSyncState in template-sync.ts.
+  templateSync    String?
+  // Design hash (see designHash) of the template revision this ad's `doc` came
+  // from. Compared against the template's current hash to answer "is this ad
+  // behind?" without diffing two large JSON blobs — and it's a hash of the
+  // RENDER-relevant doc only, so renaming or retagging a template doesn't make
+  // every ad look stale.
+  templateDocHash String?
+  // Set the first time a person edits THIS ad's own design. Records that the
+  // divergence was deliberate, so "Customized" can be shown with a date rather
+  // than as a bare state, and so a reset can say what it is discarding.
+  docEditedAt     DateTime?
+
   // One draft per (sub-account, template, offer). Null fingerprints are exempt
   // in Postgres — hand-built ads all have null here and never collide.
   @@unique([accountKey, templateId, offerFingerprint])
@@ -2521,6 +2625,9 @@ model AdCreative {
   @@index([accountKey, autoGenerated, status])
   @@index([accountKey, archivedAt])
   @@index([runId])
+  // "Which ads use this template?" — the impact query behind the sync prompt,
+  // which is the one lookup here that isn't account-scoped.
+  @@index([templateId])
 }
 
 // ─────────────────────────────────────────────────────
@@ -2658,6 +2765,209 @@ model AdGuidelineDoc {
 
   @@unique([make, title])
   @@index([make, isActive])
+}
+
+// ─────────────────────────────────────────────────────
+// Ad Generator — one publish attempt
+// ─────────────────────────────────────────────────────
+//
+// Written BEFORE the first platform call, so a retry finds the in-flight row
+// instead of creating a second ad that spends a second budget. Same lesson as the
+// rest of the pipeline: any table fronting a side effect needs the row to exist
+// before the effect.
+//
+// A row exists for every attempt INCLUDING failures, because a launch that
+// silently didn't happen is the failure mode that matters — and because a failed
+// row is what a retry needs to find.
+//
+// TWO DEFECTS IN THE ORIGINAL SPEC, FIXED HERE:
+//
+// 1. It keyed on the bare `offerFingerprint`, which reproduces the Silverado
+//    collision: one GM 4.9%/60mo programme covers the 2500HD and the 3500HD, so
+//    the same fingerprint means the second vehicle's launch would look like a
+//    duplicate of the first's. `offerKey` is the VEHICLE-scoped value
+//    (creativeOfferKey) for that reason.
+// 2. Uniqueness must not cover terminal failures, or a failed launch permanently
+//    blocks its own retry. Postgres can express that as a partial unique index
+//    and Prisma cannot, so it lives in scripts/ensure-adlaunch-unique.ts —
+//    exactly why ensure-adcreative-offer-unique.ts exists. There is deliberately
+//    NO @@unique here; the script owns it.
+model AdLaunch {
+  id         String @id @default(cuid())
+  accountKey String
+  platform   String // "meta" | "google"
+
+  /// attach_existing | create_new — which verb produced this launch.
+  mode String @default("attach_existing")
+
+  /// JSON string[] of AdCreative ids. One launch is one campaign with one ad per
+  /// creative, so this is plural while platformCampaignId is singular.
+  creativeIds String @db.Text
+  /// Vehicle-scoped offer key (see creativeOfferKey), NOT the bare fingerprint.
+  offerKey    String?
+
+  /// queued | publishing | published | failed | cancelled
+  status String @default("queued")
+
+  /// Frozen resolved preset + copy + creative URLs at launch time, so "what did we
+  /// actually publish" survives later preset edits.
+  payload String? @db.Text
+
+  /// Platform result, filled in as each object is created so a partial failure is
+  /// diagnosable rather than opaque.
+  platformCampaignId String?
+  platformAdSetId    String?
+  /// JSON map of creativeId → platform ad id. A map, not a scalar: there is
+  /// genuinely one ad object per creative.
+  platformAdIds      String? @db.Text
+  /// JSON — Meta adimages hashes / Google asset resource names.
+  platformImageRefs  String? @db.Text
+
+  /// The pacer row created by the back-link, for round-tripping.
+  pacerAdId String?
+
+  requestedById   String?
+  requestedByName String?
+  startedAt       DateTime  @default(now())
+  finishedAt      DateTime?
+  error           String?   @db.Text
+
+  /// Whether the published ad is currently spending, and who last flipped it.
+  /// Separate from `status` — `status` is about whether the PUBLISH succeeded, this
+  /// is about whether the result is live. Attribution matters here more than
+  /// anywhere else in the pipeline: this is the field that answers "who started
+  /// spending money", which a Graph audit log nobody can reach does not.
+  liveStatus      String? // "ACTIVE" | "PAUSED"
+  liveChangedAt   DateTime?
+  liveChangedBy   String?
+
+  @@index([accountKey, status])
+  @@index([offerKey])
+}
+
+// ─────────────────────────────────────────────────────
+// Ad Generator — per-account campaign shape for a launch
+// ─────────────────────────────────────────────────────
+//
+// A creative implies nothing about objective, geo, bid strategy, budget, flight or
+// destination. Without a saved shape a "launch" is a twelve-field form, and nobody
+// fills that in twice — so the preset is what makes launching one click.
+//
+// One row per (account, platform): a rooftop's Meta launches all look alike, and
+// the variation that matters — the offer — comes from the creative.
+//
+// NOTE what is deliberately NOT here: `specialAdCategories`. Meta's
+// FINANCIAL_PRODUCTS_SERVICES category is not a preference, it is a consequence of
+// what the ad says, so it is DERIVED per launch from the offer and its text (see
+// specialAdCategoriesFor in launch-preset.ts). Storing it as a settable field
+// would let someone turn off a restriction that Meta applies regardless — and
+// then be rejected at publish, or worse, not be.
+model AdLaunchPreset {
+  id         String @id @default(cuid())
+  accountKey String
+  platform   String // "meta" | "google"
+
+  /// e.g. OUTCOME_TRAFFIC, OUTCOME_LEADS.
+  /// attach_existing | create_new.
+  ///
+  /// Per sub-account because rooftops genuinely differ: some run evergreen
+  /// campaigns whose creative gets refreshed monthly, others spin up a campaign
+  /// per offer push. Attaching to a proven ad set avoids a learning-phase reset
+  /// and budget fragmentation, so it's the better default where it applies.
+  launchMode String @default("attach_existing")
+  /// For attach_existing: the ad set new creative is added to. Discovered via
+  /// fetchAdSets and confirmed by a person — the same reasoning as metaPageId, since
+  /// attaching to the wrong ad set spends someone else's budget on this offer.
+  targetAdSetId   String?
+  targetAdSetName String?
+
+  objective   String  @default("OUTCOME_TRAFFIC")
+  bidStrategy String?
+  /// Whole currency units as a string, matching MetaAdsPacerAd.allocation.
+  dailyBudget String?
+  flightDays  Int     @default(30)
+
+  geoZip String?
+  /// Miles. FLOORED AT 15 at resolve time when a financial-products category
+  /// applies — Meta enforces that minimum and rejects tighter targeting.
+  geoRadiusMiles Int     @default(25)
+  audienceSpec   String? @db.Text // JSON — saved audiences / interests
+
+  /// dealer_site | loomi_lp | loomi_lp_inventory. Only dealer_site is implemented;
+  /// the Loomi-hosted destination is Phase D.
+  destinationMode String  @default("dealer_site")
+  /// For dealer_site. Supports {{year}} {{make}} {{model}} {{vin}} so one preset
+  /// covers every nameplate without a row per model.
+  urlTemplate     String? @db.Text
+  lpTemplateId    String?
+  lpFormId        String?
+
+  utmSource   String?
+  utmMedium   String?
+  utmCampaign String?
+
+  /// JSON string[] of size ids to publish. Null/empty = every size the ad has.
+  sizeIds String? @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([accountKey, platform])
+}
+
+// ─────────────────────────────────────────────────────
+// Ad Generator — co-op PRE-APPROVAL of a template (human sign-off)
+// ─────────────────────────────────────────────────────
+//
+// Distinct from AdTemplateCoopCheck below, which is what the RULE ENGINE thinks.
+// This is what the manufacturer's co-op programme actually said — a person sent
+// the plate to the OEM, the OEM approved it, and every ad generated from it
+// inherits that approval. It is what makes unattended launching defensible with
+// no per-ad reviewer: the artifact a human approved is the template, and the ads
+// are that template with the month's numbers in it.
+//
+// The two can disagree in both directions, and both directions are legitimate:
+// the engine may have no rules on file for a make yet still have a real approval
+// from it, and the engine may flag a rule the OEM chose to waive.
+//
+// SCOPED TO A DESIGN, NOT A TEMPLATE ID. `docHash` is the render-relevant design
+// hash (see designHash in template-sync.ts), so editing the template moves the
+// hash and the approval stops applying. Without that, "pre-approved" would be a
+// permanent rubber stamp that survives an arbitrary redesign — which is precisely
+// the exposure co-op approval is supposed to remove.
+//
+// APPEND-ONLY. Re-approving after a redesign adds a row; withdrawing sets
+// `revokedAt` rather than deleting, because "approved, then withdrawn" is a
+// different fact from "never approved", and a reimbursement dispute is exactly
+// when somebody has to produce the history. No unique index, deliberately — it
+// keeps this additive through `db push` with no ensure-script.
+model AdTemplateCoopApproval {
+  id         String @id @default(cuid())
+  templateId String
+  /// The make whose programme granted it. A shared plate can be approved by
+  /// several manufacturers independently, so this is per (template, make).
+  make       String
+
+  /// The design the approval covers. Mismatch ⇒ the approval no longer applies.
+  docHash String
+
+  /// Guideline edition in force when it was granted. A reissue makes the approval
+  /// STALE rather than wrong — someone re-confirms against the new edition.
+  packVersion String?
+
+  /// Evidence: the co-op portal case number, or the email that granted it.
+  reference String?
+  note      String? @db.Text
+
+  approvedById   String?
+  approvedByName String?
+  approvedAt     DateTime @default(now())
+
+  revokedAt     DateTime?
+  revokedByName String?
+
+  @@index([templateId])
+  @@index([make])
 }
 
 // ─────────────────────────────────────────────────────

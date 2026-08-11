@@ -195,6 +195,32 @@ export async function pushCampaignDailyBudget(
   budgetResourceName: string,
   amountUnits: number,
 ): Promise<void> {
+  await pushCampaignDailyBudgets(cfg, customerId, [{ budgetResourceName, amountUnits }]);
+}
+
+/** One campaign budget to set, in account currency. */
+export interface CampaignBudgetUpdate {
+  budgetResourceName: string;
+  amountUnits: number;
+}
+
+/**
+ * Set MANY campaign budgets in a single mutate — one request per account, not one
+ * per campaign (google-pacing-card spec §8, AC 11). Thirty campaigns is thirty
+ * round-trips and thirty chances to fail halfway otherwise, and the developer
+ * token's daily operation budget is spent the same either way.
+ *
+ * `partialFailure` is deliberately NOT set: the operations are one intended plan
+ * ("the account's dailies now total the payable"), so a half-applied plan is worse
+ * than a rejected one — the desk can read the error, fix the offending campaign,
+ * and re-apply. Returns the number of budgets written.
+ */
+export async function pushCampaignDailyBudgets(
+  cfg: GoogleAdsConfig,
+  customerId: string,
+  updates: readonly CampaignBudgetUpdate[],
+): Promise<number> {
+  if (updates.length === 0) return 0;
   const token = await getAccessToken(cfg);
   const cid = stripDashes(customerId);
   const headers: Record<string, string> = {
@@ -205,20 +231,20 @@ export async function pushCampaignDailyBudget(
   };
   if (cfg.loginCustomerId) headers['login-customer-id'] = cfg.loginCustomerId;
 
-  const amountMicros = Math.round(amountUnits * 1_000_000).toString();
+  const operations = updates.map((u) => ({
+    update: {
+      resourceName: u.budgetResourceName,
+      amountMicros: Math.round(u.amountUnits * 1_000_000).toString(),
+    },
+    updateMask: 'amount_micros',
+  }));
+
   let res: Response;
   try {
     res = await fetch(`${ADS_BASE}/${cfg.apiVersion}/customers/${cid}/campaignBudgets:mutate`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        operations: [
-          {
-            update: { resourceName: budgetResourceName, amountMicros },
-            updateMask: 'amount_micros',
-          },
-        ],
-      }),
+      body: JSON.stringify({ operations }),
     });
   } catch (err) {
     throw new GoogleAdsError(
@@ -233,6 +259,7 @@ export async function pushCampaignDailyBudget(
     console.error('[google-ads] budget mutate error', res.status, JSON.stringify(json)?.slice(0, 1000));
     throw new GoogleAdsError(`Google Ads: ${googleAdsErrorMessage(json, res.status)}`, 'api_error', res.status);
   }
+  return updates.length;
 }
 
 // ── Row shapes (proto JSON: int64 fields arrive as strings, enums as names) ──

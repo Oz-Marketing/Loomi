@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon } from '@heroicons/react/24/outline';
+import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
@@ -27,6 +27,7 @@ import type { StatusFilterValue } from '@/components/status-filter';
 import { AdPreviewThumb, brandingFromAccount } from '@/components/ad-generator/ad-preview-thumb';
 import { ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
+import { designHash, isBehindTemplate } from '@/lib/ad-generator/template-sync';
 import { addFieldKit, type VehicleFieldsMode } from '@/lib/ad-generator/vehicle-fields';
 import { catalogByCategory, aspectLabel, type CatalogSize } from '@/lib/ad-generator/ad-size-catalog';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
@@ -60,6 +61,12 @@ type Creative = {
   expiresAt?: string | null;
   /** Auto-generated only: why the generator held it as a draft. */
   reviewNotes?: string | null;
+  /** Whether this ad still follows its source template's design. */
+  templateSync?: 'synced' | 'detached';
+  /** Design hash of the template revision this ad's doc came from. */
+  templateDocHash?: string | null;
+  /** Set when a person edited this ad's own design. */
+  docEditedAt?: string | null;
   doc?: TemplateDoc | null;
   data: AdData;
 };
@@ -76,6 +83,11 @@ export default function AdGeneratorListPage() {
   const { confirm } = useLoomiDialog();
   const router = useRouter();
   const [dbTemplates, setDbTemplates] = useState<AdTemplate[]>([]);
+  /** templateId → its CURRENT design, and that design's hash (see the fetch below). */
+  const [templateDocs, setTemplateDocs] = useState<Record<string, TemplateDoc>>({});
+  const [templateHashes, setTemplateHashes] = useState<Record<string, string>>({});
+  /** Ad id currently pulling its template's design, for the button's busy state. */
+  const [syncing, setSyncing] = useState<string | null>(null);
   const [creatives, setCreatives] = useState<Creative[] | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [scratchOpen, setScratchOpen] = useState(false);
@@ -126,10 +138,23 @@ export default function AdGeneratorListPage() {
       .then((r) => (r.ok ? r.json() : { templates: [] }))
       .then((d: { templates?: { id: string; doc: TemplateDoc | null }[] }) => {
         if (cancelled) return;
-        setDbTemplates((d.templates ?? []).filter((t) => t.doc).map((t) => adTemplateFromDoc(t.id, t.doc as TemplateDoc)));
+        const withDocs = (d.templates ?? []).filter((t) => t.doc);
+        setDbTemplates(withDocs.map((t) => adTemplateFromDoc(t.id, t.doc as TemplateDoc)));
+        // Each template's CURRENT design, kept raw and by hash. The hash tells the
+        // list which ads are on an older design; the raw doc is what an ad's card
+        // must switch to after a sync, since the previews render from the ad's own
+        // doc rather than from a stored image.
+        setTemplateDocs(Object.fromEntries(withDocs.map((t) => [t.id, t.doc as TemplateDoc])));
+        setTemplateHashes(
+          Object.fromEntries(withDocs.map((t) => [t.id, designHash(t.doc as TemplateDoc)])),
+        );
       })
       .catch(() => {
-        if (!cancelled) setDbTemplates([]);
+        if (!cancelled) {
+          setDbTemplates([]);
+          setTemplateDocs({});
+          setTemplateHashes({});
+        }
       });
     return () => {
       cancelled = true;
@@ -483,6 +508,69 @@ export default function AdGeneratorListPage() {
       toast.success('Deleted');
     } catch (err) {
       toast.error(`Couldn't delete: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  }
+
+  /**
+   * Pull the source template's current design into one ad.
+   *
+   * The other half of the save-time push, and what makes declining it safe: an ad
+   * that shows "Template updated" can take the change later, on its own. `force`
+   * is the explicit reset of a customized ad, which discards its design, so it
+   * asks first.
+   */
+  async function syncFromTemplate(id: string, force: boolean) {
+    const ad = (creatives ?? []).find((x) => x.id === id);
+    if (force) {
+      const ok = await confirm({
+        title: 'Reset to template?',
+        message: `“${ad?.name ?? 'This ad'}” has its own design. Resetting replaces it with the template's current design and discards those changes. The offer values are kept.`,
+        confirmLabel: 'Reset to template',
+        cancelLabel: 'Keep its design',
+      });
+      if (!ok) return;
+    }
+    setSyncing(id);
+    try {
+      const res = await fetch(`/api/ad-generator/creatives/${id}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+      const { result } = (await res.json()) as {
+        result?: { outcome: string; detail?: string; demoted?: boolean };
+      };
+      if (result?.outcome === 'updated') {
+        // Reflect the new state without a refetch. `doc` MUST be carried across:
+        // each card renders its preview from the ad's own doc, so updating only the
+        // link fields left the badge correct and the picture stale until a reload.
+        setCreatives((c) =>
+          (c ?? []).map((x) =>
+            x.id === id
+              ? {
+                  ...x,
+                  doc: templateDocs[x.templateId] ?? x.doc,
+                  templateSync: 'synced',
+                  templateDocHash: templateHashes[x.templateId] ?? x.templateDocHash,
+                  docEditedAt: null,
+                  updatedAt: new Date().toISOString(),
+                }
+              : x,
+          ),
+        );
+        toast.success('Updated to the template design');
+      } else if (result?.outcome === 'blocked') {
+        toast.warning(
+          `Kept its current design: ${result.detail ?? 'the template update fails preflight for this ad.'}`,
+        );
+      } else {
+        toast.error(result?.detail ?? "That ad couldn't be updated");
+      }
+    } catch (err) {
+      toast.error(`Couldn't update: ${err instanceof Error ? err.message : 'unknown error'}`);
+    } finally {
+      setSyncing(null);
     }
   }
 
@@ -840,6 +928,18 @@ export default function AdGeneratorListPage() {
                           Auto
                         </span>
                       )}
+                      {/* Customized = this ad owns its design and template edits
+                          skip it. Worth stating on the card, because it's the
+                          reason a template fix didn't show up here. */}
+                      {c.docEditedAt && (
+                        <span
+                          title={`Edited on ${new Date(c.docEditedAt).toLocaleDateString()} — this ad keeps its own design, so template updates skip it`}
+                          className="flex items-center gap-0.5 rounded bg-[var(--muted)] px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]"
+                        >
+                          <PencilSquareIcon className="h-2.5 w-2.5" />
+                          Custom
+                        </span>
+                      )}
                       <span className="truncate">{template?.name ?? c.templateId}</span>
                     </div>
                     <div className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">
@@ -851,6 +951,32 @@ export default function AdGeneratorListPage() {
                         <> · offer ends {new Date(c.expiresAt).toLocaleDateString()}</>
                       )}
                     </div>
+                    {/* The template has moved on since this ad was built. Offered
+                        rather than applied: a design change has to be someone's
+                        decision, and for a customized ad it costs them their edit. */}
+                    {isBehindTemplate(
+                      { doc: c.doc, templateDocHash: c.templateDocHash, templateSync: c.templateSync, autoGenerated: c.autoGenerated },
+                      templateHashes[c.templateId] ?? null,
+                    ) && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void syncFromTemplate(c.id, !!c.docEditedAt);
+                        }}
+                        disabled={syncing === c.id}
+                        // Amber here too, so the "your ad is behind its template"
+                        // affordance is one colour everywhere it appears — and so it
+                        // stands out from a card that is otherwise all brand colour.
+                        className="mt-1.5 flex items-center gap-1 rounded-md bg-amber-500/15 px-1.5 py-1 text-[10px] font-semibold text-amber-700 transition-colors hover:bg-amber-500/25 disabled:opacity-50 dark:text-amber-400"
+                      >
+                        <ArrowPathIcon className={`h-3 w-3 ${syncing === c.id ? 'animate-spin' : ''}`} />
+                        {syncing === c.id
+                          ? 'Updating…'
+                          : c.docEditedAt
+                            ? 'Template changed · reset to it'
+                            : 'Template updated · apply'}
+                      </button>
+                    )}
                   </div>
                   <button
                     onClick={(e) => {

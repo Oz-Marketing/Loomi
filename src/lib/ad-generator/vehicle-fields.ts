@@ -1,4 +1,4 @@
-import type { FieldSpec } from './types';
+import type { AdData, FieldSpec } from './types';
 import type { TemplateDoc } from './doc-types';
 import { vehicleOffer } from './templates/vehicle-offer';
 import { vehicleDualOffer } from './templates/vehicle-dual-offer';
@@ -41,4 +41,38 @@ export function addFieldKit(doc: TemplateDoc, mode: 'single' | 'dual'): Template
     if (!(k in defaults)) defaults[k] = v;
   }
   return { ...doc, fields: [...doc.fields, ...newFields], defaults };
+}
+
+/**
+ * Read the vehicle out of an ad's data.
+ *
+ * WHY THIS EXISTS. The stored keys are `vehicleName` plus `_vehYear` / `_vehMake` /
+ * `_vehModel` / `_vehTrim` — written by `incentiveToFieldPatch` and by the YMM
+ * picker. They are NOT `year` / `make` / `model`, which is the natural guess and
+ * the wrong one: reading `data.make` yields undefined on every real ad, and the
+ * failure is silent because every consumer treats a missing make as "no
+ * manufacturer rules apply". That is how a compliance lookup quietly becomes a
+ * no-op, so it's worth having exactly one place that knows the answer.
+ *
+ * `prefix` reads a second offer's parallel fields (`o2_`), matching the rest of
+ * the offer plumbing.
+ */
+export function vehicleFromData(
+  data: AdData,
+  prefix = '',
+): { year: string; make: string; model: string; trim: string; name: string } {
+  const g = (key: string): string => (data[`${prefix}${key}`] ?? '').toString().trim();
+  const year = g('_vehYear');
+  const make = g('_vehMake');
+  const model = g('_vehModel');
+  const name = g('vehicleName');
+  return {
+    year,
+    make,
+    model,
+    trim: g('_vehTrim'),
+    // Fall back to composing the name, so a record written by something that set
+    // only the parts still reads properly.
+    name: name || [year, make, model].filter(Boolean).join(' '),
+  };
 }

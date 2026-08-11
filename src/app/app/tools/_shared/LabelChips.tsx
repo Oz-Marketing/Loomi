@@ -254,7 +254,11 @@ export function LabelFilterBar({
         onClick={() => onChange(null)}
         aria-pressed={activeLabel === null}
         className={chip(activeLabel === null)}
-        style={activeLabel === null ? { background: 'var(--foreground)', color: 'var(--background)' } : undefined}
+        style={
+          activeLabel === null
+            ? { background: 'var(--primary)', borderColor: 'var(--primary)' }
+            : undefined
+        }
       >
         All campaigns
       </button>

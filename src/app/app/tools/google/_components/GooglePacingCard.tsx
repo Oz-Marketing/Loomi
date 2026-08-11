@@ -731,7 +731,7 @@ function Th({
     >
       {tooltip ? (
         <Tooltip label={tooltip}>
-          <span className="cursor-help border-b border-dotted border-current/40">{children}</span>
+          <span className="cursor-help">{children}</span>
         </Tooltip>
       ) : (
         children
@@ -808,14 +808,15 @@ function EventBudgetBar({
   );
 }
 
-/** Row tag — the pacer's standard chip chrome (same as the Daily/Lifetime and
- *  Base/Added tags), so a Google-specific badge doesn't invent a new shape. */
+/** Row tag — colored text, no fill. A row can carry several of these at once
+ *  (shared + ad schedule + disapproved), and filled badges stacked next to the
+ *  campaign name turned the first column into a wall of blocks. */
 function Tag({ color, label, tooltip }: { color: string; label: string; tooltip: string }) {
   return (
     <Tooltip label={tooltip}>
       <span
-        className="whitespace-nowrap rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
-        style={{ background: `${color}29`, color }}
+        className="whitespace-nowrap text-[10px] font-bold uppercase tracking-wider"
+        style={{ color }}
       >
         {label}
       </span>

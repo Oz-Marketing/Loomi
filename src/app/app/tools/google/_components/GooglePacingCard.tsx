@@ -30,6 +30,7 @@ import {
   ArrowSmallDownIcon,
   ArrowSmallUpIcon,
   ArrowUturnLeftIcon,
+  BoltIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   InformationCircleIcon,
@@ -39,7 +40,6 @@ import {
   PlusSmallIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
-import { GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
 import { COLORS } from '@/lib/ad-pacer/constants';
 import { fmt, fmtDate, num } from '@/lib/ad-pacer/helpers';
 import { collectLabels, serializeTags } from '@/lib/ad-pacer/labels';
@@ -124,6 +124,7 @@ export function GooglePacingCard({
   );
   const [healthLineId, setHealthLineId] = useState<string | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
+  const [spendOpen, setSpendOpen] = useState(false);
   // Undo holds whole ad sets — every mutation here is a multi-row rewrite
   // (balance, move, a mode switch), so a field-level undo would be a lie.
   const [undoStack, setUndoStack] = useState<PacerAd[][]>([]);
@@ -376,27 +377,18 @@ export function GooglePacingCard({
           <span className="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">
             {view.activeLabel ?? 'Account'} Allocation
           </span>
-          <span className="text-xs text-[var(--muted-foreground)]">
-            {clock.dataEdgeIso ? (
-              <>
-                data through {fmtDate(clock.dataEdgeIso)} · day{' '}
-                {clock.todayDay ?? clock.daysInMonth} of {clock.daysInMonth}
-              </>
-            ) : (
-              <>no settled days yet · {clock.daysInMonth}-day month</>
-            )}
-          </span>
-          {clock.stale && (
-            <Tooltip label="Spend and the day count both stop at the last settled day, so the recommendation stays honest — but a fresh sync will move it.">
-              <span
-                className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider"
-                style={{ color: COLORS.warn }}
-              >
-                <ArrowPathIcon className="h-3 w-3" />
-                Sync behind
-              </span>
-            </Tooltip>
-          )}
+          {/* Expands the two numbers that drive the day's work. */}
+          <button
+            type="button"
+            onClick={() => setSpendOpen((o) => !o)}
+            aria-expanded={spendOpen}
+            className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          >
+            {spendOpen ? 'Hide' : 'Spend to date'}
+            <ChevronDownIcon
+              className={`h-3.5 w-3.5 transition-transform ${spendOpen ? 'rotate-180' : ''}`}
+            />
+          </button>
         </div>
 
         {/* Segmented allocation bar — one segment per campaign, matching the
@@ -461,16 +453,76 @@ export function GooglePacingCard({
             across campaigns
           </div>
         </div>
+
+        {/* The two numbers the day's work actually turns on, at a size you can
+            read across a desk. Collapsed by default so the panel stays a bar. */}
+        {spendOpen && (
+          <div className="mt-4 grid grid-cols-1 gap-3 border-t border-[var(--border)] pt-4 sm:grid-cols-2">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                Left to spend
+              </div>
+              <div className="mt-1 text-3xl font-bold tabular-nums leading-tight text-[var(--foreground)]">
+                {fmt(Math.max(0, view.totals.denominator - view.totals.spent))}
+              </div>
+              <div className="mt-1 text-xs text-[var(--muted-foreground)]">
+                {fmt(view.totals.denominator)} {denominatorNoun(view)} − {fmt(view.totals.spent)} spent
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                Daily budget needed
+              </div>
+              <div
+                className="mt-1 text-3xl font-bold tabular-nums leading-tight"
+                style={{ color: 'var(--primary)' }}
+              >
+                {fmt(view.totals.accountDaily)}
+                <span className="text-base font-semibold text-[var(--muted-foreground)]">/day</span>
+              </div>
+              <div className="mt-1 text-xs text-[var(--muted-foreground)]">
+                across {view.visible.filter((l) => l.dailyControllable).length} campaign
+                {view.visible.filter((l) => l.dailyControllable).length === 1 ? '' : 's'} — what
+                Google Ads Manager should total after applying
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Toolbar: what the table shows and how it's allocated, plus the
           actions that operate on it. One row so everything shares a baseline —
           two stacked strips of different widths read as misaligned. */}
       <div className="mb-3 mt-6 flex flex-wrap items-center gap-x-4 gap-y-2">
-        <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
-          Campaigns{' '}
-          <span className="font-normal text-[var(--muted-foreground)]">({rows.length})</span>
-        </span>
+        {/* Which data you are looking at, stated plainly and up front. It used
+            to be a 10px caption inside the allocation panel, which is not where
+            anyone checks before reading the numbers. */}
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2">
+            <span className="text-base font-bold tracking-tight text-[var(--foreground)]">
+              {clock.todayDay != null
+                ? `Day ${clock.todayDay} of ${clock.daysInMonth}`
+                : `${clock.daysInMonth}-day month`}
+            </span>
+            {clock.stale && (
+              <Tooltip label="Spend and the day count both stop at the last settled day, so the recommendation stays honest — but a fresh sync will move it.">
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider"
+                  style={{ color: COLORS.warn }}
+                >
+                  <ArrowPathIcon className="h-3 w-3" />
+                  Sync behind
+                </span>
+              </Tooltip>
+            )}
+          </div>
+          <div className="text-xs text-[var(--muted-foreground)]">
+            {clock.dataEdgeIso
+              ? `data through ${fmtDate(clock.dataEdgeIso)}`
+              : 'no settled days yet'}{' '}
+            · {rows.length} campaign{rows.length === 1 ? '' : 's'}
+          </div>
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
             Allocate by
@@ -513,21 +565,21 @@ export function GooglePacingCard({
             label={
               !googleConnected
                 ? 'Connect Google Ads to push budgets'
-                : 'Sets each campaign’s average daily budget in Google to its New Daily Budget. One batched update for the account; shared budgets are skipped, and only campaigns whose rate has drifted are touched.'
+                : 'Apply recommended daily budgets — sets each campaign’s average daily budget in Google to its New Daily Budget. One batched update for the account; shared budgets are skipped, and only campaigns whose rate has drifted are touched.'
             }
           >
             <button
               type="button"
               onClick={onPushBudgets}
               disabled={readOnly || pushing || !googleConnected}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Apply recommended daily budgets"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] transition-colors hover:border-[var(--primary)]/40 hover:bg-[var(--primary)]/10 hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
             >
               {pushing ? (
                 <ArrowPathIcon className="h-4 w-4 animate-spin" />
               ) : (
-                <GoogleAdsBrandIcon className="h-4 w-4" />
+                <BoltIcon className="h-4 w-4" />
               )}
-              Apply daily budgets
             </button>
           </Tooltip>
           <BalanceButton readOnly={readOnly} onBalance={doBalance} />

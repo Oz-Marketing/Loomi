@@ -506,7 +506,58 @@ export function GooglePacingCard({
           onChange={setActiveLabel}
           className="mb-0"
         />
-        {tableActions && <div className="ml-auto">{tableActions}</div>}
+        {/* Actions sit with the table they act on, right-aligned, with Meta's
+            divider separating them from the search/add group. */}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Tooltip
+            label={
+              !googleConnected
+                ? 'Connect Google Ads to push budgets'
+                : 'Sets each campaign’s average daily budget in Google to its New Daily Budget. One batched update for the account; shared budgets are skipped, and only campaigns whose rate has drifted are touched.'
+            }
+          >
+            <button
+              type="button"
+              onClick={onPushBudgets}
+              disabled={readOnly || pushing || !googleConnected}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {pushing ? (
+                <ArrowPathIcon className="h-4 w-4 animate-spin" />
+              ) : (
+                <GoogleAdsBrandIcon className="h-4 w-4" />
+              )}
+              Apply daily budgets
+            </button>
+          </Tooltip>
+          <BalanceButton readOnly={readOnly} onBalance={doBalance} />
+          <Tooltip label="Shift budget between campaigns without changing the account total.">
+            <button
+              type="button"
+              onClick={() => setMoveOpen(true)}
+              disabled={readOnly}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ArrowsRightLeftIcon className="h-4 w-4" />
+              Move budget
+            </button>
+          </Tooltip>
+          <button
+            type="button"
+            onClick={undo}
+            disabled={readOnly || undoStack.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ArrowUturnLeftIcon className="h-4 w-4" />
+            Undo
+          </button>
+          {tableActions && (
+            <>
+              <div className="mx-1 h-5 w-px bg-[var(--border)]" />
+              {tableActions}
+            </>
+          )}
+        </div>
       </div>
 
       {/* Event budget check — only meaningful inside a label view (§9). */}
@@ -635,52 +686,6 @@ export function GooglePacingCard({
             </tfoot>
           </table>
         </div>
-      </div>
-
-      {/* ── Actions ── */}
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Tooltip
-          label={
-            !googleConnected
-              ? 'Connect Google Ads to push budgets'
-              : 'Sets each campaign’s average daily budget in Google to its New Daily Budget. One batched update for the account; shared budgets are skipped, and only campaigns whose rate has drifted are touched.'
-          }
-        >
-          <button
-            type="button"
-            onClick={onPushBudgets}
-            disabled={readOnly || pushing || !googleConnected}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {pushing ? (
-              <ArrowPathIcon className="h-4 w-4 animate-spin" />
-            ) : (
-              <GoogleAdsBrandIcon className="h-4 w-4" />
-            )}
-            Apply daily budgets
-          </button>
-        </Tooltip>
-        <BalanceButton readOnly={readOnly} onBalance={doBalance} />
-        <Tooltip label="Shift budget between campaigns without changing the account total.">
-          <button
-            type="button"
-            onClick={() => setMoveOpen(true)}
-            disabled={readOnly}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <ArrowsRightLeftIcon className="h-4 w-4" />
-            Move budget
-          </button>
-        </Tooltip>
-        <button
-          type="button"
-          onClick={undo}
-          disabled={readOnly || undoStack.length === 0}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <ArrowUturnLeftIcon className="h-4 w-4" />
-          Undo
-        </button>
       </div>
 
       {moveOpen && (

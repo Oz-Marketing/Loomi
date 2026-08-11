@@ -58,6 +58,7 @@ import {
 } from '@/lib/ad-pacer/google-allocator';
 import type { PacerAd, PacerPlan } from '@/lib/ad-pacer/types';
 import { LabelChips, LabelFilterBar, Tooltip } from '@/app/app/tools/_shared';
+import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { zonedTodayIso } from '@/lib/timezone';
 import { toast } from '@/lib/toast';
 import { GoogleDeliveryHealthModal } from './GoogleDeliveryHealthModal';
@@ -450,16 +451,21 @@ export function GooglePacingCard({
           <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
             Allocate by
           </span>
-          <select
-            value={mode}
-            onChange={(e) => switchMode(e.target.value as AllocationMode)}
-            disabled={readOnly}
-            aria-label="Allocation unit"
-            className="rounded-lg border border-[var(--border)] bg-[var(--input)] px-2.5 py-1.5 text-xs font-medium text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <option value="amt">$ amount</option>
-            <option value="pct">% of payable</option>
-          </select>
+          {/* Same Loomi combobox as the Move source, minus the search — two
+              options don't need filtering, but they should look like one control
+              family. */}
+          <div className="w-36">
+            <SearchableSelect
+              value={mode}
+              onChange={(value) => switchMode(value as AllocationMode)}
+              disabled={readOnly}
+              searchable={false}
+              options={[
+                { value: 'amt', label: '$ amount' },
+                { value: 'pct', label: '% of payable' },
+              ]}
+            />
+          </div>
           <Tooltip
             label={
               mode === 'pct'
@@ -1268,30 +1274,42 @@ function MovePanel({
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
           From
         </span>
-        <select
-          value={sourceKey}
-          onChange={(e) => {
-            setSourceKey(e.target.value);
-            setSelected((prev) => {
-              const next = new Set(prev);
-              next.delete(e.target.value);
-              return next;
-            });
-          }}
-          disabled={readOnly}
-          aria-label="Move budget from"
-          className="rounded-lg border border-[var(--border)] bg-[var(--input)] px-2.5 py-2 text-sm text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none disabled:opacity-60"
-        >
-          <option value="">Choose a source…</option>
-          {offerUnallocated && (
-            <option value="__unalloc">Unallocated ({fmt(leftover)})</option>
-          )}
-          {options.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name} ({fmt(o.target)})
-            </option>
-          ))}
-        </select>
+        {/* Loomi's searchable combobox rather than a native select: an account
+            can carry dozens of campaigns, and it portals so the list isn't
+            clipped by the card. Each option carries its campaign color, the same
+            swatch used in the meter and the destination chips. */}
+        <div className="w-56">
+          <SearchableSelect
+            value={sourceKey}
+            onChange={(value) => {
+              setSourceKey(value);
+              setSelected((prev) => {
+                const next = new Set(prev);
+                next.delete(value);
+                return next;
+              });
+            }}
+            disabled={readOnly}
+            searchable
+            placeholder="Choose a source…"
+            className="py-2 text-sm"
+            options={[
+              ...(offerUnallocated
+                ? [{ value: '__unalloc', label: `Unallocated (${fmt(leftover)})` }]
+                : []),
+              ...options.map((o) => ({
+                value: o.id,
+                label: `${o.name} (${fmt(o.target)})`,
+                icon: (
+                  <span
+                    className="h-2 w-2 flex-shrink-0 rounded-sm"
+                    style={{ background: campaignColor(o.colorIndex) }}
+                  />
+                ),
+              })),
+            ]}
+          />
+        </div>
 
         <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
           {(

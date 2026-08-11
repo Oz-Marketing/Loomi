@@ -14,11 +14,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  CalendarDaysIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   LockClosedIcon,
   LockOpenIcon,
+  PencilSquareIcon,
 } from '@heroicons/react/24/outline';
 import { COLORS } from '@/lib/ad-pacer/constants';
 import { fmt } from '@/lib/ad-pacer/helpers';
@@ -218,7 +218,7 @@ export function GoogleCampaignCard({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
             <MetricBox
               label="Spent MTD"
               value={fmt(line.spentMTD)}
@@ -255,11 +255,36 @@ export function GoogleCampaignCard({
               </button>
             </Tooltip>
             <MetricBox
+              label="Spend Remaining"
+              value={fmt(line.remainingBudget)}
+              sub={`of ${fmt(line.target)} target`}
+              tooltip="Target spend minus what has been spent so far — the money this campaign still has to deliver this month."
+            />
+            <MetricBox
+              label="Projected Spend"
+              value={line.projectedSpend != null ? fmt(line.projectedSpend) : '—'}
+              sub={
+                line.projectedSpend != null
+                  ? `${line.projectedSpend >= line.target ? '+' : '−'}${fmt(Math.abs(line.projectedSpend - line.target))} vs target`
+                  : 'no daily synced'
+              }
+              color={
+                line.projectedSpend == null
+                  ? undefined
+                  : Math.abs(line.projectedSpend - line.target) <= line.target * 0.05
+                    ? COLORS.success
+                    : line.projectedSpend > line.target
+                      ? COLORS.warn
+                      : COLORS.lifetime
+              }
+              tooltip="Where this campaign lands if the daily budget is left exactly as it is: spent so far + current daily × remaining flight days. A forecast of the CURRENT setting — its job is to show what happens if nobody acts."
+            />
+            <MetricBox
               label="Rec. Daily Budget"
               value={line.dailyControllable ? fmt(line.recommendedDaily) : '—'}
               sub={
                 line.dailyControllable
-                  ? `${fmt(Math.max(0, line.target - line.spentMTD))} left ÷ ${line.flight.remaining}d`
+                  ? `${fmt(line.remainingBudget)} left ÷ ${line.flight.remaining}d`
                   : 'total budget — no daily lever'
               }
               detail={
@@ -368,15 +393,15 @@ function FlightBlock({
           {line.flight.remaining} day{line.flight.remaining === 1 ? '' : 's'} left
         </span>
         {!readOnly && (
-          <Tooltip label="The days this campaign is funded for THIS month. Auto-derived from its Google dates — override it when the funding window differs.">
+          <Tooltip label="Adjust flight">
             <button
               type="button"
               onClick={() => setOpen((o) => !o)}
               aria-expanded={open}
-              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+              aria-label="Adjust flight"
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
             >
-              <CalendarDaysIcon className="h-3 w-3" />
-              Adjust flight
+              <PencilSquareIcon className="h-3 w-3" />
             </button>
           </Tooltip>
         )}

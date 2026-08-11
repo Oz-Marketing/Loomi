@@ -285,6 +285,18 @@ export interface AllocatorLine {
   paceStatus: PaceStatus;
   evenDaily: number;
   recommendedDaily: number;
+  /** Target still unspent: max(0, target − spent). Floored at zero — an
+   *  overspent campaign has nothing left to spend, not a negative amount. */
+  remainingBudget: number;
+  /**
+   * Where this campaign lands if the daily budget is left exactly as it is:
+   * spent + currentDaily × remaining flight days. A forecast of the CURRENT
+   * setting, deliberately not of the recommendation — its whole job is to show
+   * what happens if nobody acts. Null when no daily has synced, since a
+   * projection off a zero rate would read as "will spend nothing" when the
+   * truth is "we do not know the rate".
+   */
+  projectedSpend: number | null;
   /** The campaign's current average daily budget on the platform. */
   currentDaily: number;
   flight: FlightDays;
@@ -357,6 +369,7 @@ export function buildAllocatorLine(
           : 'on';
 
   const pacingType = googlePacingTypeLabel(ad.googleBudgetPeriod, ad.budgetType);
+  const currentDaily = num(ad.pacerDailyBudget) ?? 0;
   return {
     id: ad.id,
     name: ad.name || 'Untitled campaign',
@@ -371,7 +384,10 @@ export function buildAllocatorLine(
     paceStatus,
     evenDaily,
     recommendedDaily,
-    currentDaily: num(ad.pacerDailyBudget) ?? 0,
+    remainingBudget: round2(Math.max(0, target - spentMTD)),
+    projectedSpend:
+      currentDaily > 0 ? round2(spentMTD + currentDaily * flight.remaining) : null,
+    currentDaily,
     flight,
     locked: ad.pacerLocked === true,
     tags: parseTags(ad.pacerTags),

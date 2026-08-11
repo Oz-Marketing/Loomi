@@ -655,7 +655,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
       </div>
 
       {!connected && (
-        <div className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 px-4 py-2.5 text-xs text-[var(--muted-foreground)]">
+        <div className="mb-5 mt-3 flex items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--muted)]/30 px-4 py-2.5 text-xs text-[var(--muted-foreground)]">
           <span>
             Google Ads isn&apos;t connected — you can still plan &amp; pace manually. Connect to
             auto-import campaigns and sync spend.
@@ -758,15 +758,6 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         // Replaces the per-campaign island-budget pacer: the account's payable is
         // the source and every campaign's daily is derived from its share of it.
         <div className="mt-1">
-          <div className="mb-3 flex items-start gap-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3.5 py-2.5 text-[11px] leading-relaxed text-[var(--muted-foreground)]">
-            <InformationCircleIcon className="mt-0.5 h-4 w-4 flex-shrink-0 text-[var(--primary)]" />
-            <span>
-              Google daily budgets are averages, not caps. Actual daily spend can run up to 2× the
-              rate on a busy day, so single-day swings aren&apos;t overspend — Google paces the
-              remainder of the month to (daily × remaining calendar days), which is exactly what
-              the New daily budget column is set to.
-            </span>
-          </div>
           {plan && (
             <GooglePacingCard
               accountKey={accountKey}

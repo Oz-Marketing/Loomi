@@ -137,7 +137,6 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   const [importOpen, setImportOpen] = useState(false);
   const [showCopyModal, setShowCopyModal] = useState(false);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
-  const [search, setSearch] = useState('');
   const [filters, setFilters] = useState<PlanFilters>(EMPTY_FILTERS);
   const [filterSidebarOpen, setFilterSidebarOpen] = useState(false);
   // Basic (default) vs Detailed plan view — Detailed adds the Design +
@@ -155,13 +154,13 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     : null;
   const { data, isLoading, mutate } = useSWR<PacerPlan>(swrKey, fetcher, { revalidateOnFocus: false });
   const ads = useMemo<PacerAd[]>(() => data?.ads ?? [], [data]);
-  // Rendered rows = sidebar filters (mirrors Meta's applyFilters) + the search
-  // box, applied to the planner table + pacing cards.
-  const visibleAds = useMemo(() => {
-    const filtered = applyFilters(ads, filters, currentUserId);
-    const q = search.trim().toLowerCase();
-    return q ? filtered.filter((a) => (a.name ?? '').toLowerCase().includes(q)) : filtered;
-  }, [ads, filters, currentUserId, search]);
+  // Rendered rows = the sidebar filters (mirrors Meta's applyFilters). The
+  // free-text search box was removed; the Filters sidebar is the one place that
+  // narrows the list, so there is no second, competing filter to reason about.
+  const visibleAds = useMemo(
+    () => applyFilters(ads, filters, currentUserId),
+    [ads, filters, currentUserId],
+  );
   // Period list (Google-scoped) for the "copy from another month" modal.
   const { data: periodsData } = useSWR<{ periods: PeriodSummary[] }>(
     accountKey
@@ -574,27 +573,6 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   // as a prop so it sits with the table it acts on rather than above the whole card.
   const planActions = (
     <div className="flex items-center gap-2">
-      <div className="relative">
-        <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search ads…"
-          aria-label="Search ads by name"
-          className="w-44 rounded-lg border border-[var(--border)] bg-[var(--card)] py-1.5 pl-8 pr-7 text-xs text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)] focus:outline-none"
-        />
-        {search && (
-          <button
-            type="button"
-            onClick={() => setSearch('')}
-            aria-label="Clear search"
-            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-          >
-            <XMarkIcon className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
       {connected && (
         <Tooltip label="Sync actual spend from Google">
           <button

@@ -33,7 +33,6 @@ import {
   BoltIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  InformationCircleIcon,
   LockClosedIcon,
   LockOpenIcon,
   MinusSmallIcon,
@@ -66,6 +65,12 @@ import { zonedTodayIso } from '@/lib/timezone';
 import { toast } from '@/lib/toast';
 import { GoogleDeliveryHealthModal } from './GoogleDeliveryHealthModal';
 import { PACE_COLORS, PACE_LABELS, campaignColor } from './google-pacing-theme';
+
+/** "August 2026" for the period heading — same wording as the shell's. */
+function periodLabel(period: string): string {
+  const [y, m] = period.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
 
 const money2 = (n: number) =>
   `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -373,10 +378,29 @@ export function GooglePacingCard({
 
       {/* ── Allocation bar ── */}
       <div className="glass-section-card rounded-xl px-5 py-4 mb-4">
-        <div className="mb-3 flex flex-wrap items-baseline gap-2.5">
+        <div className="mb-3 flex flex-wrap items-center gap-2.5">
           <span className="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">
             {view.activeLabel ?? 'Account'} Allocation
           </span>
+          {/* The unit belongs to the allocation, not to the table's toolbar —
+              it shows the current one and switches on click. */}
+          <Tooltip
+            label={
+              mode === 'pct'
+                ? 'Allocating by percent of the month’s actual spend — click to switch to dollar amounts.'
+                : 'Allocating by fixed dollar amounts — click to switch to percent of actual spend.'
+            }
+          >
+            <button
+              type="button"
+              onClick={() => switchMode(mode === 'pct' ? 'amt' : 'pct')}
+              disabled={readOnly}
+              aria-label={`Allocating by ${mode === 'pct' ? 'percent' : 'dollars'} — switch unit`}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--card)] text-xs font-bold text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {mode === 'pct' ? '%' : '$'}
+            </button>
+          </Tooltip>
           {/* Expands the two numbers that drive the day's work. */}
           <button
             type="button"
@@ -490,15 +514,16 @@ export function GooglePacingCard({
         )}
       </div>
 
-      {/* ── Toolbar: what the table shows and how it's allocated, plus the
-          actions that operate on it. One row so everything shares a baseline —
-          two stacked strips of different widths read as misaligned. */}
-      <div className="mb-3 mt-6 flex flex-wrap items-center gap-x-4 gap-y-2">
-        {/* Which data you are looking at, stated plainly and up front. It used
-            to be a 10px caption inside the allocation panel, which is not where
-            anyone checks before reading the numbers. */}
-        <div className="min-w-0">
-          <div className="flex items-baseline gap-2">
+      {/* ── Header: what you're looking at (left) and when (right), then the
+          actions on their own row. Two rows so nothing sits on top of anything
+          else, and the two identity facts share a baseline. */}
+      <div className="mb-3 mt-6 flex flex-wrap items-start justify-between gap-4">
+        <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
+          Campaigns · {periodLabel(period)}{' '}
+          <span className="font-normal text-[var(--muted-foreground)]">({ads.length})</span>
+        </span>
+        <div className="text-right">
+          <div className="flex items-center justify-end gap-2">
             <span className="text-base font-bold tracking-tight text-[var(--foreground)]">
               {clock.todayDay != null
                 ? `Day ${clock.todayDay} of ${clock.daysInMonth}`
@@ -519,48 +544,13 @@ export function GooglePacingCard({
           <div className="text-xs text-[var(--muted-foreground)]">
             {clock.dataEdgeIso
               ? `data through ${fmtDate(clock.dataEdgeIso)}`
-              : 'no settled days yet'}{' '}
-            · {rows.length} campaign{rows.length === 1 ? '' : 's'}
+              : 'no settled days yet'}
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-            Allocate by
-          </span>
-          {/* Same Loomi combobox as the Move source, minus the search — two
-              options don't need filtering, but they should look like one control
-              family. */}
-          <div className="w-36">
-            <SearchableSelect
-              value={mode}
-              onChange={(value) => switchMode(value as AllocationMode)}
-              disabled={readOnly}
-              searchable={false}
-              options={[
-                { value: 'amt', label: '$ amount' },
-                { value: 'pct', label: '% of actual spend' },
-              ]}
-            />
-          </div>
-          <Tooltip
-            label={
-              mode === 'pct'
-                ? 'Every line is a percent of the month’s actual spend — they should total 100%. It is always percent of the full figure, never of "actual spend minus the locked lines".'
-                : 'Every line is a fixed dollar amount — they should total the actual spend.'
-            }
-          >
-            <InformationCircleIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
-          </Tooltip>
-        </div>
-        <LabelFilterBar
-          ads={ads}
-          activeLabel={activeLabel}
-          onChange={setActiveLabel}
-          className="mb-0"
-        />
-        {/* Actions sit with the table they act on, right-aligned, with Meta's
-            divider separating them from the search/add group. */}
-        <div className="ml-auto flex flex-wrap items-center gap-2">
+      </div>
+
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Tooltip
             label={
               !googleConnected
@@ -603,12 +593,15 @@ export function GooglePacingCard({
             <ArrowUturnLeftIcon className="h-4 w-4" />
             Undo
           </button>
-          {tableActions && (
-            <>
-              <div className="mx-1 h-5 w-px bg-[var(--border)]" />
-              {tableActions}
-            </>
-          )}
+        </div>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <LabelFilterBar
+            ads={ads}
+            activeLabel={activeLabel}
+            onChange={setActiveLabel}
+            className="mb-0"
+          />
+          {tableActions}
         </div>
       </div>
 

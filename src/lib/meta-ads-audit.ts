@@ -24,6 +24,13 @@ export const TRACKED_AD_FIELDS: Record<string, string> = {
   flightStart: 'Flight start',
   flightEnd: 'Flight end',
   liveDate: 'Live date',
+  // Google allocator: a lock changes no dollars but changes who Balance and
+  // Move are allowed to touch, so it needs to be attributable. Labels are how
+  // event money gets accounted for, so an untag is worth logging too.
+  pacerLocked: 'Budget lock',
+  pacerTags: 'Labels',
+  googleFlightStartOverride: 'Flight override start',
+  googleFlightEndOverride: 'Flight override end',
 };
 
 export interface AdFieldDiff {
@@ -117,6 +124,21 @@ export async function purgeOldAuditEntries(): Promise<number> {
 
 /** Format a money-ish field value for a human-readable summary. */
 function fmtVal(field: string, v: string | null): string {
+  // A lock reads as a state, not a boolean literal — "Unlocked → Locked" beats
+  // "false → true" in a change log a human has to scan.
+  if (field === 'pacerLocked') return v === 'true' ? 'Locked' : 'Unlocked';
+  // Labels are stored as JSON; show the names, and say "none" rather than "—"
+  // so a de-tagged line doesn't read like a missing value.
+  if (field === 'pacerTags') {
+    if (v == null) return 'none';
+    try {
+      const parsed = JSON.parse(v);
+      if (Array.isArray(parsed) && parsed.length > 0) return parsed.join(', ');
+    } catch {
+      return v;
+    }
+    return 'none';
+  }
   if (v == null) return '—';
   const moneyFields = new Set([
     'pacerDailyBudget',

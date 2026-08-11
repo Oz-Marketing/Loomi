@@ -16,7 +16,13 @@ import { COLORS } from '@/lib/ad-pacer/constants';
 import { fmt, fmtDate, classifyPacerHealth } from '@/lib/ad-pacer/helpers';
 import { buildPacerCalc } from '@/lib/ad-pacer/pacer-calc';
 import { shiftPeriod } from '@/lib/ad-pacer/period';
-import { PacerRow, Tooltip, usePacerReadOnly } from '@/app/app/tools/_shared';
+import {
+  LabelFilterBar,
+  PacerRow,
+  Tooltip,
+  usePacerReadOnly,
+} from '@/app/app/tools/_shared';
+import { collectLabels, hasTag, serializeTags } from '@/lib/ad-pacer/labels';
 import { AdSetLinkPicker, type MetaAdSetOption } from './AdSetLinkPicker';
 import { FilterStatus } from './FilterSidebar';
 
@@ -377,10 +383,15 @@ export function BudgetPacerPanel({
     [accountKey, plan, onChange],
   );
 
-  const visibleAds = useMemo(
-    () => applyFilters(plan.ads, filters, currentUserId),
-    [plan.ads, filters, currentUserId],
-  );
+  // §9 label view — composes with the sidebar filters: a row has to satisfy both.
+  const [activeLabel, setActiveLabel] = useState<string | null>(null);
+  const allLabels = useMemo(() => collectLabels(plan.ads), [plan.ads]);
+  const visibleAds = useMemo(() => {
+    const filtered = applyFilters(plan.ads, filters, currentUserId);
+    return activeLabel == null
+      ? filtered
+      : filtered.filter((ad) => hasTag(ad.pacerTags, activeLabel));
+  }, [plan.ads, filters, currentUserId, activeLabel]);
   const allExpanded =
     visibleAds.length > 0 && visibleAds.every((a) => expandedIds.has(a.id));
 
@@ -508,6 +519,7 @@ export function BudgetPacerPanel({
           </div>
         );
       })()}
+      <LabelFilterBar ads={plan.ads} activeLabel={activeLabel} onChange={setActiveLabel} />
       <FilterStatus
         filters={filters}
         onClear={() => onFiltersChange(EMPTY_FILTERS)}
@@ -560,6 +572,8 @@ export function BudgetPacerPanel({
                 disabled={readOnly}
               />
             }
+            allLabels={allLabels}
+            onTagsChange={(tags) => updateAd({ ...ad, pacerTags: serializeTags(tags) })}
             syncInfo={<MetaSyncInfo ad={ad} timeZone={plan.timeZone} />}
             statusMismatch={
               <MetaStatusMismatch

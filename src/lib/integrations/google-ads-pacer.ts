@@ -209,6 +209,65 @@ export async function fetchCampaignDailySpend(
   return byCampaign;
 }
 
+/** Reference metrics for one campaign over a window (spec §7). Labeled reference
+ *  only on the card — conversion tracking quality varies too much across these
+ *  accounts to compute an automated performance verdict from it. */
+export interface GoogleCampaignWindowMetrics {
+  spend: number;
+  conversions: number;
+  costPerConversion: number | null;
+  /** Percent (already ×100), matching the reporting surfaces. */
+  ctr: number | null;
+  clicks: number;
+  impressions: number;
+}
+
+/**
+ * One campaign's window metrics, for the delivery-health popup. Deliberately a
+ * single-campaign read rather than reusing getCampaignPerformance (which pulls
+ * every campaign plus an offline-conversion join): this fires on each popup open,
+ * so it stays the cheapest query that answers the question.
+ *
+ * cost_per_conversion is recomputed from spend ÷ conversions rather than trusted
+ * from the API — Google's own field is blank when conversions are zero, and a
+ * blank rendered next to a real spend figure reads as "free".
+ */
+export async function fetchCampaignWindowMetrics(
+  cfg: GoogleAdsConfig,
+  customerId: string,
+  campaignId: string,
+  sinceIso: string,
+  untilIso: string,
+): Promise<GoogleCampaignWindowMetrics> {
+  const rows = await gaql(
+    cfg,
+    customerId,
+    `SELECT metrics.cost_micros, metrics.conversions, metrics.clicks, metrics.impressions
+     FROM campaign
+     WHERE segments.date BETWEEN '${sinceIso}' AND '${untilIso}'
+       AND campaign.id = ${Number(campaignId) || 0}`,
+  );
+  let spend = 0;
+  let conversions = 0;
+  let clicks = 0;
+  let impressions = 0;
+  for (const r of rows) {
+    const m = r.metrics ?? {};
+    spend += microsToUnits(m.costMicros);
+    conversions += Number(m.conversions ?? 0) || 0;
+    clicks += Math.trunc(Number(m.clicks ?? 0)) || 0;
+    impressions += Math.trunc(Number(m.impressions ?? 0)) || 0;
+  }
+  return {
+    spend,
+    conversions,
+    costPerConversion: conversions > 0 ? spend / conversions : null,
+    ctr: impressions > 0 ? (clicks / impressions) * 100 : null,
+    clicks,
+    impressions,
+  };
+}
+
 /**
  * Campaign ids that restrict days/dayparts via an ad schedule. Post
  * June 2026, scheduled campaigns pace the full monthly cap into active days,

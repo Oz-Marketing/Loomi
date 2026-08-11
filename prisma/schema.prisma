@@ -1907,6 +1907,19 @@ model MetaAdsPacerPeriodBudget {
   // Σ ad pacerActual). The client budget for these months is entered later into
   // baseBudgetGoal, so over/under = historicalActual − baseBudgetGoal × markup.
   historicalActual      String?
+  // ── Google allocator (google-pacing-card spec §3/§9) ──
+  // The unit the WHOLE Google card allocates in: "pct" (percent of payable) or
+  // "amt" (dollar amounts). One unit for every line, deliberately — mixed units
+  // per line were the source of the toggle-drift and pool-shrink bugs. Google
+  // only; Meta's card has no allocator. Null = "pct" (the default).
+  googleAllocationMode  String?
+  // Optional intended budget per LABEL, as JSON Record<label, number> — e.g.
+  // {"Summer Sales Event": 1200}. Used only in a filtered (label) view, where
+  // the tagged campaigns' allocation is checked against it so added sales
+  // dollars can be confirmed fully allocated rather than absorbed into regular
+  // budget. Never the account denominator: unfiltered, allocation is always
+  // checked against payable.
+  googleEventBudgets    String?
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
 
@@ -1982,6 +1995,14 @@ model MetaAdsPacerAd {
 
   // Money (string to mirror form input, parsed at calc time)
   allocation            String?
+  // Google allocator (spec §3): the line's PERCENT-OF-PAYABLE input, kept only
+  // while the card is in percent mode. `allocation` above stays the authoritative
+  // dollar target in BOTH modes — everything downstream (reconciliation, the
+  // over/under, the budget panels) reads dollars and must not learn about modes.
+  // This exists so a percent survives a change to the account payable: in percent
+  // mode the dollar target is RE-DERIVED as percent ÷ 100 × payable, which is
+  // impossible from a stored dollar alone. Null on Meta rows and in dollar mode.
+  allocationPercent     String?
   pacerActual           String?
   pacerDailyBudget      String?
   // Full-run actual spend across the linked ad set's entire flight (Meta
@@ -2097,6 +2118,28 @@ model MetaAdsPacerAd {
   // budget change this holds the segment-summed ceiling; otherwise it's just
   // current daily × 30.4. Null until first sync / for total-budget campaigns.
   googleProratedCeiling        String?
+  // Google allocator flight override (spec §6). Flight dates AUTO-DERIVE from
+  // the campaign's own googleStartDate/googleEndDate intersected with the month;
+  // these two exist for the case the API can't express — the campaign existed on
+  // the 1st but wasn't FUNDED until mid-month, or the desk is pacing a custom
+  // window. Deliberately separate from flightStart/flightEnd (the planner's
+  // intent, which the Ad Planner owns) so a pacing override never rewrites the
+  // plan. YYYY-MM-DD; always re-clamped to the month in view, so a stale
+  // override from another month clamps away instead of corrupting the window.
+  googleFlightStartOverride    String?
+  googleFlightEndOverride      String?
+  // Google allocator lock (spec §4): a fixed carve-out, protected from Balance
+  // and from Move as either source or destination. Locking changes NO numbers —
+  // it only sets this flag — and never creates an unallocated gap on its own.
+  // It does not exempt the line from a budget push: the rate it needs is still
+  // the rate it needs.
+  pacerLocked                  Boolean  @default(false)
+  // Free-text labels as a JSON array of strings, e.g. ["Summer Sales Event"].
+  // A view/tracking dimension only, INDEPENDENT of budgetSource (base/added):
+  // tagging a base-funded campaign into an event must not move money between
+  // pools. Shared with Meta — the label/filter bar is cross-platform even though
+  // the allocator is Google-only.
+  pacerTags                    String?
   // Per-ad alert mute (Change 9): when true, the pacing-family scanners
   // (underspend/overpace, went-dark, flight-ending) skip this ad so a
   // known-acceptable case stops pinging. Workflow alerts are unaffected.

@@ -70,7 +70,7 @@ import {
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { zonedTodayIso } from '@/lib/timezone';
 import { toast } from '@/lib/toast';
-import { GoogleCampaignCard } from './GoogleCampaignCard';
+import { COL, GoogleCampaignCard } from './GoogleCampaignCard';
 import { GoogleDeliveryHealthModal } from './GoogleDeliveryHealthModal';
 import { PACE_COLORS, PACE_LABELS, campaignColor } from './google-pacing-theme';
 
@@ -698,26 +698,45 @@ export function GooglePacingCard({
               No campaigns match this view.
             </div>
           )}
-          {/* The account line still has to be readable without the table. */}
-          <div className="glass-section-card mt-2 flex flex-wrap items-center justify-between gap-3 rounded-xl px-4 py-3">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+          {/* Totals, on the SAME column widths as every header line above so the
+              list reads as a table. */}
+          <div className="glass-section-card mt-2 flex items-center gap-3 rounded-xl px-4 py-3">
+            <span className="min-w-0 flex-1 pl-[1.625rem] text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
               {view.activeLabel ? 'Campaign total' : 'Account total'}
             </span>
-            <div className="flex flex-wrap items-center gap-5 text-sm">
-              <span className="tabular-nums">
-                <span className="text-[var(--muted-foreground)]">Target </span>
-                <span className="font-bold">{fmt(view.totals.allocated)}</span>
-              </span>
-              <span className="tabular-nums">
-                <span className="text-[var(--muted-foreground)]">Spent </span>
-                <span className="font-bold">{fmt(view.totals.spent)}</span>
-              </span>
-              <span className="tabular-nums">
-                <span className="text-[var(--muted-foreground)]">New daily </span>
-                <span className="font-bold" style={{ color: 'var(--primary)' }}>
-                  {fmt(view.totals.accountDaily)}
-                </span>
-              </span>
+            <div className={`${COL.allocation} flex-shrink-0 text-right`}>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Allocation
+              </div>
+              <div className="text-sm font-bold tabular-nums text-[var(--foreground)]">
+                {mode === 'pct'
+                  ? `${view.visible.reduce((sum, l) => sum + l.input, 0).toFixed(1)}%`
+                  : fmt(view.totals.allocated)}
+              </div>
+            </div>
+            <div className={`${COL.spent} hidden flex-shrink-0 text-right sm:block`}>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Spent MTD
+              </div>
+              <div className="text-sm font-bold tabular-nums" style={{ color: COLORS.daily }}>
+                {fmt(view.totals.spent)}
+              </div>
+            </div>
+            <div className={`${COL.daily} hidden flex-shrink-0 text-right sm:block`}>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Current Daily
+              </div>
+              <div className="text-sm font-bold tabular-nums text-[var(--foreground)]">
+                {fmt(view.visible.reduce((sum, l) => sum + l.currentDaily, 0))}
+              </div>
+            </div>
+            <div className={`${COL.pace} flex-shrink-0 text-right`}>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                New Daily
+              </div>
+              <div className="text-sm font-bold tabular-nums" style={{ color: 'var(--primary)' }}>
+                {fmt(view.totals.accountDaily)}
+              </div>
             </div>
           </div>
         </div>

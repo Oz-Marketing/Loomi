@@ -1,16 +1,20 @@
 'use client';
 
 /**
- * Card view of one allocator line — the alternative to the table, mirroring
- * Meta's PacerRow: a collapsed header you can scan down, and an expanded card
- * with the working numbers.
+ * Card view of one allocator line — the alternative to the table, following
+ * Meta's PacerRow: a collapsed header you can scan straight down, expanding to
+ * a card whose top row is target spend (left) and flight (right).
  *
  * The two views render the SAME `AllocatorLine`, so nothing is recomputed here
- * and the two can't disagree. This file is layout only.
+ * and they cannot disagree. This file is layout only.
+ *
+ * COLUMN WIDTHS ARE SHARED with the totals line below the list (see COL) — the
+ * header only reads as a table if every row and the total use one set of widths.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
+  CalendarDaysIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   LockClosedIcon,
@@ -23,9 +27,17 @@ import type { PacerAd } from '@/lib/ad-pacer/types';
 import { InlineMoneyCell, LabelChips, MetricBox, Tooltip } from '@/app/app/tools/_shared';
 import { PACE_COLORS, PACE_LABELS, campaignColor } from './google-pacing-theme';
 
-/** The pacing-health sentence behind the verdict's tooltip. Says what the badge
- *  means and what it does NOT mean, since a single ratio invites over-reading. */
-function paceHelp(line: AllocatorLine): string {
+/** One set of column widths for the header rows AND the totals line. */
+export const COL = {
+  allocation: 'w-24',
+  spent: 'w-28',
+  daily: 'w-28',
+  pace: 'w-36',
+};
+
+/** The pacing-health sentence behind the verdict. Says what the badge means and
+ *  what it does NOT, since a single ratio invites over-reading. */
+export function paceHelp(line: AllocatorLine): string {
   if (line.paceRatio == null) {
     return 'No settled days in this campaign’s flight yet, so there is nothing to compare against.';
   }
@@ -76,107 +88,129 @@ export function GoogleCampaignCard({
 
   return (
     <div className="glass-section-card mb-2 rounded-xl">
-      {/* ── Collapsed header: name, spent, current daily, pace ── */}
+      {/* ── Collapsed header, columns aligned with the totals line ── */}
       <div className="flex w-full items-center gap-3 px-4 py-3">
         <button
           type="button"
           onClick={onToggleExpanded}
           aria-expanded={expanded}
-          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
         >
           {expanded ? (
             <ChevronDownIcon className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]" />
           ) : (
             <ChevronRightIcon className="h-4 w-4 flex-shrink-0 text-[var(--muted-foreground)]" />
           )}
-          <span
-            className="h-2.5 w-2.5 flex-shrink-0 rounded-sm"
-            style={{ background: color }}
-          />
+          <span className="h-2.5 w-2.5 flex-shrink-0 rounded-sm" style={{ background: color }} />
           <span className="min-w-0 truncate text-sm font-semibold text-[var(--foreground)]">
             {line.name}
           </span>
-          {!line.flight.fullMonth && (
-            <span className="hidden flex-shrink-0 text-[10px] tabular-nums text-[var(--muted-foreground)] sm:inline">
-              day {line.flight.startDay}–{line.flight.endDay}
-            </span>
+          {line.locked && (
+            <LockClosedIcon className="h-3 w-3 flex-shrink-0 text-[var(--muted-foreground)]" />
           )}
         </button>
 
-        <div className="hidden flex-shrink-0 items-center gap-6 sm:flex">
-          <div className="text-right">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-              Spent MTD
-            </div>
-            <div className="text-sm font-bold tabular-nums" style={{ color: COLORS.daily }}>
-              {fmt(line.spentMTD)}
-            </div>
+        {/* Allocation is editable right here — it is the number you come to change. */}
+        <div className={`${COL.allocation} flex-shrink-0 text-right`}>
+          <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+            Allocation
           </div>
-          <div className="text-right">
-            <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
-              Current Daily
-            </div>
-            <div className="text-sm font-bold tabular-nums text-[var(--foreground)]">
-              {line.currentDaily > 0 ? fmt(line.currentDaily) : '—'}
-            </div>
+          <InlineMoneyCell
+            value={mode === 'pct' ? String(Number(line.input.toFixed(2))) : line.input.toFixed(2)}
+            ariaLabel={`${mode === 'pct' ? 'Percent' : 'Dollar'} allocation for ${line.name}`}
+            disabled={readOnly}
+            display={
+              <span className="block text-right text-sm font-bold tabular-nums text-[var(--foreground)]">
+                {mode === 'pct' ? `${Number(line.input.toFixed(2))}%` : fmt(line.input)}
+              </span>
+            }
+            onCommit={(next) => {
+              const parsed = Number(next);
+              if (next == null || !Number.isFinite(parsed) || parsed < 0) return;
+              if (Math.abs(parsed - line.input) > 0.0001) onInput(parsed);
+            }}
+          />
+        </div>
+
+        <div className={`${COL.spent} hidden flex-shrink-0 text-right sm:block`}>
+          <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+            Spent MTD
+          </div>
+          <div className="text-sm font-bold tabular-nums" style={{ color: COLORS.daily }}>
+            {fmt(line.spentMTD)}
           </div>
         </div>
 
-        <Tooltip label={paceHelp(line)} placement="bottom">
-          <button
-            type="button"
-            onClick={onOpenHealth}
-            className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-opacity hover:opacity-80"
-            style={{ background: `${paceColor}1f`, color: paceColor }}
-          >
-            <span className="h-1.5 w-1.5 rounded-full" style={{ background: paceColor }} />
-            {PACE_LABELS[line.paceStatus]}
-          </button>
-        </Tooltip>
+        <div className={`${COL.daily} hidden flex-shrink-0 text-right sm:block`}>
+          <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+            Current Daily
+          </div>
+          <div className="text-sm font-bold tabular-nums text-[var(--foreground)]">
+            {line.currentDaily > 0 ? fmt(line.currentDaily) : '—'}
+          </div>
+        </div>
+
+        <div className={`${COL.pace} flex flex-shrink-0 justify-end`}>
+          <Tooltip label={paceHelp(line)} placement="bottom">
+            <button
+              type="button"
+              onClick={onOpenHealth}
+              className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-opacity hover:opacity-80"
+              style={{ background: `${paceColor}1f`, color: paceColor }}
+            >
+              <span className="h-1.5 w-1.5 rounded-full" style={{ background: paceColor }} />
+              {PACE_LABELS[line.paceStatus]}
+            </button>
+          </Tooltip>
+        </div>
       </div>
 
       {/* ── Expanded body ── */}
       {expanded && (
         <div className="border-t border-[var(--border)] px-4 py-4">
-          <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Tooltip
-                label={
-                  line.locked
-                    ? 'Locked — protected from Balance and from Move.'
-                    : 'Lock this budget — a fixed carve-out Balance and Move leave alone.'
-                }
-              >
-                <button
-                  type="button"
-                  onClick={onToggleLock}
-                  disabled={readOnly}
-                  aria-pressed={line.locked}
-                  aria-label={line.locked ? `Unlock ${line.name}` : `Lock ${line.name}`}
-                  className={`inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+          {/* Meta's shape: the money on the left, the window on the right. */}
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                Target Spend
+              </div>
+              <div className="mt-0.5 text-2xl font-bold tabular-nums leading-tight text-[var(--foreground)]">
+                {fmt(line.target)}
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-[var(--muted-foreground)]">
+                  {payable > 0 ? `${line.percentOfPayable.toFixed(1)}% of actual spend` : '—'}
+                </span>
+                <Tooltip
+                  label={
                     line.locked
-                      ? 'border-[var(--foreground)]/30 bg-[var(--foreground)]/10 text-[var(--foreground)]'
-                      : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-                  }`}
+                      ? 'Locked — protected from Balance and from Move.'
+                      : 'Lock this budget — a fixed carve-out Balance and Move leave alone.'
+                  }
                 >
-                  {line.locked ? (
-                    <LockClosedIcon className="h-3 w-3" />
-                  ) : (
-                    <LockOpenIcon className="h-3 w-3" />
-                  )}
-                </button>
-              </Tooltip>
-              <LabelChips
-                tags={ad?.pacerTags}
-                allLabels={allLabels}
-                readOnly={readOnly}
-                onChange={onTagsChange}
-              />
+                  <button
+                    type="button"
+                    onClick={onToggleLock}
+                    disabled={readOnly}
+                    aria-pressed={line.locked}
+                    aria-label={line.locked ? `Unlock ${line.name}` : `Lock ${line.name}`}
+                    className={`inline-flex h-5 w-5 items-center justify-center rounded border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                      line.locked
+                        ? 'border-[var(--foreground)]/30 bg-[var(--foreground)]/10 text-[var(--foreground)]'
+                        : 'border-[var(--border)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                    }`}
+                  >
+                    {line.locked ? (
+                      <LockClosedIcon className="h-2.5 w-2.5" />
+                    ) : (
+                      <LockOpenIcon className="h-2.5 w-2.5" />
+                    )}
+                  </button>
+                </Tooltip>
+              </div>
             </div>
 
-            {/* Flight window, top right and editable — the funding window is a
-                per-campaign fact and this is the card that owns the campaign. */}
-            <FlightInline
+            <FlightBlock
               line={line}
               daysInMonth={daysInMonth}
               readOnly={readOnly}
@@ -184,38 +218,7 @@ export function GoogleCampaignCard({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-            <div className="metric-box w-full rounded-lg bg-[var(--muted)]/40 px-3 py-2.5">
-              <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                Allocation
-              </div>
-              <InlineMoneyCell
-                value={mode === 'pct' ? String(Number(line.input.toFixed(2))) : line.input.toFixed(2)}
-                ariaLabel={`${mode === 'pct' ? 'Percent' : 'Dollar'} allocation for ${line.name}`}
-                disabled={readOnly}
-                display={
-                  <span className="block text-lg font-bold leading-tight text-[var(--foreground)]">
-                    {mode === 'pct'
-                      ? `${Number(line.input.toFixed(2))}%`
-                      : fmt(line.input)}
-                  </span>
-                }
-                onCommit={(next) => {
-                  const parsed = Number(next);
-                  if (next == null || !Number.isFinite(parsed) || parsed < 0) return;
-                  if (Math.abs(parsed - line.input) > 0.0001) onInput(parsed);
-                }}
-              />
-              <div className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
-                {payable > 0 ? `${line.percentOfPayable.toFixed(1)}% of actual spend` : '—'}
-              </div>
-            </div>
-
-            <MetricBox
-              label="Target Spend"
-              value={fmt(line.target)}
-              sub={`over ${line.flight.total} flight day${line.flight.total === 1 ? '' : 's'}`}
-            />
+          <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
             <MetricBox
               label="Spent MTD"
               value={fmt(line.spentMTD)}
@@ -230,8 +233,27 @@ export function GoogleCampaignCard({
                   ? `${line.paceDelta >= 0 ? '+' : '−'}${fmt(Math.abs(line.paceDelta))} vs actual`
                   : 'nothing expected yet'
               }
-              tooltip={paceHelp(line)}
             />
+            {/* Verdict lives in the box row, and opens the full health report. */}
+            <Tooltip label={paceHelp(line)} className="w-full">
+              <button
+                type="button"
+                onClick={onOpenHealth}
+                className="metric-box w-full rounded-lg bg-[var(--muted)]/40 px-3 py-2.5 text-left transition-colors hover:bg-[var(--muted)]/70"
+              >
+                <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                  Pacing
+                </div>
+                <div className="text-lg font-bold leading-tight" style={{ color: paceColor }}>
+                  {PACE_LABELS[line.paceStatus]}
+                </div>
+                <div className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
+                  {line.paceRatio != null
+                    ? `${Math.round(line.paceRatio * 100)}% of pace · delivery health →`
+                    : 'delivery health →'}
+                </div>
+              </button>
+            </Tooltip>
             <MetricBox
               label="Rec. Daily Budget"
               value={line.dailyControllable ? fmt(line.recommendedDaily) : '—'}
@@ -249,31 +271,26 @@ export function GoogleCampaignCard({
             />
           </div>
 
-          {/* The verdict in words, with the health detail on hover. */}
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <Tooltip label={paceHelp(line)}>
-              <span
-                className="cursor-help text-[11px] font-semibold"
-                style={{ color: paceColor }}
-              >
-                {PACE_LABELS[line.paceStatus]}
-                {line.paceRatio != null && ` · ${Math.round(line.paceRatio * 100)}% of pace`}
-              </span>
-            </Tooltip>
-            <button
-              type="button"
-              onClick={onOpenHealth}
-              className="text-[11px] font-medium text-[var(--primary)] transition-opacity hover:opacity-80"
-            >
-              Delivery health →
-            </button>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <LabelChips
+              tags={ad?.pacerTags}
+              allLabels={allLabels}
+              readOnly={readOnly}
+              onChange={onTagsChange}
+            />
             {line.shared && (
-              <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: COLORS.daily }}>
+              <span
+                className="text-[10px] font-bold uppercase tracking-wider"
+                style={{ color: COLORS.daily }}
+              >
                 Shared budget — push skips it
               </span>
             )}
             {line.disapproved && (
-              <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: COLORS.error }}>
+              <span
+                className="text-[10px] font-bold uppercase tracking-wider"
+                style={{ color: COLORS.error }}
+              >
                 Ads disapproved — budget is not the problem
               </span>
             )}
@@ -284,9 +301,12 @@ export function GoogleCampaignCard({
   );
 }
 
-/** Day-of-month flight bounds, inline. Writes an override; the auto-derived
- *  window comes from the campaign's own Google dates. */
-function FlightInline({
+/**
+ * Flight window, read-only until you ask to change it. The inline number boxes
+ * were permanent form furniture for something adjusted once a month, so the
+ * window now just reads as text with an Adjust button beside it.
+ */
+function FlightBlock({
   line,
   daysInMonth,
   readOnly,
@@ -297,13 +317,31 @@ function FlightInline({
   readOnly: boolean;
   onChange: (startDay: number, endDay: number) => void;
 }) {
+  const [open, setOpen] = useState(false);
   const [start, setStart] = useState(String(line.flight.startDay));
   const [end, setEnd] = useState(String(line.flight.endDay));
+  const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setStart(String(line.flight.startDay));
     setEnd(String(line.flight.endDay));
   }, [line.flight.startDay, line.flight.endDay]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
 
   const commit = () => {
     const s = Math.min(Math.max(Number(start) || 1, 1), daysInMonth);
@@ -311,45 +349,81 @@ function FlightInline({
     setStart(String(s));
     setEnd(String(e));
     if (s !== line.flight.startDay || e !== line.flight.endDay) onChange(s, e);
+    setOpen(false);
   };
 
   const inputClass =
-    'w-10 rounded border border-[var(--border)] bg-[var(--input)] px-1 py-0.5 text-center text-xs font-semibold tabular-nums text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none disabled:opacity-60';
+    'w-12 rounded border border-[var(--border)] bg-[var(--input)] px-1 py-1 text-center text-xs font-semibold tabular-nums text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none';
 
   return (
-    <div className="text-right">
-      <Tooltip label="The days this campaign is funded for THIS month. Auto-derived from its Google dates — override it when the funding window differs.">
-        <span className="cursor-help text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-          Flight this month
+    <div ref={wrapRef} className="relative text-right">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+        Flight this month
+      </div>
+      <div className="mt-0.5 text-lg font-bold tabular-nums leading-tight text-[var(--foreground)]">
+        Day {line.flight.startDay}–{line.flight.endDay}
+      </div>
+      <div className="mt-1 flex items-center justify-end gap-2">
+        <span className="text-[11px] tabular-nums text-[var(--muted-foreground)]">
+          {line.flight.remaining} day{line.flight.remaining === 1 ? '' : 's'} left
         </span>
-      </Tooltip>
-      <div className="mt-1 flex items-center justify-end gap-1.5 text-xs text-[var(--muted-foreground)]">
-        <span>day</span>
-        <input
-          value={start}
-          onChange={(e) => setStart(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-          disabled={readOnly}
-          inputMode="numeric"
-          aria-label={`Flight start day for ${line.name}`}
-          className={inputClass}
-        />
-        <span>–</span>
-        <input
-          value={end}
-          onChange={(e) => setEnd(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-          disabled={readOnly}
-          inputMode="numeric"
-          aria-label={`Flight end day for ${line.name}`}
-          className={inputClass}
-        />
+        {!readOnly && (
+          <Tooltip label="The days this campaign is funded for THIS month. Auto-derived from its Google dates — override it when the funding window differs.">
+            <button
+              type="button"
+              onClick={() => setOpen((o) => !o)}
+              aria-expanded={open}
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--border)] bg-[var(--card)] px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+            >
+              <CalendarDaysIcon className="h-3 w-3" />
+              Adjust flight
+            </button>
+          </Tooltip>
+        )}
       </div>
-      <div className="mt-0.5 text-[10px] tabular-nums text-[var(--muted-foreground)]">
-        {line.flight.remaining} day{line.flight.remaining === 1 ? '' : 's'} left
-      </div>
+
+      {open && (
+        <div className="animate-dropdown-in absolute right-0 top-full z-40 mt-1.5 w-56 rounded-lg border border-[var(--border)] bg-[var(--card-strong)] p-3 text-left shadow-xl backdrop-blur-2xl backdrop-saturate-150">
+          <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+            Flight this month
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+            <span>day</span>
+            <input
+              value={start}
+              onChange={(e) => setStart(e.target.value)}
+              inputMode="numeric"
+              aria-label={`Flight start day for ${line.name}`}
+              className={inputClass}
+            />
+            <span>–</span>
+            <input
+              value={end}
+              onChange={(e) => setEnd(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && commit()}
+              inputMode="numeric"
+              aria-label={`Flight end day for ${line.name}`}
+              className={inputClass}
+            />
+          </div>
+          <div className="mt-2.5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="rounded-md px-2 py-1 text-[11px] font-medium text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={commit}
+              className="rounded-md bg-[var(--primary)] px-2.5 py-1 text-[11px] font-semibold text-white hover:opacity-90"
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

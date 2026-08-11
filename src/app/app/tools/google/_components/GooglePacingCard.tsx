@@ -1193,12 +1193,17 @@ function Row({
             />
           )}
         </div>
-        <LabelChips
-          tags={ad?.pacerTags}
-          allLabels={allLabels}
-          readOnly={readOnly}
-          onChange={onTagsChange}
-        />
+        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+          {line.channelType && (
+            <span className="text-[11px] text-[var(--muted-foreground)]">{line.channelType}</span>
+          )}
+          <LabelChips
+            tags={ad?.pacerTags}
+            allLabels={allLabels}
+            readOnly={readOnly}
+            onChange={onTagsChange}
+          />
+        </div>
       </td>
 
       <td className="px-3 py-2.5 text-right align-middle">

@@ -303,6 +303,10 @@ export interface AllocatorLine {
   locked: boolean;
   tags: string[];
   pacingType: 'Daily' | 'Total';
+  /** Google's channel rollup (Search / Display / PMax / …) — the planner shows it
+   *  under the name, so the pacing surfaces show it too rather than making you
+   *  switch tabs to tell a Search line from a PMax one. */
+  channelType: string | null;
   shared: boolean;
   sharedCount: number | null;
   hasAdSchedule: boolean;
@@ -392,6 +396,7 @@ export function buildAllocatorLine(
     locked: ad.pacerLocked === true,
     tags: parseTags(ad.pacerTags),
     pacingType,
+    channelType: ad.googleChannelType ?? null,
     shared: isSharedBudget(ad.googleBudgetReferenceCount),
     sharedCount: isSharedBudget(ad.googleBudgetReferenceCount)
       ? (ad.googleBudgetReferenceCount ?? null)

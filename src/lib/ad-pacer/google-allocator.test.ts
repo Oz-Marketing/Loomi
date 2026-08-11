@@ -79,6 +79,7 @@ function line(overrides: Partial<AllocatorLine> & { id: string }): AllocatorLine
     locked: false,
     tags: [],
     pacingType: 'Daily',
+    channelType: null,
     shared: false,
     sharedCount: null,
     hasAdSchedule: false,

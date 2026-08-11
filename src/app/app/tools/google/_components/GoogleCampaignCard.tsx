@@ -105,6 +105,11 @@ export function GoogleCampaignCard({
           <span className="min-w-0 truncate text-sm font-semibold text-[var(--foreground)]">
             {line.name}
           </span>
+          {line.channelType && (
+            <span className="hidden flex-shrink-0 text-[11px] text-[var(--muted-foreground)] sm:inline">
+              {line.channelType}
+            </span>
+          )}
           {line.locked && (
             <LockClosedIcon className="h-3 w-3 flex-shrink-0 text-[var(--muted-foreground)]" />
           )}

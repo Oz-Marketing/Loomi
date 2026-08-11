@@ -298,9 +298,8 @@ export function LabelFilterBar({
 
   return (
     <div ref={wrapRef} className={`relative flex items-center gap-2 ${className}`}>
-      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-        View
-      </span>
+      {/* No "View" label — the trigger reads "All campaigns" or the active
+          label, which says what it is without one. */}
       {/* A dropdown rather than a chip per label: an account can accumulate a
           dozen events over a season, and a row of pills that wraps to two lines
           pushes the table down without telling you anything you can't read from

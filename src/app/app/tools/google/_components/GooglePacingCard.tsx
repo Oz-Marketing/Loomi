@@ -26,17 +26,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowPathIcon,
+  ArrowsRightLeftIcon,
+  ArrowSmallDownIcon,
+  ArrowSmallUpIcon,
   ArrowUturnLeftIcon,
+  BoltIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  ChevronUpIcon,
-  InformationCircleIcon,
+  Squares2X2Icon,
+  TableCellsIcon,
   LockClosedIcon,
   LockOpenIcon,
   MinusSmallIcon,
   PlusSmallIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
-import { GoogleAdsBrandIcon } from '@/components/icons/platform-logos';
 import { COLORS } from '@/lib/ad-pacer/constants';
 import { fmt, fmtDate, num } from '@/lib/ad-pacer/helpers';
 import { collectLabels, serializeTags } from '@/lib/ad-pacer/labels';
@@ -57,12 +61,24 @@ import {
   type MoveSource,
 } from '@/lib/ad-pacer/google-allocator';
 import type { PacerAd, PacerPlan } from '@/lib/ad-pacer/types';
-import { LabelChips, LabelFilterBar, Tooltip } from '@/app/app/tools/_shared';
+import {
+  InlineMoneyCell,
+  LabelChips,
+  LabelFilterBar,
+  Tooltip,
+} from '@/app/app/tools/_shared';
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { zonedTodayIso } from '@/lib/timezone';
 import { toast } from '@/lib/toast';
+import { COL, GoogleCampaignCard } from './GoogleCampaignCard';
 import { GoogleDeliveryHealthModal } from './GoogleDeliveryHealthModal';
 import { PACE_COLORS, PACE_LABELS, campaignColor } from './google-pacing-theme';
+
+/** "August 2026" for the period heading — same wording as the shell's. */
+function periodLabel(period: string): string {
+  const [y, m] = period.split('-').map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+}
 
 const money2 = (n: number) =>
   `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -94,6 +110,9 @@ export interface GooglePacingCardProps {
   onPushBudgets: () => void;
   pushing?: boolean;
   googleConnected: boolean;
+  /** Search / sync / Add Plan, rendered directly above the table so the controls
+   *  sit with the rows they act on rather than above the whole card. */
+  tableActions?: React.ReactNode;
 }
 
 export function GooglePacingCard({
@@ -108,6 +127,7 @@ export function GooglePacingCard({
   onPushBudgets,
   pushing = false,
   googleConnected,
+  tableActions,
 }: GooglePacingCardProps) {
   const readOnly = frozen;
   const [mode, setMode] = useState<AllocationMode>(plan.allocationMode ?? 'pct');
@@ -116,6 +136,18 @@ export function GooglePacingCard({
     plan.eventBudgets ?? {},
   );
   const [healthLineId, setHealthLineId] = useState<string | null>(null);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [spendOpen, setSpendOpen] = useState(false);
+  // Table (dense, comparative) vs cards (one campaign at a time, Meta's shape).
+  const [layout, setLayout] = useState<'table' | 'cards'>('table');
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const toggleExpanded = (id: string) =>
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   // Undo holds whole ad sets — every mutation here is a multi-row rewrite
   // (balance, move, a mode switch), so a field-level undo would be a lie.
   const [undoStack, setUndoStack] = useState<PacerAd[][]>([]);
@@ -275,6 +307,18 @@ export function GooglePacingCard({
 
   const healthLine = healthLineId ? view.lines.find((l) => l.id === healthLineId) : null;
 
+  /** Write a manual flight override as day-of-month bounds within this month. */
+  const setFlight = useCallback(
+    (id: string, startDay: number, endDay: number) => {
+      const pad = (n: number) => String(n).padStart(2, '0');
+      updateAd(id, {
+        googleFlightStartOverride: `${period}-${pad(startDay)}`,
+        googleFlightEndOverride: `${period}-${pad(endDay)}`,
+      });
+    },
+    [period, updateAd],
+  );
+
   // Bar widths measure against the LARGER of the denominator and the plan, so an
   // over-allocated plan compresses rather than overflowing the track.
   const meterBasis = Math.max(view.totals.denominator, view.totals.allocated) || 1;
@@ -289,96 +333,97 @@ export function GooglePacingCard({
 
   return (
     <div>
-      {/* ── Account allocation panel ──
-          Same shape as Meta's TotalAllocationHeader: title + a right-aligned
-          stat cluster, then the allocation bar with a legend underneath. The
-          allocator's extra numbers (payable, spend, pace) join that cluster
-          rather than getting a strip of their own. */}
+      {/* ── Headline stats ──
+          One card per number, above the allocation bar. These are the figures a
+          rep reads first and quotes to a client, so they get their own surfaces
+          rather than being crammed into a header row. MetricBox is Loomi's
+          passive-stat primitive (same one the pacer cards use), so they match the
+          rest of the tool. Filtered views swap the account's budget/payable for
+          the denominator the slice is actually measured against (§9). */}
+      <div
+        className={`mb-3 grid grid-cols-2 gap-2 sm:grid-cols-3 ${
+          view.activeLabel ? 'lg:grid-cols-4' : 'lg:grid-cols-5'
+        }`}
+      >
+        {view.activeLabel ? (
+          <StatCard
+            label={view.denominatorKind === 'eventBudget' ? 'Event Budget' : 'Campaign Total'}
+            value={fmt(view.totals.denominator)}
+            tooltip={
+              view.denominatorKind === 'eventBudget'
+                ? 'The budget you intended for this label. The tagged allocation is checked against it.'
+                : 'No event budget set for this label, so the tagged campaigns are checked against their own total.'
+            }
+          />
+        ) : (
+          <>
+            <StatCard
+              label="Total Budget"
+              value={fmt(totalBudget)}
+              sub="client gross"
+              tooltip="The client's budget for the month, before the markup. Set it on the Planner tab."
+            />
+            <StatCard
+              label="Actual Spend"
+              value={fmt(payable)}
+              sub={`× ${(markup * 100).toFixed(1)}% markup`}
+              color={carryoverNote !== 0 ? COLORS.warn : undefined}
+              tooltip={`Client budget × ${(markup * 100).toFixed(1)}% markup — the spend that actually reaches Google, and the denominator every allocation is measured against.${
+                carryoverNote !== 0
+                  ? ` This month also carries a ${money2(carryoverNote)} reconciliation carryover, which is NOT included — apply it to the budget number if you want it paced.`
+                  : ''
+              }`}
+            />
+          </>
+        )}
+        <StatCard
+          label="Spent MTD"
+          value={fmt(view.totals.spent)}
+          sub={clock.dataEdgeIso ? `through ${fmtDate(clock.dataEdgeIso)}` : 'no settled days'}
+          color={COLORS.daily}
+          tooltip="Delivered so far this month, from Google. Served cost, not billed."
+        />
+        <StatCard
+          label="Expected MTD"
+          value={fmt(view.totals.expected)}
+          sub="at an even pace"
+          tooltip="What should have been spent by now, at an even pace across each campaign's own flight days."
+        />
+        <StatCard
+          label={view.activeLabel ? 'Campaign Pace' : 'Account Pace'}
+          value={PACE_LABELS[view.totals.paceStatus]}
+          sub={
+            view.totals.paceRatio != null
+              ? `${Math.round(view.totals.paceRatio * 100)}% of expected`
+              : undefined
+          }
+          color={PACE_COLORS[view.totals.paceStatus]}
+          tooltip={
+            view.totals.paceRatio != null
+              ? `Spent is ${Math.round(view.totals.paceRatio * 100)}% of expected. On track is within 12% either way — Google can spend up to 2× the daily on a busy day, so a tighter band would flip on any busy Saturday.`
+              : 'No settled days yet.'
+          }
+        />
+      </div>
+
+      {/* ── Allocation bar ── */}
       <div className="glass-section-card rounded-xl px-5 py-4 mb-4">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2.5">
-          <div className="flex items-baseline gap-2.5">
-            <span className="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">
-              {view.activeLabel ?? 'Account'} Allocation
-            </span>
-            <span className="text-[10px] text-[var(--muted-foreground)]">
-              {clock.dataEdgeIso ? (
-                <>
-                  data through {fmtDate(clock.dataEdgeIso)} · day{' '}
-                  {clock.todayDay ?? clock.daysInMonth} of {clock.daysInMonth}
-                </>
-              ) : (
-                <>no settled days yet · {clock.daysInMonth}-day month</>
-              )}
-            </span>
-            {clock.stale && (
-              <Tooltip label="Spend and the day count both stop at the last settled day, so the recommendation stays honest — but a fresh sync will move it.">
-                <span
-                  className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider"
-                  style={{ color: COLORS.warn }}
-                >
-                  <ArrowPathIcon className="h-3 w-3" />
-                  Sync behind
-                </span>
-              </Tooltip>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-3">
-            {/* §9 required rescoping: in a label view the account's budget and
-                payable are not this slice's numbers, so they're replaced by the
-                denominator the slice is actually measured against. Leaving them
-                up would be the worst case — account-wide figures sitting over a
-                filtered table, looking authoritative. */}
-            {view.activeLabel ? (
-              <Stat
-                label={view.denominatorKind === 'eventBudget' ? 'Event Budget' : 'Campaign Total'}
-                value={fmt(view.totals.denominator)}
-                tooltip={
-                  view.denominatorKind === 'eventBudget'
-                    ? 'The budget you intended for this label. The tagged allocation is checked against it.'
-                    : 'No event budget set for this label, so the tagged campaigns are checked against their own total.'
-                }
-              />
-            ) : (
-              <>
-                <Stat
-                  label="Total Budget"
-                  value={fmt(totalBudget)}
-                  tooltip="The client's budget for the month, before the markup. Set it on the Planner tab."
-                />
-                <Stat
-                  label="Adjusted Payable"
-                  value={fmt(payable)}
-                  color={carryoverNote !== 0 ? COLORS.warn : undefined}
-                  tooltip={`Client budget × ${(markup * 100).toFixed(1)}% markup — the spend that actually reaches Google, and the denominator every allocation is measured against.${
-                    carryoverNote !== 0
-                      ? ` This month also carries a ${money2(carryoverNote)} reconciliation carryover, which is NOT included — apply it to the budget number if you want it paced.`
-                      : ''
-                  }`}
-                />
-              </>
-            )}
-            <Stat
-              label="Spent MTD"
-              value={fmt(view.totals.spent)}
-              color={COLORS.daily}
-              tooltip="Delivered so far this month, from Google. Served cost, not billed."
+        <div className="mb-3 flex flex-wrap items-center gap-2.5">
+          <span className="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">
+            {view.activeLabel ?? 'Account'} Allocation
+          </span>
+          {/* Expands the two numbers that drive the day's work. */}
+          <button
+            type="button"
+            onClick={() => setSpendOpen((o) => !o)}
+            aria-expanded={spendOpen}
+            className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          >
+            {spendOpen ? 'Hide' : 'Spend to date'}
+            <ChevronDownIcon
+              className={`h-3.5 w-3.5 transition-transform ${spendOpen ? 'rotate-180' : ''}`}
             />
-            <Stat
-              label="Expected MTD"
-              value={fmt(view.totals.expected)}
-              tooltip="What should have been spent by now, at an even pace across each campaign's own flight days."
-            />
-            <Stat
-              label={view.activeLabel ? 'Campaign Pace' : 'Account Pace'}
-              value={PACE_LABELS[view.totals.paceStatus]}
-              color={PACE_COLORS[view.totals.paceStatus]}
-              tooltip={
-                view.totals.paceRatio != null
-                  ? `Spent is ${Math.round(view.totals.paceRatio * 100)}% of expected. On track is within 12% either way — Google can spend up to 2× the daily on a busy day, so a tighter band would flip on any busy Saturday.`
-                  : 'No settled days yet.'
-              }
-            />
-          </div>
+          </button>
         </div>
 
         {/* Segmented allocation bar — one segment per campaign, matching the
@@ -390,7 +435,7 @@ export function GooglePacingCard({
               <Tooltip
                 key={l.id}
                 className="h-full transition-[width] duration-500"
-                label={`${l.name}: ${fmt(l.target)} (${l.percentOfPayable.toFixed(1)}% of payable)${l.locked ? ' · locked' : ''}`}
+                label={`${l.name}: ${fmt(l.target)} (${l.percentOfPayable.toFixed(1)}% of actual spend)${l.locked ? ' · locked' : ''}`}
                 style={{
                   width: `${(l.target / meterBasis) * 100}%`,
                   background: campaignColor(l.colorIndex),
@@ -415,7 +460,7 @@ export function GooglePacingCard({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-4">
-          <div className="text-[10px] text-[var(--muted-foreground)]">
+          <div className="text-xs text-[var(--muted-foreground)]">
             Allocated{' '}
             <span className="font-bold" style={{ color: allocColor }}>
               {fmt(view.totals.allocated)}
@@ -423,19 +468,19 @@ export function GooglePacingCard({
             of {fmt(view.totals.denominator)} {denominatorNoun(view)}
           </div>
           {!view.totals.fullyAllocated && (
-            <div className="text-[10px] font-bold" style={{ color: allocColor }}>
+            <div className="text-xs font-bold" style={{ color: allocColor }}>
               {view.totals.unallocated > 0
                 ? `${fmt(view.totals.unallocated)} unallocated`
                 : `${fmt(-view.totals.unallocated)} over`}
             </div>
           )}
           {view.totals.lockedTarget > 0 && (
-            <div className="flex items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
-              <LockClosedIcon className="h-2.5 w-2.5" />
+            <div className="flex items-center gap-1.5 text-xs text-[var(--muted-foreground)]">
+              <LockClosedIcon className="h-3 w-3" />
               {fmt(view.totals.lockedTarget)} locked
             </div>
           )}
-          <div className="ml-auto text-[10px] text-[var(--muted-foreground)]">
+          <div className="ml-auto text-xs text-[var(--muted-foreground)]">
             {fmt(Math.max(0, view.totals.denominator - view.totals.spent))} left to spend ·{' '}
             <span className="font-bold text-[var(--foreground)]">
               {fmt(view.totals.accountDaily)}/day
@@ -443,45 +488,168 @@ export function GooglePacingCard({
             across campaigns
           </div>
         </div>
+
+        {/* The two numbers the day's work actually turns on, at a size you can
+            read across a desk. Collapsed by default so the panel stays a bar. */}
+        {spendOpen && (
+          <div className="mt-4 grid grid-cols-1 gap-3 border-t border-[var(--border)] pt-4 sm:grid-cols-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                Left to spend
+              </div>
+              <div className="mt-1 text-3xl font-bold tabular-nums leading-tight text-[var(--foreground)]">
+                {fmt(Math.max(0, view.totals.denominator - view.totals.spent))}
+              </div>
+              <div className="mt-1 text-xs text-[var(--muted-foreground)]">
+                {fmt(view.totals.denominator)} {denominatorNoun(view)} − {fmt(view.totals.spent)} spent
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                Daily budget needed
+              </div>
+              <div
+                className="mt-1 text-3xl font-bold tabular-nums leading-tight"
+                style={{ color: 'var(--primary)' }}
+              >
+                {fmt(view.totals.accountDaily)}
+                <span className="text-base font-semibold text-[var(--muted-foreground)]">/day</span>
+              </div>
+              <div className="mt-1 text-xs text-[var(--muted-foreground)]">
+                Across {view.visible.filter((l) => l.dailyControllable).length} campaign
+                {view.visible.filter((l) => l.dailyControllable).length === 1 ? '' : 's'}
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                Days left
+              </div>
+              <div className="mt-1 text-3xl font-bold tabular-nums leading-tight text-[var(--foreground)]">
+                {Math.max(0, clock.daysInMonth - clock.dataEdgeDay)}
+              </div>
+              <div className="mt-1 text-xs text-[var(--muted-foreground)]">
+                of {clock.daysInMonth} — counted from the data edge, whole days
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* ── Controls: allocation unit + label view ── */}
-      <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-2">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-            Allocate by
+      {/* ── Header: what you're looking at (left) and when (right), then the
+          actions on their own row. Two rows so nothing sits on top of anything
+          else, and the two identity facts share a baseline. */}
+      <div className="mb-3 mt-6 flex flex-wrap items-start justify-between gap-4">
+        <span className="text-lg font-bold tracking-tight text-[var(--foreground)]">
+          {ads.length} Campaign{ads.length === 1 ? '' : 's'}{' '}
+          <span className="font-normal text-[var(--muted-foreground)]">
+            · {periodLabel(period)}
           </span>
-          {/* Same Loomi combobox as the Move source, minus the search — two
-              options don't need filtering, but they should look like one control
-              family. */}
-          <div className="w-36">
-            <SearchableSelect
-              value={mode}
-              onChange={(value) => switchMode(value as AllocationMode)}
-              disabled={readOnly}
-              searchable={false}
-              options={[
-                { value: 'amt', label: '$ amount' },
-                { value: 'pct', label: '% of payable' },
-              ]}
-            />
+        </span>
+        <div className="text-right">
+          <div className="flex items-center justify-end gap-2">
+            <span className="text-base font-bold tracking-tight text-[var(--foreground)]">
+              {clock.todayDay != null
+                ? `Day ${clock.todayDay} of ${clock.daysInMonth}`
+                : `${clock.daysInMonth}-day month`}
+            </span>
+            {clock.stale && (
+              <Tooltip label="Spend and the day count both stop at the last settled day, so the recommendation stays honest — but a fresh sync will move it.">
+                <span
+                  className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider"
+                  style={{ color: COLORS.warn }}
+                >
+                  <ArrowPathIcon className="h-3 w-3" />
+                  Sync behind
+                </span>
+              </Tooltip>
+            )}
           </div>
+          <div className="text-xs text-[var(--muted-foreground)]">
+            {clock.dataEdgeIso
+              ? `data through ${fmtDate(clock.dataEdgeIso)}`
+              : 'no settled days yet'}
+          </div>
+        </div>
+      </div>
+
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Tooltip
             label={
-              mode === 'pct'
-                ? 'Every line is a percent of the adjusted payable — they should total 100%. Percent is always percent of payable, never of "payable minus the locked lines".'
-                : 'Every line is a fixed dollar amount — they should total the payable.'
+              !googleConnected
+                ? 'Connect Google Ads to push budgets'
+                : 'Apply recommended daily budgets — sets each campaign’s average daily budget in Google to its New Daily Budget. One batched update for the account; shared budgets are skipped, and only campaigns whose rate has drifted are touched.'
             }
           >
-            <InformationCircleIcon className="h-3.5 w-3.5 text-[var(--muted-foreground)]" />
+            <button
+              type="button"
+              onClick={onPushBudgets}
+              disabled={readOnly || pushing || !googleConnected}
+              aria-label="Apply recommended daily budgets"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] transition-colors hover:border-[var(--primary)]/40 hover:bg-[var(--primary)]/10 hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {pushing ? (
+                <ArrowPathIcon className="h-4 w-4 animate-spin" />
+              ) : (
+                <BoltIcon className="h-4 w-4" />
+              )}
+            </button>
           </Tooltip>
+          <BalanceButton readOnly={readOnly} onBalance={doBalance} />
+          <Tooltip label="Shift budget between campaigns without changing the account total.">
+            <button
+              type="button"
+              onClick={() => setMoveOpen(true)}
+              disabled={readOnly}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ArrowsRightLeftIcon className="h-4 w-4" />
+              Move budget
+            </button>
+          </Tooltip>
+          <button
+            type="button"
+            onClick={undo}
+            disabled={readOnly || undoStack.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <ArrowUturnLeftIcon className="h-4 w-4" />
+            Undo
+          </button>
         </div>
-        <LabelFilterBar
-          ads={ads}
-          activeLabel={activeLabel}
-          onChange={setActiveLabel}
-          className="mb-0"
-        />
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
+            {(
+              [
+                ['table', 'Table', TableCellsIcon],
+                ['cards', 'Cards', Squares2X2Icon],
+              ] as const
+            ).map(([value, label, Icon]) => (
+              <Tooltip key={value} label={`${label} view`}>
+                <button
+                  type="button"
+                  onClick={() => setLayout(value)}
+                  aria-pressed={layout === value}
+                  aria-label={`${label} view`}
+                  className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
+                    layout === value
+                      ? 'bg-[var(--primary)] text-white'
+                      : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                </button>
+              </Tooltip>
+            ))}
+          </div>
+          <LabelFilterBar
+            ads={ads}
+            activeLabel={activeLabel}
+            onChange={setActiveLabel}
+            className="mb-0"
+          />
+          {tableActions}
+        </div>
       </div>
 
       {/* Event budget check — only meaningful inside a label view (§9). */}
@@ -502,162 +670,224 @@ export function GooglePacingCard({
         />
       )}
 
-      {/* ── The campaign table ── */}
-      <div className="glass-table">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1040px]">
-            <thead className="sticky top-0 z-10">
-              <tr className="border-b border-[var(--border)] bg-[var(--muted)]">
-                <th className="w-10 px-2 py-2" />
-                <Th align="left">Campaign</Th>
-                <Th className="w-[150px]">Allocation</Th>
-                <Th>Monthly Target</Th>
-                <Th>Spent MTD</Th>
-                <Th tooltip="Target × (flight days elapsed ÷ total flight days) — what should have been spent by now at an even pace.">
-                  Expected MTD
-                </Th>
-                <Th align="left">Pace</Th>
-                <Th tooltip="Monthly target ÷ flight days. A steady reference — it ignores spend so far.">
-                  Even Pace
-                </Th>
-                <Th
-                  hero
-                  tooltip="(Monthly target − spent) ÷ remaining flight days. Set this as the campaign's daily budget in Google today to land on target."
-                >
-                  New Daily Budget
-                </Th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((line) => (
-                <Row
-                  key={line.id}
-                  line={line}
-                  ad={adsById.get(line.id)}
-                  mode={mode}
-                  payable={payable}
-                  allLabels={allLabels}
-                  readOnly={readOnly}
-                  onInput={(value) => applyInputs(new Map([[line.id, value]]))}
-                  onToggleLock={() => updateAd(line.id, { pacerLocked: !line.locked })}
-                  onTagsChange={(tags) => updateAd(line.id, { pacerTags: serializeTags(tags) })}
-                  onOpenHealth={() => setHealthLineId(line.id)}
-                />
-              ))}
-              {rows.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={9}
-                    className="px-3 py-10 text-center text-sm text-[var(--muted-foreground)]"
+      {layout === 'cards' ? (
+        /* Card view — same AllocatorLine as the table, so the two can never
+           disagree; only the layout differs. */
+        <div>
+          {rows.map((line) => (
+            <GoogleCampaignCard
+              key={line.id}
+              line={line}
+              ad={adsById.get(line.id)}
+              mode={mode}
+              payable={payable}
+              daysInMonth={clock.daysInMonth}
+              allLabels={allLabels}
+              readOnly={readOnly}
+              expanded={expandedIds.has(line.id)}
+              onToggleExpanded={() => toggleExpanded(line.id)}
+              onInput={(value) => applyInputs(new Map([[line.id, value]]))}
+              onToggleLock={() => updateAd(line.id, { pacerLocked: !line.locked })}
+              onTagsChange={(tags) => updateAd(line.id, { pacerTags: serializeTags(tags) })}
+              onOpenHealth={() => setHealthLineId(line.id)}
+              onFlightChange={(startDay, endDay) => setFlight(line.id, startDay, endDay)}
+            />
+          ))}
+          {rows.length === 0 && (
+            <div className="rounded-xl border border-dashed border-[var(--border)] px-6 py-10 text-center text-sm text-[var(--muted-foreground)]">
+              No campaigns match this view.
+            </div>
+          )}
+          {/* Totals, on the SAME column widths as every header line above so the
+              list reads as a table. */}
+          <div className="glass-section-card mt-2 flex items-center gap-3 rounded-xl px-4 py-3">
+            <span className="min-w-0 flex-1 pl-[1.625rem] text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              {view.activeLabel ? 'Campaign total' : 'Account total'}
+            </span>
+            <div className={`${COL.allocation} flex-shrink-0 text-right`}>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Allocation
+              </div>
+              <div className="text-sm font-bold tabular-nums text-[var(--foreground)]">
+                {mode === 'pct'
+                  ? `${view.visible.reduce((sum, l) => sum + l.input, 0).toFixed(1)}%`
+                  : fmt(view.totals.allocated)}
+              </div>
+            </div>
+            <div className={`${COL.spent} hidden flex-shrink-0 text-right sm:block`}>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Spent MTD
+              </div>
+              <div className="text-sm font-bold tabular-nums" style={{ color: COLORS.daily }}>
+                {fmt(view.totals.spent)}
+              </div>
+            </div>
+            <div className={`${COL.daily} hidden flex-shrink-0 text-right sm:block`}>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                Current Daily
+              </div>
+              <div className="text-sm font-bold tabular-nums text-[var(--foreground)]">
+                {fmt(view.visible.reduce((sum, l) => sum + l.currentDaily, 0))}
+              </div>
+            </div>
+            <div className={`${COL.pace} flex-shrink-0 text-right`}>
+              <div className="text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+                New Daily
+              </div>
+              <div className="text-sm font-bold tabular-nums" style={{ color: 'var(--primary)' }}>
+                {fmt(view.totals.accountDaily)}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="glass-table">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1040px]">
+              <thead className="sticky top-0 z-10">
+                <tr className="border-b border-[var(--border)] bg-[var(--muted)]">
+                  <th className="w-10 px-2 py-2" />
+                  <Th align="left">Campaign</Th>
+                  <Th className="w-[170px]">
+                    <span className="inline-flex items-center gap-1.5">
+                      Allocation
+                      {/* The unit belongs to this column — it shows the current
+                          one and switches on click. */}
+                      <Tooltip
+                        label={
+                          mode === 'pct'
+                            ? 'Allocating by percent of the month’s actual spend — click to switch to dollar amounts.'
+                            : 'Allocating by fixed dollar amounts — click to switch to percent of actual spend.'
+                        }
+                      >
+                        <button
+                          type="button"
+                          onClick={() => switchMode(mode === 'pct' ? 'amt' : 'pct')}
+                          disabled={readOnly}
+                          aria-label={`Allocating by ${mode === 'pct' ? 'percent' : 'dollars'} — switch unit`}
+                          className="inline-flex h-5 w-5 items-center justify-center rounded border border-[var(--border)] bg-[var(--card)] text-[11px] font-bold text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {mode === 'pct' ? '%' : '$'}
+                        </button>
+                      </Tooltip>
+                    </span>
+                  </Th>
+                  <Th>Target Spend</Th>
+                  <Th>Spent MTD</Th>
+                  <Th tooltip="Target × (flight days elapsed ÷ total flight days) — what should have been spent by now at an even pace.">
+                    Expected MTD
+                  </Th>
+                  <Th align="left">Pace</Th>
+                  <Th tooltip="The average daily budget this campaign currently has in Google. The New Daily Budget beside it is what it should be — the gap is what a push would change.">
+                    Current Daily
+                  </Th>
+                  <Th
+                    hero
+                    tooltip="(Monthly target − spent) ÷ remaining flight days. Set this as the campaign's daily budget in Google today to land on target."
                   >
-                    No campaigns match this view.
+                    New Daily Budget
+                  </Th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((line) => (
+                  <Row
+                    key={line.id}
+                    line={line}
+                    ad={adsById.get(line.id)}
+                    mode={mode}
+                    payable={payable}
+                    allLabels={allLabels}
+                    readOnly={readOnly}
+                    onInput={(value) => applyInputs(new Map([[line.id, value]]))}
+                    onToggleLock={() => updateAd(line.id, { pacerLocked: !line.locked })}
+                    onTagsChange={(tags) => updateAd(line.id, { pacerTags: serializeTags(tags) })}
+                    onOpenHealth={() => setHealthLineId(line.id)}
+                  />
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={9}
+                      className="px-3 py-10 text-center text-sm text-[var(--muted-foreground)]"
+                    >
+                      No campaigns match this view.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-[var(--border)] bg-[var(--muted)]/60">
+                  <td />
+                  <td className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                    {view.activeLabel ? 'Campaign total' : 'Account total'}
+                  </td>
+                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
+                    {mode === 'pct'
+                      ? `${view.visible.reduce((s, l) => s + l.input, 0).toFixed(1)}%`
+                      : fmt(view.totals.allocated)}
+                  </td>
+                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
+                    {fmt(view.totals.allocated)}
+                  </td>
+                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
+                    {fmt(view.totals.spent)}
+                  </td>
+                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
+                    {fmt(view.totals.expected)}
+                  </td>
+                  <td />
+                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums text-[var(--muted-foreground)]">
+                    {fmt(view.visible.reduce((sum, l) => sum + l.currentDaily, 0))}
+                  </td>
+                  <td className="bg-[var(--muted)]/40 px-3 py-3 text-right">
+                    <span
+                      className="text-sm font-bold tabular-nums"
+                      style={{ color: 'var(--primary)' }}
+                    >
+                      {fmt(view.totals.accountDaily)}
+                    </span>
+                    <Tooltip
+                      label={
+                        view.totals.fullyAllocated
+                          ? 'The plan totals the denominator, so this daily total is what Google Ads Manager should show after applying.'
+                          : 'The plan does not total the denominator — balance it before applying, or the account daily total will not match.'
+                      }
+                    >
+                      <span
+                        className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+                        style={{
+                          background: view.totals.fullyAllocated
+                            ? 'rgba(34,197,94,0.16)'
+                            : 'rgba(239,68,68,0.16)',
+                          color: view.totals.fullyAllocated ? COLORS.success : COLORS.error,
+                        }}
+                      >
+                        {view.totals.fullyAllocated ? 'Matches' : 'Off'}
+                      </span>
+                    </Tooltip>
                   </td>
                 </tr>
-              )}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 border-[var(--border)] bg-[var(--muted)]/60">
-                <td />
-                <td className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                  {view.activeLabel ? 'Campaign total' : 'Account total'}
-                </td>
-                <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
-                  {mode === 'pct'
-                    ? `${view.visible.reduce((s, l) => s + l.input, 0).toFixed(1)}%`
-                    : fmt(view.totals.allocated)}
-                </td>
-                <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
-                  {fmt(view.totals.allocated)}
-                </td>
-                <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
-                  {fmt(view.totals.spent)}
-                </td>
-                <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
-                  {fmt(view.totals.expected)}
-                </td>
-                <td />
-                <td className="px-3 py-3 text-right text-sm font-bold tabular-nums text-[var(--muted-foreground)]">
-                  {fmt(view.totals.evenDaily)}
-                </td>
-                <td className="bg-[var(--muted)]/40 px-3 py-3 text-right">
-                  <span
-                    className="text-sm font-bold tabular-nums"
-                    style={{ color: 'var(--primary)' }}
-                  >
-                    {fmt(view.totals.accountDaily)}
-                  </span>
-                  <Tooltip
-                    label={
-                      view.totals.fullyAllocated
-                        ? 'The plan totals the denominator, so this daily total is what Google Ads Manager should show after applying.'
-                        : 'The plan does not total the denominator — balance it before applying, or the account daily total will not match.'
-                    }
-                  >
-                    <span
-                      className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
-                      style={{
-                        background: view.totals.fullyAllocated
-                          ? 'rgba(34,197,94,0.16)'
-                          : 'rgba(239,68,68,0.16)',
-                        color: view.totals.fullyAllocated ? COLORS.success : COLORS.error,
-                      }}
-                    >
-                      {view.totals.fullyAllocated ? 'Matches' : 'Off'}
-                    </span>
-                  </Tooltip>
-                </td>
-              </tr>
-            </tfoot>
-          </table>
+              </tfoot>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* ── Move / distribute (§8) ── */}
-      <MovePanel
-        view={view}
-        mode={mode}
-        payable={payable}
-        readOnly={readOnly}
-        onCommit={(inputs, summary) => {
-          applyInputs(inputs);
-          toast.success(summary);
-        }}
-      />
-
-      {/* ── Actions ── */}
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Tooltip
-          label={
-            !googleConnected
-              ? 'Connect Google Ads to push budgets'
-              : 'Sets each campaign’s average daily budget in Google to its New Daily Budget. One batched update for the account; shared budgets are skipped, and only campaigns whose rate has drifted are touched.'
-          }
-        >
-          <button
-            type="button"
-            onClick={onPushBudgets}
-            disabled={readOnly || pushing || !googleConnected}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {pushing ? (
-              <ArrowPathIcon className="h-4 w-4 animate-spin" />
-            ) : (
-              <GoogleAdsBrandIcon className="h-4 w-4" />
-            )}
-            Apply daily budgets
-          </button>
-        </Tooltip>
-        <BalanceButton readOnly={readOnly} onBalance={doBalance} />
-        <button
-          type="button"
-          onClick={undo}
-          disabled={readOnly || undoStack.length === 0}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <ArrowUturnLeftIcon className="h-4 w-4" />
-          Undo
-        </button>
-      </div>
+      {moveOpen && (
+        <MoveBudgetModal
+          view={view}
+          mode={mode}
+          payable={payable}
+          readOnly={readOnly}
+          onClose={() => setMoveOpen(false)}
+          onCommit={(inputs, summary) => {
+            applyInputs(inputs);
+            toast.success(summary);
+            setMoveOpen(false);
+          }}
+        />
+      )}
 
       {healthLine && (
         <GoogleDeliveryHealthModal
@@ -682,36 +912,49 @@ export function GooglePacingCard({
 
 function denominatorNoun(view: AllocatorView): string {
   return view.denominatorKind === 'payable'
-    ? 'payable'
+    ? 'actual spend'
     : view.denominatorKind === 'eventBudget'
       ? 'event budget'
       : 'campaign total';
 }
 
-/** Right-aligned stat in the allocation panel's cluster — same chrome as Meta's
- *  Total Gross / Total Actual Spend / Allocated trio. */
-function Stat({
+/** Headline stat. Same surface as the allocation container below it
+ *  (glass-section-card) so the strip and the bar read as one panel split into
+ *  parts, rather than two different kinds of card stacked. */
+function StatCard({
   label,
   value,
+  sub,
   color,
   tooltip,
 }: {
   label: string;
   value: string;
+  sub?: string;
   color?: string;
   tooltip?: string;
 }) {
   const body = (
-    <div className="text-right">
-      <div className="whitespace-nowrap text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">
+    <div className="glass-section-card w-full rounded-xl px-4 py-3.5">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
         {label}
       </div>
-      <div className="text-base font-bold" style={{ color: color ?? 'var(--foreground)' }}>
+      <div
+        className="mt-1 text-2xl font-bold tabular-nums leading-tight"
+        style={{ color: color ?? 'var(--foreground)' }}
+      >
         {value}
       </div>
+      {sub && <div className="mt-1 text-[11px] text-[var(--muted-foreground)]">{sub}</div>}
     </div>
   );
-  return tooltip ? <Tooltip label={tooltip}>{body}</Tooltip> : body;
+  return tooltip ? (
+    <Tooltip label={tooltip} className="w-full">
+      {body}
+    </Tooltip>
+  ) : (
+    body
+  );
 }
 
 /** Table header cell — Planner's exact chrome, with an optional tooltip and the
@@ -773,7 +1016,7 @@ function EventBudgetBar({
   return (
     <div className="mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3.5 py-2.5">
       <Tooltip
-        label={`The budget you intended for “${label}” — e.g. the added sales-event dollars. The tagged allocation is checked against it. This never changes the account's payable.`}
+        label={`The budget you intended for “${label}” — e.g. the added sales-event dollars. The tagged allocation is checked against it. This never changes the account's actual spend figure.`}
       >
         <span className="cursor-help text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
           Event budget
@@ -853,35 +1096,17 @@ function Row({
   onTagsChange: (tags: string[]) => void;
   onOpenHealth: () => void;
 }) {
-  const [draft, setDraft] = useState(formatInput(line.input, mode));
-  // Follow the row when the value changes from anywhere else (balance, move,
-  // undo, a mode switch) — but never while the field has focus, or a rebuild
-  // would yank the cursor mid-type.
-  const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (document.activeElement !== inputRef.current) {
-      setDraft(formatInput(line.input, mode));
-    }
-  }, [line.input, mode]);
-
-  const commit = () => {
-    const parsed = Number(draft);
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      setDraft(formatInput(line.input, mode));
-      return;
-    }
-    if (Math.abs(parsed - line.input) > 0.0001) onInput(parsed);
-  };
-
   // The recommended daily read against the even pace: up means it has to catch
   // up, down means it has to ease off. Purely directional — the number is the
   // instruction.
   const trend =
-    line.recommendedDaily > line.evenDaily * 1.02
-      ? 'up'
-      : line.recommendedDaily < line.evenDaily * 0.98
-        ? 'down'
-        : 'flat';
+    line.currentDaily <= 0
+      ? 'flat'
+      : line.recommendedDaily > line.currentDaily * 1.02
+        ? 'up'
+        : line.recommendedDaily < line.currentDaily * 0.98
+          ? 'down'
+          : 'flat';
 
   return (
     <tr
@@ -968,42 +1193,46 @@ function Row({
             />
           )}
         </div>
-        <LabelChips
-          tags={ad?.pacerTags}
-          allLabels={allLabels}
-          readOnly={readOnly}
-          onChange={onTagsChange}
-        />
+        <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+          {line.channelType && (
+            <span className="text-[11px] text-[var(--muted-foreground)]">{line.channelType}</span>
+          )}
+          <LabelChips
+            tags={ad?.pacerTags}
+            allLabels={allLabels}
+            readOnly={readOnly}
+            onChange={onTagsChange}
+          />
+        </div>
       </td>
 
       <td className="px-3 py-2.5 text-right align-middle">
         <div className="inline-flex items-center justify-end gap-1.5">
-          <div className="relative">
-            {mode === 'amt' && (
-              <span className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-xs text-[var(--muted-foreground)]">
-                $
-              </span>
-            )}
-            <input
-              ref={inputRef}
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onBlur={commit}
-              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+          {/* Borderless until hovered or focused, like the planner's cells — a
+              column of filled inputs reads as a form, not as a table of numbers. */}
+          <span className="w-[86px]">
+            <InlineMoneyCell
+              value={formatInput(line.input, mode)}
+              ariaLabel={`${mode === 'pct' ? 'Percent' : 'Dollar'} allocation for ${line.name}`}
               disabled={readOnly}
-              inputMode="decimal"
-              aria-label={`${mode === 'pct' ? 'Percent' : 'Dollar'} allocation for ${line.name}`}
-              className={`w-[78px] rounded-lg border border-[var(--border)] bg-[var(--input)] py-1.5 pr-2 text-right text-sm tabular-nums text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none disabled:opacity-60 ${
-                mode === 'amt' ? 'pl-5' : 'pl-2'
-              }`}
+              display={
+                <span className="block text-right text-sm font-semibold tabular-nums text-[var(--foreground)]">
+                  {mode === 'pct'
+                    ? `${Number(line.input.toFixed(2))}%`
+                    : money2(line.input)}
+                </span>
+              }
+              onCommit={(next) => {
+                const parsed = Number(next);
+                if (next == null || !Number.isFinite(parsed) || parsed < 0) return;
+                if (Math.abs(parsed - line.input) > 0.0001) onInput(parsed);
+              }}
             />
-          </div>
-          {mode === 'pct' ? (
-            <span className="w-2 text-xs text-[var(--muted-foreground)]">%</span>
-          ) : (
+          </span>
+          {mode === 'amt' && (
             // §3 companion readout: in dollar mode each line still shows its
-            // share of payable, so the plan stays legible without switching unit.
-            <Tooltip label="Share of the adjusted payable">
+            // share of actual spend, so the plan stays legible without switching.
+            <Tooltip label="Share of the month's actual spend">
               <span className="w-9 text-left text-[10px] tabular-nums text-[var(--muted-foreground)]">
                 {payable > 0 ? `${line.percentOfPayable.toFixed(1)}%` : '—'}
               </span>
@@ -1030,10 +1259,6 @@ function Row({
               onClick={onOpenHealth}
               className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)] transition-opacity hover:opacity-70"
             >
-              <span
-                className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                style={{ background: PACE_COLORS[line.paceStatus] }}
-              />
               <span style={{ color: PACE_COLORS[line.paceStatus] }}>
                 {PACE_LABELS[line.paceStatus]}
               </span>
@@ -1054,7 +1279,13 @@ function Row({
       </td>
 
       <td className="px-3 py-2.5 text-right align-middle text-sm tabular-nums text-[var(--muted-foreground)]">
-        {fmt(line.evenDaily)}
+        {line.currentDaily > 0 ? (
+          fmt(line.currentDaily)
+        ) : (
+          <Tooltip label="No daily budget synced from Google yet — import or sync this campaign.">
+            <span>—</span>
+          </Tooltip>
+        )}
       </td>
 
       <td className="bg-[var(--muted)]/40 px-3 py-2.5 text-right align-middle">
@@ -1067,18 +1298,18 @@ function Row({
               <Tooltip
                 label={
                   trend === 'up'
-                    ? 'Above its even pace — it has ground to make up over the days left.'
-                    : 'Below its even pace — it is ahead and should ease off to land on target.'
+                    ? 'Higher than the daily currently set in Google — raise it to land on target.'
+                    : 'Lower than the daily currently set in Google — ease it off to land on target.'
                 }
               >
                 {trend === 'up' ? (
-                  <ChevronUpIcon
+                  <ArrowSmallUpIcon
                     className="h-3.5 w-3.5 stroke-[2.5]"
                     style={{ color: COLORS.lifetime }}
                     aria-label="above even pace"
                   />
                 ) : (
-                  <ChevronDownIcon
+                  <ArrowSmallDownIcon
                     className="h-3.5 w-3.5 stroke-[2.5]"
                     style={{ color: COLORS.warn }}
                     aria-label="below even pace"
@@ -1123,7 +1354,7 @@ function BalanceButton({
 
   return (
     <div ref={wrapRef} className="relative inline-flex">
-      <Tooltip label="Scale the unlocked lines so the plan totals the payable, keeping their relative shape. Locked lines are never touched.">
+      <Tooltip label="Scale the unlocked lines so the plan totals the actual spend, keeping their relative shape. Locked lines are never touched.">
         <button
           type="button"
           onClick={() => onBalance('proportional')}
@@ -1182,17 +1413,19 @@ function BalanceButton({
 
 // ── §8 move / distribute panel ──
 
-function MovePanel({
+function MoveBudgetModal({
   view,
   mode,
   payable,
   readOnly,
+  onClose,
   onCommit,
 }: {
   view: AllocatorView;
   mode: AllocationMode;
   payable: number;
   readOnly: boolean;
+  onClose: () => void;
   onCommit: (inputs: Map<string, number>, summary: string) => void;
 }) {
   const [sourceKey, setSourceKey] = useState<string>('');
@@ -1200,6 +1433,14 @@ function MovePanel({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [evenTotal, setEvenTotal] = useState('');
   const [custom, setCustom] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   // Locked lines are out of both lists (§4). The active label view scopes them
   // too: moving budget between a label's campaigns must not reach outside it.
@@ -1262,16 +1503,32 @@ function MovePanel({
   if (options.length === 0) return null;
 
   return (
-    <div className="glass-section-card mt-4 rounded-xl px-5 py-4">
-      <div className="mb-3 flex flex-wrap items-baseline gap-2.5">
-        <span className="text-sm font-bold uppercase tracking-wider text-[var(--foreground)]">
-          Move Budget
-        </span>
-        <span className="text-[10px] text-[var(--muted-foreground)]">
-          Pull from one source and spread it across the campaigns you pick — the{' '}
-          {view.activeLabel ? 'label' : 'account'} total holds steady.
-        </span>
-      </div>
+    <div
+      className="fixed inset-0 z-[130] flex items-start justify-center bg-black/50 p-4 backdrop-blur-sm sm:pt-20"
+      onClick={onClose}
+    >
+      <div
+        className="glass-modal flex max-h-[85vh] w-full max-w-3xl flex-col rounded-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-3 border-b border-[var(--border)] px-5 py-4">
+          <div className="min-w-0 flex-1">
+            <h3 className="text-base font-bold text-[var(--foreground)]">Move budget</h3>
+            <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
+              Pull from one source and spread it across the campaigns you pick — the{' '}
+              {view.activeLabel ? 'label' : 'account'} total holds steady.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded p-1 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          >
+            <XMarkIcon className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
 
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
@@ -1458,21 +1715,33 @@ function MovePanel({
         </div>
       )}
 
-      <div className="mt-3.5 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={commit}
-          disabled={readOnly || !plan?.ok}
-          className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Move
-        </button>
-        {plan?.ok && (
-          <span className="text-[10px] tabular-nums text-[var(--muted-foreground)]">
-            Moving {fmt(plan.total)} across {plan.allocations.length} campaign
-            {plan.allocations.length === 1 ? '' : 's'}
-          </span>
-        )}
+        </div>
+
+        {/* Footer: the commit sits on the modal edge, with the consequence
+            spelled out beside it rather than only in the preview above. */}
+        <div className="flex items-center justify-end gap-3 border-t border-[var(--border)] px-5 py-3.5">
+          {plan?.ok && (
+            <span className="mr-auto text-[11px] tabular-nums text-[var(--muted-foreground)]">
+              Moving {fmt(plan.total)} across {plan.allocations.length} campaign
+              {plan.allocations.length === 1 ? '' : 's'}
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)]"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={commit}
+            disabled={readOnly || !plan?.ok}
+            className="rounded-lg bg-[var(--primary)] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Move
+          </button>
+        </div>
       </div>
     </div>
   );

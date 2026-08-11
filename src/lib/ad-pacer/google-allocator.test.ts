@@ -72,11 +72,14 @@ function line(overrides: Partial<AllocatorLine> & { id: string }): AllocatorLine
     paceStatus: 'none',
     evenDaily: 0,
     recommendedDaily: 0,
+    remainingBudget: 0,
+    projectedSpend: null,
     currentDaily: 0,
     flight: flightDayCounts(1, 31, 7, 31),
     locked: false,
     tags: [],
     pacingType: 'Daily',
+    channelType: null,
     shared: false,
     sharedCount: null,
     hasAdSchedule: false,
@@ -345,6 +348,30 @@ describe('buildAllocatorLine — pacing math (§5)', () => {
     );
     expect(l.pacingType).toBe('Total');
     expect(l.dailyControllable).toBe(false);
+  });
+
+  it('projects where the CURRENT daily lands it, not the recommendation', () => {
+    // $14.80/day already set, 24 flight days left, $105 spent.
+    const l = buildAllocatorLine(
+      mk({ allocationPercent: '13', pacerActual: '105', pacerDailyBudget: '14.80' }),
+      0,
+      ctx,
+    );
+    expect(l.projectedSpend).toBeCloseTo(105 + 14.8 * 24, 2);
+  });
+
+  it('withholds a projection when no daily has synced', () => {
+    // A zero rate would project "will spend nothing", when the truth is that we
+    // do not know the rate yet.
+    const l = buildAllocatorLine(mk({ allocationPercent: '13', pacerActual: '105' }), 0, ctx);
+    expect(l.projectedSpend).toBeNull();
+  });
+
+  it('reports the target still unspent, floored at zero', () => {
+    const under = buildAllocatorLine(mk({ allocationPercent: '13', pacerActual: '105' }), 0, ctx);
+    expect(under.remainingBudget).toBeCloseTo(458.86 - 105, 1);
+    const over = buildAllocatorLine(mk({ allocationPercent: '1', pacerActual: '9999' }), 0, ctx);
+    expect(over.remainingBudget).toBe(0);
   });
 
   it('never recommends a negative daily on an overspent campaign', () => {

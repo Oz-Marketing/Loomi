@@ -17,7 +17,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import useSWR from 'swr';
-import { ArrowPathIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, PencilSquareIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { COLORS } from '@/lib/ad-pacer/constants';
 import { fmt, fmtDate } from '@/lib/ad-pacer/helpers';
 import {
@@ -26,6 +26,8 @@ import {
   type DeliveryVerdictKind,
 } from '@/lib/ad-pacer/google-allocator';
 import { Tooltip } from '@/app/app/tools/_shared';
+import { DatePicker, type DateRange } from '@/components/ui/date-picker';
+import { monthBoundsIso } from '@/lib/timezone';
 import { CAMPAIGN_COLORS } from './google-pacing-theme';
 
 interface HealthPayload {
@@ -187,6 +189,7 @@ export function GoogleDeliveryHealthModal({
               differs from Google's literal campaign dates. */}
           <FlightEditor
             line={line}
+            period={period}
             daysInMonth={daysInMonth}
             readOnly={readOnly || !onFlightChange}
             onChange={onFlightChange}
@@ -360,68 +363,64 @@ function Metric({ label, value }: { label: string; value: string }) {
  */
 function FlightEditor({
   line,
+  period,
   daysInMonth,
   readOnly,
   onChange,
 }: {
   line: AllocatorLine;
+  period: string;
   daysInMonth: number;
   readOnly: boolean;
   onChange?: (startDay: number, endDay: number) => void;
 }) {
-  const [start, setStart] = useState(String(line.flight.startDay));
-  const [end, setEnd] = useState(String(line.flight.endDay));
-
-  // Follow the row when it changes underneath (a sync, an undo).
-  useEffect(() => {
-    setStart(String(line.flight.startDay));
-    setEnd(String(line.flight.endDay));
-  }, [line.flight.startDay, line.flight.endDay]);
-
-  const commit = () => {
-    if (!onChange) return;
-    const s = Math.min(Math.max(Number(start) || 1, 1), daysInMonth);
-    const e = Math.min(Math.max(Number(end) || daysInMonth, s), daysInMonth);
-    setStart(String(s));
-    setEnd(String(e));
-    if (s !== line.flight.startDay || e !== line.flight.endDay) onChange(s, e);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const bounds = monthBoundsIso(period);
+  const range: DateRange = {
+    start: `${period}-${pad(line.flight.startDay)}`,
+    end: `${period}-${pad(line.flight.endDay)}`,
   };
 
-  const inputClass =
-    'w-12 rounded border border-[var(--border)] bg-[var(--input)] px-1 py-1 text-center text-xs font-semibold tabular-nums text-[var(--foreground)] focus:border-[var(--primary)] focus:outline-none disabled:opacity-60';
+  /** Calendar dates back to day-of-month, clamped to the month in view — the
+   *  flight is a within-month window, so a date outside it cannot be meant. */
+  const commit = (next: DateRange) => {
+    if (!onChange || !next.start) return;
+    const dayOf = (iso: string) => Number(iso.slice(8, 10));
+    const inMonth = (iso: string) =>
+      bounds != null && iso >= bounds.start && iso <= bounds.end;
+    const s = inMonth(next.start) ? dayOf(next.start) : 1;
+    const e = next.end && inMonth(next.end) ? dayOf(next.end) : daysInMonth;
+    onChange(Math.min(s, e), Math.max(s, e));
+  };
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-2.5">
-      <Tooltip label="The days this campaign is funded for THIS month. Auto-derived from the campaign's Google dates — override it when the funding window differs (e.g. the campaign existed on the 1st but wasn't funded until mid-month).">
-        <span className="text-[11px] font-semibold text-[var(--foreground)]">
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--muted)]/30 px-3 py-2.5">
+      <Tooltip label="The days this campaign is funded for THIS month. Auto-derived from its Google dates — override it when the funding window differs (e.g. the campaign existed on the 1st but wasn't funded until mid-month).">
+        <span className="cursor-help text-[11px] font-semibold text-[var(--foreground)]">
           Flight this month
         </span>
       </Tooltip>
-      <div className="flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)]">
-        <span>day</span>
-        <input
-          value={start}
-          onChange={(e) => setStart(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => e.key === 'Enter' && commit()}
-          disabled={readOnly}
-          inputMode="numeric"
-          aria-label="Flight start day of month"
-          className={inputClass}
+      <span className="text-sm font-bold tabular-nums text-[var(--foreground)]">
+        {fmtDate(range.start ?? '')} – {fmtDate(range.end ?? '')}
+      </span>
+      {!readOnly && onChange && (
+        <DatePicker
+          mode="range"
+          value={range}
+          onChange={commit}
+          triggerContent={
+            <Tooltip label="Adjust flight">
+              <span
+                aria-label="Adjust flight"
+                className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--card)] text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)]"
+              >
+                <PencilSquareIcon className="h-3 w-3" />
+              </span>
+            </Tooltip>
+          }
         />
-        <span>–</span>
-        <input
-          value={end}
-          onChange={(e) => setEnd(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => e.key === 'Enter' && commit()}
-          disabled={readOnly}
-          inputMode="numeric"
-          aria-label="Flight end day of month"
-          className={inputClass}
-        />
-      </div>
-      <span className="ml-auto text-[10px] tabular-nums text-[var(--muted-foreground)]">
+      )}
+      <span className="ml-auto text-[11px] tabular-nums text-[var(--muted-foreground)]">
         {line.flight.elapsed} of {line.flight.total} flight days in · {line.flight.remaining} left
       </span>
     </div>

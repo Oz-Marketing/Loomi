@@ -1339,13 +1339,19 @@ export function MetaAdsPlannerTool({ mode: initialMode }: { mode: MetaToolMode }
       >
         {activeKey ? (
           <div className="flex items-center gap-3 min-w-0">
+            {/* No box, and the logo runs at its own aspect — see the matching
+                comment on the Google shell. A wide dealer wordmark in a 56px
+                square with a 15% inset rendered a few pixels tall. */}
             <AccountAvatar
               name={activeAccount?.dealer ?? activeKey}
               accountKey={activeKey}
               storefrontImage={activeAccount?.storefrontImage}
               logos={activeAccount?.logos}
-              size={56}
-              className="rounded-xl border border-[var(--border)] bg-[var(--muted)] flex-shrink-0"
+              size={52}
+              aspect="auto"
+              maxWidth={200}
+              logoInsetClassName="p-0"
+              className="flex-shrink-0"
             />
             <div className="flex flex-col gap-1.5 min-w-0">
               <span className="text-2xl font-bold text-[var(--foreground)] leading-tight">

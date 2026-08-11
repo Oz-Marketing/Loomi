@@ -49,6 +49,7 @@ import {
   AccountNotesButton,
   AdSummaryRow,
   AdEditorModal,
+  Tooltip,
   BulkAddAdsModal,
   Field,
   ComparePanel,
@@ -568,6 +569,59 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
     );
   }
 
+  // The plan toolbar: search, sync, and Add Plan. Defined once and placed by the
+  // active tab — the planner keeps it in its header row, the pacing card takes it
+  // as a prop so it sits with the table it acts on rather than above the whole card.
+  const planActions = (
+    <div className="flex items-center gap-2">
+      <div className="relative">
+        <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search ads…"
+          aria-label="Search ads by name"
+          className="w-44 rounded-lg border border-[var(--border)] bg-[var(--card)] py-1.5 pl-8 pr-7 text-xs text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)] focus:outline-none"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch('')}
+            aria-label="Clear search"
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+          >
+            <XMarkIcon className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {connected && (
+        <Tooltip label="Sync actual spend from Google">
+          <button
+            type="button"
+            onClick={syncFromGoogle}
+            disabled={syncing || frozen}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
+            aria-label="Sync from Google"
+          >
+            <ArrowPathIcon className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+          </button>
+        </Tooltip>
+      )}
+      {!frozen && (
+        <AddPlanButton
+          onCreateNew={() => setBulkAddOpen(true)}
+          onOpenCopy={() => setShowCopyModal(true)}
+          onImport={connected ? () => setImportOpen(true) : undefined}
+          importIcon={<GoogleAdsBrandIcon className="h-4 w-4" />}
+          importLabel="Import from Google"
+          importHint="Bring existing Google campaigns in as rows"
+          hasOtherPeriods={otherPeriodsWithAds}
+        />
+      )}
+    </div>
+  );
+
   return (
     <PacerReadOnlyContext.Provider value={frozen}>
     {/* Height is NOT pinned to the viewport. `h-full` here made this a
@@ -598,12 +652,19 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
       {/* Scope row — sub-account avatar + name + status battery, mirroring
           Meta. Keeps the tool name in the header and the account identity here. */}
       <div className="mb-6 flex items-center gap-3 min-w-0">
+        {/* No box, and the logo runs at its own aspect. A dealer wordmark is
+            wide; squeezing it into a 56px square with a 15% inset rendered it a
+            few pixels tall and unreadable. `auto` fixes the height and lets the
+            width follow, capped so a very wide mark can't push the name off. */}
         <AccountAvatar
           name={accountData?.dealer ?? accountKey}
           accountKey={accountKey}
           logos={accountData?.logos ?? undefined}
-          size={56}
-          className="flex-shrink-0 rounded-xl border border-[var(--border)] bg-[var(--muted)]"
+          size={52}
+          aspect="auto"
+          maxWidth={200}
+          logoInsetClassName="p-0"
+          className="flex-shrink-0"
         />
         <div className="flex flex-col gap-1.5 min-w-0">
           <span className="truncate text-2xl font-bold leading-tight text-[var(--foreground)]">
@@ -654,63 +715,16 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         </div>
       )}
 
-      {/* Action row above the table (mirrors Meta's Ad Plan header + CTAs). */}
-      {(tab === 'planner' || tab === 'pacing') && (
-      <div className="mt-8 mb-3 flex flex-wrap items-center justify-between gap-3">
-        <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
-          Campaigns · {periodLabel(period)}{' '}
-          <span className="font-normal text-[var(--muted-foreground)]">({ads.length})</span>
-        </span>
-        <div className="flex items-center gap-2">
-          {/* Search ads (mirrors Meta) */}
-          <div className="relative">
-            <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--muted-foreground)]" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search ads…"
-              aria-label="Search ads by name"
-              className="w-44 rounded-lg border border-[var(--border)] bg-[var(--card)] py-1.5 pl-8 pr-7 text-xs text-[var(--foreground)] placeholder:text-[var(--muted-foreground)] focus:border-[var(--primary)] focus:outline-none"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch('')}
-                aria-label="Clear search"
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-              >
-                <XMarkIcon className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-          {connected && (
-            <button
-              type="button"
-              onClick={syncFromGoogle}
-              disabled={syncing || frozen}
-              title="Sync actual spend from Google"
-              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-60"
-              aria-label="Sync from Google"
-            >
-              <ArrowPathIcon className={`h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-            </button>
-          )}
-          {/* Add Plan dropdown (mirrors Meta): create from scratch, copy from a
-              prior month, or import from Google (import shown only when linked). */}
-          {!frozen && (
-            <AddPlanButton
-              onCreateNew={() => setBulkAddOpen(true)}
-              onOpenCopy={() => setShowCopyModal(true)}
-              onImport={connected ? () => setImportOpen(true) : undefined}
-              importIcon={<GoogleAdsBrandIcon className="h-4 w-4" />}
-              importLabel="Import from Google"
-              importHint="Bring existing Google campaigns in as rows"
-              hasOtherPeriods={otherPeriodsWithAds}
-            />
-          )}
+      {/* Search / sync / add — rendered here for the planner, and handed to the
+          pacing card so it can sit directly above its own table. */}
+      {tab === 'planner' && (
+        <div className="mt-8 mb-3 flex flex-wrap items-center justify-between gap-3">
+          <span className="text-sm font-bold tracking-tight text-[var(--foreground)]">
+            Campaigns · {periodLabel(period)}{' '}
+            <span className="font-normal text-[var(--muted-foreground)]">({ads.length})</span>
+          </span>
+          {planActions}
         </div>
-      </div>
       )}
 
       {tab === 'reconcile' ? (
@@ -786,6 +800,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               onPushBudgets={pushAllBudgets}
               pushing={pushingBudgets}
               googleConnected={connected}
+              tableActions={planActions}
             />
           )}
         </div>

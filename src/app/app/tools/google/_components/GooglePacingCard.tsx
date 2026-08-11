@@ -1259,10 +1259,6 @@ function Row({
               onClick={onOpenHealth}
               className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)] transition-opacity hover:opacity-70"
             >
-              <span
-                className="h-1.5 w-1.5 flex-shrink-0 rounded-full"
-                style={{ background: PACE_COLORS[line.paceStatus] }}
-              />
               <span style={{ color: PACE_COLORS[line.paceStatus] }}>
                 {PACE_LABELS[line.paceStatus]}
               </span>

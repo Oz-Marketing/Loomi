@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { PlusIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ChevronUpDownIcon, PlusIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import {
   MAX_LABEL_LENGTH,
   collectLabels,
@@ -22,6 +22,53 @@ import {
   sameLabel,
 } from '@/lib/ad-pacer/labels';
 import { Tooltip } from './Tooltip';
+
+/**
+ * Dropdown surface shared by the label picker and the view filter.
+ *
+ * Uses `--card-strong` (96% opaque) with a heavy blur rather than `.glass-modal`
+ * (90%): these popovers open directly over a dense table, and at 90% the rows
+ * underneath read straight through the list. Matches SearchableSelect's popover,
+ * so every dropdown on the card is the same surface.
+ */
+const POPOVER_CLASS =
+  'animate-dropdown-in rounded-lg border border-[var(--border)] bg-[var(--card-strong)] shadow-xl backdrop-blur-2xl backdrop-saturate-150';
+
+/** One row inside a dropdown: color dot, label, optional count, check when on. */
+function OptionRow({
+  color,
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  color?: string;
+  label: string;
+  count?: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] font-medium transition-colors hover:bg-[var(--muted)] ${
+        active ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'
+      }`}
+    >
+      {color ? (
+        <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: color }} />
+      ) : (
+        <span className="h-2 w-2 flex-shrink-0" />
+      )}
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {count != null && (
+        <span className="tabular-nums text-[10px] text-[var(--muted-foreground)]">{count}</span>
+      )}
+      {active && <span className="text-[11px] leading-none">✓</span>}
+    </button>
+  );
+}
 
 /** One label chip. `onRemove` omitted = read-only (frozen month / overview). */
 function Chip({
@@ -145,7 +192,7 @@ export function LabelChips({
       )}
       {open && editable && (
         <div
-          className="glass-modal absolute left-0 top-full z-40 mt-1.5 w-56 rounded-lg border border-[var(--border)] p-2"
+          className={`${POPOVER_CLASS} absolute left-0 top-full z-40 mt-1.5 w-56 p-2`}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
@@ -157,26 +204,15 @@ export function LabelChips({
             </div>
           ) : (
             <div className="max-h-44 overflow-y-auto">
-              {allLabels.map((label) => {
-                const on = current.some((t) => sameLabel(t, label));
-                return (
-                  <button
-                    key={label}
-                    type="button"
-                    onClick={() => toggle(label)}
-                    className={`flex w-full items-center gap-2 rounded px-1.5 py-1.5 text-left text-[11px] font-medium transition-colors hover:bg-[var(--muted)] ${
-                      on ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'
-                    }`}
-                  >
-                    <span
-                      className="h-2 w-2 flex-shrink-0 rounded-sm"
-                      style={{ background: labelColor(label, allLabels) }}
-                    />
-                    <span className="truncate">{label}</span>
-                    {on && <span className="ml-auto text-[10px]">✓</span>}
-                  </button>
-                );
-              })}
+              {allLabels.map((label) => (
+                <OptionRow
+                  key={label}
+                  color={labelColor(label, allLabels)}
+                  label={label}
+                  active={current.some((t) => sameLabel(t, label))}
+                  onClick={() => toggle(label)}
+                />
+              ))}
             </div>
           )}
           <div className="mt-1.5 flex gap-1.5 border-t border-[var(--border)] pt-2">
@@ -231,57 +267,99 @@ export function LabelFilterBar({
   onChange: (label: string | null) => void;
   className?: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   const labels = collectLabels(ads);
   if (labels.length === 0) return null;
   const counts = countByLabel(ads);
+  const activeColor = activeLabel ? labelColor(activeLabel, labels) : null;
 
-  // Active chips take their color from inline style (the label's own color, or
-  // the foreground for "All"), so the class only carries the shared shape.
-  const chip = (active: boolean) =>
-    `inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold transition-colors ${
-      active
-        ? 'border-transparent text-white'
-        : 'border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] hover:border-[var(--primary)]'
-    }`;
+  const pick = (label: string | null) => {
+    onChange(label);
+    setOpen(false);
+  };
 
   return (
-    <div className={`flex flex-wrap items-center gap-1.5 ${className}`}>
-      <span className="mr-0.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+    <div ref={wrapRef} className={`relative flex items-center gap-2 ${className}`}>
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
         View
       </span>
+      {/* A dropdown rather than a chip per label: an account can accumulate a
+          dozen events over a season, and a row of pills that wraps to two lines
+          pushes the table down without telling you anything you can't read from
+          the one active view. */}
       <button
         type="button"
-        onClick={() => onChange(null)}
-        aria-pressed={activeLabel === null}
-        className={chip(activeLabel === null)}
-        style={
-          activeLabel === null
-            ? { background: 'var(--primary)', borderColor: 'var(--primary)' }
-            : undefined
-        }
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className="inline-flex min-w-[10rem] items-center gap-1.5 rounded-md border border-[var(--border)] bg-[var(--input)] px-2 py-1.5 text-xs text-[var(--foreground)] transition-colors hover:border-[var(--primary)] focus:border-[var(--primary)] focus:outline-none"
       >
-        All campaigns
+        {activeColor && (
+          <span
+            className="h-2 w-2 flex-shrink-0 rounded-full"
+            style={{ background: activeColor }}
+          />
+        )}
+        <span className="min-w-0 flex-1 truncate text-left">
+          {activeLabel ?? 'All campaigns'}
+        </span>
+        {activeLabel && (
+          <span className="tabular-nums text-[10px] text-[var(--muted-foreground)]">
+            {counts.get(activeLabel) ?? 0}
+          </span>
+        )}
+        <ChevronUpDownIcon className="h-3.5 w-3.5 flex-shrink-0 text-[var(--muted-foreground)]" />
       </button>
-      {labels.map((label) => {
-        const active = activeLabel != null && sameLabel(activeLabel, label);
-        const color = labelColor(label, labels);
-        return (
-          <button
-            key={label}
-            type="button"
-            onClick={() => onChange(active ? null : label)}
-            aria-pressed={active}
-            className={chip(active)}
-            style={active ? { background: color, borderColor: color } : undefined}
-          >
-            {!active && (
-              <span className="h-2 w-2 rounded-sm" style={{ background: color }} />
-            )}
-            {label}
-            <span className="tabular-nums opacity-70">{counts.get(label) ?? 0}</span>
-          </button>
-        );
-      })}
+
+      {open && (
+        <div
+          className={`${POPOVER_CLASS} absolute left-10 top-full z-40 mt-1.5 w-56 p-2`}
+          role="listbox"
+        >
+          <div className="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+            View
+          </div>
+          <OptionRow
+            label="All campaigns"
+            count={ads.length}
+            active={activeLabel === null}
+            onClick={() => pick(null)}
+          />
+          <div className="my-1 h-px bg-[var(--border)]" />
+          <div className="max-h-56 overflow-y-auto">
+            {labels.map((label) => (
+              <OptionRow
+                key={label}
+                color={labelColor(label, labels)}
+                label={label}
+                count={counts.get(label) ?? 0}
+                active={activeLabel != null && sameLabel(activeLabel, label)}
+                onClick={() =>
+                  pick(activeLabel != null && sameLabel(activeLabel, label) ? null : label)
+                }
+              />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

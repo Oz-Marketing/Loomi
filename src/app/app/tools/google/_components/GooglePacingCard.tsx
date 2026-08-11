@@ -1143,8 +1143,11 @@ function BalanceButton({
       >
         <ChevronDownIcon className="h-4 w-4" />
       </button>
+      {/* Same opaque surface as the card's other dropdowns — this opens over the
+          campaign table, where a translucent panel reads straight through
+          (unlike the full modals, which sit on a dimmed overlay). */}
       {open && (
-        <div className="glass-modal absolute bottom-full left-0 z-40 mb-1.5 w-64 rounded-xl border border-[var(--border)] p-1">
+        <div className="animate-dropdown-in absolute bottom-full left-0 z-40 mb-1.5 w-64 rounded-lg border border-[var(--border)] bg-[var(--card-strong)] p-1 shadow-xl backdrop-blur-2xl backdrop-saturate-150">
           {(
             [
               ['proportional', 'Keep proportions', 'Scale unlocked lines, hold their shape', true],

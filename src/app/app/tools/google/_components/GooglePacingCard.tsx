@@ -33,6 +33,8 @@ import {
   BoltIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  Squares2X2Icon,
+  TableCellsIcon,
   LockClosedIcon,
   LockOpenIcon,
   MinusSmallIcon,
@@ -68,6 +70,7 @@ import {
 import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { zonedTodayIso } from '@/lib/timezone';
 import { toast } from '@/lib/toast';
+import { GoogleCampaignCard } from './GoogleCampaignCard';
 import { GoogleDeliveryHealthModal } from './GoogleDeliveryHealthModal';
 import { PACE_COLORS, PACE_LABELS, campaignColor } from './google-pacing-theme';
 
@@ -135,6 +138,16 @@ export function GooglePacingCard({
   const [healthLineId, setHealthLineId] = useState<string | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
   const [spendOpen, setSpendOpen] = useState(false);
+  // Table (dense, comparative) vs cards (one campaign at a time, Meta's shape).
+  const [layout, setLayout] = useState<'table' | 'cards'>('table');
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const toggleExpanded = (id: string) =>
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   // Undo holds whole ad sets — every mutation here is a multi-row rewrite
   // (balance, move, a mode switch), so a field-level undo would be a lie.
   const [undoStack, setUndoStack] = useState<PacerAd[][]>([]);
@@ -293,6 +306,18 @@ export function GooglePacingCard({
   };
 
   const healthLine = healthLineId ? view.lines.find((l) => l.id === healthLineId) : null;
+
+  /** Write a manual flight override as day-of-month bounds within this month. */
+  const setFlight = useCallback(
+    (id: string, startDay: number, endDay: number) => {
+      const pad = (n: number) => String(n).padStart(2, '0');
+      updateAd(id, {
+        googleFlightStartOverride: `${period}-${pad(startDay)}`,
+        googleFlightEndOverride: `${period}-${pad(endDay)}`,
+      });
+    },
+    [period, updateAd],
+  );
 
   // Bar widths measure against the LARGER of the denominator and the plan, so an
   // over-allocated plan compresses rather than overflowing the track.
@@ -593,6 +618,30 @@ export function GooglePacingCard({
           </button>
         </div>
         <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div className="inline-flex items-center rounded-lg border border-[var(--border)] bg-[var(--card)] p-0.5">
+            {(
+              [
+                ['table', 'Table', TableCellsIcon],
+                ['cards', 'Cards', Squares2X2Icon],
+              ] as const
+            ).map(([value, label, Icon]) => (
+              <Tooltip key={value} label={`${label} view`}>
+                <button
+                  type="button"
+                  onClick={() => setLayout(value)}
+                  aria-pressed={layout === value}
+                  aria-label={`${label} view`}
+                  className={`inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors ${
+                    layout === value
+                      ? 'bg-[var(--primary)] text-white'
+                      : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                  }`}
+                >
+                  <Icon className="h-4 w-4" />
+                </button>
+              </Tooltip>
+            ))}
+          </div>
           <LabelFilterBar
             ads={ads}
             activeLabel={activeLabel}
@@ -621,138 +670,190 @@ export function GooglePacingCard({
         />
       )}
 
-      {/* ── The campaign table ── */}
-      <div className="glass-table">
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1040px]">
-            <thead className="sticky top-0 z-10">
-              <tr className="border-b border-[var(--border)] bg-[var(--muted)]">
-                <th className="w-10 px-2 py-2" />
-                <Th align="left">Campaign</Th>
-                <Th className="w-[170px]">
-                  <span className="inline-flex items-center gap-1.5">
-                    Allocation
-                    {/* The unit belongs to this column — it shows the current
-                        one and switches on click. */}
+      {layout === 'cards' ? (
+        /* Card view — same AllocatorLine as the table, so the two can never
+           disagree; only the layout differs. */
+        <div>
+          {rows.map((line) => (
+            <GoogleCampaignCard
+              key={line.id}
+              line={line}
+              ad={adsById.get(line.id)}
+              mode={mode}
+              payable={payable}
+              daysInMonth={clock.daysInMonth}
+              allLabels={allLabels}
+              readOnly={readOnly}
+              expanded={expandedIds.has(line.id)}
+              onToggleExpanded={() => toggleExpanded(line.id)}
+              onInput={(value) => applyInputs(new Map([[line.id, value]]))}
+              onToggleLock={() => updateAd(line.id, { pacerLocked: !line.locked })}
+              onTagsChange={(tags) => updateAd(line.id, { pacerTags: serializeTags(tags) })}
+              onOpenHealth={() => setHealthLineId(line.id)}
+              onFlightChange={(startDay, endDay) => setFlight(line.id, startDay, endDay)}
+            />
+          ))}
+          {rows.length === 0 && (
+            <div className="rounded-xl border border-dashed border-[var(--border)] px-6 py-10 text-center text-sm text-[var(--muted-foreground)]">
+              No campaigns match this view.
+            </div>
+          )}
+          {/* The account line still has to be readable without the table. */}
+          <div className="glass-section-card mt-2 flex flex-wrap items-center justify-between gap-3 rounded-xl px-4 py-3">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+              {view.activeLabel ? 'Campaign total' : 'Account total'}
+            </span>
+            <div className="flex flex-wrap items-center gap-5 text-sm">
+              <span className="tabular-nums">
+                <span className="text-[var(--muted-foreground)]">Target </span>
+                <span className="font-bold">{fmt(view.totals.allocated)}</span>
+              </span>
+              <span className="tabular-nums">
+                <span className="text-[var(--muted-foreground)]">Spent </span>
+                <span className="font-bold">{fmt(view.totals.spent)}</span>
+              </span>
+              <span className="tabular-nums">
+                <span className="text-[var(--muted-foreground)]">New daily </span>
+                <span className="font-bold" style={{ color: 'var(--primary)' }}>
+                  {fmt(view.totals.accountDaily)}
+                </span>
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="glass-table">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1040px]">
+              <thead className="sticky top-0 z-10">
+                <tr className="border-b border-[var(--border)] bg-[var(--muted)]">
+                  <th className="w-10 px-2 py-2" />
+                  <Th align="left">Campaign</Th>
+                  <Th className="w-[170px]">
+                    <span className="inline-flex items-center gap-1.5">
+                      Allocation
+                      {/* The unit belongs to this column — it shows the current
+                          one and switches on click. */}
+                      <Tooltip
+                        label={
+                          mode === 'pct'
+                            ? 'Allocating by percent of the month’s actual spend — click to switch to dollar amounts.'
+                            : 'Allocating by fixed dollar amounts — click to switch to percent of actual spend.'
+                        }
+                      >
+                        <button
+                          type="button"
+                          onClick={() => switchMode(mode === 'pct' ? 'amt' : 'pct')}
+                          disabled={readOnly}
+                          aria-label={`Allocating by ${mode === 'pct' ? 'percent' : 'dollars'} — switch unit`}
+                          className="inline-flex h-5 w-5 items-center justify-center rounded border border-[var(--border)] bg-[var(--card)] text-[11px] font-bold text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {mode === 'pct' ? '%' : '$'}
+                        </button>
+                      </Tooltip>
+                    </span>
+                  </Th>
+                  <Th>Target Spend</Th>
+                  <Th>Spent MTD</Th>
+                  <Th tooltip="Target × (flight days elapsed ÷ total flight days) — what should have been spent by now at an even pace.">
+                    Expected MTD
+                  </Th>
+                  <Th align="left">Pace</Th>
+                  <Th tooltip="The average daily budget this campaign currently has in Google. The New Daily Budget beside it is what it should be — the gap is what a push would change.">
+                    Current Daily
+                  </Th>
+                  <Th
+                    hero
+                    tooltip="(Monthly target − spent) ÷ remaining flight days. Set this as the campaign's daily budget in Google today to land on target."
+                  >
+                    New Daily Budget
+                  </Th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((line) => (
+                  <Row
+                    key={line.id}
+                    line={line}
+                    ad={adsById.get(line.id)}
+                    mode={mode}
+                    payable={payable}
+                    allLabels={allLabels}
+                    readOnly={readOnly}
+                    onInput={(value) => applyInputs(new Map([[line.id, value]]))}
+                    onToggleLock={() => updateAd(line.id, { pacerLocked: !line.locked })}
+                    onTagsChange={(tags) => updateAd(line.id, { pacerTags: serializeTags(tags) })}
+                    onOpenHealth={() => setHealthLineId(line.id)}
+                  />
+                ))}
+                {rows.length === 0 && (
+                  <tr>
+                    <td
+                      colSpan={9}
+                      className="px-3 py-10 text-center text-sm text-[var(--muted-foreground)]"
+                    >
+                      No campaigns match this view.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-[var(--border)] bg-[var(--muted)]/60">
+                  <td />
+                  <td className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
+                    {view.activeLabel ? 'Campaign total' : 'Account total'}
+                  </td>
+                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
+                    {mode === 'pct'
+                      ? `${view.visible.reduce((s, l) => s + l.input, 0).toFixed(1)}%`
+                      : fmt(view.totals.allocated)}
+                  </td>
+                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
+                    {fmt(view.totals.allocated)}
+                  </td>
+                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
+                    {fmt(view.totals.spent)}
+                  </td>
+                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
+                    {fmt(view.totals.expected)}
+                  </td>
+                  <td />
+                  <td className="px-3 py-3 text-right text-sm font-bold tabular-nums text-[var(--muted-foreground)]">
+                    {fmt(view.visible.reduce((sum, l) => sum + l.currentDaily, 0))}
+                  </td>
+                  <td className="bg-[var(--muted)]/40 px-3 py-3 text-right">
+                    <span
+                      className="text-sm font-bold tabular-nums"
+                      style={{ color: 'var(--primary)' }}
+                    >
+                      {fmt(view.totals.accountDaily)}
+                    </span>
                     <Tooltip
                       label={
-                        mode === 'pct'
-                          ? 'Allocating by percent of the month’s actual spend — click to switch to dollar amounts.'
-                          : 'Allocating by fixed dollar amounts — click to switch to percent of actual spend.'
+                        view.totals.fullyAllocated
+                          ? 'The plan totals the denominator, so this daily total is what Google Ads Manager should show after applying.'
+                          : 'The plan does not total the denominator — balance it before applying, or the account daily total will not match.'
                       }
                     >
-                      <button
-                        type="button"
-                        onClick={() => switchMode(mode === 'pct' ? 'amt' : 'pct')}
-                        disabled={readOnly}
-                        aria-label={`Allocating by ${mode === 'pct' ? 'percent' : 'dollars'} — switch unit`}
-                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-[var(--border)] bg-[var(--card)] text-[11px] font-bold text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
+                      <span
+                        className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+                        style={{
+                          background: view.totals.fullyAllocated
+                            ? 'rgba(34,197,94,0.16)'
+                            : 'rgba(239,68,68,0.16)',
+                          color: view.totals.fullyAllocated ? COLORS.success : COLORS.error,
+                        }}
                       >
-                        {mode === 'pct' ? '%' : '$'}
-                      </button>
+                        {view.totals.fullyAllocated ? 'Matches' : 'Off'}
+                      </span>
                     </Tooltip>
-                  </span>
-                </Th>
-                <Th>Target Spend</Th>
-                <Th>Spent MTD</Th>
-                <Th tooltip="Target × (flight days elapsed ÷ total flight days) — what should have been spent by now at an even pace.">
-                  Expected MTD
-                </Th>
-                <Th align="left">Pace</Th>
-                <Th tooltip="The average daily budget this campaign currently has in Google. The New Daily Budget beside it is what it should be — the gap is what a push would change.">
-                  Current Daily
-                </Th>
-                <Th
-                  hero
-                  tooltip="(Monthly target − spent) ÷ remaining flight days. Set this as the campaign's daily budget in Google today to land on target."
-                >
-                  New Daily Budget
-                </Th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((line) => (
-                <Row
-                  key={line.id}
-                  line={line}
-                  ad={adsById.get(line.id)}
-                  mode={mode}
-                  payable={payable}
-                  allLabels={allLabels}
-                  readOnly={readOnly}
-                  onInput={(value) => applyInputs(new Map([[line.id, value]]))}
-                  onToggleLock={() => updateAd(line.id, { pacerLocked: !line.locked })}
-                  onTagsChange={(tags) => updateAd(line.id, { pacerTags: serializeTags(tags) })}
-                  onOpenHealth={() => setHealthLineId(line.id)}
-                />
-              ))}
-              {rows.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={9}
-                    className="px-3 py-10 text-center text-sm text-[var(--muted-foreground)]"
-                  >
-                    No campaigns match this view.
                   </td>
                 </tr>
-              )}
-            </tbody>
-            <tfoot>
-              <tr className="border-t-2 border-[var(--border)] bg-[var(--muted)]/60">
-                <td />
-                <td className="px-3 py-3 text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
-                  {view.activeLabel ? 'Campaign total' : 'Account total'}
-                </td>
-                <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
-                  {mode === 'pct'
-                    ? `${view.visible.reduce((s, l) => s + l.input, 0).toFixed(1)}%`
-                    : fmt(view.totals.allocated)}
-                </td>
-                <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
-                  {fmt(view.totals.allocated)}
-                </td>
-                <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
-                  {fmt(view.totals.spent)}
-                </td>
-                <td className="px-3 py-3 text-right text-sm font-bold tabular-nums">
-                  {fmt(view.totals.expected)}
-                </td>
-                <td />
-                <td className="px-3 py-3 text-right text-sm font-bold tabular-nums text-[var(--muted-foreground)]">
-                  {fmt(view.visible.reduce((sum, l) => sum + l.currentDaily, 0))}
-                </td>
-                <td className="bg-[var(--muted)]/40 px-3 py-3 text-right">
-                  <span
-                    className="text-sm font-bold tabular-nums"
-                    style={{ color: 'var(--primary)' }}
-                  >
-                    {fmt(view.totals.accountDaily)}
-                  </span>
-                  <Tooltip
-                    label={
-                      view.totals.fullyAllocated
-                        ? 'The plan totals the denominator, so this daily total is what Google Ads Manager should show after applying.'
-                        : 'The plan does not total the denominator — balance it before applying, or the account daily total will not match.'
-                    }
-                  >
-                    <span
-                      className="ml-1.5 rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
-                      style={{
-                        background: view.totals.fullyAllocated
-                          ? 'rgba(34,197,94,0.16)'
-                          : 'rgba(239,68,68,0.16)',
-                        color: view.totals.fullyAllocated ? COLORS.success : COLORS.error,
-                      }}
-                    >
-                      {view.totals.fullyAllocated ? 'Matches' : 'Off'}
-                    </span>
-                  </Tooltip>
-                </td>
-              </tr>
-            </tfoot>
-          </table>
+              </tfoot>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
       {moveOpen && (
         <MoveBudgetModal

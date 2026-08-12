@@ -1,4 +1,5 @@
 import { assetCategoryLabel, assetSourceLabel } from '@/lib/media-metadata';
+import { RIGHTS_STATUS_LABELS, type RightsStatus } from '@/lib/media-rights';
 
 /**
  * Facets for filtering the media library — Phase 2 of docs/asset-management.md.
@@ -17,7 +18,7 @@ import { assetCategoryLabel, assetSourceLabel } from '@/lib/media-metadata';
  * its MIME type, because a guess that is wrong is worse than an honest blank.
  */
 
-export type MediaFacetKey = 'oem' | 'assetCategory' | 'assetSource' | 'modelYear';
+export type MediaFacetKey = 'oem' | 'assetCategory' | 'assetSource' | 'modelYear' | 'rightsStatus';
 
 /** Facet order is the render order — broad to narrow. */
 export const MEDIA_FACET_KEYS: MediaFacetKey[] = [
@@ -25,6 +26,9 @@ export const MEDIA_FACET_KEYS: MediaFacetKey[] = [
   'assetCategory',
   'assetSource',
   'modelYear',
+  // Last: it's the one facet people reach for deliberately ("what's expiring?")
+  // rather than while browsing.
+  'rightsStatus',
 ];
 
 export const MEDIA_FACET_LABELS: Record<MediaFacetKey, string> = {
@@ -32,6 +36,7 @@ export const MEDIA_FACET_LABELS: Record<MediaFacetKey, string> = {
   assetCategory: 'Asset type',
   assetSource: 'Source',
   modelYear: 'Model year',
+  rightsStatus: 'Rights',
 };
 
 /**
@@ -51,6 +56,8 @@ export interface FacetableAsset {
   assetCategory?: string | null;
   assetSource?: string | null;
   modelYear?: string[] | null;
+  /** Derived server-side by serializeMediaAsset. */
+  rights?: { status: RightsStatus } | null;
 }
 
 /** One asset's values, per facet. Always at least one entry — UNSET if empty. */
@@ -74,6 +81,9 @@ export function facetsForAsset(a: FacetableAsset): MediaFacetValues {
     assetSource: orUnset([a.assetSource]),
     // Multi-valued: an OEM package spanning MY25 and MY26 must appear under both.
     modelYear: orUnset(a.modelYear ?? []),
+    // Rights status is already a total function — every asset has one, and
+    // 'unknown' is its own meaningful value — so it never falls back to UNSET.
+    rightsStatus: [a.rights?.status ?? 'unknown'],
   };
 }
 
@@ -82,6 +92,7 @@ export function mediaFacetValueLabel(key: MediaFacetKey, value: string): string 
   if (value === UNSET) return UNSET_LABEL;
   if (key === 'assetCategory') return assetCategoryLabel(value) ?? value;
   if (key === 'assetSource') return assetSourceLabel(value) ?? value;
+  if (key === 'rightsStatus') return RIGHTS_STATUS_LABELS[value as RightsStatus] ?? value;
   return value;
 }
 

@@ -17,6 +17,18 @@ const METADATA_KEYS = [
   'vehicleModel',
   'rightsHolder',
   'tags',
+  // Rights (Phase 3)
+  'licenseType',
+  'licenseRef',
+  'licenseStartsAt',
+  'licenseExpiresAt',
+  'usageScope',
+  'territoryScope',
+  'exclusive',
+  'talentReleaseOnFile',
+  'derivativesPermitted',
+  'sublicensingPermitted',
+  'expiresAt',
 ] as const;
 
 // ── Access helpers ──

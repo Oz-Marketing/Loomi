@@ -6,6 +6,7 @@ import { MultiSelect } from '@/components/ui/multi-select';
 import { HelpTip } from '@/components/ui/help-tip';
 import { MAJOR_US_OEMS, POWERSPORTS_BRANDS } from '@/lib/oems';
 import { ASSET_CATEGORIES, ASSET_SOURCES } from '@/lib/media-metadata';
+import { LICENSE_TYPES, USAGE_SCOPES } from '@/lib/media-rights';
 
 /**
  * The DAM metadata a person edits on an asset — Phase 1 of
@@ -33,6 +34,19 @@ export interface AssetMetadataValue {
   vehicleModel: string[];
   rightsHolder: string;
   tags: string[];
+
+  // ── Rights (Phase 3) ──
+  licenseType: string;
+  licenseRef: string;
+  /** `yyyy-mm-dd`, the value an <input type="date"> holds. '' = unset. */
+  licenseStartsAt: string;
+  licenseExpiresAt: string;
+  expiresAt: string;
+  usageScope: string[];
+  territoryScope: string[];
+  /** Tri-state: '' = not recorded, which is not the same as 'no'. */
+  derivativesPermitted: string;
+  sublicensingPermitted: string;
 }
 
 export const EMPTY_ASSET_METADATA: AssetMetadataValue = {
@@ -43,7 +57,32 @@ export const EMPTY_ASSET_METADATA: AssetMetadataValue = {
   vehicleModel: [],
   rightsHolder: '',
   tags: [],
+  licenseType: '',
+  licenseRef: '',
+  licenseStartsAt: '',
+  licenseExpiresAt: '',
+  expiresAt: '',
+  usageScope: [],
+  territoryScope: [],
+  derivativesPermitted: '',
+  sublicensingPermitted: '',
 };
+
+/** ISO timestamp → the `yyyy-mm-dd` an <input type="date"> expects. */
+function toDateInput(iso?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+}
+
+/** '' | 'true' | 'false' → null | true | false. */
+function fromTriState(v: string): boolean | null {
+  return v === '' ? null : v === 'true';
+}
+
+function toTriState(v?: boolean | null): string {
+  return v === null || v === undefined ? '' : String(v);
+}
 
 /** Build the editable value from an API asset payload. */
 export function assetMetadataFrom(file: {
@@ -54,6 +93,15 @@ export function assetMetadataFrom(file: {
   vehicleModel?: string[] | null;
   rightsHolder?: string | null;
   tags?: string[] | null;
+  licenseType?: string | null;
+  licenseRef?: string | null;
+  licenseStartsAt?: string | null;
+  licenseExpiresAt?: string | null;
+  expiresAt?: string | null;
+  usageScope?: string[] | null;
+  territoryScope?: string[] | null;
+  derivativesPermitted?: boolean | null;
+  sublicensingPermitted?: boolean | null;
 }): AssetMetadataValue {
   return {
     oem: file.oem ?? '',
@@ -63,6 +111,15 @@ export function assetMetadataFrom(file: {
     vehicleModel: file.vehicleModel ?? [],
     rightsHolder: file.rightsHolder ?? '',
     tags: file.tags ?? [],
+    licenseType: file.licenseType ?? '',
+    licenseRef: file.licenseRef ?? '',
+    licenseStartsAt: toDateInput(file.licenseStartsAt),
+    licenseExpiresAt: toDateInput(file.licenseExpiresAt),
+    expiresAt: toDateInput(file.expiresAt),
+    usageScope: file.usageScope ?? [],
+    territoryScope: file.territoryScope ?? [],
+    derivativesPermitted: toTriState(file.derivativesPermitted),
+    sublicensingPermitted: toTriState(file.sublicensingPermitted),
   };
 }
 
@@ -91,6 +148,25 @@ export function assetMetadataDiff(
   if (!sameList(next.vehicleModel, prev.vehicleModel)) body.vehicleModel = next.vehicleModel;
   if (!sameList(next.tags, prev.tags)) body.tags = next.tags;
 
+  // ── Rights ──
+  if (next.licenseType !== prev.licenseType) body.licenseType = next.licenseType || null;
+  if (next.licenseRef.trim() !== prev.licenseRef.trim()) body.licenseRef = next.licenseRef.trim() || null;
+  if (!sameList(next.usageScope, prev.usageScope)) body.usageScope = next.usageScope;
+  if (!sameList(next.territoryScope, prev.territoryScope)) body.territoryScope = next.territoryScope;
+  if (next.derivativesPermitted !== prev.derivativesPermitted) {
+    body.derivativesPermitted = fromTriState(next.derivativesPermitted);
+  }
+  if (next.sublicensingPermitted !== prev.sublicensingPermitted) {
+    body.sublicensingPermitted = fromTriState(next.sublicensingPermitted);
+  }
+  // Dates go up as ISO at UTC midnight. A date input has no timezone, and
+  // sending the browser's local midnight would shift the day for anyone west of
+  // UTC — an asset expiring "on the 31st" must not lapse on the 30th.
+  for (const key of ['licenseStartsAt', 'licenseExpiresAt', 'expiresAt'] as const) {
+    if (next[key] === prev[key]) continue;
+    body[key] = next[key] ? new Date(`${next[key]}T00:00:00.000Z`).toISOString() : null;
+  }
+
   return body;
 }
 
@@ -101,6 +177,17 @@ function modelYearOptions(): { value: string; label: string }[] {
   for (let y = current + 2; y >= current - 4; y--) years.push(String(y));
   return years.map((y) => ({ value: y, label: y }));
 }
+
+/**
+ * Not-recorded / yes / no. Three options, not a checkbox: a permission nobody
+ * has confirmed is different from one that was checked and refused, and a
+ * two-state control silently asserts the second.
+ */
+const TRI_STATE_OPTIONS = [
+  { value: '', label: 'Not recorded' },
+  { value: 'true', label: 'Yes' },
+  { value: 'false', label: 'No' },
+];
 
 const FIELD_LABEL = 'flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] mb-2';
 const TEXT_INPUT =
@@ -263,6 +350,186 @@ export function AssetMetadataFields({
           disabled={disabled}
           className={TEXT_INPUT}
         />
+      </div>
+
+      {/* ── Rights ── */}
+      <div className="pt-3 border-t border-[var(--border)]">
+        <h4 className="text-sm font-semibold mb-3">Rights</h4>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={FIELD_LABEL}>
+              Licence type
+              <HelpTip title="Licence type">
+                <p>
+                  How this asset is licensed. Leave unset if you genuinely
+                  don&apos;t know — that reads as an open question, which is more
+                  useful than a guess.
+                </p>
+              </HelpTip>
+            </label>
+            <Select
+              value={value.licenseType}
+              onChange={(v) => set('licenseType', v)}
+              options={[{ value: '', label: 'Not recorded' }, ...LICENSE_TYPES.map((t) => ({ ...t }))]}
+              previewFont={false}
+              placeholder="Not recorded"
+            />
+          </div>
+
+          <div>
+            <label className={FIELD_LABEL}>
+              Agreement reference
+              <HelpTip title="Agreement reference">
+                <p>
+                  Whatever the counterparty calls it, e.g.
+                  &ldquo;Ford-2026-lifestyle-Q3&rdquo;. Free text — it&apos;s how
+                  you&apos;d find the paperwork.
+                </p>
+              </HelpTip>
+            </label>
+            <input
+              type="text"
+              value={value.licenseRef}
+              onChange={(e) => set('licenseRef', e.target.value)}
+              placeholder="e.g. Ford-2026-lifestyle-Q3"
+              disabled={disabled}
+              className={TEXT_INPUT}
+            />
+          </div>
+
+          <div>
+            <label className={FIELD_LABEL}>Licence starts</label>
+            <input
+              type="date"
+              value={value.licenseStartsAt}
+              onChange={(e) => set('licenseStartsAt', e.target.value)}
+              disabled={disabled}
+              className={TEXT_INPUT}
+            />
+          </div>
+
+          <div>
+            <label className={FIELD_LABEL}>
+              Licence expires
+              <HelpTip title="Licence expiry">
+                <p>
+                  When the right to use this asset ends. A daily sweep warns 30
+                  days out, again at 7, and marks it out of licence when it passes.
+                </p>
+              </HelpTip>
+            </label>
+            <input
+              type="date"
+              value={value.licenseExpiresAt}
+              onChange={(e) => set('licenseExpiresAt', e.target.value)}
+              disabled={disabled}
+              className={TEXT_INPUT}
+            />
+          </div>
+        </div>
+
+        <div className="mt-4">
+          <label className={FIELD_LABEL}>
+            Campaign/offer ends
+            <HelpTip title="Campaign end">
+              <p>
+                When the offer or campaign this asset supports finishes. Separate
+                from the licence: an asset routinely outlives the deal it
+                advertised, and the reverse.
+              </p>
+              <p className="mt-2">Whichever date comes first is the one that retires it.</p>
+            </HelpTip>
+          </label>
+          <input
+            type="date"
+            value={value.expiresAt}
+            onChange={(e) => set('expiresAt', e.target.value)}
+            disabled={disabled}
+            className={TEXT_INPUT}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 mt-4">
+          <div>
+            <label className={FIELD_LABEL}>
+              Usage
+              <HelpTip title="Usage scope">
+                <p>Which channels the licence covers.</p>
+              </HelpTip>
+            </label>
+            <MultiSelect
+              value={value.usageScope}
+              onChange={(v) => set('usageScope', v)}
+              options={USAGE_SCOPES.map((u) => ({ value: u.value, label: u.label }))}
+              placeholder="Any"
+              menuZIndex={200}
+            />
+          </div>
+
+          <div>
+            <label className={FIELD_LABEL}>
+              Territory
+              <HelpTip title="Territory">
+                <p>
+                  Where it&apos;s cleared for use, e.g. Utah, Idaho, National.
+                  Free text for now — OEM territory assignments don&apos;t fit a
+                  fixed list.
+                </p>
+              </HelpTip>
+            </label>
+            <input
+              type="text"
+              value={value.territoryScope.join(', ')}
+              onChange={(e) =>
+                set('territoryScope', e.target.value.split(',').map((t) => t.trim()).filter(Boolean))
+              }
+              placeholder="e.g. Utah, Idaho"
+              disabled={disabled}
+              className={TEXT_INPUT}
+            />
+          </div>
+
+          <div>
+            <label className={FIELD_LABEL}>
+              Derivatives allowed
+              <HelpTip title="Derivative works">
+                <p>
+                  Whether the licence permits resizing, cropping or compositing
+                  this asset.
+                </p>
+                <p className="mt-2">
+                  The one rights field automated generation has to respect —
+                  compositing an asset that forbids it is a breach nobody catches
+                  by eye.
+                </p>
+              </HelpTip>
+            </label>
+            <Select
+              value={value.derivativesPermitted}
+              onChange={(v) => set('derivativesPermitted', v)}
+              options={TRI_STATE_OPTIONS}
+              previewFont={false}
+              placeholder="Not recorded"
+            />
+          </div>
+
+          <div>
+            <label className={FIELD_LABEL}>
+              Sublicensing allowed
+              <HelpTip title="Sublicensing">
+                <p>Whether Oz can extend usage rights to a client or third party.</p>
+              </HelpTip>
+            </label>
+            <Select
+              value={value.sublicensingPermitted}
+              onChange={(v) => set('sublicensingPermitted', v)}
+              options={TRI_STATE_OPTIONS}
+              previewFont={false}
+              placeholder="Not recorded"
+            />
+          </div>
+        </div>
       </div>
     </div>
   );

@@ -117,7 +117,7 @@ export async function GET(req: NextRequest) {
 
     if (countOnly) return NextResponse.json({ total, source: 's3' });
 
-    const files = assets.map(serializeMediaAsset);
+    const files = assets.map((a) => serializeMediaAsset(a));
     const next = offset + files.length;
     return NextResponse.json({
       files,
@@ -160,7 +160,7 @@ export async function GET(req: NextRequest) {
     prisma.mediaAsset.count({ where }),
   ]);
 
-  const files = assets.map(serializeMediaAsset);
+  const files = assets.map((a) => serializeMediaAsset(a));
 
   const nextOffset = offset + files.length;
 

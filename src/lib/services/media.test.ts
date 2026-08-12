@@ -114,3 +114,71 @@ describe('buildAssetMetadata', () => {
     });
   });
 });
+
+describe('buildAssetMetadata — rights', () => {
+  it('accepts a known licence type and rejects an unknown one', () => {
+    expect(buildAssetMetadata({ licenseType: 'oem-licensed' })).toEqual({
+      data: { licenseType: 'oem-licensed' },
+    });
+    expect(buildAssetMetadata({ licenseType: 'perpetual' })).toEqual({
+      error: 'Unknown licence type: perpetual',
+    });
+  });
+
+  it('validates usage scope against the vocabulary', () => {
+    expect(buildAssetMetadata({ usageScope: 'digital,print' })).toEqual({
+      data: { usageScope: '["digital","print"]' },
+    });
+    expect(buildAssetMetadata({ usageScope: 'billboards' })).toEqual({
+      error: 'Unknown usage scope: billboards',
+    });
+  });
+
+  it('leaves territory free-form — DAT assignments do not fit a fixed list', () => {
+    expect(buildAssetMetadata({ territoryScope: 'Utah, Idaho' })).toEqual({
+      data: { territoryScope: '["Utah","Idaho"]' },
+    });
+  });
+
+  it('treats the permission flags as tri-state', () => {
+    expect(buildAssetMetadata({ derivativesPermitted: false })).toEqual({
+      data: { derivativesPermitted: false },
+    });
+    // null is "not recorded", which is not the same as "not permitted".
+    expect(buildAssetMetadata({ derivativesPermitted: null })).toEqual({
+      data: { derivativesPermitted: null },
+    });
+    expect(buildAssetMetadata({ derivativesPermitted: 'maybe' })).toEqual({
+      error: 'derivativesPermitted must be true, false or null',
+    });
+  });
+
+  it('rejects an unparseable date', () => {
+    expect(buildAssetMetadata({ licenseExpiresAt: 'whenever' })).toEqual({
+      error: 'licenseExpiresAt must be a valid date or null',
+    });
+  });
+
+  it('re-arms expiry when a governing date moves', () => {
+    // The renewal case: extending a licence must clear the sweep's verdict, or
+    // a relicensed asset stays flagged expired forever.
+    const result = buildAssetMetadata({ licenseExpiresAt: '2027-01-01T00:00:00.000Z' });
+    expect(result).toEqual({
+      data: {
+        licenseExpiresAt: new Date('2027-01-01T00:00:00.000Z'),
+        expiredAt: null,
+        expirationReason: null,
+        expirationWarnedAt: null,
+      },
+    });
+  });
+
+  it('does not re-arm when only the licence START moves', () => {
+    // The start date can't expire anything, so touching it must not resurrect
+    // an asset the sweep correctly retired.
+    const result = buildAssetMetadata({ licenseStartsAt: '2026-01-01T00:00:00.000Z' });
+    expect(result).toEqual({
+      data: { licenseStartsAt: new Date('2026-01-01T00:00:00.000Z') },
+    });
+  });
+});

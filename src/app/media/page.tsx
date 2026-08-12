@@ -47,6 +47,7 @@ import {
   type AssetMetadataValue,
 } from '@/components/media/asset-metadata-fields';
 import { assetSourceLabel } from '@/lib/media-metadata';
+import { rightsBadgeLabel, type RightsAssessment } from '@/lib/media-rights';
 import {
   MEDIA_FACET_KEYS,
   buildMediaFacetOptions,
@@ -97,6 +98,20 @@ interface MediaFile {
   tags?: string[];
   rightsHolder?: string | null;
   parentAssetId?: string | null;
+
+  // ── Rights (Phase 3) ──
+  licenseType?: string | null;
+  licenseRef?: string | null;
+  licenseStartsAt?: string | null;
+  licenseExpiresAt?: string | null;
+  expiresAt?: string | null;
+  expiredAt?: string | null;
+  usageScope?: string[];
+  territoryScope?: string[];
+  derivativesPermitted?: boolean | null;
+  sublicensingPermitted?: boolean | null;
+  /** Derived server-side — see serializeMediaAsset. */
+  rights?: RightsAssessment | null;
 }
 
 interface MediaFolder {
@@ -283,6 +298,37 @@ function AssetOriginBadge({ f }: { f: MediaFile }) {
   );
 }
 
+/**
+ * Licence countdown, bottom-left of the thumbnail.
+ *
+ * Only appears when there's something to act on — expiring, expired or lapsed.
+ * An asset that's fine, or that has no licence recorded, gets nothing: badging
+ * "unknown" would put a warning on most of a library mid-migration, and a
+ * warning on everything is a warning on nothing.
+ */
+function RightsBadge({ f }: { f: MediaFile }) {
+  if (!f.rights) return null;
+  const label = rightsBadgeLabel(f.rights);
+  if (!label) return null;
+
+  const past = f.rights.status === 'expired' || f.rights.status === 'lapsed';
+  return (
+    <span
+      className={`absolute bottom-2 left-2 z-10 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium backdrop-blur-sm ${
+        past ? 'bg-red-600/90 text-white' : 'bg-amber-500/90 text-white'
+      }`}
+      title={
+        past
+          ? 'Out of licence — replace before reusing this asset'
+          : `Licence or campaign ends in ${f.rights.daysRemaining} day(s)`
+      }
+    >
+      <ExclamationTriangleIcon className="h-3 w-3" />
+      {label}
+    </span>
+  );
+}
+
 interface MediaCardProps {
   f: MediaFile;
   isMenuOpen: boolean;
@@ -377,6 +423,7 @@ function MediaCard({
             a rooftop's own — editing one changes it for every sub-account that
             carries the brand. */}
         <AssetOriginBadge f={f} />
+        <RightsBadge f={f} />
       </div>
 
       {/* Info */}

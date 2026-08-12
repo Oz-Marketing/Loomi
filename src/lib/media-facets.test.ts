@@ -31,6 +31,7 @@ describe('facetsForAsset', () => {
       assetCategory: ['template'],
       assetSource: ['oem-supplied'],
       modelYear: ['2025', '2026'],
+      rightsStatus: ['unknown'],
     });
   });
 
@@ -40,6 +41,8 @@ describe('facetsForAsset', () => {
       assetCategory: [UNSET],
       assetSource: [UNSET],
       modelYear: [UNSET],
+      // Rights is never UNSET — 'unknown' is its own real value.
+      rightsStatus: ['unknown'],
     });
   });
 
@@ -129,5 +132,31 @@ describe('countMediaFacetsSelected', () => {
   it('totals across facets', () => {
     expect(countMediaFacetsSelected({ oem: ['Audi', 'Honda'], assetCategory: ['template'] })).toBe(3);
     expect(countMediaFacetsSelected({})).toBe(0);
+  });
+});
+
+describe('rightsStatus facet', () => {
+  it('reads the server-derived status', () => {
+    expect(facetsForAsset({ rights: { status: 'expiring_soon' } }).rightsStatus).toEqual([
+      'expiring_soon',
+    ]);
+  });
+
+  it('defaults to unknown rather than Unclassified', () => {
+    // Every asset has a rights position, even if that position is "we don't
+    // know" — so this facet has no empty bucket.
+    expect(facetsForAsset({}).rightsStatus).toEqual(['unknown']);
+  });
+
+  it('labels the status for the rail', () => {
+    expect(mediaFacetValueLabel('rightsStatus', 'lapsed')).toBe('Lapsed');
+    expect(mediaFacetValueLabel('rightsStatus', 'unknown')).toBe('No licence recorded');
+  });
+
+  it('filters on it', () => {
+    const expiring = facetsForAsset({ rights: { status: 'expiring_soon' } });
+    const active = facetsForAsset({ rights: { status: 'active' } });
+    expect(matchesMediaFacets(expiring, { rightsStatus: ['expiring_soon'] })).toBe(true);
+    expect(matchesMediaFacets(active, { rightsStatus: ['expiring_soon'] })).toBe(false);
   });
 });

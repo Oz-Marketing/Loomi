@@ -252,7 +252,14 @@ until this lands, and it alone solves the OEM-duplication problem.
 upload and edit UI, populate the controlled vocabularies, and add faceted search
 over them. Replace `filename contains` with metadata search.
 
-**Phase 3 — Rights and expiration.** §6, on the existing sweep.
+**Phase 3 — Rights and expiration.** §6, on the existing sweep. **Shipped**, with
+one deliberate omission: §6.2's *hard block* after the grace period is not built.
+Nothing consumes asset rights yet — the launch gate that would enforce it arrives
+with Go-to-Market — so a block would be untested code sitting in the path of every
+future launch. The sweep flags, records the trigger source, and notifies;
+enforcement lands with its consumer. `derivativesPermitted` is the field that gate
+must read first: compositing an asset whose licence forbids derivatives is the
+breach nobody catches by eye.
 
 **Phase 4 — Renditions and delivery.** Auto-generate platform sizes from a master;
 bulk download; a read-only consumer view for clients. This is where the

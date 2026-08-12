@@ -1801,6 +1801,58 @@ model MediaAsset {
   /// fail `db push` on any environment already holding duplicates.
   contentHash    String?
 
+  // ── Rights management (docs/asset-management.md Phase 3, §6) ──
+  //
+  // The most commonly under-implemented DAM capability, and the one that
+  // actually bites an automotive agency: OEM photography is licensed for a
+  // window, and creative that outlives its licence is a real exposure. All
+  // nullable — an asset with no licence recorded is "unknown", which reads
+  // differently from "unlimited" and must not be treated as either.
+  //
+  // `rightsHolder` above is the licence HOLDER; these describe the licence.
+
+  /// lib/media-rights.ts LICENSE_TYPES — OEM-licensed, stock, talent release…
+  licenseType          String?
+  /// The agreement this asset is covered by, e.g. "Ford-2026-lifestyle-Q3".
+  /// Free text: it is whatever reference the counterparty used.
+  licenseRef           String?
+  licenseStartsAt      DateTime?
+  /// When the LICENCE lapses — distinct from `expiresAt`, which is when the
+  /// offer or campaign the asset advertises ends. An asset can outlive its offer
+  /// and still be licensed, or the reverse.
+  licenseExpiresAt     DateTime?
+  /// JSON string[] — where it may be used (digital, print, social, OOH…).
+  usageScope           String?
+  /// JSON string[] — territories it is cleared for. Feeds OEM DAT compliance
+  /// once there is a launch gate to enforce it.
+  territoryScope       String?
+  /// Tri-state on purpose: null = not recorded, which is not the same as false.
+  /// A missing talent release and a confirmed absent one carry different risk.
+  exclusive            Boolean?
+  talentReleaseOnFile  Boolean?
+  /// Whether the licence permits derivative works (resize, crop, composite).
+  /// The one rights field automated generation must respect: compositing an
+  /// asset that forbids derivatives is a breach nobody would catch by eye.
+  derivativesPermitted Boolean?
+  sublicensingPermitted Boolean?
+
+  /// When the offer/campaign this asset supports ends. Set by a person, or
+  /// carried from the offer for generated creative.
+  expiresAt            DateTime?
+
+  /// Set by the expiration sweep when the asset passes whichever date came
+  /// first. A TIMESTAMP rather than a status value, matching `archivedAt` and
+  /// AdCreative's convention: expiry is orthogonal to whatever workflow state
+  /// Phase 5 adds, and folding them together would lose one of them.
+  expiredAt            DateTime?
+  /// Why it expired — "license" | "effective" | "manual". §3 of the design note
+  /// requires the trigger source to be auditable; without it nobody can tell a
+  /// lapsed licence from an ended campaign after the fact.
+  expirationReason     String?
+  /// Last advance warning sent, so the daily sweep doesn't re-notify. Null once
+  /// the dates move, which is what makes a renewal re-arm the warnings.
+  expirationWarnedAt   DateTime?
+
   @@unique([s3Key])
   @@index([accountKey, createdAt])
   @@index([accountKey, category])
@@ -1811,6 +1863,11 @@ model MediaAsset {
   // Duplicate lookup on upload.
   @@index([contentHash])
   @@index([parentAssetId])
+  // The expiration sweep's two scans: "what has lapsed" and "what lapses soon".
+  // Both run daily across every account, so they are the one query here that
+  // isn't scope-limited.
+  @@index([licenseExpiresAt])
+  @@index([expiresAt])
 }
 
 // A user-created folder for organizing media within a scope (an account, or the

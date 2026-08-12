@@ -2,7 +2,7 @@
 // be imported by client components. The full registry lives in ./types.ts, which
 // pulls in prisma and must stay server-only.
 
-export type NotificationCategory = 'Meta Ads Planner' | 'Projects' | 'Ad Generator';
+export type NotificationCategory = 'Meta Ads Planner' | 'Projects' | 'Ad Generator' | 'Media Library';
 
 /**
  * Which settings surface each notification category belongs to. The Notifications
@@ -17,4 +17,7 @@ export const NOTIFICATION_CATEGORY_SURFACE: Record<NotificationCategory, 'studio
   // First Studio-surfaced category: autonomous ad generation produces drafts that
   // need a human to review them, so somebody has to be told they exist.
   'Ad Generator': 'studio',
+  // Asset rights expiry — the library lives on Studio alongside the generator
+  // that consumes its assets.
+  'Media Library': 'studio',
 };

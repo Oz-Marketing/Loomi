@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { getAccountOems, normalizeOems } from '@/lib/oems';
 import { s3PublicUrl } from '@/lib/s3';
 import { getAncestorAccountKeys } from '@/lib/services/accounts';
+import { assessRights, isLicenseType, isUsageScope } from '@/lib/media-rights';
 import {
   coerceList,
   isAssetCategory,
@@ -40,7 +41,7 @@ import {
  * `source` here is the STORAGE origin ('s3'), which is what the media UI reads.
  * The DAM provenance field is `assetSource` — see the schema comment.
  */
-export function serializeMediaAsset(a: MediaAsset) {
+export function serializeMediaAsset(a: MediaAsset, now = new Date()) {
   return {
     id: a.id,
     name: a.filename,
@@ -69,6 +70,25 @@ export function serializeMediaAsset(a: MediaAsset) {
     rightsHolder: a.rightsHolder,
     parentAssetId: a.parentAssetId,
     contentHash: a.contentHash,
+
+    // ── Rights (Phase 3) ──
+    licenseType: a.licenseType,
+    licenseRef: a.licenseRef,
+    licenseStartsAt: a.licenseStartsAt ? a.licenseStartsAt.toISOString() : null,
+    licenseExpiresAt: a.licenseExpiresAt ? a.licenseExpiresAt.toISOString() : null,
+    usageScope: parseListColumn(a.usageScope),
+    territoryScope: parseListColumn(a.territoryScope),
+    exclusive: a.exclusive,
+    talentReleaseOnFile: a.talentReleaseOnFile,
+    derivativesPermitted: a.derivativesPermitted,
+    sublicensingPermitted: a.sublicensingPermitted,
+    expiresAt: a.expiresAt ? a.expiresAt.toISOString() : null,
+    expiredAt: a.expiredAt ? a.expiredAt.toISOString() : null,
+    expirationReason: a.expirationReason,
+
+    // Derived server-side so every consumer agrees on the answer, rather than
+    // each one re-deriving "expiring soon" from raw dates and drifting.
+    rights: assessRights(a, now),
   };
 }
 
@@ -237,6 +257,18 @@ export interface AssetMetadataInput {
   vehicleModel?: unknown;
   rightsHolder?: unknown;
   tags?: unknown;
+  // ── Rights (Phase 3) ──
+  licenseType?: unknown;
+  licenseRef?: unknown;
+  licenseStartsAt?: unknown;
+  licenseExpiresAt?: unknown;
+  usageScope?: unknown;
+  territoryScope?: unknown;
+  exclusive?: unknown;
+  talentReleaseOnFile?: unknown;
+  derivativesPermitted?: unknown;
+  sublicensingPermitted?: unknown;
+  expiresAt?: unknown;
 }
 
 /** Storage-ready metadata. Every field nullable — null means "clear this". */
@@ -248,6 +280,42 @@ export interface AssetMetadataData {
   vehicleModel?: string | null;
   rightsHolder?: string | null;
   tags?: string | null;
+  licenseType?: string | null;
+  licenseRef?: string | null;
+  licenseStartsAt?: Date | null;
+  licenseExpiresAt?: Date | null;
+  usageScope?: string | null;
+  territoryScope?: string | null;
+  exclusive?: boolean | null;
+  talentReleaseOnFile?: boolean | null;
+  derivativesPermitted?: boolean | null;
+  sublicensingPermitted?: boolean | null;
+  expiresAt?: Date | null;
+  /**
+   * Cleared whenever a governing date moves. A renewal has to re-arm the 30/7
+   * warnings and un-expire the asset, or the sweep would treat a freshly
+   * relicensed image as still dead.
+   */
+  expiredAt?: Date | null;
+  expirationReason?: string | null;
+  expirationWarnedAt?: Date | null;
+}
+
+/** Parse a client-supplied date. Returns undefined when the value is unusable. */
+function parseDateInput(raw: unknown): Date | null | undefined {
+  if (raw === null || raw === '') return null;
+  if (typeof raw !== 'string' && !(raw instanceof Date)) return undefined;
+  const d = raw instanceof Date ? raw : new Date(raw);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+/** Tri-state boolean: null clears, absent leaves alone, anything else must be a bool. */
+function parseBoolInput(raw: unknown): boolean | null | undefined {
+  if (raw === null || raw === '') return null;
+  if (typeof raw === 'boolean') return raw;
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  return undefined;
 }
 
 /**
@@ -324,6 +392,60 @@ export function buildAssetMetadata(
     } else {
       data.rightsHolder = raw.trim() || null;
     }
+  }
+
+  // ── Rights ──
+
+  if ('licenseType' in input) {
+    const raw = input.licenseType;
+    if (raw === null || raw === '') data.licenseType = null;
+    else if (!isLicenseType(raw)) return { error: `Unknown licence type: ${String(raw)}` };
+    else data.licenseType = raw;
+  }
+
+  if ('licenseRef' in input) {
+    const raw = input.licenseRef;
+    if (raw === null || raw === '') data.licenseRef = null;
+    else if (typeof raw !== 'string') return { error: 'licenseRef must be a string or null' };
+    else data.licenseRef = raw.trim() || null;
+  }
+
+  if ('usageScope' in input) {
+    const values = coerceList(input.usageScope);
+    const bad = values.find((v) => !isUsageScope(v));
+    if (bad) return { error: `Unknown usage scope: ${bad}` };
+    data.usageScope = serializeListColumn(values);
+  }
+
+  // Territories are free-form: they're US states today but OEM DAT assignments
+  // don't map cleanly onto a fixed list, and rejecting an unrecognised one would
+  // block real data. Phase 4 syncs the vocabulary from the Data Hub.
+  if ('territoryScope' in input) {
+    data.territoryScope = serializeListColumn(coerceList(input.territoryScope));
+  }
+
+  for (const key of ['exclusive', 'talentReleaseOnFile', 'derivativesPermitted', 'sublicensingPermitted'] as const) {
+    if (!(key in input)) continue;
+    const parsed = parseBoolInput(input[key]);
+    if (parsed === undefined) return { error: `${key} must be true, false or null` };
+    data[key] = parsed;
+  }
+
+  // Date fields, and the re-arm rule. Moving either governing date invalidates
+  // whatever the sweep concluded last time — the classic renewal bug is an asset
+  // that stays flagged expired after its licence was extended.
+  let datesMoved = false;
+  for (const key of ['licenseStartsAt', 'licenseExpiresAt', 'expiresAt'] as const) {
+    if (!(key in input)) continue;
+    const parsed = parseDateInput(input[key]);
+    if (parsed === undefined) return { error: `${key} must be a valid date or null` };
+    data[key] = parsed;
+    if (key !== 'licenseStartsAt') datesMoved = true;
+  }
+  if (datesMoved) {
+    data.expiredAt = null;
+    data.expirationReason = null;
+    data.expirationWarnedAt = null;
   }
 
   return { data };

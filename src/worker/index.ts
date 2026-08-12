@@ -39,6 +39,7 @@ import { pollAllAccounts } from '@/lib/ad-generator/automation/poll-offers';
 import { syncAllInventoryFeeds } from '@/lib/ad-generator/automation/sync-inventory';
 import { generateAllAccounts } from '@/lib/ad-generator/automation/generate-ads';
 import { expireStaleAds } from '@/lib/ad-generator/automation/expire-ads';
+import { sweepMediaExpiration } from '@/lib/services/media-expiration';
 import { refreshGuidelineDocs } from '@/lib/ad-generator/guideline-docs';
 
 const PROCESS_DUE_CAMPAIGNS_QUEUE = 'loomi.process-due-campaigns';
@@ -74,6 +75,10 @@ const ADGEN_EXPIRE_QUEUE = 'loomi.adgen.expire';
 // only detects that a manufacturer reissued a document and tells someone. Runs
 // well clear of the generate chain because nothing downstream depends on it.
 const ADGEN_GUIDELINES_QUEUE = 'loomi.adgen.guidelines';
+// Media asset rights: retire assets past their licence/effective date and warn
+// ahead of the ones approaching it. Independent of the ad chain — it governs the
+// source material, not the ads built from it — so it runs on its own slot.
+const MEDIA_RIGHTS_QUEUE = 'loomi.media.rights-sweep';
 
 async function runProcessDueCampaigns(): Promise<void> {
   const startedAt = Date.now();
@@ -229,6 +234,21 @@ async function runAdgenExpire(): Promise<void> {
   }
 }
 
+async function runMediaRightsSweep(): Promise<void> {
+  const startedAt = Date.now();
+  try {
+    const r = await sweepMediaExpiration();
+    if (r.expired.length || r.warned.length) {
+      console.log(
+        `[worker] media rights: ${r.expired.length} asset(s) EXPIRED, ` +
+          `${r.warned.length} warned, ${r.scanned} scanned in ${Date.now() - startedAt}ms`,
+      );
+    }
+  } catch (err) {
+    console.error('[worker] sweepMediaExpiration failed', err);
+  }
+}
+
 async function runAdgenGuidelines(): Promise<void> {
   const startedAt = Date.now();
   try {
@@ -290,6 +310,10 @@ async function main(): Promise<void> {
   await boss.createQueue(ADGEN_EXPIRE_QUEUE);
   await boss.work(ADGEN_EXPIRE_QUEUE, async () => {
     await runAdgenExpire();
+  });
+
+  await boss.work(MEDIA_RIGHTS_QUEUE, async () => {
+    await runMediaRightsSweep();
   });
 
   await boss.createQueue(ADGEN_GUIDELINES_QUEUE);
@@ -363,6 +387,12 @@ async function main(): Promise<void> {
   // that matters.
   await boss.schedule(ADGEN_GUIDELINES_QUEUE, '0 7 * * *');
   console.log('[worker] scheduled', ADGEN_GUIDELINES_QUEUE, 'daily at 07:00 UTC');
+
+  // 07:30 UTC — clear of the ad chain. Nothing downstream depends on it, and a
+  // rights warning is a planning signal rather than something that has to land
+  // before the day's generation runs.
+  await boss.schedule(MEDIA_RIGHTS_QUEUE, '30 7 * * *');
+  console.log('[worker] scheduled', MEDIA_RIGHTS_QUEUE, 'daily at 07:30 UTC');
 
   // Also run once immediately so the first send doesn't have to wait up
   // to a minute after boot.

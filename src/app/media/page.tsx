@@ -33,15 +33,20 @@ import {
 import Link from 'next/link';
 import { toast } from '@/lib/toast';
 import { safeJson } from '@/lib/safe-json';
-import { useAccount, type AccountData } from '@/contexts/account-context';
+import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
-import { AccountAvatar } from '@/components/account-avatar';
 import BulkActionDock from '@/components/bulk-action-dock';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { RenditionPanel } from '@/components/media/rendition-panel';
 import { RightsActivityPanel } from '@/components/media/rights-activity-panel';
-import { OemBrandRail } from '@/components/media/oem-brand-rail';
+import {
+  MediaScopeSection,
+  scopeLabel,
+  scopeSearchLabel,
+  scopeToParams,
+  type AdminScope,
+} from '@/components/media/media-scope-section';
 import { ApprovalPanel } from '@/components/media/approval-panel';
 import {
   AssetMetadataFields,
@@ -682,70 +687,6 @@ function MediaListRow({
   );
 }
 
-interface AccountCardProps {
-  acctKey: string;
-  acctData: AccountData | undefined;
-  overviewRow: AccountMediaPreview | undefined;
-  onSelect: () => void;
-}
-
-function AccountCard({ acctKey, acctData, overviewRow, onSelect }: AccountCardProps) {
-  const acctName = acctData?.dealer || acctKey;
-  const location = [acctData?.city, acctData?.state].filter(Boolean).join(', ');
-
-  return (
-    <button
-      onClick={onSelect}
-      className="glass-card rounded-xl p-5 text-left group hover:ring-1 hover:ring-[var(--primary)]/30 transition-all animate-fade-in-up"
-    >
-      <div className="flex items-start gap-3">
-        <AccountAvatar
-          name={acctName}
-          accountKey={acctKey}
-          storefrontImage={acctData?.storefrontImage}
-          logos={acctData?.logos}
-          size={40}
-          className="w-10 h-10 rounded-lg object-cover flex-shrink-0 border border-[var(--border)]"
-        />
-        <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-semibold truncate group-hover:text-[var(--primary)] transition-colors">
-            {acctName}
-          </h3>
-          {location && (
-            <p className="text-[11px] text-[var(--muted-foreground)] truncate mt-0.5">{location}</p>
-          )}
-        </div>
-        <ChevronRightIcon className="w-4 h-4 text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100 transition-opacity mt-1 flex-shrink-0" />
-      </div>
-      {/* File count summary */}
-      {overviewRow && !overviewRow.loading && !overviewRow.error && (
-        <div className="mt-3 pt-3 border-t border-[var(--border)]">
-          <div className="flex items-center gap-1.5 text-[10px] text-[var(--muted-foreground)]">
-            <PhotoIcon className="w-3.5 h-3.5" />
-            <span>
-              {(overviewRow.totalCount ?? 0) === 0
-                ? 'No files'
-                : `${overviewRow.totalCount} file${overviewRow.totalCount !== 1 ? 's' : ''}`}
-            </span>
-          </div>
-        </div>
-      )}
-      {overviewRow?.loading && (
-        <div className="mt-3 pt-3 border-t border-[var(--border)]">
-          <div className="h-3 bg-[var(--muted)] rounded w-16 animate-pulse" />
-        </div>
-      )}
-      {overviewRow && !overviewRow.loading && overviewRow.error && (
-        <div className="mt-3 pt-3 border-t border-[var(--border)]">
-          <div className="flex items-center gap-1.5 text-[10px] text-red-400">
-            <ExclamationTriangleIcon className="w-3.5 h-3.5" />
-            <span>Unable to load</span>
-          </div>
-        </div>
-      )}
-    </button>
-  );
-}
 
 // ── Page ──
 
@@ -850,6 +791,8 @@ export default function MediaPage() {
    */
   const [ownership, setOwnership] = useState<OwnershipFilter>('mine');
   const [facetSelection, setFacetSelection] = useState<MediaFacetSelection>({});
+  /** The admin view's own facet selection — independent of the account view's. */
+  const [adminFacetSelection, setAdminFacetSelection] = useState<MediaFacetSelection>({});
   /** Mobile-only: the rail is always shown from `lg` up. */
   const [railOpen, setRailOpen] = useState(false);
   /** How many assets the account can see beyond its own — drives the banner. */
@@ -902,15 +845,18 @@ export default function MediaPage() {
   const [overviewData, setOverviewData] = useState<Record<string, AccountMediaPreview>>({});
   const [overviewLoaded, setOverviewLoaded] = useState(false);
   const [overviewSearch, setOverviewSearch] = useState('');
-  const [overviewTab, setOverviewTab] = useState<'subaccounts' | 'loomi' | 'oem' | 'rights'>('subaccounts');
+  const [overviewTab, setOverviewTab] = useState<'assets' | 'rights'>('assets');
   /**
-   * Which shared library the OEM tab is showing. null = brand-agnostic (global).
-   * Drives the same admin grid as the Loomi tab via the `oem` query param, so
-   * selection, bulk actions and the preview all work without a second grid.
+   * Which slice of the library the admin grid is showing.
+   *
+   * This replaced three tabs — Sub-account Media, Loomi Media and OEM Libraries —
+   * which were all one question asked as navigation. They shared a grid, a search
+   * box and every facet; only the where-clause differed. So it's a filter, and it
+   * lives in the rail with the others.
    */
-  const [oemScope, setOemScope] = useState<string | null>(null);
-  /** Bumped after an upload so the rail's counts re-fetch. */
-  const [oemRailKey, setOemRailKey] = useState(0);
+  const [adminScope, setAdminScope] = useState<AdminScope>({ kind: 'all' });
+  /** Bumped after an upload so the scope counts re-fetch. */
+  const [scopeRefreshKey, setScopeRefreshKey] = useState(0);
   // ── Admin S3 media state ──
   const [adminMediaFiles, setAdminMediaFiles] = useState<MediaFile[]>([]);
   const [adminMediaTotal, setAdminMediaTotal] = useState(0);
@@ -974,11 +920,8 @@ export default function MediaPage() {
   const showOverview = isAdmin && !effectiveAccountKey;
   // Consumers can't upload, so the whole-page drop target would be a lie.
   const canDropUploadFiles = !isConsumer && (showOverview || !!effectiveAccountKey);
-  const isLoomiOverviewTab = showOverview && overviewTab === 'loomi';
-  const isOemOverviewTab = showOverview && overviewTab === 'oem';
-  /** Both admin tabs render the same grid — only the filter differs. */
-  const isAdminGridTab = isLoomiOverviewTab || isOemOverviewTab;
-  const isSubAccountOverviewTab = showOverview && overviewTab === 'subaccounts';
+  /** The single admin asset view. Scope decides what's in it. */
+  const isAdminGridTab = showOverview && overviewTab === 'assets';
 
   // All account keys (sorted)
   const allAccountKeys = useMemo(() => {
@@ -992,18 +935,6 @@ export default function MediaPage() {
   // Every account is "connected" now that media is Loomi-S3-backed.
   const connectedAccountKeys = allAccountKeys;
 
-  // Filter overview accounts by search
-  const filteredOverviewKeys = useMemo(() => {
-    if (!overviewSearch.trim()) return connectedAccountKeys;
-    const q = overviewSearch.toLowerCase();
-    return connectedAccountKeys.filter(k => {
-      const acct = accounts[k];
-      const name = (acct?.dealer || k).toLowerCase();
-      const city = (acct?.city || '').toLowerCase();
-      const state = (acct?.state || '').toLowerCase();
-      return name.includes(q) || city.includes(q) || state.includes(q);
-    });
-  }, [connectedAccountKeys, accounts, overviewSearch]);
 
   // Ref guard: prevents the global close-handler from firing in the same
   // tick as a menu-toggle button click.  React 18 delegates synthetic events
@@ -1122,17 +1053,16 @@ export default function MediaPage() {
 
   // ── Admin S3 Media Loading ──
 
-  const loadAdminMedia = useCallback(async (searchQuery?: string, oemFilter?: string | null | 'any') => {
+  const loadAdminMedia = useCallback(async (searchQuery?: string, scope: AdminScope = { kind: 'all' }) => {
     if (!isAdmin) return;
     setAdminMediaLoading(true);
 
     try {
       const params = new URLSearchParams({ limit: '50' });
       if (searchQuery?.trim()) params.set('search', searchQuery.trim());
-      // 'any' = the Loomi tab (every admin-level asset). A brand name or null
-      // narrows to one shared library, where null means brand-agnostic — hence
-      // `oem=none` rather than omitting the param.
-      if (oemFilter !== 'any') params.set('oem', oemFilter ?? 'none');
+      // The scope IS the query — see scopeToParams, which is the one place that
+      // mapping lives so the rail and the fetch can't disagree.
+      for (const [k, v] of Object.entries(scopeToParams(scope))) params.set(k, v);
 
       const res = await fetch(`/api/media?${params.toString()}`);
       const data = await res.json();
@@ -1152,14 +1082,14 @@ export default function MediaPage() {
 
   useEffect(() => {
     if (showOverview) {
-      loadAdminMedia(undefined, overviewTab === 'oem' ? oemScope : 'any');
+      loadAdminMedia(undefined, adminScope);
     } else {
       setAdminMediaFiles([]);
       setAdminMediaTotal(0);
     }
-    // overviewTab + oemScope are dependencies: switching brands has to refetch,
-    // or the grid keeps showing the previous library's assets.
-  }, [showOverview, loadAdminMedia, overviewTab, oemScope]);
+    // adminScope is a dependency: changing scope has to refetch, or the grid
+    // keeps showing the previous slice's assets.
+  }, [showOverview, loadAdminMedia, adminScope]);
 
   // ── Single-Account Data Loading ──
 
@@ -1508,9 +1438,9 @@ export default function MediaPage() {
     // The rail's per-brand counts are now wrong, and if the upload landed in the
     // library on screen the grid needs it too — an asset that doesn't appear
     // where you just put it reads as a failed upload.
-    if (isOemOverviewTab) {
-      setOemRailKey((k) => k + 1);
-      loadAdminMedia(undefined, oemScope);
+    if (showOverview) {
+      setScopeRefreshKey((k) => k + 1);
+      loadAdminMedia(undefined, adminScope);
     }
 
     if (fileInputRef.current) {
@@ -2279,18 +2209,64 @@ export default function MediaPage() {
   }, []);
 
   // ── Filtered admin media (for overview search) ──
+  /**
+   * Facets for the admin view, derived exactly as the account view derives its
+   * own. The admin grid had no facets at all while three tabs stood in for
+   * scope — now that scope is a filter, the rest of the taxonomy belongs beside
+   * it rather than being a thing only sub-account users get.
+   */
+  const adminFilesWithFacets = useMemo(
+    () => adminMediaFiles.map((f) => ({ file: f, facets: facetsForAsset(f) })),
+    [adminMediaFiles],
+  );
+
+  const adminFacetOptions = useMemo(
+    () => buildMediaFacetOptions(adminFilesWithFacets, adminFacetSelection),
+    [adminFilesWithFacets, adminFacetSelection],
+  );
+
+  const adminVisibleFacets = useMemo(
+    () => MEDIA_FACET_KEYS.filter(
+      (k) => buildMediaFacetOptions(adminFilesWithFacets, {})[k].length > 1,
+    ),
+    [adminFilesWithFacets],
+  );
+
   const filteredAdminMedia = useMemo(() => {
-    if (!overviewSearch.trim()) return adminMediaFiles;
-    const q = overviewSearch.toLowerCase();
-    return adminMediaFiles.filter(f => f.name.toLowerCase().includes(q));
-  }, [adminMediaFiles, overviewSearch]);
+    const q = overviewSearch.trim().toLowerCase();
+    return adminFilesWithFacets
+      .filter(({ file, facets }) => {
+        if (!matchesMediaFacets(facets, adminFacetSelection)) return false;
+        if (!q) return true;
+        // Same fields the server searches, so typing doesn't change what matches
+        // as results move between the cached list and a refetch.
+        return [file.name, file.altText, file.oem, file.rightsHolder, ...(file.tags ?? [])]
+          .some((v) => typeof v === 'string' && v.toLowerCase().includes(q));
+      })
+      .map(({ file }) => file);
+  }, [adminFilesWithFacets, overviewSearch, adminFacetSelection]);
+
+  /** Sub-accounts for the Scope rail, with the counts the old cards showed. */
+  const scopeAccounts = useMemo(
+    () =>
+      connectedAccountKeys.map((key) => ({
+        key,
+        dealer: accounts[key]?.dealer || key,
+        count: overviewData[key]?.totalCount,
+      })),
+    [connectedAccountKeys, accounts, overviewData],
+  );
 
   useEffect(() => {
     if (!showOverview) return;
     setSelectedIds(new Set());
     setOpenMenu(null);
     setOverviewSearch('');
-  }, [overviewTab, showOverview]);
+    // Scope changed: a facet value from the previous slice usually doesn't exist
+    // in the new one, and leaving it selected shows an empty grid for no visible
+    // reason.
+    setAdminFacetSelection({});
+  }, [overviewTab, showOverview, adminScope]);
 
   // Loomi-native media is always available; gating on a provider
   // connection no longer makes sense post-ESP-teardown.
@@ -2443,7 +2419,14 @@ export default function MediaPage() {
                   setStagedFiles([]);
                   // Uploading while looking at Audi's library should go to Audi's
                   // library. Anywhere else keeps the previous default.
-                  setUploadScope(isOemOverviewTab && oemScope ? `oem:${oemScope}` : 'account');
+                  // Uploading while looking at a slice should go to that slice.
+                  setUploadScope(
+                    adminScope.kind === 'oem'
+                      ? `oem:${adminScope.value}`
+                      : adminScope.kind === 'account'
+                        ? `account:${adminScope.value}`
+                        : 'account',
+                  );
                   setShowUploadModal(true);
                 }}
                 disabled={uploading}
@@ -2524,37 +2507,19 @@ export default function MediaPage() {
             id="media-upload-input"
           />
 
-          {/* Overview tabs */}
+          {/* Two tabs, not five. Assets is one view whose scope is a filter in the
+              rail; Rights & Activity is genuinely a different screen — an
+              operational report with no grid and no facets. */}
           <div className="flex items-center gap-1 mb-4 border-b border-[var(--border)]">
             <button
-              onClick={() => setOverviewTab('subaccounts')}
+              onClick={() => setOverviewTab('assets')}
               className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                overviewTab === 'subaccounts'
+                overviewTab === 'assets'
                   ? 'border-[var(--primary)] text-[var(--primary)]'
                   : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
               }`}
             >
-              Sub-account Media
-            </button>
-            <button
-              onClick={() => setOverviewTab('loomi')}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                overviewTab === 'loomi'
-                  ? 'border-[var(--primary)] text-[var(--primary)]'
-                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              Loomi Media
-            </button>
-            <button
-              onClick={() => setOverviewTab('oem')}
-              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
-                overviewTab === 'oem'
-                  ? 'border-[var(--primary)] text-[var(--primary)]'
-                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
-              }`}
-            >
-              OEM Libraries
+              Assets
             </button>
             <button
               onClick={() => setOverviewTab('rights')}
@@ -2568,35 +2533,49 @@ export default function MediaPage() {
             </button>
           </div>
 
-          {/* Rights & Activity — the sweep's heartbeat and what it found. Its own
-              tab because it's an operational view, not a way to browse assets:
-              the toolbar and grid below don't apply to it. */}
           {overviewTab === 'rights' && <RightsActivityPanel />}
 
-          {/* OEM libraries — pick a shared library, then the grid below shows it.
-              Above the grid rather than beside it so the asset area keeps the full
-              width it already had. */}
-          {isOemOverviewTab && (
-            <div className="mb-4 rounded-xl border border-[var(--border)] p-4">
-              <OemBrandRail selected={oemScope} onSelect={setOemScope} refreshKey={oemRailKey} />
+          {/* Scope + facets on the left, assets on the right — the same shape the
+              account view uses, so an admin isn't learning a second layout. */}
+          {isAdminGridTab && (
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+            <div className="w-full shrink-0 space-y-4 lg:sticky lg:top-[128px] lg:w-52 lg:max-h-[calc(100vh-13rem)] lg:self-start lg:overflow-y-auto lg:overscroll-contain lg:pr-1">
+              <MediaScopeSection
+                scope={adminScope}
+                onScopeChange={setAdminScope}
+                accounts={scopeAccounts}
+                refreshKey={scopeRefreshKey}
+              />
+              <MediaFilterRail
+                options={adminFacetOptions}
+                visibleFacets={adminVisibleFacets}
+                selection={adminFacetSelection}
+                onSelectionChange={setAdminFacetSelection}
+                // Ownership is meaningless here: scope already answers "whose is
+                // this", and more precisely than mine/shared could.
+                ownership="all"
+                onOwnershipChange={() => {}}
+                showOwnership={false}
+              />
             </div>
-          )}
+            <div className="min-w-0 flex-1">
 
-          {/* Overview toolbar: search + buttons */}
-          {overviewTab !== 'rights' && (
-            <div className="flex items-center justify-between mb-4 gap-3">
-              <div className="relative flex-1 max-w-xs">
-                <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-                <input
-                  type="text"
-                  value={overviewSearch}
-                  onChange={(e) => setOverviewSearch(e.target.value)}
-                  className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg pl-9 pr-3 py-2 text-[var(--foreground)]"
-                  placeholder={isOemOverviewTab ? `Search ${oemScope ?? 'brand-agnostic'} assets...` : isLoomiOverviewTab ? 'Search Loomi media...' : 'Search sub-accounts...'}
-                />
+              {/* Search — scoped to whatever the rail has selected, and it says so. */}
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="relative flex-1 max-w-xs">
+                  <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
+                  <input
+                    type="text"
+                    value={overviewSearch}
+                    onChange={(e) => setOverviewSearch(e.target.value)}
+                    className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg pl-9 pr-3 py-2 text-[var(--foreground)]"
+                    placeholder={`Search ${scopeSearchLabel(adminScope, accounts[adminScope.kind === 'account' ? adminScope.value : '']?.dealer)}...`}
+                  />
+                </div>
+                <p className="shrink-0 text-xs text-[var(--muted-foreground)]">
+                  {scopeLabel(adminScope, accounts[adminScope.kind === 'account' ? adminScope.value : '']?.dealer)}
+                </p>
               </div>
-            </div>
-          )}
 
           {/* ── Loomi Media Library section ── */}
           {isAdminGridTab && adminMediaLoading && adminMediaFiles.length === 0 && (
@@ -2662,53 +2641,19 @@ export default function MediaPage() {
             <div className="text-center py-16 text-[var(--muted-foreground)]">
               <PhotoIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
               <p className="text-sm font-medium mb-1">
-                {overviewSearch.trim() ? 'No Loomi media match your search' : 'No Loomi media files yet'}
+                {overviewSearch.trim() ? 'Nothing matches your search' : 'No assets in this scope'}
               </p>
               <p className="text-xs">
                 {overviewSearch.trim()
                   ? 'Try a different search term.'
-                  : 'Upload files to Loomi to build your shared media library.'}
+                  : 'Nothing in this scope yet — upload, or pick another scope on the left.'}
               </p>
             </div>
           )}
-
-          {/* ── Sub-account cards section ── */}
-          {isSubAccountOverviewTab && connectedAccountKeys.length > 0 && (
-            <>
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-[var(--foreground)]">Sub-account Media</h3>
-                <p className="text-xs text-[var(--muted-foreground)]">
-                  {filteredOverviewKeys.length} account{filteredOverviewKeys.length !== 1 ? 's' : ''}
-                  {overviewSearch && ` matching "${overviewSearch}"`}
-                </p>
-              </div>
-              {filteredOverviewKeys.length > 0 ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {filteredOverviewKeys.map(key => (
-                    <AccountCard
-                      key={key}
-                      acctKey={key}
-                      acctData={accounts[key]}
-                      overviewRow={overviewData[key]}
-                      onSelect={() => { setAccountFilter(key); setSearch(''); clearSelection(); }}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="text-center py-12 text-[var(--muted-foreground)]">
-                  <MagnifyingGlassIcon className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                  <p className="text-sm">No sub-accounts match &quot;{overviewSearch}&quot;</p>
-                </div>
-              )}
-            </>
-          )}
-          {isSubAccountOverviewTab && connectedAccountKeys.length === 0 && (
-            <div className="text-center py-16 text-[var(--muted-foreground)]">
-              <PhotoIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
-              <p className="text-sm font-medium mb-1">No connected sub-accounts</p>
-              <p className="text-xs">Connect an integration in account settings to view sub-account media.</p>
             </div>
+          </div>
           )}
+
         </>
       )}
 

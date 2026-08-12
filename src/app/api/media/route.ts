@@ -73,7 +73,15 @@ export async function GET(req: NextRequest) {
   const { session, error } = await requireAuth();
   if (error) return error;
 
-  const accountKey = req.nextUrl.searchParams.get('accountKey') || null;
+  const accountKeyParam = req.nextUrl.searchParams.get('accountKey');
+  /**
+   * `accountKey=all` spans every scope — admin-level, OEM-shared and every
+   * sub-account's own. It's what the unified admin library lands on, and it is a
+   * third case: omitting the param means admin-level ONLY (accountKey null),
+   * which is a different question.
+   */
+  const allScopes = accountKeyParam === 'all';
+  const accountKey = allScopes ? null : accountKeyParam || null;
   const offset = Number(req.nextUrl.searchParams.get('cursor') || '0');
   const limit = Math.min(Number(req.nextUrl.searchParams.get('limit') || '50'), 100);
   const category = req.nextUrl.searchParams.get('category') || undefined;
@@ -95,7 +103,8 @@ export async function GET(req: NextRequest) {
   // ONLY the archived ones (the "Archived" view / restore surface).
   const archivedParam = req.nextUrl.searchParams.get('archived') === 'true';
 
-  // Access check
+  // Access check. Spanning every account needs the same unrestricted rights as
+  // the admin library, since that's exactly what it reads across.
   if (accountKey === null) {
     if (!canAccessAdminMedia(session!)) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
@@ -141,7 +150,10 @@ export async function GET(req: NextRequest) {
     AND: [
       ...(search ? [mediaSearchWhere(search)] : []),
       {
-        accountKey: accountKey === null ? { equals: null as string | null } : accountKey,
+        // Omitted entirely for `all` — any constraint here would narrow it.
+        ...(allScopes
+          ? {}
+          : { accountKey: accountKey === null ? { equals: null as string | null } : accountKey }),
         ...(category ? { category } : {}),
         ...(assetCategory ? { assetCategory } : {}),
         // `oem=none` asks for brand-AGNOSTIC assets specifically, which is a

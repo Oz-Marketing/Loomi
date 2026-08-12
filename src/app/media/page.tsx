@@ -27,10 +27,14 @@ import {
   DocumentDuplicateIcon,
   ArchiveBoxIcon,
   ArrowUturnLeftIcon,
+  FunnelIcon,
+  ArrowLeftStartOnRectangleIcon,
 } from '@heroicons/react/24/outline';
+import Link from 'next/link';
 import { toast } from '@/lib/toast';
 import { safeJson } from '@/lib/safe-json';
 import { useAccount, type AccountData } from '@/contexts/account-context';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { AccountAvatar } from '@/components/account-avatar';
 import BulkActionDock from '@/components/bulk-action-dock';
@@ -43,6 +47,15 @@ import {
   type AssetMetadataValue,
 } from '@/components/media/asset-metadata-fields';
 import { assetSourceLabel } from '@/lib/media-metadata';
+import {
+  MEDIA_FACET_KEYS,
+  buildMediaFacetOptions,
+  facetsForAsset,
+  matchesMediaFacets,
+  countMediaFacetsSelected,
+  type MediaFacetSelection,
+} from '@/lib/media-facets';
+import { MediaFilterRail, type OwnershipFilter } from '@/components/media/media-filter-rail';
 import { MAJOR_US_OEMS, POWERSPORTS_BRANDS } from '@/lib/oems';
 import { Select } from '@/components/select';
 import { HelpTip } from '@/components/ui/help-tip';
@@ -142,6 +155,25 @@ const S3_CAPABILITIES: MediaCapabilities = {
   canMove: true,
   canCreateFolders: true,
   canNavigateFolders: true,
+};
+
+/**
+ * What you may do to an asset you don't own — look at it, copy its URL, download
+ * it. Nothing that writes.
+ *
+ * The API already refuses these (checkAccess returns false for an asset outside
+ * your accountKey), so this isn't the security boundary; it's there so the menu
+ * doesn't offer four actions that all end in a 403 toast. An OEM-shared asset is
+ * one row behind every rooftop that carries the brand, and "delete" on it would
+ * mean something very different from what the person clicking expects.
+ */
+const INHERITED_CAPABILITIES: MediaCapabilities = {
+  canUpload: false,
+  canDelete: false,
+  canRename: false,
+  canMove: false,
+  canCreateFolders: false,
+  canNavigateFolders: false,
 };
 
 function CropIcon({ className }: { className?: string }) {
@@ -258,6 +290,8 @@ interface MediaCardProps {
   selectionActive: boolean;
   provider: string | null;
   capabilities: MediaCapabilities | null;
+  /** Owned by another scope (OEM/global/ancestor) — read-only here. */
+  inherited?: boolean;
   menuClickRef: React.MutableRefObject<boolean>;
   draggable?: boolean;
   onDragStart?: (e: React.DragEvent) => void;
@@ -279,6 +313,7 @@ function MediaCard({
   selectionActive,
   provider: activeProvider,
   capabilities: activeCaps,
+  inherited,
   menuClickRef,
   draggable,
   onDragStart,
@@ -293,7 +328,9 @@ function MediaCard({
   onDelete,
 }: MediaCardProps) {
   const isImage = f.type?.startsWith('image') || f.url?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
-  const caps = f.source === 's3' ? S3_CAPABILITIES : activeCaps;
+  const caps = inherited
+    ? INHERITED_CAPABILITIES
+    : f.source === 's3' ? S3_CAPABILITIES : activeCaps;
 
   return (
     <div
@@ -427,6 +464,7 @@ function MediaListRow({
   selectionActive,
   provider: activeProvider,
   capabilities: activeCaps,
+  inherited,
   menuClickRef,
   draggable,
   onDragStart,
@@ -441,7 +479,9 @@ function MediaListRow({
   onDelete,
 }: MediaCardProps) {
   const isImage = f.type?.startsWith('image') || f.url?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
-  const caps = f.source === 's3' ? S3_CAPABILITIES : activeCaps;
+  const caps = inherited
+    ? INHERITED_CAPABILITIES
+    : f.source === 's3' ? S3_CAPABILITIES : activeCaps;
 
   return (
     <div
@@ -620,6 +660,7 @@ function AccountCard({ acctKey, acctData, overviewRow, onSelect }: AccountCardPr
 export default function MediaPage() {
   const { confirm } = useLoomiDialog();
   const { isAdmin, isAccount, accountKey, accountData, accounts } = useAccount();
+  const subaccountHref = useSubaccountHref();
 
   // ── Single-account detail state ──
   const [files, setFiles] = useState<MediaFile[]>([]);
@@ -652,6 +693,16 @@ export default function MediaPage() {
    * Only offered to admins; the API rejects the other two for anyone else.
    */
   const [uploadScope, setUploadScope] = useState('account');
+  /**
+   * Classification applied to every file in the batch.
+   *
+   * Batch-wide rather than per-file on purpose: uploads arrive as a set that
+   * shares its provenance — seventeen Audi template zips are all Audi, all
+   * OEM-supplied, all templates. Per-file editing already exists in the asset
+   * drawer for the exceptions.
+   */
+  const [uploadMetadata, setUploadMetadata] = useState<AssetMetadataValue>(EMPTY_ASSET_METADATA);
+  const [showUploadMetadata, setShowUploadMetadata] = useState(false);
 
   // Modals
   const [openMenu, setOpenMenu] = useState<string | null>(null);
@@ -683,6 +734,25 @@ export default function MediaPage() {
   const [showArchived, setShowArchived] = useState(false);
   // ⋯ overflow menu next to New Folder (holds the Archived-view toggle).
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+
+  /**
+   * Which assets to show by ownership. This is the control that switches the
+   * library between the account's OWN scope (folder navigation, the historical
+   * behaviour, and the default) and its EFFECTIVE scope — everything it may use,
+   * including OEM-shared and inherited assets.
+   *
+   * Default 'mine' deliberately: the effective view is flat, because folders
+   * belong to a single scope and there is no coherent tree spanning inherited
+   * assets. Defaulting to it would silently take folders away from every account
+   * that organises with them. The banner below makes the shared set discoverable
+   * instead.
+   */
+  const [ownership, setOwnership] = useState<OwnershipFilter>('mine');
+  const [facetSelection, setFacetSelection] = useState<MediaFacetSelection>({});
+  /** Mobile-only: the rail is always shown from `lg` up. */
+  const [railOpen, setRailOpen] = useState(false);
+  /** How many assets the account can see beyond its own — drives the banner. */
+  const [sharedCount, setSharedCount] = useState(0);
 
   // Move modal
   const [showMoveModal, setShowMoveModal] = useState(false);
@@ -967,8 +1037,20 @@ export default function MediaPage() {
 
   // ── Single-Account Data Loading ──
 
+  /**
+   * Monotonic request id, so a slow response can't overwrite a newer one.
+   *
+   * The page mounts on the last-selected account and then corrects to the one
+   * in the route, which fires two loads back to back. Without this guard the
+   * FIRST account's response can land second and blank the list — the library
+   * then shows "No media files yet" for an account that has files, and a reload
+   * fixes it, which is exactly the kind of bug that gets reported as flaky.
+   */
+  const loadSeqRef = useRef(0);
+
   const loadMedia = useCallback(async (cursor?: string) => {
     if (!effectiveAccountKey) return;
+    const seq = ++loadSeqRef.current;
 
     if (cursor) {
       setLoadingMore(true);
@@ -983,13 +1065,23 @@ export default function MediaPage() {
         accountKey: effectiveAccountKey,
       });
       if (cursor) params.set('cursor', cursor);
-      // Scope to the current folder ("root" = the account's top level).
-      params.set('folder', currentFolderId ?? 'root');
+      if (ownership === 'mine') {
+        // Own scope: folder navigation applies.
+        params.set('folder', currentFolderId ?? 'root');
+      } else {
+        // Effective scope is flat by construction — no folder param, because a
+        // folder belongs to one scope and can't contain an inherited asset.
+        params.set('scope', 'effective');
+      }
       if (showArchived) params.set('archived', 'true');
       params.set('limit', '50');
 
       const res = await fetch(`/api/media?${params.toString()}`);
       const data = await res.json();
+
+      // A newer load started while this one was in flight — drop the result
+      // rather than clobbering fresher state.
+      if (seq !== loadSeqRef.current) return;
 
       if (res.ok) {
         const incoming = (data.files || []).map((f: MediaFile) => ({ ...f, source: 's3' as const }));
@@ -1006,12 +1098,41 @@ export default function MediaPage() {
         toast.error(data.error || 'Failed to load media');
       }
     } catch {
+      if (seq !== loadSeqRef.current) return;
       toast.error('Failed to load media');
     }
 
+    if (seq !== loadSeqRef.current) return;
     setLoading(false);
     setLoadingMore(false);
-  }, [effectiveAccountKey, currentFolderId, showArchived]);
+  }, [effectiveAccountKey, currentFolderId, showArchived, ownership]);
+
+  /**
+   * How many assets this account can see that it does not own.
+   *
+   * Two counts rather than one query: the effective total minus the account's
+   * own total. Cheap (both are countOnly) and it avoids a bespoke endpoint whose
+   * only job would be to answer a banner.
+   */
+  useEffect(() => {
+    if (!effectiveAccountKey) {
+      setSharedCount(0);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const [own, all] = await Promise.all([
+          fetch(`/api/media?accountKey=${encodeURIComponent(effectiveAccountKey)}&countOnly=true`).then((r) => r.json()),
+          fetch(`/api/media?accountKey=${encodeURIComponent(effectiveAccountKey)}&scope=effective&countOnly=true`).then((r) => r.json()),
+        ]);
+        if (!cancelled) setSharedCount(Math.max(0, (all?.total ?? 0) - (own?.total ?? 0)));
+      } catch {
+        if (!cancelled) setSharedCount(0);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [effectiveAccountKey]);
 
   // Folders for the current scope — the flat list is fetched, then filtered to
   // the current folder's direct children (the API returns the whole tree).
@@ -1020,9 +1141,13 @@ export default function MediaPage() {
       setFolders([]);
       return;
     }
+    const seq = loadSeqRef.current;
     try {
       const res = await fetch(`/api/media/folders?accountKey=${encodeURIComponent(effectiveAccountKey)}`);
       const data = await res.json();
+      // Same stale-response guard as loadMedia — a folder list from the
+      // previously-selected account must not replace this one's.
+      if (seq !== loadSeqRef.current) return;
       if (res.ok) {
         const all: MediaFolder[] = data.folders || [];
         setFolders(all.filter((f) => (f.parentId ?? undefined) === currentFolderId));
@@ -1099,7 +1224,22 @@ export default function MediaPage() {
           if (currentFolderId) formData.append('folderId', currentFolderId);
         } else if (scopedOem) {
           formData.append('oem', scopedOem);
-          formData.append('assetSource', 'oem-supplied');
+        }
+
+        // Batch classification. The destination's implied values win where the
+        // person didn't choose one — an upload to "all Audi sub-accounts" is
+        // Audi and OEM-supplied unless they said otherwise — but an explicit
+        // choice is never overwritten.
+        const meta: Record<string, string> = {
+          oem: uploadMetadata.oem || scopedOem || '',
+          assetSource: uploadMetadata.assetSource || (scopedOem ? 'oem-supplied' : ''),
+          assetCategory: uploadMetadata.assetCategory,
+          rightsHolder: uploadMetadata.rightsHolder,
+          modelYear: uploadMetadata.modelYear.join(','),
+          tags: uploadMetadata.tags.join(','),
+        };
+        for (const [key, value] of Object.entries(meta)) {
+          if (value) formData.append(key, value);
         }
 
         if (allowDuplicate) formData.append('allowDuplicate', 'true');
@@ -1176,6 +1316,8 @@ export default function MediaPage() {
     setShowUploadModal(false);
     setStagedFiles([]);
     setUploadScope('account');
+    setUploadMetadata(EMPTY_ASSET_METADATA);
+    setShowUploadMetadata(false);
 
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -1794,17 +1936,98 @@ export default function MediaPage() {
 
   // ── Filtering ──
 
+  /**
+   * Is this asset owned by the account being viewed, or inherited?
+   *
+   * Inherited covers all three of the other scopes — global, OEM-shared, and an
+   * ancestor's. What they have in common is the thing that matters here: editing
+   * or deleting one affects other accounts, so the UI treats it as read-only.
+   */
+  const isInherited = useCallback(
+    (f: MediaFile) => !!effectiveAccountKey && (f.accountKey ?? null) !== effectiveAccountKey,
+    [effectiveAccountKey],
+  );
+
+  /** Each visible asset paired with its facet values, computed once per load. */
+  const filesWithFacets = useMemo(
+    () => files.map((f) => ({ file: f, facets: facetsForAsset(f) })),
+    [files],
+  );
+
+  const facetOptions = useMemo(
+    () => buildMediaFacetOptions(filesWithFacets, facetSelection),
+    [filesWithFacets, facetSelection],
+  );
+
+  /**
+   * Which facets are worth showing. A facet whose every asset shares one value
+   * can't narrow anything — a single-brand rooftop shouldn't carry a Brand
+   * picker listing only its own marque.
+   */
+  const visibleFacets = useMemo(
+    () => MEDIA_FACET_KEYS.filter((k) => buildMediaFacetOptions(filesWithFacets, {})[k].length > 1),
+    [filesWithFacets],
+  );
+
   const filtered = useMemo(() => {
-    if (!search.trim()) return files;
-    const q = search.toLowerCase();
-    return files.filter(f => f.name.toLowerCase().includes(q));
-  }, [files, search]);
+    const q = search.trim().toLowerCase();
+    return filesWithFacets
+      .filter(({ file, facets }) => {
+        if (ownership === 'mine' && isInherited(file)) return false;
+        if (ownership === 'shared' && !isInherited(file)) return false;
+        if (!matchesMediaFacets(facets, facetSelection)) return false;
+        if (!q) return true;
+        // Mirrors the server's search fields so typing doesn't change what
+        // matches as results move between the cached list and a refetch.
+        return [file.name, file.altText, file.oem, file.rightsHolder, ...(file.tags ?? [])]
+          .some((v) => typeof v === 'string' && v.toLowerCase().includes(q));
+      })
+      .map(({ file }) => file);
+  }, [filesWithFacets, search, facetSelection, ownership, isInherited]);
+
+  /**
+   * Counts for the Ownership rows.
+   *
+   * In the 'mine' view the fetched list only holds the account's own assets, so
+   * the shared figure comes from the separate countOnly pair rather than from
+   * what happens to be loaded — otherwise the row would read 0 and look like
+   * there is nothing to switch to.
+   */
+  const ownershipCounts = useMemo(() => {
+    if (ownership === 'mine') {
+      return { mine: files.length, shared: sharedCount, all: files.length + sharedCount };
+    }
+    const mine = files.filter((f) => !isInherited(f)).length;
+    return { mine, shared: files.length - mine, all: files.length };
+  }, [files, ownership, sharedCount, isInherited]);
+
+  const activeFilterCount =
+    countMediaFacetsSelected(facetSelection) + (ownership !== 'mine' ? 1 : 0);
 
   const filteredFolders = useMemo(() => {
+    // The effective view is flat: a folder belongs to one scope and can't hold
+    // an inherited asset, so showing folders there would promise a containment
+    // that isn't real.
+    if (ownership !== 'mine') return [];
     if (!search.trim()) return folders;
     const q = search.toLowerCase();
     return folders.filter(f => f.name.toLowerCase().includes(q));
-  }, [folders, search]);
+  }, [folders, search, ownership]);
+
+  /**
+   * Switching scope returns to the root.
+   *
+   * Without this, turning on shared assets while inside a folder leaves the
+   * breadcrumb pointing at that folder while the list ignores it — the view
+   * would claim to be somewhere it isn't.
+   */
+  const changeOwnership = useCallback((next: OwnershipFilter) => {
+    setOwnership(next);
+    if (next !== 'mine') {
+      setCurrentFolderId(undefined);
+      setFolderPath([{ id: undefined, name: 'Root' }]);
+    }
+  }, []);
 
   // ── Filtered admin media (for overview search) ──
   const filteredAdminMedia = useMemo(() => {
@@ -1852,7 +2075,21 @@ export default function MediaPage() {
   // ── Render ──
 
   return (
-    <div data-unsaved-ignore="true">
+    <div data-unsaved-ignore="true" className="flex h-screen min-h-0 flex-col overflow-hidden bg-[var(--background)]">
+      {/* Own chrome. This route renders without Loomi's sidebar (see
+          layout-shell.tsx), so the way back has to live here — otherwise the
+          asset library is a dead end. */}
+      <div className="flex shrink-0 items-center gap-3 border-b border-[var(--border)] px-5 py-2.5">
+        <Link
+          href={subaccountHref('/dashboard')}
+          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+        >
+          <ArrowLeftStartOnRectangleIcon className="h-4 w-4 rotate-180" />
+          Back to Loomi
+        </Link>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-4">
       {/* Header */}
       <div className="page-sticky-header mb-6">
         <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -2074,7 +2311,7 @@ export default function MediaPage() {
           {/* ── Loomi Media Library section ── */}
           {isLoomiOverviewTab && adminMediaLoading && adminMediaFiles.length === 0 && (
             <div className="mb-8">
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3">
                 {[1, 2, 3, 4].map(i => (
                   <div key={i} className="glass-card rounded-xl animate-pulse">
                     <div className="h-[140px] rounded-t-xl bg-[var(--muted)]" />
@@ -2096,7 +2333,7 @@ export default function MediaPage() {
                   {adminMediaTotal > filteredAdminMedia.length && ` of ${adminMediaTotal}`}
                 </p>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3">
                 {filteredAdminMedia.map(f => {
                   const itemKey = mediaItemKey(f);
                   return (
@@ -2209,9 +2446,24 @@ export default function MediaPage() {
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg pl-9 pr-3 py-2 text-[var(--foreground)]"
-                    placeholder="Search files..."
+                    placeholder="Search name, brand, keywords..."
                   />
                 </div>
+                {/* The rail is always visible on desktop; on narrow screens it
+                    collapses behind this, same as the templates library. */}
+                <button
+                  type="button"
+                  onClick={() => setRailOpen((v) => !v)}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--muted)] px-2.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] lg:hidden"
+                >
+                  <FunnelIcon className="h-3.5 w-3.5" />
+                  Filters
+                  {activeFilterCount > 0 && (
+                    <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[10px] font-semibold text-white">
+                      {activeFilterCount}
+                    </span>
+                  )}
+                </button>
                 {/* View mode toggle */}
                 <div className="flex items-center rounded-lg border border-[var(--border)] overflow-hidden">
                   <button
@@ -2242,6 +2494,26 @@ export default function MediaPage() {
             </div>
           )}
 
+          {/* Shared assets are in a different scope, so nothing in the folder
+              view hints that they exist. Without this the OEM library is
+              invisible unless someone happens to open the filter panel. */}
+          {effectiveAccountKey && ownership === 'mine' && sharedCount > 0 && !showArchived && (
+            <button
+              type="button"
+              onClick={() => changeOwnership('all')}
+              className="mb-4 flex w-full items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2 text-left text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+            >
+              <FolderArrowDownIcon className="h-4 w-4 shrink-0 text-[var(--primary)]" />
+              <span className="flex-1">
+                <span className="font-medium text-[var(--foreground)]">
+                  {sharedCount} shared {sharedCount === 1 ? 'asset is' : 'assets are'} available
+                </span>
+                {' '}from your brands and the Loomi library.
+              </span>
+              <span className="shrink-0 font-medium text-[var(--primary)]">Show</span>
+            </button>
+          )}
+
           {/* Account mode: no account selected */}
           {!isAdmin && !effectiveAccountKey && (
             <div className="text-center py-16 text-[var(--muted-foreground)]">
@@ -2250,9 +2522,28 @@ export default function MediaPage() {
             </div>
           )}
 
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+          {effectiveAccountKey && (hasConnection || isAdmin) && (
+            // Sticks below the docked page header and scrolls independently of
+            // the asset grid, so a long facet list never pushes the page.
+            <div className={`${railOpen ? 'block' : 'hidden'} lg:sticky lg:top-[128px] lg:block lg:max-h-[calc(100vh-13rem)] lg:self-start lg:overflow-y-auto lg:overscroll-contain lg:pr-1`}>
+              <MediaFilterRail
+                options={facetOptions}
+                visibleFacets={visibleFacets}
+                selection={facetSelection}
+                onSelectionChange={setFacetSelection}
+                ownership={ownership}
+                onOwnershipChange={changeOwnership}
+                showOwnership={sharedCount > 0 || ownership !== 'mine'}
+                ownershipCounts={ownershipCounts}
+              />
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+
           {/* Loading skeleton */}
           {loading && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(i => (
                 <div key={i} className="glass-card rounded-xl animate-pulse">
                   <div className="h-[140px] rounded-t-xl bg-[var(--muted)]" />
@@ -2285,7 +2576,7 @@ export default function MediaPage() {
 
           {/* Folder grid */}
           {!loading && filteredFolders.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 mt-8 mb-10">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3 mt-8 mb-10">
               {filteredFolders.map(folder => (
                 <div
                   key={folder.id}
@@ -2378,11 +2669,15 @@ export default function MediaPage() {
           {!loading && filtered.length > 0 && (
             <div className={viewMode === 'list'
               ? 'flex flex-col gap-1.5'
-              : 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3'
+              : 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3'
             }>
               {filtered.map(f => {
                 const itemKey = mediaItemKey(f);
                 const ItemComponent = viewMode === 'list' ? MediaListRow : MediaCard;
+                // Inherited assets are read-only here: they belong to another
+                // scope and editing one would change it for every account that
+                // sees it. The API refuses too — this just keeps the menu honest.
+                const fileInherited = isInherited(f);
                 return (
                   <ItemComponent
                     key={itemKey}
@@ -2392,8 +2687,9 @@ export default function MediaPage() {
                     selectionActive={selectionActive}
                     provider={provider}
                     capabilities={capabilities}
+                    inherited={fileInherited}
                     menuClickRef={menuClickRef}
-                    draggable={!!capabilities?.canMove}
+                    draggable={!!capabilities?.canMove && !fileInherited}
                     onDragStart={(e) => handleDragStart(e, f.id, 'file', f.name)}
                     onMenuToggle={() => setOpenMenu(prev => prev === itemKey ? null : itemKey)}
                     onMenuClose={() => setOpenMenu(null)}
@@ -2401,8 +2697,8 @@ export default function MediaPage() {
                     onPreview={() => setPreviewFile(f)}
                     onCopyUrl={() => copyUrl(f.url)}
                     onDownload={() => downloadFile(f.url, f.name)}
-                    onMove={capabilities?.canMove ? () => openMoveModal([{ id: f.id, type: 'file', name: f.name }]) : undefined}
-                    onRename={capabilities?.canRename ? () => {
+                    onMove={capabilities?.canMove && !fileInherited ? () => openMoveModal([{ id: f.id, type: 'file', name: f.name }]) : undefined}
+                    onRename={capabilities?.canRename && !fileInherited ? () => {
                       setRenameValue(f.name);
                       setRenameAltValue(f.altText ?? '');
                       const meta = assetMetadataFrom(f);
@@ -2410,7 +2706,7 @@ export default function MediaPage() {
                       setRenameMetadataInitial(meta);
                       setRenameFile(f);
                     } : undefined}
-                    onDelete={capabilities?.canDelete ? () => setDeleteFile(f) : undefined}
+                    onDelete={capabilities?.canDelete && !fileInherited ? () => setDeleteFile(f) : undefined}
                   />
                 );
               })}
@@ -2429,8 +2725,13 @@ export default function MediaPage() {
               </button>
             </div>
           )}
+          </div>
+          </div>
         </>
       )}
+      </div>
+      {/* Docks, modals and the drop overlay sit OUTSIDE the scroll container so
+          they anchor to the viewport rather than to the scrolled content. */}
 
       {showOverview && isLoomiOverviewTab && selectionActive && (
         <BulkActionDock
@@ -2818,6 +3119,42 @@ export default function MediaPage() {
                   </>
                 )}
               </div>
+
+              {/* Batch classification. Collapsed by default: it's the difference
+                  between a findable library and a folder of files, but it must
+                  not stand between someone and a quick upload. */}
+              {stagedFiles.length > 0 && !uploading && (
+                <div className="rounded-lg border border-[var(--border)]">
+                  <button
+                    type="button"
+                    onClick={() => setShowUploadMetadata((v) => !v)}
+                    aria-expanded={showUploadMetadata}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[var(--muted)] rounded-lg transition-colors"
+                  >
+                    <span className="text-xs font-medium text-[var(--foreground)]">
+                      Classify {stagedFiles.length === 1 ? 'this file' : `these ${stagedFiles.length} files`}
+                    </span>
+                    <span className="ml-auto text-[10px] text-[var(--muted-foreground)]">Optional</span>
+                    <ChevronRightIcon
+                      className={`h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-transform ${
+                        showUploadMetadata ? 'rotate-90' : ''
+                      }`}
+                    />
+                  </button>
+                  {showUploadMetadata && (
+                    <div className="border-t border-[var(--border)] p-3">
+                      <AssetMetadataFields
+                        value={uploadMetadata}
+                        onChange={setUploadMetadata}
+                        accountBrands={accountBrands}
+                      />
+                      <p className="mt-3 text-[10px] text-[var(--muted-foreground)]">
+                        Applied to every file in this upload. You can change any of it per file afterwards.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Staged files list */}
               {stagedFiles.length > 0 && !uploading && (

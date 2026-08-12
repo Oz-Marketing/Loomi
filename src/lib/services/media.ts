@@ -143,6 +143,36 @@ export function effectiveMediaWhere(scope: MediaScope) {
 }
 
 /**
+ * Free-text search across the fields a person actually remembers.
+ *
+ * Filename alone was never enough: an OEM asset is found by brand ("Audi"), by
+ * what it is ("template"), or by a keyword someone tagged it with — almost never
+ * by `audi_shared_my25-my26-dag_template-display_v1.zip`. Alt text is included
+ * because it is the one field that describes the CONTENT of an image, and on a
+ * well-maintained library it is the richest thing to match against.
+ *
+ * `tags` is a JSON string column, so `contains` matches its serialized form.
+ * That is a substring match, not a term match — searching "sale" also hits a tag
+ * "summer-sale", which for a search box is the desired behaviour rather than a
+ * defect. Exact tag filtering is a facet (see the assetCategory/oem params), not
+ * a search concern.
+ */
+export function mediaSearchWhere(search: string) {
+  const q = search.trim();
+  if (!q) return {};
+  const contains = { contains: q, mode: 'insensitive' as const };
+  return {
+    OR: [
+      { filename: contains },
+      { altText: contains },
+      { oem: contains },
+      { rightsHolder: contains },
+      { tags: contains },
+    ],
+  };
+}
+
+/**
  * Every asset an account may see, newest first.
  *
  * Deliberately FLAT — no folder filter. Folders belong to a single scope
@@ -157,6 +187,7 @@ export async function getEffectiveMediaForAccount(
     category?: string;
     assetCategory?: string;
     oem?: string;
+    assetSource?: string;
     search?: string;
     archived?: boolean;
     skip?: number;
@@ -165,14 +196,18 @@ export async function getEffectiveMediaForAccount(
 ) {
   const scope = await resolveMediaScope(accountKey);
 
+  // Search is its own AND branch, not merged into the filter object: it is
+  // itself an OR across five fields, and folding it in would let a search term
+  // satisfy the scope clause instead of narrowing within it.
   const where = {
     AND: [
       effectiveMediaWhere(scope),
+      ...(opts.search ? [mediaSearchWhere(opts.search)] : []),
       {
         ...(opts.category ? { category: opts.category } : {}),
         ...(opts.assetCategory ? { assetCategory: opts.assetCategory } : {}),
         ...(opts.oem ? { oem: opts.oem } : {}),
-        ...(opts.search ? { filename: { contains: opts.search } } : {}),
+        ...(opts.assetSource ? { assetSource: opts.assetSource } : {}),
         archivedAt: opts.archived ? { not: null } : { equals: null },
       },
     ],

@@ -8,6 +8,7 @@ import {
   buildAssetMetadata,
   findDuplicateAsset,
   getEffectiveMediaForAccount,
+  mediaSearchWhere,
   serializeMediaAsset,
 } from '@/lib/services/media';
 
@@ -76,6 +77,7 @@ export async function GET(req: NextRequest) {
   const category = req.nextUrl.searchParams.get('category') || undefined;
   const assetCategory = req.nextUrl.searchParams.get('assetCategory') || undefined;
   const oem = req.nextUrl.searchParams.get('oem') || undefined;
+  const assetSource = req.nextUrl.searchParams.get('assetSource') || undefined;
   const search = req.nextUrl.searchParams.get('search') || undefined;
   const countOnly = req.nextUrl.searchParams.get('countOnly') === 'true';
   const effectiveScope = req.nextUrl.searchParams.get('scope') === 'effective';
@@ -106,6 +108,7 @@ export async function GET(req: NextRequest) {
       category,
       assetCategory,
       oem,
+      assetSource,
       search,
       archived: archivedParam,
       skip: countOnly ? 0 : offset,
@@ -128,13 +131,18 @@ export async function GET(req: NextRequest) {
   // Prisma where: null accountKey = admin, otherwise = account-scoped
   // Prisma requires { equals: null } for nullable field null checks
   const where = {
-    accountKey: accountKey === null ? { equals: null as string | null } : accountKey,
-    ...(category ? { category } : {}),
-    ...(assetCategory ? { assetCategory } : {}),
-    ...(oem ? { oem } : {}),
-    ...(search ? { filename: { contains: search } } : {}),
-    ...(folderParam === null ? {} : { folderId: folderParam === 'root' ? { equals: null as string | null } : folderParam }),
-    archivedAt: archivedParam ? { not: null } : { equals: null as Date | null },
+    AND: [
+      ...(search ? [mediaSearchWhere(search)] : []),
+      {
+        accountKey: accountKey === null ? { equals: null as string | null } : accountKey,
+        ...(category ? { category } : {}),
+        ...(assetCategory ? { assetCategory } : {}),
+        ...(oem ? { oem } : {}),
+        ...(assetSource ? { assetSource } : {}),
+        ...(folderParam === null ? {} : { folderId: folderParam === 'root' ? { equals: null as string | null } : folderParam }),
+        archivedAt: archivedParam ? { not: null } : { equals: null as Date | null },
+      },
+    ],
   };
 
   if (countOnly) {

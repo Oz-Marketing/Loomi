@@ -270,7 +270,12 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith('/_next') ||
     pathname.startsWith('/favicon') ||
     pathname.startsWith('/lp/') ||
-    pathname.startsWith('/f/')
+    pathname.startsWith('/f/') ||
+    // Embed loader for the script-tag form snippet. It's fetched by an
+    // anonymous visitor's browser on the customer's own site, so gating
+    // it redirects the <script> request to /login — the browser blocks
+    // the HTML response and no form ever mounts.
+    pathname === '/loomi-form.js'
   ) {
     return NextResponse.next();
   }

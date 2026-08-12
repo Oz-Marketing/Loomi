@@ -26,11 +26,11 @@ function campaignBuilderStep(path: string): BuilderStepKey {
   // SMS:   /messaging/blasts/sms/[id]/(recipients|message|schedule)
   // Multi: /messaging/blasts/multi/[id]/(recipients|message|schedule)
   const stripped = path.replace(/^\/subaccount\/[^/]+/, '');
-  const multiMatch = stripped.match(/^\/messaging\/campaigns\/multi\/[^/]+\/(recipients|message|schedule)$/);
+  const multiMatch = stripped.match(/^\/messaging\/blasts\/multi\/[^/]+\/(recipients|message|schedule)$/);
   if (multiMatch) return multiMatch[1] as BuilderStepKey;
-  const smsMatch = stripped.match(/^\/messaging\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/);
+  const smsMatch = stripped.match(/^\/messaging\/blasts\/sms\/[^/]+\/(recipients|message|schedule)$/);
   if (smsMatch) return smsMatch[1] as BuilderStepKey;
-  const emailMatch = stripped.match(/^\/messaging\/campaigns\/[^/]+\/(recipients|template|schedule)$/);
+  const emailMatch = stripped.match(/^\/messaging\/blasts\/[^/]+\/(recipients|template|schedule)$/);
   if (emailMatch) {
     const raw = emailMatch[1];
     return raw === 'template' ? 'message' : (raw as BuilderStepKey);
@@ -40,8 +40,8 @@ function campaignBuilderStep(path: string): BuilderStepKey {
 
 function campaignBuilderChannel(path: string): 'email' | 'sms' | 'multi' {
   const stripped = path.replace(/^\/subaccount\/[^/]+/, '');
-  if (/^\/messaging\/campaigns\/multi\//.test(stripped)) return 'multi';
-  if (/^\/messaging\/campaigns\/sms\//.test(stripped)) return 'sms';
+  if (/^\/messaging\/blasts\/multi\//.test(stripped)) return 'multi';
+  if (/^\/messaging\/blasts\/sms\//.test(stripped)) return 'sms';
   return 'email';
 }
 
@@ -115,9 +115,9 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // existing isTemplateEditor branch.)
   const builderProbe = normalizedPath.replace(/^\/subaccount\/[^/]+/, '');
   const isCampaignBuilder =
-    /^\/messaging\/campaigns\/[^/]+\/(recipients|template|schedule)$/.test(builderProbe) ||
-    /^\/messaging\/campaigns\/sms\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe) ||
-    /^\/messaging\/campaigns\/multi\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe);
+    /^\/messaging\/blasts\/[^/]+\/(recipients|template|schedule)$/.test(builderProbe) ||
+    /^\/messaging\/blasts\/sms\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe) ||
+    /^\/messaging\/blasts\/multi\/[^/]+\/(recipients|message|schedule)$/.test(builderProbe);
 
   // Flow builder owns its own chrome (its own top bar lives in
   // FlowBuilder.tsx) so we hide the sidebar + TopUtilityBar entirely.

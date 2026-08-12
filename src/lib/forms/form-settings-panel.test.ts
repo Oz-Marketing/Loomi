@@ -15,12 +15,15 @@ function panelHtml(patch: Partial<Settings>): string {
     settings: { ...DEFAULT_FORM_SETTINGS, ...patch },
     blocks: [],
   };
+  // `children` goes in the props bag rather than as a third argument:
+  // EditorProvider declares it required, and the createElement overload
+  // that folds trailing args into children doesn't satisfy that.
   return renderToStaticMarkup(
-    React.createElement(
-      EditorProvider,
-      { template, onChange: () => {} },
-      React.createElement(FormSettings),
-    ),
+    React.createElement(EditorProvider, {
+      template,
+      onChange: () => {},
+      children: React.createElement(FormSettings),
+    }),
   );
 }
 

@@ -289,6 +289,29 @@ per-MIME limits are in. Two things are not:
 pre-flight firing on submit. AI auto-tagging after this, never before — tagging
 without a governed vocabulary produces high-volume inconsistent tags, per v2 §9.2.
 
+**Shipped**, and it also delivers Phase 4's deferred consumer tier: a `client`
+sees only `approved` assets and no write controls, forced server-side by role
+rather than by a query parameter. That is the portal, expressed as lifecycle
+state instead of a separate surface — which is why deferring it out of Phase 4
+was the right call.
+
+Two deliberate limits:
+
+- **Nothing is gated on `approved` yet inside Loomi.** The media picker, the ad
+  builder and the email editor still see every asset. Everything defaults to
+  `draft`, so gating them today would empty the library for internal users
+  overnight. Approval currently governs the client view and nothing else; the
+  internal gate is a switch to throw once libraries have been curated, not a
+  behaviour to ship ahead of the curation.
+- **Pre-flight reads metadata, never pixels.** "Is the logo big enough" belongs
+  to the design-time template checks, and inferring it from an image would
+  produce the confident-but-wrong finding that discredits a compliance gate.
+  Every finding cites the field it read, for the same reason the co-op rule packs
+  carry citations.
+
+AI auto-tagging remains the next thing, and still after this — the controlled
+vocabularies now exist for it to be governed by.
+
 ---
 
 ## 9. Phase 1 specification

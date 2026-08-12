@@ -1856,6 +1856,34 @@ model MediaAsset {
   /// the dates move, which is what makes a renewal re-arm the warnings.
   expirationWarnedAt   DateTime?
 
+  // ── Approval lifecycle (docs/asset-management.md Phase 5, §5) ──
+  //
+  // Four states, and only two of them live here: `draft` and `approved`. The
+  // other two are the timestamps above — `expiredAt` and `archivedAt` — kept
+  // separate on purpose. An asset can be approved AND expired (cleared for use,
+  // licence since lapsed), or approved AND archived. Collapsing them into one
+  // enum would lose which of the three was true, exactly as folding archive into
+  // AdCreative.status would have.
+  //
+  // Defaults to `draft`, including for everything already in the library:
+  // nothing has been reviewed, so nothing should claim it has.
+
+  /// "draft" | "approved". Cleared for use, not "published" — distribution is a
+  /// separate question the Go-to-Market work answers.
+  status         String    @default("draft")
+  approvedAt     DateTime?
+  approvedById   String?
+  /// Denormalized so the review history survives the reviewer leaving.
+  approvedByName String?
+  /// Free-text note from the reviewer. Carries a rejection reason too: sending
+  /// an asset back leaves it in `draft` WITH the note, rather than inventing a
+  /// fifth state whose only difference from draft is that someone looked at it.
+  reviewNote     String?   @db.Text
+  /// Pre-flight findings as of the last approve attempt, JSON MediaPreflight.
+  /// Stored so a reviewer sees what was checked without re-running it, and so an
+  /// approval remains explicable against the rules in force at the time.
+  preflightResult String?  @db.Text
+
   @@unique([s3Key])
   @@index([accountKey, createdAt])
   @@index([accountKey, category])
@@ -1866,6 +1894,9 @@ model MediaAsset {
   // Duplicate lookup on upload.
   @@index([contentHash])
   @@index([parentAssetId])
+  // Approval reads: the client-facing view asks for one account's approved
+  // assets, and the review queue asks for one account's drafts.
+  @@index([accountKey, status])
   // The expiration sweep's two scans: "what has lapsed" and "what lapses soon".
   // Both run daily across every account, so they are the one query here that
   // isn't scope-limited.

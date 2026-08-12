@@ -4,6 +4,7 @@ import { getAccountOems, normalizeOems } from '@/lib/oems';
 import { s3PublicUrl } from '@/lib/s3';
 import { getAncestorAccountKeys } from '@/lib/services/accounts';
 import { assessRights, isLicenseType, isUsageScope } from '@/lib/media-rights';
+import { parsePreflight } from '@/lib/media-preflight';
 import {
   coerceList,
   isAssetCategory,
@@ -89,6 +90,13 @@ export function serializeMediaAsset(a: MediaAsset, now = new Date()) {
     // Derived server-side so every consumer agrees on the answer, rather than
     // each one re-deriving "expiring soon" from raw dates and drifting.
     rights: assessRights(a, now),
+
+    // ── Approval (Phase 5) ──
+    status: a.status,
+    approvedAt: a.approvedAt ? a.approvedAt.toISOString() : null,
+    approvedByName: a.approvedByName,
+    reviewNote: a.reviewNote,
+    preflight: parsePreflight(a.preflightResult),
   };
 }
 
@@ -208,6 +216,7 @@ export async function getEffectiveMediaForAccount(
     assetCategory?: string;
     oem?: string;
     assetSource?: string;
+    status?: string;
     search?: string;
     archived?: boolean;
     skip?: number;
@@ -228,6 +237,7 @@ export async function getEffectiveMediaForAccount(
         ...(opts.assetCategory ? { assetCategory: opts.assetCategory } : {}),
         ...(opts.oem ? { oem: opts.oem } : {}),
         ...(opts.assetSource ? { assetSource: opts.assetSource } : {}),
+        ...(opts.status ? { status: opts.status } : {}),
         archivedAt: opts.archived ? { not: null } : { equals: null },
       },
     ],
@@ -493,4 +503,19 @@ export function canAccessAsset(
   if (role === 'admin' && accountKeys.length === 0) return true;
   if (accountKey === null) return false;
   return accountKeys.includes(accountKey);
+}
+
+/**
+ * Does this session only get to see APPROVED assets?
+ *
+ * The consumer tier from §2.2, delivered through lifecycle state rather than a
+ * separate portal surface: a client sees the library their agency has cleared
+ * for them, and nothing that is still being worked on.
+ *
+ * Deliberately keyed on the role, not on a per-account flag. "Clients see
+ * approved work" is a property of what a client IS, and making it configurable
+ * would create accounts where it was quietly switched off.
+ */
+export function isConsumerRole(role: string): boolean {
+  return role === 'client';
 }

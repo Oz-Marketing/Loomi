@@ -40,6 +40,7 @@ import { AccountAvatar } from '@/components/account-avatar';
 import BulkActionDock from '@/components/bulk-action-dock';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { RenditionPanel } from '@/components/media/rendition-panel';
+import { ApprovalPanel } from '@/components/media/approval-panel';
 import {
   AssetMetadataFields,
   EMPTY_ASSET_METADATA,
@@ -50,6 +51,7 @@ import {
 import { assetSourceLabel } from '@/lib/media-metadata';
 import { MAX_UPLOAD_BYTES, checkUploadSize, formatBytes } from '@/lib/media-limits';
 import { rightsBadgeLabel, type RightsAssessment } from '@/lib/media-rights';
+import type { MediaPreflight } from '@/lib/media-preflight';
 import {
   MEDIA_FACET_KEYS,
   buildMediaFacetOptions,
@@ -115,6 +117,13 @@ interface MediaFile {
   sublicensingPermitted?: boolean | null;
   /** Derived server-side — see serializeMediaAsset. */
   rights?: RightsAssessment | null;
+
+  // ── Approval (Phase 5) ──
+  status?: string | null;
+  approvedAt?: string | null;
+  approvedByName?: string | null;
+  reviewNote?: string | null;
+  preflight?: MediaPreflight | null;
 }
 
 interface MediaFolder {
@@ -427,6 +436,13 @@ function MediaCard({
             carries the brand. */}
         <AssetOriginBadge f={f} />
         <RightsBadge f={f} />
+        {/* Only DRAFT is badged. Once a library is curated, approved is the
+            normal state, and badging the norm marks everything. */}
+        {f.status === 'draft' && (
+          <span className="absolute bottom-2 right-2 z-10 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white/90 backdrop-blur-sm">
+            Draft
+          </span>
+        )}
       </div>
 
       {/* Info */}
@@ -709,7 +725,7 @@ function AccountCard({ acctKey, acctData, overviewRow, onSelect }: AccountCardPr
 
 export default function MediaPage() {
   const { confirm } = useLoomiDialog();
-  const { isAdmin, isAccount, accountKey, accountData, accounts } = useAccount();
+  const { isAdmin, isAccount, accountKey, accountData, accounts, userRole } = useAccount();
   const subaccountHref = useSubaccountHref();
 
   // ── Single-account detail state ──
@@ -864,6 +880,13 @@ export default function MediaPage() {
       ? accountFilter
       : null;
 
+  /**
+   * The consumer tier (§2.2). Clients browse and download the assets their
+   * agency has approved; they never author. The API already forces
+   * approved-only for this role — this hides the controls that would 403.
+   */
+  const isConsumer = userRole === 'client';
+
   // The brands the current account carries — floated to the top of the Brand
   // picker so a Ford rooftop isn't scrolling past forty marques to reach Ford.
   const accountBrands = useMemo(() => {
@@ -906,7 +929,8 @@ export default function MediaPage() {
 
   // Show overview when admin has no specific account selected
   const showOverview = isAdmin && !effectiveAccountKey;
-  const canDropUploadFiles = showOverview || !!effectiveAccountKey;
+  // Consumers can't upload, so the whole-page drop target would be a lie.
+  const canDropUploadFiles = !isConsumer && (showOverview || !!effectiveAccountKey);
   const isLoomiOverviewTab = showOverview && overviewTab === 'loomi';
   const isSubAccountOverviewTab = showOverview && overviewTab === 'subaccounts';
 
@@ -1143,7 +1167,7 @@ export default function MediaPage() {
         }
         setNextCursor(data.nextCursor || undefined);
         setProvider('s3');
-        setCapabilities(S3_CAPABILITIES);
+        setCapabilities(isConsumer ? INHERITED_CAPABILITIES : S3_CAPABILITIES);
       } else {
         toast.error(data.error || 'Failed to load media');
       }
@@ -1155,7 +1179,7 @@ export default function MediaPage() {
     if (seq !== loadSeqRef.current) return;
     setLoading(false);
     setLoadingMore(false);
-  }, [effectiveAccountKey, currentFolderId, showArchived, ownership]);
+  }, [effectiveAccountKey, currentFolderId, showArchived, ownership, isConsumer]);
 
   /**
    * How many assets this account can see that it does not own.
@@ -2044,8 +2068,10 @@ export default function MediaPage() {
    * or deleting one affects other accounts, so the UI treats it as read-only.
    */
   const isInherited = useCallback(
-    (f: MediaFile) => !!effectiveAccountKey && (f.accountKey ?? null) !== effectiveAccountKey,
-    [effectiveAccountKey],
+    (f: MediaFile) =>
+      // A consumer never owns anything here: read-only is the whole tier.
+      isConsumer || (!!effectiveAccountKey && (f.accountKey ?? null) !== effectiveAccountKey),
+    [effectiveAccountKey, isConsumer],
   );
 
   /** Each visible asset paired with its facet values, computed once per load. */
@@ -2344,13 +2370,15 @@ export default function MediaPage() {
                     New Folder
                   </button>
                 )}
-                <PrimaryButton
-                  onClick={() => { setStagedFiles([]); setShowUploadModal(true); }}
-                  disabled={uploading}
-                >
-                  <ArrowUpTrayIcon className="w-4 h-4" />
-                  {uploading ? 'Uploading...' : 'Add Media'}
-                </PrimaryButton>
+                {!isConsumer && (
+                  <PrimaryButton
+                    onClick={() => { setStagedFiles([]); setShowUploadModal(true); }}
+                    disabled={uploading}
+                  >
+                    <ArrowUpTrayIcon className="w-4 h-4" />
+                    {uploading ? 'Uploading...' : 'Add Media'}
+                  </PrimaryButton>
+                )}
               </>
             )}
           </div>
@@ -3049,6 +3077,20 @@ export default function MediaPage() {
                 assetId={renameFile.id}
                 canGenerate={!!renameFile.type?.startsWith('image/') && renameFile.type !== 'image/svg+xml'}
                 readOnly={isInherited(renameFile)}
+              />
+
+              <ApprovalPanel
+                assetId={renameFile.id}
+                status={renameFile.status}
+                approvedByName={renameFile.approvedByName}
+                approvedAt={renameFile.approvedAt}
+                reviewNote={renameFile.reviewNote}
+                readOnly={isInherited(renameFile)}
+                onChanged={(file) => {
+                  const next = { ...renameFile, ...(file as Partial<MediaFile>), source: 's3' as const };
+                  setRenameFile(next);
+                  setFiles((prev) => prev.map((f) => (f.id === next.id ? next : f)));
+                }}
               />
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--border)]">

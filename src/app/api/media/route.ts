@@ -9,6 +9,7 @@ import {
   buildAssetMetadata,
   findDuplicateAsset,
   getEffectiveMediaForAccount,
+  isConsumerRole,
   mediaSearchWhere,
   serializeMediaAsset,
 } from '@/lib/services/media';
@@ -80,6 +81,10 @@ export async function GET(req: NextRequest) {
   const oem = req.nextUrl.searchParams.get('oem') || undefined;
   const assetSource = req.nextUrl.searchParams.get('assetSource') || undefined;
   const search = req.nextUrl.searchParams.get('search') || undefined;
+  const statusParam = req.nextUrl.searchParams.get('status') || undefined;
+  // Clients see cleared work only — the consumer tier. Forced here rather than
+  // trusted from the query string, so it can't be widened by editing the URL.
+  const status = isConsumerRole(session!.user.role) ? 'approved' : statusParam;
   const countOnly = req.nextUrl.searchParams.get('countOnly') === 'true';
   const effectiveScope = req.nextUrl.searchParams.get('scope') === 'effective';
   // Folder scoping: absent = every asset (flat, back-compat for non-folder
@@ -110,6 +115,7 @@ export async function GET(req: NextRequest) {
       assetCategory,
       oem,
       assetSource,
+      status,
       search,
       archived: archivedParam,
       skip: countOnly ? 0 : offset,
@@ -140,6 +146,7 @@ export async function GET(req: NextRequest) {
         ...(assetCategory ? { assetCategory } : {}),
         ...(oem ? { oem } : {}),
         ...(assetSource ? { assetSource } : {}),
+        ...(status ? { status } : {}),
         ...(folderParam === null ? {} : { folderId: folderParam === 'root' ? { equals: null as string | null } : folderParam }),
         archivedAt: archivedParam ? { not: null } : { equals: null as Date | null },
       },

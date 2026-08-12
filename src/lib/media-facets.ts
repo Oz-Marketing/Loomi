@@ -18,7 +18,13 @@ import { RIGHTS_STATUS_LABELS, type RightsStatus } from '@/lib/media-rights';
  * its MIME type, because a guess that is wrong is worse than an honest blank.
  */
 
-export type MediaFacetKey = 'oem' | 'assetCategory' | 'assetSource' | 'modelYear' | 'rightsStatus';
+export type MediaFacetKey =
+  | 'oem'
+  | 'assetCategory'
+  | 'assetSource'
+  | 'modelYear'
+  | 'rightsStatus'
+  | 'status';
 
 /** Facet order is the render order — broad to narrow. */
 export const MEDIA_FACET_KEYS: MediaFacetKey[] = [
@@ -26,9 +32,10 @@ export const MEDIA_FACET_KEYS: MediaFacetKey[] = [
   'assetCategory',
   'assetSource',
   'modelYear',
-  // Last: it's the one facet people reach for deliberately ("what's expiring?")
-  // rather than while browsing.
+  // Last two: the ones people reach for deliberately ("what's expiring?",
+  // "what still needs review?") rather than while browsing.
   'rightsStatus',
+  'status',
 ];
 
 export const MEDIA_FACET_LABELS: Record<MediaFacetKey, string> = {
@@ -37,6 +44,7 @@ export const MEDIA_FACET_LABELS: Record<MediaFacetKey, string> = {
   assetSource: 'Source',
   modelYear: 'Model year',
   rightsStatus: 'Rights',
+  status: 'Review',
 };
 
 /**
@@ -58,6 +66,8 @@ export interface FacetableAsset {
   modelYear?: string[] | null;
   /** Derived server-side by serializeMediaAsset. */
   rights?: { status: RightsStatus } | null;
+  /** Approval lifecycle — 'draft' | 'approved'. */
+  status?: string | null;
 }
 
 /** One asset's values, per facet. Always at least one entry — UNSET if empty. */
@@ -84,6 +94,8 @@ export function facetsForAsset(a: FacetableAsset): MediaFacetValues {
     // Rights status is already a total function — every asset has one, and
     // 'unknown' is its own meaningful value — so it never falls back to UNSET.
     rightsStatus: [a.rights?.status ?? 'unknown'],
+    // Every asset has a review state; the column defaults to 'draft'.
+    status: [a.status || 'draft'],
   };
 }
 
@@ -93,6 +105,7 @@ export function mediaFacetValueLabel(key: MediaFacetKey, value: string): string 
   if (key === 'assetCategory') return assetCategoryLabel(value) ?? value;
   if (key === 'assetSource') return assetSourceLabel(value) ?? value;
   if (key === 'rightsStatus') return RIGHTS_STATUS_LABELS[value as RightsStatus] ?? value;
+  if (key === 'status') return value === 'approved' ? 'Approved' : 'Draft';
   return value;
 }
 

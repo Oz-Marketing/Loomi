@@ -32,6 +32,7 @@ describe('facetsForAsset', () => {
       assetSource: ['oem-supplied'],
       modelYear: ['2025', '2026'],
       rightsStatus: ['unknown'],
+      status: ['draft'],
     });
   });
 
@@ -41,8 +42,9 @@ describe('facetsForAsset', () => {
       assetCategory: [UNSET],
       assetSource: [UNSET],
       modelYear: [UNSET],
-      // Rights is never UNSET — 'unknown' is its own real value.
+      // Rights and review are never UNSET — each has its own real default.
       rightsStatus: ['unknown'],
+      status: ['draft'],
     });
   });
 
@@ -158,5 +160,26 @@ describe('rightsStatus facet', () => {
     const active = facetsForAsset({ rights: { status: 'active' } });
     expect(matchesMediaFacets(expiring, { rightsStatus: ['expiring_soon'] })).toBe(true);
     expect(matchesMediaFacets(active, { rightsStatus: ['expiring_soon'] })).toBe(false);
+  });
+});
+
+describe('status facet', () => {
+  it('defaults to draft — nothing claims approval it has not been given', () => {
+    expect(facetsForAsset({}).status).toEqual(['draft']);
+    expect(facetsForAsset({ status: null }).status).toEqual(['draft']);
+  });
+
+  it('reads an approved asset', () => {
+    expect(facetsForAsset({ status: 'approved' }).status).toEqual(['approved']);
+  });
+
+  it('labels for the rail', () => {
+    expect(mediaFacetValueLabel('status', 'approved')).toBe('Approved');
+    expect(mediaFacetValueLabel('status', 'draft')).toBe('Draft');
+  });
+
+  it('filters on it', () => {
+    expect(matchesMediaFacets(facetsForAsset({ status: 'approved' }), { status: ['approved'] })).toBe(true);
+    expect(matchesMediaFacets(facetsForAsset({ status: 'draft' }), { status: ['approved'] })).toBe(false);
   });
 });

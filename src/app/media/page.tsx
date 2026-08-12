@@ -35,6 +35,17 @@ import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { AccountAvatar } from '@/components/account-avatar';
 import BulkActionDock from '@/components/bulk-action-dock';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
+import {
+  AssetMetadataFields,
+  EMPTY_ASSET_METADATA,
+  assetMetadataDiff,
+  assetMetadataFrom,
+  type AssetMetadataValue,
+} from '@/components/media/asset-metadata-fields';
+import { assetSourceLabel } from '@/lib/media-metadata';
+import { MAJOR_US_OEMS, POWERSPORTS_BRANDS } from '@/lib/oems';
+import { Select } from '@/components/select';
+import { HelpTip } from '@/components/ui/help-tip';
 import PrimaryButton from '@/components/primary-button';
 
 // ── Constants ──
@@ -56,11 +67,23 @@ interface MediaFile {
   altText?: string | null;
   createdAt?: string;
   updatedAt?: string;
+  /** STORAGE origin. Not to be confused with `assetSource` (DAM provenance). */
   source?: 'esp' | 's3';
   category?: string;
   folderId?: string | null;
   /** Set when the asset is soft-archived (hidden from the default view). */
   archivedAt?: string | null;
+
+  // ── DAM metadata (docs/asset-management.md Phase 1) ──
+  accountKey?: string | null;
+  oem?: string | null;
+  assetSource?: string | null;
+  assetCategory?: string | null;
+  modelYear?: string[];
+  vehicleModel?: string[];
+  tags?: string[];
+  rightsHolder?: string | null;
+  parentAssetId?: string | null;
 }
 
 interface MediaFolder {
@@ -200,6 +223,34 @@ function ProviderPill({ prov }: { prov: string }) {
   );
 }
 
+/**
+ * Where an asset comes from, as a corner badge on the thumbnail.
+ *
+ * Priority is deliberate: the BRAND matters more than the provenance, because an
+ * OEM-scoped asset is shared — a rooftop editing one is editing every sub-account
+ * that carries that brand. Falls back to the DAM source when there's no brand,
+ * and renders nothing at all when neither is set, so untagged libraries look
+ * exactly as they do today.
+ */
+function AssetOriginBadge({ f }: { f: MediaFile }) {
+  const shared = !f.accountKey && !!f.oem;
+  const label = f.oem || assetSourceLabel(f.assetSource);
+  if (!label) return null;
+
+  return (
+    <span
+      className={`absolute top-2 right-2 z-10 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium backdrop-blur-sm ${
+        shared
+          ? 'bg-[var(--primary)]/85 text-white'
+          : 'bg-black/50 text-white/90'
+      }`}
+      title={shared ? `Shared across all ${f.oem} sub-accounts` : label}
+    >
+      {label}
+    </span>
+  );
+}
+
 interface MediaCardProps {
   f: MediaFile;
   isMenuOpen: boolean;
@@ -284,6 +335,11 @@ function MediaCard({
         >
           {isSelected && <CheckIcon className="w-3.5 h-3.5 text-white" />}
         </button>
+
+        {/* Provenance badge. An OEM-shared asset has to be visually distinct from
+            a rooftop's own — editing one changes it for every sub-account that
+            carries the brand. */}
+        <AssetOriginBadge f={f} />
       </div>
 
       {/* Info */}
@@ -589,6 +645,13 @@ export default function MediaPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pageDragDepthRef = useRef(0);
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
+  /**
+   * Where the staged files will land: `'account'` = wherever the user is
+   * browsing (unchanged behaviour, and the default), `'oem:<Brand>'` = shared
+   * with every sub-account carrying that brand, `'global'` = the Loomi library.
+   * Only offered to admins; the API rejects the other two for anyone else.
+   */
+  const [uploadScope, setUploadScope] = useState('account');
 
   // Modals
   const [openMenu, setOpenMenu] = useState<string | null>(null);
@@ -598,6 +661,12 @@ export default function MediaPage() {
   // user opens the modal alongside renameValue, PATCHed together so
   // a single Save covers both fields.
   const [renameAltValue, setRenameAltValue] = useState('');
+  // DAM metadata, seeded from the asset when the modal opens. Kept as its own
+  // state (not merged into renameFile) so the diff on save is against what was
+  // loaded, not against whatever the list has since been refreshed to.
+  const [renameMetadata, setRenameMetadata] = useState<AssetMetadataValue>(EMPTY_ASSET_METADATA);
+  const [renameMetadataInitial, setRenameMetadataInitial] =
+    useState<AssetMetadataValue>(EMPTY_ASSET_METADATA);
   const [renaming, setRenaming] = useState(false);
   const [deleteFile, setDeleteFile] = useState<MediaFile | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -674,6 +743,46 @@ export default function MediaPage() {
     : accountFilter !== 'all'
       ? accountFilter
       : null;
+
+  // The brands the current account carries — floated to the top of the Brand
+  // picker so a Ford rooftop isn't scrolling past forty marques to reach Ford.
+  const accountBrands = useMemo(() => {
+    const list = accountData?.oems?.length
+      ? accountData.oems
+      : accountData?.oem
+        ? [accountData.oem]
+        : [];
+    return list.map((b) => b.trim()).filter(Boolean);
+  }, [accountData?.oem, accountData?.oems]);
+
+  /**
+   * Upload destinations. The first option is always "where I am", so the default
+   * upload behaves exactly as it did before this existed.
+   *
+   * The brand options are what make an OEM asset storable once: picking
+   * "Shared — all Audi sub-accounts" writes `accountKey: null, oem: 'Audi'`, and
+   * every Audi rooftop resolves it without a copy.
+   */
+  const uploadScopeOptions = useMemo(() => {
+    const here = effectiveAccountKey
+      ? `This sub-account${accountData?.dealer ? ` — ${accountData.dealer}` : ''}`
+      : 'Loomi library — all accounts';
+    const options = [{ value: 'account', label: here }];
+    if (!isAdmin) return options;
+
+    // An account's own brands when we know them; the full marque list otherwise
+    // (the Select searches once the list is long).
+    const brands = accountBrands.length > 0
+      ? accountBrands
+      : [...MAJOR_US_OEMS, ...POWERSPORTS_BRANDS];
+    for (const brand of brands) {
+      options.push({ value: `oem:${brand}`, label: `Shared — all ${brand} sub-accounts` });
+    }
+    if (effectiveAccountKey) {
+      options.push({ value: 'global', label: 'Loomi library — all accounts' });
+    }
+    return options;
+  }, [effectiveAccountKey, accountData?.dealer, isAdmin, accountBrands]);
 
   // Show overview when admin has no specific account selected
   const showOverview = isAdmin && !effectiveAccountKey;
@@ -971,17 +1080,55 @@ export default function MediaPage() {
     const uploadedFiles: MediaFile[] = [];
     let successCount = 0;
     let failCount = 0;
+    let duplicateCount = 0;
 
     for (let i = 0; i < filesToUpload.length; i++) {
       const file = filesToUpload[i];
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('category', 'general');
-      if (effectiveAccountKey) formData.append('accountKey', effectiveAccountKey);
-      if (currentFolderId) formData.append('folderId', currentFolderId);
+
+      const send = (allowDuplicate: boolean) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('category', 'general');
+
+        // 'account' = upload where the user is browsing. The OEM and global
+        // scopes are account-less by definition, and a folder belongs to exactly
+        // one scope — so the current folder only travels with the first case.
+        const scopedOem = uploadScope.startsWith('oem:') ? uploadScope.slice(4) : null;
+        if (uploadScope === 'account') {
+          if (effectiveAccountKey) formData.append('accountKey', effectiveAccountKey);
+          if (currentFolderId) formData.append('folderId', currentFolderId);
+        } else if (scopedOem) {
+          formData.append('oem', scopedOem);
+          formData.append('assetSource', 'oem-supplied');
+        }
+
+        if (allowDuplicate) formData.append('allowDuplicate', 'true');
+        return fetch('/api/media', { method: 'POST', body: formData });
+      };
 
       try {
-        const res = await fetch('/api/media', { method: 'POST', body: formData });
+        let res = await send(false);
+
+        // 409 = identical bytes already in this scope. Ask rather than decide:
+        // re-uploading a file that's already here is usually a mistake, but a
+        // deliberate second copy is a legitimate thing to want.
+        if (res.status === 409) {
+          const dup = await res.json().catch(() => null);
+          const keepGoing = await confirm({
+            title: 'This file is already here',
+            message:
+              dup?.message
+              || `"${file.name}" already exists in this location with identical contents.`,
+            confirmLabel: 'Upload anyway',
+            cancelLabel: 'Skip',
+          });
+          if (!keepGoing) {
+            duplicateCount++;
+            continue;
+          }
+          res = await send(true);
+        }
+
         const { ok, data, error } = await safeJson<{ file: MediaFile }>(res);
 
         if (ok && data?.file) {
@@ -997,7 +1144,12 @@ export default function MediaPage() {
       }
     }
 
-    if (uploadedFiles.length > 0) {
+    // Only merge into the visible list when the upload landed in the scope being
+    // viewed. An OEM- or Loomi-scoped upload lives somewhere else, and showing it
+    // here would imply it can be edited in place — which for a shared asset is
+    // exactly the wrong impression.
+    const landedInView = uploadScope === 'account';
+    if (uploadedFiles.length > 0 && landedInView) {
       if (showOverview && !effectiveAccountKey) {
         setAdminMediaFiles(prev => [...uploadedFiles, ...prev]);
         setAdminMediaTotal(prev => prev + uploadedFiles.length);
@@ -1006,7 +1158,15 @@ export default function MediaPage() {
       }
     }
     if (successCount > 0) {
-      toast.success(`Uploaded ${successCount} file${successCount > 1 ? 's' : ''}`);
+      const destination = uploadScopeOptions.find(o => o.value === uploadScope)?.label;
+      toast.success(
+        landedInView
+          ? `Uploaded ${successCount} file${successCount > 1 ? 's' : ''}`
+          : `Uploaded ${successCount} file${successCount > 1 ? 's' : ''} to ${destination}`,
+      );
+    }
+    if (duplicateCount > 0) {
+      toast.success(`Skipped ${duplicateCount} file${duplicateCount > 1 ? 's' : ''} already in this location`);
     }
     if (failCount > 0) {
       toast.error(`${failCount} upload${failCount > 1 ? 's' : ''} failed`);
@@ -1015,6 +1175,7 @@ export default function MediaPage() {
     setUploading(false);
     setShowUploadModal(false);
     setStagedFiles([]);
+    setUploadScope('account');
 
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -1109,7 +1270,9 @@ export default function MediaPage() {
       const nextAlt: string | null = trimmedAlt.length === 0 ? null : trimmedAlt;
       const currentAlt = renameFile.altText ?? null;
 
-      const body: Record<string, unknown> = {};
+      const body: Record<string, unknown> = {
+        ...assetMetadataDiff(renameMetadata, renameMetadataInitial),
+      };
       if (renameValue.trim() !== renameFile.name) {
         body.name = renameValue.trim();
       }
@@ -1952,7 +2115,14 @@ export default function MediaPage() {
                       onPreview={() => setPreviewFile(f)}
                       onCopyUrl={() => copyUrl(f.url)}
                       onDownload={() => downloadFile(f.url, f.name)}
-                      onRename={() => { setRenameValue(f.name); setRenameAltValue(f.altText ?? ''); setRenameFile(f); }}
+                      onRename={() => {
+                        setRenameValue(f.name);
+                        setRenameAltValue(f.altText ?? '');
+                        const meta = assetMetadataFrom(f);
+                        setRenameMetadata(meta);
+                        setRenameMetadataInitial(meta);
+                        setRenameFile(f);
+                      }}
                       onDelete={() => setDeleteFile(f)}
                     />
                   );
@@ -2232,7 +2402,14 @@ export default function MediaPage() {
                     onCopyUrl={() => copyUrl(f.url)}
                     onDownload={() => downloadFile(f.url, f.name)}
                     onMove={capabilities?.canMove ? () => openMoveModal([{ id: f.id, type: 'file', name: f.name }]) : undefined}
-                    onRename={capabilities?.canRename ? () => { setRenameValue(f.name); setRenameAltValue(f.altText ?? ''); setRenameFile(f); } : undefined}
+                    onRename={capabilities?.canRename ? () => {
+                      setRenameValue(f.name);
+                      setRenameAltValue(f.altText ?? '');
+                      const meta = assetMetadataFrom(f);
+                      setRenameMetadata(meta);
+                      setRenameMetadataInitial(meta);
+                      setRenameFile(f);
+                    } : undefined}
                     onDelete={capabilities?.canDelete ? () => setDeleteFile(f) : undefined}
                   />
                 );
@@ -2415,11 +2592,11 @@ export default function MediaPage() {
       {/* ── Edit details Modal (filename + alt text) ── */}
       {renameFile && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in" onClick={() => setRenameFile(null)}>
-          <div className="glass-modal w-[480px]" onClick={(e) => e.stopPropagation()}>
+          <div className="glass-modal w-[560px] max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-[var(--border)]">
               <h3 className="text-base font-semibold">Edit file details</h3>
             </div>
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-4 overflow-y-auto">
               <div>
                 <label className="block text-sm text-[var(--muted-foreground)] mb-2">File name</label>
                 <input
@@ -2448,6 +2625,16 @@ export default function MediaPage() {
                 <p className="text-[11px] text-[var(--muted-foreground)] mt-1.5">
                   Used as the default <code className="font-mono">alt</code> when this image is inserted into HTML or emails. Leave empty to clear.
                 </p>
+              </div>
+
+              <div className="pt-2 border-t border-[var(--border)]">
+                <h4 className="text-sm font-semibold mb-3">Classification</h4>
+                <AssetMetadataFields
+                  value={renameMetadata}
+                  onChange={setRenameMetadata}
+                  accountBrands={accountBrands}
+                  disabled={renaming}
+                />
               </div>
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--border)]">
@@ -2576,6 +2763,37 @@ export default function MediaPage() {
               </button>
             </div>
             <div className="p-5 space-y-4">
+              {/* Destination. Only shown when there's a real choice to make —
+                  a non-admin always uploads to their own account. */}
+              {uploadScopeOptions.length > 1 && (
+                <div>
+                  <label className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] mb-2">
+                    Upload to
+                    <HelpTip title="Upload destination">
+                      <p>
+                        <strong>This sub-account</strong> keeps the file private to the
+                        account you&apos;re viewing.
+                      </p>
+                      <p className="mt-2">
+                        <strong>Shared</strong> stores it once against the brand — every
+                        sub-account carrying that brand sees it, instead of it being
+                        uploaded per rooftop.
+                      </p>
+                      <p className="mt-2">
+                        <strong>Loomi library</strong> is for brand-agnostic assets used
+                        across every account.
+                      </p>
+                    </HelpTip>
+                  </label>
+                  <Select
+                    value={uploadScope}
+                    onChange={setUploadScope}
+                    options={uploadScopeOptions}
+                    previewFont={false}
+                  />
+                </div>
+              )}
+
               {/* Drop zone */}
               <div
                 className={`border-2 border-dashed rounded-xl ${stagedFiles.length > 0 ? 'p-5' : 'p-10'} text-center transition-all cursor-pointer ${

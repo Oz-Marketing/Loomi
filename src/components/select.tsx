@@ -116,7 +116,10 @@ export function Select({
                   autoFocus
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search fonts…"
+                  // `previewFont` is the only signal this component has for
+                  // whether it's listing fonts. Any other option set (brands,
+                  // categories) showed "Search fonts…" before this.
+                  placeholder={previewFont ? 'Search fonts…' : 'Search…'}
                   className="w-full rounded-md border border-[var(--border)] bg-[var(--input)] py-1.5 pl-8 pr-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
                 />
               </div>

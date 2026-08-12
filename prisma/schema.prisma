@@ -1746,8 +1746,10 @@ model MediaAsset {
   height       Int? // image-only
   thumbnailKey String? // "media/_admin/{id}/thumb.webp"
   altText      String? // accessible alt text for images — used as the default alt= when inserting <img> from the picker, editable across the media library
+  // Which media-picker tab this appears under. NOT the DAM taxonomy — see
+  // `assetCategory` below, and lib/media-metadata.ts for why they stay separate.
   category     String? // "brand" | "ad-creative" | "oem" | "general" | "texture"
-  tags         String? // JSON string[] for future DAM filtering
+  tags         String? // JSON string[] — free-form keywords (Phase 2 surfaces them)
   folderId     String? // null = the account's root; else a MediaFolder in the same scope
   folder       MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
   uploadedBy   String? // User ID
@@ -1755,11 +1757,60 @@ model MediaAsset {
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
+  // ── DAM metadata (docs/asset-management.md Phase 1) ──
+  //
+  // All nullable and additive, so this reaches every environment through the
+  // `prisma db push` the deploy already runs, and every pre-existing asset stays
+  // exactly as visible as it was.
+
+  /// OEM scope. Set WITH a null accountKey = a manufacturer-shared asset, visible
+  /// to every account carrying that brand (see getEffectiveMediaForAccount).
+  /// Set alongside an accountKey it is descriptive only — "this rooftop asset is
+  /// Audi's" — and does not widen visibility.
+  ///
+  /// This is the column the whole phase exists for: without it, an OEM asset used
+  /// by six rooftops has to be uploaded six times.
+  oem            String? // normalized against lib/oems.ts
+  /// Where the asset came from — lib/media-metadata.ts ASSET_SOURCES. Drives the
+  /// card badge now and the rights defaults in Phase 3.
+  ///
+  /// Named `assetSource`, not `source`, because the API payload's `source` is
+  /// already the storage discriminator ('esp' | 's3') that the media UI reads.
+  /// Two different meanings under one name is a bug waiting to happen.
+  assetSource    String?
+  /// The DAM taxonomy value — ASSET_CATEGORIES. Distinct from `category`.
+  assetCategory  String?
+  /// JSON string[] of 4-digit years. An array because an OEM template package
+  /// legitimately spans model years ("MY25_MY26") and collapsing it loses that.
+  modelYear      String?
+  /// JSON string[] of vehicle model names.
+  vehicleModel   String?
+  /// Who owns the rights, e.g. "Audi of America". Free text in Phase 1; Phase 3
+  /// adds the structured licence window this is the human-readable half of.
+  rightsHolder   String?
+  /// Derivative lineage: a crop/resize/duplicate points at the master it came
+  /// from, so "which assets derive from this?" is answerable. No FK relation —
+  /// deleting a master must not cascade away its derivatives, which may be the
+  /// only approved copies in use.
+  parentAssetId  String?
+  /// sha256 of the uploaded bytes. Powers duplicate detection on upload — the
+  /// same job contentHash does on AdGuidelineDoc.
+  ///
+  /// Deliberately NOT unique: the same file legitimately exists under two scopes
+  /// (an OEM master and a rooftop's own copy), and a unique constraint would also
+  /// fail `db push` on any environment already holding duplicates.
+  contentHash    String?
+
   @@unique([s3Key])
   @@index([accountKey, createdAt])
   @@index([accountKey, category])
   @@index([accountKey, folderId])
   @@index([accountKey, archivedAt])
+  // OEM-scope reads: "every Audi asset that isn't archived".
+  @@index([oem, archivedAt])
+  // Duplicate lookup on upload.
+  @@index([contentHash])
+  @@index([parentAssetId])
 }
 
 // A user-created folder for organizing media within a scope (an account, or the

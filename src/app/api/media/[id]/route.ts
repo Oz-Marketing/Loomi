@@ -1,7 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
-import { s3PublicUrl, deleteFromS3 } from '@/lib/s3';
+import { deleteFromS3 } from '@/lib/s3';
+import {
+  buildAssetMetadata,
+  serializeMediaAsset,
+  type AssetMetadataData,
+} from '@/lib/services/media';
+
+/** The DAM metadata keys PATCH accepts. */
+const METADATA_KEYS = [
+  'oem',
+  'assetSource',
+  'assetCategory',
+  'modelYear',
+  'vehicleModel',
+  'rightsHolder',
+  'tags',
+] as const;
 
 // ── Access helpers ──
 
@@ -29,6 +45,8 @@ function checkAccess(
  *   - name: string — display filename
  *   - altText: string | null — accessible alt text; pass null/'' to clear
  *   - folderId: string | null — move to a folder ('root'/null = the scope root)
+ *   - oem, assetSource, assetCategory, modelYear, vehicleModel, rightsHolder,
+ *     tags — DAM metadata; null/'' clears, absent leaves untouched
  */
 export async function PATCH(
   req: NextRequest,
@@ -40,7 +58,26 @@ export async function PATCH(
   const { id } = await params;
   const body = await req.json().catch(() => ({}));
 
-  const data: { filename?: string; altText?: string | null; folderId?: string | null; archivedAt?: Date | null } = {};
+  const data: {
+    filename?: string;
+    altText?: string | null;
+    folderId?: string | null;
+    archivedAt?: Date | null;
+  } & AssetMetadataData = {};
+
+  // DAM metadata — only keys actually present in the body are touched, which is
+  // what keeps this a sparse PATCH.
+  const metadataInput: Record<string, unknown> = {};
+  for (const key of METADATA_KEYS) {
+    if (key in body) metadataInput[key] = body[key];
+  }
+  if (Object.keys(metadataInput).length > 0) {
+    const result = buildAssetMetadata(metadataInput);
+    if ('error' in result) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    Object.assign(data, result.data);
+  }
 
   if (body.archived !== undefined) {
     if (typeof body.archived !== 'boolean') {
@@ -96,25 +133,7 @@ export async function PATCH(
 
   const updated = await prisma.mediaAsset.update({ where: { id }, data });
 
-  return NextResponse.json({
-    file: {
-      id: updated.id,
-      name: updated.filename,
-      url: s3PublicUrl(updated.s3Key),
-      type: updated.mimeType,
-      size: updated.size,
-      width: updated.width,
-      height: updated.height,
-      thumbnailUrl: updated.thumbnailKey ? s3PublicUrl(updated.thumbnailKey) : undefined,
-      altText: updated.altText,
-      category: updated.category,
-      folderId: updated.folderId,
-      archivedAt: updated.archivedAt ? updated.archivedAt.toISOString() : null,
-      createdAt: updated.createdAt.toISOString(),
-      updatedAt: updated.updatedAt.toISOString(),
-      source: 's3' as const,
-    },
-  });
+  return NextResponse.json({ file: serializeMediaAsset(updated) });
 }
 
 /**

@@ -45,6 +45,8 @@ export interface MediaExpirationResult {
   warned: { id: string; filename: string; accountKey: string | null; days: number }[];
   /** Rows examined — separates "nothing due" from "the sweep didn't run". */
   scanned: number;
+  /** The MediaSweepRun row recording this sweep, or null if it couldn't be written. */
+  runId: string | null;
 }
 
 /** The columns the sweep reads. Narrow on purpose: this scans every account. */
@@ -71,7 +73,8 @@ export async function sweepMediaExpiration(
   accountKey?: string,
   now = new Date(),
 ): Promise<MediaExpirationResult> {
-  const result: MediaExpirationResult = { expired: [], warned: [], scanned: 0 };
+  const started = new Date();
+  const result: MediaExpirationResult = { expired: [], warned: [], scanned: 0, runId: null };
 
   // Only rows that carry at least one date can do anything. The widest warning
   // threshold bounds the lookahead, so this stays a narrow index scan rather
@@ -105,7 +108,17 @@ export async function sweepMediaExpiration(
   } catch (err) {
     // Same posture as the rest of the DAM work: an environment that hasn't taken
     // the migration yet degrades to a no-op instead of crashing the worker.
+    //
+    // But it still gets a row. A sweep that failed and a sweep that found nothing
+    // must not look identical — that indistinguishability is the whole reason
+    // this heartbeat exists, and it applies most of all to the failure path.
     console.warn('[media-expiration] lookup failed:', err);
+    result.runId = await recordRun(
+      started,
+      accountKey ?? null,
+      result,
+      err instanceof Error ? err.message : String(err),
+    );
     return result;
   }
 
@@ -159,8 +172,45 @@ export async function sweepMediaExpiration(
     }
   }
 
+  // Written BEFORE notifying: a notification failure must not cost us the record
+  // of what the sweep actually did.
+  result.runId = await recordRun(started, accountKey ?? null, result, null);
+
   await notifyRightsEvents(result);
   return result;
+}
+
+/**
+ * Write the heartbeat.
+ *
+ * Best-effort and never throws: failing to record a sweep is bad, but taking the
+ * worker down over it is worse. An environment that hasn't taken the migration
+ * yet simply gets no row, which is the same degradation the lookup above uses.
+ */
+async function recordRun(
+  startedAt: Date,
+  accountKey: string | null,
+  result: MediaExpirationResult,
+  error: string | null,
+): Promise<string | null> {
+  try {
+    const run = await prisma.mediaSweepRun.create({
+      data: {
+        accountKey,
+        startedAt,
+        finishedAt: new Date(),
+        scanned: result.scanned,
+        expiredCount: result.expired.length,
+        warnedCount: result.warned.length,
+        detail: JSON.stringify({ expired: result.expired, warned: result.warned }),
+        error,
+      },
+    });
+    return run.id;
+  } catch (err) {
+    console.warn('[media-expiration] could not record run:', err);
+    return null;
+  }
 }
 
 /**

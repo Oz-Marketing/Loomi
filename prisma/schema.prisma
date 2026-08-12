@@ -1933,6 +1933,45 @@ model MediaAsset {
   @@index([expiresAt])
 }
 
+// One run of the media rights expiration sweep — its heartbeat.
+//
+// Written on EVERY run, including a run that found nothing, because "no licences
+// expired today" and "the sweep stopped running three weeks ago" are
+// indistinguishable without a row. That is the same reason expire-ads.ts records
+// an AdAutomationRun, and the reason this exists at all: the sweep shipped
+// without it, so a job that silently died would have looked exactly like a quiet
+// one.
+//
+// A separate table rather than reusing AdAutomationRun: that table is the Ad
+// Generator's heartbeat and shadow-report.ts reads it with no `kind` filter, so
+// media rows would surface as phantom entries in the generator's run history.
+// Per-domain run tables are the established shape here — see IngestRun.
+model MediaSweepRun {
+  id String @id @default(cuid())
+
+  /// null = the scheduled sweep across every account; set for an on-demand run.
+  accountKey String?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  /// Rows examined. Zero with no error means the sweep ran and nothing was due —
+  /// which is the normal, healthy case and must be distinguishable from absence.
+  scanned      Int @default(0)
+  expiredCount Int @default(0)
+  warnedCount  Int @default(0)
+
+  /// JSON: what expired and what was warned, so "why did this asset get pulled?"
+  /// is answerable after the fact.
+  detail String? @db.Text
+  /// Set when the sweep itself failed. A failed run still gets a row — an error
+  /// nobody can see is the failure mode this table exists to prevent.
+  error  String? @db.Text
+
+  @@index([startedAt])
+  @@index([accountKey, startedAt])
+}
+
 // A generated derivative of a MediaAsset at a platform size — Phase 4 of
 // docs/asset-management.md (§8, Automatic Processing).
 //

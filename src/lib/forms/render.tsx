@@ -8,7 +8,7 @@
  * any modern browser without server-side rendering tricks.
  */
 import * as React from 'react';
-import type { Block, FormTemplate } from './types';
+import { formContentMaxWidth, type Block, type FormTemplate } from './types';
 import { BLOCK_COMPONENTS } from './components';
 import {
   blockHasResponsive,
@@ -53,7 +53,7 @@ export function FormRenderer({ template, options }: FormRendererProps) {
       >
         <div
           style={{
-            maxWidth: `${s.contentWidth}px`,
+            maxWidth: formContentMaxWidth(s),
             margin: '0 auto',
             backgroundColor: s.contentBg,
             borderRadius: s.contentBorderRadius ?? 12,
@@ -113,6 +113,13 @@ function RenderedBlock({ block }: { block: Block }) {
     const name = String(block.props.name ?? '').trim();
     if (!name) return null;
     return <input type="hidden" name={name} defaultValue={String(block.props.value ?? '')} />;
+  }
+
+  // An empty Custom HTML block renders an editor-only "paste markup
+  // here" placeholder. That's a design affordance, not content — drop
+  // the block entirely on the live form.
+  if (block.type === 'html' && !String(block.props.html ?? '').trim()) {
+    return null;
   }
 
   // Field blocks: surface the error inline directly under the input.

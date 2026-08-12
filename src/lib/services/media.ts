@@ -122,7 +122,23 @@ export async function getAccountBrands(accountKey: string): Promise<string[]> {
     select: { oem: true, oems: true },
   });
   if (!account) return [];
-  return getAccountOems({ oem: account.oem, oems: coerceList(account.oems) });
+  return brandsOfAccountRow(account);
+}
+
+/**
+ * Brands from a raw Account ROW — `oem` ∪ `oems`, normalized.
+ *
+ * Exists because `Account.oems` is a JSON STRING in the database while
+ * `getAccountOems` expects an already-parsed array: every pre-existing caller was
+ * client-side, where the API had parsed it first. Calling it with a raw row
+ * yields brand names like `["Honda"]` and `"Can-Am"` — literal JSON fragments.
+ *
+ * That bug was fixed once at a call site and then reintroduced verbatim by the
+ * next server-side reader, which is the signal it belonged in one function rather
+ * than in each caller's memory. Anything reading brands off a DB row uses this.
+ */
+export function brandsOfAccountRow(row: { oem: string | null; oems: string | null }): string[] {
+  return getAccountOems({ oem: row.oem, oems: coerceList(row.oems) });
 }
 
 /** The scopes that make up an account's effective media set. */

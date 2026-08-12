@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildAssetMetadata, effectiveMediaWhere } from './media';
+import { brandsOfAccountRow, buildAssetMetadata, effectiveMediaWhere } from './media';
 
 // Pure functions only — the query helpers around them are exercised against a
 // real database under RUN_DB_TESTS.
@@ -219,5 +219,33 @@ describe('upload accepts everything the batch form collects', () => {
       modelYear: '["2025","2026"]',
     });
     expect(result.data.licenseExpiresAt).toEqual(new Date('2027-08-31T00:00:00.000Z'));
+  });
+});
+
+describe('brandsOfAccountRow', () => {
+  it('parses the JSON-string oems column', () => {
+    // The trap: Account.oems is a JSON string in the database, so handing the raw
+    // row to getAccountOems produces the literal token `["Honda"]` as a marque.
+    // Fixed once at a call site, then reintroduced by the next server-side
+    // reader — hence one function.
+    expect(brandsOfAccountRow({ oem: null, oems: '["Honda","Acura"]' })).toEqual(['Honda', 'Acura']);
+  });
+
+  it('unions oem and oems without duplicating', () => {
+    expect(brandsOfAccountRow({ oem: 'Honda', oems: '["Honda","Acura"]' })).toEqual(['Honda', 'Acura']);
+  });
+
+  it('handles the single-brand and empty cases', () => {
+    expect(brandsOfAccountRow({ oem: 'Subaru', oems: null })).toEqual(['Subaru']);
+    expect(brandsOfAccountRow({ oem: null, oems: null })).toEqual([]);
+    expect(brandsOfAccountRow({ oem: null, oems: '[]' })).toEqual([]);
+  });
+
+  it('canonicalizes case', () => {
+    expect(brandsOfAccountRow({ oem: 'honda', oems: null })).toEqual(['Honda']);
+  });
+
+  it('survives a malformed oems column rather than throwing', () => {
+    expect(brandsOfAccountRow({ oem: 'Honda', oems: 'not json' })).toContain('Honda');
   });
 });

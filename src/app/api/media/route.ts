@@ -144,7 +144,14 @@ export async function GET(req: NextRequest) {
         accountKey: accountKey === null ? { equals: null as string | null } : accountKey,
         ...(category ? { category } : {}),
         ...(assetCategory ? { assetCategory } : {}),
-        ...(oem ? { oem } : {}),
+        // `oem=none` asks for brand-AGNOSTIC assets specifically, which is a
+        // different question from omitting the filter (any brand, or none). The
+        // OEM library rail needs to distinguish them.
+        ...(oem === 'none'
+          ? { oem: { equals: null as string | null } }
+          : oem
+            ? { oem }
+            : {}),
         ...(assetSource ? { assetSource } : {}),
         ...(status ? { status } : {}),
         ...(folderParam === null ? {} : { folderId: folderParam === 'root' ? { equals: null as string | null } : folderParam }),

@@ -41,6 +41,7 @@ import BulkActionDock from '@/components/bulk-action-dock';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { RenditionPanel } from '@/components/media/rendition-panel';
 import { RightsActivityPanel } from '@/components/media/rights-activity-panel';
+import { OemBrandRail } from '@/components/media/oem-brand-rail';
 import { ApprovalPanel } from '@/components/media/approval-panel';
 import {
   AssetMetadataFields,
@@ -901,7 +902,15 @@ export default function MediaPage() {
   const [overviewData, setOverviewData] = useState<Record<string, AccountMediaPreview>>({});
   const [overviewLoaded, setOverviewLoaded] = useState(false);
   const [overviewSearch, setOverviewSearch] = useState('');
-  const [overviewTab, setOverviewTab] = useState<'subaccounts' | 'loomi' | 'rights'>('subaccounts');
+  const [overviewTab, setOverviewTab] = useState<'subaccounts' | 'loomi' | 'oem' | 'rights'>('subaccounts');
+  /**
+   * Which shared library the OEM tab is showing. null = brand-agnostic (global).
+   * Drives the same admin grid as the Loomi tab via the `oem` query param, so
+   * selection, bulk actions and the preview all work without a second grid.
+   */
+  const [oemScope, setOemScope] = useState<string | null>(null);
+  /** Bumped after an upload so the rail's counts re-fetch. */
+  const [oemRailKey, setOemRailKey] = useState(0);
   // ── Admin S3 media state ──
   const [adminMediaFiles, setAdminMediaFiles] = useState<MediaFile[]>([]);
   const [adminMediaTotal, setAdminMediaTotal] = useState(0);
@@ -966,6 +975,9 @@ export default function MediaPage() {
   // Consumers can't upload, so the whole-page drop target would be a lie.
   const canDropUploadFiles = !isConsumer && (showOverview || !!effectiveAccountKey);
   const isLoomiOverviewTab = showOverview && overviewTab === 'loomi';
+  const isOemOverviewTab = showOverview && overviewTab === 'oem';
+  /** Both admin tabs render the same grid — only the filter differs. */
+  const isAdminGridTab = isLoomiOverviewTab || isOemOverviewTab;
   const isSubAccountOverviewTab = showOverview && overviewTab === 'subaccounts';
 
   // All account keys (sorted)
@@ -1110,13 +1122,17 @@ export default function MediaPage() {
 
   // ── Admin S3 Media Loading ──
 
-  const loadAdminMedia = useCallback(async (searchQuery?: string) => {
+  const loadAdminMedia = useCallback(async (searchQuery?: string, oemFilter?: string | null | 'any') => {
     if (!isAdmin) return;
     setAdminMediaLoading(true);
 
     try {
       const params = new URLSearchParams({ limit: '50' });
       if (searchQuery?.trim()) params.set('search', searchQuery.trim());
+      // 'any' = the Loomi tab (every admin-level asset). A brand name or null
+      // narrows to one shared library, where null means brand-agnostic — hence
+      // `oem=none` rather than omitting the param.
+      if (oemFilter !== 'any') params.set('oem', oemFilter ?? 'none');
 
       const res = await fetch(`/api/media?${params.toString()}`);
       const data = await res.json();
@@ -1136,12 +1152,14 @@ export default function MediaPage() {
 
   useEffect(() => {
     if (showOverview) {
-      loadAdminMedia();
+      loadAdminMedia(undefined, overviewTab === 'oem' ? oemScope : 'any');
     } else {
       setAdminMediaFiles([]);
       setAdminMediaTotal(0);
     }
-  }, [showOverview, loadAdminMedia]);
+    // overviewTab + oemScope are dependencies: switching brands has to refetch,
+    // or the grid keeps showing the previous library's assets.
+  }, [showOverview, loadAdminMedia, overviewTab, oemScope]);
 
   // ── Single-Account Data Loading ──
 
@@ -1487,6 +1505,13 @@ export default function MediaPage() {
     setShowUploadMetadata(false);
     setArchives({});
     setUnpackChoice({});
+    // The rail's per-brand counts are now wrong, and if the upload landed in the
+    // library on screen the grid needs it too — an asset that doesn't appear
+    // where you just put it reads as a failed upload.
+    if (isOemOverviewTab) {
+      setOemRailKey((k) => k + 1);
+      loadAdminMedia(undefined, oemScope);
+    }
 
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -2416,6 +2441,9 @@ export default function MediaPage() {
               <PrimaryButton
                 onClick={() => {
                   setStagedFiles([]);
+                  // Uploading while looking at Audi's library should go to Audi's
+                  // library. Anywhere else keeps the previous default.
+                  setUploadScope(isOemOverviewTab && oemScope ? `oem:${oemScope}` : 'account');
                   setShowUploadModal(true);
                 }}
                 disabled={uploading}
@@ -2519,6 +2547,16 @@ export default function MediaPage() {
               Loomi Media
             </button>
             <button
+              onClick={() => setOverviewTab('oem')}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                overviewTab === 'oem'
+                  ? 'border-[var(--primary)] text-[var(--primary)]'
+                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              OEM Libraries
+            </button>
+            <button
               onClick={() => setOverviewTab('rights')}
               className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
                 overviewTab === 'rights'
@@ -2535,6 +2573,15 @@ export default function MediaPage() {
               the toolbar and grid below don't apply to it. */}
           {overviewTab === 'rights' && <RightsActivityPanel />}
 
+          {/* OEM libraries — pick a shared library, then the grid below shows it.
+              Above the grid rather than beside it so the asset area keeps the full
+              width it already had. */}
+          {isOemOverviewTab && (
+            <div className="mb-4 rounded-xl border border-[var(--border)] p-4">
+              <OemBrandRail selected={oemScope} onSelect={setOemScope} refreshKey={oemRailKey} />
+            </div>
+          )}
+
           {/* Overview toolbar: search + buttons */}
           {overviewTab !== 'rights' && (
             <div className="flex items-center justify-between mb-4 gap-3">
@@ -2545,14 +2592,14 @@ export default function MediaPage() {
                   value={overviewSearch}
                   onChange={(e) => setOverviewSearch(e.target.value)}
                   className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg pl-9 pr-3 py-2 text-[var(--foreground)]"
-                  placeholder={isLoomiOverviewTab ? 'Search Loomi media...' : 'Search sub-accounts...'}
+                  placeholder={isOemOverviewTab ? `Search ${oemScope ?? 'brand-agnostic'} assets...` : isLoomiOverviewTab ? 'Search Loomi media...' : 'Search sub-accounts...'}
                 />
               </div>
             </div>
           )}
 
           {/* ── Loomi Media Library section ── */}
-          {isLoomiOverviewTab && adminMediaLoading && adminMediaFiles.length === 0 && (
+          {isAdminGridTab && adminMediaLoading && adminMediaFiles.length === 0 && (
             <div className="mb-8">
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3">
                 {[1, 2, 3, 4].map(i => (
@@ -2568,7 +2615,7 @@ export default function MediaPage() {
             </div>
           )}
 
-          {isLoomiOverviewTab && !adminMediaLoading && filteredAdminMedia.length > 0 && (
+          {isAdminGridTab && !adminMediaLoading && filteredAdminMedia.length > 0 && (
             <div className="mb-8">
               <div className="flex items-center justify-end mb-3">
                 <p className="text-xs text-[var(--muted-foreground)]">
@@ -2611,7 +2658,7 @@ export default function MediaPage() {
             </div>
           )}
 
-          {isLoomiOverviewTab && !adminMediaLoading && filteredAdminMedia.length === 0 && (
+          {isAdminGridTab && !adminMediaLoading && filteredAdminMedia.length === 0 && (
             <div className="text-center py-16 text-[var(--muted-foreground)]">
               <PhotoIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
               <p className="text-sm font-medium mb-1">
@@ -2976,7 +3023,7 @@ export default function MediaPage() {
       {/* Docks, modals and the drop overlay sit OUTSIDE the scroll container so
           they anchor to the viewport rather than to the scrolled content. */}
 
-      {showOverview && isLoomiOverviewTab && selectionActive && (
+      {showOverview && isAdminGridTab && selectionActive && (
         <BulkActionDock
           count={selectedIds.size}
           itemLabel="files"

@@ -51,6 +51,12 @@ import {
 } from '@/components/media/asset-metadata-fields';
 import { assetSourceLabel } from '@/lib/media-metadata';
 import { MAX_UPLOAD_BYTES, checkUploadSize, formatBytes } from '@/lib/media-limits';
+import {
+  extractArchive,
+  inspectArchive,
+  isZip,
+  type ArchiveInspection,
+} from '@/lib/media-archive';
 import { rightsBadgeLabel, type RightsAssessment } from '@/lib/media-rights';
 import type { MediaPreflight } from '@/lib/media-preflight';
 import {
@@ -768,6 +774,15 @@ export default function MediaPage() {
    * OEM-supplied, all templates. Per-file editing already exists in the asset
    * drawer for the exceptions.
    */
+  /**
+   * Zip inspection, keyed by staged-file fingerprint. OEM portals hand out one
+   * zip per campaign, so an archive is the normal shape of an import, not an
+   * edge case.
+   */
+  const [archives, setArchives] = useState<Record<string, ArchiveInspection>>({});
+  /** Per-zip choice. Seeded from the recommendation; the person can override. */
+  const [unpackChoice, setUnpackChoice] = useState<Record<string, boolean>>({});
+
   const [uploadMetadata, setUploadMetadata] = useState<AssetMetadataValue>(EMPTY_ASSET_METADATA);
   const [showUploadMetadata, setShowUploadMetadata] = useState(false);
 
@@ -1271,13 +1286,72 @@ export default function MediaPage() {
       }
       return merged;
     });
+
+    // Inspect archives as they're staged, so the choice is on screen before
+    // anyone commits to an upload. Reading the table of contents doesn't
+    // decompress anything, so this is cheap even for a large zip.
+    for (const file of valid) {
+      if (!isZip(file)) continue;
+      const key = stagedFileKey(file);
+      inspectArchive(file)
+        .then((inspection) => {
+          setArchives((prev) => ({ ...prev, [key]: inspection }));
+          // Seed the choice from the recommendation. A package defaults to
+          // staying whole — shredding a runnable template is the expensive
+          // mistake, and it's the one that isn't obvious afterwards.
+          setUnpackChoice((prev) => ({
+            ...prev,
+            [key]: inspection.kind === 'collection' && !inspection.error,
+          }));
+        })
+        .catch(() => {
+          /* a zip we can't read just uploads as a file, which is the old behaviour */
+        });
+    }
   }, []);
 
   const handleUpload = async (files?: File[]) => {
-    const filesToUpload = files ?? stagedFiles;
-    if (filesToUpload.length === 0) return;
+    const staged = files ?? stagedFiles;
+    if (staged.length === 0) return;
 
     setUploading(true);
+
+    /**
+     * Expand any archive the person chose to unpack.
+     *
+     * Extraction happens HERE rather than server-side so every extracted file
+     * goes through the ordinary upload endpoint — inheriting content-hash
+     * dedupe, thumbnails, size limits and the batch metadata without any of it
+     * being reimplemented for archives.
+     */
+    const filesToUpload: File[] = [];
+    let skippedInArchives = 0;
+    for (const file of staged) {
+      const key = stagedFileKey(file);
+      if (!isZip(file) || !unpackChoice[key]) {
+        filesToUpload.push(file);
+        continue;
+      }
+      try {
+        const { files: extracted, skipped } = await extractArchive(file);
+        if (extracted.length === 0) {
+          // Nothing usable inside — keep the archive rather than silently
+          // uploading nothing at all.
+          toast.error(`${file.name}: nothing could be extracted, uploading as a file`);
+          filesToUpload.push(file);
+          continue;
+        }
+        filesToUpload.push(...extracted);
+        skippedInArchives += skipped.length;
+      } catch {
+        toast.error(`${file.name}: could not be unpacked, uploading as a file`);
+        filesToUpload.push(file);
+      }
+    }
+
+    if (skippedInArchives > 0) {
+      toast.success(`Skipped ${skippedInArchives} system file${skippedInArchives > 1 ? 's' : ''} inside the archive${staged.length > 1 ? 's' : ''}`);
+    }
     const uploadedFiles: MediaFile[] = [];
     let successCount = 0;
     let failCount = 0;
@@ -1393,6 +1467,8 @@ export default function MediaPage() {
     setUploadScope('account');
     setUploadMetadata(EMPTY_ASSET_METADATA);
     setShowUploadMetadata(false);
+    setArchives({});
+    setUnpackChoice({});
 
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -3310,6 +3386,85 @@ export default function MediaPage() {
                   )}
                 </div>
               )}
+
+              {/* Archives — what's inside, and whether to unpack. Shown before
+                  the file list because the choice changes what gets uploaded. */}
+              {stagedFiles.filter(isZip).map((file) => {
+                const key = stagedFileKey(file);
+                const info = archives[key];
+                if (!info) {
+                  return (
+                    <div key={key} className="rounded-lg border border-[var(--border)] px-3 py-2 text-[11px] text-[var(--muted-foreground)]">
+                      Reading {file.name}…
+                    </div>
+                  );
+                }
+                if (info.error) {
+                  return (
+                    <div key={key} className="rounded-lg border border-[var(--border)] px-3 py-2">
+                      <p className="text-xs font-medium text-[var(--foreground)]">{file.name}</p>
+                      <p className="mt-0.5 text-[11px] text-amber-400">{info.error}</p>
+                      <p className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">
+                        It will be uploaded as a single file.
+                      </p>
+                    </div>
+                  );
+                }
+                const unpack = unpackChoice[key] ?? false;
+                return (
+                  <div key={key} className="rounded-lg border border-[var(--border)] p-3">
+                    <p className="text-xs font-medium text-[var(--foreground)]">{file.name}</p>
+                    <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">{info.reason}</p>
+
+                    <div className="mt-2 flex items-center rounded-lg border border-[var(--border)] p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setUnpackChoice((prev) => ({ ...prev, [key]: true }))}
+                        className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                          unpack ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                        }`}
+                      >
+                        Unpack {info.entries.length} file{info.entries.length === 1 ? '' : 's'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setUnpackChoice((prev) => ({ ...prev, [key]: false }))}
+                        className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                          !unpack ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                        }`}
+                      >
+                        Keep as one file
+                      </button>
+                    </div>
+
+                    {unpack && info.kind === 'package' && (
+                      // Overriding the recommendation on a bundle is the case
+                      // worth naming out loud — the fragments are individually
+                      // useless and the package is what someone actually needs.
+                      <p className="mt-1.5 text-[10px] leading-snug text-amber-400">
+                        This looks like a template package whose files reference each other.
+                        Unpacking will store the pieces separately and the package won&apos;t be usable.
+                      </p>
+                    )}
+
+                    {unpack && (
+                      <ul className="mt-2 max-h-24 space-y-0.5 overflow-y-auto">
+                        {info.entries.slice(0, 40).map((e) => (
+                          <li key={e.path} className="flex items-center gap-2 text-[10px] text-[var(--muted-foreground)]">
+                            <span className="min-w-0 flex-1 truncate">{e.name}</span>
+                            <span className="shrink-0 tabular-nums">{formatBytes(e.bytes)}</span>
+                          </li>
+                        ))}
+                        {info.entries.length > 40 && (
+                          <li className="text-[10px] text-[var(--muted-foreground)]">
+                            …and {info.entries.length - 40} more
+                          </li>
+                        )}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
 
               {/* Staged files list */}
               {stagedFiles.length > 0 && !uploading && (

@@ -46,6 +46,7 @@ import {
   EMPTY_ASSET_METADATA,
   assetMetadataDiff,
   assetMetadataFrom,
+  assetMetadataToFormFields,
   type AssetMetadataValue,
 } from '@/components/media/asset-metadata-fields';
 import { assetSourceLabel } from '@/lib/media-metadata';
@@ -1305,13 +1306,12 @@ export default function MediaPage() {
         // person didn't choose one — an upload to "all Audi sub-accounts" is
         // Audi and OEM-supplied unless they said otherwise — but an explicit
         // choice is never overwritten.
-        const meta: Record<string, string> = {
-          oem: uploadMetadata.oem || scopedOem || '',
-          assetSource: uploadMetadata.assetSource || (scopedOem ? 'oem-supplied' : ''),
-          assetCategory: uploadMetadata.assetCategory,
-          rightsHolder: uploadMetadata.rightsHolder,
-          modelYear: uploadMetadata.modelYear.join(','),
-          tags: uploadMetadata.tags.join(','),
+        const meta = {
+          ...assetMetadataToFormFields(uploadMetadata),
+          // The destination's implied values fill in where the person didn't
+          // choose one; an explicit choice is never overwritten.
+          ...(scopedOem && !uploadMetadata.oem ? { oem: scopedOem } : {}),
+          ...(scopedOem && !uploadMetadata.assetSource ? { assetSource: 'oem-supplied' } : {}),
         };
         for (const [key, value] of Object.entries(meta)) {
           if (value) formData.append(key, value);

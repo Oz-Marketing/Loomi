@@ -182,3 +182,42 @@ describe('buildAssetMetadata — rights', () => {
     });
   });
 });
+
+describe('upload accepts everything the batch form collects', () => {
+  it('validates the full rights set the way PATCH does', () => {
+    // Regression: the upload modal rendered fifteen fields and forwarded six,
+    // so a licence set once for a bulk import was silently discarded. The API
+    // side has to accept the whole set for the form fix to mean anything.
+    const result = buildAssetMetadata({
+      oem: 'Audi',
+      assetSource: 'oem-supplied',
+      assetCategory: 'template',
+      rightsHolder: 'Audi of America',
+      modelYear: '2025,2026',
+      tags: 'dag,launch',
+      licenseType: 'oem-licensed',
+      licenseRef: 'Audi-MY25-DAG',
+      licenseExpiresAt: '2027-08-31T00:00:00.000Z',
+      usageScope: 'digital,email',
+      territoryScope: 'Utah,Idaho',
+      derivativesPermitted: true,
+      sublicensingPermitted: false,
+    });
+
+    expect('error' in result).toBe(false);
+    if ('error' in result) return;
+    expect(result.data).toMatchObject({
+      oem: 'Audi',
+      assetSource: 'oem-supplied',
+      assetCategory: 'template',
+      licenseType: 'oem-licensed',
+      licenseRef: 'Audi-MY25-DAG',
+      usageScope: '["digital","email"]',
+      territoryScope: '["Utah","Idaho"]',
+      derivativesPermitted: true,
+      sublicensingPermitted: false,
+      modelYear: '["2025","2026"]',
+    });
+    expect(result.data.licenseExpiresAt).toEqual(new Date('2027-08-31T00:00:00.000Z'));
+  });
+});

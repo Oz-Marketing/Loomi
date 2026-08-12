@@ -170,6 +170,46 @@ export function assetMetadataDiff(
   return body;
 }
 
+/**
+ * The whole value as `FormData` fields, for the upload path.
+ *
+ * Distinct from `assetMetadataDiff`, which is sparse because PATCH must not
+ * touch what the user didn't change. On upload there is nothing to preserve, so
+ * every non-empty field goes up.
+ *
+ * This exists because the upload modal previously forwarded a hand-written list
+ * of six fields while rendering fifteen — so everything the Rights section
+ * collected was silently dropped. Deriving the payload from the value type means
+ * a field added to the form cannot go missing from the request.
+ */
+export function assetMetadataToFormFields(v: AssetMetadataValue): Record<string, string> {
+  const out: Record<string, string> = {};
+  const put = (k: string, val: string) => { if (val) out[k] = val; };
+
+  put('oem', v.oem);
+  put('assetSource', v.assetSource);
+  put('assetCategory', v.assetCategory);
+  put('rightsHolder', v.rightsHolder);
+  put('modelYear', v.modelYear.join(','));
+  put('vehicleModel', v.vehicleModel.join(','));
+  put('tags', v.tags.join(','));
+
+  put('licenseType', v.licenseType);
+  put('licenseRef', v.licenseRef);
+  put('usageScope', v.usageScope.join(','));
+  put('territoryScope', v.territoryScope.join(','));
+  put('derivativesPermitted', v.derivativesPermitted);
+  put('sublicensingPermitted', v.sublicensingPermitted);
+
+  // UTC midnight, matching assetMetadataDiff — a date input carries no timezone,
+  // and local midnight would shift the day for anyone west of UTC.
+  for (const key of ['licenseStartsAt', 'licenseExpiresAt', 'expiresAt'] as const) {
+    if (v[key]) out[key] = new Date(`${v[key]}T00:00:00.000Z`).toISOString();
+  }
+
+  return out;
+}
+
 /** Model years offered: this year back four, forward two. */
 function modelYearOptions(): { value: string; label: string }[] {
   const current = new Date().getFullYear();

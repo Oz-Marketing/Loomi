@@ -10,6 +10,7 @@ import { TextBlock } from './Text';
 import { ImageBlock } from './Image';
 import { DividerBlock } from './Divider';
 import { SpacerBlock } from './Spacer';
+import { HtmlBlock } from './Html';
 import {
   FieldText,
   FieldEmail,
@@ -32,6 +33,7 @@ export const BLOCK_COMPONENTS = {
   image: ImageBlock,
   divider: DividerBlock,
   spacer: SpacerBlock,
+  html: HtmlBlock,
   field_text: FieldText,
   field_email: FieldEmail,
   field_phone: FieldPhone,
@@ -53,6 +55,7 @@ export {
   ImageBlock,
   DividerBlock,
   SpacerBlock,
+  HtmlBlock,
   FieldText,
   FieldEmail,
   FieldPhone,

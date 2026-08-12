@@ -19,6 +19,7 @@ export type FormBlockType =
   | 'image'
   | 'divider'
   | 'spacer'
+  | 'html'
   // Form fields
   | 'field_text'
   | 'field_email'
@@ -106,6 +107,15 @@ export interface FormSettings {
   bodyBg: string;        // outer page background (around the form container)
   contentBg: string;     // form container background
   contentWidth: number;  // pixels, default 640
+  /**
+   * Full-bleed mode: the form card fills its container edge to edge and
+   * `contentWidth` is ignored. `contentWidth` is still stored so turning
+   * this back off restores the width the user last picked.
+   *
+   * Absent on every schema written before the setting existed, which is
+   * why it's optional — treat undefined as false.
+   */
+  contentFullWidth?: boolean;
   /** Inner padding of the form container — per-side, in px. Drives
    *  the space between the form card edge and its content. Defaults
    *  to 32 on every side; use 0 for an edge-to-edge layout. */
@@ -141,6 +151,7 @@ export const DEFAULT_FORM_SETTINGS: FormSettings = {
   bodyBg: '#f5f5f5',
   contentBg: '#ffffff',
   contentWidth: 640,
+  contentFullWidth: false,
   contentPaddingTop: 32,
   contentPaddingRight: 32,
   contentPaddingBottom: 32,
@@ -153,6 +164,17 @@ export const DEFAULT_FORM_SETTINGS: FormSettings = {
   fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
   textColor: '#1a1a1a',
 };
+
+/**
+ * The `max-width` the form card renders at — the single source of truth
+ * for every surface that draws a form (public page, editor canvas,
+ * thumbnail, error/Turnstile rails). Full-bleed returns `'none'` so the
+ * card fills whatever container it's in; otherwise the card is capped at
+ * the user's Form Width but still shrinks below it on narrow screens.
+ */
+export function formContentMaxWidth(settings: FormSettings): string {
+  return settings.contentFullWidth ? 'none' : `${settings.contentWidth}px`;
+}
 
 export function isV1FormTemplate(content: unknown): content is FormTemplate {
   if (!content || typeof content !== 'object') return false;

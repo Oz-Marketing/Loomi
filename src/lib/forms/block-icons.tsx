@@ -12,6 +12,7 @@ import {
   Bars3BottomLeftIcon,
   CheckCircleIcon,
   ChevronUpDownIcon,
+  CodeBracketIcon,
   CursorArrowRaysIcon,
   EnvelopeIcon,
   EyeSlashIcon,
@@ -53,6 +54,7 @@ const ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
   columns: ViewColumnsIcon,
   minus: MinusIcon,
   'arrows-up-down': ArrowsUpDownIcon,
+  'code-bracket': CodeBracketIcon,
 };
 
 export function FormBlockIcon({

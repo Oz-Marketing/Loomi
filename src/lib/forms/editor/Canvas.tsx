@@ -10,7 +10,7 @@ import { useEditor } from './EditorContext';
 import { EditableBlock } from './EditableBlock';
 import { BlockDropGap } from './BlockDropGap';
 import { BLOCK_COMPONENTS } from '../components';
-import type { Block, FormTemplate } from '../types';
+import { formContentMaxWidth, type Block, type FormTemplate } from '../types';
 import type { PreviewWidth } from './FormActionBar';
 
 interface CanvasProps {
@@ -62,10 +62,13 @@ export function Canvas({ previewWidth = 'desktop', zoom = 100, previewValues }: 
     id: 'canvas-empty',
   });
 
-  const effectiveWidth =
+  // Mobile preview is a fixed 375px window regardless of the desktop
+  // width setting — including full-bleed, where "fills its container"
+  // means the phone's own width.
+  const effectiveMaxWidth =
     previewWidth === 'mobile'
-      ? Math.min(375, template.settings.contentWidth)
-      : template.settings.contentWidth;
+      ? `${Math.min(375, template.settings.contentFullWidth ? 375 : template.settings.contentWidth)}px`
+      : formContentMaxWidth(template.settings);
 
   // Per-side spacing — same fallback shape FormRenderer uses, so the
   // editor canvas matches what the public page + overview thumbnail
@@ -115,7 +118,7 @@ export function Canvas({ previewWidth = 'desktop', zoom = 100, previewValues }: 
       <div
         style={{
           width: '100%',
-          maxWidth: `${effectiveWidth}px`,
+          maxWidth: effectiveMaxWidth,
           margin: '0 auto',
           backgroundColor: template.settings.contentBg,
           fontFamily: template.settings.fontFamily,

@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import { buildS3Key, buildThumbnailKey, uploadToS3 } from '@/lib/s3';
 import { generateThumbnail } from '@/lib/media-thumbnails';
+import { checkUploadSize } from '@/lib/media-limits';
 import {
   buildAssetMetadata,
   findDuplicateAsset,
@@ -235,12 +236,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'file is required' }, { status: 400 });
   }
 
-  const MAX_UPLOAD_SIZE = 25 * 1024 * 1024; // 25 MB
-  if (file.size > MAX_UPLOAD_SIZE) {
-    return NextResponse.json(
-      { error: `File size (${(file.size / (1024 * 1024)).toFixed(1)} MB) exceeds the 25 MB limit` },
-      { status: 413 },
-    );
+  // Per-family ceiling — a PSD master and a display banner have no business
+  // sharing one limit. See lib/media-limits.ts for what the buffered upload
+  // path can actually honour.
+  const sizeError = checkUploadSize(file.size, file.type);
+  if (sizeError) {
+    return NextResponse.json({ error: sizeError }, { status: 413 });
   }
 
   // Access check

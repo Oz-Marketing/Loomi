@@ -39,6 +39,7 @@ import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { AccountAvatar } from '@/components/account-avatar';
 import BulkActionDock from '@/components/bulk-action-dock';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
+import { RenditionPanel } from '@/components/media/rendition-panel';
 import {
   AssetMetadataFields,
   EMPTY_ASSET_METADATA,
@@ -47,6 +48,7 @@ import {
   type AssetMetadataValue,
 } from '@/components/media/asset-metadata-fields';
 import { assetSourceLabel } from '@/lib/media-metadata';
+import { MAX_UPLOAD_BYTES, checkUploadSize, formatBytes } from '@/lib/media-limits';
 import { rightsBadgeLabel, type RightsAssessment } from '@/lib/media-rights';
 import {
   MEDIA_FACET_KEYS,
@@ -64,7 +66,8 @@ import PrimaryButton from '@/components/primary-button';
 
 // ── Constants ──
 
-const MAX_MEDIA_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
+// Size checking lives in lib/media-limits.ts so the browser refuses a file for
+// exactly the reason the API would.
 
 // ── Types ──
 
@@ -1224,12 +1227,13 @@ export default function MediaPage() {
   const stageFiles = useCallback((fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const newFiles = Array.from(fileList);
-    const oversized = newFiles.filter((f) => f.size > MAX_MEDIA_FILE_SIZE);
-    if (oversized.length > 0) {
-      const names = oversized.map((f) => `${f.name} (${formatFileSize(f.size)})`).join(', ');
-      toast.error(`${oversized.length} file${oversized.length > 1 ? 's exceed' : ' exceeds'} the 25 MB limit: ${names}`);
+    const rejected = newFiles
+      .map((f) => ({ file: f, error: checkUploadSize(f.size, f.type) }))
+      .filter((r): r is { file: File; error: string } => r.error !== null);
+    for (const r of rejected) {
+      toast.error(`${r.file.name}: ${r.error}`);
     }
-    const valid = newFiles.filter((f) => f.size <= MAX_MEDIA_FILE_SIZE);
+    const valid = newFiles.filter((f) => checkUploadSize(f.size, f.type) === null);
     if (valid.length === 0) return;
     setStagedFiles((prev) => {
       const seen = new Set(prev.map(stagedFileKey));
@@ -1756,6 +1760,55 @@ export default function MediaPage() {
     }
     setDeleting(false);
     clearSelection();
+  };
+
+  // ── Bulk Download ──
+
+  const [downloading, setDownloading] = useState(false);
+
+  /**
+   * Zip the selection server-side and hand it to the browser.
+   *
+   * A blob rather than a link because the endpoint is a POST (the id list is too
+   * long for a query string once someone selects fifty assets) and because the
+   * server needs to check read access per file before it builds the archive.
+   */
+  const handleBulkDownload = async (includeRenditions: boolean) => {
+    if (selectedIds.size === 0) return;
+    setDownloading(true);
+    try {
+      const res = await fetch('/api/media/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [...selectedIds], includeRenditions }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        toast.error(data?.error || 'Could not build the download');
+        return;
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `loomi-media-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      const skipped = Number(res.headers.get('X-Skipped-Files') || '0');
+      if (skipped > 0) {
+        toast.error(`${skipped} file${skipped > 1 ? 's' : ''} could not be read and were left out`);
+      } else {
+        toast.success(`Downloaded ${selectedIds.size} file${selectedIds.size > 1 ? 's' : ''}`);
+      }
+    } catch {
+      toast.error('Could not build the download');
+    }
+    setDownloading(false);
   };
 
   // ── Bulk Duplicate ──
@@ -2850,6 +2903,13 @@ export default function MediaPage() {
                     disabled: !capabilities?.canMove || selectedIds.size === 0,
                   },
                   {
+                    id: 'download',
+                    label: downloading ? 'Zipping…' : 'Download',
+                    icon: <ArrowDownTrayIcon className="h-4 w-4" />,
+                    onClick: () => handleBulkDownload(false),
+                    disabled: selectedIds.size === 0 || downloading,
+                  },
+                  {
                     id: 'duplicate',
                     label: 'Duplicate',
                     icon: <DocumentDuplicateIcon className="h-4 w-4" />,
@@ -2984,6 +3044,12 @@ export default function MediaPage() {
                   disabled={renaming}
                 />
               </div>
+
+              <RenditionPanel
+                assetId={renameFile.id}
+                canGenerate={!!renameFile.type?.startsWith('image/') && renameFile.type !== 'image/svg+xml'}
+                readOnly={isInherited(renameFile)}
+              />
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--border)]">
               <button
@@ -3162,7 +3228,7 @@ export default function MediaPage() {
                     <p className={`${stagedFiles.length > 0 ? 'text-xs' : 'text-sm'} text-[var(--foreground)] font-medium mb-0.5`}>
                       {stagedFiles.length > 0 ? 'Drop more files or click to add' : 'Drop files here or click to browse'}
                     </p>
-                    <p className="text-[10px] text-[var(--muted-foreground)]">Max file size: 25 MB</p>
+                    <p className="text-[10px] text-[var(--muted-foreground)]">Up to {formatBytes(MAX_UPLOAD_BYTES)} — images 50 MB, video and design files 200 MB</p>
                   </>
                 )}
               </div>

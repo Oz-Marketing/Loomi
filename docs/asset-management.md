@@ -267,6 +267,24 @@ OEM-portal experience clients actually ask for gets built. Raise the 25 MB cap
 here — real masters (video, layered PSD, InDesign) do not fit under it, and the
 cap should become per-MIME rather than global.
 
+**Partly shipped.** Renditions (driven by `AD_SIZE_CATALOG`, so a rendition and
+the ad it lands in share dimensions by construction), bulk zip download, and
+per-MIME limits are in. Two things are not:
+
+- **The consumer portal view is deferred.** It is a distinct surface — a
+  client-role landing page with its own navigation and permissions — not a
+  variation on the library, and bolting it onto a page that already switches
+  between agency, sub-account and admin modes would make all four worse. It
+  belongs beside Phase 5's approval work, where "what may a client see" is
+  answered by lifecycle state rather than by scope alone.
+- **Large files still route through the app server.** `req.formData()` buffers
+  the whole upload in memory, so the ceilings in `lib/media-limits.ts` are bounded
+  by the Node process, not by S3. Bulk download has the same shape — JSZip builds
+  the archive in memory, hence its 300 MB cap. Genuinely large masters need
+  presigned direct-to-S3 uploads; both limits lift with that one piece of
+  infrastructure, and raising either constant without it trades a clear error
+  message for an out-of-memory crash.
+
 **Phase 5 — Approval and compliance.** §5's `approved` transition, with
 pre-flight firing on submit. AI auto-tagging after this, never before — tagging
 without a governed vocabulary produces high-volume inconsistent tags, per v2 §9.2.

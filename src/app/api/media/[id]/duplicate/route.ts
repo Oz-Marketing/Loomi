@@ -8,19 +8,7 @@ import {
   uploadToS3,
   downloadFromS3,
 } from '@/lib/s3';
-import { serializeMediaAsset } from '@/lib/services/media';
-
-/** Check access to an asset based on its accountKey. null = admin-level. */
-function checkAccess(
-  session: { user: { role: string; accountKeys?: string[] } },
-  accountKey: string | null,
-): boolean {
-  const { role, accountKeys = [] } = session.user;
-  if (role === 'developer' || role === 'super_admin') return true;
-  if (role === 'admin' && accountKeys.length === 0) return true;
-  if (accountKey === null) return false;
-  return accountKeys.includes(accountKey);
-}
+import { canAccessAsset, serializeMediaAsset } from '@/lib/services/media';
 
 /** Append " copy" before the file extension. */
 function copyName(filename: string): string {
@@ -43,7 +31,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params;
   const asset = await prisma.mediaAsset.findUnique({ where: { id } });
   if (!asset) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
-  if (!checkAccess(session!, asset.accountKey)) {
+  if (!canAccessAsset(session!, asset.accountKey)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 

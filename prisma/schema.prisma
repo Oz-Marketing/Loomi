@@ -1752,6 +1752,9 @@ model MediaAsset {
   tags         String? // JSON string[] — free-form keywords (Phase 2 surfaces them)
   folderId     String? // null = the account's root; else a MediaFolder in the same scope
   folder       MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  /// Generated platform-size derivatives. Cascade-deleted with the master —
+  /// they have no meaning without it.
+  renditions   MediaRendition[]
   uploadedBy   String? // User ID
   archivedAt   DateTime? // soft-archive: hidden from the default library view, restorable
   createdAt    DateTime     @default(now())
@@ -1868,6 +1871,48 @@ model MediaAsset {
   // isn't scope-limited.
   @@index([licenseExpiresAt])
   @@index([expiresAt])
+}
+
+// A generated derivative of a MediaAsset at a platform size — Phase 4 of
+// docs/asset-management.md (§8, Automatic Processing).
+//
+// A SEPARATE table rather than child MediaAssets, even though `parentAssetId`
+// exists and would have fit. Renditions are outputs, not library items: eight
+// sizes per master would multiply the grid by nine, distort every facet count,
+// and invite someone to tag or licence a derivative independently of the master
+// it came from. They belong TO an asset, so they hang off it.
+//
+// The master is always the source of truth. Renditions are disposable — delete
+// and regenerate freely; nothing should ever reference one as an original.
+model MediaRendition {
+  id      String     @id @default(cuid())
+  assetId String
+  asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  /// Catalog size name, e.g. "Instagram Square". Free text rather than an enum
+  /// so a size retired from AD_SIZE_CATALOG doesn't orphan existing rows.
+  name     String
+  platform String
+  width    Int
+  height   Int
+
+  s3Key    String
+  mimeType String
+  size     Int // bytes
+
+  /// How the master was fitted to the frame — "cover" crops to fill, "contain"
+  /// letterboxes. Recorded because a rendition that cropped someone's logo out
+  /// needs to be explicable without re-running the job.
+  fit String @default("cover")
+
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  // One rendition per size per asset: regenerating replaces rather than
+  // accumulating near-identical copies.
+  @@unique([assetId, name])
+  @@index([assetId])
+  @@unique([s3Key])
 }
 
 // A user-created folder for organizing media within a scope (an account, or the

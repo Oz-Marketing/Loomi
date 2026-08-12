@@ -473,3 +473,24 @@ export async function findDuplicateAsset(
     orderBy: { createdAt: 'asc' },
   });
 }
+
+// ── Access ──
+
+/**
+ * May this session act on an asset in the given scope?
+ *
+ * Was copy-pasted into three route files before this existed, and Phase 4 would
+ * have made it four. An admin-level asset (null accountKey — global or
+ * OEM-shared) is writable only by developers and unrestricted admins, because
+ * one row is shared by every account that can see it.
+ */
+export function canAccessAsset(
+  session: { user: { role: string; accountKeys?: string[] } },
+  accountKey: string | null,
+): boolean {
+  const { role, accountKeys = [] } = session.user;
+  if (role === 'developer' || role === 'super_admin') return true;
+  if (role === 'admin' && accountKeys.length === 0) return true;
+  if (accountKey === null) return false;
+  return accountKeys.includes(accountKey);
+}

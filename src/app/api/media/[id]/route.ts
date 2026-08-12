@@ -6,6 +6,7 @@ import {
   buildAssetMetadata,
   serializeMediaAsset,
   type AssetMetadataData,
+  canAccessAsset,
 } from '@/lib/services/media';
 
 /** The DAM metadata keys PATCH accepts. */
@@ -34,17 +35,6 @@ const METADATA_KEYS = [
 // ── Access helpers ──
 
 /** Check access to an asset based on its accountKey. null = admin-level. */
-function checkAccess(
-  session: { user: { role: string; accountKeys?: string[] } },
-  accountKey: string | null,
-): boolean {
-  const { role, accountKeys = [] } = session.user;
-  if (role === 'developer' || role === 'super_admin') return true;
-  if (role === 'admin' && accountKeys.length === 0) return true;
-  // Admin-level assets: only accessible by devs/unrestricted admins (above)
-  if (accountKey === null) return false;
-  return accountKeys.includes(accountKey);
-}
 
 /**
  * PATCH /api/media/[id]
@@ -127,7 +117,7 @@ export async function PATCH(
     return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
   }
 
-  if (!checkAccess(session!, asset.accountKey)) {
+  if (!canAccessAsset(session!, asset.accountKey)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
@@ -167,7 +157,7 @@ export async function DELETE(
     return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
   }
 
-  if (!checkAccess(session!, asset.accountKey)) {
+  if (!canAccessAsset(session!, asset.accountKey)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
@@ -175,6 +165,19 @@ export async function DELETE(
   await deleteFromS3(asset.s3Key);
   if (asset.thumbnailKey) {
     await deleteFromS3(asset.thumbnailKey);
+  }
+
+  // Rendition ROWS cascade with the master, but their bucket objects don't —
+  // Prisma's onDelete only reaches the database. Collected before the delete,
+  // because afterwards there's nothing left to enumerate them from.
+  const renditions = await prisma.mediaRendition.findMany({
+    where: { assetId: id },
+    select: { s3Key: true },
+  });
+  for (const r of renditions) {
+    await deleteFromS3(r.s3Key).catch(() => {
+      // Best-effort: a leaked derivative is untidy, a failed delete is worse.
+    });
   }
 
   // Delete from DB

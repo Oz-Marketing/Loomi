@@ -40,6 +40,7 @@ import { AccountAvatar } from '@/components/account-avatar';
 import BulkActionDock from '@/components/bulk-action-dock';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { RenditionPanel } from '@/components/media/rendition-panel';
+import { RightsActivityPanel } from '@/components/media/rights-activity-panel';
 import { ApprovalPanel } from '@/components/media/approval-panel';
 import {
   AssetMetadataFields,
@@ -900,7 +901,7 @@ export default function MediaPage() {
   const [overviewData, setOverviewData] = useState<Record<string, AccountMediaPreview>>({});
   const [overviewLoaded, setOverviewLoaded] = useState(false);
   const [overviewSearch, setOverviewSearch] = useState('');
-  const [overviewTab, setOverviewTab] = useState<'subaccounts' | 'loomi'>('subaccounts');
+  const [overviewTab, setOverviewTab] = useState<'subaccounts' | 'loomi' | 'rights'>('subaccounts');
   // ── Admin S3 media state ──
   const [adminMediaFiles, setAdminMediaFiles] = useState<MediaFile[]>([]);
   const [adminMediaTotal, setAdminMediaTotal] = useState(0);
@@ -2517,21 +2518,38 @@ export default function MediaPage() {
             >
               Loomi Media
             </button>
+            <button
+              onClick={() => setOverviewTab('rights')}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px ${
+                overviewTab === 'rights'
+                  ? 'border-[var(--primary)] text-[var(--primary)]'
+                  : 'border-transparent text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+              }`}
+            >
+              Rights &amp; Activity
+            </button>
           </div>
 
+          {/* Rights & Activity — the sweep's heartbeat and what it found. Its own
+              tab because it's an operational view, not a way to browse assets:
+              the toolbar and grid below don't apply to it. */}
+          {overviewTab === 'rights' && <RightsActivityPanel />}
+
           {/* Overview toolbar: search + buttons */}
-          <div className="flex items-center justify-between mb-4 gap-3">
-            <div className="relative flex-1 max-w-xs">
-              <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
-              <input
-                type="text"
-                value={overviewSearch}
-                onChange={(e) => setOverviewSearch(e.target.value)}
-                className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg pl-9 pr-3 py-2 text-[var(--foreground)]"
-                placeholder={isLoomiOverviewTab ? 'Search Loomi media...' : 'Search sub-accounts...'}
-              />
+          {overviewTab !== 'rights' && (
+            <div className="flex items-center justify-between mb-4 gap-3">
+              <div className="relative flex-1 max-w-xs">
+                <MagnifyingGlassIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)]" />
+                <input
+                  type="text"
+                  value={overviewSearch}
+                  onChange={(e) => setOverviewSearch(e.target.value)}
+                  className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg pl-9 pr-3 py-2 text-[var(--foreground)]"
+                  placeholder={isLoomiOverviewTab ? 'Search Loomi media...' : 'Search sub-accounts...'}
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* ── Loomi Media Library section ── */}
           {isLoomiOverviewTab && adminMediaLoading && adminMediaFiles.length === 0 && (

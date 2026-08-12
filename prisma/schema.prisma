@@ -1884,6 +1884,26 @@ model MediaAsset {
   /// approval remains explicable against the rules in force at the time.
   preflightResult String?  @db.Text
 
+  // ── Externally-managed assets ──
+  //
+  // Brand logos and custom fonts live on the Account record (`logos`,
+  // `customFonts`) and are read from there by the ad builder, emails and landing
+  // pages. They were uploaded to S3 but never catalogued, so the DAM couldn't
+  // see the most-reused assets an agency owns.
+  //
+  // These rows CATALOGUE them; they do not own them. Account settings remains
+  // the authority for the lifecycle, and the library renders them read-only —
+  // deleting one here would break a live logo, which is not a thing the library
+  // should be able to do.
+
+  /// What owns this row's lifecycle: "account-logo" | "account-font".
+  /// Null = an ordinary asset the library owns outright.
+  managedBy  String?
+  /// Which one — the logo variant ("light", "storefront") or the font's
+  /// `family|weight|style`. Together with managedBy this is what lets a sync
+  /// reconcile rows against the Account record rather than duplicating them.
+  managedRef String?
+
   @@unique([s3Key])
   @@index([accountKey, createdAt])
   @@index([accountKey, category])
@@ -1894,6 +1914,8 @@ model MediaAsset {
   // Duplicate lookup on upload.
   @@index([contentHash])
   @@index([parentAssetId])
+  // Brand-asset sync: "which rows does this account's logo/font set own?"
+  @@index([accountKey, managedBy])
   // Approval reads: the client-facing view asks for one account's approved
   // assets, and the review queue asks for one account's drafts.
   @@index([accountKey, status])

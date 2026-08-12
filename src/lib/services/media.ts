@@ -91,6 +91,10 @@ export function serializeMediaAsset(a: MediaAsset, now = new Date()) {
     // each one re-deriving "expiring soon" from raw dates and drifting.
     rights: assessRights(a, now),
 
+    /** Set when Account settings owns this row's lifecycle, not the library. */
+    managedBy: a.managedBy,
+    managedRef: a.managedRef,
+
     // ── Approval (Phase 5) ──
     status: a.status,
     approvedAt: a.approvedAt ? a.approvedAt.toISOString() : null,

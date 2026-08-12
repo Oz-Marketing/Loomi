@@ -125,6 +125,10 @@ interface MediaFile {
   /** Derived server-side — see serializeMediaAsset. */
   rights?: RightsAssessment | null;
 
+  /** Externally-managed (brand logo / custom font) — read-only here. */
+  managedBy?: string | null;
+  managedRef?: string | null;
+
   // ── Approval (Phase 5) ──
   status?: string | null;
   approvedAt?: string | null;
@@ -299,6 +303,19 @@ function ProviderPill({ prov }: { prov: string }) {
  * exactly as they do today.
  */
 function AssetOriginBadge({ f }: { f: MediaFile }) {
+  // A managed asset's origin is the useful thing to show — "Brand logo" tells
+  // you why it can't be edited here, which "Dealer-supplied" would not.
+  if (f.managedBy) {
+    return (
+      <span
+        className="absolute top-2 right-2 z-10 inline-flex items-center rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white/90 backdrop-blur-sm"
+        title="Managed in Settings — upload or replace it there"
+      >
+        {f.managedBy === 'account-font' ? 'Brand font' : 'Brand logo'}
+      </span>
+    );
+  }
+
   const shared = !f.accountKey && !!f.oem;
   const label = f.oem || assetSourceLabel(f.assetSource);
   if (!label) return null;
@@ -2146,7 +2163,11 @@ export default function MediaPage() {
   const isInherited = useCallback(
     (f: MediaFile) =>
       // A consumer never owns anything here: read-only is the whole tier.
-      isConsumer || (!!effectiveAccountKey && (f.accountKey ?? null) !== effectiveAccountKey),
+      isConsumer
+      // Brand logos and fonts are catalogued from Account settings, which owns
+      // their lifecycle. Deleting one here would break a live logo.
+      || !!f.managedBy
+      || (!!effectiveAccountKey && (f.accountKey ?? null) !== effectiveAccountKey),
     [effectiveAccountKey, isConsumer],
   );
 

@@ -2314,7 +2314,12 @@ export default function MediaPage() {
         </Link>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-4">
+      {/* Padding must match what .page-sticky-header cancels with its negative
+         margins — 1.5rem, then 2rem from 768px. It was px-5 (1.25rem), so the
+         full-bleed header overhung by 12px a side and this scroller grew a
+         horizontal scrollbar. overflow-x-hidden is the backstop: nothing in a
+         media library should ever scroll sideways. */}
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 pb-6 pt-4 md:px-8">
       {/* Header */}
       <div className="page-sticky-header mb-6">
         <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -2539,7 +2544,13 @@ export default function MediaPage() {
               account view uses, so an admin isn't learning a second layout. */}
           {isAdminGridTab && (
           <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
-            <div className="w-full shrink-0 space-y-4 lg:sticky lg:top-[128px] lg:w-52 lg:max-h-[calc(100vh-13rem)] lg:self-start lg:overflow-y-auto lg:overscroll-contain lg:pr-1">
+            {/* The wrapper owns the width; children fill it. Previously it set
+                lg:w-52 AND carried pr-1 around a child that was also lg:w-52,
+                so content was 4px wider than the box — and overflow-y:auto
+                forces the x axis from visible to auto, which is where the
+                horizontal scrollbar came from. overflow-x-hidden makes that
+                impossible regardless of what a future child does. */}
+            <div className="w-full shrink-0 space-y-4 lg:sticky lg:top-[128px] lg:w-52 lg:max-h-[calc(100vh-13rem)] lg:self-start lg:overflow-y-auto lg:overflow-x-hidden lg:overscroll-contain">
               <MediaScopeSection
                 scope={adminScope}
                 onScopeChange={setAdminScope}

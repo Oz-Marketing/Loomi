@@ -185,7 +185,8 @@ export function MediaScopeSection({
   const hiddenAccounts = sortedAccounts.length - accountRows.length;
 
   return (
-    <div className="space-y-3">
+    // Fills the rail wrapper, which owns the width.
+    <div className="w-full min-w-0 space-y-3">
       <div className="flex items-center justify-between px-2">
         <span className="text-xs font-semibold text-[var(--foreground)]">Scope</span>
         {scope.kind !== 'all' && (

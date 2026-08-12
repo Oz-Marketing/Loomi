@@ -16,6 +16,12 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { MEDIA_CATEGORIES } from '@/lib/media-categories';
+import type { RightsStatus } from '@/lib/media-rights';
+import {
+  countOutOfLicence,
+  isOutOfLicence as assetOutOfLicence,
+  orderPickerAssets,
+} from '@/lib/media-picker-order';
 
 // ── Types ──
 
@@ -34,6 +40,12 @@ interface MediaFile {
   folderId?: string | null;
   createdAt?: string;
   updatedAt?: string;
+
+  // ── Lifecycle (already served by serializeMediaAsset) ──
+  /** 'draft' | 'approved' — whether this is cleared for use. */
+  status?: string | null;
+  /** Derived rights position; `unknown` when no licence is recorded. */
+  rights?: { status: RightsStatus; daysRemaining: number | null } | null;
 }
 
 interface Folder {
@@ -269,11 +281,37 @@ export function MediaPickerModal({
     return path;
   }, [inBranding, folders, currentFolderId]);
 
-  const filtered = useMemo(() => {
-    if (!search.trim()) return files;
-    const q = search.toLowerCase();
-    return files.filter((f) => f.name.toLowerCase().includes(q));
-  }, [files, search]);
+  /**
+   * Whether to show only assets cleared for use.
+   *
+   * Defaults OFF, deliberately. Approval shipped with everything already in the
+   * library sitting at `draft`, so defaulting this on would empty the picker and
+   * break the ad builder on day one. Once a first batch is approved this becomes
+   * the sensible default — a one-line change here.
+   *
+   * Remembered per session so someone reviewing compliant creative doesn't
+   * re-tick it for every asset they place.
+   */
+  const [approvedOnly, setApprovedOnly] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return sessionStorage.getItem('media-picker-approved-only') === 'true';
+  });
+  const toggleApprovedOnly = useCallback((next: boolean) => {
+    setApprovedOnly(next);
+    if (typeof window !== 'undefined') {
+      if (next) sessionStorage.setItem('media-picker-approved-only', 'true');
+      else sessionStorage.removeItem('media-picker-approved-only');
+    }
+  }, []);
+
+  /** Ordering and filtering live in lib/media-picker-order.ts, where they're tested. */
+  const filtered = useMemo(
+    () => orderPickerAssets(files, { approvedOnly, search }),
+    [files, search, approvedOnly],
+  );
+
+  /** How many of the loaded assets are unusable as-is — drives the warning strip. */
+  const outOfLicenceCount = useMemo(() => countOutOfLicence(filtered), [filtered]);
 
   // ── Escape + mount ──
   useEffect(() => {
@@ -312,10 +350,37 @@ export function MediaPickerModal({
               placeholder="Search files..."
             />
           </div>
+          {/* Approved-only. A checkbox rather than a tab because it composes with
+              the category filter and the folder you're in, instead of replacing
+              them. */}
+          {!inBranding && (
+            <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[11px] text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]">
+              <input
+                type="checkbox"
+                checked={approvedOnly}
+                onChange={(e) => toggleApprovedOnly(e.target.checked)}
+                className="h-3.5 w-3.5 accent-[var(--primary)]"
+              />
+              Approved only
+            </label>
+          )}
           <button onClick={onClose} className="p-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors">
             <XMarkIcon className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Out-of-licence warning. Stated once at the top rather than only per
+            tile: the risk is placing one without noticing, and a badge on a
+            120px thumbnail is easy to miss. */}
+        {!inBranding && outOfLicenceCount > 0 && !approvedOnly && (
+          <div className="mx-5 mt-3 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2">
+            <p className="text-[11px] leading-snug text-red-400">
+              {outOfLicenceCount} asset{outOfLicenceCount === 1 ? ' is' : 's are'} past
+              their licence or campaign date and shouldn&apos;t go into live creative.
+              They&apos;re greyed out and sorted last.
+            </p>
+          </div>
+        )}
 
         {/* ── Category filter ── */}
         {showCategories && !inBranding && (
@@ -491,7 +556,10 @@ export function MediaPickerModal({
             ))}
 
             {/* Asset tiles (draggable to move) */}
-            {!inBranding && filtered.map((f) => (
+            {!inBranding && filtered.map((f) => {
+              const outOfLicence = assetOutOfLicence(f);
+              const expiringSoon = f.rights?.status === 'expiring_soon';
+              return (
               <button
                 key={f.id}
                 onClick={() => onSelect(f.url, f)}
@@ -499,18 +567,50 @@ export function MediaPickerModal({
                 onDragStart={() => setDragAssetId(f.id)}
                 onDragEnd={() => setDragAssetId(null)}
                 className="text-left rounded-lg overflow-hidden border border-transparent hover:border-[var(--primary)] hover:ring-1 hover:ring-[var(--primary)]/30 transition-all group"
-                title={showFolders ? `${f.name} — drag onto a folder to move` : f.name}
+                title={[
+                  f.name,
+                  f.status === 'approved' ? 'Approved' : 'Not yet approved',
+                  outOfLicence ? 'OUT OF LICENCE — do not use in live creative' : null,
+                  expiringSoon && f.rights?.daysRemaining != null
+                    ? `Licence expires in ${f.rights.daysRemaining} days`
+                    : null,
+                ].filter(Boolean).join(' · ')}
               >
-                <div className="h-[120px] bg-[var(--muted)] overflow-hidden">
+                <div className="relative h-[120px] bg-[var(--muted)] overflow-hidden">
                   {isImageFile(f) && f.url ? (
-                    <img src={f.thumbnailUrl || f.url} alt={f.name} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" loading="lazy" />
+                    <img
+                      src={f.thumbnailUrl || f.url}
+                      alt={f.name}
+                      // Desaturated rather than hidden: still selectable, but it
+                      // can't be mistaken for cleared creative at a glance.
+                      className={`w-full h-full object-cover transition-transform duration-200 group-hover:scale-105 ${outOfLicence ? 'opacity-40 grayscale' : ''}`}
+                      loading="lazy"
+                    />
                   ) : (
                     <div className="flex items-center justify-center h-full"><PhotoIcon className="w-6 h-6 text-[var(--muted-foreground)] opacity-30" /></div>
+                  )}
+                  {outOfLicence && (
+                    <span className="absolute left-1 top-1 rounded bg-red-500/90 px-1 py-0.5 text-[9px] font-medium text-white">
+                      Expired
+                    </span>
+                  )}
+                  {!outOfLicence && expiringSoon && (
+                    <span className="absolute left-1 top-1 rounded bg-amber-500/90 px-1 py-0.5 text-[9px] font-medium text-white">
+                      {f.rights?.daysRemaining}d
+                    </span>
+                  )}
+                  {/* Only 'approved' is badged. Marking every draft would badge
+                      the entire library, which is noise rather than signal. */}
+                  {f.status === 'approved' && (
+                    <span className="absolute right-1 top-1 rounded bg-emerald-500/90 px-1 py-0.5 text-[9px] font-medium text-white">
+                      ✓
+                    </span>
                   )}
                 </div>
                 <p className="text-[10px] truncate px-1.5 py-1 text-[var(--muted-foreground)]">{f.name}</p>
               </button>
-            ))}
+              );
+            })}
           </div>
 
           {/* Loading / empty states */}

@@ -268,7 +268,6 @@ model Account {
   accountDomains           AccountDomain[]
   snippets                 AccountSnippet[]
   mediaAssets              MediaAsset[]
-  mediaFolders             MediaFolder[]
   metaAdsPacerPlan         MetaAdsPacerPlan?
   metaAdsPacerAccountNotes MetaAdsPacerAccountNote[]
   metaAdsPacerBudgetLogs   MetaAdsPacerBudgetLog[]
@@ -1757,8 +1756,6 @@ model MediaAsset {
   // `assetCategory` below, and lib/media-metadata.ts for why they stay separate.
   category     String? // "brand" | "ad-creative" | "oem" | "general" | "texture"
   tags         String? // JSON string[] — free-form keywords (Phase 2 surfaces them)
-  folderId     String? // null = the account's root; else a MediaFolder in the same scope
-  folder       MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
   /// Generated platform-size derivatives. Cascade-deleted with the master —
   /// they have no meaning without it.
   renditions   MediaRendition[]
@@ -1914,7 +1911,6 @@ model MediaAsset {
   @@unique([s3Key])
   @@index([accountKey, createdAt])
   @@index([accountKey, category])
-  @@index([accountKey, folderId])
   @@index([accountKey, archivedAt])
   // OEM-scope reads: "every Audi asset that isn't archived".
   @@index([oem, archivedAt])
@@ -2012,26 +2008,6 @@ model MediaRendition {
   @@unique([assetId, name])
   @@index([assetId])
   @@unique([s3Key])
-}
-
-// A user-created folder for organizing media within a scope (an account, or the
-// admin library when accountKey is null). Nests via parentId; the breadcrumb is
-// the parent chain. Deleting a folder re-parents its assets/subfolders to its
-// own parent (see the folders API) — it never deletes media.
-model MediaFolder {
-  id         String        @id @default(cuid())
-  accountKey String? // null = admin-level, mirrors MediaAsset scoping
-  account    Account?      @relation(fields: [accountKey], references: [key], onDelete: Cascade)
-  name       String
-  parentId   String? // null = root
-  parent     MediaFolder?  @relation("MediaFolderTree", fields: [parentId], references: [id], onDelete: Cascade)
-  children   MediaFolder[] @relation("MediaFolderTree")
-  assets     MediaAsset[]
-  createdBy  String?
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
-
-  @@index([accountKey, parentId])
 }
 
 // ─────────────────────────────────────────────────────

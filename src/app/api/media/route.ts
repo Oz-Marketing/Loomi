@@ -62,9 +62,7 @@ function describeMediaUploadError(err: unknown): { status: number; error: string
  *
  * `?scope=effective` (with an accountKey) returns the account's EFFECTIVE set
  * instead: global ∪ its OEMs' shared assets ∪ its ancestors' ∪ its own — the
- * union described in docs/asset-management.md §9.2. That view is deliberately
- * FLAT: folders belong to one scope, so there is no coherent tree spanning
- * inherited assets, and `folder` is ignored when it is requested.
+ * union described in docs/asset-management.md §9.2.
  *
  * The default is unchanged (exact accountKey match) so every existing caller —
  * the picker, the builder, the library page — behaves exactly as before.
@@ -95,10 +93,6 @@ export async function GET(req: NextRequest) {
   const status = isConsumerRole(session!.user.role) ? 'approved' : statusParam;
   const countOnly = req.nextUrl.searchParams.get('countOnly') === 'true';
   const effectiveScope = req.nextUrl.searchParams.get('scope') === 'effective';
-  // Folder scoping: absent = every asset (flat, back-compat for non-folder
-  // consumers). "root" = only the scope's root (folderId null). Any other value
-  // = that folder's direct assets.
-  const folderParam = req.nextUrl.searchParams.get('folder');
   // Archive scoping: default view hides archived assets; `archived=true` shows
   // ONLY the archived ones (the "Archived" view / restore surface).
   const archivedParam = req.nextUrl.searchParams.get('archived') === 'true';
@@ -166,7 +160,6 @@ export async function GET(req: NextRequest) {
             : {}),
         ...(assetSource ? { assetSource } : {}),
         ...(status ? { status } : {}),
-        ...(folderParam === null ? {} : { folderId: folderParam === 'root' ? { equals: null as string | null } : folderParam }),
         archivedAt: archivedParam ? { not: null } : { equals: null as Date | null },
       },
     ],
@@ -233,8 +226,6 @@ export async function POST(req: NextRequest) {
   const accountKey = (formData.get('accountKey') as string | null) || null;
   const file = formData.get('file') as File | null;
   const category = (formData.get('category') as string | null) || 'general';
-  const folderIdRaw = (formData.get('folderId') as string | null) || null;
-  const folderId = folderIdRaw && folderIdRaw !== 'root' ? folderIdRaw : null;
   // Optional accessible alt text — caller (e.g. media library uploader)
   // can set it now, or it can be added later via PATCH.
   const altTextRaw = formData.get('altText');
@@ -281,13 +272,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // A folder, if given, must exist in the SAME scope as the upload — else drop it
-  // to root rather than leaking an asset into another account's folder.
-  let validFolderId: string | null = null;
-  if (folderId) {
-    const folder = await prisma.mediaFolder.findUnique({ where: { id: folderId }, select: { accountKey: true } });
-    if (folder && (folder.accountKey ?? null) === accountKey) validFolderId = folderId;
-  }
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const mimeType = file.type || 'application/octet-stream';
@@ -349,7 +333,6 @@ export async function POST(req: NextRequest) {
         thumbnailKey,
         altText,
         category,
-        folderId: validFolderId,
         uploadedBy: session!.user.id,
         contentHash,
         ...metadata,

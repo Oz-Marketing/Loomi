@@ -13,14 +13,11 @@ import {
   Square2StackIcon,
   ExclamationTriangleIcon,
   ChevronRightIcon,
-  FolderIcon,
-  FolderPlusIcon,
-  HomeIcon,
   ArrowLeftIcon,
   ArrowRightIcon,
   EyeIcon,
   CheckIcon,
-  FolderArrowDownIcon,
+  BuildingStorefrontIcon,
   Squares2X2Icon,
   ListBulletIcon,
   ArrowDownTrayIcon,
@@ -103,7 +100,6 @@ interface MediaFile {
   /** STORAGE origin. Not to be confused with `assetSource` (DAM provenance). */
   source?: 'esp' | 's3';
   category?: string;
-  folderId?: string | null;
   /** Set when the asset is soft-archived (hidden from the default view). */
   archivedAt?: string | null;
 
@@ -144,26 +140,10 @@ interface MediaFile {
   preflight?: MediaPreflight | null;
 }
 
-interface MediaFolder {
-  id: string;
-  name: string;
-  parentId?: string;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-interface FolderBreadcrumb {
-  id: string | undefined; // undefined = root
-  name: string;
-}
-
 interface MediaCapabilities {
   canUpload: boolean;
   canDelete: boolean;
   canRename: boolean;
-  canMove: boolean;
-  canCreateFolders: boolean;
-  canNavigateFolders: boolean;
 }
 
 interface AccountMediaPreview {
@@ -197,9 +177,6 @@ const S3_CAPABILITIES: MediaCapabilities = {
   canUpload: true,
   canDelete: true,
   canRename: true,
-  canMove: true,
-  canCreateFolders: true,
-  canNavigateFolders: true,
 };
 
 /**
@@ -216,9 +193,6 @@ const INHERITED_CAPABILITIES: MediaCapabilities = {
   canUpload: false,
   canDelete: false,
   canRename: false,
-  canMove: false,
-  canCreateFolders: false,
-  canNavigateFolders: false,
 };
 
 function CropIcon({ className }: { className?: string }) {
@@ -390,7 +364,6 @@ interface MediaCardProps {
   onPreview: () => void;
   onCopyUrl: () => void;
   onDownload?: () => void;
-  onMove?: () => void;
   onRename?: () => void;
   onDelete?: () => void;
 }
@@ -412,7 +385,6 @@ function MediaCard({
   onPreview,
   onCopyUrl,
   onDownload,
-  onMove,
   onRename,
   onDelete,
 }: MediaCardProps) {
@@ -508,14 +480,6 @@ function MediaCard({
                       <ArrowDownTrayIcon className="w-4 h-4" /> Download
                     </button>
                   )}
-                  {caps?.canMove && onMove && (
-                    <button
-                      onClick={() => { onMenuClose(); onMove(); }}
-                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                    >
-                      <FolderArrowDownIcon className="w-4 h-4" /> Move
-                    </button>
-                  )}
                   {caps?.canRename && onRename && (
                     <button
                       onClick={() => { onMenuClose(); onRename(); }}
@@ -571,7 +535,6 @@ function MediaListRow({
   onPreview,
   onCopyUrl,
   onDownload,
-  onMove,
   onRename,
   onDelete,
 }: MediaCardProps) {
@@ -656,14 +619,6 @@ function MediaListRow({
                   <ArrowDownTrayIcon className="w-4 h-4" /> Download
                 </button>
               )}
-              {caps?.canMove && onMove && (
-                <button
-                  onClick={() => { onMenuClose(); onMove(); }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                >
-                  <FolderArrowDownIcon className="w-4 h-4" /> Move
-                </button>
-              )}
               {caps?.canRename && onRename && (
                 <button
                   onClick={() => { onMenuClose(); onRename(); }}
@@ -697,20 +652,12 @@ export default function MediaPage() {
 
   // ── Single-account detail state ──
   const [files, setFiles] = useState<MediaFile[]>([]);
-  const [folders, setFolders] = useState<MediaFolder[]>([]);
   const [loading, setLoading] = useState(false);
   const [provider, setProvider] = useState<string | null>(null);
   const [capabilities, setCapabilities] = useState<MediaCapabilities | null>(null);
   const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
   const [loadingMore, setLoadingMore] = useState(false);
   const [search, setSearch] = useState('');
-
-  // Folder navigation
-  const [currentFolderId, setCurrentFolderId] = useState<string | undefined>(undefined);
-  const [folderPath, setFolderPath] = useState<FolderBreadcrumb[]>([{ id: undefined, name: 'Root' }]);
-  const [creatingFolder, setCreatingFolder] = useState(false);
-  const [newFolderName, setNewFolderName] = useState('');
-  const [showNewFolderInput, setShowNewFolderInput] = useState(false);
 
   // Upload
   const [uploading, setUploading] = useState(false);
@@ -778,16 +725,11 @@ export default function MediaPage() {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
 
   /**
-   * Which assets to show by ownership. This is the control that switches the
-   * library between the account's OWN scope (folder navigation, the historical
-   * behaviour, and the default) and its EFFECTIVE scope — everything it may use,
-   * including OEM-shared and inherited assets.
+   * Which assets to show by ownership: the account's OWN assets, or its
+   * EFFECTIVE set — everything it may use, including OEM-shared and inherited.
    *
-   * Default 'mine' deliberately: the effective view is flat, because folders
-   * belong to a single scope and there is no coherent tree spanning inherited
-   * assets. Defaulting to it would silently take folders away from every account
-   * that organises with them. The banner below makes the shared set discoverable
-   * instead.
+   * Default 'mine' so the account's own library is what it opens on; the banner
+   * below makes the shared set discoverable rather than mixing it in unasked.
    */
   const [ownership, setOwnership] = useState<OwnershipFilter>('mine');
   const [facetSelection, setFacetSelection] = useState<MediaFacetSelection>({});
@@ -798,24 +740,7 @@ export default function MediaPage() {
   /** How many assets the account can see beyond its own — drives the banner. */
   const [sharedCount, setSharedCount] = useState(0);
 
-  // Move modal
-  const [showMoveModal, setShowMoveModal] = useState(false);
-  const [moveItems, setMoveItems] = useState<{ id: string; type: 'file' | 'folder'; name?: string }[]>([]);
-  const [moveFolders, setMoveFolders] = useState<MediaFolder[]>([]);
-  const [moveFolderPath, setMoveFolderPath] = useState<FolderBreadcrumb[]>([{ id: undefined, name: 'Root' }]);
-  const [moveLoading, setMoveLoading] = useState(false);
-  const [moving, setMoving] = useState(false);
-
-  // Folder context menu + delete
-  const [folderMenuId, setFolderMenuId] = useState<string | null>(null);
-  const [renameFolderItem, setRenameFolderItem] = useState<MediaFolder | null>(null);
-  const [renameFolderValue, setRenameFolderValue] = useState('');
-  const [renamingFolder, setRenamingFolder] = useState(false);
-  const [deleteFolderItem, setDeleteFolderItem] = useState<MediaFolder | null>(null);
-  const [deletingFolder, setDeletingFolder] = useState(false);
-
   // Drag-and-drop
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
 
   // View mode — persisted in localStorage
   const [viewMode, setViewModeRaw] = useState<'grid' | 'list'>(() => {
@@ -951,7 +876,6 @@ export default function MediaPage() {
         return;
       }
       setOpenMenu(null);
-      setFolderMenuId(null);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
@@ -1113,7 +1037,6 @@ export default function MediaPage() {
     } else {
       setLoading(true);
       setFiles([]);
-      setFolders([]);
     }
 
     try {
@@ -1122,11 +1045,7 @@ export default function MediaPage() {
       });
       if (cursor) params.set('cursor', cursor);
       if (ownership === 'mine') {
-        // Own scope: folder navigation applies.
-        params.set('folder', currentFolderId ?? 'root');
       } else {
-        // Effective scope is flat by construction — no folder param, because a
-        // folder belongs to one scope and can't contain an inherited asset.
         params.set('scope', 'effective');
       }
       if (showArchived) params.set('archived', 'true');
@@ -1161,7 +1080,7 @@ export default function MediaPage() {
     if (seq !== loadSeqRef.current) return;
     setLoading(false);
     setLoadingMore(false);
-  }, [effectiveAccountKey, currentFolderId, showArchived, ownership, isConsumer]);
+  }, [effectiveAccountKey, showArchived, ownership, isConsumer]);
 
   /**
    * How many assets this account can see that it does not own.
@@ -1190,43 +1109,16 @@ export default function MediaPage() {
     return () => { cancelled = true; };
   }, [effectiveAccountKey]);
 
-  // Folders for the current scope — the flat list is fetched, then filtered to
-  // the current folder's direct children (the API returns the whole tree).
-  const loadFolders = useCallback(async () => {
-    if (!effectiveAccountKey) {
-      setFolders([]);
-      return;
-    }
-    const seq = loadSeqRef.current;
-    try {
-      const res = await fetch(`/api/media/folders?accountKey=${encodeURIComponent(effectiveAccountKey)}`);
-      const data = await res.json();
-      // Same stale-response guard as loadMedia — a folder list from the
-      // previously-selected account must not replace this one's.
-      if (seq !== loadSeqRef.current) return;
-      if (res.ok) {
-        const all: MediaFolder[] = data.folders || [];
-        setFolders(all.filter((f) => (f.parentId ?? undefined) === currentFolderId));
-      }
-    } catch {
-      /* folders are best-effort */
-    }
-  }, [effectiveAccountKey, currentFolderId]);
-
   useEffect(() => {
     if (effectiveAccountKey) {
       loadMedia();
-      loadFolders();
     } else {
       setFiles([]);
-      setFolders([]);
       setProvider(null);
       setCapabilities(null);
       setNextCursor(undefined);
-      setCurrentFolderId(undefined);
-      setFolderPath([{ id: undefined, name: 'Root' }]);
     }
-  }, [effectiveAccountKey, loadMedia, loadFolders]);
+  }, [effectiveAccountKey, loadMedia]);
 
   // ── Upload ──
 
@@ -1332,12 +1224,9 @@ export default function MediaPage() {
         formData.append('category', 'general');
 
         // 'account' = upload where the user is browsing. The OEM and global
-        // scopes are account-less by definition, and a folder belongs to exactly
-        // one scope — so the current folder only travels with the first case.
         const scopedOem = uploadScope.startsWith('oem:') ? uploadScope.slice(4) : null;
         if (uploadScope === 'account') {
           if (effectiveAccountKey) formData.append('accountKey', effectiveAccountKey);
-          if (currentFolderId) formData.append('folderId', currentFolderId);
         } else if (scopedOem) {
           formData.append('oem', scopedOem);
         }
@@ -1697,81 +1586,9 @@ export default function MediaPage() {
 
   // ── Move ──
 
-  const loadMoveFolders = async (parentId?: string) => {
-    if (!effectiveAccountKey) return;
-    setMoveLoading(true);
-    try {
-      const res = await fetch(`/api/media/folders?accountKey=${encodeURIComponent(effectiveAccountKey)}`);
-      const data = await res.json();
-      if (res.ok) {
-        const all: MediaFolder[] = data.folders || [];
-        setMoveFolders(all.filter((f) => (f.parentId ?? undefined) === parentId));
-      }
-    } catch {
-      toast.error('Failed to load folders');
-    }
-    setMoveLoading(false);
-  };
 
-  const openMoveModal = (items: { id: string; type: 'file' | 'folder'; name?: string }[]) => {
-    setMoveItems(items);
-    setMoveFolderPath([{ id: undefined, name: 'Root' }]);
-    setShowMoveModal(true);
-    loadMoveFolders();
-  };
 
-  const handleMoveConfirm = async () => {
-    if (!effectiveAccountKey || moveItems.length === 0) return;
-    setMoving(true);
 
-    const targetFolderId = moveFolderPath[moveFolderPath.length - 1].id;
-    let successCount = 0;
-
-    for (const item of moveItems) {
-      try {
-        // Files move via /api/media/[id] (folderId); folders move via
-        // /api/media/folders/[id] (parentId).
-        const res = item.type === 'folder'
-          ? await fetch(`/api/media/folders/${encodeURIComponent(item.id)}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ parentId: targetFolderId ?? 'root' }),
-            })
-          : await fetch(`/api/media/${encodeURIComponent(item.id)}`, {
-              method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ folderId: targetFolderId ?? 'root' }),
-            });
-        const { ok, data, error } = await safeJson<{ error?: string }>(res);
-        if (ok) {
-          successCount++;
-        } else {
-          toast.error(data?.error || error || `Failed to move item (${res.status})`);
-        }
-      } catch {
-        toast.error('Failed to move item');
-      }
-    }
-
-    if (successCount > 0) {
-      toast.success(`Moved ${successCount} item${successCount > 1 ? 's' : ''}`);
-      loadMedia(); // Refresh current view
-      loadFolders();
-    }
-
-    setMoving(false);
-    setShowMoveModal(false);
-    setMoveItems([]);
-    clearSelection();
-  };
-
-  const handleBulkMove = () => {
-    const items = Array.from(selectedIds).map(id => {
-      const file = files.find(f => f.id === id);
-      return { id, type: 'file' as const, name: file?.name };
-    });
-    openMoveModal(items);
-  };
 
   // ── Bulk Delete ──
 
@@ -1898,7 +1715,7 @@ export default function MediaPage() {
     if (ok > 0) toast.success(`Duplicated ${ok} file${ok > 1 ? 's' : ''}`);
     setDeleting(false);
     clearSelection();
-    loadMedia(); // surface the new copies in the current folder
+    loadMedia(); // surface the new copies
   };
 
   // ── Bulk Delete Admin S3 Files ──
@@ -1934,178 +1751,12 @@ export default function MediaPage() {
     clearSelection();
   };
 
-  // ── Delete Folder ──
 
-  const handleDeleteFolder = async () => {
-    if (!deleteFolderItem || !effectiveAccountKey) return;
-    setDeletingFolder(true);
 
-    try {
-      const res = await fetch(`/api/media/folders/${encodeURIComponent(deleteFolderItem.id)}`, { method: 'DELETE' });
-      const data = await res.json();
 
-      if (res.ok) {
-        setFolders(prev => prev.filter(f => f.id !== deleteFolderItem.id));
-        toast.success(`Folder "${deleteFolderItem.name}" deleted`);
-        setDeleteFolderItem(null);
-        // Its contents re-parented into the current folder — refresh.
-        loadMedia();
-        loadFolders();
-      } else {
-        toast.error(data.error || 'Failed to delete folder');
-      }
-    } catch {
-      toast.error('Failed to delete folder');
-    }
 
-    setDeletingFolder(false);
-  };
 
-  // ── Rename Folder ──
 
-  const handleRenameFolder = async () => {
-    if (!renameFolderItem || !effectiveAccountKey) return;
-
-    const nextName = renameFolderValue.trim();
-    if (!nextName) return;
-    if (nextName === renameFolderItem.name) {
-      setRenameFolderItem(null);
-      setRenameFolderValue('');
-      return;
-    }
-
-    setRenamingFolder(true);
-
-    try {
-      const res = await fetch(`/api/media/folders/${encodeURIComponent(renameFolderItem.id)}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: nextName }),
-      });
-      const { ok, data, error } = await safeJson<{ error?: string }>(res);
-
-      if (ok) {
-        const updatedAt = new Date().toISOString();
-        setFolders((prev) => prev.map((folder) => (
-          folder.id === renameFolderItem.id
-            ? { ...folder, name: nextName, updatedAt }
-            : folder
-        )));
-        setFolderPath((prev) => prev.map((crumb) => (
-          crumb.id === renameFolderItem.id
-            ? { ...crumb, name: nextName }
-            : crumb
-        )));
-        setRenameFolderItem(null);
-        setRenameFolderValue('');
-        toast.success('Folder renamed');
-      } else {
-        toast.error(data?.error || error || `Failed to rename folder (${res.status})`);
-      }
-    } catch {
-      toast.error('Failed to rename folder');
-    }
-
-    setRenamingFolder(false);
-  };
-
-  // ── Drag-and-drop into folders ──
-
-  const handleDragStart = useCallback((e: React.DragEvent, id: string, type: 'file' | 'folder', name: string) => {
-    e.dataTransfer.setData('application/json', JSON.stringify({ id, type, name }));
-    e.dataTransfer.effectAllowed = 'move';
-  }, []);
-
-  const handleMoveDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  }, []);
-
-  const handleMoveDrop = useCallback(async (e: React.DragEvent, targetFolderId: string) => {
-    e.preventDefault();
-    setDropTargetId(null);
-
-    if (!effectiveAccountKey || !capabilities?.canMove) return;
-
-    let dragData: { id: string; type: 'file' | 'folder'; name?: string } | null = null;
-    try {
-      dragData = JSON.parse(e.dataTransfer.getData('application/json'));
-    } catch { return; }
-    if (!dragData) return;
-
-    // Prevent dropping a folder onto itself
-    if (dragData.type === 'folder' && dragData.id === targetFolderId) return;
-
-    try {
-      const res = dragData.type === 'folder'
-        ? await fetch(`/api/media/folders/${encodeURIComponent(dragData.id)}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ parentId: targetFolderId }),
-          })
-        : await fetch(`/api/media/${encodeURIComponent(dragData.id)}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folderId: targetFolderId }),
-          });
-      const { ok, data, error } = await safeJson<{ error?: string }>(res);
-
-      if (ok) {
-        // Remove moved item from current view
-        if (dragData.type === 'file') {
-          setFiles(prev => prev.filter(f => f.id !== dragData!.id));
-        } else {
-          setFolders(prev => prev.filter(f => f.id !== dragData!.id));
-        }
-        toast.success('Moved successfully');
-      } else {
-        toast.error(data?.error || error || `Failed to move (${res.status})`);
-      }
-    } catch {
-      toast.error('Failed to move');
-    }
-  }, [effectiveAccountKey, capabilities]);
-
-  // ── Folder Navigation ──
-
-  const navigateToFolder = useCallback((folder: MediaFolder) => {
-    setCurrentFolderId(folder.id);
-    setFolderPath(prev => [...prev, { id: folder.id, name: folder.name }]);
-    setSearch('');
-  }, []);
-
-  // ── Create Folder ──
-
-  const handleCreateFolder = async () => {
-    if (!newFolderName.trim() || !effectiveAccountKey) return;
-    setCreatingFolder(true);
-
-    try {
-      const res = await fetch('/api/media/folders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          accountKey: effectiveAccountKey,
-          name: newFolderName.trim(),
-          parentId: currentFolderId,
-        }),
-      });
-      const data = await res.json();
-
-      if (res.ok && data.folder) {
-        setFolders(prev => [data.folder, ...prev]);
-        toast.success(`Folder "${newFolderName.trim()}" created`);
-        setNewFolderName('');
-        setShowNewFolderInput(false);
-      } else {
-        toast.error(data.error || 'Failed to create folder');
-      }
-    } catch {
-      toast.error('Failed to create folder');
-    }
-
-    setCreatingFolder(false);
-  };
 
   // ── Filtering ──
 
@@ -2183,29 +1834,8 @@ export default function MediaPage() {
   const activeFilterCount =
     countMediaFacetsSelected(facetSelection) + (ownership !== 'mine' ? 1 : 0);
 
-  const filteredFolders = useMemo(() => {
-    // The effective view is flat: a folder belongs to one scope and can't hold
-    // an inherited asset, so showing folders there would promise a containment
-    // that isn't real.
-    if (ownership !== 'mine') return [];
-    if (!search.trim()) return folders;
-    const q = search.toLowerCase();
-    return folders.filter(f => f.name.toLowerCase().includes(q));
-  }, [folders, search, ownership]);
-
-  /**
-   * Switching scope returns to the root.
-   *
-   * Without this, turning on shared assets while inside a folder leaves the
-   * breadcrumb pointing at that folder while the list ignores it — the view
-   * would claim to be somewhere it isn't.
-   */
   const changeOwnership = useCallback((next: OwnershipFilter) => {
     setOwnership(next);
-    if (next !== 'mine') {
-      setCurrentFolderId(undefined);
-      setFolderPath([{ id: undefined, name: 'Root' }]);
-    }
   }, []);
 
   // ── Filtered admin media (for overview search) ──
@@ -2271,30 +1901,14 @@ export default function MediaPage() {
   // Loomi-native media is always available; gating on a provider
   // connection no longer makes sense post-ESP-teardown.
   const hasConnection = Boolean(effectiveAccountKey);
-  const activeFolderName = folderPath.length > 1 ? folderPath[folderPath.length - 1]?.name : null;
   const activeAccountName = effectiveAccountKey
     ? (accounts[effectiveAccountKey]?.dealer || accountData?.dealer || effectiveAccountKey)
     : null;
-
-  const resetToAccountRoot = useCallback(() => {
-    setSearch('');
-    setCurrentFolderId(undefined);
-    setFolderPath([{ id: undefined, name: 'Root' }]);
-  }, []);
-
-  const jumpToFolderCrumb = useCallback((pathIndex: number) => {
-    const crumb = folderPath[pathIndex];
-    if (!crumb) return;
-    setCurrentFolderId(crumb.id);
-    setFolderPath(folderPath.slice(0, pathIndex + 1));
-  }, [folderPath]);
 
   const backToAllAccounts = useCallback(() => {
     setAccountFilter('all');
     setSearch('');
     setOverviewSearch('');
-    setCurrentFolderId(undefined);
-    setFolderPath([{ id: undefined, name: 'Root' }]);
   }, [setAccountFilter]);
 
   // ── Render ──
@@ -2338,76 +1952,14 @@ export default function MediaPage() {
                         All Accounts
                       </button>
                       <span className="text-[var(--muted-foreground)]">{'>'}</span>
-                      {activeFolderName ? (
-                        <button
-                          onClick={resetToAccountRoot}
-                          className="text-[var(--primary)] hover:text-[var(--primary)]/80 transition-colors"
-                        >
-                          {activeAccountName}
-                        </button>
-                      ) : (
-                        <span className="text-[var(--muted-foreground)]">{activeAccountName}</span>
-                      )}
-                      {folderPath.slice(1).map((crumb, idx) => {
-                        const pathIndex = idx + 1;
-                        const isLast = pathIndex === folderPath.length - 1;
-                        return (
-                          <span
-                            key={`${crumb.id || 'root'}-${pathIndex}`}
-                            className="inline-flex items-center gap-2"
-                          >
-                            <span className="text-[var(--muted-foreground)]">{'>'}</span>
-                            {isLast ? (
-                              <span className="text-[var(--muted-foreground)]">{crumb.name}</span>
-                            ) : (
-                              <button
-                                onClick={() => jumpToFolderCrumb(pathIndex)}
-                                className="text-[var(--primary)] hover:text-[var(--primary)]/80 transition-colors"
-                              >
-                                {crumb.name}
-                              </button>
-                            )}
-                          </span>
-                        );
-                      })}
+                      <span className="text-[var(--muted-foreground)]">{activeAccountName}</span>
                     </>
                   ) : (
                     <span className="text-[var(--muted-foreground)]">All Accounts</span>
                   )
                 ) : effectiveAccountKey ? (
                   <>
-                    {activeFolderName ? (
-                      <button
-                        onClick={resetToAccountRoot}
-                        className="text-[var(--primary)] hover:text-[var(--primary)]/80 transition-colors"
-                      >
-                        {activeAccountName}
-                      </button>
-                    ) : (
-                      <span className="text-[var(--muted-foreground)]">{activeAccountName}</span>
-                    )}
-                    {folderPath.slice(1).map((crumb, idx) => {
-                      const pathIndex = idx + 1;
-                      const isLast = pathIndex === folderPath.length - 1;
-                      return (
-                        <span
-                          key={`${crumb.id || 'root'}-${pathIndex}`}
-                          className="inline-flex items-center gap-2"
-                        >
-                          <span className="text-[var(--muted-foreground)]">{'>'}</span>
-                          {isLast ? (
-                            <span className="text-[var(--muted-foreground)]">{crumb.name}</span>
-                          ) : (
-                            <button
-                              onClick={() => jumpToFolderCrumb(pathIndex)}
-                              className="text-[var(--primary)] hover:text-[var(--primary)]/80 transition-colors"
-                            >
-                              {crumb.name}
-                            </button>
-                          )}
-                        </span>
-                      );
-                    })}
+                    <span className="text-[var(--muted-foreground)]">{activeAccountName}</span>
                   </>
                 ) : (
                   <span className="text-[var(--muted-foreground)]">Manage your media files</span>
@@ -2472,18 +2024,6 @@ export default function MediaPage() {
                     </>
                   )}
                 </div>
-                {capabilities?.canCreateFolders && (
-                  <button
-                    onClick={() => {
-                      setNewFolderName('');
-                      setShowNewFolderInput(true);
-                    }}
-                    className="inline-flex items-center gap-2 h-10 px-3 text-sm rounded-lg border border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)] hover:text-[var(--foreground)] transition-colors"
-                  >
-                    <FolderPlusIcon className="w-4 h-4" />
-                    New Folder
-                  </button>
-                )}
                 {!isConsumer && (
                   <PrimaryButton
                     onClick={() => { setStagedFiles([]); setShowUploadModal(true); }}
@@ -2731,7 +2271,6 @@ export default function MediaPage() {
               <p className="text-xs text-[var(--muted-foreground)]">
                 {loading ? 'Loading...' : (
                   <>
-                    {filteredFolders.length > 0 && `${filteredFolders.length} folder${filteredFolders.length !== 1 ? 's' : ''}, `}
                     {`${filtered.length} file${filtered.length !== 1 ? 's' : ''}`}
                   </>
                 )}
@@ -2740,16 +2279,16 @@ export default function MediaPage() {
             </div>
           )}
 
-          {/* Shared assets are in a different scope, so nothing in the folder
-              view hints that they exist. Without this the OEM library is
-              invisible unless someone happens to open the filter panel. */}
+          {/* Nothing in the account's own view hints that shared assets exist.
+              Without this the OEM library is invisible unless someone happens to
+              open the filter rail. */}
           {effectiveAccountKey && ownership === 'mine' && sharedCount > 0 && !showArchived && (
             <button
               type="button"
               onClick={() => changeOwnership('all')}
               className="mb-4 flex w-full items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2 text-left text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
             >
-              <FolderArrowDownIcon className="h-4 w-4 shrink-0 text-[var(--primary)]" />
+              <BuildingStorefrontIcon className="h-4 w-4 shrink-0 text-[var(--primary)]" />
               <span className="flex-1">
                 <span className="font-medium text-[var(--foreground)]">
                   {sharedCount} shared {sharedCount === 1 ? 'asset is' : 'assets are'} available
@@ -2804,110 +2343,17 @@ export default function MediaPage() {
           )}
 
           {/* Empty state */}
-          {!loading && effectiveAccountKey && (hasConnection || isAdmin) && filtered.length === 0 && filteredFolders.length === 0 && (
+          {!loading && effectiveAccountKey && (hasConnection || isAdmin) && filtered.length === 0 && (
             <div className="text-center py-16 text-[var(--muted-foreground)]">
               <PhotoIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
-              {files.length === 0 && folders.length === 0 ? (
+              {files.length === 0 ? (
                 <>
-                  <p className="text-sm font-medium mb-1">
-                    {currentFolderId ? 'This folder is empty' : 'No media files yet'}
-                  </p>
+                  <p className="text-sm font-medium mb-1">No media files yet</p>
                   <p className="text-xs">Click &quot;Upload Media&quot; to upload files.</p>
                 </>
               ) : (
                 <p className="text-sm">No files match your search.</p>
               )}
-            </div>
-          )}
-
-          {/* Folder grid */}
-          {!loading && filteredFolders.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3 mt-8 mb-10">
-              {filteredFolders.map(folder => (
-                <div
-                  key={folder.id}
-                  className={`glass-card rounded-xl p-5 text-left group hover:ring-1 hover:ring-[var(--primary)]/30 transition-all animate-fade-in-up relative ${folderMenuId === folder.id ? 'z-30' : 'z-0'} ${
-                    capabilities?.canMove ? 'cursor-grab active:cursor-grabbing' : ''
-                  } ${dropTargetId === folder.id ? 'ring-2 ring-[var(--primary)] bg-[var(--primary)]/10 scale-[1.02] shadow-lg shadow-[var(--primary)]/20' : ''}`}
-                  draggable={!!capabilities?.canMove}
-                  onDragStart={(e) => handleDragStart(e, folder.id, 'folder', folder.name)}
-                  onDragOver={handleMoveDragOver}
-                  onDragEnter={(e) => { e.preventDefault(); setDropTargetId(folder.id); }}
-                  onDragLeave={(e) => {
-                    // Only clear if we truly left the folder card (not entering a child)
-                    if (!e.currentTarget.contains(e.relatedTarget as Node)) setDropTargetId(null);
-                  }}
-                  onDrop={(e) => handleMoveDrop(e, folder.id)}
-                >
-                  <div
-                    className="flex items-center gap-3 cursor-pointer"
-                    onClick={() => navigateToFolder(folder)}
-                  >
-                    <div className="w-10 h-10 rounded-lg bg-[var(--primary)]/10 flex items-center justify-center flex-shrink-0">
-                      <FolderIcon className="w-5 h-5 text-[var(--primary)]" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h3
-                        className="text-xs font-semibold truncate"
-                        title={folder.name}
-                      >
-                        {folder.name}
-                      </h3>
-                      <span className="text-[10px] text-[var(--muted-foreground)]">
-                        {timeAgo(folder.createdAt)}
-                      </span>
-                    </div>
-                  </div>
-                  {/* Folder context menu button */}
-                  {(capabilities?.canMove || capabilities?.canDelete) && (
-                    <div className="absolute top-2 right-2">
-                      <button
-                        onMouseDown={(e) => {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          menuClickRef.current = true;
-                          setFolderMenuId(prev => prev === folder.id ? null : folder.id);
-                        }}
-                        className={`p-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors ${folderMenuId === folder.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-                      >
-                        <EllipsisVerticalIcon className="w-4 h-4" />
-                      </button>
-                      {folderMenuId === folder.id && (
-                        <div className="absolute right-0 top-full mt-1 z-50 w-40 glass-dropdown" onMouseDown={(e) => { e.stopPropagation(); menuClickRef.current = true; }}>
-                          {capabilities?.canMove && (
-                            <button
-                              onClick={() => {
-                                setFolderMenuId(null);
-                                setRenameFolderItem(folder);
-                                setRenameFolderValue(folder.name);
-                              }}
-                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                            >
-                              <PencilSquareIcon className="w-4 h-4" /> Edit details
-                            </button>
-                          )}
-                          {capabilities?.canMove && (
-                            <button
-                              onClick={() => { setFolderMenuId(null); openMoveModal([{ id: folder.id, type: 'folder', name: folder.name }]); }}
-                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
-                            >
-                              <FolderArrowDownIcon className="w-4 h-4" /> Move
-                            </button>
-                          )}
-                          {capabilities?.canDelete && (
-                            <button
-                              onClick={() => { setFolderMenuId(null); setDeleteFolderItem(folder); }}
-                              className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-400 hover:bg-red-500/10 transition-colors"
-                            >
-                              <TrashIcon className="w-4 h-4" /> Delete
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              ))}
             </div>
           )}
 
@@ -2935,15 +2381,12 @@ export default function MediaPage() {
                     capabilities={capabilities}
                     inherited={fileInherited}
                     menuClickRef={menuClickRef}
-                    draggable={!!capabilities?.canMove && !fileInherited}
-                    onDragStart={(e) => handleDragStart(e, f.id, 'file', f.name)}
                     onMenuToggle={() => setOpenMenu(prev => prev === itemKey ? null : itemKey)}
                     onMenuClose={() => setOpenMenu(null)}
                     onSelect={() => toggleSelectFile(f.id)}
                     onPreview={() => setPreviewFile(f)}
                     onCopyUrl={() => copyUrl(f.url)}
                     onDownload={() => downloadFile(f.url, f.name)}
-                    onMove={capabilities?.canMove && !fileInherited ? () => openMoveModal([{ id: f.id, type: 'file', name: f.name }]) : undefined}
                     onRename={capabilities?.canRename && !fileInherited ? () => {
                       setRenameValue(f.name);
                       setRenameAltValue(f.altText ?? '');
@@ -3042,13 +2485,6 @@ export default function MediaPage() {
                 ]
               : [
                   {
-                    id: 'move',
-                    label: 'Move',
-                    icon: <FolderArrowDownIcon className="h-4 w-4" />,
-                    onClick: handleBulkMove,
-                    disabled: !capabilities?.canMove || selectedIds.size === 0,
-                  },
-                  {
                     id: 'download',
                     label: downloading ? 'Zipping…' : 'Download',
                     icon: <ArrowDownTrayIcon className="h-4 w-4" />,
@@ -3082,66 +2518,6 @@ export default function MediaPage() {
         />
       )}
 
-      {showNewFolderInput && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in"
-          onClick={() => {
-            if (creatingFolder) return;
-            setShowNewFolderInput(false);
-            setNewFolderName('');
-          }}
-        >
-          <div className="glass-modal w-[440px]" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)]">
-              <h3 className="text-base font-semibold">New Folder</h3>
-              <button
-                onClick={() => { setShowNewFolderInput(false); setNewFolderName(''); }}
-                disabled={creatingFolder}
-                className="p-1 rounded text-[var(--muted-foreground)] hover:text-[var(--foreground)] disabled:opacity-50"
-              >
-                <XMarkIcon className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-5">
-              <input
-                type="text"
-                value={newFolderName}
-                onChange={(e) => setNewFolderName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    void handleCreateFolder();
-                  }
-                  if (e.key === 'Escape' && !creatingFolder) {
-                    e.preventDefault();
-                    setShowNewFolderInput(false);
-                    setNewFolderName('');
-                  }
-                }}
-                className="w-full px-3 py-2 text-sm rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] focus:outline-none focus:border-[var(--primary)]"
-                placeholder="Folder name"
-                autoFocus
-              />
-            </div>
-            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--border)]">
-              <button
-                onClick={() => { setShowNewFolderInput(false); setNewFolderName(''); }}
-                disabled={creatingFolder}
-                className="px-4 py-2 text-sm font-medium text-[var(--foreground)] rounded-lg hover:bg-[var(--muted)] transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { void handleCreateFolder(); }}
-                disabled={creatingFolder || !newFolderName.trim()}
-                className="px-4 py-2 text-sm font-medium text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-40"
-              >
-                {creatingFolder ? 'Creating...' : 'Create Folder'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Edit details Modal (filename + alt text) ── */}
       {renameFile && (
@@ -3230,52 +2606,6 @@ export default function MediaPage() {
         </div>
       )}
 
-      {renameFolderItem && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in"
-          onClick={() => {
-            if (renamingFolder) return;
-            setRenameFolderItem(null);
-            setRenameFolderValue('');
-          }}
-        >
-          <div className="glass-modal w-[420px]" onClick={(e) => e.stopPropagation()}>
-            <div className="px-5 py-4 border-b border-[var(--border)]">
-              <h3 className="text-base font-semibold">Rename Folder</h3>
-            </div>
-            <div className="p-5">
-              <label className="block text-sm text-[var(--muted-foreground)] mb-2">Folder name</label>
-              <input
-                type="text"
-                value={renameFolderValue}
-                onChange={(e) => setRenameFolderValue(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleRenameFolder(); }}
-                className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg px-3 py-2 text-[var(--foreground)]"
-                autoFocus
-              />
-            </div>
-            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--border)]">
-              <button
-                onClick={() => {
-                  setRenameFolderItem(null);
-                  setRenameFolderValue('');
-                }}
-                disabled={renamingFolder}
-                className="px-4 py-2 text-sm font-medium text-[var(--foreground)] rounded-lg hover:bg-[var(--muted)] transition-colors disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleRenameFolder}
-                disabled={renamingFolder || !renameFolderValue.trim()}
-                className="px-4 py-2 text-sm font-medium text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
-              >
-                {renamingFolder ? 'Saving...' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ── Delete Confirmation Modal ── */}
       {deleteFile && (
@@ -3575,154 +2905,6 @@ export default function MediaPage() {
                 </button>
               </div>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* ── Delete Folder Confirmation Modal ── */}
-      {deleteFolderItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in" onClick={() => setDeleteFolderItem(null)}>
-          <div className="glass-modal w-[420px]" onClick={(e) => e.stopPropagation()}>
-            <div className="px-5 py-4 border-b border-[var(--border)]">
-              <h3 className="text-base font-semibold">Delete Folder</h3>
-            </div>
-            <div className="p-5">
-              <p className="text-sm text-[var(--foreground)]">
-                Are you sure you want to delete <strong>{deleteFolderItem.name}</strong>?
-              </p>
-              <p className="text-xs text-[var(--muted-foreground)] mt-2">
-                This will permanently remove the folder and all its contents from {provider ? providerLabel(provider) : 'the connected platform'}. This action cannot be undone.
-              </p>
-            </div>
-            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--border)]">
-              <button
-                onClick={() => setDeleteFolderItem(null)}
-                className="px-4 py-2 text-sm font-medium text-[var(--foreground)] rounded-lg hover:bg-[var(--muted)] transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteFolder}
-                disabled={deletingFolder}
-                className="px-4 py-2 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50"
-              >
-                {deletingFolder ? 'Deleting...' : 'Delete Folder'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Move Modal (Folder Picker) ── */}
-      {showMoveModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in"
-          onClick={() => !moving && setShowMoveModal(false)}
-          onKeyDown={(e) => { if (e.key === 'Escape' && !moving) setShowMoveModal(false); }}
-          tabIndex={-1}
-          ref={(el) => el?.focus()}
-        >
-          <div className="glass-modal w-[480px] max-h-[70vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border)]">
-              <div>
-                <h3 className="text-base font-semibold">Move to Folder</h3>
-                <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-                  {moveItems.length} item{moveItems.length > 1 ? 's' : ''} selected
-                </p>
-              </div>
-              <button
-                onClick={() => setShowMoveModal(false)}
-                className="p-1 rounded-lg text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
-              >
-                <XMarkIcon className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Breadcrumb */}
-            <div className="flex items-center gap-1 px-5 py-2 border-b border-[var(--border)] text-xs flex-wrap">
-              {moveFolderPath.map((crumb, idx) => {
-                const isLast = idx === moveFolderPath.length - 1;
-                return (
-                  <span key={crumb.id ?? 'root'} className="flex items-center gap-1">
-                    {idx > 0 && <ChevronRightIcon className="w-3 h-3 text-[var(--muted-foreground)]" />}
-                    {isLast ? (
-                      <span className="font-medium text-[var(--foreground)] flex items-center gap-1">
-                        {idx === 0 ? <HomeIcon className="w-3 h-3" /> : <FolderIcon className="w-3 h-3" />}
-                        {crumb.name}
-                      </span>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          const newPath = moveFolderPath.slice(0, idx + 1);
-                          setMoveFolderPath(newPath);
-                          loadMoveFolders(crumb.id);
-                        }}
-                        className="flex items-center gap-1 text-[var(--primary)] hover:text-[var(--primary)]/80 transition-colors"
-                      >
-                        {idx === 0 ? <HomeIcon className="w-3 h-3" /> : <FolderIcon className="w-3 h-3" />}
-                        {crumb.name}
-                      </button>
-                    )}
-                  </span>
-                );
-              })}
-            </div>
-
-            {/* Folder list */}
-            <div className="flex-1 overflow-y-auto p-3 min-h-[200px]">
-              {moveLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <div className="animate-pulse text-sm text-[var(--muted-foreground)]">Loading folders...</div>
-                </div>
-              ) : moveFolders.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-8 text-[var(--muted-foreground)]">
-                  <FolderIcon className="w-8 h-8 opacity-30 mb-2" />
-                  <p className="text-xs">No subfolders here</p>
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  {moveFolders
-                    .filter(mf => !moveItems.some(mi => mi.id === mf.id))
-                    .map(mf => (
-                    <button
-                      key={mf.id}
-                      onClick={() => {
-                        const newPath = [...moveFolderPath, { id: mf.id, name: mf.name }];
-                        setMoveFolderPath(newPath);
-                        loadMoveFolders(mf.id);
-                      }}
-                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left hover:bg-[var(--muted)] transition-colors"
-                    >
-                      <FolderIcon className="w-5 h-5 text-[var(--primary)] flex-shrink-0" />
-                      <span className="text-sm font-medium truncate">{mf.name}</span>
-                      <ChevronRightIcon className="w-3.5 h-3.5 text-[var(--muted-foreground)] ml-auto flex-shrink-0" />
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Footer */}
-            <div className="flex items-center justify-between gap-2 px-5 py-4 border-t border-[var(--border)]">
-              <p className="text-xs text-[var(--muted-foreground)]">
-                Move to: <strong>{moveFolderPath[moveFolderPath.length - 1].name}</strong>
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setShowMoveModal(false)}
-                  className="px-4 py-2 text-sm font-medium text-[var(--foreground)] rounded-lg hover:bg-[var(--muted)] transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleMoveConfirm}
-                  disabled={moving}
-                  className="px-4 py-2 text-sm font-medium text-white bg-[var(--primary)] rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
-                >
-                  {moving ? 'Moving...' : 'Move Here'}
-                </button>
-              </div>
-            </div>
           </div>
         </div>
       )}

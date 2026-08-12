@@ -54,7 +54,6 @@ export function serializeMediaAsset(a: MediaAsset, now = new Date()) {
     thumbnailUrl: a.thumbnailKey ? s3PublicUrl(a.thumbnailKey) : undefined,
     altText: a.altText,
     category: a.category,
-    folderId: a.folderId,
     accountKey: a.accountKey,
     archivedAt: a.archivedAt ? a.archivedAt.toISOString() : null,
     createdAt: a.createdAt.toISOString(),

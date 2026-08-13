@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  ArrowDownTrayIcon,
   ArrowPathIcon,
   CheckCircleIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 import { RIGHTS_STATUS_LABELS, type RightsStatus } from '@/lib/media-rights';
+import { toast } from '@/lib/toast';
 
 /**
  * Rights activity — the sweep's job history plus what it found.
@@ -68,6 +70,47 @@ export function RightsActivityPanel() {
     attentionTruncated: boolean;
   } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+
+  /**
+   * Download the rights sheet.
+   *
+   * Lives on this panel rather than the grid because this is where a rights
+   * review starts — the question "what's lapsing and what's already gone" is
+   * the one the file answers.
+   */
+  const exportCsv = useCallback(async (datedOnly: boolean) => {
+    setExporting(true);
+    try {
+      const res = await fetch('/api/media/rights-export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountKey: 'all', datedOnly }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || 'Could not build the export');
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `loomi-rights-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      const count = res.headers.get('X-Row-Count');
+      toast.success(`Exported ${count ?? ''} asset${count === '1' ? '' : 's'}`.replace('  ', ' '));
+      if (res.headers.get('X-Truncated')) {
+        toast.error('Export was capped at 5000 rows — narrow the scope for the rest.');
+      }
+    } catch {
+      toast.error('Could not build the export');
+    }
+    setExporting(false);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -124,14 +167,37 @@ export function RightsActivityPanel() {
               )}
             </div>
           </div>
-          <button
-            type="button"
-            onClick={load}
-            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
-          >
-            <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            {/* Two exports because they answer different questions: the licensed
+                set is the review, everything is the audit including the gaps. */}
+            <button
+              type="button"
+              onClick={() => exportCsv(true)}
+              disabled={exporting}
+              title="Only assets that carry a licence or campaign date"
+              className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50"
+            >
+              <ArrowDownTrayIcon className="h-3.5 w-3.5" />
+              {exporting ? 'Exporting…' : 'Export rights'}
+            </button>
+            <button
+              type="button"
+              onClick={() => exportCsv(false)}
+              disabled={exporting}
+              title="Every asset, including those with no licence recorded"
+              className="rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50"
+            >
+              All
+            </button>
+            <button
+              type="button"
+              onClick={load}
+              className="flex items-center gap-1.5 rounded-lg border border-[var(--border)] px-2.5 py-1.5 text-xs text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)]"
+            >
+              <ArrowPathIcon className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
         </div>
       </div>
 

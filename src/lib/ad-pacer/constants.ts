@@ -218,3 +218,70 @@ export const MONTH_DAYS_MULTIPLIER = 30.4;
 /** Google: fixed single-day spending limit multiple of the average daily
  *  budget (2× for all accounts — unlike Meta's per-account overage). */
 export const GOOGLE_DAILY_MULTIPLIER = 2;
+/**
+ * Google delivery tiles (delivery/reallocation spec §4): the fewest conversions
+ * a cost-per-conversion or conversion-rate figure may be computed from. These
+ * are low-volume accounts, and a CPA derived from one or two conversions is
+ * noise rendered as signal — a single lead moves it by hundreds of dollars and
+ * someone reads that as performance. Below this the tile shows "—".
+ */
+export const GOOGLE_CONVERSION_FLOOR = 3;
+/**
+ * Move tool soft warnings (§9). Both FLAG, never block — the hard cap is the
+ * movable amount and nothing else, because everything below is a judgment call
+ * that the person making the move may well be making on purpose.
+ *
+ * Source drawn below its own pace: fire when the post-move catch-up rate falls
+ * under this fraction of what the source is actually running at today. A small
+ * trim is the ordinary case and must stay quiet; the warning is for "this
+ * campaign now has less money than its current delivery will consume".
+ */
+export const MOVE_SOURCE_PACE_WARN_RATIO = 0.75;
+/**
+ * Destination front-loading: fire when the move lifts the destination's
+ * recommended daily past this multiple of its current daily. Google will spend
+ * up to 2× the daily on a high-opportunity day, so a large jump lands harder and
+ * sooner than the even-pace figure implies.
+ */
+export const MOVE_DEST_JUMP_WARN_RATIO = 1.5;
+/**
+ * How long after a push Google is still re-pacing around the change (§14).
+ * Inside this window the campaign's spend figures still describe the OLD daily,
+ * so the row shows a just-applied marker: without it, the natural reaction the
+ * next morning is to push again on numbers that have not caught up. Visible
+ * only — it never blocks a second push, because sometimes that is the right call.
+ */
+export const GOOGLE_SETTLING_HOURS = 48;
+/**
+ * Google recent-pace projection (delivery/reallocation spec §5): how many
+ * finalized flight days the run-rate averages over. Short enough to reflect what
+ * the campaign is doing NOW — the question is "where does this land if it keeps
+ * behaving like it has", and a month-long average buries a change of behaviour a
+ * week ago.
+ */
+export const GOOGLE_RECENT_PACE_WINDOW_DAYS = 7;
+/**
+ * The fewest days WITH SPEND the window must hold before a run-rate is stated at
+ * all. Below this there is no pace to speak of, only noise: one busy day would
+ * set the projection for the rest of the month. A campaign under the floor shows
+ * "—" rather than a number nobody should act on.
+ */
+export const GOOGLE_RECENT_PACE_MIN_DAYS = 3;
+/**
+ * Delivery ratio (avg daily spend ÷ daily cap) at or above which a campaign
+ * counts as filling its budget. Used by the delivery verdict and by the
+ * capped/headroom tag's fallback path, from one place so the tag and the
+ * sentence under it can never disagree about what "at cap" means.
+ */
+export const GOOGLE_AT_CAP_RATIO = 0.9;
+/**
+ * Search-lost-impression-share (budget) at or above which a campaign is treated
+ * as genuinely budget-limited (spec §8).
+ *
+ * Google's own BUDGET_CONSTRAINED flag is looser than it reads — it fires on
+ * campaigns delivering well under their cap, which is how a demand-limited
+ * campaign ended up wearing a badge claiming it "spends its full daily every
+ * day". Requiring real lost impression share alongside it is the difference
+ * between "the budget ran out" and "Google thinks the budget might matter".
+ */
+export const GOOGLE_BUDGET_LOST_IS_THRESHOLD = 0.1;

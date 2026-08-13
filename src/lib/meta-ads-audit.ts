@@ -28,6 +28,10 @@ export const TRACKED_AD_FIELDS: Record<string, string> = {
   // Move are allowed to touch, so it needs to be attributable. Labels are how
   // event money gets accounted for, so an untag is worth logging too.
   pacerLocked: 'Budget lock',
+  // Reserving a campaign removes it from the account's pacing math entirely —
+  // expected MTD, the pace read and the daily total all move. A change that
+  // large has to be attributable to whoever made it.
+  pacerReserved: 'Reserved',
   pacerTags: 'Labels',
   googleFlightStartOverride: 'Flight override start',
   googleFlightEndOverride: 'Flight override end',

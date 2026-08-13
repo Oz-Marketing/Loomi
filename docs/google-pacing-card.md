@@ -17,10 +17,10 @@ payable ──► per-campaign share ──► monthly target ──► recommen
 - `src/lib/ad-pacer/google-allocator.ts` — all the arithmetic. Pure, no React/DB/API.
 - `src/lib/ad-pacer/labels.ts` — labels + event budgets, shared with Meta.
 - `src/app/app/tools/google/_components/GooglePacingCard.tsx` — the card.
-- `src/app/app/tools/google/_components/GoogleDeliveryHealthModal.tsx` — §5 popup.
+- `src/app/app/tools/google/_components/GoogleDeliveryExpander.tsx` — §5 row panel.
 - `src/app/app/tools/_shared/LabelChips.tsx` — label chips + filter bar (both platforms).
 - `src/app/api/google-ads-pacer/[accountKey]/push-budgets` — the batched write.
-- `src/app/api/google-ads-pacer/[accountKey]/campaign-health` — the popup's data.
+- `src/app/api/google-ads-pacer/[accountKey]/campaign-health` — the panel's series.
 
 ## 1. Payable
 
@@ -63,6 +63,16 @@ whole day with complete Google data (the latest date in the synced spend series,
 capped at yesterday because today is always partial). Elapsed time shows up in
 `spent`, never in the day count.
 
+Both terms, literally: the sync's own month window (`periodWindow`) ends at the
+data edge too, so `pacerActual` is finalized spend. It used to run through today
+while the day count stopped at yesterday, which put a partial day in the
+numerator and not the denominator — the recommendation then slid down through
+the afternoon with nothing behind the move, and every pace badge read slightly
+ahead. Today's spend still arrives, via the daily-spend series, and is shown
+only as the separate "today so far" figure. Meta's window keeps running through
+today on purpose: its rolling 7-day model makes spend-to-this-instant the
+consistent choice there.
+
 Pairing a fractional day count with a lagging numerator makes the recommendation
 creep up through the day and drop when new data lands — a visible sawtooth with no
 real cause. It also matches Google's own mechanics: Google paces budget changes
@@ -92,16 +102,32 @@ and a mid-month launch paced from the 1st.
 
 `googleFlightStartOverride` / `googleFlightEndOverride` exist for the funding
 window the API can't express (the campaign existed on the 1st but wasn't funded
-until mid-month). Editable in the health popup, kept separate from the planner's
+until mid-month). Editable in the delivery panel, kept separate from the planner's
 `flightStart`/`flightEnd` so a pacing override never rewrites the plan.
 
-## 5. Delivery health popup
+## 5. Delivery row panel
 
-Opened from a row's pace badge. It exists because the pace badge cannot tell the
-two underspending cases apart: "behind but delivering its full daily" needs a
-higher cap, "spending half its cap" cannot absorb more budget at all and the money
-should go elsewhere. Verdict is `avgDailyDelivered ÷ cap` over a 7/14/30-day
-window.
+Opened from a row's pace chevron, inline, and **multi-open** — any number of rows
+at once. It exists because the pace badge cannot tell the two underspending cases
+apart: "behind but delivering its full daily" needs a higher cap, "spending half
+its cap" cannot absorb more budget at all and the money should go elsewhere.
+Verdict is `avgDailyDelivered ÷ cap`.
+
+It replaced a modal. Choosing who gives budget and who gets it is a comparison,
+and a modal can only show one campaign while covering the table you are comparing
+it against.
+
+**Every finalized day of the flight, not a rolling window.** The old 7/14/30
+selector answered a different question each day you opened it, and its 30-day
+setting counted back past the 1st, so a chart opened early in a month was mostly
+last month's campaign. The window is now flight start → data edge: same question
+every day, no prior-month contamination.
+
+**Today is never a bar.** It is a partial day, so it would read as a collapse in
+delivery and would drag the average the verdict is computed from. It appears once,
+as a hatched "today so far" strip, plus a `~live total` line (finalized + today)
+that exists purely so the finalized figures tie out against what someone sees in
+the live Google Ads account.
 
 It also carries the one piece of reasoning the recommendation deliberately no
 longer holds: whether the remaining budget can *physically* still bill, given
@@ -111,9 +137,11 @@ Reference metrics (conversions, cost/conv, CTR) are labeled reference and point
 back to the platform — conversion tracking quality varies far too much across
 these accounts to render an automated good/bad verdict on the card.
 
-The chart reads from the already-synced `MetaAdsPacerDailySpend` rows (120-day
-retention), so opening the popup costs no Google call; only the reference metrics
-fire a lazy single-campaign read, and they fail soft.
+**Opening a row costs no Google call.** The chart reads the already-synced
+`MetaAdsPacerDailySpend` rows (120-day retention) and the metrics read columns the
+account sync wrote. That is load-bearing, not incidental: the metrics used to be a
+live single-campaign read fired on each open, which multi-open would have turned
+into one API call per open row. Nothing here may reintroduce a per-open live read.
 
 ## 6. Labels and event budgets
 
@@ -172,7 +200,7 @@ half-applied plan is worse than a rejected one.
 The four-state recommendation engine (`on_track` / `adjust` / `delivery_limited` /
 `shortfall`) no longer drives the Google number. The recommendation surface is now
 stateless arithmetic on target, spent and remaining days; the delivery reasoning it
-used to fold in moved to the health popup, which is where it can be read against
+used to fold in moved to the delivery panel, which is where it can be read against
 the actual delivery picture. `buildGoogleRecommendation` and
 `buildGooglePacingCard` remain in `pacing-engine.ts` / `google-pacer-calc.ts` and
 are still unit-tested, but nothing in the Google UI calls them.

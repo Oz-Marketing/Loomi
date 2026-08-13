@@ -29,6 +29,13 @@
  *     number nobody can check.
  */
 
+import {
+  GOOGLE_AT_CAP_RATIO,
+  GOOGLE_RECENT_PACE_MIN_DAYS,
+  GOOGLE_RECENT_PACE_WINDOW_DAYS,
+  MOVE_DEST_JUMP_WARN_RATIO,
+  MOVE_SOURCE_PACE_WARN_RATIO,
+} from './constants';
 import { num } from './helpers';
 import { clampToMonth } from './pacer-calc';
 import { effMarkupOf } from './helpers';
@@ -301,6 +308,14 @@ export interface AllocatorLine {
   currentDaily: number;
   flight: FlightDays;
   locked: boolean;
+  /**
+   * §12 Reserved: committed budget that cannot spend yet. IN allocation, OUT of
+   * pacing. `target` still counts toward the account total; `expectedToDate`,
+   * `paceStatus` and `recommendedDaily` are all zeroed, because a campaign that
+   * is not supposed to spend yet cannot be behind, and a daily for it would be a
+   * rate to push at a campaign that does not exist.
+   */
+  reserved: boolean;
   tags: string[];
   pacingType: 'Daily' | 'Total';
   /** Google's channel rollup (Search / Display / PMax / …) — the planner shows it
@@ -357,14 +372,21 @@ export function buildAllocatorLine(
   const spentMTD = num(ad.pacerActual) ?? 0;
   const flight = resolveFlight(ad, ctx.clock);
 
+  // §12 — a reserved line is out of pacing entirely. Everything below is zeroed
+  // rather than computed-then-ignored, so no downstream sum can accidentally
+  // pick one of these figures back up. A reserve at 0% of expected is not
+  // "underspending", it is a campaign doing exactly what was intended.
+  const reserved = ad.pacerReserved === true;
   const expectedToDate =
-    flight.total > 0 ? round2((target * flight.elapsed) / flight.total) : 0;
-  const evenDaily = flight.total > 0 ? target / flight.total : 0;
+    reserved || flight.total <= 0 ? 0 : round2((target * flight.elapsed) / flight.total);
+  const evenDaily = reserved || flight.total <= 0 ? 0 : target / flight.total;
   const recommendedDaily =
-    flight.remaining > 0 ? Math.max(0, target - spentMTD) / flight.remaining : 0;
+    reserved || flight.remaining <= 0
+      ? 0
+      : Math.max(0, target - spentMTD) / flight.remaining;
   const paceRatio = expectedToDate > 0 ? spentMTD / expectedToDate : null;
   const paceStatus: PaceStatus =
-    paceRatio == null
+    reserved || paceRatio == null
       ? 'none'
       : paceRatio > PACE_OVER_RATIO
         ? 'over'
@@ -389,11 +411,16 @@ export function buildAllocatorLine(
     evenDaily,
     recommendedDaily,
     remainingBudget: round2(Math.max(0, target - spentMTD)),
+    // No projection for a reserved line: it is not running, so "where it lands"
+    // has no answer until it launches.
     projectedSpend:
-      currentDaily > 0 ? round2(spentMTD + currentDaily * flight.remaining) : null,
+      !reserved && currentDaily > 0
+        ? round2(spentMTD + currentDaily * flight.remaining)
+        : null,
     currentDaily,
     flight,
     locked: ad.pacerLocked === true,
+    reserved,
     tags: parseTags(ad.pacerTags),
     pacingType,
     channelType: ad.googleChannelType ?? null,
@@ -404,7 +431,9 @@ export function buildAllocatorLine(
     hasAdSchedule: !!ad.googleHasAdSchedule,
     budgetLimited: !!ad.googleBudgetConstrained,
     disapproved: !!ad.googleAdsDisapproved,
-    dailyControllable: pacingType === 'Daily',
+    // Reserved lines are excluded here too, which is what keeps them out of the
+    // account daily total AND out of the push plan in one place.
+    dailyControllable: pacingType === 'Daily' && !reserved,
   };
 }
 
@@ -419,6 +448,8 @@ export interface AllocatorTotals {
    *  what should match the account daily budget total in Google Ads Manager. */
   accountDaily: number;
   lockedTarget: number;
+  /** Σ target of reserved lines — in the allocation, out of every pacing figure. */
+  reservedTarget: number;
   /** Payable unfiltered; the label's event budget (else the subset's own total)
    *  when a filter is active (§9). */
   denominator: number;
@@ -485,6 +516,13 @@ export function buildAllocatorView(input: BuildViewInput): AllocatorView {
     0,
   );
   const lockedTarget = round2(visible.filter((l) => l.locked).reduce((s, l) => s + l.target, 0));
+  // §12 — how much of the allocation is set aside for campaigns that cannot
+  // spend yet. Counted IN `allocated` (the reserve is committed money and the
+  // payable check must see it) but surfaced separately so the account read can
+  // say why expected-MTD is lower than the allocation implies.
+  const reservedTarget = round2(
+    visible.filter((l) => l.reserved).reduce((s, l) => s + l.target, 0),
+  );
 
   const eventBudget = activeLabel ? eventBudgetFor(input.eventBudgets, activeLabel) : null;
   const denominatorKind: AllocatorView['denominatorKind'] =
@@ -507,6 +545,7 @@ export function buildAllocatorView(input: BuildViewInput): AllocatorView {
       evenDaily,
       accountDaily,
       lockedTarget,
+      reservedTarget,
       denominator,
       unallocated: round2(denominator - allocated),
       fullyAllocated: moneyEq(denominator, allocated),
@@ -575,8 +614,11 @@ export type BalanceMode = 'proportional' | 'even';
  * it from the mode is what lets a filtered view balance an event budget: deriving
  * would hardcode "100%" and quietly rescale the event to the whole account.
  *
- * `room` is what's left of it after the locked carve-outs. Locked lines are never
- * touched by either mode — that is the entire meaning of a lock.
+ * `room` is what's left of it after the carve-outs. Locked lines are never
+ * touched by either mode — that is the entire meaning of a lock — and RESERVED
+ * lines are carved out for the same reason (§12): Balance would otherwise scale
+ * or flatten a reserve like any other line, silently redistributing money that
+ * was deliberately committed to a campaign which cannot spend it yet.
  *
  * Proportional keeps the unlocked lines' relative shape (the default: it preserves
  * the judgment already encoded in the split); even sets them equal. Proportional
@@ -584,27 +626,28 @@ export type BalanceMode = 'proportional' | 'even';
  * is no shape to preserve.
  */
 export function balance(
-  lines: readonly { id: string; input: number; locked: boolean }[],
+  lines: readonly { id: string; input: number; locked: boolean; reserved?: boolean }[],
   denominatorInUnit: number,
   balanceMode: BalanceMode,
 ): Map<string, number> {
   const out = new Map<string, number>();
-  const unlocked = lines.filter((l) => !l.locked);
-  if (unlocked.length === 0) return out;
-  const lockedSum = lines.filter((l) => l.locked).reduce((s, l) => s + l.input, 0);
-  const room = Math.max(0, denominatorInUnit - lockedSum);
+  const untouchable = (l: { locked: boolean; reserved?: boolean }) => l.locked || l.reserved;
+  const adjustable = lines.filter((l) => !untouchable(l));
+  if (adjustable.length === 0) return out;
+  const carvedOut = lines.filter(untouchable).reduce((s, l) => s + l.input, 0);
+  const room = Math.max(0, denominatorInUnit - carvedOut);
 
-  if (balanceMode === 'even' || unlocked.reduce((s, l) => s + l.input, 0) <= 0) {
+  if (balanceMode === 'even' || adjustable.reduce((s, l) => s + l.input, 0) <= 0) {
     // Distribute the rounding remainder over the first lines so the total lands
     // exactly on `room` instead of a cent or two short.
-    const shares = splitEvenly(room, unlocked.length);
-    unlocked.forEach((l, i) => out.set(l.id, shares[i]));
+    const shares = splitEvenly(room, adjustable.length);
+    adjustable.forEach((l, i) => out.set(l.id, shares[i]));
     return out;
   }
-  const sum = unlocked.reduce((s, l) => s + l.input, 0);
-  const scaled = unlocked.map((l) => (l.input / sum) * room);
+  const sum = adjustable.reduce((s, l) => s + l.input, 0);
+  const scaled = adjustable.map((l) => (l.input / sum) * room);
   const rounded = reconcileRounding(scaled, room);
-  unlocked.forEach((l, i) => out.set(l.id, rounded[i]));
+  adjustable.forEach((l, i) => out.set(l.id, rounded[i]));
   return out;
 }
 
@@ -667,20 +710,50 @@ export interface MoveAllocation {
   recommendedDailyAfter: number;
 }
 
+/** A §9 soft warning: shown next to the preview, never a block. */
+export interface MoveWarning {
+  kind: 'source_below_pace' | 'destination_daily_jump';
+  /** Which line it concerns, so the UI can put it beside the right row. */
+  lineId: string;
+  message: string;
+}
+
 export interface MovePlan {
   ok: boolean;
   /** Why the move can't run — shown verbatim, so it names the actual limit. */
   error: string | null;
   total: number;
+  /** The HARD cap: target − spent MTD for a campaign source (§9). */
   available: number;
+  /** What the source has already spent. Displayed beside `available` so the cap
+   *  reads as a fact about this campaign rather than an arbitrary limit. */
+  sourceSpent: number;
   source: { label: string; targetBefore: number; targetAfter: number; recommendedDailyAfter: number } | null;
   allocations: MoveAllocation[];
+  /** Judgment-call flags. A move with warnings is still `ok: true`. */
+  warnings: MoveWarning[];
   /** New input values (card's unit) to write, keyed by line id. */
   inputs: Map<string, number>;
 }
 
-/** What the source has to give: a campaign's own target, or the leftover between
- *  the allocation and the denominator (§8). */
+/**
+ * What the source has to give.
+ *
+ * For a campaign this is **target − spent MTD**, never the full target. Money
+ * already spent cannot be given away: it has left the account and is sitting in
+ * Google's ledger against that campaign. Offering the whole target produces a
+ * move that looks conserving on the card and is arithmetically impossible in
+ * reality — the source ends the month with a target below what it has already
+ * spent, so its remaining budget is negative and its recommended daily pins to
+ * zero while the campaign keeps delivering. This is the §9 correctness fix.
+ *
+ * It is deliberately the SAME quantity the panel shows as "remaining budget"
+ * (§6). One number, two names; computing an "available" figure from the target
+ * alone anywhere is what let the two drift apart.
+ *
+ * For "Unallocated" it stays the leftover between the allocation and the
+ * denominator — nothing has been spent from a pool that was never assigned.
+ */
 export function sourceAvailable(input: {
   lines: readonly AllocatorLine[];
   source: MoveSource;
@@ -691,7 +764,8 @@ export function sourceAvailable(input: {
     const allocated = input.lines.reduce((s, l) => s + l.target, 0);
     return Math.max(0, round2(input.denominator - allocated));
   }
-  return input.lines.find((l) => l.id === source.id)?.target ?? 0;
+  const line = input.lines.find((l) => l.id === source.id);
+  return line ? Math.max(0, round2(line.target - line.spentMTD)) : 0;
 }
 
 /**
@@ -702,20 +776,29 @@ export function sourceAvailable(input: {
  * rise.
  *
  * Locked lines are excluded as both source and destination (§4) — a carve-out
- * that automated redistribution can still empty isn't a carve-out.
+ * that automated redistribution can still empty isn't a carve-out. Reserved
+ * lines are excluded for a different reason (§12): the money is committed to a
+ * campaign that cannot spend it yet, so taking it away breaks a promise and
+ * adding to it piles budget onto something that still cannot spend a cent.
  *
  * Returns a preview rather than mutating: source and each destination, target
  * before → after, and the new recommended daily. Committing is the caller's move.
  */
 export function planMove(input: MovePlanInput): MovePlan {
   const byId = new Map(input.lines.map((l) => [l.id, l]));
+  const sourceSpent =
+    input.source.kind === 'campaign'
+      ? (byId.get(input.source.id)?.spentMTD ?? 0)
+      : 0;
   const empty: MovePlan = {
     ok: false,
     error: null,
     total: 0,
     available: 0,
+    sourceSpent,
     source: null,
     allocations: [],
+    warnings: [],
     inputs: new Map(),
   };
 
@@ -726,10 +809,21 @@ export function planMove(input: MovePlanInput): MovePlan {
   if (sourceLine?.locked) {
     return { ...empty, error: `${sourceLine.name} is locked — unlock it to move its budget.` };
   }
+  // §12 — a reserve is money already promised to a campaign that cannot spend it
+  // yet. Moving it out silently breaks that commitment; moving budget IN piles
+  // more onto a campaign that still cannot spend any of it.
+  if (sourceLine?.reserved) {
+    return {
+      ...empty,
+      error: `${sourceLine.name} is reserved — un-reserve it before moving its budget.`,
+    };
+  }
 
   const destinations = input.destinationIds
     .map((id) => byId.get(id))
-    .filter((l): l is AllocatorLine => !!l && !l.locked && l.id !== sourceLine?.id);
+    .filter(
+      (l): l is AllocatorLine => !!l && !l.locked && !l.reserved && l.id !== sourceLine?.id,
+    );
   if (destinations.length === 0) {
     return { ...empty, error: null, available: sourceAvailable(input) };
   }
@@ -753,13 +847,12 @@ export function planMove(input: MovePlanInput): MovePlan {
   const total = round2([...amounts.values()].reduce((s, v) => s + v, 0));
   const available = sourceAvailable(input);
   if (total > available + MONEY_EPSILON) {
-    const label = sourceLine ? sourceLine.name : 'Unallocated';
-    return {
-      ...empty,
-      total,
-      available,
-      error: `${label} only has $${available.toFixed(2)} to give.`,
-    };
+    // Name BOTH figures. "Brand only has $1,155.31" invites the reply "no, Brand
+    // has $1,694.35" — the cap only makes sense once the spent half is visible.
+    const detail = sourceLine
+      ? `${sourceLine.name} has $${available.toFixed(2)} movable — the other $${sourceLine.spentMTD.toFixed(2)} of its $${sourceLine.target.toFixed(2)} target is already spent and cannot be moved.`
+      : `Unallocated only has $${available.toFixed(2)} to give.`;
+    return { ...empty, total, available, error: detail };
   }
 
   // Convert a dollar delta into the card's unit. In percent mode a dollar move is
@@ -814,7 +907,50 @@ export function planMove(input: MovePlanInput): MovePlan {
     };
   }
 
-  return { ok: true, error: null, total, available, source, allocations, inputs };
+  // §9 soft warnings. Both are judgment calls the person may be making on
+  // purpose, so they FLAG and never block — the movable cap is the only hard
+  // limit. Computed here rather than in the dialog so the two entry points
+  // (main table, Compare) cannot warn differently about the same move.
+  const warnings: MoveWarning[] = [];
+  if (sourceLine && sourceLine.currentDaily > 0 && sourceLine.flight.remaining > 0) {
+    const rateAfter = source ? source.recommendedDailyAfter : 0;
+    if (rateAfter < sourceLine.currentDaily * MOVE_SOURCE_PACE_WARN_RATIO) {
+      const remainingAfter = Math.max(0, (source?.targetAfter ?? 0) - sourceLine.spentMTD);
+      // A rate that rounds to $0.00 reads as a formatting bug rather than as
+      // "you have given away effectively all of it", so say that instead.
+      const rateText = rateAfter > 0 && rateAfter < 0.01 ? 'under $0.01' : `$${rateAfter.toFixed(2)}`;
+      warnings.push({
+        kind: 'source_below_pace',
+        lineId: sourceLine.id,
+        message: `Leaves ${sourceLine.name} $${remainingAfter.toFixed(2)} for ${sourceLine.flight.remaining} day${sourceLine.flight.remaining === 1 ? '' : 's'} — about ${rateText}/day, below the $${sourceLine.currentDaily.toFixed(2)}/day it is running at now. It will exhaust its budget before the flight ends unless you lower its daily too.`,
+      });
+    }
+  }
+  for (const a of allocations) {
+    const line = byId.get(a.id);
+    // Nothing to compare against on a campaign with no daily set (unlinked, or
+    // a total-budget campaign) — silence beats a jump warning off a zero base.
+    if (!line || line.currentDaily <= 0) continue;
+    if (a.recommendedDailyAfter > line.currentDaily * MOVE_DEST_JUMP_WARN_RATIO) {
+      warnings.push({
+        kind: 'destination_daily_jump',
+        lineId: a.id,
+        message: `${a.name} jumps from $${line.currentDaily.toFixed(2)}/day to $${a.recommendedDailyAfter.toFixed(2)}/day. Google can spend up to 2× the daily on a strong day, so this lands harder and faster than the even-pace figure suggests.`,
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    error: null,
+    total,
+    available,
+    sourceSpent,
+    source,
+    allocations,
+    warnings,
+    inputs,
+  };
 }
 
 /** The §5 catch-up rate, exposed for previews: remaining budget ÷ remaining
@@ -825,6 +961,81 @@ export function recommendedDailyFor(
   remainingDays: number,
 ): number {
   return remainingDays > 0 ? Math.max(0, target - spent) / remainingDays : 0;
+}
+
+// ── §5 recent-pace projection ──
+
+export interface RecentPace {
+  /** Average daily spend over the window, or null when there isn't enough
+   *  history to state one. Null is the point of this type — see below. */
+  avgDaily: number | null;
+  /** Days that went into the average (the divisor actually used). */
+  days: number;
+  /** Leading zero-spend days dropped before averaging. */
+  rampDaysSkipped: number;
+}
+
+/**
+ * What the campaign has actually been spending per day lately (§5).
+ *
+ * Three rules, each there because of a specific way this number lies:
+ *
+ *  1. **Leading zero-spend days are dropped.** A campaign live on paper from the
+ *     1st but not delivering until the 4th would otherwise average three zeros
+ *     into its run-rate and project a permanent underspend that never existed.
+ *     Only LEADING zeros go: a zero day mid-flight is real delivery information
+ *     and stays in the divisor.
+ *  2. **The window is the last few finalized days**, not the whole flight. The
+ *     question is where this lands if it keeps behaving as it has, and a
+ *     month-long average buries a change of behaviour a week ago.
+ *  3. **Below the floor there is no answer.** With one or two spending days, a
+ *     single busy day sets the projection for the rest of the month. Returning
+ *     null makes the caller render "—"; returning a number would dress that
+ *     noise up as a forecast. This is what keeps a brand-new or reserved
+ *     campaign from showing a run-rate at all.
+ *
+ * Takes an already flight-clamped, finalized series (no today, no prior month) —
+ * the panel's chart series exactly.
+ */
+export function recentPace(
+  series: readonly { date: string; spend: number }[],
+  windowDays: number = GOOGLE_RECENT_PACE_WINDOW_DAYS,
+  minDays: number = GOOGLE_RECENT_PACE_MIN_DAYS,
+): RecentPace {
+  let start = 0;
+  while (start < series.length && (Number(series[start]?.spend) || 0) <= 0) start++;
+  const live = series.slice(start);
+  const window = live.slice(-Math.max(1, windowDays));
+  const spending = window.filter((p) => (Number(p.spend) || 0) > 0).length;
+  if (window.length === 0 || spending < minDays) {
+    return { avgDaily: null, days: window.length, rampDaysSkipped: start };
+  }
+  const total = window.reduce((s, p) => s + (Number(p.spend) || 0), 0);
+  // Divide by the window's real LENGTH, not the days requested — a campaign with
+  // four days of history must not read as half-pace because we asked for seven.
+  return {
+    avgDaily: round2(total / window.length),
+    days: window.length,
+    rampDaysSkipped: start,
+  };
+}
+
+/**
+ * Where the month lands if the campaign keeps spending at `avgDaily` (§5).
+ * Null in, null out: no run-rate means no projection, never a bare spent-MTD
+ * figure masquerading as a forecast.
+ *
+ * A straight line, deliberately. Google's daily is an average it paces against
+ * its own monthly limit and can spend up to 2× of on any one day, so this is a
+ * what-if, not a prediction of Google's behaviour — the label has to say so.
+ */
+export function projectAtDaily(
+  spentMTD: number,
+  avgDaily: number | null,
+  remainingDays: number,
+): number | null {
+  if (avgDaily == null) return null;
+  return round2(spentMTD + avgDaily * Math.max(0, remainingDays));
 }
 
 // ── §7 delivery health verdict ──
@@ -864,7 +1075,8 @@ export function deliveryVerdict(
   const ratio = cap > 0 ? avgDaily / cap : null;
   let kind: DeliveryVerdictKind;
   if (ratio == null) kind = 'room';
-  else if (ratio >= 0.9) kind = paceStatus === 'over' ? 'at_cap_ahead' : 'at_cap';
+  else if (ratio >= GOOGLE_AT_CAP_RATIO)
+    kind = paceStatus === 'over' ? 'at_cap_ahead' : 'at_cap';
   else if (ratio >= 0.5) kind = 'room';
   else kind = 'underdelivering';
   return { kind, ratio, avgDaily, windowSpend, cap };
@@ -873,11 +1085,56 @@ export function deliveryVerdict(
 // ── §8 push plan ──
 
 export type PushSkipReason =
+  | 'reserved'
   | 'not_linked'
   | 'total_budget'
   | 'shared_budget'
   | 'no_target'
   | 'below_threshold';
+
+/**
+ * Can this ONE campaign be applied on its own (§14)?
+ *
+ * Same structural rules as the batch — reserved, unlinked, total-budget, shared,
+ * no target — with the drift threshold deliberately absent. The threshold exists
+ * to keep trivial edits out of a batch nobody inspected line by line; a person
+ * who clicked apply on one named campaign has already made that judgment, and
+ * silently doing nothing in response to a deliberate click is worse than the
+ * pointless edit the gate was protecting against.
+ *
+ * `null` reason = it can be applied.
+ */
+export function applyEligibility(
+  line: AllocatorLine,
+  budgetResourceName: string | null | undefined,
+): { ok: boolean; reason: Exclude<PushSkipReason, 'below_threshold'> | null } {
+  if (line.reserved) return { ok: false, reason: 'reserved' };
+  if (!line.dailyControllable) return { ok: false, reason: 'total_budget' };
+  if (line.shared) return { ok: false, reason: 'shared_budget' };
+  if (!budgetResourceName) return { ok: false, reason: 'not_linked' };
+  if (line.target <= 0) return { ok: false, reason: 'no_target' };
+  return { ok: true, reason: null };
+}
+
+/** Plain-language reason an apply control is unavailable. Shown ON the disabled
+ *  control (§14): a control that is dead with no stated reason reads as broken,
+ *  and the reason is usually the actual next action ("set it in Google"). */
+export function applyBlockedReason(
+  reason: Exclude<PushSkipReason, 'below_threshold'>,
+): string {
+  switch (reason) {
+    case 'reserved':
+      return 'Reserved — out of pacing, so there is no daily to push.';
+    case 'total_budget':
+      return 'Total-budget campaign — Google paces it to its own end date, so there is no daily rate to set.';
+    case 'shared_budget':
+      return 'Shared budget, set in Google — several campaigns point at this budget, so a per-campaign daily does not exist.';
+    case 'not_linked':
+      return 'Not linked to a Google campaign budget yet — import or sync it first.';
+    case 'no_target':
+      return 'No monthly target allocated, so there is nothing to pace to.';
+  }
+}
 
 export interface PushCandidate {
   id: string;
@@ -917,7 +1174,9 @@ export interface PushPlan {
  *    campaign's number onto a budget its siblings also spend from would quietly
  *    change campaigns nobody touched;
  *  - drift below the threshold: rewriting a daily that's already right costs
- *    smart bidding its learning for nothing.
+ *    smart bidding its learning for nothing;
+ *  - RESERVED lines (§12): there is no daily to push at a campaign that has not
+ *    been built or linked yet, and it is out of pacing anyway.
  *
  * Locked lines ARE pushed. A lock protects a carve-out from redistribution; it
  * says nothing about whether the platform should be told the rate that carve-out
@@ -936,6 +1195,12 @@ export function buildPushPlan(
   for (const line of lines) {
     const newDaily = round2(line.recommendedDaily);
     const base = { id: line.id, name: line.name, currentDaily: line.currentDaily, newDaily };
+    // §12 — reserved before total_budget, because `dailyControllable` is false
+    // for both and "total budget" would be the wrong reason to show.
+    if (line.reserved) {
+      skipped.push({ ...base, reason: 'reserved' });
+      continue;
+    }
     if (!line.dailyControllable) {
       skipped.push({ ...base, reason: 'total_budget' });
       continue;

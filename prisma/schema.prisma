@@ -2342,8 +2342,54 @@ model MetaAdsPacerAd {
   //    serve (fix the ads, never raise the budget).
   // googlePrimaryStatus keeps the raw campaign.primary_status for display.
   googlePrimaryStatus          String?
+  // The FULL campaign.primary_status_reasons list, JSON-encoded. The two
+  // booleans above are derived from it and answer one question each; this is
+  // kept because the delivery panel has to say WHY a campaign isn't serving
+  // (budget removed, pending, ended, policy) and that reason set is exactly
+  // what the mismatch warning needs to be actionable rather than alarming.
+  googlePrimaryStatusReasons   String?
   googleBudgetConstrained      Boolean  @default(false)
   googleAdsDisapproved         Boolean  @default(false)
+  // Delivery-surface metric tiles (delivery/reallocation spec §4). These ride the
+  // SAME account-wide month-to-date query that produces pacerActual, so a tile can
+  // never disagree with the spend figure above it and opening N row expanders
+  // costs ZERO Google calls. Server-managed by the sync, exactly like pacerActual:
+  // the client PUT allow-list omits them, so autosave can't clobber a sync.
+  //
+  // Only the raw INPUTS are stored. Avg CPC, CTR and cost/conv are derived at
+  // render (spend ÷ clicks, clicks ÷ impressions, spend ÷ conversions) rather
+  // than trusted from the API, because Google's own cost_per_conversion is blank
+  // at zero conversions and a blank beside a real spend figure reads as "free".
+  // conversions_from_interactions_rate is stored, not derived — interactions ≠
+  // clicks on several campaign types and we don't pull interactions.
+  googleImpressions            Int?
+  googleClicks                 Int?
+  googleConversions            String?
+  googleConvRate               String? // fraction 0–1, ×100 at display
+  // Search impression share lost, as FRACTIONS 0–1 (×100 at display). Search and
+  // Shopping only: null for PMAX / Demand Gen / Display, and null when the
+  // account is under Google's reporting threshold — both render "not available",
+  // never a zero. Google reports anything above 90% as exactly 0.9, so 0.9 must
+  // display as "≥90%". These are RATIOS over eligible impressions: they are read
+  // unsegmented over the whole month window and must never be summed or averaged
+  // across days.
+  //  • budget-lost — demand exists, the budget ran out. Can absorb more money.
+  //  • rank-lost   — bid/Quality Score is the constraint. More money just sits.
+  googleSearchBudgetLostIs     String?
+  googleSearchRankLostIs       String?
+  // Last day covered by the metrics above (YYYY-MM-DD) — the tiles' own "as of"
+  // stamp. Matches pacerActual's window end exactly: the DATA EDGE (yesterday in
+  // a live month, the month end in a closed one), never today. A stale stamp is
+  // how a failed metrics pull surfaces: the sync leaves the previous values in
+  // place rather than writing zeros.
+  googleMetricsAsOf            String?
+  // When this campaign's daily budget was last pushed to Google (§14). Drives
+  // the just-applied marker: Google takes 24–48h to re-pace around a budget
+  // change, so numbers read the morning after a push describe the OLD rate.
+  // Without a visible "applied yesterday", the natural reaction is to push
+  // again on figures that have not caught up yet. Visible only — it never
+  // blocks a second push, because sometimes the second push is the right call.
+  googleDailyPushedAt          DateTime?
   // The campaign restricts days/dayparts via an ad schedule. Since Google's
   // June 2026 change, scheduled campaigns pace the FULL monthly cap into
   // their active days, so calendar-day pacing math misreads them — detected
@@ -2372,6 +2418,23 @@ model MetaAdsPacerAd {
   // It does not exempt the line from a budget push: the rate it needs is still
   // the rate it needs.
   pacerLocked                  Boolean  @default(false)
+  // Reserved (delivery/reallocation spec §12): budget set aside for a campaign
+  // that CANNOT spend yet — committed, but not built or not linked to Google.
+  //
+  // In allocation, out of pacing. The target still counts toward the account
+  // allocation total and the payable check, so the reserve stays visible and
+  // protected and can never be mistaken for free budget; but the line is removed
+  // from Expected MTD, account pace, the recommended daily, the account daily
+  // total, Balance, Move, the push, the pacing alert scanners and month-end
+  // variance. Leaving it in is what made a whole account read 74% of expected
+  // and demand $397/day when the honest figures were ~86% and ~$320.
+  //
+  // MANUAL, never inferred. Auto-detecting from "no linked daily" would
+  // eventually fire on a merely-paused live campaign, and a tool that silently
+  // drops a campaign out of pacing is worse than one that shows a wrong number.
+  // Distinct from pacerLocked: locked = live but don't reallocate; reserved =
+  // cannot spend yet. Different badges, different meanings, never merged.
+  pacerReserved                Boolean  @default(false)
   // Free-text labels as a JSON array of strings, e.g. ["Summer Sales Event"].
   // A view/tracking dimension only, INDEPENDENT of budgetSource (base/added):
   // tagging a base-funded campaign into an event must not move money between

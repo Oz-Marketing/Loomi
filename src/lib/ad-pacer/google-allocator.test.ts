@@ -7,7 +7,11 @@ import {
   convertMode,
   deliveryVerdict,
   flightDayCounts,
+  applyBlockedReason,
+  applyEligibility,
   planMove,
+  projectAtDaily,
+  recentPace,
   resolveClock,
   resolveFlight,
   resolvePayable,
@@ -85,6 +89,7 @@ function line(overrides: Partial<AllocatorLine> & { id: string }): AllocatorLine
     hasAdSchedule: false,
     budgetLimited: false,
     disapproved: false,
+    reserved: false,
     dailyControllable: true,
     ...overrides,
   } as AllocatorLine;
@@ -522,6 +527,52 @@ describe('balance (§12, AC 3)', () => {
   });
 });
 
+describe('applyEligibility (§14) — individual apply ignores the drift gate', () => {
+  it('allows a linked, unreserved, non-shared daily campaign with a target', () => {
+    expect(applyEligibility(line({ id: 'a', target: 500 }), 'customers/1/campaignBudgets/9')).toEqual(
+      { ok: true, reason: null },
+    );
+  });
+
+  it('allows a change FAR below the batch threshold', () => {
+    // A 2-cent drift would never make it into apply-all, and that is correct
+    // for a batch nobody inspected line by line. But a person who clicked apply
+    // on this campaign by name has already made that judgment, and silently
+    // doing nothing is worse than the trivial edit the gate was avoiding.
+    const tiny = line({ id: 'a', target: 500, currentDaily: 20, recommendedDaily: 20.02 });
+    expect(applyEligibility(tiny, 'customers/1/campaignBudgets/9').ok).toBe(true);
+  });
+
+  it('blocks the four structural cases, each with its own reason', () => {
+    const res = 'customers/1/campaignBudgets/9';
+    expect(applyEligibility(line({ id: 'a', target: 500, reserved: true }), res).reason).toBe(
+      'reserved',
+    );
+    expect(
+      applyEligibility(line({ id: 'a', target: 500, dailyControllable: false }), res).reason,
+    ).toBe('total_budget');
+    expect(applyEligibility(line({ id: 'a', target: 500, shared: true }), res).reason).toBe(
+      'shared_budget',
+    );
+    expect(applyEligibility(line({ id: 'a', target: 500 }), null).reason).toBe('not_linked');
+    expect(applyEligibility(line({ id: 'a', target: 0 }), res).reason).toBe('no_target');
+  });
+
+  it('reports reserved BEFORE total_budget — the reason has to be the real one', () => {
+    // A reserved line is also not daily-controllable, so order decides which
+    // sentence the user reads. "Total-budget campaign" would be a lie here.
+    const reserved = line({ id: 'a', target: 500, reserved: true, dailyControllable: false });
+    expect(applyEligibility(reserved, 'customers/1/campaignBudgets/9').reason).toBe('reserved');
+  });
+
+  it('every blocked reason has plain-language copy', () => {
+    // A disabled control with no stated reason reads as broken.
+    for (const reason of ['reserved', 'total_budget', 'shared_budget', 'not_linked', 'no_target'] as const) {
+      expect(applyBlockedReason(reason).length).toBeGreaterThan(10);
+    }
+  });
+});
+
 describe('planMove (§8, AC 9)', () => {
   const lines = [
     line({ id: 'src', name: 'Polaris', input: 600, target: 600, spentMTD: 200 }),
@@ -566,16 +617,33 @@ describe('planMove (§8, AC 9)', () => {
     expect(plan.allocations.find((a) => a.id === 'd1')!.targetAfter).toBe(370);
   });
 
-  it('caps at what the source actually has', () => {
+  it('caps at target − spent, not the full target (§9 correctness fix)', () => {
+    // d2 holds $100 and has already spent $20, so only $80 can move. Offering
+    // the full $100 is the bug: the source would end the month targeting less
+    // than it has already spent.
     const plan = planMove({
       ...base,
       source: { kind: 'campaign', id: 'd2' },
       destinationIds: ['d1'],
       method: 'even',
-      evenTotal: 500,
+      evenTotal: 100,
     });
     expect(plan.ok).toBe(false);
-    expect(plan.error).toContain('only has $100.00');
+    expect(plan.error).toContain('$80.00 movable');
+    expect(plan.error).toContain('$20.00');
+    expect(plan.available).toBe(80);
+    expect(plan.sourceSpent).toBe(20);
+
+    // …and exactly the movable amount still goes through.
+    const atCap = planMove({
+      ...base,
+      source: { kind: 'campaign', id: 'd2' },
+      destinationIds: ['d1'],
+      method: 'even',
+      evenTotal: 80,
+    });
+    expect(atCap.ok).toBe(true);
+    expect(atCap.source!.targetAfter).toBe(20);
   });
 
   it('refuses a locked source and drops a locked destination (§4)', () => {
@@ -673,11 +741,95 @@ describe('planMove (§8, AC 9)', () => {
     expect(plan.allocations.map((a) => a.id)).toEqual(['d1']);
   });
 
-  it('sourceAvailable reads the leftover for Unallocated and the target for a campaign', () => {
+  it('sourceAvailable reads the leftover for Unallocated and target − spent for a campaign', () => {
     expect(sourceAvailable({ lines, source: { kind: 'unallocated' }, denominator: 2000 })).toBe(600);
+    // d1: $300 target − $100 spent. It is the SAME quantity the delivery panel
+    // shows as remaining budget (§6) — one number, two names.
     expect(
       sourceAvailable({ lines, source: { kind: 'campaign', id: 'd1' }, denominator: 2000 }),
-    ).toBe(300);
+    ).toBe(200);
+  });
+
+  it('never offers a negative movable amount when a campaign has overspent', () => {
+    const overspent = [line({ id: 'over', target: 100, input: 100, spentMTD: 260 })];
+    expect(
+      sourceAvailable({ lines: overspent, source: { kind: 'campaign', id: 'over' }, denominator: 2000 }),
+    ).toBe(0);
+  });
+
+  it('warns (without blocking) when the source drops below its own delivery rate', () => {
+    // Brand runs at $75/day with 20 days left; after giving away $900 it has
+    // $100 left — $5/day. Well under the 0.75 ratio, so it warns, but the plan
+    // is still committable: deliberately starving a campaign you are about to
+    // pause is a real and correct move.
+    const paced = [
+      line({
+        id: 'brand',
+        name: 'Brand',
+        input: 1500,
+        target: 1500,
+        spentMTD: 500,
+        currentDaily: 75,
+        flight: flightDayCounts(1, 31, 11, 31),
+      }),
+      line({ id: 'used', name: 'Used Cars', input: 500, target: 500, spentMTD: 100, currentDaily: 25 }),
+    ];
+    const plan = planMove({
+      lines: paced,
+      mode: 'amt' as AllocationMode,
+      payable: 2000,
+      denominator: 2000,
+      source: { kind: 'campaign', id: 'brand' },
+      destinationIds: ['used'],
+      method: 'even',
+      evenTotal: 900,
+    });
+    expect(plan.ok).toBe(true);
+    const warn = plan.warnings.find((w) => w.kind === 'source_below_pace');
+    expect(warn).toBeDefined();
+    expect(warn!.lineId).toBe('brand');
+    expect(warn!.message).toContain('Brand');
+  });
+
+  it('warns on a large destination daily jump, and stays quiet on a small one', () => {
+    const mk = (evenTotal: number) =>
+      planMove({
+        lines: [
+          line({ id: 's', name: 'Src', input: 2000, target: 2000, spentMTD: 100, currentDaily: 90 }),
+          line({ id: 'd', name: 'Dest', input: 300, target: 300, spentMTD: 60, currentDaily: 10 }),
+        ],
+        mode: 'amt' as AllocationMode,
+        payable: 4000,
+        denominator: 4000,
+        source: { kind: 'campaign', id: 's' },
+        destinationIds: ['d'],
+        method: 'even',
+        evenTotal,
+      });
+    // Dest sits at $10/day; +$600 over 24 remaining days takes it to ~$35/day.
+    const big = mk(600);
+    expect(big.ok).toBe(true);
+    expect(big.warnings.some((w) => w.kind === 'destination_daily_jump')).toBe(true);
+    // A move that leaves it inside 1.5× stays silent.
+    const small = mk(1);
+    expect(small.warnings.some((w) => w.kind === 'destination_daily_jump')).toBe(false);
+  });
+
+  it('does not warn about a daily jump on a campaign with no daily set', () => {
+    const plan = planMove({
+      lines: [
+        line({ id: 's', input: 2000, target: 2000, spentMTD: 100, currentDaily: 90 }),
+        line({ id: 'unlinked', input: 0, target: 0, spentMTD: 0, currentDaily: 0 }),
+      ],
+      mode: 'amt' as AllocationMode,
+      payable: 4000,
+      denominator: 4000,
+      source: { kind: 'campaign', id: 's' },
+      destinationIds: ['unlinked'],
+      method: 'even',
+      evenTotal: 900,
+    });
+    expect(plan.warnings.some((w) => w.kind === 'destination_daily_jump')).toBe(false);
   });
 });
 
@@ -939,5 +1091,227 @@ describe('buildPushPlan (§8, AC 11)', () => {
     );
     // Every controllable line counts, pushed or not — it is what Google will hold.
     expect(plan.accountDailyAfter).toBeCloseTo(40.4, 2);
+  });
+});
+
+// ── §5 recent-pace projection ──
+
+const days = (...spends: number[]) =>
+  spends.map((spend, i) => ({ date: `2026-08-${String(i + 1).padStart(2, '0')}`, spend }));
+
+describe('recentPace', () => {
+  it('averages over the days it actually has, not the days requested', () => {
+    // Four days of history asked for a seven-day window must not read as
+    // four-sevenths of the real rate.
+    const pace = recentPace(days(10, 20, 30, 40));
+    expect(pace.avgDaily).toBe(25);
+    expect(pace.days).toBe(4);
+  });
+
+  it('drops LEADING zero-spend days — the launch ramp', () => {
+    // Live on paper from the 1st, delivering from the 4th. Averaging the three
+    // zeros in would project a permanent underspend that never happened.
+    const pace = recentPace(days(0, 0, 0, 20, 20, 20));
+    expect(pace.avgDaily).toBe(20);
+    expect(pace.rampDaysSkipped).toBe(3);
+    expect(pace.days).toBe(3);
+  });
+
+  it('keeps zero days that fall MID-flight — they are real delivery', () => {
+    // A campaign that went dark for two days genuinely is pacing lower, and the
+    // projection has to say so.
+    const pace = recentPace(days(30, 0, 0, 30, 30));
+    expect(pace.avgDaily).toBe(18); // 90 ÷ 5, not 90 ÷ 3
+    expect(pace.rampDaysSkipped).toBe(0);
+  });
+
+  it('windows to the most recent days when the flight is longer', () => {
+    // Ten days, the last seven of which are the slow ones — the projection
+    // should follow current behaviour, not the strong start.
+    const pace = recentPace(days(100, 100, 100, 10, 10, 10, 10, 10, 10, 10));
+    expect(pace.days).toBe(7);
+    expect(pace.avgDaily).toBe(10);
+  });
+
+  it('refuses to state a rate below the spending-day floor', () => {
+    // One busy day would otherwise set the projection for the whole month.
+    expect(recentPace(days(50)).avgDaily).toBeNull();
+    expect(recentPace(days(0, 0, 50, 0)).avgDaily).toBeNull();
+    expect(recentPace([]).avgDaily).toBeNull();
+    // Exactly at the floor, it answers.
+    expect(recentPace(days(10, 10, 10)).avgDaily).toBe(10);
+  });
+
+  it('gives a never-delivered campaign no rate at all', () => {
+    // The reserved / brand-new case: budget committed, nothing spent.
+    expect(recentPace(days(0, 0, 0, 0, 0)).avgDaily).toBeNull();
+  });
+});
+
+describe('projectAtDaily', () => {
+  it('projects spend forward at the given rate', () => {
+    expect(projectAtDaily(700, 25, 20)).toBe(1200);
+  });
+
+  it('passes null through rather than returning bare spend-to-date', () => {
+    // A projection that quietly equals spent-MTD reads as "it will stop
+    // spending", which is a claim we have no basis for.
+    expect(projectAtDaily(700, null, 20)).toBeNull();
+  });
+
+  it('never projects backwards on the last day of a flight', () => {
+    expect(projectAtDaily(700, 25, 0)).toBe(700);
+    expect(projectAtDaily(700, 25, -3)).toBe(700);
+  });
+});
+
+// ── §12 Reserved ──
+
+/**
+ * The account read this exists to fix. With a committed-but-unlaunched campaign
+ * left in pacing, the whole account reported 74% of expected and demanded
+ * $397/day; the honest figures with it set aside were ~86% and ~$320. Reserved
+ * is what makes the second pair the one on screen.
+ */
+describe('Reserved (§12)', () => {
+  const ad = (over: Partial<PacerAd>): PacerAd =>
+    ({
+      id: over.id ?? 'r1',
+      name: over.name ?? 'AFCU',
+      platform: 'google',
+      period: PERIOD,
+      allocation: '1000',
+      pacerActual: '0',
+      ...over,
+    }) as PacerAd;
+
+  const ctx = { mode: 'amt' as AllocationMode, payable: PAYABLE, clock: CLOCK };
+
+  it('zeroes every pacing figure but keeps the target', () => {
+    const line = buildAllocatorLine(ad({ pacerReserved: true }), 0, ctx);
+    expect(line.target).toBe(1000); // in allocation
+    expect(line.reserved).toBe(true);
+    expect(line.expectedToDate).toBe(0); // out of pacing
+    expect(line.evenDaily).toBe(0);
+    expect(line.recommendedDaily).toBe(0);
+    expect(line.paceStatus).toBe('none'); // NOT "underspending 0%"
+    expect(line.projectedSpend).toBeNull();
+    expect(line.dailyControllable).toBe(false); // nothing to push
+  });
+
+  it('keeps the reserve in the allocation total but out of expected and the daily', () => {
+    const view = buildAllocatorView({
+      ads: [
+        ad({ id: 'live', name: 'Brand', allocation: '1000', pacerActual: '600' }),
+        ad({ id: 'held', name: 'AFCU', allocation: '1000', pacerReserved: true }),
+      ],
+      mode: 'amt',
+      payable: PAYABLE,
+      clock: CLOCK,
+    });
+    // The reserve is committed money: the payable check has to see it, or it
+    // reads as free budget waiting to be spent elsewhere.
+    expect(view.totals.allocated).toBe(2000);
+    expect(view.totals.reservedTarget).toBe(1000);
+    // ...but it contributes nothing to what SHOULD have been spent by now.
+    const soloLive = buildAllocatorLine(
+      ad({ id: 'live', allocation: '1000', pacerActual: '600' }),
+      0,
+      ctx,
+    );
+    expect(view.totals.expected).toBeCloseTo(soloLive.expectedToDate, 2);
+    expect(view.totals.accountDaily).toBeCloseTo(soloLive.recommendedDaily, 2);
+  });
+
+  it('PROPERTY: reserving a line changes the account read by exactly that line', () => {
+    const ads = [
+      ad({ id: 'a', name: 'Brand', allocation: '1200', pacerActual: '700' }),
+      ad({ id: 'b', name: 'Used', allocation: '800', pacerActual: '500' }),
+      ad({ id: 'c', name: 'AFCU', allocation: '1539.78', pacerActual: '0' }),
+    ];
+    const withIt = buildAllocatorView({ ads, mode: 'amt', payable: PAYABLE, clock: CLOCK });
+    const afcu = withIt.lines.find((l) => l.id === 'c')!;
+    const reserved = buildAllocatorView({
+      ads: [ads[0], ads[1], { ...ads[2], pacerReserved: true }],
+      mode: 'amt',
+      payable: PAYABLE,
+      clock: CLOCK,
+    });
+
+    // Allocation is untouched — the reserve is still committed.
+    expect(reserved.totals.allocated).toBeCloseTo(withIt.totals.allocated, 2);
+    // Expected and the daily drop by exactly that line's contribution, nothing else.
+    expect(reserved.totals.expected).toBeCloseTo(withIt.totals.expected - afcu.expectedToDate, 2);
+    expect(reserved.totals.accountDaily).toBeCloseTo(
+      withIt.totals.accountDaily - afcu.recommendedDaily,
+      2,
+    );
+    // And the account stops reading as behind on money it was never going to spend.
+    expect(reserved.totals.paceRatio!).toBeGreaterThan(withIt.totals.paceRatio!);
+  });
+
+  it('is carved out of Balance, like a lock', () => {
+    // Proportional balance across a $1,000 reserve + two $500 lines, to a $3,000
+    // denominator: the reserve holds, the other two split the remaining $2,000.
+    const out = balance(
+      [
+        { id: 'held', input: 1000, locked: false, reserved: true },
+        { id: 'x', input: 500, locked: false },
+        { id: 'y', input: 500, locked: false },
+      ],
+      3000,
+      'proportional',
+    );
+    expect(out.has('held')).toBe(false); // untouched
+    expect(out.get('x')).toBe(1000);
+    expect(out.get('y')).toBe(1000);
+  });
+
+  it('is excluded from Move as source and as destination', () => {
+    const lines = [
+      line({ id: 'held', name: 'AFCU', target: 1000, reserved: true }),
+      line({ id: 'live', name: 'Brand', target: 1000, spentMTD: 200, remainingBudget: 800 }),
+    ];
+    const asSource = planMove({
+      lines,
+      mode: 'amt',
+      payable: PAYABLE,
+      source: { kind: 'campaign', id: 'held' },
+      destinationIds: ['live'],
+      method: 'custom',
+      customAmounts: { live: 100 },
+      denominator: PAYABLE,
+    });
+    expect(asSource.ok).toBe(false);
+    expect(asSource.error).toContain('reserved');
+
+    const asDestination = planMove({
+      lines,
+      mode: 'amt',
+      payable: PAYABLE,
+      source: { kind: 'campaign', id: 'live' },
+      destinationIds: ['held'],
+      method: 'custom',
+      customAmounts: { held: 100 },
+      denominator: PAYABLE,
+    });
+    expect(asDestination.allocations).toEqual([]);
+  });
+
+  it('is skipped by the push, with its own reason', () => {
+    const plan = buildPushPlan(
+      [line({ id: 'held', target: 1000, reserved: true, dailyControllable: false })],
+      new Map([['held', 'budgets/1']]),
+    );
+    expect(plan.candidates).toEqual([]);
+    // Not "total_budget" — that would send someone looking at the wrong thing.
+    expect(plan.skipped[0].reason).toBe('reserved');
+  });
+
+  it('paces the FULL reserve over the remaining days once un-reserved', () => {
+    // Launched mid-month: the team does not prorate, so the whole target has to
+    // land in the days that are left.
+    const launched = buildAllocatorLine(ad({ allocation: '1000', pacerActual: '0' }), 0, ctx);
+    expect(launched.recommendedDaily).toBeCloseTo(1000 / launched.flight.remaining, 6);
   });
 });

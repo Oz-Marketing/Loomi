@@ -32,6 +32,18 @@ interface PushBody {
   dryRun?: boolean;
   /** Restrict the push to a label's campaigns (the filtered view). */
   label?: string | null;
+  /**
+   * §14 — apply exactly these campaigns (the per-campaign control), instead of
+   * every drifted line. Two consequences, both intended:
+   *
+   *  • The drift threshold is NOT applied. It is a batch-noise filter, and a
+   *    person who clicked apply on one named campaign has already decided the
+   *    change is worth making. Silently skipping it would leave them staring at
+   *    an unchanged number with no explanation.
+   *  • The structural skips still apply. Reserved, shared, unlinked and
+   *    total-budget campaigns have no per-campaign daily to write, whoever asks.
+   */
+  adIds?: string[];
 }
 
 /**
@@ -85,7 +97,26 @@ export async function POST(
     return NextResponse.json({ error: 'No Google campaigns in this period' }, { status: 400 });
   }
 
-  const pushPlan = buildPushPlan(view.visible, view.budgetResourceByLine);
+  // One engine, two entry points. An explicit pick narrows the line set and
+  // drops the drift gate; everything downstream — dedupe, mutate, audit,
+  // bookkeeping — is identical, so a single apply can never behave differently
+  // from the same campaign inside a batch.
+  const explicit = Array.isArray(body.adIds) ? body.adIds.filter((id) => typeof id === 'string') : null;
+  const explicitSet = explicit && explicit.length > 0 ? new Set(explicit) : null;
+  const targetLines = explicitSet
+    ? view.visible.filter((l) => explicitSet.has(l.id))
+    : view.visible;
+  if (explicitSet && targetLines.length === 0) {
+    return NextResponse.json(
+      { error: 'None of those campaigns are in this period' },
+      { status: 400 },
+    );
+  }
+  const pushPlan = buildPushPlan(
+    targetLines,
+    view.budgetResourceByLine,
+    explicitSet ? { driftFraction: 0, driftMinDollars: 0 } : {},
+  );
 
   // Defensive de-dupe: two rows pointing at ONE budget resource would be two
   // conflicting operations in a single mutate (and whichever landed last would
@@ -118,7 +149,13 @@ export async function POST(
   const summary = {
     period,
     label: body.label ?? null,
-    accountDailyAfter: pushPlan.accountDailyAfter,
+    // Always the WHOLE view's figure, never just the campaigns being pushed.
+    // buildPushPlan derives it from the lines handed to it, which for a
+    // single-campaign apply is that one campaign — reporting that as the
+    // "account daily after" would understate the account by an order of
+    // magnitude in exactly the flow §14 makes the default.
+    accountDailyAfter: buildPushPlan(view.visible, view.budgetResourceByLine)
+      .accountDailyAfter,
     pushed: pushed.map((c) => ({
       adId: c.id,
       name: c.name,
@@ -146,12 +183,16 @@ export async function POST(
     await pushCampaignDailyBudgets(cfg, customerId, updates);
 
     // Keep our copy in lockstep with what Google now holds, so the card's drift
-    // check doesn't immediately want to push the same numbers again.
+    // check doesn't immediately want to push the same numbers again. This is
+    // also what makes the footer's LIVE account daily total honest between
+    // syncs: it sums this field, which now reflects the rate Google accepted
+    // rather than the rate it held before the push.
+    const pushedAt = new Date();
     await prisma.$transaction(
       pushed.map((c) =>
         prisma.metaAdsPacerAd.update({
           where: { id: c.id },
-          data: { pacerDailyBudget: c.newDaily.toFixed(2) },
+          data: { pacerDailyBudget: c.newDaily.toFixed(2), googleDailyPushedAt: pushedAt },
         }),
       ),
     );

@@ -271,6 +271,9 @@ interface GoogleMetrics {
   averageCpc?: string;
   costMicros?: string;
   conversions?: number;
+  // Conversions ÷ interactions, as a fraction. Interactions are not clicks on
+  // every campaign type, so this is read from the API rather than derived.
+  conversionsFromInteractionsRate?: number;
   conversionsValue?: number;
   costPerConversion?: string;
   allConversions?: number;

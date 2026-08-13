@@ -40,6 +40,7 @@ import { RenditionPanel } from '@/components/media/rendition-panel';
 import { RightsActivityPanel } from '@/components/media/rights-activity-panel';
 import { ScopeMoveModal, type ScopeMoveTarget } from '@/components/media/scope-move-modal';
 import { CollectionsSection } from '@/components/media/collections-section';
+import { BulkMetadataModal } from '@/components/media/bulk-metadata-modal';
 import {
   MediaScopeSection,
   scopeLabel,
@@ -1675,6 +1676,39 @@ export default function MediaPage() {
     clearSelection();
   };
 
+  // ── Bulk metadata edit ──
+  const [bulkEditItems, setBulkEditItems] = useState<MediaFile[] | null>(null);
+  const [bulkEditing, setBulkEditing] = useState(false);
+
+  const applyBulkMetadata = async (fields: Record<string, unknown>) => {
+    if (!bulkEditItems?.length) return;
+    setBulkEditing(true);
+    try {
+      const res = await fetch('/api/media/bulk', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: bulkEditItems.map((f) => f.id), ...fields }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(data?.error || 'Could not apply those changes');
+      } else {
+        toast.success(`Updated ${data.updated} asset${data.updated === 1 ? '' : 's'}`);
+        // Named, not counted: "2 skipped" leaves someone guessing which two.
+        if (data.skipped?.length) {
+          toast.error(`Skipped (no access): ${data.skipped.slice(0, 3).join(', ')}${data.skipped.length > 3 ? '…' : ''}`);
+        }
+        if (showOverview) loadAdminMedia(undefined, adminScope);
+        else loadMedia();
+        clearSelection();
+        setBulkEditItems(null);
+      }
+    } catch {
+      toast.error('Could not apply those changes');
+    }
+    setBulkEditing(false);
+  };
+
   // ── Collections ──
   //
   // Selecting one TAKES OVER the grid rather than stacking on the current
@@ -2707,6 +2741,17 @@ export default function MediaPage() {
                 ]
               : [
                   {
+                    id: 'bulk-edit',
+                    label: 'Edit details',
+                    icon: <PencilSquareIcon className="h-4 w-4" />,
+                    onClick: () => {
+                      const chosen = (showOverview ? adminMediaFiles : files)
+                        .filter((f) => selectedIds.has(f.id));
+                      if (chosen.length) setBulkEditItems(chosen);
+                    },
+                    disabled: selectedIds.size === 0 || bulkEditing,
+                  },
+                  {
                     id: 'collect',
                     label: 'Add to collection',
                     icon: <BookmarkIcon className="h-4 w-4" />,
@@ -2760,6 +2805,16 @@ export default function MediaPage() {
 
 
       {/* ── Edit details Modal (filename + alt text) ── */}
+      {bulkEditItems && bulkEditItems.length > 0 && (
+        <BulkMetadataModal
+          count={bulkEditItems.length}
+          accountBrands={accountBrands}
+          busy={bulkEditing}
+          onCancel={() => setBulkEditItems(null)}
+          onApply={applyBulkMetadata}
+        />
+      )}
+
       {scopeMoveItems && scopeMoveItems.length > 0 && (
         <ScopeMoveModal
           count={scopeMoveItems.length}

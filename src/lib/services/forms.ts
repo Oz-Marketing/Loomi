@@ -9,6 +9,7 @@ import {
 } from '@/lib/forms/types';
 import { isValidSlug, slugify } from '@/lib/forms/schemas';
 import { parseNotificationEmails } from '@/lib/forms/notify';
+import { readSubmissionMetadata } from '@/lib/forms/embed-params';
 
 export type FormStatus = 'draft' | 'published';
 
@@ -88,6 +89,10 @@ export interface FormSubmissionRow {
     fullName: string;
   } | null;
   data: Record<string, unknown>;
+  /** Embed metadata captured from `meta_*` params on the form URL.
+   *  Empty when the submission came from a plain (non-embedded) load.
+   *  Third-party input — render it escaped. */
+  metadata: Record<string, string>;
   ipAddress: string;
   userAgent: string;
   referrer: string;
@@ -783,6 +788,7 @@ export async function listFormSubmissions(options: {
           }
         : null,
       data: parseJsonObject(row.data),
+      metadata: readSubmissionMetadata(row.metadata),
       ipAddress: row.ipAddress ?? '',
       userAgent: row.userAgent ?? '',
       referrer: row.referrer ?? '',

@@ -26,7 +26,8 @@ import { LpTracker } from '@/lib/landing-pages/LpTracker';
 import { LpTrackingScripts } from '@/lib/landing-pages/LpTrackingScripts';
 import { LpJsonLd } from '@/lib/landing-pages/LpJsonLd';
 import { LpAttributionProvider } from '@/lib/landing-pages/lp-attribution-context';
-import { parseFormTemplate } from '@/lib/forms/types';
+import { collectFieldBlocks, getFieldName, parseFormTemplate } from '@/lib/forms/types';
+import { parseEmbedParams, type RawSearchParams } from '@/lib/forms/embed-params';
 
 // Sentinel slug used by middleware when a custom-domain visitor hits
 // the root path — resolved here to the domain's `homeLandingPageId`.
@@ -34,6 +35,7 @@ const HOME_SENTINEL = '__home__';
 
 interface PageProps {
   params: Promise<{ slug: string }>;
+  searchParams: Promise<RawSearchParams>;
 }
 
 /**
@@ -130,8 +132,8 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
  * silently dropped from the preload map; the EmbeddedForm block
  * renders its "form not found" placeholder in that case.
  */
-export default async function PublicLandingPage({ params }: PageProps) {
-  const { slug } = await params;
+export default async function PublicLandingPage({ params, searchParams }: PageProps) {
+  const [{ slug }, sp] = await Promise.all([params, searchParams]);
   const page = await resolveLandingPage(slug);
   if (!page) notFound();
 
@@ -150,7 +152,17 @@ export default async function PublicLandingPage({ params }: PageProps) {
       // The Form service returns schema already parsed, but be
       // defensive — parseFormTemplate handles the raw JSON case too.
       const schema = parseFormTemplate(form.schema as unknown);
-      if (schema) preloaded.set(formIds[i], { slug: form.slug, schema });
+      if (!schema) continue;
+      // `note_`/`meta_` params on the LP's own URL, resolved per form:
+      // an LP can host two forms, and a note may only address fields
+      // the form in hand actually declares. Done here on the server so
+      // the override is in the form's first render, not swapped in
+      // after a client effect.
+      const { noteOverrides, metadata } = parseEmbedParams(
+        sp,
+        new Set(collectFieldBlocks(schema).map(getFieldName)),
+      );
+      preloaded.set(formIds[i], { slug: form.slug, schema, noteOverrides, metadata });
     }
   }
 

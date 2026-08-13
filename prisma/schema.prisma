@@ -995,6 +995,13 @@ model FormSubmission {
   // Raw field-id → value map captured from the submit POST. The Form's
   // schema is the source of truth for what these field ids mean.
   data        Json
+  // Embed metadata captured from `meta_{key}` query params on the
+  // public form URL — page context handed over by a third-party host
+  // page (VIN, stock number, VDP url from a Dealer.com VDP). Flat
+  // string→string map, key/value/count-bounded at write time by
+  // `lib/forms/embed-params`. Null for submissions with no meta params.
+  // Untrusted input: escape wherever it's rendered.
+  metadata    Json?
   ipAddress   String?
   userAgent   String?
   referrer    String?

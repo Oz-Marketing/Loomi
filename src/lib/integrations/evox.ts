@@ -16,6 +16,7 @@
 import { uploadToS3, buildS3Key, s3PublicUrl, isS3Configured } from '@/lib/s3';
 import { prisma } from '@/lib/prisma';
 import { autoCropVehicleImage } from '@/lib/integrations/evox-crop';
+import { normalizeOems } from '@/lib/oems';
 
 const BASE = 'https://api.evoximages.com/api/v1';
 const PID = Number(process.env.EVOX_PRODUCT_ID ?? 27);
@@ -192,7 +193,26 @@ export async function resolveThumbBytes(vifnum: number, colorCode: string): Prom
  * URL unchanged if S3 isn't configured. CDN URLs are pre-signed — only
  * api.evoximages.com URLs get the key.
  */
-export async function importEvoxImage(url: string, accountKey: string | null, hint: string): Promise<string> {
+/**
+ * What the caller already knows about the vehicle.
+ *
+ * Optional because not every path has it, but both real callers do — and
+ * without it the library entry threw away year/make/model into a filename slug,
+ * leaving vehicle photography with no brand, no model year and no model. That is
+ * metadata nobody has to type, which is the cheapest kind there is.
+ */
+export interface EvoxVehicleFacts {
+  year?: number | string | null;
+  make?: string | null;
+  model?: string | null;
+}
+
+export async function importEvoxImage(
+  url: string,
+  accountKey: string | null,
+  hint: string,
+  vehicle?: EvoxVehicleFacts,
+): Promise<string> {
   let fetchUrl = url;
   const headers: Record<string, string> = {};
   try {
@@ -227,6 +247,12 @@ export async function importEvoxImage(url: string, accountKey: string | null, hi
   // the media library, not just a loose URL. Best-effort: never fail the pick.
   try {
     const dims = pngDimensions(buf);
+    // Canonicalized against lib/oems.ts so "chevrolet" and "Chevrolet" don't
+    // become two libraries in the brand rail.
+    const [brand] = normalizeOems(vehicle?.make ?? undefined);
+    const yearNum = Number(vehicle?.year);
+    const modelYear = Number.isFinite(yearNum) && yearNum > 1900 ? String(yearNum) : null;
+    const vehicleModel = vehicle?.model?.trim() || null;
     await prisma.mediaAsset.upsert({
       where: { s3Key: key },
       create: {
@@ -240,6 +266,18 @@ export async function importEvoxImage(url: string, accountKey: string | null, hi
         category: 'ad-creative',
         tags: JSON.stringify(['evox']),
         altText: hint.replace(/-/g, ' ').trim() || null,
+
+        // Derived, never typed. The caller already resolved this vehicle, so
+        // filing the image under its brand, model year and model costs nothing
+        // and makes it findable by the same facets everything else uses.
+        ...(brand ? { oem: brand } : {}),
+        ...(modelYear ? { modelYear: JSON.stringify([modelYear]) } : {}),
+        ...(vehicleModel ? { vehicleModel: JSON.stringify([vehicleModel]) } : {}),
+        assetCategory: 'photography',
+        // EVOX licenses these to us; they are not Oz-created and not the
+        // dealer's, and the distinction drives the rights prompts.
+        assetSource: 'stock',
+        rightsHolder: 'EVOX Images',
       },
       update: { size: buf.length },
     });

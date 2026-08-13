@@ -538,3 +538,77 @@ export function canAccessAsset(
 export function isConsumerRole(role: string): boolean {
   return role === 'client';
 }
+
+// ── Scope moves ──
+
+/**
+ * An asset's destination scope. Mirrors the three scopes in the header comment:
+ * global (both null), OEM-shared (accountKey null + oem), account-owned.
+ */
+export interface ScopeTarget {
+  accountKey: string | null;
+  oem: string | null;
+}
+
+export interface ScopeMoveCheck {
+  /** Null when the move is allowed; a message when it isn't. */
+  error: string | null;
+}
+
+/** Unrestricted admins only — the tier that may write admin-level assets. */
+export function isUnrestrictedAdmin(session: {
+  user: { role: string; accountKeys?: string[] };
+}): boolean {
+  const { role, accountKeys = [] } = session.user;
+  if (role === 'developer' || role === 'super_admin') return true;
+  return role === 'admin' && accountKeys.length === 0;
+}
+
+/**
+ * May this session move this asset to this scope?
+ *
+ * Pure, so the rules are testable without a database — and these are rules
+ * worth testing: a scope move changes WHO CAN SEE an asset, which is the one
+ * media operation with a blast radius beyond its own row.
+ *
+ * Admin-only overall. Promoting a rooftop's asset to an OEM library publishes it
+ * to every other account carrying that brand, and that is not a decision a
+ * single rooftop's user should be able to make for the others.
+ */
+export function checkScopeMove(
+  session: { user: { role: string; accountKeys?: string[] } },
+  asset: { accountKey: string | null; oem: string | null; managedBy: string | null },
+  target: ScopeTarget,
+): ScopeMoveCheck {
+  if (!isUnrestrictedAdmin(session)) {
+    return { error: 'Only agency admins can change an asset’s scope.' };
+  }
+
+  // Account settings owns logos and fonts; the library only catalogues them.
+  // Moving one would desynchronise the two and the next sync would undo it.
+  if (asset.managedBy) {
+    return {
+      error: 'Brand logos and fonts are managed in Account settings and can’t be moved here.',
+    };
+  }
+
+  if (target.accountKey !== null && target.oem !== null) {
+    // Not a real scope: `oem` on an account-owned asset is descriptive, and
+    // allowing both here would imply a sharing that the resolution rule doesn't
+    // actually provide.
+    return { error: 'An asset belongs to one account or to a brand, not both.' };
+  }
+
+  const unchanged =
+    (asset.accountKey ?? null) === target.accountKey && (asset.oem ?? null) === target.oem;
+  if (unchanged) return { error: 'That is already this asset’s scope.' };
+
+  return { error: null };
+}
+
+/** Human phrase for a scope, for confirmations and toasts. */
+export function describeScope(target: ScopeTarget, dealerName?: string): string {
+  if (target.accountKey) return dealerName || target.accountKey;
+  if (target.oem) return `every ${target.oem} sub-account`;
+  return 'the Loomi library (every account)';
+}

@@ -37,6 +37,7 @@ import BulkActionDock from '@/components/bulk-action-dock';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { RenditionPanel } from '@/components/media/rendition-panel';
 import { RightsActivityPanel } from '@/components/media/rights-activity-panel';
+import { ScopeMoveModal, type ScopeMoveTarget } from '@/components/media/scope-move-modal';
 import {
   MediaScopeSection,
   scopeLabel,
@@ -365,6 +366,8 @@ interface MediaCardProps {
   onCopyUrl: () => void;
   onDownload?: () => void;
   onRename?: () => void;
+  /** Change which scope owns the asset. Admin-only, so undefined otherwise. */
+  onMoveScope?: () => void;
   onDelete?: () => void;
 }
 
@@ -386,6 +389,7 @@ function MediaCard({
   onCopyUrl,
   onDownload,
   onRename,
+  onMoveScope,
   onDelete,
 }: MediaCardProps) {
   const isImage = f.type?.startsWith('image') || f.url?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
@@ -488,6 +492,14 @@ function MediaCard({
                       <PencilSquareIcon className="w-4 h-4" /> Edit details
                     </button>
                   )}
+                  {onMoveScope && (
+                    <button
+                      onClick={() => { onMenuClose(); onMoveScope(); }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                    >
+                      <BuildingStorefrontIcon className="w-4 h-4" /> Move…
+                    </button>
+                  )}
                   {caps?.canDelete && onDelete && (
                     <button
                       onClick={() => { onMenuClose(); onDelete(); }}
@@ -536,6 +548,7 @@ function MediaListRow({
   onCopyUrl,
   onDownload,
   onRename,
+  onMoveScope,
   onDelete,
 }: MediaCardProps) {
   const isImage = f.type?.startsWith('image') || f.url?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
@@ -625,6 +638,14 @@ function MediaListRow({
                   className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
                 >
                   <PencilSquareIcon className="w-4 h-4" /> Rename
+                </button>
+              )}
+              {onMoveScope && (
+                <button
+                  onClick={() => { onMenuClose(); onMoveScope(); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-[var(--foreground)] hover:bg-[var(--muted)] transition-colors"
+                >
+                  <BuildingStorefrontIcon className="w-4 h-4" /> Move…
                 </button>
               )}
               {caps?.canDelete && onDelete && (
@@ -1652,6 +1673,64 @@ export default function MediaPage() {
     clearSelection();
   };
 
+  // ── Scope moves ──
+  //
+  // Admin-only: promoting an asset to an OEM library publishes it to every
+  // rooftop on that brand, which isn't one sub-account's call to make.
+  const [scopeMoveItems, setScopeMoveItems] = useState<MediaFile[] | null>(null);
+  const [movingScope, setMovingScope] = useState(false);
+
+  const handleScopeMove = async (target: ScopeMoveTarget) => {
+    if (!scopeMoveItems?.length) return;
+    setMovingScope(true);
+    let ok = 0;
+    const failures: string[] = [];
+    let duplicateOf: string | null = null;
+
+    for (const item of scopeMoveItems) {
+      try {
+        const res = await fetch(`/api/media/${encodeURIComponent(item.id)}/scope`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(target),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+          ok += 1;
+          if (data?.duplicateOf) duplicateOf = data.duplicateOf;
+        } else {
+          failures.push(`${item.name}: ${data?.error || 'failed'}`);
+        }
+      } catch {
+        failures.push(`${item.name}: failed`);
+      }
+    }
+
+    if (ok > 0) {
+      toast.success(`Moved ${ok} asset${ok > 1 ? 's' : ''}`);
+      // The moved assets have left whichever scope is on screen, so both the
+      // grid and the rail's counts are now wrong.
+      if (showOverview) {
+        setScopeRefreshKey((k) => k + 1);
+        loadAdminMedia(undefined, adminScope);
+      } else {
+        loadMedia();
+      }
+      clearSelection();
+    }
+    // Reported per asset: a partial move is the common failure (one managed
+    // logo in a selection) and "3 of 5 moved" is actionable where a generic
+    // error isn't.
+    for (const f of failures.slice(0, 4)) toast.error(f);
+    if (failures.length > 4) toast.error(`…and ${failures.length - 4} more failed`);
+    if (duplicateOf) {
+      toast.error(`A file with identical contents ("${duplicateOf}") is already there.`);
+    }
+
+    setMovingScope(false);
+    setScopeMoveItems(null);
+  };
+
   // ── Bulk Download ──
 
   const [downloading, setDownloading] = useState(false);
@@ -2180,6 +2259,7 @@ export default function MediaPage() {
                         setRenameMetadataInitial(meta);
                         setRenameFile(f);
                       }}
+                      onMoveScope={isAdmin && !f.managedBy ? () => setScopeMoveItems([f]) : undefined}
                       onDelete={() => setDeleteFile(f)}
                     />
                   );
@@ -2395,6 +2475,7 @@ export default function MediaPage() {
                       setRenameMetadataInitial(meta);
                       setRenameFile(f);
                     } : undefined}
+                    onMoveScope={isAdmin && !fileInherited && !f.managedBy ? () => setScopeMoveItems([f]) : undefined}
                     onDelete={capabilities?.canDelete && !fileInherited ? () => setDeleteFile(f) : undefined}
                   />
                 );
@@ -2485,6 +2566,17 @@ export default function MediaPage() {
                 ]
               : [
                   {
+                    id: 'move-scope',
+                    label: 'Move',
+                    icon: <BuildingStorefrontIcon className="h-4 w-4" />,
+                    onClick: () => {
+                      const chosen = (showOverview ? adminMediaFiles : files)
+                        .filter((f) => selectedIds.has(f.id));
+                      if (chosen.length) setScopeMoveItems(chosen);
+                    },
+                    disabled: !isAdmin || selectedIds.size === 0 || movingScope,
+                  },
+                  {
                     id: 'download',
                     label: downloading ? 'Zipping…' : 'Download',
                     icon: <ArrowDownTrayIcon className="h-4 w-4" />,
@@ -2520,6 +2612,17 @@ export default function MediaPage() {
 
 
       {/* ── Edit details Modal (filename + alt text) ── */}
+      {scopeMoveItems && scopeMoveItems.length > 0 && (
+        <ScopeMoveModal
+          count={scopeMoveItems.length}
+          singleName={scopeMoveItems.length === 1 ? scopeMoveItems[0].name : undefined}
+          accounts={scopeAccounts.map(({ key, dealer }) => ({ key, dealer }))}
+          busy={movingScope}
+          onCancel={() => setScopeMoveItems(null)}
+          onConfirm={handleScopeMove}
+        />
+      )}
+
       {renameFile && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in" onClick={() => setRenameFile(null)}>
           <div className="glass-modal w-[560px] max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>

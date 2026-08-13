@@ -48,8 +48,14 @@ export function BulkMetadataModal({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in"
       onClick={busy ? undefined : onCancel}
     >
-      <div className="glass-modal max-h-[85vh] w-[520px] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="border-b border-[var(--border)] px-5 py-4">
+      {/* Scrolling lives on the BODY, not on this box.
+          globals.css forces `overflow: visible` on `.glass-modal:has(.glass-dropdown)`
+          so a Select's panel isn't clipped — and this form is full of Selects, so
+          an `overflow-y-auto` here is silently cancelled and the footer becomes
+          unreachable on a short viewport. Flex column with a scrollable middle
+          keeps Apply pinned and always clickable. */}
+      <div className="glass-modal flex max-h-[85vh] w-[520px] flex-col" onClick={(e) => e.stopPropagation()}>
+        <div className="shrink-0 border-b border-[var(--border)] px-5 py-4">
           <h3 className="text-base font-semibold">
             Edit {count} asset{count === 1 ? '' : 's'}
           </h3>
@@ -59,7 +65,7 @@ export function BulkMetadataModal({
           </p>
         </div>
 
-        <div className="p-5">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 pb-40">
           <AssetMetadataFields
             value={value}
             onChange={setValue}
@@ -68,7 +74,7 @@ export function BulkMetadataModal({
           />
         </div>
 
-        <div className="flex items-center justify-between gap-2 border-t border-[var(--border)] px-5 py-4">
+        <div className="shrink-0 flex items-center justify-between gap-2 border-t border-[var(--border)] px-5 py-4">
           <p className="text-[11px] text-[var(--muted-foreground)]">
             {fieldCount === 0
               ? 'Nothing filled in yet'

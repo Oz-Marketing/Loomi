@@ -30,6 +30,7 @@ import {
 } from '@heroicons/react/24/outline';
 import Link from 'next/link';
 import { toast } from '@/lib/toast';
+import { useDockedScroll } from '@/hooks/use-docked-scroll';
 import { safeJson } from '@/lib/safe-json';
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
@@ -673,6 +674,14 @@ export default function MediaPage() {
   const { confirm } = useLoomiDialog();
   const { isAdmin, isAccount, accountKey, accountData, accounts, userRole } = useAccount();
   const subaccountHref = useSubaccountHref();
+
+  /**
+   * This route renders without Loomi's sidebar, so it isn't inside
+   * SurfaceShell's scroll card — nothing was setting `data-scrolled`, and the
+   * pinned header sat transparent over the grid.
+   */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  useDockedScroll(scrollRef);
 
   // ── Single-account detail state ──
   const [files, setFiles] = useState<MediaFile[]>([]);
@@ -1947,8 +1956,8 @@ export default function MediaPage() {
     if (selectedIds.size === 0) return;
     const count = selectedIds.size;
     const confirmed = await confirm({
-      title: 'Delete Loomi Files',
-      message: `Delete ${count} selected file${count > 1 ? 's' : ''} from Loomi? This cannot be undone.`,
+      title: 'Delete files',
+      message: `Delete ${count} selected file${count > 1 ? 's' : ''}? This cannot be undone.`,
       confirmLabel: 'Delete',
       destructive: true,
     });
@@ -2158,7 +2167,15 @@ export default function MediaPage() {
          full-bleed header overhung by 12px a side and this scroller grew a
          horizontal scrollbar. overflow-x-hidden is the backstop: nothing in a
          media library should ever scroll sideways. */}
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 pb-6 pt-4 md:px-8">
+      <div
+        ref={scrollRef}
+        data-scrolled="false"
+        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 pb-6 pt-4 md:px-8"
+      >
+        {/* Rest-state clearance above the pinned header, which scrolls away
+            beneath it — the same spacer SurfaceShell gives pages inside it.
+            This route renders its own chrome, so it has to provide it. */}
+        <div aria-hidden className="content-dock-lead" />
       {/* Header */}
       <div className="page-sticky-header mb-6">
         <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -2698,6 +2715,40 @@ export default function MediaPage() {
               disabled: filteredAdminMedia.length === 0,
             },
             {
+              id: 'bulk-edit',
+              label: 'Edit details',
+              icon: <PencilSquareIcon className="h-4 w-4" />,
+              onClick: () => {
+                const chosen = adminMediaFiles.filter((f) => selectedIds.has(f.id));
+                if (chosen.length) setBulkEditItems(chosen);
+              },
+              disabled: selectedIds.size === 0 || bulkEditing,
+            },
+            {
+              id: 'collect',
+              label: 'Add to collection',
+              icon: <BookmarkIcon className="h-4 w-4" />,
+              onClick: addSelectionToCollection,
+              disabled: selectedIds.size === 0,
+            },
+            {
+              id: 'move-scope',
+              label: 'Move',
+              icon: <BuildingStorefrontIcon className="h-4 w-4" />,
+              onClick: () => {
+                const chosen = adminMediaFiles.filter((f) => selectedIds.has(f.id));
+                if (chosen.length) setScopeMoveItems(chosen);
+              },
+              disabled: !isAdmin || selectedIds.size === 0 || movingScope,
+            },
+            {
+              id: 'download',
+              label: downloading ? 'Zipping…' : 'Download',
+              icon: <ArrowDownTrayIcon className="h-4 w-4" />,
+              onClick: () => handleBulkDownload(false),
+              disabled: selectedIds.size === 0 || downloading,
+            },
+            {
               id: 'delete',
               label: 'Delete',
               icon: <TrashIcon className="h-4 w-4" />,
@@ -2829,10 +2880,14 @@ export default function MediaPage() {
       {renameFile && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in" onClick={() => setRenameFile(null)}>
           <div className="glass-modal w-[560px] max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <div className="px-5 py-4 border-b border-[var(--border)]">
+            <div className="shrink-0 px-5 py-4 border-b border-[var(--border)]">
               <h3 className="text-base font-semibold">Edit file details</h3>
             </div>
-            <div className="p-5 space-y-4 overflow-y-auto">
+            {/* min-h-0 is what actually lets a flex child shrink below its
+                content and scroll; without it the body grows and pushes the
+                footer past the viewport. pb-40 gives the last Select room to
+                open inside the scroll area rather than against its edge. */}
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-5 pb-40">
               <div>
                 <label className="block text-sm text-[var(--muted-foreground)] mb-2">File name</label>
                 <input
@@ -2893,7 +2948,7 @@ export default function MediaPage() {
                 }}
               />
             </div>
-            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--border)]">
+            <div className="shrink-0 flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--border)]">
               <button
                 onClick={() => setRenameFile(null)}
                 className="px-4 py-2 text-sm font-medium text-[var(--foreground)] rounded-lg hover:bg-[var(--muted)] transition-colors"

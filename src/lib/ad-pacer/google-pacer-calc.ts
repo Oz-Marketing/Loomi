@@ -49,6 +49,8 @@ export interface ImportedGoogleCampaign {
   // spends its full cap and has headroom (raise budget); adsDisapproved = an ad
   // can't serve (fix the ads, never raise the budget).
   primaryStatus: string | null;
+  /** Raw campaign.primary_status_reasons — why it is (or isn't) serving. */
+  primaryStatusReasons: string[];
   budgetConstrained: boolean;
   adsDisapproved: boolean;
 }

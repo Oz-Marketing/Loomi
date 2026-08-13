@@ -840,7 +840,10 @@ function refreshDerivedAdFlags(ads: unknown, period: string, tz: string): unknow
 export interface PriorOverUnder {
   period: string; // the prior month (YYYY-MM)
   clientBudget: number; // combined gross (Base + Added)
-  spendTarget: number; // combined gross × markup
+  spendTarget: number; // gross × markup, MINUS any reserved allocations (§12)
+  /** Σ reserved allocations removed from spendTarget — reported so a smaller
+   *  target is explainable rather than mysterious. */
+  reservedExcluded: number;
   actual: number; // combined actual spend
   variance: number; // actual − spendTarget (negative = underspent)
   carryover: number; // −variance: +ve means "spend this much more next month"
@@ -857,6 +860,9 @@ export interface PriorOverUnder {
  * NOTE: called from the route AFTER getPeriodPlanView, never from inside it —
  * it calls getPeriodPlanView(prior), so nesting it would recurse.
  */
+/** Cents-precision rounding for the over/under figures. */
+const round2Money = (n: number): number => Math.round(n * 100) / 100;
+
 export async function getPriorOverUnder(
   accountKey: string,
   period: string,
@@ -872,7 +878,20 @@ export async function getPriorOverUnder(
   const clientBudget =
     (isNaN(baseGoal) ? 0 : baseGoal) + (isNaN(addedGoal) ? 0 : addedGoal);
   // view.markup is already the resolved factor (fetchPeriodPlan boundary, §0.1).
-  const spendTarget = effectiveSpendTarget(clientBudget, view.markup ?? 0);
+  const grossSpendTarget = effectiveSpendTarget(clientBudget, view.markup ?? 0);
+  // §12 — a RESERVED line holds budget for a campaign that could not spend yet.
+  // Leaving its target in the month's spend target books the whole reserve as an
+  // underspend and carries it forward as though the account had missed, when in
+  // fact nothing was ever going to be spent there. Take it out of the target,
+  // and report how much was taken so the smaller number is explainable.
+  const reservedExcluded = round2Money(
+    (view.ads ?? []).reduce(
+      (s: number, a: { pacerReserved?: boolean | null; allocation?: string | null }) =>
+        a.pacerReserved ? s + (Number(a.allocation) || 0) : s,
+      0,
+    ),
+  );
+  const spendTarget = round2Money(Math.max(0, grossSpendTarget - reservedExcluded));
   // §2: a resolved straddler counts its full run in its own month.
   const actual = (view.ads ?? []).reduce(
     (
@@ -892,6 +911,7 @@ export async function getPriorOverUnder(
     period: prior,
     clientBudget,
     spendTarget,
+    reservedExcluded,
     actual,
     variance,
     carryover: -variance,

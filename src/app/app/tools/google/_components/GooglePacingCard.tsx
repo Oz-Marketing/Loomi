@@ -27,12 +27,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowPathIcon,
   ArrowsRightLeftIcon,
+  ViewColumnsIcon,
+  NoSymbolIcon,
+  ClockIcon,
   ArrowSmallDownIcon,
   ArrowSmallUpIcon,
+  ArchiveBoxIcon,
   ArrowUturnLeftIcon,
   BoltIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  ExclamationTriangleIcon,
   Squares2X2Icon,
   TableCellsIcon,
   LockClosedIcon,
@@ -41,14 +46,19 @@ import {
   PlusSmallIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
-import { COLORS } from '@/lib/ad-pacer/constants';
+import { COLORS, GOOGLE_SETTLING_HOURS } from '@/lib/ad-pacer/constants';
 import { fmt, fmtDate, num } from '@/lib/ad-pacer/helpers';
 import { collectLabels, serializeTags } from '@/lib/ad-pacer/labels';
 import {
+  applyBlockedReason,
+  applyEligibility,
   balance,
   buildAllocatorView,
   convertMode,
+  moneyEq,
   planMove,
+  PUSH_DRIFT_FRACTION,
+  PUSH_DRIFT_MIN_DOLLARS,
   resolveClock,
   resolvePayable,
   sourceAvailable,
@@ -71,8 +81,23 @@ import { SearchableSelect } from '@/components/flows/builder/SearchableSelect';
 import { zonedTodayIso } from '@/lib/timezone';
 import { toast } from '@/lib/toast';
 import { COL, GoogleCampaignCard } from './GoogleCampaignCard';
-import { GoogleDeliveryHealthModal } from './GoogleDeliveryHealthModal';
+import { capDelivery, isFutileRaise } from '@/lib/ad-pacer/google-metrics';
+import {
+  adStatusTone,
+  normalizeAdStatus,
+  statusMismatch,
+  statusReasonText,
+  type StatusMismatch,
+} from '@/lib/ad-pacer/platform-status';
+import { GoogleDeliveryExpander } from './GoogleDeliveryExpander';
 import { PACE_COLORS, PACE_LABELS, campaignColor } from './google-pacing-theme';
+import { GoogleCompareModal } from './GoogleCompareModal';
+import { GoogleApplyConfirmModal, type ApplyChange } from './GoogleApplyConfirmModal';
+
+/** §10 — the comparison is 2–4 campaigns. Below two there is nothing to compare;
+ *  above four the grid stops being readable at a glance, which is its only job. */
+const COMPARE_MIN = 2;
+const COMPARE_MAX = 4;
 
 /** "August 2026" for the period heading — same wording as the shell's. */
 function periodLabel(period: string): string {
@@ -107,9 +132,15 @@ export interface GooglePacingCardProps {
     eventBudgets?: Record<string, number>;
   }) => void;
   /** Push the recommended dailies to Google (batched — see §8). */
-  onPushBudgets: () => void;
+  /** §14 — apply. No argument = the whole drifted batch; a list of ids = exactly
+   *  those campaigns, honoured even below the drift threshold. */
+  onPushBudgets: (adIds?: readonly string[]) => void;
   pushing?: boolean;
   googleConnected: boolean;
+  /** Re-run the account sync (spend + the §4 metric columns). Shared by every
+   *  open delivery panel — ten open rows must never fire ten syncs. */
+  onSyncFromGoogle?: () => void;
+  syncing?: boolean;
   /** Search / sync / Add Plan, rendered directly above the table so the controls
    *  sit with the rows they act on rather than above the whole card. */
   tableActions?: React.ReactNode;
@@ -127,6 +158,8 @@ export function GooglePacingCard({
   onPushBudgets,
   pushing = false,
   googleConnected,
+  onSyncFromGoogle,
+  syncing = false,
   tableActions,
 }: GooglePacingCardProps) {
   const readOnly = frozen;
@@ -135,19 +168,52 @@ export function GooglePacingCard({
   const [eventBudgets, setEventBudgets] = useState<Record<string, number>>(
     plan.eventBudgets ?? {},
   );
-  const [healthLineId, setHealthLineId] = useState<string | null>(null);
   const [moveOpen, setMoveOpen] = useState(false);
+  // §10 Compare selection. Deliberately the SAME set the Compare-view Move
+  // button pre-loads (§9's second entry point) rather than a second selection
+  // model — "look, then move without re-picking" is the whole reason Compare
+  // flows into Move, and two independent selections would break that in the one
+  // step where it matters.
+  const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
+  const [compareOpen, setCompareOpen] = useState(false);
+  /** Destinations Move opens pre-filled with. Empty = opened from the toolbar. */
+  const [movePreload, setMovePreload] = useState<string[]>([]);
+  /**
+   * §14 — the pending push, awaiting confirmation. Null = nothing staged.
+   *
+   * `mode` is carried explicitly rather than inferred from the row count. The
+   * two paths mean different things to the server — 'single' names its campaign
+   * so the drift gate is dropped for it, 'all' sends no ids and lets the server
+   * rebuild the batch — and inferring that from "is this list the same length as
+   * the batch" silently picks the wrong one whenever a single deliberate apply
+   * happens to be the only drifted campaign on the account.
+   */
+  const [pendingApply, setPendingApply] = useState<{
+    changes: ApplyChange[];
+    mode: 'single' | 'all';
+  } | null>(null);
   const [spendOpen, setSpendOpen] = useState(false);
   // Table (dense, comparative) vs cards (one campaign at a time, Meta's shape).
   const [layout, setLayout] = useState<'table' | 'cards'>('table');
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const toggleExpanded = (id: string) =>
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // Which rows have their delivery panel open (§1). A SET, not a single id:
+  // choosing who gives budget and who gets it is a comparison, and the modal
+  // this replaced could only ever show one campaign while hiding the table
+  // behind it. Opening a row never closes another — the user decides what stays
+  // open. Kept separate from `expandedIds` (the cards layout's planning body)
+  // so the two panels don't fight over one toggle.
+  const [deliveryIds, setDeliveryIds] = useState<Set<string>>(new Set());
+  const toggleSet =
+    (setter: typeof setExpandedIds) =>
+    (id: string) =>
+      setter((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+  const toggleExpanded = toggleSet(setExpandedIds);
+  const toggleDelivery = toggleSet(setDeliveryIds);
   // Undo holds whole ad sets — every mutation here is a multi-row rewrite
   // (balance, move, a mode switch), so a field-level undo would be a lie.
   const [undoStack, setUndoStack] = useState<PacerAd[][]>([]);
@@ -305,9 +371,95 @@ export function GooglePacingCard({
     );
   };
 
-  const healthLine = healthLineId ? view.lines.find((l) => l.id === healthLineId) : null;
-
   /** Write a manual flight override as day-of-month bounds within this month. */
+  // Cap the comparison at four columns. Past that the grid stops being readable
+  // at a glance, which is the only thing it is for — the fifth column is where
+  // someone starts scrolling sideways and comparing from memory again.
+  const toggleCompare = useCallback((id: string) => {
+    setCompareIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else if (next.size < COMPARE_MAX) next.add(id);
+      return next;
+    });
+  }, []);
+
+  // The compared lines in TABLE order, not click order: the grid should read the
+  // same way the table does.
+  const compareLines = useMemo(
+    () => view.visible.filter((l) => compareIds.has(l.id)),
+    [view.visible, compareIds],
+  );
+
+  // Drop selections that leave the view (filter change, campaign removed) so the
+  // count can never claim campaigns the grid would not show.
+  useEffect(() => {
+    setCompareIds((prev) => {
+      const valid = new Set(view.visible.map((l) => l.id));
+      const next = new Set([...prev].filter((id) => valid.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [view.visible]);
+
+  // §14 — stage one campaign for confirmation. Never pushes directly: no write
+  // to a live account happens without the concrete change stated first.
+  const requestApply = useCallback((change: ApplyChange) => {
+    setPendingApply({ changes: [change], mode: 'single' });
+  }, []);
+
+  // §14 — the demoted apply-all. Same drift gate the server applies to a batch,
+  // recomputed here only to SHOW the list before committing; the server rebuilds
+  // it from stored allocations and remains the authority on what is written.
+  const applyAllChanges = useMemo<ApplyChange[]>(() => {
+    const out: ApplyChange[] = [];
+    for (const line of view.visible) {
+      const ad = adsById.get(line.id);
+      if (!applyEligibility(line, ad?.googleBudgetResourceName ?? null).ok) continue;
+      const drift = Math.abs(line.recommendedDaily - line.currentDaily);
+      const threshold = Math.max(
+        PUSH_DRIFT_MIN_DOLLARS,
+        line.currentDaily * PUSH_DRIFT_FRACTION,
+      );
+      if (drift < threshold) continue;
+      out.push({
+        id: line.id,
+        name: line.name,
+        currentDaily: line.currentDaily,
+        newDaily: line.recommendedDaily,
+        futile: isFutileRaise({
+          currentDaily: line.currentDaily,
+          recommendedDaily: line.recommendedDaily,
+          delivery: capDelivery({
+            budgetConstrained: line.budgetLimited,
+            channelType: line.channelType,
+            budgetLostIsRaw: ad?.googleSearchBudgetLostIs ?? null,
+            series: ad?.dailySpend,
+            cap: line.currentDaily,
+            dataEdgeIso: clock.dataEdgeIso,
+          }),
+        }),
+      });
+    }
+    return out;
+  }, [view.visible, adsById, clock.dataEdgeIso]);
+
+  // The sum of what Google actually holds right now. `currentDaily` is synced
+  // from Google and rewritten the moment a push succeeds, so this stays honest
+  // between syncs. Reserved and total-budget lines are excluded on both sides,
+  // so the two totals compare like for like.
+  const liveAccountDaily = useMemo(
+    () =>
+      view.visible.reduce(
+        (sum, l) => sum + (l.dailyControllable && !l.reserved ? l.currentDaily : 0),
+        0,
+      ),
+    [view.visible],
+  );
+
+  const requestApplyAll = useCallback(() => {
+    if (applyAllChanges.length > 0) setPendingApply({ changes: applyAllChanges, mode: 'all' });
+  }, [applyAllChanges]);
+
   const setFlight = useCallback(
     (id: string, startDay: number, endDay: number) => {
       const pad = (n: number) => String(n).padStart(2, '0');
@@ -480,6 +632,21 @@ export function GooglePacingCard({
               {fmt(view.totals.lockedTarget)} locked
             </div>
           )}
+          {/* §12 — the reserve is inside the allocation but outside every pacing
+              figure, so the account's expected-MTD and daily-needed are lower
+              than the allocation alone would imply. Say so here rather than
+              leaving someone to reconcile the gap themselves. */}
+          {view.totals.reservedTarget > 0 && (
+            <Tooltip label="Committed to campaigns that cannot spend yet. Counted in the allocation and the payable check, and excluded from Expected MTD, the account pace, the daily needed and the push.">
+              <div
+                className="flex cursor-help items-center gap-1.5 text-xs"
+                style={{ color: COLORS.lifetime }}
+              >
+                <ArchiveBoxIcon className="h-3 w-3" />
+                {fmt(view.totals.reservedTarget)} reserved
+              </div>
+            </Tooltip>
+          )}
           <div className="ml-auto text-xs text-[var(--muted-foreground)]">
             {fmt(Math.max(0, view.totals.denominator - view.totals.spent))} left to spend ·{' '}
             <span className="font-bold text-[var(--foreground)]">
@@ -578,13 +745,15 @@ export function GooglePacingCard({
             label={
               !googleConnected
                 ? 'Connect Google Ads to push budgets'
-                : 'Apply recommended daily budgets — sets each campaign’s average daily budget in Google to its New Daily Budget. One batched update for the account; shared budgets are skipped, and only campaigns whose rate has drifted are touched.'
+                : applyAllChanges.length === 0
+                  ? 'Nothing to apply in a batch — every campaign is already within the drift threshold of its recommended daily. You can still apply an individual campaign from its row.'
+                  : `Apply all ${applyAllChanges.length} drifted campaign${applyAllChanges.length === 1 ? '' : 's'} at once. You will see the full list and confirm before anything is written. Applying one campaign at a time from its row is usually the better habit — this is here for when the whole plan already looks right.`
             }
           >
             <button
               type="button"
-              onClick={onPushBudgets}
-              disabled={readOnly || pushing || !googleConnected}
+              onClick={requestApplyAll}
+              disabled={readOnly || pushing || !googleConnected || applyAllChanges.length === 0}
               aria-label="Apply recommended daily budgets"
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--card)] text-[var(--foreground)] transition-colors hover:border-[var(--primary)]/40 hover:bg-[var(--primary)]/10 hover:text-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -596,10 +765,35 @@ export function GooglePacingCard({
             </button>
           </Tooltip>
           <BalanceButton readOnly={readOnly} onBalance={doBalance} />
+          <Tooltip
+            label={
+              compareIds.size < COMPARE_MIN
+                ? `Tick ${COMPARE_MIN - compareIds.size} more campaign${COMPARE_MIN - compareIds.size === 1 ? '' : 's'} to compare them side by side — metrics as rows, campaigns as columns.`
+                : `Compare these ${compareIds.size} side by side, then move budget between them without re-picking.`
+            }
+          >
+            <button
+              type="button"
+              onClick={() => setCompareOpen(true)}
+              disabled={compareIds.size < COMPARE_MIN}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <ViewColumnsIcon className="h-4 w-4" />
+              Compare
+              {compareIds.size > 0 && (
+                <span className="tabular-nums text-[var(--muted-foreground)]">
+                  ({compareIds.size})
+                </span>
+              )}
+            </button>
+          </Tooltip>
           <Tooltip label="Shift budget between campaigns without changing the account total.">
             <button
               type="button"
-              onClick={() => setMoveOpen(true)}
+              onClick={() => {
+                setMovePreload([]);
+                setMoveOpen(true);
+              }}
               disabled={readOnly}
               className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] px-3 py-2 text-sm font-medium text-[var(--foreground)] transition-colors hover:bg-[var(--muted)] disabled:cursor-not-allowed disabled:opacity-40"
             >
@@ -689,8 +883,24 @@ export function GooglePacingCard({
               onInput={(value) => applyInputs(new Map([[line.id, value]]))}
               onToggleLock={() => updateAd(line.id, { pacerLocked: !line.locked })}
               onTagsChange={(tags) => updateAd(line.id, { pacerTags: serializeTags(tags) })}
-              onOpenHealth={() => setHealthLineId(line.id)}
+              deliveryOpen={deliveryIds.has(line.id)}
+              onToggleDelivery={() => toggleDelivery(line.id)}
               onFlightChange={(startDay, endDay) => setFlight(line.id, startDay, endDay)}
+              delivery={
+                deliveryIds.has(line.id) ? (
+                  <GoogleDeliveryExpander
+                    accountKey={accountKey}
+                    period={period}
+                    line={line}
+                    ad={adsById.get(line.id)}
+                    daysInMonth={clock.daysInMonth}
+                    readOnly={readOnly}
+                    onFlightChange={(startDay, endDay) => setFlight(line.id, startDay, endDay)}
+                    onSyncFromGoogle={googleConnected ? onSyncFromGoogle : undefined}
+                    syncing={syncing}
+                  />
+                ) : null
+              }
             />
           ))}
           {rows.length === 0 && (
@@ -799,10 +1009,27 @@ export function GooglePacingCard({
                     payable={payable}
                     allLabels={allLabels}
                     readOnly={readOnly}
+                    accountKey={accountKey}
+                    period={period}
+                    daysInMonth={clock.daysInMonth}
+                    dataEdgeIso={clock.dataEdgeIso}
+                    onSyncFromGoogle={googleConnected ? onSyncFromGoogle : undefined}
+                    syncing={syncing}
+                    deliveryOpen={deliveryIds.has(line.id)}
                     onInput={(value) => applyInputs(new Map([[line.id, value]]))}
                     onToggleLock={() => updateAd(line.id, { pacerLocked: !line.locked })}
+                    onToggleReserved={() =>
+                      updateAd(line.id, { pacerReserved: !line.reserved })
+                    }
                     onTagsChange={(tags) => updateAd(line.id, { pacerTags: serializeTags(tags) })}
-                    onOpenHealth={() => setHealthLineId(line.id)}
+                    onToggleDelivery={() => toggleDelivery(line.id)}
+                    onFlightChange={(startDay, endDay) => setFlight(line.id, startDay, endDay)}
+                    compareSelected={compareIds.has(line.id)}
+                    compareDisabled={compareIds.size >= COMPARE_MAX}
+                    onToggleCompare={() => toggleCompare(line.id)}
+                    pushing={pushing}
+                    googleConnected={googleConnected}
+                    onApply={requestApply}
                   />
                 ))}
                 {rows.length === 0 && (
@@ -847,6 +1074,19 @@ export function GooglePacingCard({
                     >
                       {fmt(view.totals.accountDaily)}
                     </span>
+                    {/* §14 — what is actually set in Google right now, beside
+                        what the plan wants. The recommended total is a property
+                        of targets and spend, so it does NOT move when you apply;
+                        only this one does. A gap is the honest picture of an
+                        account where some campaigns cannot absorb what even-pace
+                        math wants to give them — and it points at what to solve
+                        with a move, which is why it is surfaced rather than
+                        quietly reconciled. */}
+                    <LiveDailyTotal
+                      recommended={view.totals.accountDaily}
+                      live={liveAccountDaily}
+                      unapplied={applyAllChanges.length}
+                    />
                     <Tooltip
                       label={
                         view.totals.fullyAllocated
@@ -874,8 +1114,45 @@ export function GooglePacingCard({
         </div>
       )}
 
+      {pendingApply != null && (
+        <GoogleApplyConfirmModal
+          changes={pendingApply.changes}
+          pushing={pushing}
+          onClose={() => setPendingApply(null)}
+          onConfirm={() => {
+            // Single: name the campaign, which tells the server to honour it
+            // even below the drift threshold. All: send nothing and let the
+            // server rebuild the batch from stored allocations.
+            onPushBudgets(
+              pendingApply.mode === 'single' ? pendingApply.changes.map((c) => c.id) : undefined,
+            );
+            setPendingApply(null);
+          }}
+        />
+      )}
+
+      {compareOpen && compareLines.length >= COMPARE_MIN && (
+        <GoogleCompareModal
+          lines={compareLines}
+          adsById={adsById}
+          onClose={() => setCompareOpen(false)}
+          onMove={() => {
+            // Hand the compared set straight to Move as its destinations and
+            // close the grid. The source stays unpicked on purpose: Compare says
+            // which campaigns are in play, not which one gives — that is the
+            // decision the grid was opened to inform.
+            setMovePreload(compareLines.map((l) => l.id));
+            setCompareOpen(false);
+            setMoveOpen(true);
+          }}
+        />
+      )}
+
       {moveOpen && (
         <MoveBudgetModal
+          accountKey={accountKey}
+          period={period}
+          initialDestinationIds={movePreload}
           view={view}
           mode={mode}
           payable={payable}
@@ -889,23 +1166,6 @@ export function GooglePacingCard({
         />
       )}
 
-      {healthLine && (
-        <GoogleDeliveryHealthModal
-          accountKey={accountKey}
-          period={period}
-          line={healthLine}
-          daysInMonth={clock.daysInMonth}
-          readOnly={readOnly}
-          onClose={() => setHealthLineId(null)}
-          onFlightChange={(startDay, endDay) => {
-            const pad = (n: number) => String(n).padStart(2, '0');
-            updateAd(healthLine.id, {
-              googleFlightStartOverride: `${period}-${pad(startDay)}`,
-              googleFlightEndOverride: `${period}-${pad(endDay)}`,
-            });
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -1057,6 +1317,65 @@ function EventBudgetBar({
   );
 }
 
+/**
+ * What Google reports for this campaign right now (§13), as a dot beside the
+ * name — and, when it contradicts the team's own Ad Status, a loud one.
+ *
+ * The mismatch is the point of the pill. A row Loomi is pacing as live that
+ * Google has paused is the expensive silent failure: the recommended daily, the
+ * account total and the push all keep treating it as a running campaign, and
+ * nothing on the card would otherwise say the money is not moving.
+ */
+function PlatformStatusPill({
+  ad,
+  mismatch,
+}: {
+  ad: PacerAd | undefined;
+  mismatch: StatusMismatch;
+}) {
+  if (!ad) return null;
+  const status = normalizeAdStatus(ad);
+  // Not linked is said elsewhere on the row; a second badge for it is noise.
+  if (status === 'Not linked' || status === 'Unknown') return null;
+  const tone = adStatusTone(status);
+  const color =
+    tone === 'good'
+      ? COLORS.success
+      : tone === 'warn'
+        ? COLORS.warn
+        : tone === 'bad'
+          ? COLORS.error
+          : 'var(--muted-foreground)';
+  const why = mismatch?.reasons.length
+    ? ` Google says ${mismatch.reasons.map(statusReasonText).join(', ')}.`
+    : '';
+  const label = mismatch
+    ? mismatch.kind === 'not_serving'
+      ? `Loomi is pacing this as ${ad.adStatus.toLowerCase()}, but Google reports it ${status.toLowerCase()} — it is not serving.${why} Its recommended daily is a number for a campaign that is not running, and pushing it will change nothing.`
+      : `Loomi has this as ${ad.adStatus.toLowerCase()}, but Google reports it ${status.toLowerCase()} — it is spending on a line the plan is not pacing.${why}`
+    : `Google reports this campaign ${status.toLowerCase()}.${why} Platform status, read-only — it never changes the Ad Status the team sets.`;
+
+  return (
+    <Tooltip label={label}>
+      {mismatch ? (
+        <span
+          className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+          style={{ background: `${COLORS.error}1f`, color: COLORS.error }}
+        >
+          <ExclamationTriangleIcon className="h-3 w-3" />
+          {mismatch.kind === 'not_serving' ? `Not serving · ${status}` : `Live in Google`}
+        </span>
+      ) : (
+        <span
+          className="inline-flex h-2 w-2 flex-shrink-0 rounded-full"
+          style={{ background: color }}
+          aria-label={`Google status: ${status}`}
+        />
+      )}
+    </Tooltip>
+  );
+}
+
 /** Row tag — colored text, no fill. A row can carry several of these at once
  *  (shared + ad schedule + disapproved), and filled badges stacked next to the
  *  campaign name turned the first column into a wall of blocks. */
@@ -1080,10 +1399,25 @@ function Row({
   payable,
   allLabels,
   readOnly,
+  accountKey,
+  period,
+  daysInMonth,
+  dataEdgeIso,
+  onSyncFromGoogle,
+  syncing,
+  deliveryOpen,
   onInput,
   onToggleLock,
+  onToggleReserved,
   onTagsChange,
-  onOpenHealth,
+  onToggleDelivery,
+  onFlightChange,
+  compareSelected,
+  compareDisabled,
+  onToggleCompare,
+  pushing,
+  googleConnected,
+  onApply,
 }: {
   line: AllocatorLine;
   ad: PacerAd | undefined;
@@ -1091,11 +1425,67 @@ function Row({
   payable: number;
   allLabels: readonly string[];
   readOnly: boolean;
+  accountKey: string;
+  period: string;
+  daysInMonth: number;
+  /** Last whole day with data — keeps today's partial out of the §8 bar read. */
+  dataEdgeIso: string | null;
+  onSyncFromGoogle?: () => void;
+  syncing: boolean;
+  deliveryOpen: boolean;
   onInput: (value: number) => void;
   onToggleLock: () => void;
+  onToggleReserved: () => void;
   onTagsChange: (tags: string[]) => void;
-  onOpenHealth: () => void;
+  onToggleDelivery: () => void;
+  onFlightChange: (startDay: number, endDay: number) => void;
+  /** §10 Compare selection — the same set Move's second entry point pre-loads. */
+  compareSelected: boolean;
+  compareDisabled: boolean;
+  onToggleCompare: () => void;
+  /** §14 per-campaign apply. `pushing` disables every control during a write. */
+  pushing: boolean;
+  googleConnected: boolean;
+  onApply: (change: ApplyChange) => void;
 }) {
+  // §13 — does the team's Ad Status contradict what Google reports? Display
+  // only; it never rewrites either side.
+  const mismatch = ad ? statusMismatch(ad) : null;
+
+  // §8 — is this campaign genuinely filling its cap? Never the flag alone: on a
+  // Search line it needs real lost impression share behind it, and on a PMax line
+  // (no impression share) the recent bars have to actually sit at the cap.
+  const atCap = capDelivery({
+    budgetConstrained: line.budgetLimited,
+    channelType: line.channelType,
+    budgetLostIsRaw: ad?.googleSearchBudgetLostIs ?? null,
+    series: ad?.dailySpend,
+    cap: line.currentDaily,
+    dataEdgeIso,
+  });
+  // §14 — is the recommendation a raise this campaign cannot act on? Reuses the
+  // SAME cap read as the tag above, so the row cannot flag a futile raise while
+  // simultaneously badging the campaign as delivering to its cap.
+  const futileRaise = isFutileRaise({
+    currentDaily: line.currentDaily,
+    recommendedDaily: line.recommendedDaily,
+    delivery: atCap,
+  });
+
+  // The tooltip has to bridge DELIVERY and PACE, or the tag reads as a
+  // contradiction next to an "underspending" badge on the same row. At cap and
+  // behind on the month is not a conflict — it is the whole diagnosis: the cap
+  // is what's holding it back.
+  const cappedTooltip =
+    (atCap.basis === 'budget_lost_is'
+      ? `Genuinely budget-limited: Google reports ${Math.round((atCap.budgetLostIs ?? 0) * 100)}% of impressions lost to budget, so there is demand it is turning away. `
+      : `Its recent daily spend is sitting at the ${fmt(line.currentDaily)} cap, so it is filling the budget it has. `) +
+    (line.paceStatus === 'under'
+      ? 'It is still behind for the month because the cap is set low — a higher daily is what catches it up.'
+      : line.paceStatus === 'over'
+        ? 'It is also ahead of target for the month, so more budget is not the need here.'
+        : 'It is on pace for the month.');
+
   // The recommended daily read against the even pace: up means it has to catch
   // up, down means it has to ease off. Purely directional — the number is the
   // instruction.
@@ -1109,6 +1499,7 @@ function Row({
           : 'flat';
 
   return (
+    <>
     <tr
       className={`border-b border-[var(--border)] transition-colors hover:bg-[var(--muted)]/30 ${
         line.locked ? 'bg-[var(--muted)]/20' : ''
@@ -1141,15 +1532,70 @@ function Row({
             )}
           </button>
         </Tooltip>
+        {/* §12 Reserved, next to the lock: the two controls that answer "how may
+            this budget be touched". Deliberately a manual toggle and nothing
+            else — nothing infers it, because auto-dropping a campaign out of
+            pacing off a missing daily would eventually misfire on a merely
+            paused live campaign. */}
+        <Tooltip
+          label={
+            line.reserved
+              ? `Reserved — ${line.name} is out of Expected MTD, the account pace, the recommended daily and the push, but its target still counts toward the allocation. Un-reserve it when the campaign launches.`
+              : `Reserve ${line.name} — for budget committed to a campaign that cannot spend yet (not built, or not linked to Google). It stays in the allocation and leaves every pacing figure, so the account read stops counting money that was never going to be spent this month.`
+          }
+        >
+          <button
+            type="button"
+            onClick={onToggleReserved}
+            disabled={readOnly}
+            aria-pressed={line.reserved}
+            aria-label={line.reserved ? `Un-reserve ${line.name}` : `Reserve ${line.name}`}
+            className={`mt-1 inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+              line.reserved
+                ? 'border-[var(--foreground)]/30 bg-[var(--foreground)]/10'
+                : 'border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--foreground)]/30 hover:text-[var(--foreground)]'
+            }`}
+            style={line.reserved ? { color: COLORS.lifetime } : undefined}
+          >
+            <ArchiveBoxIcon className="h-3 w-3" />
+          </button>
+        </Tooltip>
       </td>
 
       <td className="px-3 py-2.5 text-left align-middle">
         <div className="flex flex-wrap items-center gap-2">
+          {/* §10 selection. It sits with the campaign's identity rather than in
+              the control column, which answers a different question ("how may
+              this budget be touched"). Disabled past four with the reason, so a
+              dead checkbox never reads as a broken one. */}
+          <Tooltip
+            label={
+              compareSelected
+                ? `Remove ${line.name} from the comparison.`
+                : compareDisabled
+                  ? 'Compare holds four campaigns — untick one to swap it out.'
+                  : `Add ${line.name} to the comparison.`
+            }
+          >
+            <input
+              type="checkbox"
+              checked={compareSelected}
+              disabled={compareDisabled && !compareSelected}
+              onChange={onToggleCompare}
+              aria-label={`Compare ${line.name}`}
+              className="h-3.5 w-3.5 flex-shrink-0 cursor-pointer rounded border-[var(--border)] accent-[var(--primary)] disabled:cursor-not-allowed disabled:opacity-40"
+            />
+          </Tooltip>
           <span
             className="h-2 w-2 flex-shrink-0 rounded-sm"
             style={{ background: campaignColor(line.colorIndex) }}
           />
           <span className="text-sm font-semibold text-[var(--foreground)]">{line.name}</span>
+          {/* §13 — what Google actually reports for this campaign, on the
+              COLLAPSED row so status is legible across every line without
+              opening anything. Read-only platform truth: it never touches the
+              team's own Ad Status. */}
+          <PlatformStatusPill ad={ad} mismatch={mismatch} />
           {!line.flight.fullMonth && (
             <Tooltip label="This campaign's flight window inside the month — it paces against these days, not the whole month.">
               <span className="whitespace-nowrap text-[10px] tabular-nums text-[var(--muted-foreground)]">
@@ -1185,12 +1631,8 @@ function Row({
               tooltip="At least one ad is disapproved — the budget is sized right but the ads can't serve. Fix the disapprovals; raising the budget won't help."
             />
           )}
-          {line.budgetLimited && (
-            <Tag
-              color={COLORS.success}
-              label="Capped · headroom"
-              tooltip="Limited by budget — it spends its full daily every day and could absorb more."
-            />
+          {atCap.atCap && (
+            <Tag color={COLORS.success} label="Capped · headroom" tooltip={cappedTooltip} />
           )}
         </div>
         <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
@@ -1253,20 +1695,46 @@ function Row({
 
       <td className="px-3 py-2.5 text-left align-middle">
         <div className="flex items-center gap-1.5">
-          <Tooltip label="Open delivery health — is it spending its full daily, and can it absorb more?">
+          {line.reserved ? (
+            /* §12 — a reserve is not underspending, it is money set aside for a
+               campaign that cannot spend yet. Showing "0% of pace" here is a
+               false alarm about a campaign doing exactly what was intended. */
+            <Tooltip label="Reserved — budget committed to a campaign that cannot spend yet. It counts toward the account allocation but is out of Expected MTD, the account pace, the recommended daily and the push. Un-reserve it when the campaign launches; it will then pace its full target over the days that are left.">
+              <span
+                className="inline-flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+                style={{ background: `${COLORS.lifetime}1f`, color: COLORS.lifetime }}
+              >
+                <ArchiveBoxIcon className="h-3 w-3" />
+                Reserved
+              </span>
+            </Tooltip>
+          ) : (
+          <Tooltip
+            label={
+              deliveryOpen
+                ? 'Hide delivery detail'
+                : 'Show delivery detail — is it spending its full daily, and can it absorb more? Open as many rows as you like.'
+            }
+          >
             <button
               type="button"
-              onClick={onOpenHealth}
+              onClick={onToggleDelivery}
+              aria-expanded={deliveryOpen}
               className="inline-flex items-center gap-1.5 text-xs font-medium text-[var(--foreground)] transition-opacity hover:opacity-70"
             >
               <span style={{ color: PACE_COLORS[line.paceStatus] }}>
                 {PACE_LABELS[line.paceStatus]}
               </span>
-              <ChevronRightIcon className="h-3 w-3 text-[var(--muted-foreground)]" />
+              {deliveryOpen ? (
+                <ChevronDownIcon className="h-3 w-3 text-[var(--muted-foreground)]" />
+              ) : (
+                <ChevronRightIcon className="h-3 w-3 text-[var(--muted-foreground)]" />
+              )}
             </button>
           </Tooltip>
+          )}
         </div>
-        {line.expectedToDate > 0 && (
+        {!line.reserved && line.expectedToDate > 0 && (
           <div className="mt-0.5 text-[10px] tabular-nums text-[var(--muted-foreground)]">
             {line.paceRatio != null && `${Math.round(line.paceRatio * 100)}% · `}
             <span style={{ color: line.paceDelta >= 0 ? COLORS.warn : COLORS.lifetime }}>
@@ -1291,6 +1759,19 @@ function Row({
       <td className="bg-[var(--muted)]/40 px-3 py-2.5 text-right align-middle">
         {line.dailyControllable ? (
           <div className="flex items-center justify-end gap-1">
+            {/* §14 — the PRIMARY apply control: one campaign, one deliberate
+                action, right beside the number it writes. Apply-all still
+                exists in the toolbar but is deliberately not the thumb-target,
+                because this team looks before it acts and a one-click push of
+                every drifted campaign is the riskier default. */}
+            <ApplyButton
+              line={line}
+              ad={ad}
+              futile={futileRaise}
+              pushing={pushing}
+              disabled={readOnly || !googleConnected}
+              onApply={onApply}
+            />
             <span className="text-sm font-bold tabular-nums text-[var(--foreground)]">
               {fmt(line.recommendedDaily)}
             </span>
@@ -1325,6 +1806,28 @@ function Row({
         )}
       </td>
     </tr>
+    {/* The delivery panel, full width beneath its own row (§1). It sits INSIDE
+        the table rather than floating over it so the surrounding rows stay
+        readable — the point of the panel is comparing this campaign against the
+        ones above and below it. */}
+    {deliveryOpen && (
+      <tr className="border-b border-[var(--border)]">
+        <td colSpan={9} className="p-0">
+          <GoogleDeliveryExpander
+            accountKey={accountKey}
+            period={period}
+            line={line}
+            ad={ad}
+            daysInMonth={daysInMonth}
+            readOnly={readOnly}
+            onFlightChange={onFlightChange}
+            onSyncFromGoogle={onSyncFromGoogle}
+            syncing={syncing}
+          />
+        </td>
+      </tr>
+    )}
+    </>
   );
 }
 
@@ -1413,24 +1916,203 @@ function BalanceButton({
 
 // ── §8 move / distribute panel ──
 
+/**
+ * Hold a typed amount at or below the movable cap (§9). The cap is the ONE hard
+ * limit in the Move tool, so it is enforced at the keystroke rather than as a
+ * validation message after the fact — a number that cannot be committed should
+ * not be typeable.
+ *
+ * Partial input ("", "12.") passes through untouched; clamping mid-keystroke
+ * would fight the person typing.
+ */
+/**
+ * The per-campaign apply control (§14).
+ *
+ * Three states, and the disabled one is the point: a campaign that cannot be
+ * pushed says WHY on the control itself. A dead button with no explanation reads
+ * as broken, and the reason here is usually the actual next action — "shared
+ * budget, set it in Google" tells you where to go. Reserved campaigns get no
+ * control at all rather than a disabled one: there is nothing to push and never
+ * will be while the line is reserved, so an inert button would only invite the
+ * question.
+ */
+/**
+ * Plan total vs live total (§14). Two numbers that answer different questions:
+ * what the plan wants set, and what is set. They match when everything is
+ * applied and nothing has drifted; otherwise the gap IS the state of the
+ * account, and a partial apply becomes visible and actionable instead of a
+ * silent discrepancy.
+ *
+ * A healthy end state frequently is NOT "all applied" — you apply the working
+ * raises and the cuts, leave the demand-limited underspenders alone, and move
+ * their stranded budget. So the gap is reported without a nag to close it.
+ */
+function LiveDailyTotal({
+  recommended,
+  live,
+  unapplied,
+}: {
+  recommended: number;
+  live: number;
+  unapplied: number;
+}) {
+  const inSync = moneyEq(recommended, live);
+  const delta = live - recommended;
+  return (
+    <Tooltip
+      label={
+        inSync
+          ? 'What the plan wants and what Google currently holds are the same. Nothing to apply.'
+          : `Google currently holds ${fmt(live)}/day across these campaigns; the plan wants ${fmt(recommended)}/day. ${
+              unapplied > 0
+                ? `${unapplied} campaign${unapplied === 1 ? '' : 's'} past the drift threshold ${unapplied === 1 ? 'is' : 'are'} un-applied.`
+                : 'The difference is in campaigns below the drift threshold.'
+            } Applying never changes the plan total — only the live one moves.`
+      }
+    >
+      <span className="mt-0.5 block cursor-help text-[10px] tabular-nums text-[var(--muted-foreground)]">
+        {inSync ? (
+          <span style={{ color: COLORS.success }}>in sync</span>
+        ) : (
+          <>
+            live {fmt(live)}
+            <span className="ml-1" style={{ color: delta > 0 ? COLORS.warn : COLORS.daily }}>
+              ({delta > 0 ? '+' : '−'}
+              {fmt(Math.abs(delta))})
+            </span>
+          </>
+        )}
+      </span>
+    </Tooltip>
+  );
+}
+
+function ApplyButton({
+  line,
+  ad,
+  futile,
+  pushing,
+  disabled,
+  onApply,
+}: {
+  line: AllocatorLine;
+  ad: PacerAd | undefined;
+  futile: boolean;
+  pushing: boolean;
+  disabled: boolean;
+  onApply: (change: ApplyChange) => void;
+}) {
+  const eligibility = applyEligibility(line, ad?.googleBudgetResourceName ?? null);
+  // §12 — reserved lines are out of pacing entirely; no control, not a dead one.
+  if (eligibility.reason === 'reserved') return null;
+
+  const pushedAt = ad?.googleDailyPushedAt ? new Date(ad.googleDailyPushedAt) : null;
+  // Google re-paces over 24–48h, so a push inside that window is still settling
+  // and the numbers on this row still describe the OLD rate.
+  const settling =
+    pushedAt != null && Date.now() - pushedAt.getTime() < GOOGLE_SETTLING_HOURS * 3600 * 1000;
+  const matches = moneyEq(line.recommendedDaily, line.currentDaily);
+
+  if (!eligibility.ok && eligibility.reason) {
+    return (
+      <Tooltip label={applyBlockedReason(eligibility.reason)}>
+        <span
+          aria-label={`Cannot apply ${line.name}: ${applyBlockedReason(eligibility.reason)}`}
+          className="inline-flex h-6 w-6 cursor-not-allowed items-center justify-center rounded-md border border-[var(--border)] text-[var(--muted-foreground)] opacity-40"
+        >
+          <NoSymbolIcon className="h-3 w-3" />
+        </span>
+      </Tooltip>
+    );
+  }
+
+  return (
+    <Tooltip
+      label={
+        matches
+          ? `${line.name} is already set to ${fmt(line.recommendedDaily)}/day in Google. Applying again would rewrite the same rate.`
+          : settling
+            ? `Applied ${fmtRelativeHours(pushedAt as Date)}. Google re-paces over 24–48 hours, so today's spend still reflects the old rate — you can push again, but the numbers have not caught up yet.`
+            : futile
+              ? `Set ${line.name} to ${fmt(line.recommendedDaily)}/day in Google. Note: it is not spending the daily it already has, so the raise is unlikely to move spend — this is budget worth moving instead.`
+              : `Set ${line.name} to ${fmt(line.recommendedDaily)}/day in Google. You will confirm the change first.`
+      }
+    >
+      <button
+        type="button"
+        disabled={disabled || pushing}
+        onClick={() =>
+          onApply({
+            id: line.id,
+            name: line.name,
+            currentDaily: line.currentDaily,
+            newDaily: line.recommendedDaily,
+            futile,
+          })
+        }
+        aria-label={`Apply ${fmt(line.recommendedDaily)} daily budget to ${line.name}`}
+        className="inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+        style={{
+          borderColor: settling ? COLORS.daily : 'var(--border)',
+          color: matches ? 'var(--muted-foreground)' : settling ? COLORS.daily : 'var(--primary)',
+        }}
+      >
+        {settling ? <ClockIcon className="h-3 w-3" /> : <BoltIcon className="h-3 w-3" />}
+      </button>
+    </Tooltip>
+  );
+}
+
+/** "3 hours ago" / "yesterday" — enough precision to judge a settling window. */
+function fmtRelativeHours(at: Date): string {
+  const hours = Math.floor((Date.now() - at.getTime()) / 3600000);
+  if (hours < 1) return 'just now';
+  if (hours === 1) return '1 hour ago';
+  if (hours < 24) return `${hours} hours ago`;
+  return hours < 48 ? 'yesterday' : `${Math.floor(hours / 24)} days ago`;
+}
+
+function capAmount(raw: string, cap: number): string {
+  const n = Number(raw);
+  if (raw.trim() === '' || !Number.isFinite(n)) return raw;
+  const ceiling = Math.max(0, cap);
+  return n > ceiling ? String(Number(ceiling.toFixed(2))) : raw;
+}
+
 function MoveBudgetModal({
+  accountKey,
+  period,
   view,
   mode,
   payable,
   readOnly,
+  initialDestinationIds,
   onClose,
   onCommit,
 }: {
+  accountKey: string;
+  period: string;
   view: AllocatorView;
   mode: AllocationMode;
   payable: number;
   readOnly: boolean;
+  /**
+   * §9's two entry points, one engine. Opened from the toolbar this is empty and
+   * nothing is pre-selected; opened from Compare it carries the compared set as
+   * destinations so the move needs no re-picking. Only what is pre-filled
+   * differs — every rule, cap, warning and recompute below is identical, because
+   * a move that behaved differently depending on which button opened it would be
+   * two tools wearing one name.
+   */
+  initialDestinationIds?: readonly string[];
   onClose: () => void;
   onCommit: (inputs: Map<string, number>, summary: string) => void;
 }) {
   const [sourceKey, setSourceKey] = useState<string>('');
   const [method, setMethod] = useState<MoveMethod>('even');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(initialDestinationIds ?? []),
+  );
   const [evenTotal, setEvenTotal] = useState('');
   const [custom, setCustom] = useState<Record<string, string>>({});
 
@@ -1491,6 +2173,21 @@ function MoveBudgetModal({
   const commit = () => {
     if (!plan?.ok) return;
     const label = plan.source?.label ?? 'source';
+    // The durable record (§9). Fire-and-forget on purpose: the money moves
+    // through autosave, and a logging failure must not block or undo a move the
+    // person already confirmed. It is logged best-effort and reported quietly.
+    void fetch(`/api/google-ads-pacer/${encodeURIComponent(accountKey)}/move-log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        period,
+        sourceId: source?.kind === 'campaign' ? source.id : null,
+        total: plan.total,
+        allocations: plan.allocations.map((a) => ({ id: a.id, amount: a.amount })),
+      }),
+    }).catch(() => {
+      toast.error('Move applied, but it could not be written to the change log.');
+    });
     onCommit(
       plan.inputs,
       `Moved ${fmt(plan.total)} from ${label} across ${plan.allocations.length} campaign${plan.allocations.length === 1 ? '' : 's'}`,
@@ -1559,7 +2256,10 @@ function MoveBudgetModal({
                 : []),
               ...options.map((o) => ({
                 value: o.id,
-                label: `${o.name} (${fmt(o.target)})`,
+                // Movable, not target (§9). The picker is where someone decides
+                // what to draw from, so showing the full target here would set
+                // an expectation the amount field then refuses.
+                label: `${o.name} (${fmt(Math.max(0, o.target - o.spentMTD))} movable)`,
                 icon: (
                   <span
                     className="h-2 w-2 flex-shrink-0 rounded-sm"
@@ -1602,7 +2302,13 @@ function MoveBudgetModal({
             </span>
             <input
               value={evenTotal}
-              onChange={(e) => setEvenTotal(e.target.value)}
+              // Only clamp once a source is chosen. With no source `available`
+              // is 0, and capping against it would make the field refuse every
+              // keystroke for anyone who types the amount before picking where
+              // it comes from.
+              onChange={(e) =>
+                setEvenTotal(capAmount(e.target.value, source ? available : Infinity))
+              }
               disabled={readOnly}
               inputMode="decimal"
               placeholder="total to spread"
@@ -1612,9 +2318,22 @@ function MoveBudgetModal({
           </div>
         )}
         {source && (
-          <span className="text-[10px] tabular-nums text-[var(--muted-foreground)]">
-            {fmt(available)} available
-          </span>
+          /* Both halves of the cap (§9). "Available" alone reads as arbitrary
+             the moment it is smaller than the target on the row above. */
+          <Tooltip
+            label={
+              source.kind === 'campaign'
+                ? 'Movable = target − spent MTD. Money already spent has left the account and sits against this campaign in Google, so it cannot be given to another one.'
+                : 'The leftover between the plan and the payable — budget never assigned to a campaign.'
+            }
+          >
+            <span className="cursor-help text-[10px] tabular-nums text-[var(--muted-foreground)]">
+              {fmt(available)} movable
+              {source.kind === 'campaign' && plan != null && plan.sourceSpent > 0 && (
+                <> · {fmt(plan.sourceSpent)} already spent</>
+              )}
+            </span>
+          </Tooltip>
         )}
       </div>
 
@@ -1665,7 +2384,25 @@ function MoveBudgetModal({
                     <span className="text-[10px] text-[var(--muted-foreground)]">$</span>
                     <input
                       value={custom[o.id] ?? ''}
-                      onChange={(e) => setCustom((c) => ({ ...c, [o.id]: e.target.value }))}
+                      onChange={(e) =>
+                        setCustom((c) => ({
+                          ...c,
+                          // Each field caps at what is left after the OTHER
+                          // destinations, so the running total can't cross the
+                          // movable amount either.
+                          [o.id]: capAmount(
+                            e.target.value,
+                            source
+                              ? available -
+                                Object.entries(c).reduce(
+                                  (sum, [id, v]) =>
+                                    id === o.id || !selected.has(id) ? sum : sum + (Number(v) || 0),
+                                  0,
+                                )
+                              : Infinity,
+                          ),
+                        }))
+                      }
                       disabled={readOnly}
                       inputMode="decimal"
                       placeholder="0"
@@ -1711,6 +2448,29 @@ function MoveBudgetModal({
                 />
               ))}
             </div>
+          )}
+          {/* §9 soft warnings — judgment calls, so they sit under the preview
+              rather than beside the commit button, and the button stays live.
+              Warned-about moves are frequently the RIGHT move (deliberately
+              starving a campaign you are about to pause); the warning's job is
+              to make sure the consequence was seen, not to argue. */}
+          {plan.warnings.length > 0 && (
+            <ul className="mt-2.5 space-y-1.5">
+              {plan.warnings.map((w) => (
+                <li
+                  key={`${w.kind}:${w.lineId}`}
+                  className="flex gap-2 rounded-lg px-3 py-2 text-[11px] leading-relaxed"
+                  style={{ background: `${COLORS.warn}14`, color: 'var(--foreground)' }}
+                >
+                  <ExclamationTriangleIcon
+                    className="mt-0.5 h-3.5 w-3.5 flex-shrink-0"
+                    style={{ color: COLORS.warn }}
+                    aria-hidden
+                  />
+                  <span>{w.message}</span>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}

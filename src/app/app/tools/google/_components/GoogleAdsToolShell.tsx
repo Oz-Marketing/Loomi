@@ -432,7 +432,7 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
   // The server recomputes the plan from stored allocations, so a stale tab can't
   // push last hour's numbers.
   const [pushingBudgets, setPushingBudgets] = useState(false);
-  const pushAllBudgets = async () => {
+  const pushAllBudgets = async (adIds?: readonly string[]) => {
     if (!accountKey || pushingBudgets) return;
     setPushingBudgets(true);
     try {
@@ -441,12 +441,15 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({}),
+          // Empty/absent = the whole drifted batch; a list = exactly these
+          // campaigns, drift gate off (§14).
+          body: JSON.stringify(adIds && adIds.length > 0 ? { adIds: [...adIds] } : {}),
         },
       );
       const body = await readJsonSafe(res);
       if (!res.ok) throw new Error((body?.error as string) || `Push failed (${res.status})`);
       const pushedCount = (body?.pushedCount as number) ?? 0;
+      const single = adIds != null && adIds.length === 1;
       const skipped = (body?.skipped as unknown[] | undefined)?.length ?? 0;
       // Name the held-back campaigns rather than reporting a bare count — "3
       // skipped" with no reason is the kind of message people learn to ignore.
@@ -454,10 +457,24 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
         (body?.skipped as { name: string; reason: string }[] | undefined) ?? []
       ).filter((s) => s.reason !== 'below_threshold');
       if (pushedCount === 0) {
+        // A deliberate single apply that pushed nothing means it was structurally
+        // blocked, not merely within range — say which, rather than the batch's
+        // "already within range", which would be a lie for a below-threshold pick
+        // the server was told to honour.
+        const why = (body?.skipped as { name: string; reason: string }[] | undefined)?.[0];
         toast.success(
-          skipped > 0
-            ? 'Every campaign is already within range — nothing to push'
-            : 'Nothing to push',
+          single && why
+            ? `${why.name} could not be pushed (${why.reason.replace(/_/g, ' ')})`
+            : skipped > 0
+              ? 'Every campaign is already within range — nothing to push'
+              : 'Nothing to push',
+        );
+      } else if (single) {
+        const one = (body?.pushed as { name: string; from: number; to: number }[] | undefined)?.[0];
+        toast.success(
+          one
+            ? `${one.name}: daily budget set to $${one.to.toFixed(2)} in Google`
+            : 'Daily budget set in Google',
         );
       } else {
         toast.success(
@@ -772,6 +789,8 @@ export function GoogleAdsToolShell({ mode }: { mode: 'planner' | 'pacer' }) {
               pushing={pushingBudgets}
               googleConnected={connected}
               tableActions={planActions}
+              onSyncFromGoogle={syncFromGoogle}
+              syncing={syncing}
             />
           )}
         </div>

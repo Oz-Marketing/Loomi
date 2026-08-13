@@ -268,6 +268,7 @@ model Account {
   accountDomains           AccountDomain[]
   snippets                 AccountSnippet[]
   mediaAssets              MediaAsset[]
+  mediaCollections         MediaCollection[]
   metaAdsPacerPlan         MetaAdsPacerPlan?
   metaAdsPacerAccountNotes MetaAdsPacerAccountNote[]
   metaAdsPacerBudgetLogs   MetaAdsPacerBudgetLog[]
@@ -1759,6 +1760,8 @@ model MediaAsset {
   /// Generated platform-size derivatives. Cascade-deleted with the master —
   /// they have no meaning without it.
   renditions   MediaRendition[]
+  /// Static-collection memberships.
+  collectionItems MediaCollectionItem[]
   uploadedBy   String? // User ID
   archivedAt   DateTime? // soft-archive: hidden from the default library view, restorable
   createdAt    DateTime     @default(now())
@@ -1927,6 +1930,75 @@ model MediaAsset {
   // isn't scope-limited.
   @@index([licenseExpiresAt])
   @@index([expiresAt])
+}
+
+// A named set of assets — the replacement for folders.
+//
+// Folders were removed because they could only express "an arbitrary pile
+// someone made", and they did it badly: an asset lived in exactly one, so a
+// photo that belonged to both the summer campaign and the brand library had to
+// pick. Collections don't have that problem — an asset can be in any number —
+// and they come in two kinds:
+//
+//   static  a curated list. "Ford Ogden August — final creative package."
+//   smart   a saved SEARCH. "All approved Audi display assets." New assets
+//           matching the criteria appear automatically; nothing to maintain.
+//
+// Scoped exactly like assets (accountKey null = agency-level), so a collection
+// of OEM-shared work isn't trapped inside one rooftop.
+model MediaCollection {
+  id         String   @id @default(cuid())
+  accountKey String? // null = agency-level
+  account    Account? @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  name        String
+  description String? @db.Text
+
+  /// "static" | "smart".
+  kind String @default("static")
+
+  /// For smart collections: JSON MediaCollectionQuery — the scope, facet
+  /// selection and search text that define it. Null on static ones.
+  ///
+  /// Stored as the QUERY rather than as resolved ids, which is the whole point:
+  /// resolving at read time is what makes "new matching assets appear
+  /// automatically" true instead of a promise someone has to keep manually.
+  query String? @db.Text
+
+  items MediaCollectionItem[]
+
+  createdBy   String?
+  createdByName String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // "This account's collections", the only listing there is.
+  @@index([accountKey, updatedAt])
+}
+
+// Membership for a STATIC collection.
+//
+// A join table rather than a JSON id list on the collection: it makes "which
+// collections is this asset in?" a real query, and it lets the asset FK clean up
+// after a delete instead of leaving a dangling id in a blob.
+model MediaCollectionItem {
+  id           String          @id @default(cuid())
+  collectionId String
+  collection   MediaCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  assetId      String
+  asset        MediaAsset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  /// Manual ordering within the collection. A "final creative package" has an
+  /// order someone chose; alphabetical would discard it.
+  position  Int      @default(0)
+  addedBy   String?
+  createdAt DateTime @default(now())
+
+  // An asset appears at most once in a collection — adding twice is a no-op,
+  // not a duplicate row.
+  @@unique([collectionId, assetId])
+  @@index([collectionId, position])
+  @@index([assetId])
 }
 
 // One run of the media rights expiration sweep — its heartbeat.

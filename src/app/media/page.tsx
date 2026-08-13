@@ -17,6 +17,7 @@ import {
   ArrowRightIcon,
   EyeIcon,
   CheckIcon,
+  BookmarkIcon,
   BuildingStorefrontIcon,
   Squares2X2Icon,
   ListBulletIcon,
@@ -38,6 +39,7 @@ import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-m
 import { RenditionPanel } from '@/components/media/rendition-panel';
 import { RightsActivityPanel } from '@/components/media/rights-activity-panel';
 import { ScopeMoveModal, type ScopeMoveTarget } from '@/components/media/scope-move-modal';
+import { CollectionsSection } from '@/components/media/collections-section';
 import {
   MediaScopeSection,
   scopeLabel,
@@ -1673,6 +1675,114 @@ export default function MediaPage() {
     clearSelection();
   };
 
+  // ── Collections ──
+  //
+  // Selecting one TAKES OVER the grid rather than stacking on the current
+  // filters: a collection is a set someone defined, and intersecting it with
+  // whatever was already selected would show neither thing.
+  const [activeCollectionId, setActiveCollectionId] = useState<string | null>(null);
+  const [collectionFiles, setCollectionFiles] = useState<MediaFile[] | null>(null);
+  const [collectionName, setCollectionName] = useState<string | null>(null);
+  const [collectionsKey, setCollectionsKey] = useState(0);
+
+  useEffect(() => {
+    if (!activeCollectionId) {
+      setCollectionFiles(null);
+      setCollectionName(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/media/collections/${encodeURIComponent(activeCollectionId)}`);
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (res.ok) {
+          setCollectionFiles(data.files || []);
+          setCollectionName(data.collection?.name ?? null);
+        } else {
+          toast.error(data?.error || 'Could not open that collection');
+          setActiveCollectionId(null);
+        }
+      } catch {
+        if (!cancelled) setActiveCollectionId(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeCollectionId]);
+
+  /** Save the current scope + facets + search as a smart collection. */
+  const saveCurrentAsCollection = async () => {
+    const name = window.prompt('Name this saved search');
+    if (!name?.trim()) return;
+    const query = {
+      accountKey: adminScope.kind === 'account' ? adminScope.value : adminScope.kind === 'all' ? undefined : null,
+      oem: adminScope.kind === 'oem' ? adminScope.value : adminScope.kind === 'global' ? 'none' : undefined,
+      facets: adminFacetSelection,
+      search: overviewSearch.trim() || undefined,
+    };
+    try {
+      const res = await fetch('/api/media/collections', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), kind: 'smart', query }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'failed');
+      toast.success(`Saved “${name.trim()}” — it keeps up as assets change`);
+      setCollectionsKey((k) => k + 1);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save that search');
+    }
+  };
+
+  /** Add the current selection to a static collection, creating it if needed. */
+  const addSelectionToCollection = async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+    const name = window.prompt(`Add ${ids.length} asset${ids.length > 1 ? 's' : ''} to which collection? (a new one is created if the name is new)`);
+    if (!name?.trim()) return;
+
+    try {
+      const listRes = await fetch(`/api/media/collections${adminScope.kind === 'account' ? `?accountKey=${encodeURIComponent(adminScope.value)}` : ''}`);
+      const existing = listRes.ok ? (await listRes.json()).collections ?? [] : [];
+      const match = existing.find(
+        (c: { name: string; kind: string }) => c.name.toLowerCase() === name.trim().toLowerCase() && c.kind === 'static',
+      );
+
+      let id = match?.id;
+      if (!id) {
+        const created = await fetch('/api/media/collections', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim(), kind: 'static' }),
+        });
+        const data = await created.json().catch(() => ({}));
+        if (!created.ok) throw new Error(data?.error || 'failed');
+        id = data.collection.id;
+      }
+
+      const res = await fetch(`/api/media/collections/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ addAssetIds: ids }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'failed');
+      // `added` can be lower than the selection when some were already members —
+      // saying which is more useful than claiming all of them landed.
+      toast.success(
+        data.added === ids.length
+          ? `Added ${data.added} to “${name.trim()}”`
+          : `Added ${data.added} to “${name.trim()}” (${ids.length - data.added} already there)`,
+      );
+      setCollectionsKey((k) => k + 1);
+      clearSelection();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not add to that collection');
+    }
+  };
+
   // ── Scope moves ──
   //
   // Admin-only: promoting an asset to an OEM library publishes it to every
@@ -1942,6 +2052,8 @@ export default function MediaPage() {
   );
 
   const filteredAdminMedia = useMemo(() => {
+    // An open collection replaces the grid wholesale — see the state comment.
+    if (collectionFiles) return collectionFiles;
     const q = overviewSearch.trim().toLowerCase();
     return adminFilesWithFacets
       .filter(({ file, facets }) => {
@@ -1953,7 +2065,7 @@ export default function MediaPage() {
           .some((v) => typeof v === 'string' && v.toLowerCase().includes(q));
       })
       .map(({ file }) => file);
-  }, [adminFilesWithFacets, overviewSearch, adminFacetSelection]);
+  }, [adminFilesWithFacets, overviewSearch, adminFacetSelection, collectionFiles]);
 
   /** Sub-accounts for the Scope rail, with the counts the old cards showed. */
   const scopeAccounts = useMemo(
@@ -2176,6 +2288,12 @@ export default function MediaPage() {
                 accounts={scopeAccounts}
                 refreshKey={scopeRefreshKey}
               />
+              <CollectionsSection
+                accountKey={adminScope.kind === 'account' ? adminScope.value : null}
+                selectedId={activeCollectionId}
+                onSelect={setActiveCollectionId}
+                refreshKey={collectionsKey}
+              />
               <MediaFilterRail
                 options={adminFacetOptions}
                 visibleFacets={adminVisibleFacets}
@@ -2202,9 +2320,32 @@ export default function MediaPage() {
                     placeholder={`Search ${scopeSearchLabel(adminScope, accounts[adminScope.kind === 'account' ? adminScope.value : '']?.dealer)}...`}
                   />
                 </div>
-                <p className="shrink-0 text-xs text-[var(--muted-foreground)]">
-                  {scopeLabel(adminScope, accounts[adminScope.kind === 'account' ? adminScope.value : '']?.dealer)}
-                </p>
+                {collectionName ? (
+                  <button
+                    onClick={() => setActiveCollectionId(null)}
+                    className="shrink-0 text-xs text-[var(--primary)] transition-opacity hover:opacity-80"
+                    title="Back to the library"
+                  >
+                    {collectionName} ✕
+                  </button>
+                ) : (
+                  <div className="flex shrink-0 items-center gap-3">
+                    {/* Only offered once something is actually narrowed — saving
+                        "everything" as a search would be a collection of the
+                        whole library. */}
+                    {(countMediaFacetsSelected(adminFacetSelection) > 0 || adminScope.kind !== 'all' || overviewSearch.trim()) && (
+                      <button
+                        onClick={saveCurrentAsCollection}
+                        className="text-xs text-[var(--primary)] transition-opacity hover:opacity-80"
+                      >
+                        Save this view
+                      </button>
+                    )}
+                    <p className="text-xs text-[var(--muted-foreground)]">
+                      {scopeLabel(adminScope, accounts[adminScope.kind === 'account' ? adminScope.value : '']?.dealer)}
+                    </p>
+                  </div>
+                )}
               </div>
 
           {/* ── Loomi Media Library section ── */}
@@ -2565,6 +2706,13 @@ export default function MediaPage() {
                   },
                 ]
               : [
+                  {
+                    id: 'collect',
+                    label: 'Add to collection',
+                    icon: <BookmarkIcon className="h-4 w-4" />,
+                    onClick: addSelectionToCollection,
+                    disabled: selectedIds.size === 0,
+                  },
                   {
                     id: 'move-scope',
                     label: 'Move',

@@ -88,7 +88,9 @@ import { requiredFieldsFor, FIELD_LABELS, type OemOfferRule } from '@/lib/ad-gen
 import { buildLayerTree, flattenLayerTree, normalizeGroupZ, pruneEmptyGroups, type LayerNode } from '@/lib/ad-generator/layer-tree';
 import { TextElementIcon, ShapeElementIcon, ButtonElementIcon, DashboardLayoutIcon, LayersIcon, OutlinesIcon, MarginsIcon, CropIcon } from '@/components/ad-generator/builder-icons';
 import { VAlignTopIcon, VAlignMiddleIcon, VAlignBottomIcon, HAlignLeftIcon, HAlignCenterIcon, HAlignRightIcon } from '@/components/ad-generator/valign-icons';
-import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
+import { normalizeTags, type LibrarySize } from '@/lib/ad-generator/ad-size-library';
+import { useSizeLibrary } from '@/lib/ad-generator/use-size-library';
+import { SizePicker } from '@/components/ad-generator/size-picker';
 import { addSizesToDoc, dedupeSizeIds, type SizeToAdd } from '@/lib/ad-generator/size-ids';
 import {
   applyBox,
@@ -937,22 +939,10 @@ export default function AdBuilderPage() {
   const [customName, setCustomName] = useState('');
   const [customW, setCustomW] = useState('');
   const [customH, setCustomH] = useState('');
-  // The shared size library (drives the Add-size picker; falls back to presets).
-  const [libSizes, setLibSizes] = useState<{ id: string; name: string; width: number; height: number }[]>([]);
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/api/ad-generator/sizes')
-      .then((r) => (r.ok ? r.json() : { sizes: [] }))
-      .then((d: { sizes?: { id: string; name: string; width: number; height: number }[] }) => {
-        if (!cancelled) setLibSizes(d.sizes ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setLibSizes([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const [customTags, setCustomTags] = useState('');
+  // The size library — the same list the /ad-generator/sizes page and the
+  // from-scratch modal read, so a size added anywhere is offered everywhere.
+  const { sizes: libSizes, facets: libFacets, loading: libLoading, reload: reloadLibrary } = useSizeLibrary();
 
   // ── persistence ──
   const [templateId, setTemplateId] = useState<string | null>(null);
@@ -2597,15 +2587,16 @@ export default function AdBuilderPage() {
       const res = await fetch('/api/ad-generator/sizes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, width: Math.round(w), height: Math.round(h) }),
+        body: JSON.stringify({ name, width: Math.round(w), height: Math.round(h), tags: normalizeTags(customTags.split(',')) }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      if (json.size) setLibSizes((prev) => [json.size, ...prev]);
+      void reloadLibrary();
       addSize(name, Math.round(w), Math.round(h));
       setCustomName('');
       setCustomW('');
       setCustomH('');
+      setCustomTags('');
       toast.success('Size created');
     } catch (err) {
       toast.error(`Couldn't create size: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -4881,6 +4872,8 @@ export default function AdBuilderPage() {
             createLibrarySize={createLibrarySize}
             copyLayoutFrom={copyLayoutFrom}
             libSizes={libSizes}
+            libFacets={libFacets}
+            libLoading={libLoading}
             addSizeOpen={addSizeOpen}
             setAddSizeOpen={setAddSizeOpen}
             customName={customName}
@@ -4889,6 +4882,8 @@ export default function AdBuilderPage() {
             setCustomW={setCustomW}
             customH={customH}
             setCustomH={setCustomH}
+            customTags={customTags}
+            setCustomTags={setCustomTags}
             onClose={() => setSizesOpen(false)}
             viewAll={viewAll}
             onViewAll={() => {
@@ -7143,6 +7138,8 @@ function SizesManager({
   createLibrarySize,
   copyLayoutFrom,
   libSizes,
+  libFacets,
+  libLoading,
   addSizeOpen,
   setAddSizeOpen,
   customName,
@@ -7151,6 +7148,8 @@ function SizesManager({
   setCustomW,
   customH,
   setCustomH,
+  customTags,
+  setCustomTags,
   onClose,
   viewAll,
   onViewAll,
@@ -7163,7 +7162,9 @@ function SizesManager({
   addSizes: (sizes: SizeToAdd[]) => void;
   createLibrarySize: () => void;
   copyLayoutFrom: (id: string) => void;
-  libSizes: { id: string; name: string; width: number; height: number }[];
+  libSizes: LibrarySize[];
+  libFacets: { tag: string; count: number }[];
+  libLoading: boolean;
   addSizeOpen: boolean;
   setAddSizeOpen: React.Dispatch<React.SetStateAction<boolean>>;
   customName: string;
@@ -7172,6 +7173,8 @@ function SizesManager({
   setCustomW: (v: string) => void;
   customH: string;
   setCustomH: (v: string) => void;
+  customTags: string;
+  setCustomTags: (v: string) => void;
   onClose: () => void;
   viewAll: boolean;
   onViewAll: () => void;
@@ -7184,51 +7187,23 @@ function SizesManager({
       ? bg.color
       : '#ffffff';
 
-  // Multiselect for the Add catalog — accumulate picks, add them all at once.
-  const [picked, setPicked] = useState<Record<string, { name: string; width: number; height: number }>>({});
-  const pickKey = (name: string, w: number, h: number) => `${name}:${w}x${h}`;
-  const togglePick = (name: string, w: number, h: number) =>
+  // Multiselect over the size library — accumulate picks, add them all at once.
+  const [picked, setPicked] = useState<Record<string, LibrarySize>>({});
+  const togglePick = (s: LibrarySize) =>
     setPicked((prev) => {
-      const k = pickKey(name, w, h);
       const next = { ...prev };
-      if (next[k]) delete next[k];
-      else next[k] = { name, width: w, height: h };
+      if (next[s.id]) delete next[s.id];
+      else next[s.id] = s;
       return next;
     });
+  const pickedIds = useMemo(() => new Set(Object.keys(picked)), [picked]);
   const pickedCount = Object.keys(picked).length;
   const addPicked = () => {
     // ONE call with the whole selection — adding them one by one gave same-ratio
-    // picks (the catalog's three 1080×1920 sizes) colliding ids.
+    // picks (the three 1080×1920 story sizes) colliding ids.
     addSizes(Object.values(picked).map((s) => ({ label: s.name, width: s.width, height: s.height })));
     setPicked({});
     setAddSizeOpen(false);
-  };
-  // A ratio-accurate swatch (long edge = `long` px) for a catalog/list entry.
-  const ratioSwatch = (w: number, h: number, long: number, extraClass = '') => {
-    const tw = w >= h ? long : Math.round((long * w) / h);
-    const th = h >= w ? long : Math.round((long * h) / w);
-    return <span className={`rounded-[2px] border border-[var(--border)] ${extraClass}`} style={{ width: tw, height: th, background: previewFill }} />;
-  };
-  // A selectable catalog/library tile (checkbox-style multiselect + ratio).
-  const catalogTile = (name: string, w: number, h: number) => {
-    const sel = !!picked[pickKey(name, w, h)];
-    return (
-      <button
-        key={`${name}:${w}x${h}`}
-        onClick={() => togglePick(name, w, h)}
-        aria-pressed={sel}
-        className={`flex items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors ${sel ? 'border-[var(--primary)] bg-[var(--primary)]/10' : 'border-[var(--border)] hover:border-[var(--primary)]'}`}
-      >
-        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center">{ratioSwatch(w, h, 30)}</span>
-        <span className="min-w-0 flex-1">
-          <span className={`block truncate text-xs font-medium ${sel ? 'text-[var(--primary)]' : 'text-[var(--foreground)]'}`}>{name}</span>
-          <span className="block text-[10px] tabular-nums text-[var(--muted-foreground)]">{w}×{h}</span>
-        </span>
-        <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[4px] border ${sel ? 'border-[var(--primary)] bg-[var(--primary)] text-white' : 'border-[var(--muted-foreground)]/50'}`}>
-          {sel && <CheckIcon className="h-3 w-3" strokeWidth={3} />}
-        </span>
-      </button>
-    );
   };
   return (
     <section
@@ -7313,33 +7288,31 @@ function SizesManager({
         <div className="mt-2 flex min-h-0 flex-col rounded-lg border border-dashed border-[var(--border)]">
           <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-2.5">
             <p className="text-[11px] text-[var(--muted-foreground)]">Select one or more sizes to add, then hit Add.</p>
-            {/* Standard catalog, grouped by category — multiselect w/ ratio previews */}
-            {catalogByCategory().map((grp) => (
-              <div key={grp.category}>
-                <div className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{grp.label}</div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {grp.sizes.map((p) => catalogTile(p.name, p.width, p.height))}
-                </div>
-              </div>
-            ))}
-
-            {/* Custom sizes from the shared library (added on top of the catalog) */}
-            {libSizes.length > 0 && (
-              <div>
-                <div className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Custom</div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {libSizes.map((s) => catalogTile(s.name, s.width, s.height))}
-                </div>
-              </div>
-            )}
+            {/* The whole size library, filtered by what each size is used for. */}
+            <SizePicker
+              sizes={libSizes}
+              facets={libFacets}
+              loading={libLoading}
+              selectedIds={pickedIds}
+              onToggle={togglePick}
+              previewFill={previewFill}
+              dense
+            />
 
             {/* Create a brand-new size — saved to the library + added here */}
             <div className="space-y-1.5 border-t border-[var(--border)] pt-2.5">
-              <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">Custom size</div>
+              <div className="text-[9px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">New size</div>
               <input
                 value={customName}
                 onChange={(e) => setCustomName(e.target.value)}
                 placeholder="New size name (e.g. Wide Banner)"
+                className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+              />
+              <input
+                value={customTags}
+                onChange={(e) => setCustomTags(e.target.value)}
+                placeholder="Used for (e.g. Facebook, Display)"
+                title="Comma-separated tags — what this size is used for. They filter this picker."
                 className="w-full rounded-md border border-[var(--border)] bg-[var(--background)] px-2 py-1.5 text-xs text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
               />
               <div className="flex items-center gap-1.5">

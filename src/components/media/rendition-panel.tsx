@@ -1,19 +1,21 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowDownTrayIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { HelpTip } from '@/components/ui/help-tip';
-import { catalogByCategory } from '@/lib/ad-generator/ad-size-catalog';
+import { filterSizes } from '@/lib/ad-generator/ad-size-library';
+import { useSizeLibrary } from '@/lib/ad-generator/use-size-library';
+import { TagFilterChips } from '@/components/ad-generator/size-picker';
 import { formatBytes } from '@/lib/media-limits';
 
 /**
  * Platform sizes generated from one master — Phase 4 of docs/asset-management.md.
  *
- * The sizes come from the ad builder's own catalog, so a rendition and the ad it
- * ends up in share dimensions by construction. Renditions are disposable: the
- * master is the source of truth, deleting one costs nothing, and regenerating
- * replaces in place.
+ * The sizes come from the ad builder's own size library — including sizes a team
+ * added themselves — so a rendition and the ad it ends up in share dimensions by
+ * construction. Renditions are disposable: the master is the source of truth,
+ * deleting one costs nothing, and regenerating replaces in place.
  */
 
 interface Rendition {
@@ -43,6 +45,10 @@ export function RenditionPanel({
   const [busy, setBusy] = useState(false);
   const [picking, setPicking] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // Sizes to offer, and the tag chips that narrow them.
+  const { sizes: library, facets, loading: libLoading } = useSizeLibrary();
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const offered = useMemo(() => filterSizes(library, tagFilter), [library, tagFilter]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -193,14 +199,19 @@ export function RenditionPanel({
 
           {picking && (
             <div className="rounded-lg border border-[var(--border)] p-2.5">
+              <TagFilterChips facets={facets} selected={tagFilter} onChange={setTagFilter} className="mb-2" />
               <div className="max-h-56 overflow-y-auto space-y-3">
-                {catalogByCategory().map((group) => (
-                  <div key={group.category}>
-                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--muted-foreground)]">
-                      {group.label}
-                    </div>
+                {libLoading && (
+                  <p className="px-1.5 py-2 text-[11px] text-[var(--muted-foreground)]">Loading sizes…</p>
+                )}
+                {!libLoading && offered.length === 0 && (
+                  <p className="px-1.5 py-2 text-[11px] text-[var(--muted-foreground)]">
+                    {library.length === 0 ? 'No sizes in the library yet.' : 'No sizes match that filter.'}
+                  </p>
+                )}
+                <div>
                     <div className="space-y-0.5">
-                      {group.sizes.map((size) => {
+                      {offered.map((size) => {
                         const checked = selected.has(size.name);
                         const already = existing.has(size.name);
                         return (
@@ -251,8 +262,7 @@ export function RenditionPanel({
                         );
                       })}
                     </div>
-                  </div>
-                ))}
+                </div>
               </div>
 
               <button

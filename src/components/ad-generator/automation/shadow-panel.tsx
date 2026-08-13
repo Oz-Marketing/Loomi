@@ -31,7 +31,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { Select } from '@/components/select';
 import { HelpTip } from '@/components/ui/help-tip';
-import { aspectLabel } from '@/lib/ad-generator/ad-size-catalog';
+import { aspectLabel } from '@/lib/ad-generator/ad-size-library';
 import { windowPreview } from '@/lib/ad-generator/automation/window-preview';
 import { skipReasonFix, skipReasonLabel, summarizeSkips } from '@/lib/ad-generator/automation/skip-reasons';
 import type { CycleState, RunSummary } from './types';

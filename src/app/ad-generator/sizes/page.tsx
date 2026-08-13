@@ -1,13 +1,20 @@
 'use client';
 
 /**
- * Ad Size Library — a shared, named set of ad sizes the template builder draws
- * from. Anyone signed in can add, rename, resize, or remove one; each row shows
- * who created it and when. Styled to match the Ad Generator gallery + Templates
- * chrome. Behind AD_GENERATOR_ENABLED (the route layout 404s when off).
+ * Ad Size Library — the one list of sizes the Ad Generator designs against.
+ *
+ * Every size here is the same kind of thing: there's no built-in tier and no
+ * "custom" pile. What a size is FOR is carried by its tags ("Facebook",
+ * "Display", "Email"), which are free-form, editable inline, and used as filters
+ * rather than folders — a 1080×1080 that runs on Instagram and in email says so
+ * by carrying both tags.
+ *
+ * Anyone signed in can add, rename, resize, retag, or remove one; each row shows
+ * who created it and when. Behind AD_GENERATOR_ENABLED (the route layout 404s
+ * when off).
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { toast } from 'sonner';
 import {
@@ -19,31 +26,31 @@ import {
   RectangleGroupIcon,
   MegaphoneIcon,
   Squares2X2Icon,
+  MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { UserAvatar } from '@/components/user-avatar';
-import { catalogByCategory, aspectLabel } from '@/lib/ad-generator/ad-size-catalog';
-
-type AdSize = {
-  id: string;
-  name: string;
-  width: number;
-  height: number;
-  createdByName: string | null;
-  createdByEmail: string | null;
-  createdByImage: string | null;
-  createdAt: string;
-};
+import { HelpTip } from '@/components/ui/help-tip';
+import { TagChip, TagEditorPopover } from '@/components/templates/taxonomy-controls';
+import { TagFilterChips, RatioSwatch } from '@/components/ad-generator/size-picker';
+import { aspectLabel, filterSizes, normalizeTags, type LibrarySize } from '@/lib/ad-generator/ad-size-library';
+import { useSizeLibrary } from '@/lib/ad-generator/use-size-library';
 
 export default function AdSizesPage() {
   const { accountKey } = useAccount();
   const { confirm } = useLoomiDialog();
-  const [sizes, setSizes] = useState<AdSize[] | null>(null);
+  const { sizes, facets, allTags, loading, reload } = useSizeLibrary();
+
   const [name, setName] = useState('');
   const [width, setWidth] = useState('');
   const [height, setHeight] = useState('');
+  const [newTags, setNewTags] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Browsing: tag chips filter (OR), plus a text search over name/dimensions.
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const [query, setQuery] = useState('');
 
   // Inline edit state (one row at a time).
   const [editId, setEditId] = useState<string | null>(null);
@@ -52,22 +59,23 @@ export default function AdSizesPage() {
   const [editHeight, setEditHeight] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Which row's tag popover is open (tags save immediately, no edit mode).
+  const [tagFor, setTagFor] = useState<string | null>(null);
+  const tagRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!tagFor) return;
+    const onDown = (e: MouseEvent) => {
+      if (!tagRef.current?.contains(e.target as Node)) setTagFor(null);
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [tagFor]);
+
   // Sizes are global, but preserve the active sub-account across the back-links
   // (the generator is an admin-level route that reads ?account=).
   const acctQuery = accountKey ? `?account=${encodeURIComponent(accountKey)}` : '';
 
-  async function load() {
-    try {
-      const res = await fetch('/api/ad-generator/sizes');
-      const json = res.ok ? await res.json() : { sizes: [] };
-      setSizes(json.sizes ?? []);
-    } catch {
-      setSizes([]);
-    }
-  }
-  useEffect(() => {
-    void load();
-  }, []);
+  const shown = useMemo(() => filterSizes(sizes, tagFilter, query), [sizes, tagFilter, query]);
 
   async function create() {
     const w = Number(width);
@@ -81,14 +89,15 @@ export default function AdSizesPage() {
       const res = await fetch('/api/ad-generator/sizes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), width: w, height: h }),
+        body: JSON.stringify({ name: name.trim(), width: w, height: h, tags: normalizeTags(newTags.split(',')) }),
       });
       if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
       setName('');
       setWidth('');
       setHeight('');
+      setNewTags('');
       toast.success('Size added');
-      void load();
+      void reload();
     } catch (err) {
       toast.error(`Couldn't add: ${err instanceof Error ? err.message : 'unknown error'}`);
     } finally {
@@ -96,7 +105,7 @@ export default function AdSizesPage() {
     }
   }
 
-  function startEdit(s: AdSize) {
+  function startEdit(s: LibrarySize) {
     setEditId(s.id);
     setEditName(s.name);
     setEditWidth(String(s.width));
@@ -105,6 +114,16 @@ export default function AdSizesPage() {
 
   function cancelEdit() {
     setEditId(null);
+  }
+
+  async function patchSize(id: string, body: Record<string, unknown>): Promise<boolean> {
+    const res = await fetch(`/api/ad-generator/sizes/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error || `HTTP ${res.status}`);
+    return true;
   }
 
   async function saveEdit(id: string) {
@@ -116,16 +135,10 @@ export default function AdSizesPage() {
     }
     setSavingEdit(true);
     try {
-      const res = await fetch(`/api/ad-generator/sizes/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: editName.trim(), width: w, height: h }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(json?.error || `HTTP ${res.status}`);
-      setSizes((prev) => (prev ?? []).map((x) => (x.id === id ? { ...x, ...json.size } : x)));
+      await patchSize(id, { name: editName.trim(), width: w, height: h });
       setEditId(null);
       toast.success('Size updated');
+      void reload();
     } catch (err) {
       toast.error(`Couldn't update: ${err instanceof Error ? err.message : 'unknown error'}`);
     } finally {
@@ -133,7 +146,16 @@ export default function AdSizesPage() {
     }
   }
 
-  async function remove(s: AdSize) {
+  async function saveTags(s: LibrarySize, tags: string[]) {
+    try {
+      await patchSize(s.id, { tags });
+      void reload();
+    } catch (err) {
+      toast.error(`Couldn't save tags: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  }
+
+  async function remove(s: LibrarySize) {
     const ok = await confirm({
       title: 'Remove size?',
       message: `"${s.name}" (${s.width}×${s.height}) will be removed from the library. Existing ads keep their layouts — this only affects new "add size" picks.`,
@@ -144,14 +166,12 @@ export default function AdSizesPage() {
     try {
       const res = await fetch(`/api/ad-generator/sizes/${s.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setSizes((prev) => (prev ?? []).filter((x) => x.id !== s.id));
       toast.success('Removed');
+      void reload();
     } catch (err) {
       toast.error(`Couldn't remove: ${err instanceof Error ? err.message : 'unknown error'}`);
     }
   }
-
-  const count = useMemo(() => sizes?.length ?? 0, [sizes]);
 
   return (
     <div>
@@ -162,7 +182,7 @@ export default function AdSizesPage() {
             <div>
               <h2 className="text-2xl font-bold">Ad Sizes</h2>
               <p className="text-[var(--muted-foreground)] mt-1">
-                Named ad sizes the template builder picks from. Anyone can add, edit, or remove one.
+                Every size the ad builder can design against. Anyone can add, edit, tag, or remove one.
               </p>
             </div>
           </div>
@@ -213,10 +233,35 @@ export default function AdSizesPage() {
             type="number"
             value={height}
             onChange={(e) => setHeight(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && create()}
-            placeholder="1080"
             className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
           />
+        </label>
+        <label className="min-w-[12rem] flex-1">
+          <span className="mb-1 flex items-center gap-1 text-xs font-medium text-[var(--muted-foreground)]">
+            Used for
+            <HelpTip title="Tags" iconClassName="w-3.5 h-3.5">
+              <p>
+                What this size is used for — &ldquo;Facebook&rdquo;, &ldquo;Display&rdquo;, &ldquo;Email&rdquo;. Comma-separated, and a
+                size can carry as many as it needs.
+              </p>
+              <p className="mt-2">
+                Tags filter the pickers in the builder, so prefer an existing tag over a new spelling of it.
+              </p>
+            </HelpTip>
+          </span>
+          <input
+            value={newTags}
+            onChange={(e) => setNewTags(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && create()}
+            list="ad-size-tag-vocab"
+            placeholder="Facebook, Display"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] px-3 py-2 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+          />
+          <datalist id="ad-size-tag-vocab">
+            {allTags.map((t) => (
+              <option key={t} value={t} />
+            ))}
+          </datalist>
         </label>
         <button
           onClick={create}
@@ -228,61 +273,39 @@ export default function AdSizesPage() {
         </button>
       </div>
 
-      {/* Standard catalog — built-in platform sizes, always available */}
-      <div className="mb-8">
-        <div className="mb-3 flex items-baseline gap-2">
-          <h2 className="text-sm font-semibold text-[var(--foreground)]">Standard sizes</h2>
-          <span className="text-xs text-[var(--muted-foreground)]">Built-in platform presets — always available in the builder.</span>
+      {/* Browse — search + tag filters over the whole library */}
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="relative w-56">
+          <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted-foreground)]" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search sizes…"
+            className="w-full rounded-lg border border-[var(--border)] bg-[var(--background)] py-2 pl-9 pr-3 text-sm text-[var(--foreground)] outline-none focus:border-[var(--primary)]"
+          />
         </div>
-        <div className="space-y-4">
-          {catalogByCategory().map((grp) => (
-            <div key={grp.category}>
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{grp.label}</div>
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {grp.sizes.map((s) => {
-                  const ratio = s.width / s.height;
-                  const boxW = ratio >= 1 ? 44 : 44 * ratio;
-                  const boxH = ratio >= 1 ? 44 / ratio : 44;
-                  return (
-                    <div key={s.name} className="glass-card flex items-center gap-3 rounded-2xl border border-[var(--border)] p-4">
-                      <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--muted)]/40">
-                        <div className="rounded-[2px] bg-[var(--primary)]/30 ring-1 ring-[var(--primary)]/50" style={{ width: boxW, height: boxH }} />
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-semibold text-[var(--foreground)]">{s.name}</div>
-                        <div className="text-xs text-[var(--muted-foreground)]">
-                          {s.width}×{s.height} · {aspectLabel(s.width, s.height)}
-                        </div>
-                        <div className="mt-1 text-[11px] text-[var(--muted-foreground)]">{s.platform}</div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
+        <TagFilterChips facets={facets} selected={tagFilter} onChange={setTagFilter} />
+        <span className="ml-auto text-xs text-[var(--muted-foreground)]">
+          {shown.length} of {sizes.length} {sizes.length === 1 ? 'size' : 'sizes'}
+        </span>
       </div>
 
-      {/* Custom sizes — team-added presets from the DB */}
-      <h2 className="mb-3 text-sm font-semibold text-[var(--foreground)]">Custom sizes</h2>
-      {sizes === null ? (
+      {loading ? (
         <div className="text-sm text-[var(--muted-foreground)]">Loading…</div>
-      ) : count === 0 ? (
+      ) : shown.length === 0 ? (
         <div className="glass-card rounded-2xl px-4 py-10 text-center text-sm text-[var(--muted-foreground)]">
-          No custom sizes yet. The standard sizes above cover the common platforms — add one here for anything bespoke.
+          {sizes.length === 0
+            ? 'No sizes yet — add the first one above.'
+            : 'No sizes match that search or tag filter.'}
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {sizes!.map((s) => {
-            const ratio = s.width / s.height;
-            const boxW = ratio >= 1 ? 44 : 44 * ratio;
-            const boxH = ratio >= 1 ? 44 / ratio : 44;
+          {shown.map((s) => {
             const editing = editId === s.id;
             return (
-              <div key={s.id} className="glass-card flex items-center gap-3 rounded-2xl border border-[var(--border)] p-4">
+              <div key={s.id} className="glass-card flex items-start gap-3 rounded-2xl border border-[var(--border)] p-4">
                 <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-lg bg-[var(--muted)]/40">
-                  <div className="rounded-[2px] bg-[var(--primary)]/30 ring-1 ring-[var(--primary)]/50" style={{ width: boxW, height: boxH }} />
+                  <RatioSwatch width={s.width} height={s.height} long={44} fill="var(--primary)" className="opacity-40" />
                 </div>
 
                 {editing ? (
@@ -315,12 +338,50 @@ export default function AdSizesPage() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-semibold text-[var(--foreground)]">{s.name}</div>
                     <div className="text-xs text-[var(--muted-foreground)]">
-                      {s.width}×{s.height}
+                      {s.width}×{s.height} · {aspectLabel(s.width, s.height)}
                     </div>
+
+                    {/* Tags — click to add/remove; saved as soon as they change. */}
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                      {s.tags.map((tag) => (
+                        <TagChip
+                          key={tag}
+                          tag={tag}
+                          size="xs"
+                          removable
+                          onRemove={() => void saveTags(s, s.tags.filter((x) => x !== tag))}
+                        />
+                      ))}
+                      <div className="relative" ref={tagFor === s.id ? tagRef : undefined}>
+                        <button
+                          onClick={() => setTagFor((v) => (v === s.id ? null : s.id))}
+                          title="Add tag"
+                          className="inline-flex items-center gap-0.5 rounded px-1.5 py-px text-[10px] text-[var(--muted-foreground)] transition-colors hover:bg-[var(--primary)]/5 hover:text-[var(--primary)]"
+                        >
+                          <PlusIcon className="h-2.5 w-2.5" />
+                          {s.tags.length === 0 && <span>tag</span>}
+                        </button>
+                        {tagFor === s.id && (
+                          <TagEditorPopover
+                            allTags={Array.from(new Set([...allTags, ...s.tags]))}
+                            currentTags={Object.fromEntries(
+                              Array.from(new Set([...allTags, ...s.tags])).map((t) => [t, s.tags.includes(t) ? 'all' : 'none'] as const),
+                            )}
+                            onToggle={(tag) =>
+                              void saveTags(s, s.tags.includes(tag) ? s.tags.filter((x) => x !== tag) : [...s.tags, tag])
+                            }
+                            onCreate={(tag) => saveTags(s, [...s.tags, tag])}
+                            popoverRef={tagRef}
+                          />
+                        )}
+                      </div>
+                    </div>
+
                     <div className="mt-1.5 flex items-center gap-1.5">
                       <UserAvatar name={s.createdByName} email={s.createdByEmail} avatarUrl={s.createdByImage} size={18} />
                       <span className="truncate text-[11px] text-[var(--muted-foreground)]">
-                        {s.createdByName || 'Someone'} · {new Date(s.createdAt).toLocaleDateString()}
+                        {s.createdByName || 'Someone'}
+                        {s.createdAt ? ` · ${new Date(s.createdAt).toLocaleDateString()}` : ''}
                       </span>
                     </div>
                   </div>

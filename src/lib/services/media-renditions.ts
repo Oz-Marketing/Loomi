@@ -3,7 +3,8 @@ import { randomUUID } from 'crypto';
 import { prisma } from '@/lib/prisma';
 import { deleteFromS3, downloadFromS3, s3PublicUrl, uploadToS3 } from '@/lib/s3';
 import { isImageMime } from '@/lib/media-thumbnails';
-import { AD_SIZE_CATALOG, type CatalogSize } from '@/lib/ad-generator/ad-size-catalog';
+import { findSizeByName } from '@/lib/ad-generator/size-library-store';
+import type { LibrarySize } from '@/lib/ad-generator/ad-size-library';
 
 /**
  * Rendition generation — Phase 4 of docs/asset-management.md (§8).
@@ -13,9 +14,10 @@ import { AD_SIZE_CATALOG, type CatalogSize } from '@/lib/ad-generator/ad-size-ca
  * same photo into eight frames — is the specific chore the design note says the
  * Creative module exists to remove.
  *
- * Sizes come from `ad-generator/ad-size-catalog.ts`, not a new list. The builder
- * already designs against that catalog, so a rendition and the ad it will sit in
- * are the same dimensions by construction rather than by coincidence.
+ * Sizes come from the ad size library (`AdSizePreset`), not a new list. The
+ * builder already designs against that library, so a rendition and the ad it
+ * will sit in are the same dimensions by construction rather than by
+ * coincidence — including for sizes a team added themselves.
  *
  * Server-only: pulls bytes from S3 and runs sharp.
  */
@@ -34,7 +36,7 @@ function buildRenditionKey(
 export type RenditionFit = 'cover' | 'contain';
 
 export interface RenditionRequest {
-  /** Catalog size name, e.g. "Instagram Square". */
+  /** Library size name, e.g. "Instagram Square". */
   name: string;
   fit?: RenditionFit;
 }
@@ -50,8 +52,8 @@ export interface GeneratedRendition {
   fit: string;
 }
 
-export function findCatalogSize(name: string): CatalogSize | undefined {
-  return AD_SIZE_CATALOG.find((s) => s.name === name);
+export function findLibrarySize(name: string): Promise<LibrarySize | undefined> {
+  return findSizeByName(name);
 }
 
 /**
@@ -92,7 +94,7 @@ export async function generateRenditions(
   const master = await downloadFromS3(asset.s3Key);
 
   for (const req of requests) {
-    const size = findCatalogSize(req.name);
+    const size = await findLibrarySize(req.name);
     if (!size) {
       failed.push({ name: req.name, error: 'Unknown size' });
       continue;
@@ -138,7 +140,7 @@ export async function generateRenditions(
           id: renditionId,
           assetId,
           name: size.name,
-          platform: size.platform,
+          platform: size.tags[0] ?? '',
           width: size.width,
           height: size.height,
           s3Key: key,
@@ -153,7 +155,7 @@ export async function generateRenditions(
           fit,
           width: size.width,
           height: size.height,
-          platform: size.platform,
+          platform: size.tags[0] ?? '',
           createdBy: userId ?? null,
         },
       });

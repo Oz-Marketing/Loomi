@@ -2722,15 +2722,29 @@ model AdCategoryStarter {
 // ─────────────────────────────────────────────────────
 //
 // A shared (global) library of named ad sizes — Square 1080, Story 1080×1920,
-// etc. The template builder's size picker draws from this; anyone can add a new
-// size (name + W×H). Each row records who created it (name / email / avatar
-// snapshot) + when, so the library shows provenance. Additive; reaches an
-// environment via db push on deploy, queried resiliently.
+// etc. THE size list: every picker in the Ad Generator reads it, and there is no
+// second, code-owned set of "app default" sizes sitting beside it. The built-in
+// starters are seeded into this table on first use (see `builtinKey`), so a
+// starter and a team-added size are the same kind of row — equally editable,
+// taggable, and removable.
+//
+// Each row records who created it (name / email / avatar snapshot) + when, so
+// the library shows provenance. Additive; reaches an environment via db push on
+// deploy, queried resiliently.
 model AdSizePreset {
   id             String   @id @default(cuid())
   name           String
   width          Int
   height         Int
+  // What the size is USED FOR — JSON string[] of free-form tags ("Facebook",
+  // "Display", "Email"). Replaces the old fixed social/display/email grouping:
+  // one size is often used for several things, and every team's list differs.
+  tags           String?  @db.Text
+  // Set only on rows seeded from the built-in starter set, so seeding can run
+  // once per environment without duplicating. NOT a "system size" marker — a
+  // seeded row is editable and deletable like any other; this only keeps the
+  // seeder from re-adding one that already exists.
+  builtinKey     String?  @unique
   createdById    String?
   createdByName  String?
   createdByEmail String?

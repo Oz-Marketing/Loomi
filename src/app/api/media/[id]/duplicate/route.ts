@@ -3,24 +3,12 @@ import { randomUUID } from 'crypto';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
 import {
-  s3PublicUrl,
   buildS3Key,
   buildThumbnailKey,
   uploadToS3,
   downloadFromS3,
 } from '@/lib/s3';
-
-/** Check access to an asset based on its accountKey. null = admin-level. */
-function checkAccess(
-  session: { user: { role: string; accountKeys?: string[] } },
-  accountKey: string | null,
-): boolean {
-  const { role, accountKeys = [] } = session.user;
-  if (role === 'developer' || role === 'super_admin') return true;
-  if (role === 'admin' && accountKeys.length === 0) return true;
-  if (accountKey === null) return false;
-  return accountKeys.includes(accountKey);
-}
+import { canAccessAsset, serializeMediaAsset } from '@/lib/services/media';
 
 /** Append " copy" before the file extension. */
 function copyName(filename: string): string {
@@ -43,7 +31,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params;
   const asset = await prisma.mediaAsset.findUnique({ where: { id } });
   if (!asset) return NextResponse.json({ error: 'Asset not found' }, { status: 404 });
-  if (!checkAccess(session!, asset.accountKey)) {
+  if (!canAccessAsset(session!, asset.accountKey)) {
     return NextResponse.json({ error: 'Access denied' }, { status: 403 });
   }
 
@@ -83,30 +71,29 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
         category: asset.category,
         folderId: asset.folderId,
         uploadedBy: session!.user.id,
+
+        // The copy carries the original's classification — a duplicate of an
+        // Audi OEM template is still an Audi OEM template, and re-tagging it by
+        // hand is exactly the sort of chore that leaves metadata half-applied.
+        oem: asset.oem,
+        assetSource: asset.assetSource,
+        assetCategory: asset.assetCategory,
+        modelYear: asset.modelYear,
+        vehicleModel: asset.vehicleModel,
+        rightsHolder: asset.rightsHolder,
+        tags: asset.tags,
+
+        // Same bytes, so the same hash — which is what makes the copy findable
+        // as a duplicate rather than pretending to be a distinct asset.
+        contentHash: asset.contentHash,
+        // Derivative lineage: point at the original's own master if it has one,
+        // so a chain of copies stays one level deep and always resolves to the
+        // real source rather than to another copy.
+        parentAssetId: asset.parentAssetId ?? asset.id,
       },
     });
 
-    return NextResponse.json(
-      {
-        file: {
-          id: created.id,
-          name: created.filename,
-          url: s3PublicUrl(created.s3Key),
-          type: created.mimeType,
-          size: created.size,
-          width: created.width,
-          height: created.height,
-          thumbnailUrl: created.thumbnailKey ? s3PublicUrl(created.thumbnailKey) : undefined,
-          altText: created.altText,
-          category: created.category,
-          folderId: created.folderId,
-          archivedAt: null,
-          createdAt: created.createdAt.toISOString(),
-          source: 's3' as const,
-        },
-      },
-      { status: 201 },
-    );
+    return NextResponse.json({ file: serializeMediaAsset(created) }, { status: 201 });
   } catch (err) {
     console.error('[api/media/[id]/duplicate] failed:', err);
     return NextResponse.json({ error: 'Could not duplicate this file' }, { status: 500 });

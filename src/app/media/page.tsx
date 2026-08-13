@@ -27,19 +27,56 @@ import {
   DocumentDuplicateIcon,
   ArchiveBoxIcon,
   ArrowUturnLeftIcon,
+  FunnelIcon,
+  ArrowLeftStartOnRectangleIcon,
 } from '@heroicons/react/24/outline';
+import Link from 'next/link';
 import { toast } from '@/lib/toast';
 import { safeJson } from '@/lib/safe-json';
 import { useAccount, type AccountData } from '@/contexts/account-context';
+import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { AccountAvatar } from '@/components/account-avatar';
 import BulkActionDock from '@/components/bulk-action-dock';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
+import { RenditionPanel } from '@/components/media/rendition-panel';
+import { ApprovalPanel } from '@/components/media/approval-panel';
+import {
+  AssetMetadataFields,
+  EMPTY_ASSET_METADATA,
+  assetMetadataDiff,
+  assetMetadataFrom,
+  assetMetadataToFormFields,
+  type AssetMetadataValue,
+} from '@/components/media/asset-metadata-fields';
+import { assetSourceLabel } from '@/lib/media-metadata';
+import { MAX_UPLOAD_BYTES, checkUploadSize, formatBytes } from '@/lib/media-limits';
+import {
+  extractArchive,
+  inspectArchive,
+  isZip,
+  type ArchiveInspection,
+} from '@/lib/media-archive';
+import { rightsBadgeLabel, type RightsAssessment } from '@/lib/media-rights';
+import type { MediaPreflight } from '@/lib/media-preflight';
+import {
+  MEDIA_FACET_KEYS,
+  buildMediaFacetOptions,
+  facetsForAsset,
+  matchesMediaFacets,
+  countMediaFacetsSelected,
+  type MediaFacetSelection,
+} from '@/lib/media-facets';
+import { MediaFilterRail, type OwnershipFilter } from '@/components/media/media-filter-rail';
+import { MAJOR_US_OEMS, POWERSPORTS_BRANDS } from '@/lib/oems';
+import { Select } from '@/components/select';
+import { HelpTip } from '@/components/ui/help-tip';
 import PrimaryButton from '@/components/primary-button';
 
 // ── Constants ──
 
-const MAX_MEDIA_FILE_SIZE = 25 * 1024 * 1024; // 25 MB
+// Size checking lives in lib/media-limits.ts so the browser refuses a file for
+// exactly the reason the API would.
 
 // ── Types ──
 
@@ -56,11 +93,48 @@ interface MediaFile {
   altText?: string | null;
   createdAt?: string;
   updatedAt?: string;
+  /** STORAGE origin. Not to be confused with `assetSource` (DAM provenance). */
   source?: 'esp' | 's3';
   category?: string;
   folderId?: string | null;
   /** Set when the asset is soft-archived (hidden from the default view). */
   archivedAt?: string | null;
+
+  // ── DAM metadata (docs/asset-management.md Phase 1) ──
+  accountKey?: string | null;
+  oem?: string | null;
+  assetSource?: string | null;
+  assetCategory?: string | null;
+  modelYear?: string[];
+  vehicleModel?: string[];
+  tags?: string[];
+  rightsHolder?: string | null;
+  parentAssetId?: string | null;
+
+  // ── Rights (Phase 3) ──
+  licenseType?: string | null;
+  licenseRef?: string | null;
+  licenseStartsAt?: string | null;
+  licenseExpiresAt?: string | null;
+  expiresAt?: string | null;
+  expiredAt?: string | null;
+  usageScope?: string[];
+  territoryScope?: string[];
+  derivativesPermitted?: boolean | null;
+  sublicensingPermitted?: boolean | null;
+  /** Derived server-side — see serializeMediaAsset. */
+  rights?: RightsAssessment | null;
+
+  /** Externally-managed (brand logo / custom font) — read-only here. */
+  managedBy?: string | null;
+  managedRef?: string | null;
+
+  // ── Approval (Phase 5) ──
+  status?: string | null;
+  approvedAt?: string | null;
+  approvedByName?: string | null;
+  reviewNote?: string | null;
+  preflight?: MediaPreflight | null;
 }
 
 interface MediaFolder {
@@ -119,6 +193,25 @@ const S3_CAPABILITIES: MediaCapabilities = {
   canMove: true,
   canCreateFolders: true,
   canNavigateFolders: true,
+};
+
+/**
+ * What you may do to an asset you don't own — look at it, copy its URL, download
+ * it. Nothing that writes.
+ *
+ * The API already refuses these (checkAccess returns false for an asset outside
+ * your accountKey), so this isn't the security boundary; it's there so the menu
+ * doesn't offer four actions that all end in a 403 toast. An OEM-shared asset is
+ * one row behind every rooftop that carries the brand, and "delete" on it would
+ * mean something very different from what the person clicking expects.
+ */
+const INHERITED_CAPABILITIES: MediaCapabilities = {
+  canUpload: false,
+  canDelete: false,
+  canRename: false,
+  canMove: false,
+  canCreateFolders: false,
+  canNavigateFolders: false,
 };
 
 function CropIcon({ className }: { className?: string }) {
@@ -200,6 +293,78 @@ function ProviderPill({ prov }: { prov: string }) {
   );
 }
 
+/**
+ * Where an asset comes from, as a corner badge on the thumbnail.
+ *
+ * Priority is deliberate: the BRAND matters more than the provenance, because an
+ * OEM-scoped asset is shared — a rooftop editing one is editing every sub-account
+ * that carries that brand. Falls back to the DAM source when there's no brand,
+ * and renders nothing at all when neither is set, so untagged libraries look
+ * exactly as they do today.
+ */
+function AssetOriginBadge({ f }: { f: MediaFile }) {
+  // A managed asset's origin is the useful thing to show — "Brand logo" tells
+  // you why it can't be edited here, which "Dealer-supplied" would not.
+  if (f.managedBy) {
+    return (
+      <span
+        className="absolute top-2 right-2 z-10 inline-flex items-center rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white/90 backdrop-blur-sm"
+        title="Managed in Settings — upload or replace it there"
+      >
+        {f.managedBy === 'account-font' ? 'Brand font' : 'Brand logo'}
+      </span>
+    );
+  }
+
+  const shared = !f.accountKey && !!f.oem;
+  const label = f.oem || assetSourceLabel(f.assetSource);
+  if (!label) return null;
+
+  return (
+    <span
+      className={`absolute top-2 right-2 z-10 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium backdrop-blur-sm ${
+        shared
+          ? 'bg-[var(--primary)]/85 text-white'
+          : 'bg-black/50 text-white/90'
+      }`}
+      title={shared ? `Shared across all ${f.oem} sub-accounts` : label}
+    >
+      {label}
+    </span>
+  );
+}
+
+/**
+ * Licence countdown, bottom-left of the thumbnail.
+ *
+ * Only appears when there's something to act on — expiring, expired or lapsed.
+ * An asset that's fine, or that has no licence recorded, gets nothing: badging
+ * "unknown" would put a warning on most of a library mid-migration, and a
+ * warning on everything is a warning on nothing.
+ */
+function RightsBadge({ f }: { f: MediaFile }) {
+  if (!f.rights) return null;
+  const label = rightsBadgeLabel(f.rights);
+  if (!label) return null;
+
+  const past = f.rights.status === 'expired' || f.rights.status === 'lapsed';
+  return (
+    <span
+      className={`absolute bottom-2 left-2 z-10 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium backdrop-blur-sm ${
+        past ? 'bg-red-600/90 text-white' : 'bg-amber-500/90 text-white'
+      }`}
+      title={
+        past
+          ? 'Out of licence — replace before reusing this asset'
+          : `Licence or campaign ends in ${f.rights.daysRemaining} day(s)`
+      }
+    >
+      <ExclamationTriangleIcon className="h-3 w-3" />
+      {label}
+    </span>
+  );
+}
+
 interface MediaCardProps {
   f: MediaFile;
   isMenuOpen: boolean;
@@ -207,6 +372,8 @@ interface MediaCardProps {
   selectionActive: boolean;
   provider: string | null;
   capabilities: MediaCapabilities | null;
+  /** Owned by another scope (OEM/global/ancestor) — read-only here. */
+  inherited?: boolean;
   menuClickRef: React.MutableRefObject<boolean>;
   draggable?: boolean;
   onDragStart?: (e: React.DragEvent) => void;
@@ -228,6 +395,7 @@ function MediaCard({
   selectionActive,
   provider: activeProvider,
   capabilities: activeCaps,
+  inherited,
   menuClickRef,
   draggable,
   onDragStart,
@@ -242,7 +410,9 @@ function MediaCard({
   onDelete,
 }: MediaCardProps) {
   const isImage = f.type?.startsWith('image') || f.url?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
-  const caps = f.source === 's3' ? S3_CAPABILITIES : activeCaps;
+  const caps = inherited
+    ? INHERITED_CAPABILITIES
+    : f.source === 's3' ? S3_CAPABILITIES : activeCaps;
 
   return (
     <div
@@ -284,6 +454,19 @@ function MediaCard({
         >
           {isSelected && <CheckIcon className="w-3.5 h-3.5 text-white" />}
         </button>
+
+        {/* Provenance badge. An OEM-shared asset has to be visually distinct from
+            a rooftop's own — editing one changes it for every sub-account that
+            carries the brand. */}
+        <AssetOriginBadge f={f} />
+        <RightsBadge f={f} />
+        {/* Only DRAFT is badged. Once a library is curated, approved is the
+            normal state, and badging the norm marks everything. */}
+        {f.status === 'draft' && (
+          <span className="absolute bottom-2 right-2 z-10 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white/90 backdrop-blur-sm">
+            Draft
+          </span>
+        )}
       </div>
 
       {/* Info */}
@@ -371,6 +554,7 @@ function MediaListRow({
   selectionActive,
   provider: activeProvider,
   capabilities: activeCaps,
+  inherited,
   menuClickRef,
   draggable,
   onDragStart,
@@ -385,7 +569,9 @@ function MediaListRow({
   onDelete,
 }: MediaCardProps) {
   const isImage = f.type?.startsWith('image') || f.url?.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
-  const caps = f.source === 's3' ? S3_CAPABILITIES : activeCaps;
+  const caps = inherited
+    ? INHERITED_CAPABILITIES
+    : f.source === 's3' ? S3_CAPABILITIES : activeCaps;
 
   return (
     <div
@@ -563,7 +749,8 @@ function AccountCard({ acctKey, acctData, overviewRow, onSelect }: AccountCardPr
 
 export default function MediaPage() {
   const { confirm } = useLoomiDialog();
-  const { isAdmin, isAccount, accountKey, accountData, accounts } = useAccount();
+  const { isAdmin, isAccount, accountKey, accountData, accounts, userRole } = useAccount();
+  const subaccountHref = useSubaccountHref();
 
   // ── Single-account detail state ──
   const [files, setFiles] = useState<MediaFile[]>([]);
@@ -589,6 +776,32 @@ export default function MediaPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pageDragDepthRef = useRef(0);
   const [stagedFiles, setStagedFiles] = useState<File[]>([]);
+  /**
+   * Where the staged files will land: `'account'` = wherever the user is
+   * browsing (unchanged behaviour, and the default), `'oem:<Brand>'` = shared
+   * with every sub-account carrying that brand, `'global'` = the Loomi library.
+   * Only offered to admins; the API rejects the other two for anyone else.
+   */
+  const [uploadScope, setUploadScope] = useState('account');
+  /**
+   * Classification applied to every file in the batch.
+   *
+   * Batch-wide rather than per-file on purpose: uploads arrive as a set that
+   * shares its provenance — seventeen Audi template zips are all Audi, all
+   * OEM-supplied, all templates. Per-file editing already exists in the asset
+   * drawer for the exceptions.
+   */
+  /**
+   * Zip inspection, keyed by staged-file fingerprint. OEM portals hand out one
+   * zip per campaign, so an archive is the normal shape of an import, not an
+   * edge case.
+   */
+  const [archives, setArchives] = useState<Record<string, ArchiveInspection>>({});
+  /** Per-zip choice. Seeded from the recommendation; the person can override. */
+  const [unpackChoice, setUnpackChoice] = useState<Record<string, boolean>>({});
+
+  const [uploadMetadata, setUploadMetadata] = useState<AssetMetadataValue>(EMPTY_ASSET_METADATA);
+  const [showUploadMetadata, setShowUploadMetadata] = useState(false);
 
   // Modals
   const [openMenu, setOpenMenu] = useState<string | null>(null);
@@ -598,6 +811,12 @@ export default function MediaPage() {
   // user opens the modal alongside renameValue, PATCHed together so
   // a single Save covers both fields.
   const [renameAltValue, setRenameAltValue] = useState('');
+  // DAM metadata, seeded from the asset when the modal opens. Kept as its own
+  // state (not merged into renameFile) so the diff on save is against what was
+  // loaded, not against whatever the list has since been refreshed to.
+  const [renameMetadata, setRenameMetadata] = useState<AssetMetadataValue>(EMPTY_ASSET_METADATA);
+  const [renameMetadataInitial, setRenameMetadataInitial] =
+    useState<AssetMetadataValue>(EMPTY_ASSET_METADATA);
   const [renaming, setRenaming] = useState(false);
   const [deleteFile, setDeleteFile] = useState<MediaFile | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -614,6 +833,25 @@ export default function MediaPage() {
   const [showArchived, setShowArchived] = useState(false);
   // ⋯ overflow menu next to New Folder (holds the Archived-view toggle).
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+
+  /**
+   * Which assets to show by ownership. This is the control that switches the
+   * library between the account's OWN scope (folder navigation, the historical
+   * behaviour, and the default) and its EFFECTIVE scope — everything it may use,
+   * including OEM-shared and inherited assets.
+   *
+   * Default 'mine' deliberately: the effective view is flat, because folders
+   * belong to a single scope and there is no coherent tree spanning inherited
+   * assets. Defaulting to it would silently take folders away from every account
+   * that organises with them. The banner below makes the shared set discoverable
+   * instead.
+   */
+  const [ownership, setOwnership] = useState<OwnershipFilter>('mine');
+  const [facetSelection, setFacetSelection] = useState<MediaFacetSelection>({});
+  /** Mobile-only: the rail is always shown from `lg` up. */
+  const [railOpen, setRailOpen] = useState(false);
+  /** How many assets the account can see beyond its own — drives the banner. */
+  const [sharedCount, setSharedCount] = useState(0);
 
   // Move modal
   const [showMoveModal, setShowMoveModal] = useState(false);
@@ -675,9 +913,57 @@ export default function MediaPage() {
       ? accountFilter
       : null;
 
+  /**
+   * The consumer tier (§2.2). Clients browse and download the assets their
+   * agency has approved; they never author. The API already forces
+   * approved-only for this role — this hides the controls that would 403.
+   */
+  const isConsumer = userRole === 'client';
+
+  // The brands the current account carries — floated to the top of the Brand
+  // picker so a Ford rooftop isn't scrolling past forty marques to reach Ford.
+  const accountBrands = useMemo(() => {
+    const list = accountData?.oems?.length
+      ? accountData.oems
+      : accountData?.oem
+        ? [accountData.oem]
+        : [];
+    return list.map((b) => b.trim()).filter(Boolean);
+  }, [accountData?.oem, accountData?.oems]);
+
+  /**
+   * Upload destinations. The first option is always "where I am", so the default
+   * upload behaves exactly as it did before this existed.
+   *
+   * The brand options are what make an OEM asset storable once: picking
+   * "Shared — all Audi sub-accounts" writes `accountKey: null, oem: 'Audi'`, and
+   * every Audi rooftop resolves it without a copy.
+   */
+  const uploadScopeOptions = useMemo(() => {
+    const here = effectiveAccountKey
+      ? `This sub-account${accountData?.dealer ? ` — ${accountData.dealer}` : ''}`
+      : 'Loomi library — all accounts';
+    const options = [{ value: 'account', label: here }];
+    if (!isAdmin) return options;
+
+    // An account's own brands when we know them; the full marque list otherwise
+    // (the Select searches once the list is long).
+    const brands = accountBrands.length > 0
+      ? accountBrands
+      : [...MAJOR_US_OEMS, ...POWERSPORTS_BRANDS];
+    for (const brand of brands) {
+      options.push({ value: `oem:${brand}`, label: `Shared — all ${brand} sub-accounts` });
+    }
+    if (effectiveAccountKey) {
+      options.push({ value: 'global', label: 'Loomi library — all accounts' });
+    }
+    return options;
+  }, [effectiveAccountKey, accountData?.dealer, isAdmin, accountBrands]);
+
   // Show overview when admin has no specific account selected
   const showOverview = isAdmin && !effectiveAccountKey;
-  const canDropUploadFiles = showOverview || !!effectiveAccountKey;
+  // Consumers can't upload, so the whole-page drop target would be a lie.
+  const canDropUploadFiles = !isConsumer && (showOverview || !!effectiveAccountKey);
   const isLoomiOverviewTab = showOverview && overviewTab === 'loomi';
   const isSubAccountOverviewTab = showOverview && overviewTab === 'subaccounts';
 
@@ -858,8 +1144,20 @@ export default function MediaPage() {
 
   // ── Single-Account Data Loading ──
 
+  /**
+   * Monotonic request id, so a slow response can't overwrite a newer one.
+   *
+   * The page mounts on the last-selected account and then corrects to the one
+   * in the route, which fires two loads back to back. Without this guard the
+   * FIRST account's response can land second and blank the list — the library
+   * then shows "No media files yet" for an account that has files, and a reload
+   * fixes it, which is exactly the kind of bug that gets reported as flaky.
+   */
+  const loadSeqRef = useRef(0);
+
   const loadMedia = useCallback(async (cursor?: string) => {
     if (!effectiveAccountKey) return;
+    const seq = ++loadSeqRef.current;
 
     if (cursor) {
       setLoadingMore(true);
@@ -874,13 +1172,23 @@ export default function MediaPage() {
         accountKey: effectiveAccountKey,
       });
       if (cursor) params.set('cursor', cursor);
-      // Scope to the current folder ("root" = the account's top level).
-      params.set('folder', currentFolderId ?? 'root');
+      if (ownership === 'mine') {
+        // Own scope: folder navigation applies.
+        params.set('folder', currentFolderId ?? 'root');
+      } else {
+        // Effective scope is flat by construction — no folder param, because a
+        // folder belongs to one scope and can't contain an inherited asset.
+        params.set('scope', 'effective');
+      }
       if (showArchived) params.set('archived', 'true');
       params.set('limit', '50');
 
       const res = await fetch(`/api/media?${params.toString()}`);
       const data = await res.json();
+
+      // A newer load started while this one was in flight — drop the result
+      // rather than clobbering fresher state.
+      if (seq !== loadSeqRef.current) return;
 
       if (res.ok) {
         const incoming = (data.files || []).map((f: MediaFile) => ({ ...f, source: 's3' as const }));
@@ -892,17 +1200,46 @@ export default function MediaPage() {
         }
         setNextCursor(data.nextCursor || undefined);
         setProvider('s3');
-        setCapabilities(S3_CAPABILITIES);
+        setCapabilities(isConsumer ? INHERITED_CAPABILITIES : S3_CAPABILITIES);
       } else {
         toast.error(data.error || 'Failed to load media');
       }
     } catch {
+      if (seq !== loadSeqRef.current) return;
       toast.error('Failed to load media');
     }
 
+    if (seq !== loadSeqRef.current) return;
     setLoading(false);
     setLoadingMore(false);
-  }, [effectiveAccountKey, currentFolderId, showArchived]);
+  }, [effectiveAccountKey, currentFolderId, showArchived, ownership, isConsumer]);
+
+  /**
+   * How many assets this account can see that it does not own.
+   *
+   * Two counts rather than one query: the effective total minus the account's
+   * own total. Cheap (both are countOnly) and it avoids a bespoke endpoint whose
+   * only job would be to answer a banner.
+   */
+  useEffect(() => {
+    if (!effectiveAccountKey) {
+      setSharedCount(0);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const [own, all] = await Promise.all([
+          fetch(`/api/media?accountKey=${encodeURIComponent(effectiveAccountKey)}&countOnly=true`).then((r) => r.json()),
+          fetch(`/api/media?accountKey=${encodeURIComponent(effectiveAccountKey)}&scope=effective&countOnly=true`).then((r) => r.json()),
+        ]);
+        if (!cancelled) setSharedCount(Math.max(0, (all?.total ?? 0) - (own?.total ?? 0)));
+      } catch {
+        if (!cancelled) setSharedCount(0);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [effectiveAccountKey]);
 
   // Folders for the current scope — the flat list is fetched, then filtered to
   // the current folder's direct children (the API returns the whole tree).
@@ -911,9 +1248,13 @@ export default function MediaPage() {
       setFolders([]);
       return;
     }
+    const seq = loadSeqRef.current;
     try {
       const res = await fetch(`/api/media/folders?accountKey=${encodeURIComponent(effectiveAccountKey)}`);
       const data = await res.json();
+      // Same stale-response guard as loadMedia — a folder list from the
+      // previously-selected account must not replace this one's.
+      if (seq !== loadSeqRef.current) return;
       if (res.ok) {
         const all: MediaFolder[] = data.folders || [];
         setFolders(all.filter((f) => (f.parentId ?? undefined) === currentFolderId));
@@ -943,12 +1284,13 @@ export default function MediaPage() {
   const stageFiles = useCallback((fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const newFiles = Array.from(fileList);
-    const oversized = newFiles.filter((f) => f.size > MAX_MEDIA_FILE_SIZE);
-    if (oversized.length > 0) {
-      const names = oversized.map((f) => `${f.name} (${formatFileSize(f.size)})`).join(', ');
-      toast.error(`${oversized.length} file${oversized.length > 1 ? 's exceed' : ' exceeds'} the 25 MB limit: ${names}`);
+    const rejected = newFiles
+      .map((f) => ({ file: f, error: checkUploadSize(f.size, f.type) }))
+      .filter((r): r is { file: File; error: string } => r.error !== null);
+    for (const r of rejected) {
+      toast.error(`${r.file.name}: ${r.error}`);
     }
-    const valid = newFiles.filter((f) => f.size <= MAX_MEDIA_FILE_SIZE);
+    const valid = newFiles.filter((f) => checkUploadSize(f.size, f.type) === null);
     if (valid.length === 0) return;
     setStagedFiles((prev) => {
       const seen = new Set(prev.map(stagedFileKey));
@@ -961,27 +1303,138 @@ export default function MediaPage() {
       }
       return merged;
     });
+
+    // Inspect archives as they're staged, so the choice is on screen before
+    // anyone commits to an upload. Reading the table of contents doesn't
+    // decompress anything, so this is cheap even for a large zip.
+    for (const file of valid) {
+      if (!isZip(file)) continue;
+      const key = stagedFileKey(file);
+      inspectArchive(file)
+        .then((inspection) => {
+          setArchives((prev) => ({ ...prev, [key]: inspection }));
+          // Seed the choice from the recommendation. A package defaults to
+          // staying whole — shredding a runnable template is the expensive
+          // mistake, and it's the one that isn't obvious afterwards.
+          setUnpackChoice((prev) => ({
+            ...prev,
+            [key]: inspection.kind === 'collection' && !inspection.error,
+          }));
+        })
+        .catch(() => {
+          /* a zip we can't read just uploads as a file, which is the old behaviour */
+        });
+    }
   }, []);
 
   const handleUpload = async (files?: File[]) => {
-    const filesToUpload = files ?? stagedFiles;
-    if (filesToUpload.length === 0) return;
+    const staged = files ?? stagedFiles;
+    if (staged.length === 0) return;
 
     setUploading(true);
+
+    /**
+     * Expand any archive the person chose to unpack.
+     *
+     * Extraction happens HERE rather than server-side so every extracted file
+     * goes through the ordinary upload endpoint — inheriting content-hash
+     * dedupe, thumbnails, size limits and the batch metadata without any of it
+     * being reimplemented for archives.
+     */
+    const filesToUpload: File[] = [];
+    let skippedInArchives = 0;
+    for (const file of staged) {
+      const key = stagedFileKey(file);
+      if (!isZip(file) || !unpackChoice[key]) {
+        filesToUpload.push(file);
+        continue;
+      }
+      try {
+        const { files: extracted, skipped } = await extractArchive(file);
+        if (extracted.length === 0) {
+          // Nothing usable inside — keep the archive rather than silently
+          // uploading nothing at all.
+          toast.error(`${file.name}: nothing could be extracted, uploading as a file`);
+          filesToUpload.push(file);
+          continue;
+        }
+        filesToUpload.push(...extracted);
+        skippedInArchives += skipped.length;
+      } catch {
+        toast.error(`${file.name}: could not be unpacked, uploading as a file`);
+        filesToUpload.push(file);
+      }
+    }
+
+    if (skippedInArchives > 0) {
+      toast.success(`Skipped ${skippedInArchives} system file${skippedInArchives > 1 ? 's' : ''} inside the archive${staged.length > 1 ? 's' : ''}`);
+    }
     const uploadedFiles: MediaFile[] = [];
     let successCount = 0;
     let failCount = 0;
+    let duplicateCount = 0;
 
     for (let i = 0; i < filesToUpload.length; i++) {
       const file = filesToUpload[i];
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('category', 'general');
-      if (effectiveAccountKey) formData.append('accountKey', effectiveAccountKey);
-      if (currentFolderId) formData.append('folderId', currentFolderId);
+
+      const send = (allowDuplicate: boolean) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('category', 'general');
+
+        // 'account' = upload where the user is browsing. The OEM and global
+        // scopes are account-less by definition, and a folder belongs to exactly
+        // one scope — so the current folder only travels with the first case.
+        const scopedOem = uploadScope.startsWith('oem:') ? uploadScope.slice(4) : null;
+        if (uploadScope === 'account') {
+          if (effectiveAccountKey) formData.append('accountKey', effectiveAccountKey);
+          if (currentFolderId) formData.append('folderId', currentFolderId);
+        } else if (scopedOem) {
+          formData.append('oem', scopedOem);
+        }
+
+        // Batch classification. The destination's implied values win where the
+        // person didn't choose one — an upload to "all Audi sub-accounts" is
+        // Audi and OEM-supplied unless they said otherwise — but an explicit
+        // choice is never overwritten.
+        const meta = {
+          ...assetMetadataToFormFields(uploadMetadata),
+          // The destination's implied values fill in where the person didn't
+          // choose one; an explicit choice is never overwritten.
+          ...(scopedOem && !uploadMetadata.oem ? { oem: scopedOem } : {}),
+          ...(scopedOem && !uploadMetadata.assetSource ? { assetSource: 'oem-supplied' } : {}),
+        };
+        for (const [key, value] of Object.entries(meta)) {
+          if (value) formData.append(key, value);
+        }
+
+        if (allowDuplicate) formData.append('allowDuplicate', 'true');
+        return fetch('/api/media', { method: 'POST', body: formData });
+      };
 
       try {
-        const res = await fetch('/api/media', { method: 'POST', body: formData });
+        let res = await send(false);
+
+        // 409 = identical bytes already in this scope. Ask rather than decide:
+        // re-uploading a file that's already here is usually a mistake, but a
+        // deliberate second copy is a legitimate thing to want.
+        if (res.status === 409) {
+          const dup = await res.json().catch(() => null);
+          const keepGoing = await confirm({
+            title: 'This file is already here',
+            message:
+              dup?.message
+              || `"${file.name}" already exists in this location with identical contents.`,
+            confirmLabel: 'Upload anyway',
+            cancelLabel: 'Skip',
+          });
+          if (!keepGoing) {
+            duplicateCount++;
+            continue;
+          }
+          res = await send(true);
+        }
+
         const { ok, data, error } = await safeJson<{ file: MediaFile }>(res);
 
         if (ok && data?.file) {
@@ -997,7 +1450,12 @@ export default function MediaPage() {
       }
     }
 
-    if (uploadedFiles.length > 0) {
+    // Only merge into the visible list when the upload landed in the scope being
+    // viewed. An OEM- or Loomi-scoped upload lives somewhere else, and showing it
+    // here would imply it can be edited in place — which for a shared asset is
+    // exactly the wrong impression.
+    const landedInView = uploadScope === 'account';
+    if (uploadedFiles.length > 0 && landedInView) {
       if (showOverview && !effectiveAccountKey) {
         setAdminMediaFiles(prev => [...uploadedFiles, ...prev]);
         setAdminMediaTotal(prev => prev + uploadedFiles.length);
@@ -1006,7 +1464,15 @@ export default function MediaPage() {
       }
     }
     if (successCount > 0) {
-      toast.success(`Uploaded ${successCount} file${successCount > 1 ? 's' : ''}`);
+      const destination = uploadScopeOptions.find(o => o.value === uploadScope)?.label;
+      toast.success(
+        landedInView
+          ? `Uploaded ${successCount} file${successCount > 1 ? 's' : ''}`
+          : `Uploaded ${successCount} file${successCount > 1 ? 's' : ''} to ${destination}`,
+      );
+    }
+    if (duplicateCount > 0) {
+      toast.success(`Skipped ${duplicateCount} file${duplicateCount > 1 ? 's' : ''} already in this location`);
     }
     if (failCount > 0) {
       toast.error(`${failCount} upload${failCount > 1 ? 's' : ''} failed`);
@@ -1015,6 +1481,11 @@ export default function MediaPage() {
     setUploading(false);
     setShowUploadModal(false);
     setStagedFiles([]);
+    setUploadScope('account');
+    setUploadMetadata(EMPTY_ASSET_METADATA);
+    setShowUploadMetadata(false);
+    setArchives({});
+    setUnpackChoice({});
 
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -1109,7 +1580,9 @@ export default function MediaPage() {
       const nextAlt: string | null = trimmedAlt.length === 0 ? null : trimmedAlt;
       const currentAlt = renameFile.altText ?? null;
 
-      const body: Record<string, unknown> = {};
+      const body: Record<string, unknown> = {
+        ...assetMetadataDiff(renameMetadata, renameMetadataInitial),
+      };
       if (renameValue.trim() !== renameFile.name) {
         body.name = renameValue.trim();
       }
@@ -1406,6 +1879,55 @@ export default function MediaPage() {
     clearSelection();
   };
 
+  // ── Bulk Download ──
+
+  const [downloading, setDownloading] = useState(false);
+
+  /**
+   * Zip the selection server-side and hand it to the browser.
+   *
+   * A blob rather than a link because the endpoint is a POST (the id list is too
+   * long for a query string once someone selects fifty assets) and because the
+   * server needs to check read access per file before it builds the archive.
+   */
+  const handleBulkDownload = async (includeRenditions: boolean) => {
+    if (selectedIds.size === 0) return;
+    setDownloading(true);
+    try {
+      const res = await fetch('/api/media/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: [...selectedIds], includeRenditions }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        toast.error(data?.error || 'Could not build the download');
+        return;
+      }
+
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `loomi-media-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+
+      const skipped = Number(res.headers.get('X-Skipped-Files') || '0');
+      if (skipped > 0) {
+        toast.error(`${skipped} file${skipped > 1 ? 's' : ''} could not be read and were left out`);
+      } else {
+        toast.success(`Downloaded ${selectedIds.size} file${selectedIds.size > 1 ? 's' : ''}`);
+      }
+    } catch {
+      toast.error('Could not build the download');
+    }
+    setDownloading(false);
+  };
+
   // ── Bulk Duplicate ──
   const handleBulkDuplicate = async () => {
     if (selectedIds.size === 0) return;
@@ -1631,17 +2153,104 @@ export default function MediaPage() {
 
   // ── Filtering ──
 
+  /**
+   * Is this asset owned by the account being viewed, or inherited?
+   *
+   * Inherited covers all three of the other scopes — global, OEM-shared, and an
+   * ancestor's. What they have in common is the thing that matters here: editing
+   * or deleting one affects other accounts, so the UI treats it as read-only.
+   */
+  const isInherited = useCallback(
+    (f: MediaFile) =>
+      // A consumer never owns anything here: read-only is the whole tier.
+      isConsumer
+      // Brand logos and fonts are catalogued from Account settings, which owns
+      // their lifecycle. Deleting one here would break a live logo.
+      || !!f.managedBy
+      || (!!effectiveAccountKey && (f.accountKey ?? null) !== effectiveAccountKey),
+    [effectiveAccountKey, isConsumer],
+  );
+
+  /** Each visible asset paired with its facet values, computed once per load. */
+  const filesWithFacets = useMemo(
+    () => files.map((f) => ({ file: f, facets: facetsForAsset(f) })),
+    [files],
+  );
+
+  const facetOptions = useMemo(
+    () => buildMediaFacetOptions(filesWithFacets, facetSelection),
+    [filesWithFacets, facetSelection],
+  );
+
+  /**
+   * Which facets are worth showing. A facet whose every asset shares one value
+   * can't narrow anything — a single-brand rooftop shouldn't carry a Brand
+   * picker listing only its own marque.
+   */
+  const visibleFacets = useMemo(
+    () => MEDIA_FACET_KEYS.filter((k) => buildMediaFacetOptions(filesWithFacets, {})[k].length > 1),
+    [filesWithFacets],
+  );
+
   const filtered = useMemo(() => {
-    if (!search.trim()) return files;
-    const q = search.toLowerCase();
-    return files.filter(f => f.name.toLowerCase().includes(q));
-  }, [files, search]);
+    const q = search.trim().toLowerCase();
+    return filesWithFacets
+      .filter(({ file, facets }) => {
+        if (ownership === 'mine' && isInherited(file)) return false;
+        if (ownership === 'shared' && !isInherited(file)) return false;
+        if (!matchesMediaFacets(facets, facetSelection)) return false;
+        if (!q) return true;
+        // Mirrors the server's search fields so typing doesn't change what
+        // matches as results move between the cached list and a refetch.
+        return [file.name, file.altText, file.oem, file.rightsHolder, ...(file.tags ?? [])]
+          .some((v) => typeof v === 'string' && v.toLowerCase().includes(q));
+      })
+      .map(({ file }) => file);
+  }, [filesWithFacets, search, facetSelection, ownership, isInherited]);
+
+  /**
+   * Counts for the Ownership rows.
+   *
+   * In the 'mine' view the fetched list only holds the account's own assets, so
+   * the shared figure comes from the separate countOnly pair rather than from
+   * what happens to be loaded — otherwise the row would read 0 and look like
+   * there is nothing to switch to.
+   */
+  const ownershipCounts = useMemo(() => {
+    if (ownership === 'mine') {
+      return { mine: files.length, shared: sharedCount, all: files.length + sharedCount };
+    }
+    const mine = files.filter((f) => !isInherited(f)).length;
+    return { mine, shared: files.length - mine, all: files.length };
+  }, [files, ownership, sharedCount, isInherited]);
+
+  const activeFilterCount =
+    countMediaFacetsSelected(facetSelection) + (ownership !== 'mine' ? 1 : 0);
 
   const filteredFolders = useMemo(() => {
+    // The effective view is flat: a folder belongs to one scope and can't hold
+    // an inherited asset, so showing folders there would promise a containment
+    // that isn't real.
+    if (ownership !== 'mine') return [];
     if (!search.trim()) return folders;
     const q = search.toLowerCase();
     return folders.filter(f => f.name.toLowerCase().includes(q));
-  }, [folders, search]);
+  }, [folders, search, ownership]);
+
+  /**
+   * Switching scope returns to the root.
+   *
+   * Without this, turning on shared assets while inside a folder leaves the
+   * breadcrumb pointing at that folder while the list ignores it — the view
+   * would claim to be somewhere it isn't.
+   */
+  const changeOwnership = useCallback((next: OwnershipFilter) => {
+    setOwnership(next);
+    if (next !== 'mine') {
+      setCurrentFolderId(undefined);
+      setFolderPath([{ id: undefined, name: 'Root' }]);
+    }
+  }, []);
 
   // ── Filtered admin media (for overview search) ──
   const filteredAdminMedia = useMemo(() => {
@@ -1689,7 +2298,21 @@ export default function MediaPage() {
   // ── Render ──
 
   return (
-    <div data-unsaved-ignore="true">
+    <div data-unsaved-ignore="true" className="flex h-screen min-h-0 flex-col overflow-hidden bg-[var(--background)]">
+      {/* Own chrome. This route renders without Loomi's sidebar (see
+          layout-shell.tsx), so the way back has to live here — otherwise the
+          asset library is a dead end. */}
+      <div className="flex shrink-0 items-center gap-3 border-b border-[var(--border)] px-5 py-2.5">
+        <Link
+          href={subaccountHref('/dashboard')}
+          className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+        >
+          <ArrowLeftStartOnRectangleIcon className="h-4 w-4 rotate-180" />
+          Back to Loomi
+        </Link>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 pt-4">
       {/* Header */}
       <div className="page-sticky-header mb-6">
         <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -1844,13 +2467,15 @@ export default function MediaPage() {
                     New Folder
                   </button>
                 )}
-                <PrimaryButton
-                  onClick={() => { setStagedFiles([]); setShowUploadModal(true); }}
-                  disabled={uploading}
-                >
-                  <ArrowUpTrayIcon className="w-4 h-4" />
-                  {uploading ? 'Uploading...' : 'Add Media'}
-                </PrimaryButton>
+                {!isConsumer && (
+                  <PrimaryButton
+                    onClick={() => { setStagedFiles([]); setShowUploadModal(true); }}
+                    disabled={uploading}
+                  >
+                    <ArrowUpTrayIcon className="w-4 h-4" />
+                    {uploading ? 'Uploading...' : 'Add Media'}
+                  </PrimaryButton>
+                )}
               </>
             )}
           </div>
@@ -1911,7 +2536,7 @@ export default function MediaPage() {
           {/* ── Loomi Media Library section ── */}
           {isLoomiOverviewTab && adminMediaLoading && adminMediaFiles.length === 0 && (
             <div className="mb-8">
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3">
                 {[1, 2, 3, 4].map(i => (
                   <div key={i} className="glass-card rounded-xl animate-pulse">
                     <div className="h-[140px] rounded-t-xl bg-[var(--muted)]" />
@@ -1933,7 +2558,7 @@ export default function MediaPage() {
                   {adminMediaTotal > filteredAdminMedia.length && ` of ${adminMediaTotal}`}
                 </p>
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3">
                 {filteredAdminMedia.map(f => {
                   const itemKey = mediaItemKey(f);
                   return (
@@ -1952,7 +2577,14 @@ export default function MediaPage() {
                       onPreview={() => setPreviewFile(f)}
                       onCopyUrl={() => copyUrl(f.url)}
                       onDownload={() => downloadFile(f.url, f.name)}
-                      onRename={() => { setRenameValue(f.name); setRenameAltValue(f.altText ?? ''); setRenameFile(f); }}
+                      onRename={() => {
+                        setRenameValue(f.name);
+                        setRenameAltValue(f.altText ?? '');
+                        const meta = assetMetadataFrom(f);
+                        setRenameMetadata(meta);
+                        setRenameMetadataInitial(meta);
+                        setRenameFile(f);
+                      }}
                       onDelete={() => setDeleteFile(f)}
                     />
                   );
@@ -2039,9 +2671,24 @@ export default function MediaPage() {
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     className="w-full text-sm bg-[var(--input)] border border-[var(--border)] rounded-lg pl-9 pr-3 py-2 text-[var(--foreground)]"
-                    placeholder="Search files..."
+                    placeholder="Search name, brand, keywords..."
                   />
                 </div>
+                {/* The rail is always visible on desktop; on narrow screens it
+                    collapses behind this, same as the templates library. */}
+                <button
+                  type="button"
+                  onClick={() => setRailOpen((v) => !v)}
+                  className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-[var(--border)] bg-[var(--muted)] px-2.5 text-xs font-medium text-[var(--foreground)] transition-colors hover:border-[var(--primary)] lg:hidden"
+                >
+                  <FunnelIcon className="h-3.5 w-3.5" />
+                  Filters
+                  {activeFilterCount > 0 && (
+                    <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[var(--primary)] px-1 text-[10px] font-semibold text-white">
+                      {activeFilterCount}
+                    </span>
+                  )}
+                </button>
                 {/* View mode toggle */}
                 <div className="flex items-center rounded-lg border border-[var(--border)] overflow-hidden">
                   <button
@@ -2072,6 +2719,26 @@ export default function MediaPage() {
             </div>
           )}
 
+          {/* Shared assets are in a different scope, so nothing in the folder
+              view hints that they exist. Without this the OEM library is
+              invisible unless someone happens to open the filter panel. */}
+          {effectiveAccountKey && ownership === 'mine' && sharedCount > 0 && !showArchived && (
+            <button
+              type="button"
+              onClick={() => changeOwnership('all')}
+              className="mb-4 flex w-full items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--muted)]/40 px-3 py-2 text-left text-xs text-[var(--muted-foreground)] transition-colors hover:border-[var(--primary)] hover:text-[var(--foreground)]"
+            >
+              <FolderArrowDownIcon className="h-4 w-4 shrink-0 text-[var(--primary)]" />
+              <span className="flex-1">
+                <span className="font-medium text-[var(--foreground)]">
+                  {sharedCount} shared {sharedCount === 1 ? 'asset is' : 'assets are'} available
+                </span>
+                {' '}from your brands and the Loomi library.
+              </span>
+              <span className="shrink-0 font-medium text-[var(--primary)]">Show</span>
+            </button>
+          )}
+
           {/* Account mode: no account selected */}
           {!isAdmin && !effectiveAccountKey && (
             <div className="text-center py-16 text-[var(--muted-foreground)]">
@@ -2080,9 +2747,28 @@ export default function MediaPage() {
             </div>
           )}
 
+          <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+          {effectiveAccountKey && (hasConnection || isAdmin) && (
+            // Sticks below the docked page header and scrolls independently of
+            // the asset grid, so a long facet list never pushes the page.
+            <div className={`${railOpen ? 'block' : 'hidden'} lg:sticky lg:top-[128px] lg:block lg:max-h-[calc(100vh-13rem)] lg:self-start lg:overflow-y-auto lg:overscroll-contain lg:pr-1`}>
+              <MediaFilterRail
+                options={facetOptions}
+                visibleFacets={visibleFacets}
+                selection={facetSelection}
+                onSelectionChange={setFacetSelection}
+                ownership={ownership}
+                onOwnershipChange={changeOwnership}
+                showOwnership={sharedCount > 0 || ownership !== 'mine'}
+                ownershipCounts={ownershipCounts}
+              />
+            </div>
+          )}
+          <div className="min-w-0 flex-1">
+
           {/* Loading skeleton */}
           {loading && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3">
               {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(i => (
                 <div key={i} className="glass-card rounded-xl animate-pulse">
                   <div className="h-[140px] rounded-t-xl bg-[var(--muted)]" />
@@ -2115,7 +2801,7 @@ export default function MediaPage() {
 
           {/* Folder grid */}
           {!loading && filteredFolders.length > 0 && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3 mt-8 mb-10">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3 mt-8 mb-10">
               {filteredFolders.map(folder => (
                 <div
                   key={folder.id}
@@ -2208,11 +2894,15 @@ export default function MediaPage() {
           {!loading && filtered.length > 0 && (
             <div className={viewMode === 'list'
               ? 'flex flex-col gap-1.5'
-              : 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3'
+              : 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3'
             }>
               {filtered.map(f => {
                 const itemKey = mediaItemKey(f);
                 const ItemComponent = viewMode === 'list' ? MediaListRow : MediaCard;
+                // Inherited assets are read-only here: they belong to another
+                // scope and editing one would change it for every account that
+                // sees it. The API refuses too — this just keeps the menu honest.
+                const fileInherited = isInherited(f);
                 return (
                   <ItemComponent
                     key={itemKey}
@@ -2222,8 +2912,9 @@ export default function MediaPage() {
                     selectionActive={selectionActive}
                     provider={provider}
                     capabilities={capabilities}
+                    inherited={fileInherited}
                     menuClickRef={menuClickRef}
-                    draggable={!!capabilities?.canMove}
+                    draggable={!!capabilities?.canMove && !fileInherited}
                     onDragStart={(e) => handleDragStart(e, f.id, 'file', f.name)}
                     onMenuToggle={() => setOpenMenu(prev => prev === itemKey ? null : itemKey)}
                     onMenuClose={() => setOpenMenu(null)}
@@ -2231,9 +2922,16 @@ export default function MediaPage() {
                     onPreview={() => setPreviewFile(f)}
                     onCopyUrl={() => copyUrl(f.url)}
                     onDownload={() => downloadFile(f.url, f.name)}
-                    onMove={capabilities?.canMove ? () => openMoveModal([{ id: f.id, type: 'file', name: f.name }]) : undefined}
-                    onRename={capabilities?.canRename ? () => { setRenameValue(f.name); setRenameAltValue(f.altText ?? ''); setRenameFile(f); } : undefined}
-                    onDelete={capabilities?.canDelete ? () => setDeleteFile(f) : undefined}
+                    onMove={capabilities?.canMove && !fileInherited ? () => openMoveModal([{ id: f.id, type: 'file', name: f.name }]) : undefined}
+                    onRename={capabilities?.canRename && !fileInherited ? () => {
+                      setRenameValue(f.name);
+                      setRenameAltValue(f.altText ?? '');
+                      const meta = assetMetadataFrom(f);
+                      setRenameMetadata(meta);
+                      setRenameMetadataInitial(meta);
+                      setRenameFile(f);
+                    } : undefined}
+                    onDelete={capabilities?.canDelete && !fileInherited ? () => setDeleteFile(f) : undefined}
                   />
                 );
               })}
@@ -2252,8 +2950,13 @@ export default function MediaPage() {
               </button>
             </div>
           )}
+          </div>
+          </div>
         </>
       )}
+      </div>
+      {/* Docks, modals and the drop overlay sit OUTSIDE the scroll container so
+          they anchor to the viewport rather than to the scrolled content. */}
 
       {showOverview && isLoomiOverviewTab && selectionActive && (
         <BulkActionDock
@@ -2323,6 +3026,13 @@ export default function MediaPage() {
                     icon: <FolderArrowDownIcon className="h-4 w-4" />,
                     onClick: handleBulkMove,
                     disabled: !capabilities?.canMove || selectedIds.size === 0,
+                  },
+                  {
+                    id: 'download',
+                    label: downloading ? 'Zipping…' : 'Download',
+                    icon: <ArrowDownTrayIcon className="h-4 w-4" />,
+                    onClick: () => handleBulkDownload(false),
+                    disabled: selectedIds.size === 0 || downloading,
                   },
                   {
                     id: 'duplicate',
@@ -2415,11 +3125,11 @@ export default function MediaPage() {
       {/* ── Edit details Modal (filename + alt text) ── */}
       {renameFile && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 animate-overlay-in" onClick={() => setRenameFile(null)}>
-          <div className="glass-modal w-[480px]" onClick={(e) => e.stopPropagation()}>
+          <div className="glass-modal w-[560px] max-h-[85vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             <div className="px-5 py-4 border-b border-[var(--border)]">
               <h3 className="text-base font-semibold">Edit file details</h3>
             </div>
-            <div className="p-5 space-y-4">
+            <div className="p-5 space-y-4 overflow-y-auto">
               <div>
                 <label className="block text-sm text-[var(--muted-foreground)] mb-2">File name</label>
                 <input
@@ -2449,6 +3159,36 @@ export default function MediaPage() {
                   Used as the default <code className="font-mono">alt</code> when this image is inserted into HTML or emails. Leave empty to clear.
                 </p>
               </div>
+
+              <div className="pt-2 border-t border-[var(--border)]">
+                <h4 className="text-sm font-semibold mb-3">Classification</h4>
+                <AssetMetadataFields
+                  value={renameMetadata}
+                  onChange={setRenameMetadata}
+                  accountBrands={accountBrands}
+                  disabled={renaming}
+                />
+              </div>
+
+              <RenditionPanel
+                assetId={renameFile.id}
+                canGenerate={!!renameFile.type?.startsWith('image/') && renameFile.type !== 'image/svg+xml'}
+                readOnly={isInherited(renameFile)}
+              />
+
+              <ApprovalPanel
+                assetId={renameFile.id}
+                status={renameFile.status}
+                approvedByName={renameFile.approvedByName}
+                approvedAt={renameFile.approvedAt}
+                reviewNote={renameFile.reviewNote}
+                readOnly={isInherited(renameFile)}
+                onChanged={(file) => {
+                  const next = { ...renameFile, ...(file as Partial<MediaFile>), source: 's3' as const };
+                  setRenameFile(next);
+                  setFiles((prev) => prev.map((f) => (f.id === next.id ? next : f)));
+                }}
+              />
             </div>
             <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-[var(--border)]">
               <button
@@ -2576,6 +3316,37 @@ export default function MediaPage() {
               </button>
             </div>
             <div className="p-5 space-y-4">
+              {/* Destination. Only shown when there's a real choice to make —
+                  a non-admin always uploads to their own account. */}
+              {uploadScopeOptions.length > 1 && (
+                <div>
+                  <label className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] mb-2">
+                    Upload to
+                    <HelpTip title="Upload destination">
+                      <p>
+                        <strong>This sub-account</strong> keeps the file private to the
+                        account you&apos;re viewing.
+                      </p>
+                      <p className="mt-2">
+                        <strong>Shared</strong> stores it once against the brand — every
+                        sub-account carrying that brand sees it, instead of it being
+                        uploaded per rooftop.
+                      </p>
+                      <p className="mt-2">
+                        <strong>Loomi library</strong> is for brand-agnostic assets used
+                        across every account.
+                      </p>
+                    </HelpTip>
+                  </label>
+                  <Select
+                    value={uploadScope}
+                    onChange={setUploadScope}
+                    options={uploadScopeOptions}
+                    previewFont={false}
+                  />
+                </div>
+              )}
+
               {/* Drop zone */}
               <div
                 className={`border-2 border-dashed rounded-xl ${stagedFiles.length > 0 ? 'p-5' : 'p-10'} text-center transition-all cursor-pointer ${
@@ -2596,10 +3367,125 @@ export default function MediaPage() {
                     <p className={`${stagedFiles.length > 0 ? 'text-xs' : 'text-sm'} text-[var(--foreground)] font-medium mb-0.5`}>
                       {stagedFiles.length > 0 ? 'Drop more files or click to add' : 'Drop files here or click to browse'}
                     </p>
-                    <p className="text-[10px] text-[var(--muted-foreground)]">Max file size: 25 MB</p>
+                    <p className="text-[10px] text-[var(--muted-foreground)]">Up to {formatBytes(MAX_UPLOAD_BYTES)} — images 50 MB, video and design files 200 MB</p>
                   </>
                 )}
               </div>
+
+              {/* Batch classification. Collapsed by default: it's the difference
+                  between a findable library and a folder of files, but it must
+                  not stand between someone and a quick upload. */}
+              {stagedFiles.length > 0 && !uploading && (
+                <div className="rounded-lg border border-[var(--border)]">
+                  <button
+                    type="button"
+                    onClick={() => setShowUploadMetadata((v) => !v)}
+                    aria-expanded={showUploadMetadata}
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[var(--muted)] rounded-lg transition-colors"
+                  >
+                    <span className="text-xs font-medium text-[var(--foreground)]">
+                      Classify {stagedFiles.length === 1 ? 'this file' : `these ${stagedFiles.length} files`}
+                    </span>
+                    <span className="ml-auto text-[10px] text-[var(--muted-foreground)]">Optional</span>
+                    <ChevronRightIcon
+                      className={`h-3.5 w-3.5 shrink-0 text-[var(--muted-foreground)] transition-transform ${
+                        showUploadMetadata ? 'rotate-90' : ''
+                      }`}
+                    />
+                  </button>
+                  {showUploadMetadata && (
+                    <div className="border-t border-[var(--border)] p-3">
+                      <AssetMetadataFields
+                        value={uploadMetadata}
+                        onChange={setUploadMetadata}
+                        accountBrands={accountBrands}
+                      />
+                      <p className="mt-3 text-[10px] text-[var(--muted-foreground)]">
+                        Applied to every file in this upload. You can change any of it per file afterwards.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Archives — what's inside, and whether to unpack. Shown before
+                  the file list because the choice changes what gets uploaded. */}
+              {stagedFiles.filter(isZip).map((file) => {
+                const key = stagedFileKey(file);
+                const info = archives[key];
+                if (!info) {
+                  return (
+                    <div key={key} className="rounded-lg border border-[var(--border)] px-3 py-2 text-[11px] text-[var(--muted-foreground)]">
+                      Reading {file.name}…
+                    </div>
+                  );
+                }
+                if (info.error) {
+                  return (
+                    <div key={key} className="rounded-lg border border-[var(--border)] px-3 py-2">
+                      <p className="text-xs font-medium text-[var(--foreground)]">{file.name}</p>
+                      <p className="mt-0.5 text-[11px] text-amber-400">{info.error}</p>
+                      <p className="mt-0.5 text-[10px] text-[var(--muted-foreground)]">
+                        It will be uploaded as a single file.
+                      </p>
+                    </div>
+                  );
+                }
+                const unpack = unpackChoice[key] ?? false;
+                return (
+                  <div key={key} className="rounded-lg border border-[var(--border)] p-3">
+                    <p className="text-xs font-medium text-[var(--foreground)]">{file.name}</p>
+                    <p className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">{info.reason}</p>
+
+                    <div className="mt-2 flex items-center rounded-lg border border-[var(--border)] p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setUnpackChoice((prev) => ({ ...prev, [key]: true }))}
+                        className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                          unpack ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                        }`}
+                      >
+                        Unpack {info.entries.length} file{info.entries.length === 1 ? '' : 's'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setUnpackChoice((prev) => ({ ...prev, [key]: false }))}
+                        className={`flex-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                          !unpack ? 'bg-[var(--primary)] text-white' : 'text-[var(--muted-foreground)] hover:text-[var(--foreground)]'
+                        }`}
+                      >
+                        Keep as one file
+                      </button>
+                    </div>
+
+                    {unpack && info.kind === 'package' && (
+                      // Overriding the recommendation on a bundle is the case
+                      // worth naming out loud — the fragments are individually
+                      // useless and the package is what someone actually needs.
+                      <p className="mt-1.5 text-[10px] leading-snug text-amber-400">
+                        This looks like a template package whose files reference each other.
+                        Unpacking will store the pieces separately and the package won&apos;t be usable.
+                      </p>
+                    )}
+
+                    {unpack && (
+                      <ul className="mt-2 max-h-24 space-y-0.5 overflow-y-auto">
+                        {info.entries.slice(0, 40).map((e) => (
+                          <li key={e.path} className="flex items-center gap-2 text-[10px] text-[var(--muted-foreground)]">
+                            <span className="min-w-0 flex-1 truncate">{e.name}</span>
+                            <span className="shrink-0 tabular-nums">{formatBytes(e.bytes)}</span>
+                          </li>
+                        ))}
+                        {info.entries.length > 40 && (
+                          <li className="text-[10px] text-[var(--muted-foreground)]">
+                            …and {info.entries.length - 40} more
+                          </li>
+                        )}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
 
               {/* Staged files list */}
               {stagedFiles.length > 0 && !uploading && (

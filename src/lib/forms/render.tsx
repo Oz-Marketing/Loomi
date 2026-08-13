@@ -23,6 +23,13 @@ interface RenderOptions {
    * errors through via context.
    */
   errors?: Record<string, string>;
+  /**
+   * Per-field help-text overrides from the embed's `note_{fieldKey}`
+   * query params (see `embed-params.ts`). Keyed by field name. A field
+   * with no entry keeps the help text authored in the form builder.
+   * Display-only — these never ride along with the submission.
+   */
+  helpTextOverrides?: Record<string, string>;
 }
 
 export interface FormRendererProps {
@@ -31,9 +38,11 @@ export interface FormRendererProps {
 }
 
 const FieldErrorContext = React.createContext<Record<string, string>>({});
+const HelpTextOverrideContext = React.createContext<Record<string, string>>({});
 
 export function FormRenderer({ template, options }: FormRendererProps) {
   const errors = options?.errors ?? {};
+  const helpTextOverrides = options?.helpTextOverrides ?? {};
   // Per-side spacing — `??` lets us tolerate older schemas that
   // predate these fields (they fall through to 32 on every side).
   const s = template.settings;
@@ -41,30 +50,32 @@ export function FormRenderer({ template, options }: FormRendererProps) {
   const padding = `${s.contentPaddingTop ?? 32}px ${s.contentPaddingRight ?? 32}px ${s.contentPaddingBottom ?? 32}px ${s.contentPaddingLeft ?? 32}px`;
   return (
     <FieldErrorContext.Provider value={errors}>
-      <div
-        className="loomi-form-root"
-        style={{
-          backgroundColor: s.bodyBg,
-          fontFamily: s.fontFamily,
-          color: s.textColor,
-          minHeight: '100%',
-          padding: margin,
-        }}
-      >
+      <HelpTextOverrideContext.Provider value={helpTextOverrides}>
         <div
+          className="loomi-form-root"
           style={{
-            maxWidth: formContentMaxWidth(s),
-            margin: '0 auto',
-            backgroundColor: s.contentBg,
-            borderRadius: s.contentBorderRadius ?? 12,
-            padding,
+            backgroundColor: s.bodyBg,
+            fontFamily: s.fontFamily,
+            color: s.textColor,
+            minHeight: '100%',
+            padding: margin,
           }}
         >
-          {template.blocks.map((block) => (
-            <RenderedBlock key={block.id} block={block} />
-          ))}
+          <div
+            style={{
+              maxWidth: formContentMaxWidth(s),
+              margin: '0 auto',
+              backgroundColor: s.contentBg,
+              borderRadius: s.contentBorderRadius ?? 12,
+              padding,
+            }}
+          >
+            {template.blocks.map((block) => (
+              <RenderedBlock key={block.id} block={block} />
+            ))}
+          </div>
         </div>
-      </div>
+      </HelpTextOverrideContext.Provider>
     </FieldErrorContext.Provider>
   );
 }
@@ -76,7 +87,19 @@ function RenderedBlock({ block }: { block: Block }) {
   }
 
   const errors = React.useContext(FieldErrorContext);
-  const fieldError = errors[String(block.props.name ?? block.id)];
+  const helpTextOverrides = React.useContext(HelpTextOverrideContext);
+  const fieldName = String(block.props.name ?? block.id);
+  const fieldError = errors[fieldName];
+
+  // `note_{fieldKey}` help text, when the embed supplied one for this
+  // field. Absent → the builder-authored `helpText` prop stands. The
+  // override is display-only: it lands in the rendered props, never in
+  // an input value, so it can't be submitted.
+  const helpTextOverride = helpTextOverrides[fieldName];
+  const props =
+    helpTextOverride !== undefined
+      ? { ...block.props, helpText: helpTextOverride }
+      : block.props;
 
   // Per-breakpoint overrides + hide toggles compile to a scoped <style>
   // and a class attached to the block's root element. Absent when the
@@ -128,7 +151,7 @@ function RenderedBlock({ block }: { block: Block }) {
     return (
       <>
         {styleTag}
-        <Component {...block.props} className={responsiveClass} />
+        <Component {...props} className={responsiveClass} />
         <div
           role="alert"
           style={{
@@ -147,7 +170,7 @@ function RenderedBlock({ block }: { block: Block }) {
   return (
     <>
       {styleTag}
-      <Component {...block.props} className={responsiveClass} />
+      <Component {...props} className={responsiveClass} />
     </>
   );
 }

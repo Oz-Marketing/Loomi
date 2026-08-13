@@ -24,7 +24,10 @@ export type NotificationType =
   | 'task_mention'
   // Ad Generator (Studio surface) — autonomous generation
   | 'incentive_ads_ready'
-  | 'coop_guideline_changed';
+  | 'coop_guideline_changed'
+  // Media Library (Studio surface) — rights management
+  | 'asset_rights_expiring'
+  | 'asset_rights_expired';
 
 export interface NotificationTypeMeta {
   type: NotificationType;
@@ -207,6 +210,26 @@ export const NOTIFICATION_TYPE_REGISTRY: NotificationTypeMeta[] = [
     category: 'Ad Generator',
     // Immediate: every ad generated between the reissue and someone noticing is
     // built against rules that may no longer be in force.
+    channel: 'immediate',
+    defaultEnabled: true,
+  },
+  {
+    type: 'asset_rights_expiring',
+    label: 'Asset licence expiring',
+    description:
+      'A media asset\u2019s licence or effective date is approaching (30 days out, then 7). Time to renew or plan a replacement.',
+    category: 'Media Library',
+    // Digest: a licence 30 days out is a planning item, not an interruption.
+    channel: 'digest',
+    defaultEnabled: true,
+  },
+  {
+    type: 'asset_rights_expired',
+    label: 'Asset out of licence',
+    description:
+      'A media asset has passed its licence or effective date. Creative still using it should be replaced.',
+    category: 'Media Library',
+    // Immediate: an asset in live creative past its licence is active exposure.
     channel: 'immediate',
     defaultEnabled: true,
   },

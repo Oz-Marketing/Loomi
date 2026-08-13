@@ -186,7 +186,11 @@ function buildAgencyNav(userRole: string | null, oemRelevant: boolean): NavEntry
   const isElevated = userRole === 'developer' || userRole === 'super_admin';
   const abs = (href: string, label: string, icon: IconComponent): NavItem => ({ href, label, icon, absolute: true });
 
-  const items: NavEntry[] = [dashboardNav, templatesNav];
+  // Media sits with Dashboard and Templates rather than under Manage: at agency
+  // level the library is the Loomi shared/OEM collection plus a roll-up of every
+  // sub-account's, which is something you work in, not something you configure.
+  // Without it the only way in was to switch into a sub-account first.
+  const items: NavEntry[] = [dashboardNav, templatesNav, mediaNav];
 
   const manage: NavEntry[] = [];
   if (hasAdminAccess) {

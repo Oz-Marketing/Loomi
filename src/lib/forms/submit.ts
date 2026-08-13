@@ -7,7 +7,9 @@
  * in isolation.
  */
 import { randomUUID } from 'node:crypto';
-import type { Form, Prisma } from '@prisma/client';
+// `Prisma` is a value import, not a type-only one — `Prisma.DbNull` is
+// the runtime sentinel that writes SQL NULL into a nullable Json column.
+import { Prisma, type Form } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { parseFormTemplate } from './types';
 import type { FileValue } from './types';
@@ -38,6 +40,12 @@ export interface SubmitContext {
   utmCampaign?: string | null;
   utmTerm?: string | null;
   utmContent?: string | null;
+  /** Embed metadata from the form URL's `meta_{key}` params — page
+   *  context (VIN, stock number, VDP url) handed over by the host page
+   *  the form is iframed into. Already sanitized by the route; stored
+   *  verbatim so automations can read it. Untrusted — escape on
+   *  output. */
+  metadata?: Record<string, string> | null;
 }
 
 export interface SubmissionResult {
@@ -149,6 +157,12 @@ export async function submitForm(args: {
       formId: form.id,
       contactId,
       data: values as unknown as Prisma.InputJsonValue,
+      // Store null rather than `{}` when the embed passed no meta
+      // params, so "has metadata" is a simple non-null check.
+      metadata:
+        context.metadata && Object.keys(context.metadata).length > 0
+          ? (context.metadata as Prisma.InputJsonValue)
+          : Prisma.DbNull,
       ipAddress: context.ipAddress ?? null,
       userAgent: context.userAgent ?? null,
       referrer: context.referrer ?? null,

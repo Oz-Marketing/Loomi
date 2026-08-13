@@ -995,6 +995,13 @@ model FormSubmission {
   // Raw field-id → value map captured from the submit POST. The Form's
   // schema is the source of truth for what these field ids mean.
   data        Json
+  // Embed metadata captured from `meta_{key}` query params on the
+  // public form URL — page context handed over by a third-party host
+  // page (VIN, stock number, VDP url from a Dealer.com VDP). Flat
+  // string→string map, key/value/count-bounded at write time by
+  // `lib/forms/embed-params`. Null for submissions with no meta params.
+  // Untrusted input: escape wherever it's rendered.
+  metadata    Json?
   ipAddress   String?
   userAgent   String?
   referrer    String?
@@ -1746,20 +1753,226 @@ model MediaAsset {
   height       Int? // image-only
   thumbnailKey String? // "media/_admin/{id}/thumb.webp"
   altText      String? // accessible alt text for images — used as the default alt= when inserting <img> from the picker, editable across the media library
+  // Which media-picker tab this appears under. NOT the DAM taxonomy — see
+  // `assetCategory` below, and lib/media-metadata.ts for why they stay separate.
   category     String? // "brand" | "ad-creative" | "oem" | "general" | "texture"
-  tags         String? // JSON string[] for future DAM filtering
+  tags         String? // JSON string[] — free-form keywords (Phase 2 surfaces them)
   folderId     String? // null = the account's root; else a MediaFolder in the same scope
   folder       MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  /// Generated platform-size derivatives. Cascade-deleted with the master —
+  /// they have no meaning without it.
+  renditions   MediaRendition[]
   uploadedBy   String? // User ID
   archivedAt   DateTime? // soft-archive: hidden from the default library view, restorable
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
+
+  // ── DAM metadata (docs/asset-management.md Phase 1) ──
+  //
+  // All nullable and additive, so this reaches every environment through the
+  // `prisma db push` the deploy already runs, and every pre-existing asset stays
+  // exactly as visible as it was.
+
+  /// OEM scope. Set WITH a null accountKey = a manufacturer-shared asset, visible
+  /// to every account carrying that brand (see getEffectiveMediaForAccount).
+  /// Set alongside an accountKey it is descriptive only — "this rooftop asset is
+  /// Audi's" — and does not widen visibility.
+  ///
+  /// This is the column the whole phase exists for: without it, an OEM asset used
+  /// by six rooftops has to be uploaded six times.
+  oem            String? // normalized against lib/oems.ts
+  /// Where the asset came from — lib/media-metadata.ts ASSET_SOURCES. Drives the
+  /// card badge now and the rights defaults in Phase 3.
+  ///
+  /// Named `assetSource`, not `source`, because the API payload's `source` is
+  /// already the storage discriminator ('esp' | 's3') that the media UI reads.
+  /// Two different meanings under one name is a bug waiting to happen.
+  assetSource    String?
+  /// The DAM taxonomy value — ASSET_CATEGORIES. Distinct from `category`.
+  assetCategory  String?
+  /// JSON string[] of 4-digit years. An array because an OEM template package
+  /// legitimately spans model years ("MY25_MY26") and collapsing it loses that.
+  modelYear      String?
+  /// JSON string[] of vehicle model names.
+  vehicleModel   String?
+  /// Who owns the rights, e.g. "Audi of America". Free text in Phase 1; Phase 3
+  /// adds the structured licence window this is the human-readable half of.
+  rightsHolder   String?
+  /// Derivative lineage: a crop/resize/duplicate points at the master it came
+  /// from, so "which assets derive from this?" is answerable. No FK relation —
+  /// deleting a master must not cascade away its derivatives, which may be the
+  /// only approved copies in use.
+  parentAssetId  String?
+  /// sha256 of the uploaded bytes. Powers duplicate detection on upload — the
+  /// same job contentHash does on AdGuidelineDoc.
+  ///
+  /// Deliberately NOT unique: the same file legitimately exists under two scopes
+  /// (an OEM master and a rooftop's own copy), and a unique constraint would also
+  /// fail `db push` on any environment already holding duplicates.
+  contentHash    String?
+
+  // ── Rights management (docs/asset-management.md Phase 3, §6) ──
+  //
+  // The most commonly under-implemented DAM capability, and the one that
+  // actually bites an automotive agency: OEM photography is licensed for a
+  // window, and creative that outlives its licence is a real exposure. All
+  // nullable — an asset with no licence recorded is "unknown", which reads
+  // differently from "unlimited" and must not be treated as either.
+  //
+  // `rightsHolder` above is the licence HOLDER; these describe the licence.
+
+  /// lib/media-rights.ts LICENSE_TYPES — OEM-licensed, stock, talent release…
+  licenseType          String?
+  /// The agreement this asset is covered by, e.g. "Ford-2026-lifestyle-Q3".
+  /// Free text: it is whatever reference the counterparty used.
+  licenseRef           String?
+  licenseStartsAt      DateTime?
+  /// When the LICENCE lapses — distinct from `expiresAt`, which is when the
+  /// offer or campaign the asset advertises ends. An asset can outlive its offer
+  /// and still be licensed, or the reverse.
+  licenseExpiresAt     DateTime?
+  /// JSON string[] — where it may be used (digital, print, social, OOH…).
+  usageScope           String?
+  /// JSON string[] — territories it is cleared for. Feeds OEM DAT compliance
+  /// once there is a launch gate to enforce it.
+  territoryScope       String?
+  /// Tri-state on purpose: null = not recorded, which is not the same as false.
+  /// A missing talent release and a confirmed absent one carry different risk.
+  exclusive            Boolean?
+  talentReleaseOnFile  Boolean?
+  /// Whether the licence permits derivative works (resize, crop, composite).
+  /// The one rights field automated generation must respect: compositing an
+  /// asset that forbids derivatives is a breach nobody would catch by eye.
+  derivativesPermitted Boolean?
+  sublicensingPermitted Boolean?
+
+  /// When the offer/campaign this asset supports ends. Set by a person, or
+  /// carried from the offer for generated creative.
+  expiresAt            DateTime?
+
+  /// Set by the expiration sweep when the asset passes whichever date came
+  /// first. A TIMESTAMP rather than a status value, matching `archivedAt` and
+  /// AdCreative's convention: expiry is orthogonal to whatever workflow state
+  /// Phase 5 adds, and folding them together would lose one of them.
+  expiredAt            DateTime?
+  /// Why it expired — "license" | "effective" | "manual". §3 of the design note
+  /// requires the trigger source to be auditable; without it nobody can tell a
+  /// lapsed licence from an ended campaign after the fact.
+  expirationReason     String?
+  /// Last advance warning sent, so the daily sweep doesn't re-notify. Null once
+  /// the dates move, which is what makes a renewal re-arm the warnings.
+  expirationWarnedAt   DateTime?
+
+  // ── Approval lifecycle (docs/asset-management.md Phase 5, §5) ──
+  //
+  // Four states, and only two of them live here: `draft` and `approved`. The
+  // other two are the timestamps above — `expiredAt` and `archivedAt` — kept
+  // separate on purpose. An asset can be approved AND expired (cleared for use,
+  // licence since lapsed), or approved AND archived. Collapsing them into one
+  // enum would lose which of the three was true, exactly as folding archive into
+  // AdCreative.status would have.
+  //
+  // Defaults to `draft`, including for everything already in the library:
+  // nothing has been reviewed, so nothing should claim it has.
+
+  /// "draft" | "approved". Cleared for use, not "published" — distribution is a
+  /// separate question the Go-to-Market work answers.
+  status         String    @default("draft")
+  approvedAt     DateTime?
+  approvedById   String?
+  /// Denormalized so the review history survives the reviewer leaving.
+  approvedByName String?
+  /// Free-text note from the reviewer. Carries a rejection reason too: sending
+  /// an asset back leaves it in `draft` WITH the note, rather than inventing a
+  /// fifth state whose only difference from draft is that someone looked at it.
+  reviewNote     String?   @db.Text
+  /// Pre-flight findings as of the last approve attempt, JSON MediaPreflight.
+  /// Stored so a reviewer sees what was checked without re-running it, and so an
+  /// approval remains explicable against the rules in force at the time.
+  preflightResult String?  @db.Text
+
+  // ── Externally-managed assets ──
+  //
+  // Brand logos and custom fonts live on the Account record (`logos`,
+  // `customFonts`) and are read from there by the ad builder, emails and landing
+  // pages. They were uploaded to S3 but never catalogued, so the DAM couldn't
+  // see the most-reused assets an agency owns.
+  //
+  // These rows CATALOGUE them; they do not own them. Account settings remains
+  // the authority for the lifecycle, and the library renders them read-only —
+  // deleting one here would break a live logo, which is not a thing the library
+  // should be able to do.
+
+  /// What owns this row's lifecycle: "account-logo" | "account-font".
+  /// Null = an ordinary asset the library owns outright.
+  managedBy  String?
+  /// Which one — the logo variant ("light", "storefront") or the font's
+  /// `family|weight|style`. Together with managedBy this is what lets a sync
+  /// reconcile rows against the Account record rather than duplicating them.
+  managedRef String?
 
   @@unique([s3Key])
   @@index([accountKey, createdAt])
   @@index([accountKey, category])
   @@index([accountKey, folderId])
   @@index([accountKey, archivedAt])
+  // OEM-scope reads: "every Audi asset that isn't archived".
+  @@index([oem, archivedAt])
+  // Duplicate lookup on upload.
+  @@index([contentHash])
+  @@index([parentAssetId])
+  // Brand-asset sync: "which rows does this account's logo/font set own?"
+  @@index([accountKey, managedBy])
+  // Approval reads: the client-facing view asks for one account's approved
+  // assets, and the review queue asks for one account's drafts.
+  @@index([accountKey, status])
+  // The expiration sweep's two scans: "what has lapsed" and "what lapses soon".
+  // Both run daily across every account, so they are the one query here that
+  // isn't scope-limited.
+  @@index([licenseExpiresAt])
+  @@index([expiresAt])
+}
+
+// A generated derivative of a MediaAsset at a platform size — Phase 4 of
+// docs/asset-management.md (§8, Automatic Processing).
+//
+// A SEPARATE table rather than child MediaAssets, even though `parentAssetId`
+// exists and would have fit. Renditions are outputs, not library items: eight
+// sizes per master would multiply the grid by nine, distort every facet count,
+// and invite someone to tag or licence a derivative independently of the master
+// it came from. They belong TO an asset, so they hang off it.
+//
+// The master is always the source of truth. Renditions are disposable — delete
+// and regenerate freely; nothing should ever reference one as an original.
+model MediaRendition {
+  id      String     @id @default(cuid())
+  assetId String
+  asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  /// Catalog size name, e.g. "Instagram Square". Free text rather than an enum
+  /// so a size retired from AD_SIZE_CATALOG doesn't orphan existing rows.
+  name     String
+  platform String
+  width    Int
+  height   Int
+
+  s3Key    String
+  mimeType String
+  size     Int // bytes
+
+  /// How the master was fitted to the frame — "cover" crops to fill, "contain"
+  /// letterboxes. Recorded because a rendition that cropped someone's logo out
+  /// needs to be explicable without re-running the job.
+  fit String @default("cover")
+
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  // One rendition per size per asset: regenerating replaces rather than
+  // accumulating near-identical copies.
+  @@unique([assetId, name])
+  @@index([assetId])
+  @@unique([s3Key])
 }
 
 // A user-created folder for organizing media within a scope (an account, or the

@@ -137,6 +137,14 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // pages keep the standard app shell.
   const isAdBuilder = /^\/ad-generator\/builder$/.test(builderProbe);
 
+  // Media Library — a full-viewport asset workspace that owns its own chrome
+  // (top bar + back link live in app/media/page.tsx). Unlike the builders this
+  // is a BROWSING surface, so it keeps its own account breadcrumb and an
+  // explicit way back to the dashboard; without one there'd be no nav at all.
+  // `builderProbe` has already stripped any /subaccount/<slug> prefix, so this
+  // covers /media and /subaccount/<slug>/media alike.
+  const isMediaLibrary = builderProbe === '/media';
+
   if (isFullScreen) {
     return <div className="flex-1">{children}</div>;
   }
@@ -148,8 +156,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
     return <div className="flex-1 min-w-0">{children}</div>;
   }
 
-  if (isFlowBuilder) {
-    // Flow builder owns its full canvas edge-to-edge — no shell padding.
+  if (isFlowBuilder || isMediaLibrary) {
+    // Own their full canvas edge-to-edge — no shell padding, no sidebar.
     return <div className="flex-1 min-w-0">{children}</div>;
   }
 

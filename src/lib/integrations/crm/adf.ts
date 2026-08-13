@@ -14,13 +14,21 @@
  */
 import type { Contact, FormSubmission } from '@prisma/client';
 import { asFileValues } from '@/lib/forms/types';
+import { readSubmissionMetadata } from '@/lib/forms/embed-params';
 
 export interface AdfLeadInput {
   dealerName: string;
   formName: string;
   submission: Pick<
     FormSubmission,
-    'data' | 'createdAt' | 'utmSource' | 'utmMedium' | 'utmCampaign' | 'utmTerm' | 'utmContent'
+    | 'data'
+    | 'metadata'
+    | 'createdAt'
+    | 'utmSource'
+    | 'utmMedium'
+    | 'utmCampaign'
+    | 'utmTerm'
+    | 'utmContent'
   >;
   contact: Pick<Contact, 'email' | 'phone' | 'firstName' | 'lastName'> | null;
 }
@@ -97,6 +105,18 @@ function buildComments(input: AdfLeadInput): string {
         : String(value ?? '');
     lines.push(`${key}: ${rendered}`);
   }
+  // Embed metadata (`meta_*` from the host VDP): VIN, stock number and
+  // page URL are exactly what a salesperson wants on the lead, so they
+  // go in ahead of the attribution line. `xmlEscape` on the joined
+  // comments block covers these — they're third-party strings.
+  const meta = Object.entries(readSubmissionMetadata(input.submission.metadata)).sort(
+    ([a], [b]) => a.localeCompare(b),
+  );
+  if (meta.length) {
+    lines.push('', 'Page context:');
+    for (const [key, value] of meta) lines.push(`${key}: ${value}`);
+  }
+
   const utm = [
     ['source', input.submission.utmSource],
     ['medium', input.submission.utmMedium],

@@ -38,6 +38,7 @@ import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import BulkActionDock from '@/components/bulk-action-dock';
 import { CropEditorModal, type CropRect } from '@/components/media/crop-editor-modal';
 import { RenditionPanel } from '@/components/media/rendition-panel';
+import { PublicLinkPanel } from '@/components/media/public-link-panel';
 import { RightsActivityPanel } from '@/components/media/rights-activity-panel';
 import { ScopeMoveModal, type ScopeMoveTarget } from '@/components/media/scope-move-modal';
 import { CollectionsSection } from '@/components/media/collections-section';
@@ -2927,6 +2928,8 @@ export default function MediaPage() {
                   disabled={renaming}
                 />
               </div>
+
+              <PublicLinkPanel assetId={renameFile.id} readOnly={isInherited(renameFile)} />
 
               <RenditionPanel
                 assetId={renameFile.id}

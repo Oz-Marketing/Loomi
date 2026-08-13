@@ -1762,6 +1762,8 @@ model MediaAsset {
   renditions   MediaRendition[]
   /// Static-collection memberships.
   collectionItems MediaCollectionItem[]
+  /// Shareable links pointing at this asset.
+  publicLinks     MediaPublicLink[]
   uploadedBy   String? // User ID
   archivedAt   DateTime? // soft-archive: hidden from the default library view, restorable
   createdAt    DateTime     @default(now())
@@ -1930,6 +1932,54 @@ model MediaAsset {
   // isn't scope-limited.
   @@index([licenseExpiresAt])
   @@index([expiresAt])
+}
+
+// A shareable link to one asset, usable without a Loomi login.
+//
+// The gap: handing an asset to a dealer, a vendor or a printer meant either
+// giving them an account or emailing the file. Neither scales, and re-emailing
+// on every revision is how stale creative gets used.
+//
+// A STORED token, not a signed one. lib/forms/file-tokens.ts signs an HMAC with
+// an expiry, which is right there — those links are meant to lapse. These are
+// meant to LAST and to be revocable, and a signed token can't be revoked
+// without a database lookup anyway. So the row IS the token: delete it and the
+// link dies.
+//
+// ── What this is not ──
+//
+// Objects are uploaded public-read, so the underlying S3 URL is already
+// world-readable. Revoking a link stops anyone holding the LINK, not anyone who
+// saved the direct bucket URL. That makes this a convenience and audit boundary,
+// not a security one — see the route comment. Locking the bucket down is a
+// separate piece of work.
+model MediaPublicLink {
+  /// The token itself — random, unguessable, and the primary key so a lookup is
+  /// the same operation as a validation.
+  id      String     @id
+  assetId String
+  asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  /// What this link is for ("Sent to Young Chevy print vendor"), so a list of
+  /// six links is legible months later.
+  label String?
+
+  /// Optional. Null = non-expiring, which is the default and the point.
+  expiresAt DateTime?
+  /// Set on revoke rather than deleting the row: who shared what, and when it
+  /// was pulled, is the audit trail. A deleted row answers nothing.
+  revokedAt DateTime?
+
+  /// Cheap usage signal — enough to answer "is anyone actually using this?"
+  /// without building analytics.
+  accessCount    Int       @default(0)
+  lastAccessedAt DateTime?
+
+  createdBy     String?
+  createdByName String?
+  createdAt     DateTime  @default(now())
+
+  @@index([assetId, revokedAt])
 }
 
 // A named set of assets — the replacement for folders.

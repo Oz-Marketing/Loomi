@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
-import { listEmailBlasts, type EmailBlastSummary } from '@/lib/services/email-blasts';
+import {
+  listEmailBlasts,
+  type BlastSourceFilter,
+  type EmailBlastSummary,
+} from '@/lib/services/email-blasts';
 import { listSmsBlasts, type SmsBlastSummary } from '@/lib/services/sms-blasts';
 
 /**
@@ -53,9 +57,16 @@ export async function GET(req: NextRequest) {
   const statusFilter: 'all' | 'archived' =
     statusParam === 'archived' || legacyIncludeArchived ? 'archived' : 'all';
 
+  // ?source=blasts (default) returns only human-composed campaigns.
+  // 'flows' returns only the per-(flow, node) wrapper shells the flow
+  // engine sends through; 'all' returns both. See BlastSourceFilter.
+  const sourceParam = req.nextUrl.searchParams.get('source');
+  const source: BlastSourceFilter =
+    sourceParam === 'flows' || sourceParam === 'all' ? sourceParam : 'blasts';
+
   const [emails, sms] = await Promise.all([
-    listEmailBlasts({ limit: 500, accountKeys: visibilityScope, statusFilter }),
-    listSmsBlasts({ limit: 500, accountKeys: visibilityScope, statusFilter }),
+    listEmailBlasts({ limit: 500, accountKeys: visibilityScope, statusFilter, source }),
+    listSmsBlasts({ limit: 500, accountKeys: visibilityScope, statusFilter, source }),
   ]);
 
   function matchesAccount(accountKeys: string[]): boolean {
@@ -127,12 +138,21 @@ function isArchived(metadata: string | null | undefined): boolean {
   return Boolean(parseMeta(metadata)?.archived);
 }
 
+/** Pull the flow id out of a wrapper's "Flow:<flowId>/Node:<nodeId>"
+ *  key so the row can deep-link back to the flow it belongs to. */
+function flowIdFromKey(flowNodeKey: string): string | undefined {
+  const match = /^Flow:([^/]+)\/Node:/.exec(flowNodeKey);
+  return match ? match[1] : undefined;
+}
+
 function mapEmail(c: EmailBlastSummary) {
   const meta = parseMeta(c.metadata);
   const isMulti = Boolean(meta?.multiChannel && meta?.linkedSmsBlastId);
   return {
     id: c.id,
     campaignId: c.id,
+    isFlow: Boolean(c.flowNodeKey),
+    flowId: flowIdFromKey(c.flowNodeKey),
     name: c.name || '(Untitled email campaign)',
     status: c.status,
     provider: 'loomi-email',
@@ -152,6 +172,8 @@ function mapSms(c: SmsBlastSummary) {
   return {
     id: c.id,
     campaignId: c.id,
+    isFlow: Boolean(c.flowNodeKey),
+    flowId: flowIdFromKey(c.flowNodeKey),
     name: c.name || '(Untitled SMS campaign)',
     status: c.status,
     provider: 'loomi-sms',

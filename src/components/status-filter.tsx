@@ -9,11 +9,19 @@ import { ChevronUpDownIcon } from '@heroicons/react/24/outline';
 //   - draft     → draft (plus DB-level 'paused' for flows; UI-only)
 //   - published → active
 //   - archived  → soft-deleted, auto-purges after 30 days
+//   - flows     → Blasts only: the automated sends a flow step produced,
+//                 which are hidden from the default list because they're
+//                 flow steps rather than composed blasts.
 //
 // Renders as a compact native <select> so keyboard + accessibility
 // come for free. Caller drives the value/onChange.
 
-export type StatusFilterValue = 'all' | 'draft' | 'published' | 'archived';
+export type StatusFilterValue =
+  | 'all'
+  | 'draft'
+  | 'published'
+  | 'archived'
+  | 'flows';
 
 export interface StatusFilterOption {
   value: StatusFilterValue;

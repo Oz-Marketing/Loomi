@@ -647,20 +647,28 @@ const RemoveTagNode = makeActionNode('remove_tag', (c) => {
 });
 
 const UpdateFieldNode = makeActionNode('update_field', (c) => {
-  const field = String(c.field || '');
+  const field = String(c.field || '').replace(/^custom:/, '');
   const value = String(c.value || '');
   if (!field) return 'Pick a field to update →';
-  return `${field} = ${value || '(empty)'}`;
+  return `${field} = ${value || '(clear)'}`;
 });
 
+// `listName` is a display-only copy the inspector writes alongside
+// `listId`; fall back to the id for nodes saved before it existed.
+function listLabel(c: Record<string, unknown>): string {
+  const name = String(c.listName || '').trim();
+  if (name) return name;
+  return String(c.listId || '');
+}
+
 const AddToListNode = makeActionNode('add_to_list', (c) => {
-  const listId = String(c.listId || '');
-  return listId ? `+ list: ${truncate(listId, 16)}` : 'Pick a list →';
+  const label = listLabel(c);
+  return label ? `+ list: ${truncate(label, 20)}` : 'Pick a list →';
 });
 
 const RemoveFromListNode = makeActionNode('remove_from_list', (c) => {
-  const listId = String(c.listId || '');
-  return listId ? `− list: ${truncate(listId, 16)}` : 'Pick a list →';
+  const label = listLabel(c);
+  return label ? `− list: ${truncate(label, 20)}` : 'Pick a list →';
 });
 
 const AddNoteNode = makeActionNode('add_note', (c) => {

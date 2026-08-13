@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   S3ServiceException,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -159,6 +160,64 @@ export async function getPresignedUrl(key: string, expiresIn = 3600): Promise<st
     new GetObjectCommand({ Bucket: getBucket(), Key: key }),
     { expiresIn },
   );
+}
+
+/**
+ * Pre-signed PUT URL, so a browser can upload straight to the bucket.
+ *
+ * This exists for files too large to pass through the app server: an upload via
+ * `req.formData()` is buffered entirely in memory, which is what caps the normal
+ * path (see lib/media-limits.ts). Going direct removes the app from the byte
+ * path altogether.
+ *
+ * REQUIRES BUCKET CORS. The browser issues a cross-origin PUT, so the bucket
+ * must allow PUT from the app's origin with the Content-Type header. Without
+ * that the request fails in the browser before it reaches S3, and no amount of
+ * server-side code can compensate — see docs/asset-management.md.
+ *
+ * `contentType` is signed into the URL, so the client must send exactly the same
+ * value or S3 rejects the upload.
+ */
+export async function getPresignedUploadUrl(
+  key: string,
+  contentType: string,
+  expiresIn = 900,
+): Promise<string> {
+  return getSignedUrl(
+    getClient(),
+    new PutObjectCommand({
+      Bucket: getBucket(),
+      Key: key,
+      ContentType: contentType,
+      // Matches uploadToS3's default so a direct upload is readable the same way
+      // everything else is.
+      ACL: 'public-read',
+    }),
+    { expiresIn },
+  );
+}
+
+/**
+ * Size and type of an object already in the bucket, or null if it isn't there.
+ *
+ * The finalize step uses this to confirm a direct upload actually landed and to
+ * learn its REAL size — the client's claim about what it uploaded can't be
+ * trusted, and a row pointing at a missing object is worse than a failed upload.
+ */
+export async function headS3Object(
+  key: string,
+): Promise<{ size: number; contentType: string | null } | null> {
+  try {
+    const res = await getClient().send(
+      new HeadObjectCommand({ Bucket: getBucket(), Key: key }),
+    );
+    return {
+      size: res.ContentLength ?? 0,
+      contentType: res.ContentType ?? null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Download an object from S3 as a Buffer. Used for push-to-ESP. */

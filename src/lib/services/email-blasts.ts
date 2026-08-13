@@ -82,6 +82,10 @@ export interface CreateEmailBlastInput {
 export interface EmailBlastSummary {
   id: string;
   name: string;
+  /** Non-empty only on the per-(flow, node) wrapper shells the flow
+   *  engine creates. Callers use it to badge or hide those rows — see
+   *  BlastSourceFilter. */
+  flowNodeKey: string;
   subject: string;
   previewText: string;
   sourceType: string;
@@ -251,6 +255,8 @@ function parseCampaignMetadata(raw: string | null | undefined): {
 function toSummary(row: {
   id: string;
   name: string | null;
+  // Optional: some call sites hand toSummary a row selected without it.
+  flowNodeKey?: string | null;
   subject: string;
   previewText: string | null;
   sourceType: string;
@@ -276,6 +282,7 @@ function toSummary(row: {
   return {
     id: row.id,
     name: row.name || '',
+    flowNodeKey: row.flowNodeKey || '',
     subject: row.subject,
     previewText: row.previewText || '',
     sourceType: row.sourceType || 'template-library',
@@ -303,6 +310,7 @@ function toSummary(row: {
 const emailCampaignSummarySelect = {
   id: true,
   name: true,
+  flowNodeKey: true,
   subject: true,
   previewText: true,
   sourceType: true,
@@ -914,21 +922,52 @@ export async function duplicateEmailBlast(
 
 export type BlastStatusFilter = 'all' | 'archived';
 
+/**
+ * Which kind of row to return.
+ *
+ *   'blasts' (default) — only campaigns a human composed. This is what
+ *                        the Blasts list means by "a blast".
+ *   'flows'            — only the per-(flow, node) wrapper shells the
+ *                        flow engine creates for its email/SMS steps.
+ *   'all'              — both.
+ *
+ * Flow wrappers are excluded by default because they aren't blasts:
+ * there's one row per flow STEP (not per send), its counters roll up
+ * every enrollment that ever passed through, and it can't be edited,
+ * scheduled, duplicated, or re-sent. Left in the list they multiply with
+ * every flow email step and bury the real send history.
+ */
+export type BlastSourceFilter = 'blasts' | 'flows' | 'all';
+
+/** Prisma `where` fragment implementing BlastSourceFilter. Both blast
+ *  tables carry the same nullable `flowNodeKey` marker. */
+export function blastSourceWhere(
+  source: BlastSourceFilter,
+): { flowNodeKey?: null | { not: null } } {
+  if (source === 'all') return {};
+  if (source === 'flows') return { flowNodeKey: { not: null } };
+  return { flowNodeKey: null };
+}
+
 export async function listEmailBlasts(options?: {
   limit?: number;
   accountKeys?: string[];
   /** 'all' (default) hides archived rows. 'archived' returns only
    *  archived rows so the table can show them under the StatusFilter. */
   statusFilter?: BlastStatusFilter;
+  /** Defaults to 'blasts' — flow wrapper rows are hidden. */
+  source?: BlastSourceFilter;
 }): Promise<EmailBlastSummary[]> {
   const limit = Math.max(1, Math.min(100, options?.limit ?? 25));
   const statusFilter = options?.statusFilter ?? 'all';
   // Filter on archivedAt at the DB layer — much cheaper than fetching
   // everything and dropping rows client-side once we have a real index.
-  const where =
-    statusFilter === 'archived'
+  const where = {
+    ...(statusFilter === 'archived'
       ? { archivedAt: { not: null } }
-      : { archivedAt: null };
+      : { archivedAt: null }),
+    ...blastSourceWhere(options?.source ?? 'blasts'),
+  };
   const rows = await prisma.emailBlast.findMany({
     where,
     select: emailCampaignSummarySelect,
@@ -1190,6 +1229,13 @@ export async function processDueEmailBlasts(options?: {
   const rows = await prisma.emailBlast.findMany({
     where: {
       status: { in: PROCESSABLE_STATUSES },
+      // Never sweep a flow's wrapper shell. The flow engine owns those
+      // rows: it creates the EmailBlastRecipient and sends the
+      // per-contact, mergetag-rendered body itself. If this sweep picked
+      // one up in the window between the recipient upsert and the send,
+      // it would send the wrapper's stored htmlContent to that same
+      // recipient — a duplicate email with the wrong personalization.
+      ...blastSourceWhere('blasts'),
       OR: [
         { scheduledFor: null },
         { scheduledFor: { lte: now } },

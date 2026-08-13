@@ -157,7 +157,7 @@ export function OemIncentivesPanel({ defaultMake, defaultZip, dual, dualVehicleM
       const v = (sj.vehicles ?? [])[0] as EvoxVehicle | undefined;
       const color = v?.colors?.[0];
       if (!v || !color) return null;
-      const r = await fetch('/api/ad-generator/evox/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vifnum: v.vifnum, colorCode: color.code, accountKey, hint: `${yr}-${mk}-${mdl}` }) });
+      const r = await fetch('/api/ad-generator/evox/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ vifnum: v.vifnum, colorCode: color.code, accountKey, hint: `${yr}-${mk}-${mdl}`, year: yr, make: mk, model: mdl }) });
       const rj = await r.json().catch(() => ({}));
       return typeof rj.url === 'string' ? rj.url : null;
     } catch {

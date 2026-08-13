@@ -118,7 +118,6 @@ export async function POST(req: NextRequest) {
         height: h,
         thumbnailKey,
         category: 'ad-creative',
-        folderId: null,
         uploadedBy: session!.user.id,
       },
     });

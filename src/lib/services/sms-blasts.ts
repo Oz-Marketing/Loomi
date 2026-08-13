@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/prisma';
+import { blastSourceWhere, type BlastSourceFilter } from './email-blasts';
 import {
   resolveTwilioConfig,
   sendSmsViaTwilio,
@@ -98,6 +99,9 @@ export interface CreateSmsBlastInput {
 export interface SmsBlastSummary {
   id: string;
   name: string;
+  /** Non-empty only on the per-(flow, node) wrapper shells the flow
+   *  engine creates — see BlastSourceFilter in email-blasts.ts. */
+  flowNodeKey: string;
   message: string;
   status: SmsBlastStatus;
   scheduledFor: string;
@@ -248,6 +252,8 @@ function parseCampaignMetadata(raw: string | null | undefined): {
 function toSummary(row: {
   id: string;
   name: string | null;
+  // Optional: some call sites hand toSummary a row selected without it.
+  flowNodeKey?: string | null;
   message: string;
   status: string;
   scheduledFor: Date | null;
@@ -269,6 +275,7 @@ function toSummary(row: {
   return {
     id: row.id,
     name: row.name || '',
+    flowNodeKey: row.flowNodeKey || '',
     message: row.message,
     status: row.status as SmsBlastStatus,
     scheduledFor: row.scheduledFor?.toISOString() || '',
@@ -292,6 +299,7 @@ function toSummary(row: {
 const smsCampaignSummarySelect = {
   id: true,
   name: true,
+  flowNodeKey: true,
   message: true,
   status: true,
   scheduledFor: true,
@@ -703,6 +711,9 @@ export async function duplicateSmsBlast(
 }
 
 export type BlastStatusFilter = 'all' | 'archived';
+// Re-exported rather than redefined so the two blast services can never
+// disagree about what counts as a flow wrapper.
+export type { BlastSourceFilter } from './email-blasts';
 
 export async function listSmsBlasts(options?: {
   limit?: number;
@@ -710,13 +721,17 @@ export async function listSmsBlasts(options?: {
   /** 'all' (default) hides archived rows. 'archived' returns only
    *  archived rows so the table can show them under the StatusFilter. */
   statusFilter?: BlastStatusFilter;
+  /** Defaults to 'blasts' — flow wrapper rows are hidden. */
+  source?: BlastSourceFilter;
 }): Promise<SmsBlastSummary[]> {
   const limit = Math.max(1, Math.min(100, options?.limit ?? 25));
   const statusFilter = options?.statusFilter ?? 'all';
-  const where =
-    statusFilter === 'archived'
+  const where = {
+    ...(statusFilter === 'archived'
       ? { archivedAt: { not: null } }
-      : { archivedAt: null };
+      : { archivedAt: null }),
+    ...blastSourceWhere(options?.source ?? 'blasts'),
+  };
   const rows = await prisma.smsBlast.findMany({
     where,
     select: smsCampaignSummarySelect,
@@ -970,6 +985,9 @@ export async function processDueSmsBlasts(options?: {
   const rows = await prisma.smsBlast.findMany({
     where: {
       status: { in: PROCESSABLE_STATUSES },
+      // Never sweep a flow's wrapper shell — see the email equivalent in
+      // processDueEmailBlasts. The flow engine owns the send.
+      ...blastSourceWhere('blasts'),
       OR: [
         { scheduledFor: null },
         { scheduledFor: { lte: now } },

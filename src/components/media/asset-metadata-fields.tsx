@@ -4,6 +4,8 @@ import { useMemo } from 'react';
 import { Select } from '@/components/select';
 import { MultiSelect } from '@/components/ui/multi-select';
 import { HelpTip } from '@/components/ui/help-tip';
+import { DatePicker } from '@/components/ui/date-picker';
+import { TagInput } from '@/components/ui/tag-input';
 import { MAJOR_US_OEMS, POWERSPORTS_BRANDS } from '@/lib/oems';
 import { ASSET_CATEGORIES, ASSET_SOURCES } from '@/lib/media-metadata';
 import { LICENSE_TYPES, USAGE_SCOPES } from '@/lib/media-rights';
@@ -38,7 +40,7 @@ export interface AssetMetadataValue {
   // ── Rights (Phase 3) ──
   licenseType: string;
   licenseRef: string;
-  /** `yyyy-mm-dd`, the value an <input type="date"> holds. '' = unset. */
+  /** `yyyy-mm-dd`, the DatePicker's IsoDate. '' = unset. */
   licenseStartsAt: string;
   licenseExpiresAt: string;
   expiresAt: string;
@@ -68,7 +70,7 @@ export const EMPTY_ASSET_METADATA: AssetMetadataValue = {
   sublicensingPermitted: '',
 };
 
-/** ISO timestamp → the `yyyy-mm-dd` an <input type="date"> expects. */
+/** ISO timestamp → the `yyyy-mm-dd` the DatePicker expects. */
 function toDateInput(iso?: string | null): string {
   if (!iso) return '';
   const d = new Date(iso);
@@ -368,27 +370,24 @@ export function AssetMetadataFields({
 
       <div>
         <label className={FIELD_LABEL}>
-          Keywords
-          <HelpTip title="Keywords">
+          Tags
+          <HelpTip title="Tags">
             <p>
-              Free-form tags for search. Prefer an existing keyword over a new
+              Free-form labels for search. Prefer an existing tag over a new
               near-duplicate — &ldquo;summer-event&rdquo; and &ldquo;summer event&rdquo;
               are two different tags and neither will find the other.
             </p>
+            <p className="mt-2">
+              Each tag&apos;s colour comes from its text, so the same tag looks the
+              same everywhere.
+            </p>
           </HelpTip>
         </label>
-        <input
-          type="text"
-          value={value.tags.join(', ')}
-          onChange={(e) =>
-            set(
-              'tags',
-              e.target.value.split(',').map((t) => t.trim()).filter(Boolean),
-            )
-          }
-          placeholder="Comma-separated, e.g. lease, q3, launch"
+        <TagInput
+          value={value.tags}
+          onChange={(next) => set('tags', next)}
+          placeholder="Add a tag and press Enter"
           disabled={disabled}
-          className={TEXT_INPUT}
         />
       </div>
 
@@ -440,12 +439,13 @@ export function AssetMetadataFields({
 
           <div>
             <label className={FIELD_LABEL}>Licence starts</label>
-            <input
-              type="date"
-              value={value.licenseStartsAt}
-              onChange={(e) => set('licenseStartsAt', e.target.value)}
+            <DatePicker
+              mode="single"
+              value={value.licenseStartsAt || null}
+              onChange={(iso) => set('licenseStartsAt', iso ?? '')}
               disabled={disabled}
-              className={TEXT_INPUT}
+              placeholder="Not set"
+              minWidth="100%"
             />
           </div>
 
@@ -459,12 +459,13 @@ export function AssetMetadataFields({
                 </p>
               </HelpTip>
             </label>
-            <input
-              type="date"
-              value={value.licenseExpiresAt}
-              onChange={(e) => set('licenseExpiresAt', e.target.value)}
+            <DatePicker
+              mode="single"
+              value={value.licenseExpiresAt || null}
+              onChange={(iso) => set('licenseExpiresAt', iso ?? '')}
               disabled={disabled}
-              className={TEXT_INPUT}
+              placeholder="Not set"
+              minWidth="100%"
             />
           </div>
         </div>
@@ -481,12 +482,13 @@ export function AssetMetadataFields({
               <p className="mt-2">Whichever date comes first is the one that retires it.</p>
             </HelpTip>
           </label>
-          <input
-            type="date"
-            value={value.expiresAt}
-            onChange={(e) => set('expiresAt', e.target.value)}
+          <DatePicker
+            mode="single"
+            value={value.expiresAt || null}
+            onChange={(iso) => set('expiresAt', iso ?? '')}
             disabled={disabled}
-            className={TEXT_INPUT}
+            placeholder="Not set"
+            minWidth="100%"
           />
         </div>
 

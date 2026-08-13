@@ -163,7 +163,11 @@ function isGlobalAppPath(pathname: string): boolean {
     // Asset paths mapped to /api/* via next.config.js rewrites — must
     // bypass host rewriting so the next.config rewrite applies cleanly.
     pathname.startsWith('/avatars/') ||
-    pathname.startsWith('/logos/')
+    pathname.startsWith('/logos/') ||
+    // Public media links. Shared outward to people with no Loomi account and no
+    // idea which host they're on, so they must resolve identically everywhere —
+    // exactly like /login. Host-rewriting one would 404 the recipient.
+    pathname.startsWith('/m/')
   );
 }
 
@@ -271,6 +275,10 @@ export async function proxy(request: NextRequest) {
     pathname.startsWith('/favicon') ||
     pathname.startsWith('/lp/') ||
     pathname.startsWith('/f/') ||
+    // Public media links. The TOKEN is the credential — the route resolves it
+    // and 404s anything revoked, expired or unknown — so gating on a session
+    // here would break every link we've handed out. Same rationale as /f/.
+    pathname.startsWith('/m/') ||
     // Embed loader for the script-tag form snippet. It's fetched by an
     // anonymous visitor's browser on the customer's own site, so gating
     // it redirects the <script> request to /login — the browser blocks

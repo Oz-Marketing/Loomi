@@ -69,7 +69,6 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
         thumbnailKey: newThumbKey,
         altText: asset.altText,
         category: asset.category,
-        folderId: asset.folderId,
         uploadedBy: session!.user.id,
 
         // The copy carries the original's classification — a duplicate of an

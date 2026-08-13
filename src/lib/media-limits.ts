@@ -11,14 +11,16 @@
  *
  * ── The honest constraint ──
  *
- * Uploads go through `req.formData()` and are buffered in memory before they
- * reach S3, so these ceilings are bounded by what the Node process can hold, not
- * by what the bucket can take. The numbers below are set accordingly. Genuinely
- * large media — multi-gigabyte video masters, full InDesign packages — needs
- * presigned direct-to-S3 uploads so the bytes never touch the app server. That
- * is a separate piece of work, deliberately not smuggled in here: raising these
- * constants past what the buffered path can survive would trade a clear error
- * for an out-of-memory crash.
+ * The BUFFERED path goes through `req.formData()` and holds the whole file in
+ * memory before it reaches S3, so the ceilings below are bounded by what the Node
+ * process can survive — not by what the bucket accepts. Raising them past that
+ * point would trade a clear error message for an out-of-memory crash.
+ *
+ * Anything larger takes the DIRECT path instead (see needsDirectUpload): the
+ * browser PUTs straight to S3 with a pre-signed URL and the app never touches the
+ * bytes. That lifts the ceiling to DIRECT_UPLOAD_MAX_BYTES, at the cost of the
+ * content hash and the generated thumbnail, both of which need the bytes
+ * server-side. So direct upload is the escape hatch for masters, not the default.
  */
 
 export interface UploadLimit {
@@ -82,6 +84,36 @@ export function formatBytes(bytes: number): string {
   if (bytes >= MB) return `${Math.round(bytes / MB)} MB`;
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${bytes} B`;
+}
+
+/**
+ * Ceiling for a DIRECT (pre-signed) upload.
+ *
+ * 5 GB is S3's hard limit for a single PUT — past that you need multipart, which
+ * is a materially bigger client. Anything this large is a video or an InDesign
+ * package, and both are well served by one PUT.
+ */
+export const DIRECT_UPLOAD_MAX_BYTES = 5 * 1024 * MB;
+
+/**
+ * Should this file bypass the app server?
+ *
+ * Anything the buffered path can carry keeps using it, because that path also
+ * gives us a content hash for dedupe and a generated thumbnail — both of which
+ * need the bytes server-side. Direct upload trades those away for size, so it's
+ * the escape hatch rather than the default.
+ */
+export function needsDirectUpload(size: number, mimeType: string | null | undefined): boolean {
+  return size > uploadLimitFor(mimeType).bytes;
+}
+
+/**
+ * null when the file is acceptable by SOME route; an error when it's too big for
+ * even a direct upload.
+ */
+export function checkAnyUploadSize(size: number): string | null {
+  if (size <= DIRECT_UPLOAD_MAX_BYTES) return null;
+  return `${formatBytes(size)} exceeds the ${formatBytes(DIRECT_UPLOAD_MAX_BYTES)} maximum`;
 }
 
 /** null when the file is fine; an error message when it isn't. */

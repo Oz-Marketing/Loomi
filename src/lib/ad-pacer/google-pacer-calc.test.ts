@@ -29,6 +29,7 @@ function imp(overrides: Partial<ImportedGoogleCampaign>): ImportedGoogleCampaign
     budgetExplicitlyShared: false,
     budgetPeriod: 'DAILY',
     primaryStatus: 'ELIGIBLE',
+    primaryStatusReasons: [],
     budgetConstrained: false,
     adsDisapproved: false,
     ...overrides,

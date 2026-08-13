@@ -244,6 +244,12 @@ async function runMediaRightsSweep(): Promise<void> {
           `${r.warned.length} warned, ${r.scanned} scanned in ${Date.now() - startedAt}ms`,
       );
     }
+    // A sweep that couldn't record itself is the one case worth logging even
+    // though nothing happened: the MediaSweepRun row is how anyone confirms this
+    // job is still alive, so its absence has to be visible somewhere.
+    if (!r.runId) {
+      console.warn('[worker] media rights: sweep ran but no MediaSweepRun row was written');
+    }
   } catch (err) {
     console.error('[worker] sweepMediaExpiration failed', err);
   }

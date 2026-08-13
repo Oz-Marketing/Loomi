@@ -26,6 +26,7 @@ import {
   PencilSquareIcon,
   ArchiveBoxIcon,
   ArrowUturnLeftIcon,
+  BoltIcon,
 } from '@heroicons/react/24/outline';
 
 // ── Engagement helpers ──
@@ -79,6 +80,16 @@ interface Campaign {
    * rows are always 'email'. The Campaigns table renders a badge from it.
    */
   channel?: 'email' | 'sms' | 'multi';
+  /**
+   * True on the wrapper rows the flow engine creates for a flow's
+   * email/SMS steps. These aren't blasts — one row per flow STEP, with
+   * counters that roll up every enrollment that has ever passed through
+   * — so they're hidden unless the toolbar's "From flows" view is on,
+   * and archive/delete/duplicate are suppressed for them.
+   */
+  isFlow?: boolean;
+  /** Flow this wrapper belongs to, for the deep link back. */
+  flowId?: string;
 }
 
 export interface AccountMeta {
@@ -530,7 +541,15 @@ function CampaignTableRow({
   // Archive/Delete only operate on Loomi-native rows. In-flight statuses
   // are blocked server-side too — we mirror that here so the button
   // doesn't dangle uselessly.
-  const canMutate = isLoomi && normalizedStatus !== 'scheduled' && item.status !== 'queued' && item.status !== 'processing';
+  // Flow wrappers are owned by their flow — archiving or deleting one
+  // would orphan the step's recipient rows (and it'd be recreated on the
+  // next send anyway). Manage the flow instead.
+  const canMutate =
+    isLoomi &&
+    !item.isFlow &&
+    normalizedStatus !== 'scheduled' &&
+    item.status !== 'queued' &&
+    item.status !== 'processing';
   const isSent = isLoomi && normalizedStatus === 'sent';
   // Sent rows open the read-only detail drawer instead of the editor;
   // draft/scheduled rows keep navigating to the builder.
@@ -562,7 +581,18 @@ function CampaignTableRow({
         />
       </td>
       <td className="px-3 py-2.5 align-middle">
-        <span className="block text-sm font-medium truncate">{item.name || '(Untitled)'}</span>
+        <span className="flex items-center gap-1.5 min-w-0">
+          <span className="text-sm font-medium truncate">{item.name || '(Untitled)'}</span>
+          {item.isFlow && (
+            <span
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-medium uppercase tracking-wider bg-violet-500/15 text-violet-300 flex-shrink-0"
+              title="Sent automatically by a flow step. The numbers here cover every contact that has ever reached this step — see the flow's Enrollments tab for per-contact history."
+            >
+              <BoltIcon className="w-2.5 h-2.5" />
+              Flow
+            </span>
+          )}
+        </span>
       </td>
       <td className="px-3 py-2.5 align-middle">
         <ChannelBadge channel={getCampaignChannel(item)} />

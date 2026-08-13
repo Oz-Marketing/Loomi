@@ -21,7 +21,17 @@ export async function POST(req: NextRequest) {
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   if (!evoxConfigured()) return NextResponse.json({ error: 'EVOX is not configured' }, { status: 400 });
 
-  let body: { vifnum?: number | string; colorCode?: string; accountKey?: string; hint?: string };
+  let body: {
+    vifnum?: number | string;
+    colorCode?: string;
+    accountKey?: string;
+    hint?: string;
+    // Optional: lets the library entry carry the vehicle's brand, model year
+    // and model instead of only a filename slug.
+    year?: number | string;
+    make?: string;
+    model?: string;
+  };
   try {
     body = await req.json();
   } catch {
@@ -36,7 +46,12 @@ export async function POST(req: NextRequest) {
   try {
     const evoxUrl = await resolveImageUrl(vifnum, colorCode, true);
     if (!evoxUrl) return NextResponse.json({ error: 'No image available for that vehicle/color' }, { status: 404 });
-    const url = await importEvoxImage(evoxUrl, body.accountKey?.trim() || null, body.hint || `${vifnum}-${colorCode}`);
+    const url = await importEvoxImage(
+      evoxUrl,
+      body.accountKey?.trim() || null,
+      body.hint || `${vifnum}-${colorCode}`,
+      { year: body.year, make: body.make, model: body.model },
+    );
     return NextResponse.json({ url });
   } catch (err) {
     console.error('[api/ad-generator/evox/resolve] failed:', err);

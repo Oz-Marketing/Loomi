@@ -15,7 +15,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
-import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, CheckIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
+import { BoltIcon, MegaphoneIcon, PlusIcon, TrashIcon, Squares2X2Icon, RectangleGroupIcon, XMarkIcon, Cog6ToothIcon, ChevronDownIcon, DocumentTextIcon, ShieldCheckIcon, ArchiveBoxIcon, ArrowUturnLeftIcon, CheckCircleIcon, PencilSquareIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { useAccount } from '@/contexts/account-context';
 import { useLoomiDialog } from '@/contexts/loomi-dialog-context';
 import { MANAGEMENT_ROLES } from '@/lib/roles';
@@ -29,7 +29,9 @@ import { ALL_TEMPLATES } from '@/lib/ad-generator/templates';
 import { adTemplateFromDoc, blankTemplateDoc } from '@/lib/ad-generator/doc-template';
 import { designHash, isBehindTemplate } from '@/lib/ad-generator/template-sync';
 import { addFieldKit, type VehicleFieldsMode } from '@/lib/ad-generator/vehicle-fields';
-import { catalogByCategory, aspectLabel, type CatalogSize } from '@/lib/ad-generator/ad-size-catalog';
+import type { LibrarySize } from '@/lib/ad-generator/ad-size-library';
+import { useSizeLibrary } from '@/lib/ad-generator/use-size-library';
+import { SizePicker } from '@/components/ad-generator/size-picker';
 import { templateInIndustry } from '@/lib/ad-generator/industry';
 import {
   facetsForAd,
@@ -454,12 +456,14 @@ export default function AdGeneratorListPage() {
   // From scratch: a blank ad (empty doc) at the chosen name + starting size(s),
   // opened straight in the builder's ad mode so the designer starts on an empty
   // canvas with no layers.
-  async function createBlank(name: string, sizes: CatalogSize[], vehicleMode: VehicleFieldsMode) {
+  async function createBlank(name: string, sizes: LibrarySize[], vehicleMode: VehicleFieldsMode) {
     if (!accountKey) {
       toast.error('Select an account first');
       return;
     }
-    const chosen = sizes.length ? sizes : [{ name: 'Square', width: 1080, height: 1080 } as CatalogSize];
+    const chosen: { name: string; width: number; height: number }[] = sizes.length
+      ? sizes
+      : [{ name: 'Square', width: 1080, height: 1080 }];
     setCreating(true);
     try {
       const trimmed = name.trim() || 'Untitled ad';
@@ -1180,7 +1184,11 @@ export default function AdGeneratorListPage() {
 /**
  * "From scratch" setup step — name the ad and pick a starting size before the
  * builder opens, so a brand-new design starts at the right dimensions instead
- * of always defaulting to a 1080 square. Sizes come from the shared catalog.
+ * of always defaulting to a 1080 square.
+ *
+ * Sizes come from the size library (`/ad-generator/sizes`) — the same list the
+ * builder's Sizes panel reads. This modal used to render a code-side catalog
+ * instead, so sizes a team added were simply absent here.
  */
 function ScratchSetupModal({
   creating,
@@ -1189,14 +1197,25 @@ function ScratchSetupModal({
 }: {
   creating: boolean;
   onClose: () => void;
-  onStart: (name: string, sizes: CatalogSize[], vehicleMode: VehicleFieldsMode) => void;
+  onStart: (name: string, sizes: LibrarySize[], vehicleMode: VehicleFieldsMode) => void;
 }) {
-  const groups = useMemo(() => catalogByCategory(), []);
+  const { sizes, facets, loading } = useSizeLibrary();
   const [name, setName] = useState('Untitled ad');
   const [vehicleMode, setVehicleMode] = useState<VehicleFieldsMode>('none');
-  const [selected, setSelected] = useState<CatalogSize[]>(() => [AD_SIZE_CATALOG_DEFAULT(groups)]);
-  const toggle = (s: CatalogSize) =>
-    setSelected((cur) => (cur.some((x) => x.name === s.name) ? cur.filter((x) => x.name !== s.name) : [...cur, s]));
+  const [selected, setSelected] = useState<LibrarySize[]>([]);
+  const toggle = (s: LibrarySize) =>
+    setSelected((cur) => (cur.some((x) => x.id === s.id) ? cur.filter((x) => x.id !== s.id) : [...cur, s]));
+  const selectedIds = useMemo(() => new Set(selected.map((s) => s.id)), [selected]);
+
+  // Preselect a sensible default once the library lands — a square if there is
+  // one (matches the old 1080 default), else whatever's first. Runs only while
+  // nothing is selected, so it can't fight the user's picks on a revalidation.
+  useEffect(() => {
+    if (selected.length || !sizes.length) return;
+    const square = sizes.find((s) => s.width === s.height);
+    setSelected([square ?? sizes[0]]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sizes]);
 
   return createPortal(
     <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-black/60 p-4 pt-16" onClick={onClose}>
@@ -1244,52 +1263,19 @@ function ScratchSetupModal({
           </div>
         </div>
 
-        <div className="mb-1 flex items-baseline justify-between">
+        <div className="mb-1.5 flex items-baseline justify-between">
           <span className="text-xs font-medium text-[var(--foreground)]">Starting sizes</span>
           <span className="text-[11px] text-[var(--muted-foreground)]">{selected.length} selected</span>
         </div>
-        <div className="max-h-[44vh] space-y-4 overflow-y-auto pr-1">
-          {groups.map((grp) => (
-            <div key={grp.category}>
-              <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">{grp.label}</div>
-              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {grp.sizes.map((s) => {
-                  const ratio = s.width / s.height;
-                  const boxW = ratio >= 1 ? 28 : 28 * ratio;
-                  const boxH = ratio >= 1 ? 28 / ratio : 28;
-                  const on = selected.some((x) => x.name === s.name);
-                  return (
-                    <button
-                      key={s.name}
-                      type="button"
-                      onClick={() => toggle(s)}
-                      aria-pressed={on}
-                      title={`${s.name} · ${s.width}×${s.height}`}
-                      className={`relative flex items-center gap-2 rounded-xl border p-2.5 text-left transition-colors ${
-                        on ? 'border-[var(--primary)] ring-1 ring-[var(--primary)]/40' : 'border-[var(--border)] hover:border-[var(--primary)]'
-                      }`}
-                    >
-                      {on && (
-                        <span className="absolute right-1.5 top-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-[var(--primary)] text-white">
-                          <CheckIcon className="h-3 w-3" />
-                        </span>
-                      )}
-                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded bg-[var(--muted)]/50">
-                        <div className="rounded-[2px] bg-[var(--primary)]/30 ring-1 ring-[var(--primary)]/50" style={{ width: boxW, height: boxH }} />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="truncate text-[11px] font-semibold text-[var(--foreground)]">{s.name}</div>
-                        <div className="truncate text-[10px] text-[var(--muted-foreground)]">
-                          {s.width}×{s.height} · {aspectLabel(s.width, s.height)}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+        <div className="max-h-[44vh] overflow-y-auto pr-1">
+          <SizePicker sizes={sizes} facets={facets} loading={loading} selectedIds={selectedIds} onToggle={toggle} />
         </div>
+        <Link
+          href="/ad-generator/sizes"
+          className="mt-2 inline-block text-[11px] font-medium text-[var(--muted-foreground)] transition-colors hover:text-[var(--primary)]"
+        >
+          Manage size library →
+        </Link>
 
         <div className="mt-5 flex items-center justify-end gap-2">
           <button onClick={onClose} disabled={creating} className="rounded-lg px-3 py-2 text-sm text-[var(--muted-foreground)] transition-colors hover:text-[var(--foreground)] disabled:opacity-50">
@@ -1310,9 +1296,3 @@ function ScratchSetupModal({
   );
 }
 
-/** Default starting size for the scratch modal — Instagram Square if present
- *  (matches the prior 1080 default), else the first catalog size. */
-function AD_SIZE_CATALOG_DEFAULT(groups: { sizes: CatalogSize[] }[]): CatalogSize {
-  const all = groups.flatMap((g) => g.sizes);
-  return all.find((s) => s.name === 'Instagram Square') ?? all[0];
-}

@@ -158,6 +158,23 @@ const UNDERSPEND_UNDER_PCT = 85;
 const LOW_TIME_LEFT_FRACTION = 0.3;
 // Planner statuses that mean the ad should be delivering right now.
 const PLANNER_LIVE_STATUSES = new Set(['Live', 'Live - Changes Required']);
+
+/**
+ * Should the pacing-family scanners (underspend / overpace / went-dark /
+ * flight-ending) skip this ad?
+ *
+ * Two independent reasons, kept separate so either can be undone on its own:
+ *  - `alertsMuted` — the desk has judged this ad's alerts as noise (Change 9).
+ *  - `pacerReserved` — the budget is set aside for a campaign that CANNOT spend
+ *    yet (delivery/reallocation spec §12). It sits at 0% of expected by design,
+ *    so every underspend scanner would fire on it every single day. That false
+ *    alarm is one of the things Reserved exists to remove, and silencing it must
+ *    NOT be done by setting alertsMuted — un-reserving a launched campaign has
+ *    to restore its alerts without also un-muting something a human muted.
+ */
+function skipPacingAlerts(ad: { alertsMuted: boolean; pacerReserved: boolean }): boolean {
+  return ad.alertsMuted || ad.pacerReserved;
+}
 // Meta effective_status values that count as actively delivering.
 const META_ACTIVE_STATUSES = new Set(['ACTIVE']);
 
@@ -239,6 +256,7 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
     budgetSource: string;
     metaEffectiveStatus: string | null;
     alertsMuted: boolean;
+    pacerReserved: boolean;
     ownerUserId: string | null;
     designerUserId: string | null;
     accountRepUserId: string | null;
@@ -375,7 +393,7 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
   // ── 4. Pacing alerts: overpacing, early underpacing, and (most valuable)
   //     a significant underspend with little flight left to recover. ──
   for (const ad of ads) {
-    if (ad.alertsMuted) continue; // per-ad mute (Change 9)
+    if (skipPacingAlerts(ad)) continue;
     const isLifetime = ad.budgetType === 'Lifetime';
     const effectiveStart = ad.liveDate || ad.flightStart;
     if (!effectiveStart || !ad.flightEnd) continue;
@@ -445,7 +463,7 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
   // ── 4b. Ad went dark: planner says Live + in-flight, but Meta now reports
   //     it not delivering (paused/off/rejected) — easy to miss. ──
   for (const ad of ads) {
-    if (ad.alertsMuted) continue;
+    if (skipPacingAlerts(ad)) continue;
     if (!ad.metaEffectiveStatus) continue; // only when linked + synced
     if (!PLANNER_LIVE_STATUSES.has(ad.adStatus)) continue;
     const effectiveStart = ad.liveDate || ad.flightStart;
@@ -481,7 +499,7 @@ export async function scanPacerAlerts(): Promise<ScanResult> {
 
   // ── 4c. End-of-flight approaching: active ad ending in 1–2 days. ──
   for (const ad of ads) {
-    if (ad.alertsMuted) continue;
+    if (skipPacingAlerts(ad)) continue;
     if (!ad.flightEnd) continue;
     if (!PLANNER_LIVE_STATUSES.has(ad.adStatus)) continue;
     const endD = new Date(ad.flightEnd + 'T00:00:00');

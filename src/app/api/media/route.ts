@@ -9,7 +9,7 @@ import {
   buildAssetMetadata,
   findDuplicateAsset,
   getEffectiveMediaForAccount,
-  isConsumerRole,
+  resolveStatusFilter,
   mediaSearchWhere,
   serializeMediaAsset,
 } from '@/lib/services/media';
@@ -62,9 +62,7 @@ function describeMediaUploadError(err: unknown): { status: number; error: string
  *
  * `?scope=effective` (with an accountKey) returns the account's EFFECTIVE set
  * instead: global ∪ its OEMs' shared assets ∪ its ancestors' ∪ its own — the
- * union described in docs/asset-management.md §9.2. That view is deliberately
- * FLAT: folders belong to one scope, so there is no coherent tree spanning
- * inherited assets, and `folder` is ignored when it is requested.
+ * union described in docs/asset-management.md §9.2.
  *
  * The default is unchanged (exact accountKey match) so every existing caller —
  * the picker, the builder, the library page — behaves exactly as before.
@@ -73,7 +71,15 @@ export async function GET(req: NextRequest) {
   const { session, error } = await requireAuth();
   if (error) return error;
 
-  const accountKey = req.nextUrl.searchParams.get('accountKey') || null;
+  const accountKeyParam = req.nextUrl.searchParams.get('accountKey');
+  /**
+   * `accountKey=all` spans every scope — admin-level, OEM-shared and every
+   * sub-account's own. It's what the unified admin library lands on, and it is a
+   * third case: omitting the param means admin-level ONLY (accountKey null),
+   * which is a different question.
+   */
+  const allScopes = accountKeyParam === 'all';
+  const accountKey = allScopes ? null : accountKeyParam || null;
   const offset = Number(req.nextUrl.searchParams.get('cursor') || '0');
   const limit = Math.min(Number(req.nextUrl.searchParams.get('limit') || '50'), 100);
   const category = req.nextUrl.searchParams.get('category') || undefined;
@@ -82,20 +88,17 @@ export async function GET(req: NextRequest) {
   const assetSource = req.nextUrl.searchParams.get('assetSource') || undefined;
   const search = req.nextUrl.searchParams.get('search') || undefined;
   const statusParam = req.nextUrl.searchParams.get('status') || undefined;
-  // Clients see cleared work only — the consumer tier. Forced here rather than
+  // Clients see cleared work only — the consumer tier. Forced rather than
   // trusted from the query string, so it can't be widened by editing the URL.
-  const status = isConsumerRole(session!.user.role) ? 'approved' : statusParam;
+  const status = resolveStatusFilter(session!.user.role, statusParam);
   const countOnly = req.nextUrl.searchParams.get('countOnly') === 'true';
   const effectiveScope = req.nextUrl.searchParams.get('scope') === 'effective';
-  // Folder scoping: absent = every asset (flat, back-compat for non-folder
-  // consumers). "root" = only the scope's root (folderId null). Any other value
-  // = that folder's direct assets.
-  const folderParam = req.nextUrl.searchParams.get('folder');
   // Archive scoping: default view hides archived assets; `archived=true` shows
   // ONLY the archived ones (the "Archived" view / restore surface).
   const archivedParam = req.nextUrl.searchParams.get('archived') === 'true';
 
-  // Access check
+  // Access check. Spanning every account needs the same unrestricted rights as
+  // the admin library, since that's exactly what it reads across.
   if (accountKey === null) {
     if (!canAccessAdminMedia(session!)) {
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
@@ -141,13 +144,22 @@ export async function GET(req: NextRequest) {
     AND: [
       ...(search ? [mediaSearchWhere(search)] : []),
       {
-        accountKey: accountKey === null ? { equals: null as string | null } : accountKey,
+        // Omitted entirely for `all` — any constraint here would narrow it.
+        ...(allScopes
+          ? {}
+          : { accountKey: accountKey === null ? { equals: null as string | null } : accountKey }),
         ...(category ? { category } : {}),
         ...(assetCategory ? { assetCategory } : {}),
-        ...(oem ? { oem } : {}),
+        // `oem=none` asks for brand-AGNOSTIC assets specifically, which is a
+        // different question from omitting the filter (any brand, or none). The
+        // OEM library rail needs to distinguish them.
+        ...(oem === 'none'
+          ? { oem: { equals: null as string | null } }
+          : oem
+            ? { oem }
+            : {}),
         ...(assetSource ? { assetSource } : {}),
         ...(status ? { status } : {}),
-        ...(folderParam === null ? {} : { folderId: folderParam === 'root' ? { equals: null as string | null } : folderParam }),
         archivedAt: archivedParam ? { not: null } : { equals: null as Date | null },
       },
     ],
@@ -214,8 +226,6 @@ export async function POST(req: NextRequest) {
   const accountKey = (formData.get('accountKey') as string | null) || null;
   const file = formData.get('file') as File | null;
   const category = (formData.get('category') as string | null) || 'general';
-  const folderIdRaw = (formData.get('folderId') as string | null) || null;
-  const folderId = folderIdRaw && folderIdRaw !== 'root' ? folderIdRaw : null;
   // Optional accessible alt text — caller (e.g. media library uploader)
   // can set it now, or it can be added later via PATCH.
   const altTextRaw = formData.get('altText');
@@ -262,13 +272,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // A folder, if given, must exist in the SAME scope as the upload — else drop it
-  // to root rather than leaking an asset into another account's folder.
-  let validFolderId: string | null = null;
-  if (folderId) {
-    const folder = await prisma.mediaFolder.findUnique({ where: { id: folderId }, select: { accountKey: true } });
-    if (folder && (folder.accountKey ?? null) === accountKey) validFolderId = folderId;
-  }
 
   const buffer = Buffer.from(await file.arrayBuffer());
   const mimeType = file.type || 'application/octet-stream';
@@ -330,7 +333,6 @@ export async function POST(req: NextRequest) {
         thumbnailKey,
         altText,
         category,
-        folderId: validFolderId,
         uploadedBy: session!.user.id,
         contentHash,
         ...metadata,

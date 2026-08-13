@@ -268,7 +268,7 @@ model Account {
   accountDomains           AccountDomain[]
   snippets                 AccountSnippet[]
   mediaAssets              MediaAsset[]
-  mediaFolders             MediaFolder[]
+  mediaCollections         MediaCollection[]
   metaAdsPacerPlan         MetaAdsPacerPlan?
   metaAdsPacerAccountNotes MetaAdsPacerAccountNote[]
   metaAdsPacerBudgetLogs   MetaAdsPacerBudgetLog[]
@@ -1757,11 +1757,13 @@ model MediaAsset {
   // `assetCategory` below, and lib/media-metadata.ts for why they stay separate.
   category     String? // "brand" | "ad-creative" | "oem" | "general" | "texture"
   tags         String? // JSON string[] — free-form keywords (Phase 2 surfaces them)
-  folderId     String? // null = the account's root; else a MediaFolder in the same scope
-  folder       MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
   /// Generated platform-size derivatives. Cascade-deleted with the master —
   /// they have no meaning without it.
   renditions   MediaRendition[]
+  /// Static-collection memberships.
+  collectionItems MediaCollectionItem[]
+  /// Shareable links pointing at this asset.
+  publicLinks     MediaPublicLink[]
   uploadedBy   String? // User ID
   archivedAt   DateTime? // soft-archive: hidden from the default library view, restorable
   createdAt    DateTime     @default(now())
@@ -1914,7 +1916,6 @@ model MediaAsset {
   @@unique([s3Key])
   @@index([accountKey, createdAt])
   @@index([accountKey, category])
-  @@index([accountKey, folderId])
   @@index([accountKey, archivedAt])
   // OEM-scope reads: "every Audi asset that isn't archived".
   @@index([oem, archivedAt])
@@ -1931,6 +1932,162 @@ model MediaAsset {
   // isn't scope-limited.
   @@index([licenseExpiresAt])
   @@index([expiresAt])
+}
+
+// A shareable link to one asset, usable without a Loomi login.
+//
+// The gap: handing an asset to a dealer, a vendor or a printer meant either
+// giving them an account or emailing the file. Neither scales, and re-emailing
+// on every revision is how stale creative gets used.
+//
+// A STORED token, not a signed one. lib/forms/file-tokens.ts signs an HMAC with
+// an expiry, which is right there — those links are meant to lapse. These are
+// meant to LAST and to be revocable, and a signed token can't be revoked
+// without a database lookup anyway. So the row IS the token: delete it and the
+// link dies.
+//
+// ── What this is not ──
+//
+// Objects are uploaded public-read, so the underlying S3 URL is already
+// world-readable. Revoking a link stops anyone holding the LINK, not anyone who
+// saved the direct bucket URL. That makes this a convenience and audit boundary,
+// not a security one — see the route comment. Locking the bucket down is a
+// separate piece of work.
+model MediaPublicLink {
+  /// The token itself — random, unguessable, and the primary key so a lookup is
+  /// the same operation as a validation.
+  id      String     @id
+  assetId String
+  asset   MediaAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  /// What this link is for ("Sent to Young Chevy print vendor"), so a list of
+  /// six links is legible months later.
+  label String?
+
+  /// Optional. Null = non-expiring, which is the default and the point.
+  expiresAt DateTime?
+  /// Set on revoke rather than deleting the row: who shared what, and when it
+  /// was pulled, is the audit trail. A deleted row answers nothing.
+  revokedAt DateTime?
+
+  /// Cheap usage signal — enough to answer "is anyone actually using this?"
+  /// without building analytics.
+  accessCount    Int       @default(0)
+  lastAccessedAt DateTime?
+
+  createdBy     String?
+  createdByName String?
+  createdAt     DateTime  @default(now())
+
+  @@index([assetId, revokedAt])
+}
+
+// A named set of assets — the replacement for folders.
+//
+// Folders were removed because they could only express "an arbitrary pile
+// someone made", and they did it badly: an asset lived in exactly one, so a
+// photo that belonged to both the summer campaign and the brand library had to
+// pick. Collections don't have that problem — an asset can be in any number —
+// and they come in two kinds:
+//
+//   static  a curated list. "Ford Ogden August — final creative package."
+//   smart   a saved SEARCH. "All approved Audi display assets." New assets
+//           matching the criteria appear automatically; nothing to maintain.
+//
+// Scoped exactly like assets (accountKey null = agency-level), so a collection
+// of OEM-shared work isn't trapped inside one rooftop.
+model MediaCollection {
+  id         String   @id @default(cuid())
+  accountKey String? // null = agency-level
+  account    Account? @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  name        String
+  description String? @db.Text
+
+  /// "static" | "smart".
+  kind String @default("static")
+
+  /// For smart collections: JSON MediaCollectionQuery — the scope, facet
+  /// selection and search text that define it. Null on static ones.
+  ///
+  /// Stored as the QUERY rather than as resolved ids, which is the whole point:
+  /// resolving at read time is what makes "new matching assets appear
+  /// automatically" true instead of a promise someone has to keep manually.
+  query String? @db.Text
+
+  items MediaCollectionItem[]
+
+  createdBy   String?
+  createdByName String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // "This account's collections", the only listing there is.
+  @@index([accountKey, updatedAt])
+}
+
+// Membership for a STATIC collection.
+//
+// A join table rather than a JSON id list on the collection: it makes "which
+// collections is this asset in?" a real query, and it lets the asset FK clean up
+// after a delete instead of leaving a dangling id in a blob.
+model MediaCollectionItem {
+  id           String          @id @default(cuid())
+  collectionId String
+  collection   MediaCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  assetId      String
+  asset        MediaAsset      @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  /// Manual ordering within the collection. A "final creative package" has an
+  /// order someone chose; alphabetical would discard it.
+  position  Int      @default(0)
+  addedBy   String?
+  createdAt DateTime @default(now())
+
+  // An asset appears at most once in a collection — adding twice is a no-op,
+  // not a duplicate row.
+  @@unique([collectionId, assetId])
+  @@index([collectionId, position])
+  @@index([assetId])
+}
+
+// One run of the media rights expiration sweep — its heartbeat.
+//
+// Written on EVERY run, including a run that found nothing, because "no licences
+// expired today" and "the sweep stopped running three weeks ago" are
+// indistinguishable without a row. That is the same reason expire-ads.ts records
+// an AdAutomationRun, and the reason this exists at all: the sweep shipped
+// without it, so a job that silently died would have looked exactly like a quiet
+// one.
+//
+// A separate table rather than reusing AdAutomationRun: that table is the Ad
+// Generator's heartbeat and shadow-report.ts reads it with no `kind` filter, so
+// media rows would surface as phantom entries in the generator's run history.
+// Per-domain run tables are the established shape here — see IngestRun.
+model MediaSweepRun {
+  id String @id @default(cuid())
+
+  /// null = the scheduled sweep across every account; set for an on-demand run.
+  accountKey String?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  /// Rows examined. Zero with no error means the sweep ran and nothing was due —
+  /// which is the normal, healthy case and must be distinguishable from absence.
+  scanned      Int @default(0)
+  expiredCount Int @default(0)
+  warnedCount  Int @default(0)
+
+  /// JSON: what expired and what was warned, so "why did this asset get pulled?"
+  /// is answerable after the fact.
+  detail String? @db.Text
+  /// Set when the sweep itself failed. A failed run still gets a row — an error
+  /// nobody can see is the failure mode this table exists to prevent.
+  error  String? @db.Text
+
+  @@index([startedAt])
+  @@index([accountKey, startedAt])
 }
 
 // A generated derivative of a MediaAsset at a platform size — Phase 4 of
@@ -1973,26 +2130,6 @@ model MediaRendition {
   @@unique([assetId, name])
   @@index([assetId])
   @@unique([s3Key])
-}
-
-// A user-created folder for organizing media within a scope (an account, or the
-// admin library when accountKey is null). Nests via parentId; the breadcrumb is
-// the parent chain. Deleting a folder re-parents its assets/subfolders to its
-// own parent (see the folders API) — it never deletes media.
-model MediaFolder {
-  id         String        @id @default(cuid())
-  accountKey String? // null = admin-level, mirrors MediaAsset scoping
-  account    Account?      @relation(fields: [accountKey], references: [key], onDelete: Cascade)
-  name       String
-  parentId   String? // null = root
-  parent     MediaFolder?  @relation("MediaFolderTree", fields: [parentId], references: [id], onDelete: Cascade)
-  children   MediaFolder[] @relation("MediaFolderTree")
-  assets     MediaAsset[]
-  createdBy  String?
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
-
-  @@index([accountKey, parentId])
 }
 
 // ─────────────────────────────────────────────────────
@@ -2342,8 +2479,54 @@ model MetaAdsPacerAd {
   //    serve (fix the ads, never raise the budget).
   // googlePrimaryStatus keeps the raw campaign.primary_status for display.
   googlePrimaryStatus          String?
+  // The FULL campaign.primary_status_reasons list, JSON-encoded. The two
+  // booleans above are derived from it and answer one question each; this is
+  // kept because the delivery panel has to say WHY a campaign isn't serving
+  // (budget removed, pending, ended, policy) and that reason set is exactly
+  // what the mismatch warning needs to be actionable rather than alarming.
+  googlePrimaryStatusReasons   String?
   googleBudgetConstrained      Boolean  @default(false)
   googleAdsDisapproved         Boolean  @default(false)
+  // Delivery-surface metric tiles (delivery/reallocation spec §4). These ride the
+  // SAME account-wide month-to-date query that produces pacerActual, so a tile can
+  // never disagree with the spend figure above it and opening N row expanders
+  // costs ZERO Google calls. Server-managed by the sync, exactly like pacerActual:
+  // the client PUT allow-list omits them, so autosave can't clobber a sync.
+  //
+  // Only the raw INPUTS are stored. Avg CPC, CTR and cost/conv are derived at
+  // render (spend ÷ clicks, clicks ÷ impressions, spend ÷ conversions) rather
+  // than trusted from the API, because Google's own cost_per_conversion is blank
+  // at zero conversions and a blank beside a real spend figure reads as "free".
+  // conversions_from_interactions_rate is stored, not derived — interactions ≠
+  // clicks on several campaign types and we don't pull interactions.
+  googleImpressions            Int?
+  googleClicks                 Int?
+  googleConversions            String?
+  googleConvRate               String? // fraction 0–1, ×100 at display
+  // Search impression share lost, as FRACTIONS 0–1 (×100 at display). Search and
+  // Shopping only: null for PMAX / Demand Gen / Display, and null when the
+  // account is under Google's reporting threshold — both render "not available",
+  // never a zero. Google reports anything above 90% as exactly 0.9, so 0.9 must
+  // display as "≥90%". These are RATIOS over eligible impressions: they are read
+  // unsegmented over the whole month window and must never be summed or averaged
+  // across days.
+  //  • budget-lost — demand exists, the budget ran out. Can absorb more money.
+  //  • rank-lost   — bid/Quality Score is the constraint. More money just sits.
+  googleSearchBudgetLostIs     String?
+  googleSearchRankLostIs       String?
+  // Last day covered by the metrics above (YYYY-MM-DD) — the tiles' own "as of"
+  // stamp. Matches pacerActual's window end exactly: the DATA EDGE (yesterday in
+  // a live month, the month end in a closed one), never today. A stale stamp is
+  // how a failed metrics pull surfaces: the sync leaves the previous values in
+  // place rather than writing zeros.
+  googleMetricsAsOf            String?
+  // When this campaign's daily budget was last pushed to Google (§14). Drives
+  // the just-applied marker: Google takes 24–48h to re-pace around a budget
+  // change, so numbers read the morning after a push describe the OLD rate.
+  // Without a visible "applied yesterday", the natural reaction is to push
+  // again on figures that have not caught up yet. Visible only — it never
+  // blocks a second push, because sometimes the second push is the right call.
+  googleDailyPushedAt          DateTime?
   // The campaign restricts days/dayparts via an ad schedule. Since Google's
   // June 2026 change, scheduled campaigns pace the FULL monthly cap into
   // their active days, so calendar-day pacing math misreads them — detected
@@ -2372,6 +2555,23 @@ model MetaAdsPacerAd {
   // It does not exempt the line from a budget push: the rate it needs is still
   // the rate it needs.
   pacerLocked                  Boolean  @default(false)
+  // Reserved (delivery/reallocation spec §12): budget set aside for a campaign
+  // that CANNOT spend yet — committed, but not built or not linked to Google.
+  //
+  // In allocation, out of pacing. The target still counts toward the account
+  // allocation total and the payable check, so the reserve stays visible and
+  // protected and can never be mistaken for free budget; but the line is removed
+  // from Expected MTD, account pace, the recommended daily, the account daily
+  // total, Balance, Move, the push, the pacing alert scanners and month-end
+  // variance. Leaving it in is what made a whole account read 74% of expected
+  // and demand $397/day when the honest figures were ~86% and ~$320.
+  //
+  // MANUAL, never inferred. Auto-detecting from "no linked daily" would
+  // eventually fire on a merely-paused live campaign, and a tool that silently
+  // drops a campaign out of pacing is worse than one that shows a wrong number.
+  // Distinct from pacerLocked: locked = live but don't reallocate; reserved =
+  // cannot spend yet. Different badges, different meanings, never merged.
+  pacerReserved                Boolean  @default(false)
   // Free-text labels as a JSON array of strings, e.g. ["Summer Sales Event"].
   // A view/tracking dimension only, INDEPENDENT of budgetSource (base/added):
   // tagging a base-funded campaign into an event must not move money between
@@ -2722,15 +2922,29 @@ model AdCategoryStarter {
 // ─────────────────────────────────────────────────────
 //
 // A shared (global) library of named ad sizes — Square 1080, Story 1080×1920,
-// etc. The template builder's size picker draws from this; anyone can add a new
-// size (name + W×H). Each row records who created it (name / email / avatar
-// snapshot) + when, so the library shows provenance. Additive; reaches an
-// environment via db push on deploy, queried resiliently.
+// etc. THE size list: every picker in the Ad Generator reads it, and there is no
+// second, code-owned set of "app default" sizes sitting beside it. The built-in
+// starters are seeded into this table on first use (see `builtinKey`), so a
+// starter and a team-added size are the same kind of row — equally editable,
+// taggable, and removable.
+//
+// Each row records who created it (name / email / avatar snapshot) + when, so
+// the library shows provenance. Additive; reaches an environment via db push on
+// deploy, queried resiliently.
 model AdSizePreset {
   id             String   @id @default(cuid())
   name           String
   width          Int
   height         Int
+  // What the size is USED FOR — JSON string[] of free-form tags ("Facebook",
+  // "Display", "Email"). Replaces the old fixed social/display/email grouping:
+  // one size is often used for several things, and every team's list differs.
+  tags           String?  @db.Text
+  // Set only on rows seeded from the built-in starter set, so seeding can run
+  // once per environment without duplicating. NOT a "system size" marker — a
+  // seeded row is editable and deletable like any other; this only keeps the
+  // seeder from re-adding one that already exists.
+  builtinKey     String?  @unique
   createdById    String?
   createdByName  String?
   createdByEmail String?

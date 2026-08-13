@@ -10,6 +10,10 @@ import type { BlastFilterState, BlastFilterOptions, RepFilterOption } from '@/co
 import { BlastFilterSidebar } from '@/components/filters/blast-filter-sidebar';
 import { DashboardToolbar, type CustomDateRange } from '@/components/filters/dashboard-toolbar';
 import { ListToolbar } from '@/components/list-toolbar';
+import type {
+  StatusFilterOption,
+  StatusFilterValue,
+} from '@/components/status-filter';
 import { DEFAULT_DATE_RANGE, getDateRangeBounds, type DateRangeKey } from '@/lib/date-ranges';
 import { resolveAccountLocationId, resolveAccountProvider } from '@/lib/account-resolvers';
 import {
@@ -63,6 +67,20 @@ interface AccountData {
 }
 
 type PageTab = 'analytics' | 'list';
+
+/** The three mutually-exclusive views the toolbar dropdown offers over
+ *  the blast list. See `campaignsView` for what each one means. */
+type BlastsView = 'all' | 'archived' | 'flows';
+
+const BLASTS_VIEW_OPTIONS: StatusFilterOption[] = [
+  { value: 'all', label: 'All' },
+  { value: 'archived', label: 'Archived' },
+  { value: 'flows', label: 'From flows' },
+];
+
+function toBlastsView(next: StatusFilterValue): BlastsView {
+  return next === 'archived' || next === 'flows' ? next : 'all';
+}
 
 // ── Helpers ──
 
@@ -125,17 +143,28 @@ function AdminCampaignsPage() {
   // source now — ESP-fetched campaigns are gone.
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [campaignsLoading, setCampaignsLoading] = useState(true);
-  // Status filter — drives the StatusFilter dropdown in the campaign
-  // list toolbar and the ?status= param on the loomi list endpoint.
-  // Campaigns only support 'all' (live) and 'archived' for now.
-  const [campaignsStatusFilter, setCampaignsStatusFilter] = useState<'all' | 'archived'>('all');
+  // Combined "which rows" selector behind the toolbar's dropdown. Three
+  // mutually-exclusive views over one list:
+  //   'all'      → live, human-composed blasts (the default)
+  //   'archived' → soft-deleted blasts
+  //   'flows'    → the automated sends flow email/SMS steps produced.
+  //                Hidden from the default view because each row is a
+  //                flow STEP, not a send: its counters roll up every
+  //                enrollment that ever passed through, and it can't be
+  //                edited, scheduled, duplicated, or re-sent.
+  const [campaignsView, setCampaignsView] = useState<BlastsView>('all');
+  const campaignsStatusFilter: 'all' | 'archived' =
+    campaignsView === 'archived' ? 'archived' : 'all';
+  const campaignsSource = campaignsView === 'flows' ? 'flows' : 'blasts';
   // Lifted page-level search so the unified ListToolbar drives
   // BlastPageList from the same value.
   const [campaignsSearch, setCampaignsSearch] = useState('');
   useEffect(() => {
     let cancelled = false;
     setCampaignsLoading(true);
-    fetch(`/api/blasts/loomi/list?status=${campaignsStatusFilter}`)
+    fetch(
+      `/api/blasts/loomi/list?status=${campaignsStatusFilter}&source=${campaignsSource}`,
+    )
       .then((r) => (r.ok ? r.json() : { campaigns: [] }))
       .then((data: { campaigns?: Campaign[] }) => {
         if (cancelled) return;
@@ -150,7 +179,7 @@ function AdminCampaignsPage() {
     return () => {
       cancelled = true;
     };
-  }, [campaignsStatusFilter]);
+  }, [campaignsStatusFilter, campaignsSource]);
 
   const accountNames = useMemo<Record<string, string>>(() => ({}), []);
 
@@ -501,16 +530,9 @@ function AdminCampaignsPage() {
                   search={campaignsSearch}
                   onSearchChange={setCampaignsSearch}
                   searchPlaceholder="Search campaigns…"
-                  status={campaignsStatusFilter}
-                  onStatusChange={(next) =>
-                    setCampaignsStatusFilter(
-                      next === 'archived' ? 'archived' : 'all',
-                    )
-                  }
-                  statusOptions={[
-                    { value: 'all', label: 'All' },
-                    { value: 'archived', label: 'Archived' },
-                  ]}
+                  status={campaignsView}
+                  onStatusChange={(next) => setCampaignsView(toBlastsView(next))}
+                  statusOptions={BLASTS_VIEW_OPTIONS}
                   trailing={
                     <>
                       <DashboardToolbar
@@ -596,9 +618,19 @@ function AccountCampaignsPage() {
   const [dateRange, setDateRange] = useState<DateRangeKey>(DEFAULT_DATE_RANGE);
   const [customRange, setCustomRange] = useState<CustomDateRange | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
-  // Status filter — drives the StatusFilter dropdown in the campaign
-  // list toolbar + the ?status= param on the loomi list endpoint.
-  const [campaignsStatusFilter, setCampaignsStatusFilter] = useState<'all' | 'archived'>('all');
+  // Combined "which rows" selector behind the toolbar's dropdown. Three
+  // mutually-exclusive views over one list:
+  //   'all'      → live, human-composed blasts (the default)
+  //   'archived' → soft-deleted blasts
+  //   'flows'    → the automated sends flow email/SMS steps produced.
+  //                Hidden from the default view because each row is a
+  //                flow STEP, not a send: its counters roll up every
+  //                enrollment that ever passed through, and it can't be
+  //                edited, scheduled, duplicated, or re-sent.
+  const [campaignsView, setCampaignsView] = useState<BlastsView>('all');
+  const campaignsStatusFilter: 'all' | 'archived' =
+    campaignsView === 'archived' ? 'archived' : 'all';
+  const campaignsSource = campaignsView === 'flows' ? 'flows' : 'blasts';
   // Lifted search so the unified ListToolbar drives BlastPageList
   // from the same value.
   const [campaignsSearch, setCampaignsSearch] = useState('');
@@ -611,7 +643,7 @@ function AccountCampaignsPage() {
       // Loomi-native is the only source now — ESP campaigns are gone.
       try {
         const res = await fetch(
-          `/api/blasts/loomi/list?accountKey=${encodeURIComponent(accountKey!)}&status=${campaignsStatusFilter}`,
+          `/api/blasts/loomi/list?accountKey=${encodeURIComponent(accountKey!)}&status=${campaignsStatusFilter}&source=${campaignsSource}`,
         );
         if (cancelled) return;
         const data = await res.json().catch(() => ({}));
@@ -639,7 +671,7 @@ function AccountCampaignsPage() {
 
     load();
     return () => { cancelled = true; };
-  }, [accountKey, campaignsStatusFilter]);
+  }, [accountKey, campaignsStatusFilter, campaignsSource]);
 
   const bounds = useMemo(
     () =>
@@ -834,16 +866,9 @@ function AccountCampaignsPage() {
                 search={campaignsSearch}
                 onSearchChange={setCampaignsSearch}
                 searchPlaceholder="Search campaigns…"
-                status={campaignsStatusFilter}
-                onStatusChange={(next) =>
-                  setCampaignsStatusFilter(
-                    next === 'archived' ? 'archived' : 'all',
-                  )
-                }
-                statusOptions={[
-                  { value: 'all', label: 'All' },
-                  { value: 'archived', label: 'Archived' },
-                ]}
+                status={campaignsView}
+                onStatusChange={(next) => setCampaignsView(toBlastsView(next))}
+                statusOptions={BLASTS_VIEW_OPTIONS}
                 trailing={
                   <DashboardToolbar
                     dateRange={dateRange}

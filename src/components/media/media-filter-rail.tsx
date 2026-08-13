@@ -115,7 +115,8 @@ export function MediaFilterRail({
   }
 
   return (
-    <aside className="w-full shrink-0 space-y-4 lg:w-52">
+    // min-w-0 so a long facet label truncates instead of widening the rail.
+    <aside className="w-full min-w-0 shrink-0 space-y-4 lg:w-52">
       <div className="flex items-center justify-between px-2">
         <span className="text-xs font-semibold text-[var(--foreground)]">Filters</span>
         {active > 0 && (

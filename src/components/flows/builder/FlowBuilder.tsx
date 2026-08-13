@@ -78,7 +78,7 @@ const DEFAULT_NODE_CONFIG: Record<BuilderNodeType, Record<string, unknown>> = {
   add_to_list: { listId: '' },
   remove_from_list: { listId: '' },
   add_note: { note: '' },
-  create_task: { title: '', dueAt: '' },
+  create_task: { title: '', description: '', priority: 'medium', dueInDays: '' },
   wait: { ms: 60 * 60 * 1000 }, // 1 hour
   wait_until: { field: '', offsetDays: 0 },
   condition: {

@@ -90,7 +90,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         thumbnailKey,
         altText: asset.altText,
         category: asset.category,
-        folderId: asset.folderId,
         uploadedBy: session!.user.id,
       },
     });
@@ -108,7 +107,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           thumbnailUrl: created.thumbnailKey ? s3PublicUrl(created.thumbnailKey) : undefined,
           altText: created.altText,
           category: created.category,
-          folderId: created.folderId,
           archivedAt: null,
           createdAt: created.createdAt.toISOString(),
           source: 's3' as const,

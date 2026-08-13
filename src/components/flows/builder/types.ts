@@ -229,13 +229,13 @@ export const NODE_META: Record<BuilderNodeType, NodeMetaEntry> = {
   // ── Contact ops ──
   add_tag: meta('contact', 'Add Tag', 'Add a tag to the contact.'),
   remove_tag: meta('contact', 'Remove Tag', 'Remove a tag from the contact.'),
-  update_field: meta('contact', 'Update Field', 'Set a value on a contact field. Execution coming soon.', false),
-  add_to_list: meta('contact', 'Add to List', 'Add the contact to a static list. Execution coming soon.', false),
-  remove_from_list: meta('contact', 'Remove from List', 'Remove the contact from a static list. Execution coming soon.', false),
+  update_field: meta('contact', 'Update Field', 'Set a value on a contact field or custom field.'),
+  add_to_list: meta('contact', 'Add to List', 'Add the contact to a static list.'),
+  remove_from_list: meta('contact', 'Remove from List', 'Remove the contact from a static list.'),
   add_note: meta('contact', 'Add Note', 'Attach a note to the contact. Execution coming soon.', false),
 
   // ── Tasks ──
-  create_task: meta('tasks', 'Create Task', 'Create an internal task. Execution coming soon.', false),
+  create_task: meta('tasks', 'Create Task', 'File a task on the Projects board for this contact.'),
 
   // ── Logic ──
   condition: meta('logic', 'Condition', 'Branch on whether a predicate is true (yes/no).'),

@@ -120,8 +120,26 @@ export interface PacerAd {
   // = BUDGET_CONSTRAINED (raise budget); googleAdsDisapproved = an ad is
   // disapproved (fix the ads). googlePrimaryStatus = raw campaign.primary_status.
   googlePrimaryStatus?: string | null;
+  /** JSON array of campaign.primary_status_reasons — read via parseStatusReasons. */
+  googlePrimaryStatusReasons?: string | null;
   googleBudgetConstrained?: boolean | null;
   googleAdsDisapproved?: boolean | null;
+  // Delivery-surface metric tiles (§4). Raw INPUTS only — avg CPC, CTR and
+  // cost/conv are derived at render from these plus pacerActual, so the tiles
+  // can't disagree with the spend figure. Synced on the same month-to-date query
+  // as pacerActual; googleMetricsAsOf is that window's last day — the data edge
+  // (yesterday live / month end closed). The two impression-share fields are 0–1,
+  // null for PMAX / Demand Gen / Display and below Google's reporting threshold.
+  googleImpressions?: number | null;
+  googleClicks?: number | null;
+  googleConversions?: string | null;
+  googleConvRate?: string | null;
+  googleSearchBudgetLostIs?: string | null;
+  googleSearchRankLostIs?: string | null;
+  googleMetricsAsOf?: string | null;
+  /** §14 — when this campaign's daily was last pushed to Google. Drives the
+   *  just-applied marker through Google's 24–48h re-pacing window. */
+  googleDailyPushedAt?: string | Date | null;
   // §9 monthly ceiling ($) — server-computed, reprorated across mid-month budget
   // changes (change_event); falls back to current daily × 30.4. Null for total.
   googleProratedCeiling?: string | null;
@@ -137,6 +155,10 @@ export interface PacerAd {
   /** §4 locked carve-out: skipped by Balance and by Move (both source and
    *  destination). Changes no numbers on its own. */
   pacerLocked?: boolean | null;
+  /** §12 Reserved: committed budget that cannot spend yet. Counts in allocation,
+   *  removed from every pacing figure, from Balance/Move/push, from the alert
+   *  scanners and from month-end variance. Manual only — never inferred. */
+  pacerReserved?: boolean | null;
   /** §9 labels, JSON array of strings. Independent of budgetSource. Shared with
    *  Meta — read/written via lib/ad-pacer/labels.ts, never parsed inline. */
   pacerTags?: string | null;
@@ -154,7 +176,11 @@ export interface PacerAd {
 export interface PriorOverUnder {
   period: string;
   clientBudget: number;
+  /** The month's spend target with any RESERVED allocations removed (§12). */
   spendTarget: number;
+  /** Σ reserved allocations excluded from spendTarget — surfaced, never silent,
+   *  so a shrunken target is explainable rather than mysterious. */
+  reservedExcluded: number;
   actual: number;
   variance: number; // actual − spendTarget (negative = underspent)
   carryover: number; // −variance: +ve = spend this much more next month

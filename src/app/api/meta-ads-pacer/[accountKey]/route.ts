@@ -59,6 +59,8 @@ interface IncomingAd {
   pacerEndDate?: string | null;
   // Google allocator (§4/§6): lock flag and the manual funding-window override.
   pacerLocked?: boolean;
+  /** §12 Reserved — set from the pacing row. Manual only; nothing derives it. */
+  pacerReserved?: boolean;
   googleFlightStartOverride?: string | null;
   googleFlightEndOverride?: string | null;
   // Labels (§9) — JSON array, cross-platform. Sent already serialized by the
@@ -253,6 +255,7 @@ export async function PUT(
       // Tracked by the audit diff (TRACKED_AD_FIELDS) — these must be selected
       // or every save logs a phantom "undefined → false" lock change.
       pacerLocked: true,
+      pacerReserved: true,
       pacerTags: true,
       googleFlightStartOverride: true,
       googleFlightEndOverride: true,
@@ -397,6 +400,7 @@ export async function PUT(
         pacerTodayDate: nullable(ad.pacerTodayDate),
         pacerEndDate: nullable(ad.pacerEndDate),
         pacerLocked: ad.pacerLocked === true,
+        pacerReserved: ad.pacerReserved === true,
         pacerTags: nullable(ad.pacerTags),
         googleFlightStartOverride: nullable(ad.googleFlightStartOverride),
         googleFlightEndOverride: nullable(ad.googleFlightEndOverride),

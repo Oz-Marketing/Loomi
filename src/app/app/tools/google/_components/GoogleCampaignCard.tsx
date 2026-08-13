@@ -65,7 +65,9 @@ export function GoogleCampaignCard({
   onInput,
   onToggleLock,
   onTagsChange,
-  onOpenHealth,
+  deliveryOpen,
+  onToggleDelivery,
+  delivery,
   onFlightChange,
 }: {
   line: AllocatorLine;
@@ -80,7 +82,12 @@ export function GoogleCampaignCard({
   onInput: (value: number) => void;
   onToggleLock: () => void;
   onTagsChange: (tags: string[]) => void;
-  onOpenHealth: () => void;
+  /** Whether this card's delivery panel is showing (§1 — multi-open). */
+  deliveryOpen: boolean;
+  onToggleDelivery: () => void;
+  /** The delivery panel itself, rendered by the card so the two layouts share
+   *  one component and one open-set instead of two near-copies. */
+  delivery: React.ReactNode;
   onFlightChange: (startDay: number, endDay: number) => void;
 }) {
   const color = campaignColor(line.colorIndex);
@@ -159,7 +166,8 @@ export function GoogleCampaignCard({
           <Tooltip label={paceHelp(line)} placement="bottom">
             <button
               type="button"
-              onClick={onOpenHealth}
+              onClick={onToggleDelivery}
+              aria-expanded={deliveryOpen}
               className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold transition-opacity hover:opacity-80"
               style={{ background: `${paceColor}1f`, color: paceColor }}
             >
@@ -239,11 +247,12 @@ export function GoogleCampaignCard({
                   : 'nothing expected yet'
               }
             />
-            {/* Verdict lives in the box row, and opens the full health report. */}
+            {/* Verdict lives in the box row, and toggles the delivery panel. */}
             <Tooltip label={paceHelp(line)} className="w-full">
               <button
                 type="button"
-                onClick={onOpenHealth}
+                onClick={onToggleDelivery}
+                aria-expanded={deliveryOpen}
                 className="metric-box w-full rounded-lg bg-[var(--muted)]/40 px-3 py-2.5 text-left transition-colors hover:bg-[var(--muted)]/70"
               >
                 <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--muted-foreground)]">
@@ -254,8 +263,10 @@ export function GoogleCampaignCard({
                 </div>
                 <div className="mt-0.5 text-[11px] text-[var(--muted-foreground)]">
                   {line.paceRatio != null
-                    ? `${Math.round(line.paceRatio * 100)}% of pace · delivery health →`
-                    : 'delivery health →'}
+                    ? `${Math.round(line.paceRatio * 100)}% of pace · ${deliveryOpen ? 'hide delivery' : 'delivery detail ↓'}`
+                    : deliveryOpen
+                      ? 'hide delivery'
+                      : 'delivery detail ↓'}
                 </div>
               </button>
             </Tooltip>
@@ -327,6 +338,12 @@ export function GoogleCampaignCard({
           </div>
         </div>
       )}
+
+      {/* Delivery panel (§1). Independent of the planning body above it: the
+          pace badge on the COLLAPSED header opens this directly, so the
+          delivery read never costs an extra click through a panel that answers
+          a different question. */}
+      {delivery}
     </div>
   );
 }

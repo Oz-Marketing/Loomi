@@ -1,14 +1,21 @@
 /**
  * Ad size library — /api/ad-generator/sizes
  *
- * A shared, named library of ad sizes the builder draws from. Anyone signed in
- * can list or add one; each row records its creator (name / email / avatar) +
- * timestamp. Flag-gated; resilient (unmigrated table → empty list).
+ * THE size list: every picker in the generator reads this route, so a size added
+ * here shows up everywhere. Sizes are organized by free-form tags describing
+ * what they're used for; the response carries the tag vocabulary in use so a
+ * picker can offer it without a second request.
+ *
+ * Anyone signed in can list or add one; each row records its creator (name /
+ * email / avatar) + timestamp. Flag-gated; resilient (unmigrated table → empty
+ * list).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getAuthSession } from '@/lib/api-auth';
 import { adGeneratorAllowed } from '@/lib/ad-generator/access';
 import { prisma } from '@/lib/prisma';
+import { normalizeTags, tagFacets, UNTAGGED } from '@/lib/ad-generator/ad-size-library';
+import { listSizeLibrary, toLibrarySize } from '@/lib/ad-generator/size-library-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,11 +25,14 @@ export async function GET() {
   const session = await getAuthSession();
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   try {
-    const sizes = await prisma.adSizePreset.findMany({ orderBy: { createdAt: 'desc' } });
-    return NextResponse.json({ sizes });
+    const sizes = await listSizeLibrary();
+    const tags = tagFacets(sizes)
+      .map((f) => f.tag)
+      .filter((t) => t !== UNTAGGED);
+    return NextResponse.json({ sizes, tags });
   } catch (err) {
     console.warn('[api/ad-generator/sizes] falling back to []:', err);
-    return NextResponse.json({ sizes: [] });
+    return NextResponse.json({ sizes: [], tags: [] });
   }
 }
 
@@ -31,7 +41,7 @@ export async function POST(req: NextRequest) {
   const session = await getAuthSession();
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-  let body: { name?: string; width?: number | string; height?: number | string };
+  let body: { name?: string; width?: number | string; height?: number | string; tags?: unknown };
   try {
     body = await req.json();
   } catch {
@@ -51,13 +61,14 @@ export async function POST(req: NextRequest) {
         name,
         width,
         height,
+        tags: JSON.stringify(normalizeTags(body.tags)),
         createdById: u.id ?? null,
         createdByName: u.name ?? null,
         createdByEmail: u.email ?? null,
         createdByImage: u.image ?? null,
       },
     });
-    return NextResponse.json({ size });
+    return NextResponse.json({ size: toLibrarySize(size) });
   } catch (err) {
     console.error('[api/ad-generator/sizes] create failed:', err);
     return NextResponse.json({ error: 'Could not save — has the table been migrated in this environment?' }, { status: 500 });

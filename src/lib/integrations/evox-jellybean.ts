@@ -127,7 +127,11 @@ export async function resolveJellybean(input: JellybeanInput): Promise<Jellybean
     // 2) Miss → resolve hi-res, re-host to S3 (deterministic key = cache key).
     const evoxUrl = await resolveImageUrl(vehicle.vifnum, color.code, true);
     if (!evoxUrl) return null;
-    const hostedUrl = await importEvoxImage(evoxUrl, null, hint);
+    const hostedUrl = await importEvoxImage(evoxUrl, null, hint, {
+      year: vehicle.year,
+      make: vehicle.make,
+      model: vehicle.model,
+    });
     return { url: hostedUrl, matchedColor: color.name || null, cached: false };
   } catch (err) {
     console.warn('[evox-jellybean] resolve failed:', err);

@@ -9,7 +9,7 @@ import {
   buildAssetMetadata,
   findDuplicateAsset,
   getEffectiveMediaForAccount,
-  isConsumerRole,
+  resolveStatusFilter,
   mediaSearchWhere,
   serializeMediaAsset,
 } from '@/lib/services/media';
@@ -88,9 +88,9 @@ export async function GET(req: NextRequest) {
   const assetSource = req.nextUrl.searchParams.get('assetSource') || undefined;
   const search = req.nextUrl.searchParams.get('search') || undefined;
   const statusParam = req.nextUrl.searchParams.get('status') || undefined;
-  // Clients see cleared work only — the consumer tier. Forced here rather than
+  // Clients see cleared work only — the consumer tier. Forced rather than
   // trusted from the query string, so it can't be widened by editing the URL.
-  const status = isConsumerRole(session!.user.role) ? 'approved' : statusParam;
+  const status = resolveStatusFilter(session!.user.role, statusParam);
   const countOnly = req.nextUrl.searchParams.get('countOnly') === 'true';
   const effectiveScope = req.nextUrl.searchParams.get('scope') === 'effective';
   // Archive scoping: default view hides archived assets; `archived=true` shows

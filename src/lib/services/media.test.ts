@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { brandsOfAccountRow, buildAssetMetadata, effectiveMediaWhere } from './media';
+import {
+  brandsOfAccountRow,
+  buildAssetMetadata,
+  effectiveMediaWhere,
+  resolveStatusFilter,
+} from './media';
 
 // Pure functions only — the query helpers around them are exercised against a
 // real database under RUN_DB_TESTS.
@@ -247,5 +252,33 @@ describe('brandsOfAccountRow', () => {
 
   it('survives a malformed oems column rather than throwing', () => {
     expect(brandsOfAccountRow({ oem: 'Honda', oems: 'not json' })).toContain('Honda');
+  });
+});
+
+describe('resolveStatusFilter — the consumer tier’s one guarantee', () => {
+  it('forces a client to approved-only', () => {
+    expect(resolveStatusFilter('client')).toBe('approved');
+  });
+
+  it('DISCARDS a client’s own status request rather than defaulting it', () => {
+    // The distinction that matters: a client passing ?status=draft must not be
+    // able to widen their own view. Defaulting-when-absent would allow it.
+    expect(resolveStatusFilter('client', 'draft')).toBe('approved');
+    expect(resolveStatusFilter('client', 'approved')).toBe('approved');
+    expect(resolveStatusFilter('client', 'anything')).toBe('approved');
+  });
+
+  it('leaves every internal role free to filter as asked', () => {
+    for (const role of ['developer', 'super_admin', 'admin']) {
+      expect(resolveStatusFilter(role, 'draft')).toBe('draft');
+      expect(resolveStatusFilter(role)).toBeUndefined();
+    }
+  });
+
+  it('treats an unknown role as internal, not as a consumer', () => {
+    // Deliberate: only 'client' is the consumer tier. A new internal role must
+    // not be silently restricted to approved-only, which would look like
+    // missing data rather than a permission rule.
+    expect(resolveStatusFilter('some_future_role', 'draft')).toBe('draft');
   });
 });

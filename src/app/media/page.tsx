@@ -2620,10 +2620,23 @@ export default function MediaPage() {
             <div className="text-center py-16 text-[var(--muted-foreground)]">
               <PhotoIcon className="w-12 h-12 mx-auto mb-3 opacity-30" />
               {files.length === 0 ? (
+                isConsumer ? (
+                  /* A client sees only APPROVED assets, so an empty library
+                     usually means "nothing cleared yet", not "no files". The
+                     old copy told them to click an Upload button they don't
+                     have, about a library that isn't empty. */
+                  <>
+                    <p className="text-sm font-medium mb-1">Nothing shared with you yet</p>
+                    <p className="text-xs">
+                      Assets appear here once your account team has approved them.
+                    </p>
+                  </>
+                ) : (
                 <>
                   <p className="text-sm font-medium mb-1">No media files yet</p>
                   <p className="text-xs">Click &quot;Upload Media&quot; to upload files.</p>
                 </>
+                )
               ) : (
                 <p className="text-sm">No files match your search.</p>
               )}

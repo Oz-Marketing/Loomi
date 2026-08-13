@@ -539,6 +539,23 @@ export function isConsumerRole(role: string): boolean {
   return role === 'client';
 }
 
+/**
+ * Which lifecycle status a request may filter on.
+ *
+ * This is the consumer tier's ONE security guarantee: a client sees cleared work
+ * and nothing else. It was an inline ternary in the route — correct, but a
+ * one-line rule with no test, which is a poor way to hold the only thing
+ * standing between a client and unapproved creative.
+ *
+ * The forcing is deliberate rather than defaulting: a client passing
+ * `?status=draft` must not widen their own view, so their request's value is
+ * discarded entirely instead of merely being defaulted when absent.
+ */
+export function resolveStatusFilter(role: string, requested?: string): string | undefined {
+  if (isConsumerRole(role)) return 'approved';
+  return requested;
+}
+
 // ── Scope moves ──
 
 /**

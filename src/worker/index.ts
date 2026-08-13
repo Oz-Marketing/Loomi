@@ -268,6 +268,35 @@ async function runAdgenGuidelines(): Promise<void> {
   }
 }
 
+/**
+ * Register a recurring job: ensure the queue row exists, then attach the
+ * cron schedule.
+ *
+ * `boss.schedule` has a foreign key onto pgboss.queue, so scheduling a
+ * queue that was never created throws — and because every schedule call
+ * sits in main()'s straight-line path, ONE missed createQueue took the
+ * whole worker down at boot on every restart, silently stopping campaign
+ * sends, flow enrollments and the ad-gen chain along with it. Pairing the
+ * two here makes that drift structurally impossible, and the try/catch
+ * means a future failure costs one job rather than all of them. Both
+ * calls are idempotent (createQueue is ON CONFLICT DO NOTHING; schedule
+ * upserts), so this is safe to run on every boot.
+ */
+async function scheduleRecurring(
+  boss: Awaited<ReturnType<typeof getBoss>>,
+  queue: string,
+  cron: string,
+  cadence: string,
+): Promise<void> {
+  try {
+    await boss.createQueue(queue);
+    await boss.schedule(queue, cron);
+    console.log('[worker] scheduled', queue, cadence);
+  } catch (err) {
+    console.error(`[worker] FAILED to schedule ${queue} (${cadence})`, err);
+  }
+}
+
 async function main(): Promise<void> {
   const boss = await getBoss();
   console.log('[worker] pg-boss started');
@@ -312,6 +341,7 @@ async function main(): Promise<void> {
     await runAdgenExpire();
   });
 
+  await boss.createQueue(MEDIA_RIGHTS_QUEUE);
   await boss.work(MEDIA_RIGHTS_QUEUE, async () => {
     await runMediaRightsSweep();
   });
@@ -341,58 +371,50 @@ async function main(): Promise<void> {
     },
   );
 
-  // Recurring schedule: every minute. pg-boss is idempotent on schedule
-  // creation, so this is safe to call on every boot.
-  await boss.schedule(PROCESS_DUE_CAMPAIGNS_QUEUE, '* * * * *');
-  console.log('[worker] scheduled', PROCESS_DUE_CAMPAIGNS_QUEUE, 'every minute');
+  // Recurring schedule: every minute.
+  await scheduleRecurring(boss, PROCESS_DUE_CAMPAIGNS_QUEUE, '* * * * *', 'every minute');
 
   // Flow enrollments tick every minute (matches the wait-node minimum
   // resolution); trigger polling every 5 minutes since list/audience
   // membership changes are coarse and we don't want to thrash the DB.
-  await boss.schedule(PROCESS_FLOW_ENROLLMENTS_QUEUE, '* * * * *');
-  console.log('[worker] scheduled', PROCESS_FLOW_ENROLLMENTS_QUEUE, 'every minute');
-
-  await boss.schedule(PROCESS_FLOW_TRIGGERS_QUEUE, '*/5 * * * *');
-  console.log('[worker] scheduled', PROCESS_FLOW_TRIGGERS_QUEUE, 'every 5 minutes');
+  await scheduleRecurring(boss, PROCESS_FLOW_ENROLLMENTS_QUEUE, '* * * * *', 'every minute');
+  await scheduleRecurring(boss, PROCESS_FLOW_TRIGGERS_QUEUE, '*/5 * * * *', 'every 5 minutes');
 
   // Archive retention sweep — runs daily at 02:00 UTC. Hard-deletes
   // rows archived more than ARCHIVE_RETENTION_DAYS ago across every
   // model that supports archiving.
-  await boss.schedule(PURGE_ARCHIVED_QUEUE, '0 2 * * *');
-  console.log('[worker] scheduled', PURGE_ARCHIVED_QUEUE, 'daily at 02:00 UTC');
+  await scheduleRecurring(boss, PURGE_ARCHIVED_QUEUE, '0 2 * * *', 'daily at 02:00 UTC');
 
   // 05:00 — first in the daily chain, so an ad for a dead offer is pulled before
   // the day's new work is built.
-  await boss.schedule(ADGEN_EXPIRE_QUEUE, '0 5 * * *');
-  console.log('[worker] scheduled', ADGEN_EXPIRE_QUEUE, 'daily at 05:00 UTC');
+  await scheduleRecurring(boss, ADGEN_EXPIRE_QUEUE, '0 5 * * *', 'daily at 05:00 UTC');
 
   // Shadow mode: inventory first so the offer poll can read fresh stock to
   // decide what to watch. Neither job produces an ad.
-  await boss.schedule(ADGEN_SYNC_INVENTORY_QUEUE, '30 5 * * *');
-  console.log('[worker] scheduled', ADGEN_SYNC_INVENTORY_QUEUE, 'daily at 05:30 UTC');
-
-  await boss.schedule(ADGEN_POLL_OFFERS_QUEUE, '0 6 * * *');
-  console.log('[worker] scheduled', ADGEN_POLL_OFFERS_QUEUE, 'daily at 06:00 UTC');
+  await scheduleRecurring(
+    boss,
+    ADGEN_SYNC_INVENTORY_QUEUE,
+    '30 5 * * *',
+    'daily at 05:30 UTC',
+  );
+  await scheduleRecurring(boss, ADGEN_POLL_OFFERS_QUEUE, '0 6 * * *', 'daily at 06:00 UTC');
 
   // 06:30 — half an hour after the poll, so a programme published overnight
   // becomes a draft the same morning. Rendering is the expensive step, hence the
   // gap rather than chaining directly.
-  await boss.schedule(ADGEN_GENERATE_QUEUE, '30 6 * * *');
-  console.log('[worker] scheduled', ADGEN_GENERATE_QUEUE, 'daily at 06:30 UTC');
+  await scheduleRecurring(boss, ADGEN_GENERATE_QUEUE, '30 6 * * *', 'daily at 06:30 UTC');
 
   // 07:00 — deliberately AFTER generation rather than before. A guideline that
   // changed overnight needs a human to interpret it, so blocking the morning's
   // drafts on it would trade a small compliance risk for a guaranteed outage.
   // The alert lands while the drafts are still unapproved, which is the window
   // that matters.
-  await boss.schedule(ADGEN_GUIDELINES_QUEUE, '0 7 * * *');
-  console.log('[worker] scheduled', ADGEN_GUIDELINES_QUEUE, 'daily at 07:00 UTC');
+  await scheduleRecurring(boss, ADGEN_GUIDELINES_QUEUE, '0 7 * * *', 'daily at 07:00 UTC');
 
   // 07:30 UTC — clear of the ad chain. Nothing downstream depends on it, and a
   // rights warning is a planning signal rather than something that has to land
   // before the day's generation runs.
-  await boss.schedule(MEDIA_RIGHTS_QUEUE, '30 7 * * *');
-  console.log('[worker] scheduled', MEDIA_RIGHTS_QUEUE, 'daily at 07:30 UTC');
+  await scheduleRecurring(boss, MEDIA_RIGHTS_QUEUE, '30 7 * * *', 'daily at 07:30 UTC');
 
   // Also run once immediately so the first send doesn't have to wait up
   // to a minute after boot.

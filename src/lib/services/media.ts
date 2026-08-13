@@ -54,7 +54,6 @@ export function serializeMediaAsset(a: MediaAsset, now = new Date()) {
     thumbnailUrl: a.thumbnailKey ? s3PublicUrl(a.thumbnailKey) : undefined,
     altText: a.altText,
     category: a.category,
-    folderId: a.folderId,
     accountKey: a.accountKey,
     archivedAt: a.archivedAt ? a.archivedAt.toISOString() : null,
     createdAt: a.createdAt.toISOString(),
@@ -122,7 +121,23 @@ export async function getAccountBrands(accountKey: string): Promise<string[]> {
     select: { oem: true, oems: true },
   });
   if (!account) return [];
-  return getAccountOems({ oem: account.oem, oems: coerceList(account.oems) });
+  return brandsOfAccountRow(account);
+}
+
+/**
+ * Brands from a raw Account ROW — `oem` ∪ `oems`, normalized.
+ *
+ * Exists because `Account.oems` is a JSON STRING in the database while
+ * `getAccountOems` expects an already-parsed array: every pre-existing caller was
+ * client-side, where the API had parsed it first. Calling it with a raw row
+ * yields brand names like `["Honda"]` and `"Can-Am"` — literal JSON fragments.
+ *
+ * That bug was fixed once at a call site and then reintroduced verbatim by the
+ * next server-side reader, which is the signal it belonged in one function rather
+ * than in each caller's memory. Anything reading brands off a DB row uses this.
+ */
+export function brandsOfAccountRow(row: { oem: string | null; oems: string | null }): string[] {
+  return getAccountOems({ oem: row.oem, oems: coerceList(row.oems) });
 }
 
 /** The scopes that make up an account's effective media set. */
@@ -522,4 +537,95 @@ export function canAccessAsset(
  */
 export function isConsumerRole(role: string): boolean {
   return role === 'client';
+}
+
+/**
+ * Which lifecycle status a request may filter on.
+ *
+ * This is the consumer tier's ONE security guarantee: a client sees cleared work
+ * and nothing else. It was an inline ternary in the route — correct, but a
+ * one-line rule with no test, which is a poor way to hold the only thing
+ * standing between a client and unapproved creative.
+ *
+ * The forcing is deliberate rather than defaulting: a client passing
+ * `?status=draft` must not widen their own view, so their request's value is
+ * discarded entirely instead of merely being defaulted when absent.
+ */
+export function resolveStatusFilter(role: string, requested?: string): string | undefined {
+  if (isConsumerRole(role)) return 'approved';
+  return requested;
+}
+
+// ── Scope moves ──
+
+/**
+ * An asset's destination scope. Mirrors the three scopes in the header comment:
+ * global (both null), OEM-shared (accountKey null + oem), account-owned.
+ */
+export interface ScopeTarget {
+  accountKey: string | null;
+  oem: string | null;
+}
+
+export interface ScopeMoveCheck {
+  /** Null when the move is allowed; a message when it isn't. */
+  error: string | null;
+}
+
+/** Unrestricted admins only — the tier that may write admin-level assets. */
+export function isUnrestrictedAdmin(session: {
+  user: { role: string; accountKeys?: string[] };
+}): boolean {
+  const { role, accountKeys = [] } = session.user;
+  if (role === 'developer' || role === 'super_admin') return true;
+  return role === 'admin' && accountKeys.length === 0;
+}
+
+/**
+ * May this session move this asset to this scope?
+ *
+ * Pure, so the rules are testable without a database — and these are rules
+ * worth testing: a scope move changes WHO CAN SEE an asset, which is the one
+ * media operation with a blast radius beyond its own row.
+ *
+ * Admin-only overall. Promoting a rooftop's asset to an OEM library publishes it
+ * to every other account carrying that brand, and that is not a decision a
+ * single rooftop's user should be able to make for the others.
+ */
+export function checkScopeMove(
+  session: { user: { role: string; accountKeys?: string[] } },
+  asset: { accountKey: string | null; oem: string | null; managedBy: string | null },
+  target: ScopeTarget,
+): ScopeMoveCheck {
+  if (!isUnrestrictedAdmin(session)) {
+    return { error: 'Only agency admins can change an asset’s scope.' };
+  }
+
+  // Account settings owns logos and fonts; the library only catalogues them.
+  // Moving one would desynchronise the two and the next sync would undo it.
+  if (asset.managedBy) {
+    return {
+      error: 'Brand logos and fonts are managed in Account settings and can’t be moved here.',
+    };
+  }
+
+  if (target.accountKey !== null && target.oem !== null) {
+    // Not a real scope: `oem` on an account-owned asset is descriptive, and
+    // allowing both here would imply a sharing that the resolution rule doesn't
+    // actually provide.
+    return { error: 'An asset belongs to one account or to a brand, not both.' };
+  }
+
+  const unchanged =
+    (asset.accountKey ?? null) === target.accountKey && (asset.oem ?? null) === target.oem;
+  if (unchanged) return { error: 'That is already this asset’s scope.' };
+
+  return { error: null };
+}
+
+/** Human phrase for a scope, for confirmations and toasts. */
+export function describeScope(target: ScopeTarget, dealerName?: string): string {
+  if (target.accountKey) return dealerName || target.accountKey;
+  if (target.oem) return `every ${target.oem} sub-account`;
+  return 'the Loomi library (every account)';
 }

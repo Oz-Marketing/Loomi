@@ -94,6 +94,11 @@ export function EvoxPickerModal({ onClose, onPick, initial }: { onClose: () => v
           colorCode: color.code,
           accountKey,
           hint: `${v.year}-${v.make}-${v.model}-${color.simple || color.name || color.code}`,
+          // Same values the hint already interpolates — sent as fields so the
+          // library entry carries brand/model-year/model rather than a slug.
+          year: v.year,
+          make: v.make,
+          model: v.model,
         }),
       });
       const json = await res.json();

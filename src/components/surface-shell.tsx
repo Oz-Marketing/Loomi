@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
+import { useDockedScroll } from '@/hooks/use-docked-scroll';
 import { Bars3Icon } from '@heroicons/react/24/outline';
 import { useSidebarCollapse } from '@/contexts/sidebar-collapse-context';
 
@@ -43,43 +44,8 @@ export function SurfaceShell({
     return () => document.removeEventListener('keydown', onKey);
   }, [mobileOpen, setMobileOpen]);
 
-  // Track whether the content card has scrolled, so the pinned
-  // `.page-sticky-header` can paint its backdrop (`data-scrolled='true'`).
-  // Re-sync on navigation since the card element persists.
-  //
-  // Two deliberate choices here, both learned the hard way:
-  //
-  //   1. The attribute is written DIRECTLY to the DOM instead of going through
-  //      React state. Docking is a paint-only change to one pseudo-element, so
-  //      there's nothing to re-render — and routing it through state re-rendered
-  //      the entire page subtree (`children`) mid-gesture, which is exactly when
-  //      you can least afford the work.
-  //   2. Hysteresis: dock past DOCK_ON, undock only below DOCK_OFF. A single
-  //      boundary can't then flip twice inside one trackpad wobble.
-  //
-  // What is NOT needed any more: the old "minimum scroll range" guard. It
-  // existed because docking used to shrink the header ~20px, which changed
-  // scrollHeight and let scroll anchoring shove scrollTop around. Docking no
-  // longer touches layout at all (see `.page-sticky-header` in globals.css), so
-  // there's no feedback loop left to guard against. Keep it that way: anything
-  // that resizes on `data-scrolled` brings the jitter straight back.
-  useEffect(() => {
-    const main = mainRef.current;
-    if (!main) return;
-    const DOCK_ON = 14; // dock once scrolled past this
-    const DOCK_OFF = 6; // undock once back under this (hysteresis)
-    let docked = main.dataset.scrolled === 'true';
-    const apply = (next: boolean) => {
-      if (next === docked) return;
-      docked = next;
-      main.dataset.scrolled = next ? 'true' : 'false';
-    };
-    const onScroll = () =>
-      apply(docked ? main.scrollTop > DOCK_OFF : main.scrollTop > DOCK_ON);
-    onScroll();
-    main.addEventListener('scroll', onScroll, { passive: true });
-    return () => main.removeEventListener('scroll', onScroll);
-  }, [pathname]);
+  // Paints the pinned header's backdrop once the card scrolls.
+  useDockedScroll(mainRef);
 
   return (
     <>

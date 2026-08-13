@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { checkUploadSize, formatBytes, uploadLimitFor } from './media-limits';
+import {
+  DIRECT_UPLOAD_MAX_BYTES,
+  checkAnyUploadSize,
+  checkUploadSize,
+  formatBytes,
+  needsDirectUpload,
+  uploadLimitFor,
+} from './media-limits';
 
 const MB = 1024 * 1024;
 
@@ -60,5 +67,39 @@ describe('formatBytes', () => {
     expect(formatBytes(2048)).toBe('2 KB');
     expect(formatBytes(50 * MB)).toBe('50 MB');
     expect(formatBytes(1024 * MB)).toBe('1 GB');
+  });
+});
+
+describe('needsDirectUpload', () => {
+  it('keeps normal files on the buffered path, which is what gives us dedupe', () => {
+    expect(needsDirectUpload(40 * MB, 'image/jpeg')).toBe(false);
+    expect(needsDirectUpload(150 * MB, 'video/mp4')).toBe(false);
+  });
+
+  it('sends anything over its family ceiling direct', () => {
+    expect(needsDirectUpload(80 * MB, 'image/jpeg')).toBe(true);
+    expect(needsDirectUpload(900 * MB, 'video/mp4')).toBe(true);
+  });
+
+  it('uses the family limit, not one flat number', () => {
+    // 120 MB is over the image ceiling but under the design-file one, so a PSD
+    // stays buffered where a JPEG of the same size goes direct.
+    expect(needsDirectUpload(120 * MB, 'image/jpeg')).toBe(true);
+    expect(needsDirectUpload(120 * MB, 'image/vnd.adobe.photoshop')).toBe(false);
+  });
+});
+
+describe('checkAnyUploadSize', () => {
+  it('accepts anything a direct upload could carry', () => {
+    // A 2 GB video is refused by the buffered check and allowed by this one —
+    // that difference is the whole point of the direct path.
+    expect(checkUploadSize(2 * 1024 * MB, 'video/mp4')).not.toBeNull();
+    expect(checkAnyUploadSize(2 * 1024 * MB)).toBeNull();
+  });
+
+  it('refuses past S3’s single-PUT limit', () => {
+    expect(checkAnyUploadSize(DIRECT_UPLOAD_MAX_BYTES)).toBeNull();
+    const err = checkAnyUploadSize(DIRECT_UPLOAD_MAX_BYTES + 1);
+    expect(err).toContain('5 GB');
   });
 });

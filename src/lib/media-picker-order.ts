@@ -66,3 +66,25 @@ export function orderPickerAssets<T extends PickableAsset>(
 export function countOutOfLicence(assets: PickableAsset[]): number {
   return assets.filter(isOutOfLicence).length;
 }
+
+/**
+ * Should "Approved only" start ticked?
+ *
+ * The flat answer was "no", because approval shipped with the whole library at
+ * draft and defaulting it on would have emptied the picker. But leaving it off
+ * forever means the compliance gate only protects people who remember to tick a
+ * box, which is not a gate.
+ *
+ * So it's adaptive: on when the scope actually HAS approved work, off when it
+ * doesn't. That makes it self-resolving — the moment a first batch is approved
+ * the picker starts defaulting to it, with no flag to flip and no day where the
+ * picker is empty.
+ *
+ * An EXPLICIT choice always wins. Once someone unticks it, that's remembered for
+ * the session (see the modal's sessionStorage) and this is never consulted again
+ * — a default that keeps overriding a person's decision is worse than either
+ * fixed answer.
+ */
+export function defaultApprovedOnly(assets: PickableAsset[]): boolean {
+  return assets.some((a) => a.status === 'approved');
+}

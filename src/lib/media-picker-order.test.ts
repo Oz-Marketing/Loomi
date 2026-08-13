@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   countOutOfLicence,
+  defaultApprovedOnly,
   isOutOfLicence,
   orderPickerAssets,
   pickerRank,
@@ -110,5 +111,28 @@ describe('countOutOfLicence', () => {
   it('counts only the past-date ones', () => {
     expect(countOutOfLicence([lapsedApproved, expiringApproved, approved, draft])).toBe(1);
     expect(countOutOfLicence([])).toBe(0);
+  });
+});
+
+describe('defaultApprovedOnly', () => {
+  it('is off when nothing is approved — the day-one state', () => {
+    // Defaulting on here would empty the picker and break the ad builder.
+    expect(defaultApprovedOnly([draft, legacy])).toBe(false);
+    expect(defaultApprovedOnly([])).toBe(false);
+  });
+
+  it('turns on as soon as the library has approved work', () => {
+    // Self-resolving: no flag to flip once a first batch is approved.
+    expect(defaultApprovedOnly([draft, approved])).toBe(true);
+  });
+
+  it('counts an approved-but-lapsed asset as approved work', () => {
+    // It IS approved; the rights problem is signalled separately by the badge
+    // and the warning strip, and shouldn't suppress the approval default.
+    expect(defaultApprovedOnly([lapsedApproved])).toBe(true);
+  });
+
+  it('ignores status-less legacy assets', () => {
+    expect(defaultApprovedOnly([legacy])).toBe(false);
   });
 });

@@ -277,13 +277,28 @@ per-MIME limits are in. Two things are not:
   between agency, sub-account and admin modes would make all four worse. It
   belongs beside Phase 5's approval work, where "what may a client see" is
   answered by lifecycle state rather than by scope alone.
-- **Large files still route through the app server.** `req.formData()` buffers
-  the whole upload in memory, so the ceilings in `lib/media-limits.ts` are bounded
-  by the Node process, not by S3. Bulk download has the same shape — JSZip builds
-  the archive in memory, hence its 300 MB cap. Genuinely large masters need
-  presigned direct-to-S3 uploads; both limits lift with that one piece of
-  infrastructure, and raising either constant without it trades a clear error
-  message for an out-of-memory crash.
+- **Large UPLOADS now go direct — but need bucket CORS.** Files above their
+  family ceiling take a pre-signed PUT straight to S3 (`/api/media/upload-url`
+  then `/api/media/finalize`), lifting the cap to 5 GB, S3's single-PUT limit.
+
+  **This does not work until the bucket allows cross-origin PUT.** The browser
+  uploads directly, so DigitalOcean Spaces must permit `PUT` from the app origins
+  with the `Content-Type` header — for `https://studio.loomilm.com` and
+  `https://staging.loomilm.com`, plus `http://localhost:3000` for development.
+  Until then the PUT fails in the browser and no server-side code can compensate;
+  the client surfaces exactly that hint on a failed PUT rather than a generic
+  error. Configure it in the Spaces settings for the bucket.
+
+  Direct uploads deliberately give up two things, because both need the bytes
+  server-side: the content hash (so no duplicate detection) and the generated
+  thumbnail (so the grid shows a file-type icon). Fetching a multi-gigabyte object
+  back to compute either would reintroduce the memory problem the path exists to
+  avoid. `contentHash` is left null rather than filled with a client-supplied
+  value that couldn't be verified.
+
+- **Bulk DOWNLOAD is still buffered.** JSZip builds the archive in memory, hence
+  the 300 MB cap. The fix is the mirror image — hand back pre-signed GET URLs and
+  let the browser fetch them — and it hasn't been built.
 
 **Phase 5 — Approval and compliance.** §5's `approved` transition, with
 pre-flight firing on submit. AI auto-tagging after this, never before — tagging

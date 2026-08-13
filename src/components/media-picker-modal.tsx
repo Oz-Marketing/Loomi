@@ -15,6 +15,7 @@ import { MEDIA_CATEGORIES } from '@/lib/media-categories';
 import type { RightsStatus } from '@/lib/media-rights';
 import {
   countOutOfLicence,
+  defaultApprovedOnly,
   isOutOfLicence as assetOutOfLicence,
   orderPickerAssets,
 } from '@/lib/media-picker-order';
@@ -170,17 +171,28 @@ export function MediaPickerModal({
    * Remembered per session so someone reviewing compliant creative doesn't
    * re-tick it for every asset they place.
    */
-  const [approvedOnly, setApprovedOnly] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return sessionStorage.getItem('media-picker-approved-only') === 'true';
+  /**
+   * null = no explicit choice yet, so the default is derived from what's
+   * actually in the library (see defaultApprovedOnly). A stored 'true'/'false'
+   * is a decision someone made and always wins.
+   */
+  const [approvedChoice, setApprovedChoice] = useState<boolean | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const stored = sessionStorage.getItem('media-picker-approved-only');
+    return stored === null ? null : stored === 'true';
   });
   const toggleApprovedOnly = useCallback((next: boolean) => {
-    setApprovedOnly(next);
+    setApprovedChoice(next);
     if (typeof window !== 'undefined') {
-      if (next) sessionStorage.setItem('media-picker-approved-only', 'true');
-      else sessionStorage.removeItem('media-picker-approved-only');
+      // Both values are stored, including false: "I deliberately want drafts"
+      // has to survive, and removing the key would fall back to the adaptive
+      // default and silently re-tick the box on the next open.
+      sessionStorage.setItem('media-picker-approved-only', String(next));
     }
   }, []);
+
+  /** The effective setting: an explicit choice, else derived from the library. */
+  const approvedOnly = approvedChoice ?? defaultApprovedOnly(files);
 
   /** Ordering and filtering live in lib/media-picker-order.ts, where they're tested. */
   const filtered = useMemo(

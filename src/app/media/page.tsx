@@ -60,7 +60,12 @@ import {
   type AssetMetadataValue,
 } from '@/components/media/asset-metadata-fields';
 import { assetSourceLabel } from '@/lib/media-metadata';
-import { MAX_UPLOAD_BYTES, checkUploadSize, formatBytes } from '@/lib/media-limits';
+import {
+  DIRECT_UPLOAD_MAX_BYTES,
+  checkAnyUploadSize,
+  formatBytes,
+  needsDirectUpload,
+} from '@/lib/media-limits';
 import {
   extractArchive,
   inspectArchive,
@@ -1159,13 +1164,15 @@ export default function MediaPage() {
   const stageFiles = useCallback((fileList: FileList | null) => {
     if (!fileList || fileList.length === 0) return;
     const newFiles = Array.from(fileList);
+    // Checked against what ANY route can carry: anything over the buffered
+    // ceiling goes direct to S3 instead of being refused.
     const rejected = newFiles
-      .map((f) => ({ file: f, error: checkUploadSize(f.size, f.type) }))
+      .map((f) => ({ file: f, error: checkAnyUploadSize(f.size) }))
       .filter((r): r is { file: File; error: string } => r.error !== null);
     for (const r of rejected) {
       toast.error(`${r.file.name}: ${r.error}`);
     }
-    const valid = newFiles.filter((f) => checkUploadSize(f.size, f.type) === null);
+    const valid = newFiles.filter((f) => checkAnyUploadSize(f.size) === null);
     if (valid.length === 0) return;
     setStagedFiles((prev) => {
       const seen = new Set(prev.map(stagedFileKey));
@@ -1251,6 +1258,74 @@ export default function MediaPage() {
 
     for (let i = 0; i < filesToUpload.length; i++) {
       const file = filesToUpload[i];
+
+      /**
+       * Large files bypass the app server entirely: pre-signed PUT straight to
+       * S3, then a finalize call to create the row. They give up dedupe and a
+       * thumbnail (both need the bytes server-side) in exchange for not being
+       * capped by what a Node process can hold.
+       */
+      if (needsDirectUpload(file.size, file.type)) {
+        try {
+          const scopedOem = uploadScope.startsWith('oem:') ? uploadScope.slice(4) : null;
+          const scopeBody = {
+            ...(uploadScope === 'account' && effectiveAccountKey
+              ? { accountKey: effectiveAccountKey }
+              : {}),
+            ...(scopedOem ? { oem: scopedOem } : {}),
+          };
+
+          const signRes = await fetch('/api/media/upload-url', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              filename: file.name,
+              contentType: file.type || 'application/octet-stream',
+              size: file.size,
+              ...scopeBody,
+            }),
+          });
+          const signed = await signRes.json().catch(() => ({}));
+          if (!signRes.ok) throw new Error(signed?.error || 'Could not start the upload');
+
+          // Content-Type must match what was signed, or S3 rejects the PUT.
+          const put = await fetch(signed.url, {
+            method: 'PUT',
+            headers: { 'Content-Type': signed.contentType },
+            body: file,
+          });
+          if (!put.ok) {
+            // The overwhelmingly likely cause, and one the app can't fix.
+            throw new Error(
+              `Upload was rejected by storage (${put.status}). If this is the first large upload, the bucket may need CORS configured for PUT.`,
+            );
+          }
+
+          const finRes = await fetch('/api/media/finalize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              key: signed.key,
+              assetId: signed.assetId,
+              filename: file.name,
+              contentType: file.type || 'application/octet-stream',
+              ...scopeBody,
+              ...assetMetadataToFormFields(uploadMetadata),
+              ...(scopedOem && !uploadMetadata.oem ? { oem: scopedOem } : {}),
+              ...(scopedOem && !uploadMetadata.assetSource ? { assetSource: 'oem-supplied' } : {}),
+            }),
+          });
+          const fin = await finRes.json().catch(() => ({}));
+          if (!finRes.ok) throw new Error(fin?.error || 'Upload finished but could not be saved');
+
+          uploadedFiles.push({ ...fin.file, source: 's3' });
+          successCount++;
+        } catch (err) {
+          toast.error(`${file.name}: ${err instanceof Error ? err.message : 'upload failed'}`);
+          failCount++;
+        }
+        continue;
+      }
 
       const send = (allowDuplicate: boolean) => {
         const formData = new FormData();
@@ -3095,7 +3170,7 @@ export default function MediaPage() {
                     <p className={`${stagedFiles.length > 0 ? 'text-xs' : 'text-sm'} text-[var(--foreground)] font-medium mb-0.5`}>
                       {stagedFiles.length > 0 ? 'Drop more files or click to add' : 'Drop files here or click to browse'}
                     </p>
-                    <p className="text-[10px] text-[var(--muted-foreground)]">Up to {formatBytes(MAX_UPLOAD_BYTES)} — images 50 MB, video and design files 200 MB</p>
+                    <p className="text-[10px] text-[var(--muted-foreground)]">Up to {formatBytes(DIRECT_UPLOAD_MAX_BYTES)} — larger files upload straight to storage</p>
                   </>
                 )}
               </div>

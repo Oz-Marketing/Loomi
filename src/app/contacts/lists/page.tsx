@@ -23,8 +23,9 @@ import BulkActionDock, { type BulkActionDockItem } from '@/components/bulk-actio
 // Lists are static, manually-curated contact rosters. The table shows
 // every list visible to the current user (account-scoped on the server
 // + client-side narrowing when inside a single subaccount). The
-// New List modal seeds via CSV; rename is in-place via a small modal
-// triggered by the pencil icon on the row.
+// New List modal can seed via CSV or create an empty list (contacts get
+// added later from All Contacts → "Add to list"); rename is in-place via
+// a small modal triggered by the pencil icon on the row.
 
 interface ListSummary {
   id: string;
@@ -190,11 +191,13 @@ export default function ListsPage() {
     setSelectedIds(new Set());
   }
 
+  // `file` is optional — with a CSV we hand off to the import mapper, without
+  // one we just add the empty list to the table and stay put.
   async function handleCreate(
     name: string,
     targetAccountKey: string,
     description: string,
-    file: File,
+    file: File | null,
   ) {
     try {
       const res = await fetch('/api/contacts/lists', {
@@ -213,6 +216,10 @@ export default function ListsPage() {
       };
       setLists((prev) => [created, ...prev]);
       setShowCreate(false);
+      if (!file) {
+        toast.success(`List "${created.name}" created.`);
+        return;
+      }
       stashPendingImportFile(file);
       router.push(subHref(`/contacts/import?listId=${encodeURIComponent(created.id)}`));
     } catch (err) {
@@ -354,7 +361,7 @@ export default function ListsPage() {
           </p>
           {!search && (
             <p className="text-[var(--muted-foreground)] text-xs mt-1 max-w-md mx-auto">
-              Click <span className="font-medium">New List</span> to create a roster — name it, then upload a CSV of contacts to populate it.
+              Click <span className="font-medium">New List</span> to create a roster — name it, then upload a CSV to populate it or leave it empty and add contacts later.
             </p>
           )}
         </div>
@@ -684,7 +691,7 @@ function NewListModal({
   accountOptions: { key: string; dealer: string }[];
   defaultAccountKey: string;
   canPickAccount: boolean;
-  onCreate: (name: string, accountKey: string, description: string, file: File) => Promise<void>;
+  onCreate: (name: string, accountKey: string, description: string, file: File | null) => Promise<void>;
   onClose: () => void;
 }) {
   const [name, setName] = useState('');
@@ -694,8 +701,9 @@ function NewListModal({
   const [fileError, setFileError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const canSubmit =
-    name.trim().length > 0 && selectedAccountKey.length > 0 && file !== null && !submitting;
+  // The CSV is optional: an empty list is valid on its own and gets populated
+  // later from All Contacts → "Add to list".
+  const canSubmit = name.trim().length > 0 && selectedAccountKey.length > 0 && !submitting;
 
   function handleFilePick(next: File | null) {
     if (!next) {
@@ -714,7 +722,7 @@ function NewListModal({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!canSubmit || !file) return;
+    if (!canSubmit) return;
     setSubmitting(true);
     try {
       await onCreate(name.trim(), selectedAccountKey, description.trim(), file);
@@ -736,7 +744,8 @@ function NewListModal({
         <div>
           <h3 className="text-lg font-bold">New List</h3>
           <p className="text-xs text-[var(--muted-foreground)] mt-1">
-            Name the list and pick a CSV. You&apos;ll map columns next.
+            Name the list. Add a CSV to populate it now, or leave it empty and add
+            contacts later.
           </p>
         </div>
 
@@ -776,9 +785,20 @@ function NewListModal({
           )}
 
           <div>
-            <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5">
-              CSV file
-            </label>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <label className="block text-[11px] font-semibold text-[var(--muted-foreground)] uppercase tracking-wider">
+                CSV file <span className="text-[var(--muted-foreground)] font-normal lowercase">(optional)</span>
+              </label>
+              {file && (
+                <button
+                  type="button"
+                  onClick={() => handleFilePick(null)}
+                  className="text-[11px] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
             <label
               htmlFor="new-list-csv-file"
               className={`block w-full rounded-xl border-2 border-dashed p-5 text-center cursor-pointer transition-colors ${
@@ -799,7 +819,7 @@ function NewListModal({
                 <>
                   <p className="text-sm font-medium">Click to choose a CSV</p>
                   <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-                    Up to 25 MB. First row should be a header.
+                    Up to 25 MB. First row should be a header. Skip this to start empty.
                   </p>
                 </>
               )}
@@ -808,7 +828,12 @@ function NewListModal({
                 type="file"
                 accept=".csv,text/csv"
                 className="hidden"
-                onChange={(e) => handleFilePick(e.target.files?.[0] ?? null)}
+                onChange={(e) => {
+                  handleFilePick(e.target.files?.[0] ?? null);
+                  // Clear the input so re-picking the same file after Remove
+                  // still fires onChange.
+                  e.target.value = '';
+                }}
               />
             </label>
             {fileError && (
@@ -845,7 +870,7 @@ function NewListModal({
             disabled={!canSubmit}
             className="px-3 h-10 text-sm rounded-lg border border-[var(--primary)] bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {submitting ? 'Creating…' : 'Create + Continue'}
+            {submitting ? 'Creating…' : file ? 'Create + Continue' : 'Create List'}
           </button>
         </div>
       </form>

@@ -4,6 +4,7 @@ import * as React from 'react';
 import { formContentMaxWidth, type FormTemplate } from '@/lib/forms/types';
 import { FormRenderer } from '@/lib/forms/render';
 import { FormInteractiveContext } from '@/lib/forms/components/FieldFileInput';
+import { META_FIELD_PREFIX } from '@/lib/forms/embed-params';
 
 interface FormPublicProps {
   slug: string;
@@ -32,6 +33,20 @@ interface FormPublicProps {
    * client-side render.
    */
   turnstileSiteKey?: string | null;
+  /**
+   * Per-field help-text overrides parsed from the embed's
+   * `note_{fieldKey}` query params. Already sanitized and filtered to
+   * fields that exist on this form (see `embed-params.ts`). Rendered
+   * only — never submitted.
+   */
+  helpTextOverrides?: Record<string, string>;
+  /**
+   * Submission metadata parsed from the embed's `meta_{key}` query
+   * params. Never rendered; attached to the submit payload as
+   * `__loomi_meta_*` fields, which the API re-sanitizes and persists on
+   * the submission row.
+   */
+  metadata?: Record<string, string>;
 }
 
 const TURNSTILE_API_SRC = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
@@ -107,6 +122,8 @@ export function FormPublic({
   embed,
   attribution,
   turnstileSiteKey,
+  helpTextOverrides,
+  metadata,
 }: FormPublicProps) {
   const [phase, setPhase] = React.useState<Phase>('idle');
   const [fieldErrors, setFieldErrors] = React.useState<Record<string, string>>({});
@@ -263,6 +280,15 @@ export function FormPublic({
       formData.set('__loomi_lp_id', attribution.pageId);
       formData.set('__loomi_lp_slug', attribution.pageSlug);
     }
+    // Embed metadata (`?meta_vin=…`) rides along as `__loomi_meta_*`
+    // fields. Values were sanitized server-side before render; the API
+    // re-checks them anyway, since the submit endpoint is public.
+    if (metadata) {
+      for (const [key, value] of Object.entries(metadata)) {
+        formData.set(`${META_FIELD_PREFIX}${key}`, value);
+      }
+    }
+
     const utms = readLpUtmCookie();
     if (utms) {
       if (utms.source) formData.set('__loomi_utm_source', utms.source);
@@ -406,7 +432,10 @@ export function FormPublic({
         {/* Enable file-field uploads only on the live public form —
             preview surfaces (editor, overview, thumbnail) stay inert. */}
         <FormInteractiveContext.Provider value={true}>
-          <FormRenderer template={template} options={{ errors: fieldErrors }} />
+          <FormRenderer
+            template={template}
+            options={{ errors: fieldErrors, helpTextOverrides }}
+          />
         </FormInteractiveContext.Provider>
 
         {turnstileSiteKey && (

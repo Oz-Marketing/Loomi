@@ -97,6 +97,11 @@ export function SubmissionDetailDrawer({
   }
 
   const contact = submission.contact;
+  // Sorted so the drawer reads the same on every open — a JSON object's
+  // key order follows whatever the URL happened to list.
+  const metaEntries = Object.entries(submission.metadata ?? {}).sort(([a], [b]) =>
+    a.localeCompare(b),
+  );
 
   return (
     <div className="fixed inset-0 z-[60]" role="dialog" aria-modal="true">
@@ -191,6 +196,32 @@ export function SubmissionDetailDrawer({
               </dl>
             )}
           </section>
+
+          {/* Embed metadata — `meta_*` params from the host page the
+              form was iframed into (VIN, stock number, VDP url). These
+              values come from a third-party page, so they're rendered
+              as plain text: JSX escapes them, and we deliberately do
+              NOT linkify a url-looking value. */}
+          {metaEntries.length > 0 && (
+            <section className="px-5 py-4 border-b border-[var(--border)]">
+              <h4 className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--muted-foreground)] mb-3">
+                Page context
+              </h4>
+              <dl className="space-y-2 text-xs">
+                {metaEntries.map(([key, value]) => (
+                  <div
+                    key={key}
+                    className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 items-start"
+                  >
+                    <dt className="text-[var(--muted-foreground)] font-mono break-all">
+                      {key}
+                    </dt>
+                    <dd className="text-[var(--foreground)] min-w-0 break-all">{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </section>
+          )}
 
           {/* Metadata */}
           <section className="px-5 py-4">

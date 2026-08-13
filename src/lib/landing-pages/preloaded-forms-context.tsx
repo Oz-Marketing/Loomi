@@ -23,6 +23,20 @@ export interface PreloadedForm {
   /** Form slug — required for submissions to know where to POST. */
   slug: string;
   schema: FormTemplate;
+  /**
+   * Per-field help-text overrides from `note_{fieldKey}` params on the
+   * LP's own URL, already filtered to fields THIS form declares (two
+   * forms on one page each get their own slice). Parsed server-side on
+   * /lp/[slug] so the first render carries the override.
+   */
+  noteOverrides?: Record<string, string>;
+  /**
+   * Submission metadata from `meta_{key}` params on the LP's URL. Page
+   * -wide rather than per-form, but it travels on the preloaded entry
+   * because that's the channel that already reaches both LP render
+   * modes (blocks tree + html-mode hydrated roots).
+   */
+  metadata?: Record<string, string>;
 }
 
 const PreloadedFormsContext = React.createContext<Map<string, PreloadedForm> | null>(null);

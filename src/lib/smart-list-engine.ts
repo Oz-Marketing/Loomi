@@ -1,11 +1,33 @@
-import type {
-  FilterDefinition,
-  FilterCondition,
-  FilterGroup,
-  FieldDefinition,
-  FieldType,
+import {
+  NO_VALUE_OPERATORS,
+  RANGE_OPERATORS,
+  type FieldDefinition,
+  type FieldType,
+  type FilterCondition,
+  type FilterDefinition,
+  type FilterGroup,
+  type FilterOperator,
 } from './smart-list-types';
 import type { Contact } from '@/lib/contacts/types';
+
+// ── Fail-closed contract ────────────────────────────────────────
+//
+// Every evaluator below returns FALSE for anything it doesn't
+// understand: an unknown operator, an operator that doesn't belong to
+// the field's declared type, a missing value, an empty group, an empty
+// definition.
+//
+// This used to be the other way around (`default: return true`), which
+// meant a filter the engine couldn't interpret matched EVERY contact.
+// That's the wrong direction for a segment: the failure mode of
+// "matches nobody" is a visibly empty audience someone fixes, while
+// "matches everybody" is an invisible blast/export to the entire
+// database. Reachable in practice by re-typing a custom field
+// (date → text) out from under saved segments that reference it.
+//
+// Save-time validation (`smart-list-validate.ts`) is what surfaces
+// these as errors; this module is the last line of defence for filter
+// JSON already sitting in the database.
 
 /**
  * Evaluate a FilterDefinition against a list of contacts.
@@ -17,24 +39,49 @@ import type { Contact } from '@/lib/contacts/types';
  * pick the operator family. When omitted, the engine falls back to
  * legacy direct-property reads — built-in fields still work, but
  * custom fields are silently ignored.
+ *
+ * A definition with no groups matches NOTHING. Callers that want
+ * "no filter yet → show everything" (e.g. the segment editor's live
+ * preview before any condition is entered) must short-circuit on
+ * `groups.length === 0` themselves rather than relying on this.
  */
 export function evaluateFilter(
   contacts: Contact[],
   definition: FilterDefinition,
   fields?: FieldDefinition[],
+  /** Definitions of referenced segments, keyed by audience id. Required
+   *  only when the definition composes other segments; load them with
+   *  `loadSegmentRefs` (server) before calling. */
+  refs?: Map<string, FilterDefinition>,
 ): Contact[] {
-  if (!definition.groups.length) return contacts;
+  if (!definition.groups?.length) return [];
   const fieldMap = buildFieldMap(fields);
+  return contacts.filter((contact) =>
+    matchesDefinition(contact, definition, fieldMap, refs),
+  );
+}
 
-  return contacts.filter((contact) => {
-    const groupResults = definition.groups.map((group) =>
-      evaluateGroup(contact, group, fieldMap),
-    );
+/** Whether one contact satisfies a definition. Split out so a segment
+ *  reference can recurse into the referenced definition. */
+function matchesDefinition(
+  contact: Contact,
+  definition: FilterDefinition,
+  fieldMap: Map<string, FieldDefinition> | null,
+  refs: Map<string, FilterDefinition> | undefined,
+  depth = 0,
+): boolean {
+  if (!definition.groups?.length) return false;
+  // Mirrors MAX_SEGMENT_REF_DEPTH. The loader rejects cycles up front,
+  // so this is a belt-and-braces stop for a definition assembled by
+  // some other path.
+  if (depth > 5) return false;
 
-    return definition.logic === 'AND'
-      ? groupResults.every(Boolean)
-      : groupResults.some(Boolean);
-  });
+  const groupResults = definition.groups.map((group) =>
+    evaluateGroup(contact, group, fieldMap, refs, depth),
+  );
+  return definition.logic === 'AND'
+    ? groupResults.every(Boolean)
+    : groupResults.some(Boolean);
 }
 
 function buildFieldMap(
@@ -50,11 +97,15 @@ function evaluateGroup(
   contact: Contact,
   group: FilterGroup,
   fieldMap: Map<string, FieldDefinition> | null,
+  refs?: Map<string, FilterDefinition>,
+  depth = 0,
 ): boolean {
-  if (!group.conditions.length) return true;
+  // A group with no conditions expresses nothing, so it narrows to
+  // nothing. See the fail-closed note at the top of the file.
+  if (!group.conditions?.length) return false;
 
   const results = group.conditions.map((condition) =>
-    evaluateCondition(contact, condition, fieldMap),
+    evaluateCondition(contact, condition, fieldMap, refs, depth),
   );
 
   return group.logic === 'AND'
@@ -66,9 +117,35 @@ function evaluateCondition(
   contact: Contact,
   condition: FilterCondition,
   fieldMap: Map<string, FieldDefinition> | null,
+  refs?: Map<string, FilterDefinition>,
+  depth = 0,
 ): boolean {
   const { field, operator, value, value2 } = condition;
   const def = fieldMap?.get(field) ?? null;
+
+  // Segment composition: evaluate the REFERENCED definition against this
+  // same contact. Fails closed when the reference wasn't loaded — an
+  // unresolvable reference must not silently widen the audience.
+  if (operator === 'in_segment' || operator === 'not_in_segment') {
+    const referenced = refs?.get(value?.trim() ?? '');
+    if (!referenced) return false;
+    const inSegment = matchesDefinition(
+      contact,
+      referenced,
+      fieldMap,
+      refs,
+      depth + 1,
+    );
+    return operator === 'in_segment' ? inSegment : !inSegment;
+  }
+
+  // Operators that compare against something need that something. An
+  // empty target is not "match everyone" — `contains ""` is true for
+  // every string, which is precisely the fail-open case this guard
+  // exists to stop. The builder strips these on save; filter JSON
+  // written before that (or straight through the API) still reaches
+  // here.
+  if (!operatorHasRequiredValues(operator, value, value2)) return false;
 
   // Read the raw value from the right place: custom fields live under
   // the `customFields` JSON blob, everything else is a direct property.
@@ -100,10 +177,34 @@ function evaluateCondition(
       return evaluateNumberCondition(raw, operator, value, value2);
     case 'select':
       return evaluateSelectCondition(toScalarString(raw), operator, value);
+    case 'numeric_text':
+      // Stored as text, comparable either way — the operator decides.
+      return NUMBER_OPERATORS.has(operator)
+        ? evaluateNumberCondition(raw, operator, value, value2)
+        : evaluateTextCondition(toScalarString(raw), operator, value);
     case 'text':
     default:
       return evaluateTextCondition(toScalarString(raw), operator, value);
   }
+}
+
+/**
+ * True when `operator` has every value it needs to express a
+ * comparison. No-value operators (is_empty / is_true / overdue / …)
+ * always pass; range operators need both bounds; everything else needs
+ * a non-blank `value`.
+ */
+export function operatorHasRequiredValues(
+  operator: string,
+  value: string | undefined,
+  value2: string | undefined,
+): boolean {
+  if (NO_VALUE_OPERATORS.includes(operator as FilterOperator)) return true;
+  if (!value || !value.trim()) return false;
+  if (RANGE_OPERATORS.includes(operator as FilterOperator)) {
+    return !!value2 && !!value2.trim();
+  }
+  return true;
 }
 
 // Operator-name → FieldType fallback for callers that don't pass a
@@ -192,8 +293,9 @@ function evaluateTextCondition(
       return fieldValue === '';
     case 'is_not_empty':
       return fieldValue !== '';
+    // Operator doesn't belong to this field type — no match.
     default:
-      return true;
+      return false;
   }
 }
 
@@ -238,15 +340,36 @@ function evaluateNumberCondition(
         actual >= target &&
         actual <= target2
       );
+    // Operator doesn't belong to this field type — no match.
     default:
-      return true;
+      return false;
   }
 }
 
+const NUMBER_OPERATORS: ReadonlySet<string> = new Set([
+  'num_equals',
+  'num_not_equals',
+  'num_gt',
+  'num_lt',
+  'num_gte',
+  'num_lte',
+  'num_between',
+]);
+
+// Plain decimal only, with thousands separators tolerated because CRM
+// exports are full of "72,500".
+//
+// This is deliberately narrower than `Number()`, which also accepts hex
+// ("0x10" → 16) and exponent notation ("1e3" → 1000). Neither is a
+// meaningful mileage or year, and more importantly the SQL translator
+// has to reproduce this rule exactly — a shared, restricted grammar is
+// checkable; JS's full coercion table is not.
+const NUMERIC_TEXT = /^-?\d+(\.\d+)?$/;
+
 function parseNumeric(value: string | null | undefined): number | null {
   if (value == null) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
+  const trimmed = value.trim().replace(/,/g, '');
+  if (!trimmed || !NUMERIC_TEXT.test(trimmed)) return null;
   const n = Number(trimmed);
   return Number.isFinite(n) ? n : null;
 }
@@ -275,8 +398,9 @@ function evaluateBooleanCondition(
       return boolValue;
     case 'is_false':
       return !boolValue;
+    // Operator doesn't belong to this field type — no match.
     default:
-      return true;
+      return false;
   }
 }
 
@@ -344,10 +468,16 @@ function evaluateDateCondition(
       const cutoff = todayStart.getTime() - days * 24 * 60 * 60 * 1000;
       return startOfDay(parsedDate).getTime() < cutoff;
     }
+    // Operator doesn't belong to this field type — no match.
     default:
-      return true;
+      return false;
   }
 }
+
+// Exported so the SQL translator can compute identical bounds. Two
+// implementations of "what does `more_than_days_ago: 180` mean" is
+// exactly how a fast path and a slow path drift apart.
+export { parseDateValue as parseFilterDate, startOfDay as startOfFilterDay, endOfDay as endOfFilterDay };
 
 function parseDateValue(value?: string): Date | null {
   if (!value) return null;
@@ -413,8 +543,9 @@ function evaluateTagsCondition(
       const targets = parseTagList(value);
       return !targets.some((t) => lowerTags.includes(t));
     }
+    // Operator doesn't belong to this field type — no match.
     default:
-      return true;
+      return false;
   }
 }
 
@@ -449,7 +580,8 @@ function evaluateSelectCondition(
       const targets = parseTagList(value);
       return !targets.includes(lower);
     }
+    // Operator doesn't belong to this field type — no match.
     default:
-      return true;
+      return false;
   }
 }

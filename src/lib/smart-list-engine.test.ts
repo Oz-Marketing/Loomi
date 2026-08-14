@@ -61,6 +61,54 @@ describe('tag operators', () => {
   });
 });
 
+// The engine is the last line of defence for filter JSON already sitting
+// in the database, so every one of these has to narrow to nothing rather
+// than fall through to "matches everyone" — which is what a blast or an
+// ad-platform export would then act on.
+describe('fail-closed semantics', () => {
+  it('an operator from the wrong type family matches nobody', () => {
+    // The re-typed-custom-field case: `last_service_date` was declared a
+    // date, saved segments hold date operators, someone flips it to text.
+    const retyped = getFilterableFields([
+      { key: 'last_service_date', label: 'Last Service Date', type: 'text', category: 'custom' },
+    ]);
+    const d = def('last_service_date', 'more_than_days_ago', '166');
+    expect(evaluateFilter([contact], d, retyped)).toHaveLength(0);
+  });
+
+  it('a value-taking operator with a blank value matches nobody', () => {
+    // `contains ""` is true for every string — the classic fail-open.
+    expect(matches(def('deal_type', 'is_one_of', ''))).toBe(false);
+    expect(matches(def('unit_age_at_purchase', 'num_gte', '   '))).toBe(false);
+  });
+
+  it('a range operator missing its upper bound matches nobody', () => {
+    expect(matches(def('last_purchase_date', 'between', daysAgo(30)))).toBe(false);
+  });
+
+  it('an unknown operator matches nobody', () => {
+    expect(matches(def('deal_type', 'sounds_like', 'Purchase'))).toBe(false);
+  });
+
+  it('an empty definition matches nobody', () => {
+    expect(evaluateFilter([contact], { version: 1, logic: 'AND', groups: [] }, fields)).toHaveLength(0);
+  });
+
+  it('a group with no conditions matches nobody', () => {
+    const empty: FilterDefinition = {
+      version: 1,
+      logic: 'AND',
+      groups: [{ id: 'g', logic: 'AND', conditions: [] }],
+    };
+    expect(evaluateFilter([contact], empty, fields)).toHaveLength(0);
+  });
+
+  it('still matches when the filter is genuinely satisfiable', () => {
+    // Guard against over-correcting into "nothing ever matches".
+    expect(matches(def('deal_type', 'is_one_of', 'Purchase'))).toBe(true);
+  });
+});
+
 describe('relative-date operators (the new ones)', () => {
   it('within_last_days matches a recent past date', () => {
     expect(matches(def('last_purchase_date', 'within_last_days', '30'))).toBe(true);

@@ -14,7 +14,8 @@ import {
   normalizeEmailAddress,
   normalizePhoneNumber,
 } from '@/lib/contact-hygiene';
-import { getMessagingSummaryForContacts } from '@/lib/contacts/queries';
+import { CONTACT_SELECT, serializeContact } from '@/lib/contacts/queries';
+import { collectSegmentContactIds } from '@/lib/segments/resolve';
 import { listFieldsForAccount } from '@/lib/services/contact-custom-fields';
 import { evaluateFilter } from '@/lib/smart-list-engine';
 import {
@@ -1570,14 +1571,13 @@ async function resolveAudienceContactIds(
   });
   if (!definition.groups || definition.groups.length === 0) return [];
 
+  // Delegate to the shared segment resolver so a flow's audience trigger
+  // and the segment builder's preview are answered by exactly one piece
+  // of code — including its SQL fast path. This used to be a bespoke
+  // scan over raw Prisma rows, which is how messaging conditions came to
+  // mean different things here than in the UI.
   const fields = await getAccountFilterableFields(accountKey);
-  const matched: string[] = [];
-  await forEachContactBatch(accountKey, {}, (batch) => {
-    for (const c of evaluateFilter(batch as unknown as Contact[], definition, fields)) {
-      matched.push(c.id);
-    }
-  });
-  return matched;
+  return collectSegmentContactIds(accountKey, definition, fields);
 }
 
 /**
@@ -1763,7 +1763,7 @@ async function resolveDateReminderContactIds(
   const isCustom = def?.isCustom === true;
 
   const matched: string[] = [];
-  await forEachContactBatch(flow.accountKey, {}, (batch) => {
+  await forEachContactBatch(flow.accountKey, { select: CONTACT_SELECT }, (batch) => {
     for (const contact of batch) {
       const anchor = parseTriggerDate(readContactFieldValue(contact, field, isCustom));
       if (!anchor) continue;
@@ -1774,7 +1774,7 @@ async function resolveDateReminderContactIds(
       if (!dateMatches) continue;
       if (
         hasFilter &&
-        evaluateFilter([contact as unknown as Contact], filterDef!, fields).length === 0
+        evaluateFilter([serializeContact(contact as never)], filterDef!, fields).length === 0
       ) {
         continue;
       }
@@ -2250,28 +2250,14 @@ async function evaluateConditionBranch(
 
   const contact = await prisma.contact.findUnique({
     where: { id: enrollment.contactId },
+    select: { ...CONTACT_SELECT, accountKey: true },
   });
   if (!contact) return 'else';
 
-  // Hydrate messaging fields (hasReceivedEmail/Sms/Message,
-  // hasOpenedEmail, lastMessageDate) that the rule evaluator may
-  // reference. These are materialised at read time — they aren't
-  // columns on Contact — so without this step those rules would
-  // always evaluate as undefined → falsy.
-  const summaries = await getMessagingSummaryForContacts(
-    contact.accountKey,
-    [contact.id],
-  );
-  const summary = summaries.get(contact.id);
-  const hydratedContact: Record<string, unknown> = {
-    ...contact,
-    hasReceivedMessage: summary?.hasReceivedMessage ?? false,
-    hasReceivedEmail: summary?.hasReceivedEmail ?? false,
-    hasReceivedSms: summary?.hasReceivedSms ?? false,
-    hasOpenedEmail: summary?.hasOpenedEmail ?? false,
-    hasClickedEmail: summary?.hasClickedEmail ?? false,
-    lastMessageDate: summary?.lastMessageDate ?? '',
-  };
+  // Serialize so the rule evaluator sees the same Contact shape the
+  // builder does — derived fullName, ISO dates, and the engagement
+  // rollups behind hasOpenedEmail / lastMessageDate.
+  const hydratedContact = serializeContact(contact);
 
   const fields = await getAccountFilterableFields(contact.accountKey);
 

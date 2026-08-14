@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import * as audienceService from '@/lib/services/audiences';
+import { resolveFilterFields } from '@/lib/services/audience-fields';
+import {
+  formatFilterErrors,
+  parseAndValidateFilterDefinition,
+} from '@/lib/smart-list-validate';
 
 type RouteContext = { params: Promise<{ id: string }> };
 
@@ -95,13 +100,19 @@ export async function PATCH(req: Request, { params }: RouteContext) {
   }
 
   if (typeof body.filters === 'string') {
-    try {
-      const parsed = JSON.parse(body.filters);
-      if (parsed.version !== 1 || !Array.isArray(parsed.groups)) {
-        return NextResponse.json({ error: 'Invalid filter definition' }, { status: 400 });
-      }
-    } catch {
-      return NextResponse.json({ error: 'filters must be valid JSON' }, { status: 400 });
+    // Validated against the segment's OWN account scope — an account-scoped
+    // segment may reference that account's custom fields, an org-wide one
+    // may not.
+    const fields = await resolveFilterFields(existing.accountKey, id);
+    const validation = parseAndValidateFilterDefinition(body.filters, fields);
+    if (!validation.ok) {
+      return NextResponse.json(
+        {
+          error: `Invalid filter definition — ${formatFilterErrors(validation.errors)}`,
+          details: validation.errors,
+        },
+        { status: 400 },
+      );
     }
     updates.filters = body.filters;
   }

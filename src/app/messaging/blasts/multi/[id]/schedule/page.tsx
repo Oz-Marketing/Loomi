@@ -15,11 +15,11 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
-import { useFilterableFields } from '@/hooks/use-filterable-fields';
-import type { Contact } from '@/lib/contacts/types';
-import { evaluateFilter } from '@/lib/smart-list-engine';
-import type { FilterDefinition } from '@/lib/smart-list-types';
-import { isLikelyDialablePhone, normalizePhoneNumber } from '@/lib/contact-hygiene';
+import {
+  audienceSelectionFromDraft,
+  type AudienceSelection,
+  type RecipientRow,
+} from '@/lib/segments/selection';
 import PrimaryButton from '@/components/primary-button';
 import { IphoneSmsPreview } from '@/components/campaigns/iphone-sms-preview';
 
@@ -51,17 +51,6 @@ interface SmsDraft {
   /** JSON-stringified array of Contact IDs for manual selection mode. */
   sourceContactIds: string;
   metadata: string;
-}
-
-function parseContactIdArray(raw: string | null | undefined): string[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.map((v) => String(v).trim()).filter(Boolean);
-  } catch {
-    return [];
-  }
 }
 
 function parseSmsMediaUrls(rawMetadata: string): string[] {
@@ -97,17 +86,6 @@ function formatDateTime(iso: string): string {
   });
 }
 
-function parseFilterDefinition(raw: string): FilterDefinition | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as FilterDefinition;
-    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.groups)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
 function parseLinkedSmsId(rawMetadata: string): string | null {
   if (!rawMetadata) return null;
   try {
@@ -119,10 +97,6 @@ function parseLinkedSmsId(rawMetadata: string): string | null {
   }
 }
 
-function isValidEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(value);
-}
-
 export default function MultiScheduleStepPage({ params }: PageProps) {
   const router = useRouter();
   const { id } = use(params);
@@ -131,13 +105,6 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
   const [smsDraft, setSmsDraft] = useState<SmsDraft | null>(null);
   const [loading, setLoading] = useState(true);
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [contactsLoading, setContactsLoading] = useState(false);
-  // Per-list-ID membership cache so split rails (each on its own list)
-  // each get their own member set. Single ID populates one entry; the
-  // recipient memos look up by the draft's sourceListId.
-  const [listMembersById, setListMembersById] = useState<Map<string, Set<string>>>(new Map());
-  const [listMembersLoading, setListMembersLoading] = useState(false);
 
   const [sendMode, setSendMode] = useState<SendMode>('later');
   const [previewTab, setPreviewTab] = useState<'email' | 'sms'>('email');
@@ -184,134 +151,102 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
 
   const accountKey = emailDraft?.accountKeys[0] || smsDraft?.accountKeys[0] || '';
   const account = accountKey ? accounts[accountKey] : null;
-  // Source sub-account's custom fields — feeds both email + SMS
-  // evaluateFilter calls below so saved audiences referencing custom
-  // keys resolve correctly across both rails.
-  const { fields: filterableFields } = useFilterableFields(accountKey || null);
+  // Both rails resolved SERVER-side, over the whole contact roster.
+  //
+  // These used to filter `contacts` — the 5,000 most-recently-added rows —
+  // which applied the per-campaign ceiling BEFORE the segment filter
+  // instead of after it. A segment uncorrelated with recency reached only
+  // the fraction of its members that happened to be recent, and nothing
+  // in the UI said anyone had been left out.
+  const [emailRecipients, setEmailRecipients] = useState<RecipientRow[]>([]);
+  const [smsRecipients, setSmsRecipients] = useState<RecipientRow[]>([]);
+  const [recipientsLoading, setRecipientsLoading] = useState(true);
+  const [emailTruncated, setEmailTruncated] = useState(false);
+  const [smsTruncated, setSmsTruncated] = useState(false);
+  const [emailTotal, setEmailTotal] = useState(0);
+  const [smsTotal, setSmsTotal] = useState(0);
+
+  const emailSelection = useMemo(
+    () => audienceSelectionFromDraft(emailDraft),
+    [emailDraft],
+  );
+  const smsSelection = useMemo(
+    () => audienceSelectionFromDraft(smsDraft),
+    [smsDraft],
+  );
+  const selectionKey = useMemo(
+    () => JSON.stringify([emailSelection, smsSelection]),
+    [emailSelection, smsSelection],
+  );
 
   useEffect(() => {
-    if (!accountKey) return;
-    let cancelled = false;
-    setContactsLoading(true);
-    fetch(`/api/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true`)
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data?.error || 'Failed to load contacts');
-        return Array.isArray(data?.contacts) ? (data.contacts as Contact[]) : [];
-      })
-      .then((rows) => {
-        if (!cancelled) setContacts(rows);
-      })
-      .catch(() => {
-        if (!cancelled) setContacts([]);
-      })
-      .finally(() => {
-        if (!cancelled) setContactsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [accountKey]);
-
-  // Rails can pick different lists in split-audience mode, so fetch per
-  // rail. Shared cache by list ID keeps us from double-fetching when both
-  // rails happen to land on the same list.
-  const emailListId = emailDraft?.sourceListId || '';
-  const smsListId = smsDraft?.sourceListId || '';
-
-  useEffect(() => {
-    const candidates = [emailListId, smsListId].filter((x) => x);
-    const distinct = [...new Set(candidates)];
-    if (distinct.length === 0) {
-      setListMembersById(new Map());
+    if (!accountKey || (!emailSelection && !smsSelection)) {
+      setEmailRecipients([]);
+      setSmsRecipients([]);
+      setRecipientsLoading(false);
       return;
     }
     let cancelled = false;
-    setListMembersLoading(true);
-    Promise.all(
-      distinct.map(async (listId) => {
-        const res = await fetch(`/api/contacts/lists/${encodeURIComponent(listId)}`);
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Failed to load list');
-        const ids: string[] = Array.isArray(data.members)
-          ? data.members.map((m: { id: string }) => m.id).filter(Boolean)
-          : [];
-        return [listId, new Set(ids)] as const;
-      }),
-    )
-      .then((entries) => {
-        if (!cancelled) setListMembersById(new Map(entries));
+    setRecipientsLoading(true);
+
+    async function resolve(
+      selection: AudienceSelection | null,
+      channel: 'email' | 'sms',
+    ) {
+      if (!selection) return { recipients: [], total: 0, truncated: false };
+      const res = await fetch('/api/segments/recipients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountKey, selection, channel }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      return data;
+    }
+
+    Promise.all([
+      resolve(emailSelection, 'email'),
+      resolve(smsSelection, 'sms'),
+    ])
+      .then(([email, sms]) => {
+        if (cancelled) return;
+        setEmailRecipients(Array.isArray(email.recipients) ? email.recipients : []);
+        setEmailTotal(Number(email.total) || 0);
+        setEmailTruncated(Boolean(email.truncated));
+        setSmsRecipients(Array.isArray(sms.recipients) ? sms.recipients : []);
+        setSmsTotal(Number(sms.total) || 0);
+        setSmsTruncated(Boolean(sms.truncated));
       })
       .catch(() => {
-        if (!cancelled) setListMembersById(new Map());
+        if (cancelled) return;
+        setEmailRecipients([]);
+        setSmsRecipients([]);
+        setEmailTruncated(false);
+        setSmsTruncated(false);
       })
       .finally(() => {
-        if (!cancelled) setListMembersLoading(false);
+        if (!cancelled) setRecipientsLoading(false);
       });
+
     return () => {
       cancelled = true;
     };
-  }, [emailListId, smsListId]);
-
-  // Resolve each channel's recipient list against its own validity gate.
-  // Three mutually-exclusive selection modes per rail: manual contact-ID
-  // list > static list > segment filter > "all". Manual IDs that no
-  // longer point at a deliverable contact silently drop out; pre-flight
-  // checklist surfaces the resulting count so the user can react.
-  const emailRecipients = useMemo(() => {
-    if (!emailDraft) return [] as Array<{ contactId: string; accountKey: string; email: string; fullName: string }>;
-    const sendable = contacts.filter((c) =>
-      Boolean(c.id && isValidEmail(String(c.email || '').trim())),
-    );
-    let matched: Contact[];
-    if (emailDraft.sourceContactIds) {
-      const idSet = new Set(parseContactIdArray(emailDraft.sourceContactIds));
-      matched = sendable.filter((c) => idSet.has(c.id));
-    } else if (emailDraft.sourceListId) {
-      const members = listMembersById.get(emailDraft.sourceListId);
-      if (!members) return [];
-      matched = sendable.filter((c) => members.has(c.id));
-    } else {
-      const filter = emailDraft.sourceFilter ? parseFilterDefinition(emailDraft.sourceFilter) : null;
-      matched = filter ? evaluateFilter(sendable, filter, filterableFields) : sendable;
-    }
-    return matched.map((c) => ({
-      contactId: String(c.id).trim(),
-      accountKey,
-      email: String(c.email || '').trim(),
-      fullName: String(c.fullName || '').trim(),
-    }));
-  }, [emailDraft, contacts, accountKey, listMembersById, filterableFields]);
-
-  const smsRecipients = useMemo(() => {
-    if (!smsDraft) return [] as Array<{ contactId: string; accountKey: string; phone: string; fullName: string }>;
-    const sendable = contacts.filter((c) =>
-      isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || ''))),
-    );
-    let matched: Contact[];
-    if (smsDraft.sourceContactIds) {
-      const idSet = new Set(parseContactIdArray(smsDraft.sourceContactIds));
-      matched = sendable.filter((c) => idSet.has(c.id));
-    } else if (smsDraft.sourceListId) {
-      const members = listMembersById.get(smsDraft.sourceListId);
-      if (!members) return [];
-      matched = sendable.filter((c) => members.has(c.id));
-    } else {
-      const filter = smsDraft.sourceFilter ? parseFilterDefinition(smsDraft.sourceFilter) : null;
-      matched = filter ? evaluateFilter(sendable, filter, filterableFields) : sendable;
-    }
-    return matched.map((c) => ({
-      contactId: String(c.id).trim(),
-      accountKey,
-      phone: normalizePhoneNumber(String(c.phone || '')),
-      fullName: String(c.fullName || '').trim(),
-    }));
-  }, [smsDraft, contacts, accountKey, listMembersById, filterableFields]);
+    // `selectionKey` stands in for the two selection objects.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionKey, accountKey]);
 
   async function handleSchedule() {
     if (!emailDraft || !smsDraft) return;
     if (emailRecipients.length === 0 && smsRecipients.length === 0) {
       toast.error('No deliverable recipients on either channel.');
+      return;
+    }
+    if (emailTruncated || smsTruncated) {
+      const which = emailTruncated ? 'email' : 'SMS';
+      const total = emailTruncated ? emailTotal : smsTotal;
+      toast.error(
+        `The ${which} audience has ${total.toLocaleString()} contacts, over the per-campaign limit. Narrow the segment and try again.`,
+      );
       return;
     }
 
@@ -457,13 +392,13 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
                     icon={EnvelopeIcon}
                     label="Email"
                     count={emailRecipients.length}
-                    loading={contactsLoading || listMembersLoading}
+                    loading={recipientsLoading}
                   />
                   <ChannelStat
                     icon={ChatBubbleLeftRightIcon}
                     label="SMS"
                     count={smsRecipients.length}
-                    loading={contactsLoading || listMembersLoading}
+                    loading={recipientsLoading}
                   />
                 </div>
 
@@ -628,8 +563,10 @@ export default function MultiScheduleStepPage({ params }: PageProps) {
             onClick={handleSchedule}
             disabled={
               submitting ||
-              contactsLoading ||
-              listMembersLoading ||
+              recipientsLoading ||
+              // Never send an arbitrary prefix of an over-limit audience.
+              emailTruncated ||
+              smsTruncated ||
               (emailRecipients.length === 0 && smsRecipients.length === 0)
             }
           >

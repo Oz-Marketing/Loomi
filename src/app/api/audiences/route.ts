@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import * as audienceService from '@/lib/services/audiences';
+import { resolveFilterFields } from '@/lib/services/audience-fields';
+import {
+  formatFilterErrors,
+  parseAndValidateFilterDefinition,
+} from '@/lib/smart-list-validate';
 
 /**
  * GET /api/audiences
@@ -36,27 +41,47 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'name and filters are required' }, { status: 400 });
   }
 
-  // Validate filters is valid JSON
-  try {
-    const parsed = JSON.parse(filters);
-    if (parsed.version !== 1 || !Array.isArray(parsed.groups)) {
-      return NextResponse.json({ error: 'Invalid filter definition' }, { status: 400 });
-    }
-  } catch {
-    return NextResponse.json({ error: 'filters must be valid JSON' }, { status: 400 });
-  }
-
-  // Non-admin users can only create audiences for their assigned accounts
   const userRole = session!.user.role;
   const userAccountKeys: string[] = session!.user.accountKeys ?? [];
-  if (accountKey && userRole !== 'developer' && !userAccountKeys.includes(accountKey)) {
+  const isPrivileged = userRole === 'developer' || userRole === 'super_admin';
+  const scopedAccountKey: string | null =
+    typeof accountKey === 'string' && accountKey.trim() ? accountKey.trim() : null;
+
+  // Scope check. An audience with no accountKey is ORG-WIDE: getAudiences()
+  // hands it to every user, and only developers/super_admins can edit or
+  // delete it (see [id]/route.ts assertWriteAccess). Creation used to skip
+  // this check entirely whenever accountKey was absent, so any authenticated
+  // user could mint a segment visible everywhere that they then couldn't
+  // remove. Org-wide creation is now privileged, and everyone else must name
+  // an account they're actually assigned to.
+  if (!scopedAccountKey) {
+    if (!isPrivileged) {
+      return NextResponse.json(
+        { error: 'Only developers and super admins can create org-wide segments' },
+        { status: 403 },
+      );
+    }
+  } else if (!isPrivileged && !userAccountKeys.includes(scopedAccountKey)) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  // Validate the filter definition against the same field catalogue the
+  // builder offered, so an unknown field, a mistyped operator, or a
+  // valueless condition is a 400 here rather than a segment that quietly
+  // matches nobody at send time.
+  const fields = await resolveFilterFields(scopedAccountKey);
+  const validation = parseAndValidateFilterDefinition(filters, fields);
+  if (!validation.ok) {
+    return NextResponse.json(
+      { error: `Invalid filter definition — ${formatFilterErrors(validation.errors)}`, details: validation.errors },
+      { status: 400 },
+    );
   }
 
   const audience = await audienceService.createAudience({
     name,
     description,
-    accountKey: accountKey || null,
+    accountKey: scopedAccountKey,
     createdByUserId: session!.user.id,
     filters,
     icon,

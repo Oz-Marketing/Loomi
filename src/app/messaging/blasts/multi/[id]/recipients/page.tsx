@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useMemo, useRef, useState } from 'react';
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   ArrowLeftIcon,
@@ -20,7 +20,6 @@ import { useAccount } from '@/contexts/account-context';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import type { Contact } from '@/lib/contacts/types';
 import { LIFECYCLE_PRESETS } from '@/lib/smart-list-presets';
-import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import { isLikelyDialablePhone, normalizePhoneNumber } from '@/lib/contact-hygiene';
 import { toast } from '@/lib/toast';
@@ -171,8 +170,9 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
   const [loading, setLoading] = useState(true);
 
   const [selectedAccountKey, setSelectedAccountKey] = useState('');
-  // Source sub-account's custom fields — both rails share a single
-  // source account, so one fetch covers email + SMS evaluateFilter().
+  // Source sub-account's custom fields — still needed by the inline
+  // filter builder's field dropdown. Counting itself resolves
+  // server-side, where the same catalogue is rebuilt per request.
   const { fields: filterableFields } = useFilterableFields(selectedAccountKey || null);
 
   // Split-audience model: each rail tracks its own selection. When
@@ -193,8 +193,6 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
   // Shared list-member cache so a list referenced by both rails doesn't
   // double-fetch when split is off (or when both rails happen to point
   // at the same list in split mode).
-  const [listMembersById, setListMembersById] = useState<Map<string, Set<string>>>(new Map());
-  const [loadingListIds, setLoadingListIds] = useState<Set<string>>(new Set());
 
   const [saving, setSaving] = useState(false);
   const [modalRail, setModalRail] = useState<Rail>('email');
@@ -372,108 +370,78 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     });
   }, [scopedLists]);
 
-  // Fetch any list IDs we don't yet have cached. One unified effect so a
-  // shared list ID across both rails only triggers one network call.
-  const emailListId = emailSelection.kind === 'list' ? emailSelection.id : null;
+  // When the rails aren't split, SMS follows the email selection.
   const effectiveSmsSelection = splitAudiences ? smsSelection : emailSelection;
-  const smsListId = effectiveSmsSelection.kind === 'list' ? effectiveSmsSelection.id : null;
 
-  // Track list IDs we've already kicked off a fetch for, so each list is
-  // fetched exactly once. Using a ref (rather than the state Maps/Sets) keeps
-  // this out of the effect deps — including listMembersById/loadingListIds
-  // there caused the effect to re-run on every fetch and spin forever.
-  const fetchedListIdsRef = useRef<Set<string>>(new Set());
+  // Both rails' sendable counts resolved SERVER-side, over the whole
+  // roster. Counting `contacts` meant counting inside the 5,000
+  // most-recently-added rows, which under-reports any segment that isn't
+  // correlated with recency — and this is the number the audience choice
+  // is made on.
+  const [emailSendable, setEmailSendable] = useState(0);
+  const [smsSendable, setSmsSendable] = useState(0);
+  const [sendableLoading, setSendableLoading] = useState(false);
+
+  const toServerSelection = useCallback((sel: AudienceSelection) => {
+    if (sel.kind === 'all') return { kind: 'all' as const };
+    if (sel.kind === 'list') return { kind: 'list' as const, listId: sel.id };
+    if (sel.kind === 'contacts') return { kind: 'contacts' as const, ids: sel.ids };
+    return { kind: 'filter' as const, definition: sel.filter };
+  }, []);
+
+  const sendableKey = useMemo(
+    () =>
+      JSON.stringify([
+        toServerSelection(emailSelection),
+        toServerSelection(effectiveSmsSelection),
+      ]),
+    [emailSelection, effectiveSmsSelection, toServerSelection],
+  );
 
   useEffect(() => {
-    const candidates = [emailListId, smsListId].filter((x): x is string => Boolean(x));
-    const needed = candidates.filter((listId) => !fetchedListIdsRef.current.has(listId));
-    if (needed.length === 0) return;
-
-    for (const listId of needed) fetchedListIdsRef.current.add(listId);
-    setLoadingListIds((prev) => {
-      const next = new Set(prev);
-      for (const listId of needed) next.add(listId);
-      return next;
-    });
-
+    if (!selectedAccountKey) {
+      setEmailSendable(0);
+      setSmsSendable(0);
+      return;
+    }
     let cancelled = false;
-    needed.forEach((listId) => {
-      fetch(`/api/contacts/lists/${encodeURIComponent(listId)}`)
-        .then(async (res) => {
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Failed to load list');
-          const ids: string[] = Array.isArray(data.members)
-            ? data.members.map((m: { id: string }) => m.id).filter(Boolean)
-            : [];
+    setSendableLoading(true);
+
+    const [emailSel, smsSel] = JSON.parse(sendableKey);
+
+    const count = async (selection: unknown, channel: 'email' | 'sms') => {
+      const res = await fetch('/api/segments/recipients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountKey: selectedAccountKey, selection, channel }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      return Number(data.total) || 0;
+    };
+
+    const timer = setTimeout(() => {
+      Promise.all([count(emailSel, 'email'), count(smsSel, 'sms')])
+        .then(([email, sms]) => {
           if (cancelled) return;
-          setListMembersById((prev) => {
-            const next = new Map(prev);
-            next.set(listId, new Set(ids));
-            return next;
-          });
+          setEmailSendable(email);
+          setSmsSendable(sms);
         })
         .catch(() => {
           if (cancelled) return;
-          setListMembersById((prev) => {
-            const next = new Map(prev);
-            next.set(listId, new Set());
-            return next;
-          });
+          setEmailSendable(0);
+          setSmsSendable(0);
         })
         .finally(() => {
-          if (cancelled) return;
-          setLoadingListIds((prev) => {
-            const next = new Set(prev);
-            next.delete(listId);
-            return next;
-          });
+          if (!cancelled) setSendableLoading(false);
         });
-    });
+    }, 300);
 
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [emailListId, smsListId]);
-
-  const emailListMembers = emailListId ? listMembersById.get(emailListId) ?? null : null;
-  const smsListMembers = smsListId ? listMembersById.get(smsListId) ?? null : null;
-  const emailListLoading = emailListId !== null && loadingListIds.has(emailListId);
-  const smsListLoading = smsListId !== null && loadingListIds.has(smsListId);
-
-  const { emailSendable, smsSendable } = useMemo(() => {
-    if (contactsLoading) return { emailSendable: 0, smsSendable: 0 };
-    const emailOk = contacts.filter((c) => Boolean(c.id) && isEmailDeliverable(c));
-    const smsOk = contacts.filter((c) => Boolean(c.id) && isSmsDeliverable(c));
-
-    const resolveEmail = () => {
-      if (emailSelection.kind === 'all') return emailOk.length;
-      if (emailSelection.kind === 'list') {
-        if (!emailListMembers) return 0;
-        return emailOk.filter((c) => emailListMembers.has(c.id)).length;
-      }
-      if (emailSelection.kind === 'contacts') {
-        const idSet = new Set(emailSelection.ids);
-        return emailOk.filter((c) => idSet.has(c.id)).length;
-      }
-      return evaluateFilter(emailOk, emailSelection.filter, filterableFields).length;
-    };
-
-    const resolveSms = () => {
-      const sel = effectiveSmsSelection;
-      if (sel.kind === 'all') return smsOk.length;
-      if (sel.kind === 'list') {
-        if (!smsListMembers) return 0;
-        return smsOk.filter((c) => smsListMembers.has(c.id)).length;
-      }
-      if (sel.kind === 'contacts') {
-        const idSet = new Set(sel.ids);
-        return smsOk.filter((c) => idSet.has(c.id)).length;
-      }
-      return evaluateFilter(smsOk, sel.filter, filterableFields).length;
-    };
-
-    return { emailSendable: resolveEmail(), smsSendable: resolveSms() };
-  }, [contacts, contactsLoading, emailSelection, effectiveSmsSelection, emailListMembers, smsListMembers, filterableFields]);
+  }, [sendableKey, selectedAccountKey]);
 
   function buildPayload(sel: AudienceSelection): Record<string, unknown> {
     const payload: Record<string, unknown> = {
@@ -573,8 +541,8 @@ export default function MultiRecipientsStepPage({ params }: PageProps) {
     );
   }
 
-  const emailCountsLoading = contactsLoading || emailListLoading;
-  const smsCountsLoading = contactsLoading || smsListLoading;
+  const emailCountsLoading = sendableLoading;
+  const smsCountsLoading = sendableLoading;
 
   return (
     <div className="pb-32">

@@ -45,12 +45,37 @@ export interface Contact {
   leaseEndDate: string;
   warrantyEndDate: string;
   purchaseDate: string;
+  dateOfBirth: string;
   hasReceivedMessage: boolean;
   hasReceivedEmail: boolean;
   hasReceivedSms: boolean;
   hasOpenedEmail: boolean;
   hasClickedEmail: boolean;
   lastMessageDate: string;
+  /** Engagement rollups, ISO strings ('' when the event never happened).
+   *  These are the date-typed versions of the booleans above — "opened in
+   *  the last 30 days" rather than "has ever opened", which decays to
+   *  meaninglessness as a roster ages. */
+  lastEmailDeliveredAt: string;
+  lastEmailOpenedAt: string;
+  lastEmailClickedAt: string;
+  lastSmsAt: string;
+  /** Lifetime rollups over ContactEvent (service visits + vehicle sales).
+   *  Distinct from the CRM-snapshot columns above (`lastServiceDate`,
+   *  `purchaseDate`): these are derived from the event history, and the
+   *  two can legitimately disagree. */
+  serviceVisitCount: number;
+  saleCount: number;
+  lifetimeSpend: number;
+  firstServiceEventAt: string;
+  lastServiceEventAt: string;
+  firstSaleEventAt: string;
+  lastSaleEventAt: string;
+  /** Ids of the static ContactLists this contact belongs to. */
+  listIds: string[];
+  /** Per-channel opt-out, from the `dnd` column. */
+  dndEmail: boolean;
+  dndSms: boolean;
   /** Account-extensible properties keyed by the custom field's `key`.
    *  Empty object when the contact has no custom data. Values are
    *  intentionally loose — the filter engine + UI normalise per the

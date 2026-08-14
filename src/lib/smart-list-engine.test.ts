@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateFilter } from './smart-list-engine';
+import { addFilterDays, evaluateFilter } from './smart-list-engine';
 import { getFilterableFields, type FilterDefinition } from './smart-list-types';
 import type { Contact } from '@/lib/contacts/types';
 
@@ -125,5 +125,36 @@ describe('relative-date operators (the new ones)', () => {
       customFields: { last_purchase_date: new Date(Date.now() + 5 * 86_400_000).toISOString() },
     } as unknown as Contact;
     expect(matches(def('last_purchase_date', 'within_last_days', '30'), future)).toBe(false);
+  });
+});
+
+describe('relative-date bounds are calendar days, not 24h multiples', () => {
+  // Regression: the bounds used to be `todayStart - days * 86400000`,
+  // which lands at 23:00 (or 01:00) rather than midnight whenever the
+  // span crosses a daylight-saving change. The engine floors the row's
+  // date before comparing and the SQL translator doesn't, so those two
+  // only agree when the bound is a real midnight — this diverged for
+  // roughly half the year, and a differential test caught it only
+  // because it happened to run after midnight.
+  it('lands on midnight across a DST boundary', () => {
+    // Mid-August (DST) back to mid-February (standard time).
+    const august = new Date(2026, 7, 14, 0, 0, 0, 0);
+    const back180 = addFilterDays(august, -180);
+
+    expect(back180.getHours()).toBe(0);
+    expect(back180.getMinutes()).toBe(0);
+    expect(back180.getSeconds()).toBe(0);
+
+    // …and forward across the other transition.
+    const february = new Date(2026, 1, 15, 0, 0, 0, 0);
+    const fwd180 = addFilterDays(february, 180);
+    expect(fwd180.getHours()).toBe(0);
+  });
+
+  it('a 24h-multiple shift does NOT, which is the bug', () => {
+    const august = new Date(2026, 7, 14, 0, 0, 0, 0);
+    const naive = new Date(august.getTime() - 180 * 86_400_000);
+    // Pins the difference so nobody "simplifies" the helper back.
+    expect(naive.getHours()).not.toBe(0);
   });
 });

@@ -29,6 +29,7 @@
 
 import { Prisma } from '@prisma/client';
 import {
+  addFilterDays,
   endOfFilterDay,
   parseFilterDate,
   startOfFilterDay,
@@ -513,13 +514,13 @@ function translateDate(
     case 'within_days': {
       const days = parseDays(value);
       if (days === null) return FALSE;
-      const upper = endOfFilterDay(addDays(todayStart, days));
+      const upper = endOfFilterDay(addFilterDays(todayStart, days));
       return Prisma.sql`(${col} >= ${todayStart} AND ${col} <= ${upper})`;
     }
     case 'within_last_days': {
       const days = parseDays(value);
       if (days === null) return FALSE;
-      const lower = addDays(todayStart, -days);
+      const lower = addFilterDays(todayStart, -days);
       const upper = endOfFilterDay(todayStart);
       return Prisma.sql`(${col} >= ${lower} AND ${col} <= ${upper})`;
     }
@@ -529,7 +530,7 @@ function translateDate(
       // The engine compares startOfDay(row) < cutoff where cutoff is a
       // midnight boundary; for a midnight cutoff that's equivalent to
       // comparing the raw timestamp.
-      return Prisma.sql`${col} < ${addDays(todayStart, -days)}`;
+      return Prisma.sql`${col} < ${addFilterDays(todayStart, -days)}`;
     }
     default:
       return null;
@@ -541,9 +542,7 @@ function parseDays(value: string): number | null {
   return Number.isNaN(n) ? null : n;
 }
 
-function addDays(from: Date, days: number): Date {
-  return new Date(from.getTime() + days * 24 * 60 * 60 * 1000);
-}
+
 
 // ── Tags ────────────────────────────────────────────────────────
 //

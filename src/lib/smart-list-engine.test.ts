@@ -151,7 +151,16 @@ describe('relative-date bounds are calendar days, not 24h multiples', () => {
     expect(fwd180.getHours()).toBe(0);
   });
 
-  it('a 24h-multiple shift does NOT, which is the bug', () => {
+  // The bug only exists where the clock actually changes. CI runs in
+  // UTC, where a 24h-multiple shift IS midnight and there is nothing to
+  // catch — so this half is conditional, while the invariant above holds
+  // in every zone. (A first version of this test asserted the difference
+  // unconditionally and failed CI for exactly that reason.)
+  const observesDst =
+    new Date(2026, 0, 1).getTimezoneOffset() !==
+    new Date(2026, 6, 1).getTimezoneOffset();
+
+  it.skipIf(!observesDst)('a 24h-multiple shift does NOT, which is the bug', () => {
     const august = new Date(2026, 7, 14, 0, 0, 0, 0);
     const naive = new Date(august.getTime() - 180 * 86_400_000);
     // Pins the difference so nobody "simplifies" the helper back.

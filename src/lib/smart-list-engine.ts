@@ -443,7 +443,7 @@ function evaluateDateCondition(
       if (!parsedDate || !value) return false;
       const days = parseInt(value, 10);
       if (isNaN(days)) return false;
-      const future = endOfDay(new Date(todayStart.getTime() + days * 24 * 60 * 60 * 1000));
+      const future = endOfDay(addCalendarDays(todayStart, days));
       // within_days: date is between start of today and end of Nth day.
       return parsedDate.getTime() >= todayStart.getTime() && parsedDate.getTime() <= future.getTime();
     }
@@ -454,7 +454,7 @@ function evaluateDateCondition(
       if (!parsedDate || !value) return false;
       const days = parseInt(value, 10);
       if (isNaN(days)) return false;
-      const lower = todayStart.getTime() - days * 24 * 60 * 60 * 1000;
+      const lower = addCalendarDays(todayStart, -days).getTime();
       const upper = endOfDay(new Date(todayStart)).getTime();
       return parsedDate.getTime() >= lower && parsedDate.getTime() <= upper;
     }
@@ -465,7 +465,7 @@ function evaluateDateCondition(
       if (!parsedDate || !value) return false;
       const days = parseInt(value, 10);
       if (isNaN(days)) return false;
-      const cutoff = todayStart.getTime() - days * 24 * 60 * 60 * 1000;
+      const cutoff = addCalendarDays(todayStart, -days).getTime();
       return startOfDay(parsedDate).getTime() < cutoff;
     }
     // Operator doesn't belong to this field type — no match.
@@ -477,7 +477,34 @@ function evaluateDateCondition(
 // Exported so the SQL translator can compute identical bounds. Two
 // implementations of "what does `more_than_days_ago: 180` mean" is
 // exactly how a fast path and a slow path drift apart.
-export { parseDateValue as parseFilterDate, startOfDay as startOfFilterDay, endOfDay as endOfFilterDay };
+export {
+  parseDateValue as parseFilterDate,
+  startOfDay as startOfFilterDay,
+  endOfDay as endOfFilterDay,
+  addCalendarDays as addFilterDays,
+};
+
+/**
+ * Shift a date by whole CALENDAR days, not by N × 24h.
+ *
+ * The difference only shows up across a daylight-saving boundary, and
+ * when it does it is genuinely wrong: `todayStart - 180 × 86400000` in
+ * mid-August lands at 23:00 the previous evening, not midnight. That
+ * matters because the relative date operators are defined in terms of
+ * calendar days ("more than 180 days ago"), and because the SQL
+ * translator relies on those bounds being real midnights — the engine
+ * floors the row's date before comparing, and only a midnight bound
+ * makes floored and unfloored comparisons equivalent.
+ *
+ * Left unfixed this diverged twice a year: a segment previewed one set
+ * of contacts and resolved to another, for the six months of the year
+ * the offset ran the wrong way.
+ */
+function addCalendarDays(from: Date, days: number): Date {
+  const d = new Date(from);
+  d.setDate(d.getDate() + days);
+  return d;
+}
 
 function parseDateValue(value?: string): Date | null {
   if (!value) return null;

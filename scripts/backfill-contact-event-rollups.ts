@@ -8,75 +8,61 @@
 // and purchase segments read as "nobody has ever visited" until each
 // contact happens to appear in a future ingest batch.
 //
-// Only walks contacts that actually have events, so the cost is
-// proportional to real history rather than to roster size. Idempotent:
-// recomputes from the event table, so re-running converges.
+// One set-based UPDATE per account, so the cost scales with the number of
+// ACCOUNTS rather than the number of contacts. Idempotent: recomputes
+// from the event table, so re-running converges on the same answer.
 //
 //   npx tsx scripts/backfill-contact-event-rollups.ts [--dry-run]
 
 import 'dotenv/config';
 import { prisma } from '../src/lib/prisma';
-import { recomputeContactEventRollups } from '../src/lib/contacts/event-rollups';
+import { recomputeAllContactEventRollups } from '../src/lib/contacts/event-rollups';
 
 const DRY_RUN = process.argv.includes('--dry-run');
-const FORCE = process.argv.includes('--force');
-const BATCH = 500;
 
 async function main() {
-  // Same skip-once-populated guard as the engagement backfill: this runs
-  // on every deploy but the work is one-time, and the ingest keeps the
-  // columns current afterwards.
-  if (!FORCE) {
-    const populated = await prisma.contact.findFirst({
-      where: { OR: [{ serviceVisitCount: { gt: 0 } }, { saleCount: { gt: 0 } }] },
-      select: { id: true },
-    });
-    if (populated) {
-      console.log('Event rollups already populated — skipping (pass --force to recompute).');
-      return;
-    }
-  }
-
-  // Distinct contacts that have any event at all.
-  const withEvents = await prisma.contactEvent.findMany({
+  // No skip guard, deliberately.
+  //
+  // The set-based recompute costs ~11s across production's full 259k
+  // contacts-with-history, so "run it every deploy" is cheaper than the
+  // bookkeeping to avoid it — and it is idempotent, so re-running only
+  // reconfirms the same numbers.
+  //
+  // It also self-heals. The first attempt at this backfill was row-by-row
+  // and blew the deploy's SSH timeout 14 of 33 accounts in. A global
+  // "already populated?" guard would have looked satisfied at that point
+  // and silently skipped the remaining 19 rooftops forever.
+  const accounts = await prisma.contactEvent.findMany({
     where: { contactId: { not: null } },
-    select: { contactId: true, accountKey: true },
-    distinct: ['contactId'],
+    select: { accountKey: true },
+    distinct: ['accountKey'],
   });
 
-  if (withEvents.length === 0) {
+  if (accounts.length === 0) {
     console.log('No contact events on record — nothing to roll up.');
     return;
   }
 
-  // Group by account: the recompute is scoped per account so an event
-  // can never contribute to a contact in a different sub-account.
-  const byAccount = new Map<string, string[]>();
-  for (const row of withEvents) {
-    if (!row.contactId) continue;
-    const list = byAccount.get(row.accountKey) ?? [];
-    list.push(row.contactId);
-    byAccount.set(row.accountKey, list);
+  console.log(
+    `${DRY_RUN ? '[dry run] ' : ''}Rolling up event history across ${accounts.length} account(s)…`,
+  );
+
+  const startedAll = Date.now();
+  let written = 0;
+  for (const { accountKey } of accounts) {
+    if (DRY_RUN) {
+      console.log(`  ${accountKey}: would recompute`);
+      continue;
+    }
+    const startedAt = Date.now();
+    const n = await recomputeAllContactEventRollups(accountKey);
+    written += n;
+    console.log(`  ${accountKey}: ${n.toLocaleString()} contacts in ${Date.now() - startedAt}ms`);
   }
 
   console.log(
-    `${DRY_RUN ? '[dry run] ' : ''}Rolling up ${withEvents.length.toLocaleString()} contacts with history across ${byAccount.size} account(s)…`,
+    `${DRY_RUN ? '[dry run] ' : ''}Done — ${written.toLocaleString()} contacts updated in ${Date.now() - startedAll}ms.`,
   );
-
-  let written = 0;
-  for (const [accountKey, ids] of byAccount) {
-    for (let i = 0; i < ids.length; i += BATCH) {
-      const slice = ids.slice(i, i + BATCH);
-      if (DRY_RUN) {
-        written += slice.length;
-        continue;
-      }
-      written += await recomputeContactEventRollups(accountKey, slice);
-    }
-    console.log(`  ${accountKey}: ${ids.length.toLocaleString()} contacts`);
-  }
-
-  console.log(`${DRY_RUN ? '[dry run] ' : ''}Done — ${written.toLocaleString()} contacts updated.`);
 }
 
 main()

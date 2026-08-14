@@ -8,42 +8,73 @@
 // figure that's 15% high). Recomputing from the event table is
 // idempotent by construction: run it once or fifty times, same answer.
 //
+// SET-BASED, not row-by-row. The first version of this issued one
+// UPDATE per contact. That's harmless for the ingest path, where a batch
+// touches a handful of customers — and catastrophic for a backfill: on
+// production's 259,307 contacts-with-history it was still going after 11
+// minutes and took the deploy down with it. Both entry points below are
+// now a single statement per account, so the cost scales with the number
+// of ACCOUNTS rather than the number of contacts.
+//
 // The aggregates are deliberately LIFETIME-only — see the schema comment
 // on Contact. A rolling window changes with the clock rather than with
 // the data, so it can't be maintained on write and would go stale
 // between recomputes.
 
+import { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
-/** Contacts per aggregation pass. */
-const CHUNK = 500;
-
-export interface EventRollup {
-  serviceVisitCount: number;
-  saleCount: number;
-  lifetimeSpend: number;
-  firstServiceEventAt: Date | null;
-  lastServiceEventAt: Date | null;
-  firstSaleEventAt: Date | null;
-  lastSaleEventAt: Date | null;
+/**
+ * The aggregate itself, shared by both entry points so the targeted
+ * recompute and the whole-account backfill can't drift apart.
+ *
+ * `lifetimeSpend` sums across BOTH event types: a service RO total and a
+ * deal price are both money the customer spent here, and "lifetime value
+ * over $X" means the combined figure.
+ */
+function aggregateSelect(accountKey: string, scope: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`
+    SELECT
+      "contactId",
+      COUNT(*) FILTER (WHERE "type" = 'service')                      AS service_count,
+      COUNT(*) FILTER (WHERE "type" = 'sale')                         AS sale_count,
+      COALESCE(SUM("amount"), 0)                                      AS spend,
+      MIN("eventDate") FILTER (WHERE "type" = 'service')              AS first_service,
+      MAX("eventDate") FILTER (WHERE "type" = 'service')              AS last_service,
+      MIN("eventDate") FILTER (WHERE "type" = 'sale')                 AS first_sale,
+      MAX("eventDate") FILTER (WHERE "type" = 'sale')                 AS last_sale
+    FROM "ContactEvent"
+    WHERE "accountKey" = ${accountKey}
+      AND "contactId" IS NOT NULL
+      ${scope}
+    GROUP BY "contactId"
+  `;
 }
 
-const EMPTY: EventRollup = {
-  serviceVisitCount: 0,
-  saleCount: 0,
-  lifetimeSpend: 0,
-  firstServiceEventAt: null,
-  lastServiceEventAt: null,
-  firstSaleEventAt: null,
-  lastSaleEventAt: null,
-};
+function applyUpdate(accountKey: string, agg: Prisma.Sql): Prisma.Sql {
+  return Prisma.sql`
+    UPDATE "Contact" c SET
+      "serviceVisitCount"   = agg.service_count,
+      "saleCount"           = agg.sale_count,
+      "lifetimeSpend"       = agg.spend,
+      "firstServiceEventAt" = agg.first_service,
+      "lastServiceEventAt"  = agg.last_service,
+      "firstSaleEventAt"    = agg.first_sale,
+      "lastSaleEventAt"     = agg.last_sale
+    FROM (${agg}) agg
+    WHERE c."id" = agg."contactId"
+      AND c."accountKey" = ${accountKey}
+  `;
+}
 
 /**
- * Recompute and persist rollups for the given contacts.
+ * Recompute rollups for specific contacts — the ingest path, called with
+ * whoever a batch touched.
  *
- * Contacts with no events are reset to zero rather than skipped — an
- * event can be deleted or re-keyed, and a stale non-zero count is worse
- * than no count at all when it's deciding who lands in an ad audience.
+ * Contacts in `contactIds` with no events are reset to zero rather than
+ * skipped: an event can be deleted or re-keyed, and a stale non-zero
+ * count is worse than no count at all when it's deciding who lands in an
+ * ad audience.
  */
 export async function recomputeContactEventRollups(
   accountKey: string,
@@ -52,58 +83,48 @@ export async function recomputeContactEventRollups(
   const ids = [...new Set(contactIds.filter(Boolean))];
   if (ids.length === 0) return 0;
 
-  let written = 0;
-  for (let i = 0; i < ids.length; i += CHUNK) {
-    const slice = ids.slice(i, i + CHUNK);
-    const rollups = await aggregateForContacts(accountKey, slice);
+  const scope = Prisma.sql`AND "contactId" IN (${Prisma.join(ids)})`;
+  const updated = await prisma.$executeRaw(
+    applyUpdate(accountKey, aggregateSelect(accountKey, scope)),
+  );
 
-    for (const contactId of slice) {
-      const rollup = rollups.get(contactId) ?? EMPTY;
-      await prisma.contact.update({
-        where: { id: contactId },
-        data: rollup,
-      });
-      written += 1;
-    }
-  }
-  return written;
+  // Zero out anyone in the set whose events have all gone away. Scoped
+  // to the ids we were asked about, and skipped entirely when they're
+  // already zero so this doesn't churn rows on every ingest.
+  await prisma.$executeRaw(Prisma.sql`
+    UPDATE "Contact" c SET
+      "serviceVisitCount"   = 0,
+      "saleCount"           = 0,
+      "lifetimeSpend"       = 0,
+      "firstServiceEventAt" = NULL,
+      "lastServiceEventAt"  = NULL,
+      "firstSaleEventAt"    = NULL,
+      "lastSaleEventAt"     = NULL
+    WHERE c."accountKey" = ${accountKey}
+      AND c."id" IN (${Prisma.join(ids)})
+      AND NOT EXISTS (
+        SELECT 1 FROM "ContactEvent" e
+        WHERE e."contactId" = c."id" AND e."accountKey" = ${accountKey}
+      )
+      AND (c."serviceVisitCount" <> 0 OR c."saleCount" <> 0 OR c."lifetimeSpend" <> 0
+           OR c."lastServiceEventAt" IS NOT NULL OR c."lastSaleEventAt" IS NOT NULL)
+  `);
+
+  return updated;
 }
 
-/** Aggregate the event table for a bounded set of contacts. */
-async function aggregateForContacts(
+/**
+ * Recompute every contact in an account that has event history — the
+ * backfill path.
+ *
+ * One statement for the whole account. Contacts with no events are left
+ * alone rather than zeroed: they're already at the column defaults, and
+ * touching all 265k of them would be a pointless rewrite of the table.
+ */
+export async function recomputeAllContactEventRollups(
   accountKey: string,
-  contactIds: string[],
-): Promise<Map<string, EventRollup>> {
-  const grouped = await prisma.contactEvent.groupBy({
-    by: ['contactId', 'type'],
-    where: { accountKey, contactId: { in: contactIds } },
-    _count: { _all: true },
-    _sum: { amount: true },
-    _min: { eventDate: true },
-    _max: { eventDate: true },
-  });
-
-  const out = new Map<string, EventRollup>();
-  for (const row of grouped) {
-    if (!row.contactId) continue;
-    const current = out.get(row.contactId) ?? { ...EMPTY };
-
-    // Spend is the sum across BOTH event types: a service RO total and a
-    // deal price are both money the customer has spent here, and
-    // "lifetime value over $X" means the combined figure.
-    current.lifetimeSpend += row._sum.amount ?? 0;
-
-    if (row.type === 'service') {
-      current.serviceVisitCount = row._count._all;
-      current.firstServiceEventAt = row._min.eventDate;
-      current.lastServiceEventAt = row._max.eventDate;
-    } else if (row.type === 'sale') {
-      current.saleCount = row._count._all;
-      current.firstSaleEventAt = row._min.eventDate;
-      current.lastSaleEventAt = row._max.eventDate;
-    }
-
-    out.set(row.contactId, current);
-  }
-  return out;
+): Promise<number> {
+  return prisma.$executeRaw(
+    applyUpdate(accountKey, aggregateSelect(accountKey, Prisma.empty)),
+  );
 }

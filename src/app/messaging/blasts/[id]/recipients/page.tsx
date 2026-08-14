@@ -18,7 +18,6 @@ import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import type { Contact } from '@/lib/contacts/types';
 import { LIFECYCLE_PRESETS } from '@/lib/smart-list-presets';
-import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import { toast } from '@/lib/toast';
 import PrimaryButton from '@/components/primary-button';
@@ -107,8 +106,6 @@ export default function RecipientsStepPage({ params }: PageProps) {
   const [lists, setLists] = useState<ListSummary[]>([]);
   // Member IDs for the currently-selected list — fetched on demand so the
   // sendable count can intersect them with the deliverable contact set.
-  const [listMemberIds, setListMemberIds] = useState<Set<string> | null>(null);
-  const [listMemberLoading, setListMemberLoading] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [showFilterBuilder, setShowFilterBuilder] = useState(false);
@@ -305,54 +302,67 @@ export default function RecipientsStepPage({ params }: PageProps) {
     }
   }, [scopedLists, selection]);
 
-  // Fetch member IDs for the selected list so the count can intersect with
-  // the deliverable contact set. Re-runs when the list selection changes.
+  // Sendable count resolved SERVER-side, over the whole roster.
+  //
+  // This is the number the user picks an audience on, so it has to be the
+  // real one. Counting `contacts` here meant counting matches within the
+  // 5,000 most-recently-added rows, which under-reports any segment that
+  // isn't correlated with recency.
+  const [sendableCount, setSendableCount] = useState(0);
+  const [sendableLoading, setSendableLoading] = useState(false);
+
+  const serverSelection = useMemo(() => {
+    if (selection.kind === 'all') return { kind: 'all' as const };
+    if (selection.kind === 'list') return { kind: 'list' as const, listId: selection.id };
+    if (selection.kind === 'contacts') return { kind: 'contacts' as const, ids: selection.ids };
+    return { kind: 'filter' as const, definition: selection.filter };
+  }, [selection]);
+  const serverSelectionKey = useMemo(
+    () => JSON.stringify(serverSelection),
+    [serverSelection],
+  );
+
   useEffect(() => {
-    if (selection.kind !== 'list') {
-      setListMemberIds(null);
+    if (!selectedAccountKey) {
+      setSendableCount(0);
       return;
     }
     let cancelled = false;
-    setListMemberLoading(true);
-    fetch(`/api/contacts/lists/${encodeURIComponent(selection.id)}`)
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Failed to load list');
-        const memberIds: string[] = Array.isArray(data.members)
-          ? data.members.map((m: { id: string }) => m.id).filter(Boolean)
-          : [];
-        if (!cancelled) setListMemberIds(new Set(memberIds));
+    setSendableLoading(true);
+
+    const timer = setTimeout(() => {
+      fetch('/api/segments/recipients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountKey: selectedAccountKey,
+          selection: serverSelection,
+          channel: 'email',
+        }),
       })
-      .catch(() => {
-        if (!cancelled) setListMemberIds(new Set());
-      })
-      .finally(() => {
-        if (!cancelled) setListMemberLoading(false);
-      });
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+          return data;
+        })
+        .then((data) => {
+          if (!cancelled) setSendableCount(Number(data.total) || 0);
+        })
+        .catch(() => {
+          if (!cancelled) setSendableCount(0);
+        })
+        .finally(() => {
+          if (!cancelled) setSendableLoading(false);
+        });
+    }, 300);
+
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [selection]);
-
-  const sendableCount = useMemo(() => {
-    if (contactsLoading) return 0;
-    const sendable = contacts.filter((c) =>
-      Boolean(c.id && isValidEmail(String(c.email || '').trim())),
-    );
-    if (selection.kind === 'all') return sendable.length;
-    if (selection.kind === 'list') {
-      if (!listMemberIds) return 0;
-      return sendable.filter((c) => listMemberIds.has(c.id)).length;
-    }
-    if (selection.kind === 'contacts') {
-      // Selection IDs that match the deliverable contact set — drops any
-      // ID whose underlying contact has since been deleted or had its
-      // email cleared.
-      const idSet = new Set(selection.ids);
-      return sendable.filter((c) => idSet.has(c.id)).length;
-    }
-    return evaluateFilter(sendable, selection.filter, filterableFields).length;
-  }, [contacts, contactsLoading, selection, listMemberIds, filterableFields]);
+    // `serverSelectionKey` stands in for `serverSelection`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverSelectionKey, selectedAccountKey]);
 
   async function persistSelection() {
     if (!draft) return;
@@ -469,7 +479,7 @@ export default function RecipientsStepPage({ params }: PageProps) {
           {/* Large sendable count */}
           <div className="text-right flex-shrink-0">
             <p className="text-4xl sm:text-5xl font-bold tabular-nums leading-none">
-              {contactsLoading || listMemberLoading ? (
+              {sendableLoading ? (
                 <ArrowPathIcon className="w-7 h-7 inline animate-spin text-[var(--muted-foreground)]" />
               ) : (
                 sendableCount.toLocaleString()

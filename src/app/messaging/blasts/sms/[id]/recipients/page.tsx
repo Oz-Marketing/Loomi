@@ -17,7 +17,6 @@ import { useAccount } from '@/contexts/account-context';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
 import type { Contact } from '@/lib/contacts/types';
 import { LIFECYCLE_PRESETS } from '@/lib/smart-list-presets';
-import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 import { isLikelyDialablePhone, normalizePhoneNumber } from '@/lib/contact-hygiene';
 import { toast } from '@/lib/toast';
@@ -91,8 +90,9 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
   const [draftLoading, setDraftLoading] = useState(true);
 
   const [selectedAccountKey, setSelectedAccountKey] = useState('');
-  // Source sub-account's custom fields — fed into evaluateFilter so
-  // saved audiences referencing custom keys filter at count time.
+  // Source sub-account's custom fields — still needed by the inline
+  // filter builder's field dropdown. Counting itself resolves
+  // server-side, where the same catalogue is rebuilt per request.
   const { fields: filterableFields } = useFilterableFields(selectedAccountKey || null);
   const [tab, setTab] = useState<AudienceTab>('segments');
   const [selection, setSelection] = useState<AudienceSelection>({ kind: 'all' });
@@ -102,8 +102,6 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
   const [contactsLoading, setContactsLoading] = useState(false);
 
   const [lists, setLists] = useState<ListSummary[]>([]);
-  const [listMemberIds, setListMemberIds] = useState<Set<string> | null>(null);
-  const [listMemberLoading, setListMemberLoading] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [showFilterBuilder, setShowFilterBuilder] = useState(false);
@@ -275,49 +273,65 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
     }
   }, [scopedLists, selection]);
 
+  // Sendable count resolved SERVER-side, over the whole roster — this is
+  // the number the audience choice is made on, so counting matches inside
+  // the 5,000 most-recently-added rows under-reported any segment not
+  // correlated with recency.
+  const [sendableCount, setSendableCount] = useState(0);
+  const [sendableLoading, setSendableLoading] = useState(false);
+
+  const serverSelection = useMemo(() => {
+    if (selection.kind === 'all') return { kind: 'all' as const };
+    if (selection.kind === 'list') return { kind: 'list' as const, listId: selection.id };
+    if (selection.kind === 'contacts') return { kind: 'contacts' as const, ids: selection.ids };
+    return { kind: 'filter' as const, definition: selection.filter };
+  }, [selection]);
+  const serverSelectionKey = useMemo(
+    () => JSON.stringify(serverSelection),
+    [serverSelection],
+  );
+
   useEffect(() => {
-    if (selection.kind !== 'list') {
-      setListMemberIds(null);
+    if (!selectedAccountKey) {
+      setSendableCount(0);
       return;
     }
     let cancelled = false;
-    setListMemberLoading(true);
-    fetch(`/api/contacts/lists/${encodeURIComponent(selection.id)}`)
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Failed to load list');
-        const memberIds: string[] = Array.isArray(data.members)
-          ? data.members.map((m: { id: string }) => m.id).filter(Boolean)
-          : [];
-        if (!cancelled) setListMemberIds(new Set(memberIds));
+    setSendableLoading(true);
+
+    const timer = setTimeout(() => {
+      fetch('/api/segments/recipients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountKey: selectedAccountKey,
+          selection: serverSelection,
+          channel: 'sms',
+        }),
       })
-      .catch(() => {
-        if (!cancelled) setListMemberIds(new Set());
-      })
-      .finally(() => {
-        if (!cancelled) setListMemberLoading(false);
-      });
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+          return data;
+        })
+        .then((data) => {
+          if (!cancelled) setSendableCount(Number(data.total) || 0);
+        })
+        .catch(() => {
+          if (!cancelled) setSendableCount(0);
+        })
+        .finally(() => {
+          if (!cancelled) setSendableLoading(false);
+        });
+    }, 300);
+
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [selection]);
-
-  // Sendable = contacts with a dialable phone (text rail uses phone for
-  // hygiene). Intersect with list members or selected IDs as needed.
-  const sendableCount = useMemo(() => {
-    if (contactsLoading) return 0;
-    const sendable = contacts.filter(isSmsDeliverable);
-    if (selection.kind === 'all') return sendable.length;
-    if (selection.kind === 'list') {
-      if (!listMemberIds) return 0;
-      return sendable.filter((c) => listMemberIds.has(c.id)).length;
-    }
-    if (selection.kind === 'contacts') {
-      const idSet = new Set(selection.ids);
-      return sendable.filter((c) => idSet.has(c.id)).length;
-    }
-    return evaluateFilter(sendable, selection.filter, filterableFields).length;
-  }, [contacts, contactsLoading, selection, listMemberIds, filterableFields]);
+    // `serverSelectionKey` stands in for `serverSelection`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverSelectionKey, selectedAccountKey]);
 
   async function persistSelection() {
     if (!draft) return;
@@ -435,7 +449,7 @@ export default function SmsRecipientsStepPage({ params }: PageProps) {
           </div>
           <div className="text-right flex-shrink-0">
             <p className="text-4xl sm:text-5xl font-bold tabular-nums leading-none">
-              {contactsLoading || listMemberLoading ? (
+              {sendableLoading ? (
                 <ArrowPathIcon className="w-7 h-7 inline animate-spin text-[var(--muted-foreground)]" />
               ) : (
                 sendableCount.toLocaleString()

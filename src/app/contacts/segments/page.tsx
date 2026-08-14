@@ -17,10 +17,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useScopedHref } from '@/hooks/use-scoped-href';
 import { useAccount } from '@/contexts/account-context';
-import { useFilterableFields } from '@/hooks/use-filterable-fields';
-import { evaluateFilter } from '@/lib/smart-list-engine';
 import type { FilterDefinition } from '@/lib/smart-list-types';
-import type { Contact } from '@/lib/contacts/types';
 import { toast } from '@/lib/toast';
 
 interface SavedSegment {
@@ -62,13 +59,10 @@ export default function SegmentsPage() {
   const router = useRouter();
   const { isAccount, isGroup, accountKey, accounts, scopedAccountKeys, accountData } = useAccount();
   const subHref = useScopedHref();
-  // Match SegmentEditor: pull custom fields when scoped to a single
-  // sub-account; the org-wide / aggregate view falls back to built-ins.
-  const { fields } = useFilterableFields(isAccount ? accountKey : null);
 
   const [savedSegments, setSavedSegments] = useState<SavedSegment[]>([]);
   const [loading, setLoading] = useState(true);
-  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [memberCounts, setMemberCounts] = useState<Map<string, number>>(new Map());
   const [contactsLoading, setContactsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -125,41 +119,57 @@ export default function SegmentsPage() {
     };
   }, [isAccount, accountKey, accountData?.category]);
 
-  // ── Fetch contacts (used for member counts) ──────────────────────
+  // ── Member counts ────────────────────────────────────────────────
+  //
+  // Resolved by the server, one batched request for every visible
+  // segment. This used to pull the account's contacts into the browser
+  // (capped at 5,000) and count matches here, so every card on an
+  // account past that cap showed a number derived from a sample.
+  //
+  // Counts are per-account by definition — a segment is a filter, and an
+  // org-wide filter has a different size in every sub-account — so the
+  // roll-up scope has no single number to show.
+  const segmentIdsKey = useMemo(
+    () => savedSegments.map((s) => s.id).sort().join(','),
+    [savedSegments],
+  );
+
   useEffect(() => {
+    if (!isAccount || !accountKey || !segmentIdsKey) {
+      setMemberCounts(new Map());
+      setContactsLoading(false);
+      return;
+    }
     let cancelled = false;
     setContactsLoading(true);
-    const url =
-      isAccount && accountKey
-        ? `/api/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true&includeMessaging=true`
-        : '/api/contacts/aggregate?includeMessaging=true&limitPerAccount=250';
-    fetch(url)
-      .then((res) => (res.ok ? res.json() : { contacts: [] }))
+
+    fetch('/api/segments/counts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountKey, ids: segmentIdsKey.split(',') }),
+    })
+      .then((res) => (res.ok ? res.json() : { counts: [] }))
       .then((data) => {
         if (cancelled) return;
-        setContacts(Array.isArray(data?.contacts) ? data.contacts : []);
+        const map = new Map<string, number>();
+        for (const entry of Array.isArray(data?.counts) ? data.counts : []) {
+          if (typeof entry?.id === 'string' && typeof entry.count === 'number') {
+            map.set(entry.id, entry.count);
+          }
+        }
+        setMemberCounts(map);
       })
       .catch(() => {
-        if (!cancelled) setContacts([]);
+        if (!cancelled) setMemberCounts(new Map());
       })
       .finally(() => {
         if (!cancelled) setContactsLoading(false);
       });
+
     return () => {
       cancelled = true;
     };
-  }, [isAccount, accountKey]);
-
-  // ── Member-count map ─────────────────────────────────────────────
-  const memberCounts = useMemo(() => {
-    const map = new Map<string, number>();
-    if (contactsLoading || !contacts.length) return map;
-    for (const segment of savedSegments) {
-      const def = parseDefinition(segment.filters);
-      if (def) map.set(segment.id, evaluateFilter(contacts, def, fields).length);
-    }
-    return map;
-  }, [contacts, contactsLoading, savedSegments, fields]);
+  }, [isAccount, accountKey, segmentIdsKey]);
 
   // ── Search filtering ─────────────────────────────────────────────
   const visibleSavedSegments = useMemo(() => {
@@ -389,7 +399,14 @@ export default function SegmentsPage() {
                     </div>
                   </div>
                   <div className="flex items-center justify-between gap-2 mt-auto pt-1">
-                    <span className="text-[11px] text-[var(--muted-foreground)] tabular-nums">
+                    <span
+                      className="text-[11px] text-[var(--muted-foreground)] tabular-nums"
+                      title={
+                        !isAccount || !accountKey
+                          ? 'Member counts are per sub-account — switch scope to see this segment’s size'
+                          : undefined
+                      }
+                    >
                       {contactsLoading
                         ? '…'
                         : count !== undefined

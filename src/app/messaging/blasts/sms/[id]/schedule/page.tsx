@@ -15,11 +15,10 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from '@/lib/toast';
 import { useAccount } from '@/contexts/account-context';
-import { useFilterableFields } from '@/hooks/use-filterable-fields';
-import type { Contact } from '@/lib/contacts/types';
-import { evaluateFilter } from '@/lib/smart-list-engine';
-import type { FilterDefinition } from '@/lib/smart-list-types';
-import { isLikelyDialablePhone, normalizePhoneNumber } from '@/lib/contact-hygiene';
+import {
+  audienceSelectionFromDraft,
+  type RecipientRow,
+} from '@/lib/segments/selection';
 import PrimaryButton from '@/components/primary-button';
 import { IphoneSmsPreview } from '@/components/campaigns/iphone-sms-preview';
 
@@ -74,17 +73,6 @@ function formatDateTime(iso: string): string {
   });
 }
 
-function parseFilterDefinition(raw: string): FilterDefinition | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as FilterDefinition;
-    if (!parsed || parsed.version !== 1 || !Array.isArray(parsed.groups)) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
 export default function SmsScheduleStepPage({ params }: PageProps) {
   const router = useRouter();
   const { id } = use(params);
@@ -92,12 +80,6 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
 
   const [draft, setDraft] = useState<DraftCampaign | null>(null);
   const [loading, setLoading] = useState(true);
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [contactsLoading, setContactsLoading] = useState(false);
-  // When the draft has a sourceListId, resolve recipients by intersecting
-  // the dialable contact set with this list's members.
-  const [listMemberIds, setListMemberIds] = useState<Set<string> | null>(null);
-  const [listMembersLoading, setListMembersLoading] = useState(false);
 
   const [messageDraft, setMessageDraft] = useState('');
 
@@ -155,109 +137,73 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
 
   const accountKey = draft?.accountKeys[0] || '';
   const account = accountKey ? accounts[accountKey] : null;
-  // Source sub-account's custom fields, fed into the filter engine so
-  // saved audiences referencing custom keys resolve correctly.
-  const { fields: filterableFields } = useFilterableFields(accountKey || null);
+  // Resolved SERVER-side, over the whole contact roster.
+  //
+  // Previously this filtered `contacts` — the 5,000 most-recently-added
+  // rows — which applied the per-campaign ceiling BEFORE the segment
+  // filter rather than after it. A segment uncorrelated with recency
+  // reached only the fraction of its members that happened to be recent,
+  // with nothing in the UI indicating anyone was left out.
+  const [recipients, setRecipients] = useState<RecipientRow[]>([]);
+  const [recipientsLoading, setRecipientsLoading] = useState(true);
+  const [audienceTotal, setAudienceTotal] = useState(0);
+  const [audienceTruncated, setAudienceTruncated] = useState(false);
+
+  const selection = useMemo(() => audienceSelectionFromDraft(draft), [draft]);
+  const selectionKey = useMemo(() => JSON.stringify(selection), [selection]);
 
   useEffect(() => {
-    if (!accountKey) return;
-    let cancelled = false;
-    setContactsLoading(true);
-    fetch(`/api/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true`)
-      .then(async (res) => {
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data?.error || 'Failed to load contacts');
-        return Array.isArray(data?.contacts) ? (data.contacts as Contact[]) : [];
-      })
-      .then((rows) => {
-        if (!cancelled) setContacts(rows);
-      })
-      .catch(() => {
-        if (!cancelled) setContacts([]);
-      })
-      .finally(() => {
-        if (!cancelled) setContactsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [accountKey]);
-
-  // Fetch list members when the draft references a static list. Mirrors
-  // the segment-filter branch so the recipient shape is uniform.
-  useEffect(() => {
-    const listId = draft?.sourceListId;
-    if (!listId) {
-      setListMemberIds(null);
+    if (!draft || !accountKey || !selection) {
+      setRecipients([]);
+      setRecipientsLoading(false);
       return;
     }
     let cancelled = false;
-    setListMembersLoading(true);
-    fetch(`/api/contacts/lists/${encodeURIComponent(listId)}`)
+    setRecipientsLoading(true);
+
+    fetch('/api/segments/recipients', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ accountKey, selection, channel: 'sms' }),
+    })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(typeof data.error === 'string' ? data.error : 'Failed to load list');
-        const ids: string[] = Array.isArray(data.members)
-          ? data.members.map((m: { id: string }) => m.id).filter(Boolean)
-          : [];
-        if (!cancelled) setListMemberIds(new Set(ids));
+        if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+        return data;
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setRecipients(Array.isArray(data.recipients) ? data.recipients : []);
+        setAudienceTotal(Number(data.total) || 0);
+        setAudienceTruncated(Boolean(data.truncated));
       })
       .catch(() => {
-        if (!cancelled) setListMemberIds(new Set());
+        if (cancelled) return;
+        setRecipients([]);
+        setAudienceTotal(0);
+        setAudienceTruncated(false);
       })
       .finally(() => {
-        if (!cancelled) setListMembersLoading(false);
+        if (!cancelled) setRecipientsLoading(false);
       });
+
     return () => {
       cancelled = true;
     };
-  }, [draft?.sourceListId]);
-
-  // Resolve audience → list of sendable recipients. Three mutually-
-  // exclusive modes: manual contact-ID list > static list > segment
-  // filter > "all". Recipients UI enforces exclusivity when persisting;
-  // we still gate explicitly here so stale fields from a different mode
-  // can't leak in.
-  const recipients = useMemo(() => {
-    if (!draft) return [] as { contactId: string; accountKey: string; phone: string; fullName: string }[];
-    const sendable = contacts.filter((c) =>
-      isLikelyDialablePhone(normalizePhoneNumber(String(c.phone || ''))),
-    );
-    let matched: Contact[];
-    if (draft.sourceContactIds) {
-      // Manual mode — JSON array of contact IDs from the Contacts tab.
-      // IDs that no longer point at a phone-deliverable contact silently
-      // drop out; the schedule checklist surfaces the resulting count.
-      let ids: string[] = [];
-      try {
-        const parsed = JSON.parse(draft.sourceContactIds);
-        if (Array.isArray(parsed)) {
-          ids = parsed.map((v) => String(v).trim()).filter(Boolean);
-        }
-      } catch {
-        ids = [];
-      }
-      const idSet = new Set(ids);
-      matched = sendable.filter((c) => idSet.has(c.id));
-    } else if (draft.sourceListId) {
-      if (!listMemberIds) return [];
-      matched = sendable.filter((c) => listMemberIds.has(c.id));
-    } else {
-      const filter = draft.sourceFilter ? parseFilterDefinition(draft.sourceFilter) : null;
-      matched = filter ? evaluateFilter(sendable, filter, filterableFields) : sendable;
-    }
-    return matched.map((c) => ({
-      contactId: String(c.id).trim(),
-      accountKey,
-      phone: normalizePhoneNumber(String(c.phone || '')),
-      fullName: String(c.fullName || '').trim(),
-    }));
-  }, [draft, contacts, accountKey, listMemberIds, filterableFields]);
+    // `selectionKey` stands in for `selection` (fresh object each render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectionKey, accountKey, draft?.id]);
 
   async function handleSchedule() {
     if (!draft) return;
     if (recipients.length === 0) {
       toast.error('No recipients with valid phone numbers.');
+      return;
+    }
+    if (audienceTruncated) {
+      toast.error(
+        `This audience has ${audienceTotal.toLocaleString()} contacts, over the ${recipients.length.toLocaleString()} per-campaign limit. Narrow the segment and try again.`,
+      );
       return;
     }
 
@@ -399,8 +345,10 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
                       </button>
                     </div>
                     <p className="text-2xl font-bold tabular-nums mt-0.5">
-                      {contactsLoading || listMembersLoading ? (
+                      {recipientsLoading ? (
                         <ArrowPathIcon className="w-5 h-5 inline animate-spin text-[var(--muted-foreground)]" />
+                      ) : audienceTruncated ? (
+                        audienceTotal.toLocaleString()
                       ) : (
                         recipients.length.toLocaleString()
                       )}
@@ -501,8 +449,9 @@ export default function SmsScheduleStepPage({ params }: PageProps) {
             onClick={handleSchedule}
             disabled={
               submitting ||
-              contactsLoading ||
-              listMembersLoading ||
+              recipientsLoading ||
+              // Never send an arbitrary prefix of an over-limit audience.
+              audienceTruncated ||
               recipients.length === 0 ||
               !draft?.message?.trim()
             }

@@ -25,6 +25,9 @@ import {
 const RUN = !!process.env.RUN_DB_TESTS;
 const A = '__vitest_elig_a';
 const B = '__vitest_elig_b';
+// Isolated so the consent-block fixtures can't skew the counts the other
+// tests assert on.
+const C = '__vitest_elig_c';
 const fields = getFilterableFields(null);
 
 /** Matches contacts with either identifier, so phone-only rows count. */
@@ -38,7 +41,7 @@ const ANY_CONTACT: FilterDefinition = {
 };
 
 async function reset() {
-  for (const key of [A, B]) {
+  for (const key of [A, B, C]) {
     await prisma.formSubmission.deleteMany({ where: { form: { accountKey: key } } });
     await prisma.form.deleteMany({ where: { accountKey: key } });
     await prisma.emailSuppression.deleteMany({ where: { accountKey: key } });
@@ -217,6 +220,72 @@ describe.skipIf(!RUN)('audience export eligibility gate', () => {
     expect(contacts.map((c) => c.identifiers.hashedEmail)).toContain(
       sha256Hex('formfill@example.com'),
     );
+  });
+
+  it('requires the consent box where the form actually asked', async () => {
+    // Three forms, three postures. The contact is otherwise identical in
+    // each case — no transaction history, provenance rests entirely on
+    // the submission.
+    const consentSchema = {
+      version: 1,
+      blocks: [
+        { id: 'b1', type: 'field_email', props: { name: 'email' } },
+        {
+          id: 'b2',
+          type: 'field_consent',
+          props: { name: 'consent', label: 'I agree to be contacted.' },
+        },
+      ],
+    };
+
+    await prisma.account.create({
+      data: { key: C, dealer: 'Vitest Eligibility C' },
+    });
+
+    async function seedSubmission(
+      email: string,
+      schema: unknown,
+      values: Record<string, unknown>,
+    ) {
+      const contact = await prisma.contact.create({
+        data: { accountKey: C, email, source: 'AutoLeads Inc' },
+        select: { id: true },
+      });
+      const form = await prisma.form.create({
+        data: {
+          accountKey: C,
+          name: `Vitest Consent ${email}`,
+          slug: `__vitest-consent-${email.replace(/\W/g, '')}`,
+          schema: schema as never,
+        },
+        select: { id: true },
+      });
+      await prisma.formSubmission.create({
+        data: { formId: form.id, contactId: contact.id, data: values as never },
+      });
+    }
+
+    await seedSubmission('ticked@example.com', consentSchema, {
+      email: 'ticked@example.com',
+      consent: true,
+    });
+    await seedSubmission('unticked@example.com', consentSchema, {
+      email: 'unticked@example.com',
+      consent: false,
+    });
+    // No consent block at all — the form author never asked, which is
+    // not the contact declining.
+    await seedSubmission('notasked@example.com', { version: 1, blocks: [] }, {
+      email: 'notasked@example.com',
+    });
+
+    const { contacts } = await resolveEligibleForSync(C, ANY_CONTACT, fields);
+    const emails = contacts.map((c) => c.identifiers.hashedEmail);
+
+    expect(emails).toContain(sha256Hex('ticked@example.com'));
+    expect(emails).toContain(sha256Hex('notasked@example.com'));
+    // The one case where we have an explicit "no" on record.
+    expect(emails).not.toContain(sha256Hex('unticked@example.com'));
   });
 
   it('reports which sources were dropped, so they can be reviewed', async () => {

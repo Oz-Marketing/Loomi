@@ -215,19 +215,106 @@ export function hasFirstPartyProvenance(
   return formSubmitters.has(contact.id);
 }
 
-/** Contacts in this batch that have submitted one of our own forms. */
+/**
+ * Contacts in this batch who submitted one of this dealer's own forms —
+ * and, where the form asked for consent, actually gave it.
+ *
+ * Loomi forms can carry a `field_consent` block ("I agree to be contacted
+ * about my inquiry"), whose answer is stored in `FormSubmission.data`
+ * under the block's `name`. Treating every submission as consent would
+ * ignore the one place a contact has explicitly said yes or no, so:
+ *
+ *   - form has a consent block, and it's ticked  → provenance
+ *   - form has a consent block, and it isn't     → NOT provenance
+ *   - form has no consent block at all           → provenance
+ *
+ * That last case is deliberate. A submission on the dealer's own site is
+ * still first-party data collected under that site's disclosure; the
+ * absence of a checkbox is the form author's choice, not the contact
+ * declining. Failing those closed would silently drop every lead from
+ * every form built before consent blocks existed.
+ *
+ * One contact can have several submissions. Any single qualifying one is
+ * enough — a person who ticked the box in March doesn't stop having done
+ * so because they later used a form that didn't ask.
+ */
 async function loadFormSubmitters(
   contactIds: string[],
 ): Promise<ReadonlySet<string>> {
   if (contactIds.length === 0) return new Set();
+
   const rows = await prisma.formSubmission.findMany({
     where: { contactId: { in: contactIds } },
-    select: { contactId: true },
-    distinct: ['contactId'],
+    select: {
+      contactId: true,
+      data: true,
+      form: { select: { schema: true } },
+    },
   });
-  return new Set(
-    rows.map((r) => r.contactId).filter((id): id is string => !!id),
-  );
+
+  const consented = new Set<string>();
+  for (const row of rows) {
+    if (!row.contactId) continue;
+    if (consented.has(row.contactId)) continue;
+
+    const keys = consentFieldNames(row.form?.schema);
+    if (keys.length === 0) {
+      consented.add(row.contactId);
+      continue;
+    }
+    const values = (row.data ?? {}) as Record<string, unknown>;
+    // Every consent block on the form has to be satisfied — a form with
+    // two of them is asking two separate questions.
+    if (keys.every((key) => isAffirmative(values[key]))) {
+      consented.add(row.contactId);
+    }
+  }
+  return consented;
+}
+
+/**
+ * `props.name` of every `field_consent` block on a form.
+ *
+ * `Form.schema` is a jsonb column, so Prisma hands it back already
+ * parsed — but tolerate a JSON string too, since older rows and fixtures
+ * store it that way. The v1 shape is `{ version, settings, blocks[] }`.
+ */
+function consentFieldNames(schema: unknown): string[] {
+  let parsed: unknown = schema;
+  if (typeof parsed === 'string') {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      // An unreadable schema tells us nothing either way; don't invent a
+      // consent requirement from it.
+      return [];
+    }
+  }
+  const blocks = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray((parsed as { blocks?: unknown })?.blocks)
+      ? (parsed as { blocks: unknown[] }).blocks
+      : [];
+
+  const names: string[] = [];
+  for (const block of blocks) {
+    const b = block as { type?: unknown; props?: Record<string, unknown> };
+    if (b?.type !== 'field_consent') continue;
+    const name = typeof b.props?.name === 'string' ? b.props.name.trim() : '';
+    if (name) names.push(name);
+  }
+  return names;
+}
+
+/** A ticked checkbox, however the form serialised it. */
+function isAffirmative(value: unknown): boolean {
+  if (value === true) return true;
+  if (typeof value === 'string') {
+    return ['true', 'yes', 'on', '1', 'checked'].includes(
+      value.trim().toLowerCase(),
+    );
+  }
+  return false;
 }
 
 function classify(

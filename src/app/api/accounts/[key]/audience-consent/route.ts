@@ -44,11 +44,24 @@ export async function GET(_req: Request, { params }: RouteContext) {
     return NextResponse.json({ error: 'Account not found' }, { status: 404 });
   }
 
+  // Resolve the attester to a name. This is a compliance record — "who
+  // said this" is the point of it, and a bare cuid answers that for
+  // nobody reading the settings page a year from now.
+  let byName: string | null = null;
+  if (account.audienceSyncConsentBy) {
+    const user = await prisma.user.findUnique({
+      where: { id: account.audienceSyncConsentBy },
+      select: { name: true },
+    });
+    byName = user?.name ?? null;
+  }
+
   return NextResponse.json({
     consent: {
       basis: account.audienceSyncConsentBasis,
-      recordedAt: account.audienceSyncConsentAt,
-      recordedBy: account.audienceSyncConsentBy,
+      at: account.audienceSyncConsentAt,
+      by: account.audienceSyncConsentBy,
+      byName,
       recorded: !!(account.audienceSyncConsentBasis && account.audienceSyncConsentAt),
     },
   });
@@ -62,7 +75,10 @@ export async function GET(_req: Request, { params }: RouteContext) {
  * person clicking it should be someone who can actually answer for it.
  */
 export async function PUT(req: Request, { params }: RouteContext) {
-  const { session, error } = await requireRole('developer', 'super_admin');
+  // Developer only, deliberately narrow for now. Widening this is a
+  // policy decision about who in the agency may make a compliance
+  // statement on a dealer's behalf, not a convenience tweak.
+  const { session, error } = await requireRole('developer');
   if (error) return error;
 
   const { key } = await params;

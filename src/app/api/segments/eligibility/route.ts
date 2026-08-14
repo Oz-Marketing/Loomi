@@ -15,7 +15,6 @@ import { NextResponse } from 'next/server';
 import { requireRole } from '@/lib/api-auth';
 import { resolveFilterFields } from '@/lib/services/audience-fields';
 import {
-  ConsentNotRecordedError,
   resolveEligibleForSync,
   type SyncChannel,
 } from '@/lib/segments/eligibility';
@@ -83,12 +82,6 @@ export async function POST(req: Request) {
     // shipping them would turn a UI request into a data export.
     return NextResponse.json({ breakdown });
   } catch (err) {
-    if (err instanceof ConsentNotRecordedError) {
-      return NextResponse.json(
-        { error: err.message, code: 'consent_not_recorded' },
-        { status: 409 },
-      );
-    }
     if (err instanceof SegmentRefError) {
       return NextResponse.json({ error: err.message }, { status: 400 });
     }

@@ -1,13 +1,32 @@
 /**
- * Seed disclaimer templates ported from Oz Dealer Tools' Monthly Offers system
- * (`disclaimer_templates` cPanel export, 2026-07-01).
+ * Seed disclaimer templates.
+ *
+ * Two sources:
+ *  - Oz Dealer Tools' Monthly Offers system (`disclaimer_templates` cPanel
+ *    export, 2026-07-01) — the Kia APR row.
+ *  - The Co-op team's custom-offer disclaimer set (2026-08) — the full-length
+ *    Audi and Volkswagen bodies. These are the only two brands in that set with
+ *    real manufacturer language; the other 17 ship placeholders and are
+ *    deliberately NOT seeded. See docs/custom-offer-disclaimer-builder.md §10.
  *
  * Body translation for Loomi's token engine:
  *  - `{{year}} {{make}} {{model}} {{trim}}` → `{{vehicle}}` (Loomi's combined Vehicle field)
- *  - literal `$` before `{{msrp}}` / `{{due_at_signing}}` / `{{monthly_payment}}`
- *    removed — Loomi's substitution formats those as "$45,000" already. NOTE:
- *    `{{cost_per_thousand}}` is NOT currency-formatted (it's a decimal rate like
- *    18.37), so it KEEPS its literal `$` — `${{cost_per_thousand}}`.
+ *  - literal `$` before money slugs removed — Loomi's substitution formats those
+ *    as "$45,000" already. NOTE: `{{cost_per_thousand}}` is NOT currency-formatted
+ *    (it's a decimal rate like 18.37), so it KEEPS its literal `$`.
+ *  - `{APR}%` → `{{apr_rate}}` — Loomi's apr_rate carries its own percent sign.
+ *
+ * ⚠️ The Audi/VW bodies carry a hardcoded `©2026` notice, as supplied. That will
+ * need revisiting each January until there's a slug for it.
+ *
+ * EVERY ROW IS `isDefault: false`, INCLUDING THE NEW ONES. `isDefault` is what
+ * lets a template auto-apply on the UNATTENDED path (see disclaimer-resolve.ts) —
+ * and these bodies depend on fields nobody has filled in yet: selling price,
+ * customer down, acquisition and disposition fees, overage rate. Unfilled tokens
+ * are left VISIBLE on purpose, so flagging these as default today would print
+ * "{{acquisition_fee}}" onto generated Audi and VW creative. Flip them to true
+ * once the fields are populated for the accounts that run these brands.
+ *
  * Skipped: the "Oz Lease" row (make "Oz" — a test entry, not a real OEM).
  *
  * Idempotent by (make, offerType, name). Run:
@@ -28,25 +47,95 @@ const TEMPLATES: { make: string; offerType: string; name: string; body: string; 
       'Must take from retail stock by {{offer_end_date}}. Finance contract must be signed and dated no later than ' +
       '{{offer_end_date}}. Limited inventory available.',
   },
+
+  // ── Audi ───────────────────────────────────────────────────────────────────
+  {
+    make: 'Audi',
+    offerType: 'lease',
+    name: 'Audi Lease',
+    isDefault: false,
+    body:
+      'Closed end lease financing available through {{offer_end_date}} for a new, unused {{vehicle}}, on approved credit ' +
+      'to well-qualified lessees by Audi Financial Services through participating Audi dealers. Monthly lease payment ' +
+      'based on MSRP of {{msrp}} and destination charges, less a suggested dealer contribution resulting in a Selling ' +
+      'Price of {{selling_price}}. Excludes tax, title, license, options and dealer fees. Amount due at signing includes ' +
+      "first month's payment, customer down payment of {{customer_down}}, and acquisition fee of {{acquisition_fee}}. " +
+      'Monthly payments total {{monthly_payments_total}}. Your payment will vary based on dealer contribution and the ' +
+      'final negotiated price. At lease end, lessee responsible for disposition fee of {{disposition_fee}}, ' +
+      '{{overage_rate}}/mile over {{total_miles}} miles and excessive wear and use. No security deposit required. ' +
+      'VIN: {{vin}}. {{dealership_name}}. Offer ends {{offer_end_date}}. ©2026 Audi of America, Inc.',
+  },
+  {
+    make: 'Audi',
+    offerType: 'apr',
+    name: 'Audi APR',
+    isDefault: false,
+    body:
+      '{{apr_rate}} APR financing available through {{offer_end_date}} for a new, unused {{vehicle}}, on approved credit ' +
+      'to well-qualified customers by Audi Financial Services through participating Audi dealers. Monthly payment of ' +
+      '{{monthly_payment}} based on amount financed of {{amount_financed}} for {{apr_term}} months at {{apr_rate}} APR ' +
+      'with {{customer_down}} customer down payment. Monthly payments total {{monthly_payments_total}}. Excludes tax, ' +
+      'title, license, options and dealer fees. Not all buyers will qualify. VIN: {{vin}}. {{dealership_name}}. ' +
+      'Offer ends {{offer_end_date}}. ©2026 Audi of America, Inc.',
+  },
+  {
+    make: 'Audi',
+    offerType: 'sales_price',
+    name: 'Audi Purchase Price',
+    isDefault: false,
+    body:
+      '{{sale_price}} purchase price available through {{offer_end_date}} for a new, unused {{vehicle}}. Based on MSRP ' +
+      'of {{msrp}}. Excludes tax, title, license, options and dealer fees. VIN: {{vin}}. {{dealership_name}}. ' +
+      'Offer ends {{offer_end_date}}. ©2026 Audi of America, Inc.',
+  },
+
+  // ── Volkswagen ─────────────────────────────────────────────────────────────
+  // Replaces the earlier ODT row, which rendered the Selling Price as the MSRP
+  // and "Monthly payments total" as the monthly payment, and hardcoded one
+  // dealer's $699 / $395 / $0.20 / 30,000 figures for every dealer.
   {
     make: 'Volkswagen',
     offerType: 'lease',
     name: 'Volkswagen Lease',
     isDefault: false,
     body:
-      'Closed end lease financing available through {{offer_end_date}} for a new, unused {{vehicle}} on approved credit to ' +
-      'well-qualified customers by Volkswagen Financial Services through participating dealers in ID, WA, UT, OR and CO. ' +
-      'Monthly lease payment based on MSRP of {{msrp}} and destination charges, less a suggested dealer contribution and ' +
-      'application of a $1,000 Customer Bonus resulting in a Selling Price of {{msrp}}. Excludes tax, title, license, ' +
-      "options and dealer fees. Amount due at signing includes first month's payment, customer down payment of " +
-      '{{due_at_signing}}, and acquisition fee of $699. Monthly payments total {{monthly_payment}}. Your payment will vary ' +
-      'based on dealer contribution and the final negotiated price. At lease end, lessee responsible for disposition fee ' +
-      'of $395, $0.20/mile over 30,000 miles and excessive wear and use. Customer Bonus applied toward lease contract ' +
-      'when using discounted Volkswagen Financial Services Special Lease program only and is not redeemable for cash. ' +
-      'A $395 fee applies if you purchase your lease vehicle. No security deposit required. Limited inventory available. ' +
-      'Offer not valid in Puerto Rico. VIN: {{vin}}. Stock: {{stock_number}}. {{vehicle}} shown. See your participating ' +
-      'Volkswagen dealer for details or call 1-800-Drive-VW. Young Volkswagen of Layton. Offer ends {{offer_end_date}}. ' +
+      'Closed end lease financing available through {{offer_end_date}} for a new, unused {{vehicle}}, on approved credit ' +
+      'to well-qualified customers by Volkswagen Financial Services through participating dealers in {{states}}. Monthly ' +
+      'lease payment based on MSRP of {{msrp}} and destination charges, less a suggested dealer contribution resulting ' +
+      'in a Selling Price of {{selling_price}}. Excludes tax, title, license, options and dealer fees. Amount due at ' +
+      "signing includes first month's payment, customer down payment of {{customer_down}}, and acquisition fee of " +
+      '{{acquisition_fee}}. Monthly payments total {{monthly_payments_total}}. Your payment will vary based on dealer ' +
+      'contribution and the final negotiated price. At lease end, lessee responsible for disposition fee of ' +
+      '{{disposition_fee}}, {{overage_rate}}/mile over {{total_miles}} miles and excessive wear and use. A ' +
+      '{{disposition_fee}} fee applies if you purchase your lease vehicle. No security deposit required. Offer not ' +
+      'valid in Puerto Rico. Offer not associated with a national Volkswagen incentive program. VIN: {{vin}}. ' +
+      '{{dealership_name}}. Offer ends {{offer_end_date}}. ©2026 Volkswagen of America, Inc.',
+  },
+  {
+    make: 'Volkswagen',
+    offerType: 'apr',
+    name: 'Volkswagen APR',
+    isDefault: false,
+    body:
+      '{{apr_rate}} APR financing available through {{offer_end_date}} for a new, unused {{vehicle}}, on approved credit ' +
+      'to well-qualified customers by {{financial_institution}} through participating dealers. Monthly payment of ' +
+      '{{monthly_payment}} based on amount financed of {{amount_financed}} for {{apr_term}} months at {{apr_rate}} APR ' +
+      'with {{customer_down}} customer down payment. Monthly payments total {{monthly_payments_total}}. Excludes tax, ' +
+      'title, license, options and dealer fees. Not all buyers will qualify. Your payment will vary based on dealer ' +
+      'contribution and the final negotiated price. Offer not valid in Puerto Rico. Offer not associated with a ' +
+      'national Volkswagen incentive program. VIN: {{vin}}. {{dealership_name}}. Offer ends {{offer_end_date}}. ' +
       '©2026 Volkswagen of America, Inc.',
+  },
+  {
+    make: 'Volkswagen',
+    offerType: 'sales_price',
+    name: 'Volkswagen Purchase Price',
+    isDefault: false,
+    body:
+      '{{sale_price}} purchase price available through {{offer_end_date}} for a new, unused {{vehicle}}. Based on MSRP ' +
+      'of {{msrp}}. Excludes tax, title, license, options and dealer fees. Offer not valid in Puerto Rico. Offer not ' +
+      'associated with a national Volkswagen incentive program. VIN: {{vin}}. {{dealership_name}}. ' +
+      'Offer ends {{offer_end_date}}. ©2026 Volkswagen of America, Inc.',
   },
 ];
 

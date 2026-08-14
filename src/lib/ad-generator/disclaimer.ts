@@ -29,6 +29,25 @@ export const DISCLAIMER_SLUGS: Record<string, string> = {
   offer_end_date: 'Offer end date as entered',
   vin: 'VIN — rendered uppercase',
   stock_number: 'Stock number',
+  // ── Full-length OEM lease/finance language ────────────────────────────────
+  // Manufacturer disclaimers (Audi, VW, and the brands still to be transcribed)
+  // itemise the lease economics clause by clause. Without these the templates
+  // can only be stored with the fees hardcoded, which is how the seeded VW row
+  // ended up quoting a $699 acquisition fee at every dealer.
+  selling_price: 'Selling price / capitalised cost — formatted. NOT the MSRP.',
+  customer_down:
+    'Customer down payment — formatted. NOT `due_at_signing`, which also includes the first payment and the acquisition fee.',
+  acquisition_fee: 'Lease acquisition fee — formatted',
+  disposition_fee: 'Lease-end disposition fee — formatted',
+  overage_rate: 'Per-mile overage charge as entered (e.g. $0.20)',
+  miles_per_year: 'Permitted miles per year — thousands-separated',
+  amount_financed: 'Amount financed on an APR offer — formatted',
+  states: 'States / regions the offer is valid in, as entered',
+  dealer_code: 'Manufacturer-assigned dealer code',
+  // Derived — computed here, never typed. A human retyping either of these is a
+  // chance to get the arithmetic wrong in a legal document.
+  total_miles: 'DERIVED: miles per year × (term ÷ 12) — thousands-separated',
+  monthly_payments_total: 'DERIVED: monthly payment × term — formatted',
 };
 
 const DEALER_FEE_BOILERPLATE =
@@ -55,6 +74,21 @@ function money(v: string | undefined): string | null {
 function plain(v: string | undefined): string | null {
   const t = (v ?? '').trim();
   return t === '' ? null : t;
+}
+
+/** Parse a user-entered figure ("$3,999", "10,000", "36") to a Number, or null. */
+function num(v: string | undefined): number | null {
+  if (v == null || String(v).trim() === '') return null;
+  const cleaned = String(v).replace(/[^0-9.-]/g, '');
+  if (cleaned === '' || cleaned === '-' || cleaned === '.') return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** A whole-number count with thousands separators (miles, not money). */
+function count(n: number | null): string | null {
+  if (n == null) return null;
+  return Math.round(n).toLocaleString('en-US');
 }
 
 /** A rate value with a trailing `%` (idempotent). ODT's disclaimer templates
@@ -88,6 +122,31 @@ export function buildTokenValues(data: AdData): Record<string, string> {
   set('offer_end_date', plain(data.expiration));
   set('vin', data.vin ? data.vin.trim().toUpperCase() : null);
   set('stock_number', plain(data.stockNumber));
+
+  // ── full-length OEM lease/finance clauses ──
+  set('selling_price', money(data.sellingPrice));
+  set('customer_down', money(data.customerDown));
+  set('acquisition_fee', money(data.acquisitionFee));
+  set('disposition_fee', money(data.dispositionFee));
+  set('overage_rate', plain(data.overageRate));
+  set('miles_per_year', count(num(data.milesPerYear)));
+  set('amount_financed', money(data.amountFinanced));
+  set('states', plain(data.states));
+  set('dealer_code', plain(data.dealerCode));
+
+  // ── derived ──
+  // The term lives under a different key per offer type, so resolve it once
+  // rather than letting each derivation guess.
+  const term = num(data.offerType === 'apr' ? data.aprTerm : data.leaseTerm);
+  const payment = num(data.monthlyPayment);
+  if (term != null && payment != null) {
+    set('monthly_payments_total', money(String(payment * term)));
+  }
+  // Lease only: an APR offer has no mileage allowance to exceed.
+  const perYear = num(data.milesPerYear);
+  if (data.offerType === 'lease' && term != null && perYear != null) {
+    set('total_miles', count(perYear * (term / 12)));
+  }
   return v;
 }
 
@@ -130,12 +189,23 @@ export function composeDisclaimer(data: AdData, templateBody?: string, rawBody?:
     out = substituteTokens(body, values).trim();
   }
 
-  if (!/dealer[-\s]?imposed fees/i.test(out)) {
+  // Only add the fee boilerplate when the body doesn't already speak to dealer
+  // fees. The test used to require the exact phrase "dealer-imposed fees", but
+  // manufacturer language says "and dealer fees" — so a full-length OEM body got
+  // the boilerplate appended and the disclaimer ended up asserting both that
+  // fees were INCLUDED and that they were EXCLUDED, in consecutive sentences.
+  if (!/dealer[-\s]?(imposed\s+)?fees?\b/i.test(out)) {
     out = `${out} ${DEALER_FEE_BOILERPLATE}`;
   }
+  // Append the identifiers only when the body doesn't already carry them. Testing
+  // the substituted VALUE rather than the token catches every phrasing — a
+  // full-length OEM body writes "VIN: {vin}." mid-sentence, and appending a
+  // second copy on the end reads as a mistake in a legal line.
   const ids: string[] = [];
-  if (values.vin) ids.push(`VIN: ${values.vin}`);
-  if (values.stock_number) ids.push(`Stock#: ${values.stock_number}`);
+  if (values.vin && !out.includes(values.vin)) ids.push(`VIN: ${values.vin}`);
+  if (values.stock_number && !out.includes(values.stock_number)) {
+    ids.push(`Stock#: ${values.stock_number}`);
+  }
   if (ids.length) out = `${out} ${ids.join('  ')}`;
   return out.trim();
 }

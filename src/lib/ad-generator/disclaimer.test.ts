@@ -72,4 +72,91 @@ describe('composeDisclaimer', () => {
     );
     expect(out.match(/dealer-imposed fees/g)?.length).toBe(1);
   });
+
+  // Manufacturer language says "and dealer fees", not "dealer-imposed fees".
+  // Appending the boilerplate to it produced a disclaimer that asserted fees were
+  // both included and excluded, one sentence apart.
+  it('suppresses the fee boilerplate when the body already excludes dealer fees', () => {
+    const out = composeDisclaimer(
+      { offerType: 'lease' },
+      'Excludes tax, title, license, options and dealer fees.',
+    );
+    expect(out).not.toContain('dealer-imposed fees');
+    expect(out).toBe('Excludes tax, title, license, options and dealer fees.');
+  });
+
+  it('does not append a second VIN when the body already carries one', () => {
+    const out = composeDisclaimer(
+      { offerType: 'lease', vin: 'abc123', stockNumber: 'H4421A' },
+      'Lease terms. VIN: {vin}. Stock {stock_number}.',
+    );
+    expect(out.match(/ABC123/g)?.length).toBe(1);
+    expect(out.match(/H4421A/g)?.length).toBe(1);
+  });
+});
+
+describe('full-length OEM lease clauses', () => {
+  const LEASE = {
+    offerType: 'lease',
+    monthlyPayment: '389',
+    leaseTerm: '36',
+    msrp: '45630',
+    sellingPrice: '42500',
+    customerDown: '3999',
+    acquisitionFee: '699',
+    dispositionFee: '395',
+    milesPerYear: '10000',
+    overageRate: '$0.20',
+    states: 'ID; UT; WA',
+    dealerCode: '32-1234',
+  };
+
+  it('formats the new lease fields', () => {
+    const v = buildTokenValues(LEASE);
+    expect(v.selling_price).toBe('$42,500');
+    expect(v.customer_down).toBe('$3,999');
+    expect(v.acquisition_fee).toBe('$699');
+    expect(v.disposition_fee).toBe('$395');
+    expect(v.miles_per_year).toBe('10,000');
+    expect(v.overage_rate).toBe('$0.20');
+    expect(v.states).toBe('ID; UT; WA');
+    expect(v.dealer_code).toBe('32-1234');
+  });
+
+  it('derives total miles and the payments total from the lease term', () => {
+    const v = buildTokenValues(LEASE);
+    expect(v.total_miles).toBe('30,000'); // 10,000/yr × (36 ÷ 12)
+    expect(v.monthly_payments_total).toBe('$14,004'); // $389 × 36
+  });
+
+  it('derives the payments total from the APR term on a finance offer', () => {
+    const v = buildTokenValues({
+      offerType: 'apr',
+      monthlyPayment: '549',
+      aprTerm: '60',
+      leaseTerm: '36', // stale lease value must not win
+    });
+    expect(v.monthly_payments_total).toBe('$32,940'); // $549 × 60, not × 36
+  });
+
+  it('omits total miles on a finance offer — there is no mileage allowance', () => {
+    const v = buildTokenValues({
+      offerType: 'apr',
+      aprTerm: '60',
+      milesPerYear: '10000',
+    });
+    expect(v).not.toHaveProperty('total_miles');
+  });
+
+  it('omits derived values rather than guessing when an input is missing', () => {
+    const v = buildTokenValues({ offerType: 'lease', monthlyPayment: '389' });
+    expect(v).not.toHaveProperty('monthly_payments_total');
+    expect(v).not.toHaveProperty('total_miles');
+  });
+
+  it('keeps customer down distinct from due at signing', () => {
+    const v = buildTokenValues({ ...LEASE, dueAtSigning: '5087' });
+    expect(v.customer_down).toBe('$3,999');
+    expect(v.due_at_signing).toBe('$5,087');
+  });
 });

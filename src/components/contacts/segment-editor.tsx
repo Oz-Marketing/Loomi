@@ -22,7 +22,7 @@ import {
 import { useAccount } from '@/contexts/account-context';
 import { useSubaccountHref } from '@/hooks/use-subaccount-href';
 import { useFilterableFields } from '@/hooks/use-filterable-fields';
-import { evaluateFilter } from '@/lib/smart-list-engine';
+import { operatorHasRequiredValues } from '@/lib/smart-list-engine';
 import { toast } from '@/lib/toast';
 import type {
   FieldDefinition,
@@ -75,19 +75,43 @@ function rehydrateIds(def: FilterDefinition): FilterDefinition {
   };
 }
 
+// Drop half-finished conditions before saving. Shares
+// `operatorHasRequiredValues` with the engine and the API validator so
+// all three agree on what "complete" means — this used to let a
+// `between` through with no bounds, which the API now rejects outright.
 function cleanForSave(def: FilterDefinition): FilterDefinition {
   return {
     ...def,
     groups: def.groups
       .map((g) => ({
         ...g,
-        conditions: g.conditions.filter((c) => {
-          const needsValue = !NO_VALUE_OPERATORS.includes(c.operator);
-          return !needsValue || c.value.trim() !== '' || c.operator === 'between';
-        }),
+        conditions: g.conditions.filter((c) =>
+          operatorHasRequiredValues(c.operator, c.value, c.value2),
+        ),
       }))
       .filter((g) => g.conditions.length > 0),
   };
+}
+
+/** Live-preview state. `count` and `reachable` are EXACT figures from
+ *  the server; `contacts` is only a display sample. */
+interface SegmentPreviewState {
+  status: 'loading' | 'ready' | 'error' | 'empty-filter' | 'org-wide';
+  count: number;
+  reachable: { email: number; phone: number };
+  contacts: Contact[];
+  /** Total contacts in the account, for the "% of roster" line. */
+  total: number;
+  strategy?: 'sql' | 'scan';
+  error?: string;
+}
+
+/** What an ad-platform push would actually take from this segment. */
+interface EligibilityState {
+  status: 'idle' | 'loading' | 'ready' | 'blocked' | 'error';
+  eligible: number;
+  excluded: { noIdentifier: number; suppressed: number; optedOut: number; duplicate: number };
+  message?: string;
 }
 
 export interface SegmentEditorProps {
@@ -106,9 +130,17 @@ export interface SegmentEditorProps {
 
 export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const router = useRouter();
-  const { isAccount, accountKey, accountData } = useAccount();
+  const { isAccount, accountKey, accountData, userRole } = useAccount();
   const subHref = useSubaccountHref();
   const segmentsHref = subHref('/contacts/segments');
+
+  // A segment with no accountKey is org-wide: visible in every account,
+  // and writable only by developers/super_admins (the API enforces this
+  // on create, edit, and delete alike). Surface that here rather than
+  // letting someone build a filter and collect a 403 on save.
+  const isPrivileged = userRole === 'developer' || userRole === 'super_admin';
+  const isOrgWideScope = !initial?.accountKey && !(isAccount && accountKey);
+  const canSave = isPrivileged || !isOrgWideScope;
 
   // Sub-account custom fields are only meaningful inside a single
   // account. Admin / org-wide mode keeps just the built-ins (custom
@@ -137,60 +169,165 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const [definition, setDefinition] = useState<FilterDefinition>(initialDef);
   const [saving, setSaving] = useState(false);
 
-  // ── Contacts for live preview ──────────────────────────────
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [contactsLoading, setContactsLoading] = useState(true);
-  const [previewMeta, setPreviewMeta] = useState<{
-    total: number;
-    sampled: boolean;
-    accounts?: number;
-  }>({ total: 0, sampled: false });
+  // ── Live preview ───────────────────────────────────────────
+  //
+  // Resolved by the server, not in this tab. The browser used to fetch
+  // every contact (capped at 5,000) and filter them here, which meant
+  // the headline number on this screen was the size of a sample on any
+  // account bigger than that — with nothing saying so.
+  const cleaned = useMemo(() => cleanForSave(definition), [definition]);
+  const [preview, setPreview] = useState<SegmentPreviewState>({
+    status: 'loading',
+    count: 0,
+    reachable: { email: 0, phone: 0 },
+    contacts: [],
+    total: 0,
+  });
+
+  const [eligibility, setEligibility] = useState<EligibilityState>({
+    status: 'idle',
+    eligible: 0,
+    excluded: { noIdentifier: 0, suppressed: 0, optedOut: 0, duplicate: 0 },
+  });
+
+  // Serialised so the effect re-runs on a real change to the filter, not
+  // on every re-render (cleanForSave returns a fresh object each time).
+  const cleanedKey = useMemo(() => JSON.stringify(cleaned), [cleaned]);
 
   useEffect(() => {
-    let cancelled = false;
-    setContactsLoading(true);
-
-    const url =
-      isAccount && accountKey
-        ? `/api/contacts?accountKey=${encodeURIComponent(accountKey)}&all=true&includeMessaging=true`
-        : '/api/contacts/aggregate?includeMessaging=true&limitPerAccount=250';
-
-    fetch(url)
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((data) => {
-        if (cancelled) return;
-        const list: Contact[] = Array.isArray(data?.contacts) ? data.contacts : [];
-        setContacts(list);
-        if (isAccount) {
-          setPreviewMeta({ total: data?.meta?.total ?? list.length, sampled: false });
-        } else {
-          setPreviewMeta({
-            total: data?.meta?.totalContacts ?? list.length,
-            sampled: true,
-            accounts: data?.meta?.accountsFetched ?? 0,
-          });
-        }
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setContacts([]);
-        setPreviewMeta({ total: 0, sampled: false });
-      })
-      .finally(() => {
-        if (!cancelled) setContactsLoading(false);
+    // Org-wide scope has no single account to resolve against — a
+    // segment is a filter, and its size differs per sub-account. Rather
+    // than showing a cross-account sample dressed up as a count, say so.
+    if (!isAccount || !accountKey) {
+      setPreview({
+        status: 'org-wide',
+        count: 0,
+        reachable: { email: 0, phone: 0 },
+        contacts: [],
+        total: 0,
       });
+      return;
+    }
+    if (cleaned.groups.length === 0) {
+      setPreview({
+        status: 'empty-filter',
+        count: 0,
+        reachable: { email: 0, phone: 0 },
+        contacts: [],
+        total: 0,
+      });
+      return;
+    }
+
+    let cancelled = false;
+    setPreview((prev) => ({ ...prev, status: 'loading' }));
+
+    // Debounced: the builder fires on every keystroke in a value input,
+    // and each resolve is a real query against the whole contact table.
+    const timer = setTimeout(() => {
+      fetch('/api/segments/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountKey,
+          definition: cleaned,
+          sampleSize: 12,
+          // So the segment can't reference itself while being edited.
+          segmentId: initial?.id,
+        }),
+      })
+        .then(async (r) => {
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
+          return data;
+        })
+        .then((data) => {
+          if (cancelled) return;
+          setPreview({
+            status: 'ready',
+            count: Number(data.count) || 0,
+            reachable: {
+              email: Number(data.reachable?.email) || 0,
+              phone: Number(data.reachable?.phone) || 0,
+            },
+            contacts: Array.isArray(data.contacts) ? data.contacts : [],
+            total: Number(data.accountTotal) || 0,
+            strategy: data.strategy,
+          });
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setPreview({
+            status: 'error',
+            count: 0,
+            reachable: { email: 0, phone: 0 },
+            contacts: [],
+            total: 0,
+            error: err instanceof Error ? err.message : 'Preview failed',
+          });
+        });
+    }, 400);
 
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [isAccount, accountKey]);
+    // `cleanedKey` stands in for `cleaned` — see above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cleanedKey, isAccount, accountKey]);
 
-  // ── Live filter evaluation ─────────────────────────────────
-  const cleaned = useMemo(() => cleanForSave(definition), [definition]);
-  const matches = useMemo(() => {
-    if (cleaned.groups.length === 0) return contacts;
-    return evaluateFilter(contacts, cleaned, fields);
-  }, [cleaned, contacts, fields]);
+  // How much of this segment could actually be pushed to an ad platform.
+  // A separate request from the preview so a missing consent basis
+  // reports itself without blanking the count beside it.
+  useEffect(() => {
+    if (!isAccount || !accountKey || cleaned.groups.length === 0) {
+      setEligibility((prev) => ({ ...prev, status: 'idle' }));
+      return;
+    }
+    let cancelled = false;
+    setEligibility((prev) => ({ ...prev, status: 'loading' }));
+
+    const timer = setTimeout(() => {
+      fetch('/api/segments/eligibility', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ accountKey, definition: cleaned }),
+      })
+        .then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (cancelled) return;
+          if (res.status === 409) {
+            setEligibility({
+              status: 'blocked',
+              eligible: 0,
+              excluded: { noIdentifier: 0, suppressed: 0, optedOut: 0, duplicate: 0 },
+              message: 'No consent basis recorded for this account',
+            });
+            return;
+          }
+          if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+          setEligibility({
+            status: 'ready',
+            eligible: Number(data.breakdown?.eligible) || 0,
+            excluded: {
+              noIdentifier: Number(data.breakdown?.excluded?.noIdentifier) || 0,
+              suppressed: Number(data.breakdown?.excluded?.suppressed) || 0,
+              optedOut: Number(data.breakdown?.excluded?.optedOut) || 0,
+              duplicate: Number(data.breakdown?.excluded?.duplicate) || 0,
+            },
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setEligibility((prev) => ({ ...prev, status: 'error' }));
+        });
+    }, 600);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cleanedKey, isAccount, accountKey]);
 
   // ── Mutations ──────────────────────────────────────────────
   const updateDef = useCallback(
@@ -269,6 +406,10 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
     }
     if (cleaned.groups.length === 0) {
       toast.error('Add at least one condition with a value.');
+      return;
+    }
+    if (!canSave) {
+      toast.error('Org-wide segments can only be saved by a developer or super admin.');
       return;
     }
 
@@ -383,7 +524,12 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
             <button
               type="button"
               onClick={handleSave}
-              disabled={saving || !name.trim() || cleaned.groups.length === 0}
+              disabled={saving || !name.trim() || cleaned.groups.length === 0 || !canSave}
+              title={
+                canSave
+                  ? undefined
+                  : 'Org-wide segments can only be saved by a developer or super admin. Switch to a sub-account to build one there.'
+              }
               className="px-4 h-9 inline-flex items-center gap-1.5 text-sm rounded-lg bg-[var(--primary)] text-white hover:bg-[var(--primary)]/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <BookmarkSquareIcon className="w-4 h-4" />
@@ -448,14 +594,7 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
 
         {/* Preview pane */}
         <aside className="lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)] flex flex-col">
-          <PreviewPanel
-            matches={matches}
-            total={previewMeta.total}
-            sampled={previewMeta.sampled}
-            sampledAccounts={previewMeta.accounts}
-            loading={contactsLoading}
-            isEmptyFilter={cleaned.groups.length === 0}
-          />
+          <PreviewPanel preview={preview} eligibility={eligibility} />
         </aside>
       </div>
     </div>
@@ -599,19 +738,28 @@ function ConditionRow({
     condition.operator !== 'is_one_of' &&
     condition.operator !== 'is_not_one_of' &&
     hasOptions;
-  const isNumberInput = fieldType === 'number';
+  // numeric_text fields (mileage, vehicle year) carry both operator
+  // families, so the input follows the OPERATOR rather than the type:
+  // a spinner for "over 60,000", a plain box for "contains 201".
+  // Multiselect fields WITH declared options (list membership) get a
+  // checkbox picker rather than the comma-separated text box — the
+  // stored values are opaque ids, so typing them isn't a real option.
+  const isOptionMultiSelect = fieldType === 'multiselect' && hasOptions;
+  const isNumberInput =
+    fieldType === 'number' ||
+    (fieldType === 'numeric_text' && condition.operator.startsWith('num_'));
   const isDateInput = fieldType === 'date' && condition.operator !== 'within_days';
 
   const inputType = isNumberInput ? 'number' : isDateInput ? 'date' : 'text';
   const placeholder =
     condition.operator === 'within_days'
       ? 'days (e.g. 30)'
-      : fieldType === 'tags' || fieldType === 'multiselect'
-        ? 'tag1, tag2'
-        : fieldType === 'select'
-          ? 'value1, value2'
-          : fieldType === 'number'
-            ? 'number'
+      : isNumberInput
+        ? 'number'
+        : fieldType === 'tags' || fieldType === 'multiselect'
+          ? 'tag1, tag2'
+          : fieldType === 'select'
+            ? 'value1, value2'
             : 'value';
 
   const fieldGroups = useMemo(
@@ -646,7 +794,14 @@ function ConditionRow({
       />
       {needsValue ? (
         <div className="flex items-stretch gap-2 flex-1 min-w-[150px]">
-          {isSingleSelectInput ? (
+          {isOptionMultiSelect ? (
+            <OptionMultiSelect
+              options={field?.options ?? []}
+              value={condition.value}
+              onChange={onValueChange}
+              invalid={missingValue}
+            />
+          ) : isSingleSelectInput ? (
             <select
               value={condition.value}
               onChange={(e) => onValueChange(e.target.value)}
@@ -702,6 +857,107 @@ function ConditionRow({
         >
           <TrashIcon className="w-4 h-4" />
         </button>
+      )}
+    </div>
+  );
+}
+
+function excludedTotal(e: EligibilityState): number {
+  return (
+    e.excluded.optedOut +
+    e.excluded.suppressed +
+    e.excluded.noIdentifier +
+    e.excluded.duplicate
+  );
+}
+
+// ── Option multi-select ──
+//
+// Renders declared options as toggles over a comma-separated value, so
+// the stored shape stays identical to what a user would have typed by
+// hand. Used for list membership, where the values are cuids.
+
+interface OptionMultiSelectProps {
+  options: { value: string; label: string }[];
+  value: string;
+  onChange: (value: string) => void;
+  invalid?: boolean;
+}
+
+function OptionMultiSelect({ options, value, onChange, invalid }: OptionMultiSelectProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const selected = useMemo(
+    () => new Set(value.split(',').map((v) => v.trim()).filter(Boolean)),
+    [value],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, [open]);
+
+  function toggle(optionValue: string) {
+    const next = new Set(selected);
+    if (next.has(optionValue)) next.delete(optionValue);
+    else next.add(optionValue);
+    // Preserve the declared option order so the saved value is stable
+    // regardless of the order things were clicked.
+    onChange(options.filter((o) => next.has(o.value)).map((o) => o.value).join(','));
+  }
+
+  const label =
+    selected.size === 0
+      ? 'Select…'
+      : options
+          .filter((o) => selected.has(o.value))
+          .map((o) => o.label)
+          .join(', ') || `${selected.size} selected`;
+
+  return (
+    <div ref={ref} className="relative flex-1 min-w-[150px]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`w-full px-3 h-9 text-sm text-left rounded-lg border bg-transparent truncate transition-colors ${
+          invalid
+            ? 'border-amber-500/50'
+            : 'border-[var(--border)] hover:border-[var(--primary)]'
+        }`}
+      >
+        {label}
+      </button>
+      {open && (
+        <div className="absolute z-[9999] mt-1 w-full max-h-56 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--background)] shadow-lg">
+          {options.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-[var(--muted-foreground)]">
+              No lists in this account yet
+            </p>
+          ) : (
+            options.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => toggle(option.value)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-[var(--sidebar-muted)] transition-colors"
+              >
+                <span
+                  className={`w-3.5 h-3.5 rounded border flex-shrink-0 ${
+                    selected.has(option.value)
+                      ? 'bg-[var(--primary)] border-[var(--primary)]'
+                      : 'border-[var(--border)]'
+                  }`}
+                />
+                <span className="truncate">{option.label}</span>
+              </button>
+            ))
+          )}
+        </div>
       )}
     </div>
   );
@@ -913,27 +1169,19 @@ function LogicPill({ value, onToggle, tone }: LogicPillProps) {
 // ── Preview pane ──
 
 interface PreviewPanelProps {
-  matches: Contact[];
-  total: number;
-  sampled: boolean;
-  sampledAccounts?: number;
-  loading: boolean;
-  isEmptyFilter: boolean;
+  preview: SegmentPreviewState;
+  eligibility: EligibilityState;
 }
 
-function PreviewPanel({
-  matches,
-  total,
-  sampled,
-  sampledAccounts,
-  loading,
-  isEmptyFilter,
-}: PreviewPanelProps) {
-  const matchCount = matches.length;
+function PreviewPanel({ preview, eligibility }: PreviewPanelProps) {
+  const { status, count: matchCount, reachable, contacts, total } = preview;
+  const loading = status === 'loading';
   const percent = total > 0 ? Math.round((matchCount / total) * 100) : 0;
-  const withEmail = matches.filter((c) => c.email && c.email.trim()).length;
-  const withPhone = matches.filter((c) => c.phone && c.phone.trim()).length;
-  const sample = matches.slice(0, 12);
+  // Exact figures from the server — NOT derived from `contacts`, which is
+  // only the handful of rows rendered below.
+  const withEmail = reachable.email;
+  const withPhone = reachable.phone;
+  const sample = contacts;
 
   return (
     <div className="glass-card rounded-xl border border-[var(--border)]/70 overflow-hidden flex flex-col flex-1 min-h-0">
@@ -950,23 +1198,69 @@ function PreviewPanel({
       <div className="px-4 py-4 border-b border-[var(--border)]/70">
         <div className="flex items-baseline gap-2">
           <span className="text-3xl font-bold tabular-nums">
-            {loading ? '—' : matchCount.toLocaleString()}
+            {status === 'ready' ? matchCount.toLocaleString() : '—'}
           </span>
           <span className="text-sm text-[var(--muted-foreground)]">
             contact{matchCount === 1 ? '' : 's'} match
           </span>
         </div>
         <p className="text-[11px] text-[var(--muted-foreground)] mt-1">
-          {loading
-            ? 'Loading contacts…'
-            : isEmptyFilter
-              ? 'No conditions — all contacts shown'
-              : `${percent}% of ${total.toLocaleString()} total`}
-          {sampled && !loading && sampledAccounts ? (
-            <> · sampled across {sampledAccounts} account{sampledAccounts === 1 ? '' : 's'}</>
-          ) : null}
+          {status === 'loading' && 'Resolving…'}
+          {status === 'empty-filter' && 'Add a condition to see who matches'}
+          {status === 'org-wide' &&
+            'Switch to a sub-account to preview — segment size differs per account'}
+          {status === 'error' && (
+            <span className="text-amber-500">{preview.error}</span>
+          )}
+          {status === 'ready' && `${percent}% of ${total.toLocaleString()} total`}
         </p>
       </div>
+
+      {/* Ad-platform eligibility. Shown next to the segment size because
+          the gap between the two is the number that surprises people —
+          a 40,000-member segment can be a 12,000-member audience once
+          opt-outs, suppressions and missing identifiers come out. */}
+      {eligibility.status !== 'idle' && (
+        <div className="px-4 py-3 border-b border-[var(--border)]/70">
+          {eligibility.status === 'blocked' ? (
+            <p className="text-[11px] text-amber-500 flex items-start gap-1.5">
+              <ExclamationTriangleIcon className="w-3.5 h-3.5 flex-shrink-0 mt-px" />
+              <span>
+                {eligibility.message} — this segment can’t be synced to an ad
+                platform until one is recorded.
+              </span>
+            </p>
+          ) : eligibility.status === 'ready' ? (
+            <>
+              <div className="flex items-baseline gap-2">
+                <span className="text-lg font-semibold tabular-nums">
+                  {eligibility.eligible.toLocaleString()}
+                </span>
+                <span className="text-[11px] text-[var(--muted-foreground)]">
+                  syncable to ad platforms
+                </span>
+              </div>
+              {excludedTotal(eligibility) > 0 && (
+                <p className="text-[11px] text-[var(--muted-foreground)] mt-1">
+                  {excludedTotal(eligibility).toLocaleString()} excluded:{' '}
+                  {[
+                    eligibility.excluded.optedOut && `${eligibility.excluded.optedOut} opted out`,
+                    eligibility.excluded.suppressed && `${eligibility.excluded.suppressed} suppressed`,
+                    eligibility.excluded.noIdentifier && `${eligibility.excluded.noIdentifier} no email or phone`,
+                    eligibility.excluded.duplicate && `${eligibility.excluded.duplicate} duplicate`,
+                  ]
+                    .filter(Boolean)
+                    .join(', ')}
+                </p>
+              )}
+            </>
+          ) : eligibility.status === 'loading' ? (
+            <p className="text-[11px] text-[var(--muted-foreground)]">
+              Checking ad-platform eligibility…
+            </p>
+          ) : null}
+        </div>
+      )}
 
       {!loading && matchCount > 0 && (
         <div className="px-4 py-3 border-b border-[var(--border)]/70 grid grid-cols-2 gap-2">

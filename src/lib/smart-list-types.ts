@@ -14,7 +14,20 @@ export type FieldType =
   | 'tags'
   | 'boolean'
   | 'select'
-  | 'multiselect';
+  | 'multiselect'
+  // Stored as text, comparable as a number. Vehicle year and mileage
+  // arrive from CRM exports as strings ("72,500", "2019") and are stored
+  // that way, but "mileage over 60,000" and "year between 2019 and 2022"
+  // are core automotive segments that text operators can't express.
+  //
+  // This type offers BOTH families and dispatches on the operator, which
+  // is what makes it additive: every saved segment using `contains` or
+  // `equals` on these fields keeps working untouched. Re-typing them to
+  // plain `number` would have invalidated those segments — and with the
+  // engine now failing closed, invalid means "matches nobody", silently.
+  | 'numeric_text'
+  // A reference to another saved segment. The value is an Audience id.
+  | 'segment_ref';
 
 // Operators by field type
 export type TextOperator =
@@ -61,6 +74,12 @@ export type TagsOperator =
 
 export type BooleanOperator = 'is_true' | 'is_false';
 
+// Segment composition. `in_segment` / `not_in_segment` reference another
+// saved segment by id; the referenced DEFINITION is evaluated against
+// the same contact, so composition costs nothing extra at resolve time
+// and can't drift from what the referenced segment means today.
+export type SegmentRefOperator = 'in_segment' | 'not_in_segment';
+
 export type SelectOperator =
   | 'is_one_of'
   | 'is_not_one_of'
@@ -73,7 +92,8 @@ export type FilterOperator =
   | DateOperator
   | TagsOperator
   | BooleanOperator
-  | SelectOperator;
+  | SelectOperator
+  | SegmentRefOperator;
 
 // Operator labels for the UI
 export const OPERATOR_LABELS: Record<FilterOperator, string> = {
@@ -104,6 +124,8 @@ export const OPERATOR_LABELS: Record<FilterOperator, string> = {
   is_false: 'is false',
   is_one_of: 'is one of',
   is_not_one_of: 'is not one of',
+  in_segment: 'is in segment',
+  not_in_segment: 'is not in segment',
 };
 
 // Operators available per field type
@@ -135,10 +157,31 @@ export const OPERATORS_BY_TYPE: Record<FieldType, FilterOperator[]> = {
   boolean: ['is_true', 'is_false'],
   select: ['is_one_of', 'is_not_one_of', 'is_empty', 'is_not_empty'],
   multiselect: ['includes_any', 'includes_all', 'excludes', 'is_empty', 'is_not_empty'],
+  segment_ref: ['in_segment', 'not_in_segment'],
+  numeric_text: [
+    'num_gte',
+    'num_lte',
+    'num_gt',
+    'num_lt',
+    'num_between',
+    'num_equals',
+    'num_not_equals',
+    'contains',
+    'equals',
+    'not_equals',
+    'is_empty',
+    'is_not_empty',
+  ],
 };
 
 // Operators that need no value input
 export const NO_VALUE_OPERATORS: FilterOperator[] = ['is_empty', 'is_not_empty', 'overdue', 'is_true', 'is_false'];
+
+// Operators that need BOTH bounds (`value` and `value2`). A range
+// missing its upper bound is incomplete, not open-ended — the engine
+// and the validator both treat it as a non-match / an error rather
+// than silently comparing against one side.
+export const RANGE_OPERATORS: FilterOperator[] = ['between', 'num_between'];
 
 // ── Filter Definition (stored as JSON in DB) ──
 
@@ -180,6 +223,7 @@ export type FieldCategory =
   | 'vehicle'
   | 'lifecycle'
   | 'messaging'
+  | 'history'
   | 'meta'
   | 'custom';
 
@@ -213,14 +257,17 @@ export const FILTERABLE_FIELDS: FieldDefinition[] = [
   { key: 'city', label: 'City', type: 'text', category: 'contact' },
   { key: 'state', label: 'State', type: 'text', category: 'contact' },
   { key: 'postalCode', label: 'Postal Code', type: 'text', category: 'contact' },
+  // Country is on the Contact row and is a required part of address-based
+  // matching when a segment is pushed to an ad platform, so it's filterable.
+  { key: 'country', label: 'Country', type: 'text', category: 'contact' },
   { key: 'source', label: 'Source', type: 'text', category: 'contact' },
 
   // Vehicle
-  { key: 'vehicleYear', label: 'Vehicle Year', type: 'text', category: 'vehicle' },
+  { key: 'vehicleYear', label: 'Vehicle Year', type: 'numeric_text', category: 'vehicle' },
   { key: 'vehicleMake', label: 'Vehicle Make', type: 'text', category: 'vehicle' },
   { key: 'vehicleModel', label: 'Vehicle Model', type: 'text', category: 'vehicle' },
   { key: 'vehicleVin', label: 'VIN', type: 'text', category: 'vehicle' },
-  { key: 'vehicleMileage', label: 'Mileage', type: 'text', category: 'vehicle' },
+  { key: 'vehicleMileage', label: 'Mileage', type: 'numeric_text', category: 'vehicle' },
 
   // Lifecycle dates
   { key: 'dateAdded', label: 'Date Added', type: 'date', category: 'lifecycle' },
@@ -231,16 +278,63 @@ export const FILTERABLE_FIELDS: FieldDefinition[] = [
   { key: 'warrantyEndDate', label: 'Warranty End Date', type: 'date', category: 'lifecycle' },
   { key: 'dateOfBirth', label: 'Date of Birth', type: 'date', category: 'lifecycle' },
 
-  // Messaging
+  // Messaging.
+  //
+  // The booleans are lifetime ("has EVER opened"), which decays toward
+  // "everyone" as a roster ages — a 6-year-old contact who opened one
+  // email in 2021 is not an engaged contact. They're kept because saved
+  // segments reference them; the date fields below are what new segments
+  // should use, since recency is the thing that actually predicts
+  // response.
   { key: 'hasReceivedMessage', label: 'Has Received Any Message', type: 'boolean', category: 'messaging' },
   { key: 'hasReceivedEmail', label: 'Has Received Email', type: 'boolean', category: 'messaging' },
   { key: 'hasReceivedSms', label: 'Has Received SMS', type: 'boolean', category: 'messaging' },
   { key: 'hasOpenedEmail', label: 'Has Opened Email', type: 'boolean', category: 'messaging' },
   { key: 'hasClickedEmail', label: 'Has Clicked Email', type: 'boolean', category: 'messaging' },
   { key: 'lastMessageDate', label: 'Last Message Date', type: 'date', category: 'messaging' },
+  { key: 'lastEmailDeliveredAt', label: 'Last Email Delivered', type: 'date', category: 'messaging' },
+  { key: 'lastEmailOpenedAt', label: 'Last Email Opened', type: 'date', category: 'messaging' },
+  { key: 'lastEmailClickedAt', label: 'Last Email Clicked', type: 'date', category: 'messaging' },
+  { key: 'lastSmsAt', label: 'Last SMS Sent', type: 'date', category: 'messaging' },
+  // Opt-out state. Visible here so a segment can SEE it — but note that
+  // exports don't rely on anyone remembering to add these conditions:
+  // the sync eligibility gate excludes opted-out and suppressed contacts
+  // unconditionally (see src/lib/segments/eligibility.ts).
+  { key: 'dndEmail', label: 'Opted Out of Email', type: 'boolean', category: 'messaging' },
+  { key: 'dndSms', label: 'Opted Out of SMS', type: 'boolean', category: 'messaging' },
+
+  // Purchase / service history — rolled up from ContactEvent.
+  //
+  // Labels say where the number comes from, because the lifecycle
+  // section above has similar-sounding fields sourced from the CRM's
+  // latest-value snapshot on the contact record. The two can disagree
+  // and a dealer needs to know which one they're filtering on.
+  { key: 'serviceVisitCount', label: 'Service Visits (lifetime count)', type: 'number', category: 'history' },
+  { key: 'saleCount', label: 'Vehicles Purchased (lifetime count)', type: 'number', category: 'history' },
+  { key: 'lifetimeSpend', label: 'Lifetime Spend ($)', type: 'number', category: 'history' },
+  { key: 'lastServiceEventAt', label: 'Last Service Visit (from history)', type: 'date', category: 'history' },
+  { key: 'firstServiceEventAt', label: 'First Service Visit (from history)', type: 'date', category: 'history' },
+  { key: 'lastSaleEventAt', label: 'Last Purchase (from history)', type: 'date', category: 'history' },
+  { key: 'firstSaleEventAt', label: 'First Purchase (from history)', type: 'date', category: 'history' },
 
   // Meta
   { key: 'tags', label: 'Tags', type: 'tags', category: 'meta' },
+  // Static list membership. Options are injected per-account by
+  // getFilterableFields (the ids are account-scoped, so there's no
+  // meaningful static option list). Modelled as multiselect so it reuses
+  // the tags operator family: includes_any / includes_all / excludes.
+  //
+  // `excludes` is the one that matters for ad audiences — it's how you
+  // express "everyone in this segment EXCEPT the people on our
+  // do-not-target list" without hand-maintaining a second segment.
+  { key: 'listIds', label: 'List Membership', type: 'multiselect', category: 'meta' },
+  // Segment composition. Options are injected per-account, like lists.
+  //
+  // This is what makes a suppression audience expressible: "everyone in
+  // Lapsed Service, who is NOT in Recently Purchased". Without it, the
+  // only way to exclude a cohort is to restate its conditions inline and
+  // keep the two copies in sync by hand.
+  { key: 'segmentRef', label: 'Segment', type: 'segment_ref', category: 'meta' },
 ];
 
 // Group fields by category for the filter builder dropdown
@@ -249,6 +343,7 @@ export const FIELD_CATEGORIES: { key: FieldCategory; label: string }[] = [
   { key: 'vehicle', label: 'Vehicle' },
   { key: 'lifecycle', label: 'Lifecycle Dates' },
   { key: 'messaging', label: 'Messaging' },
+  { key: 'history', label: 'Purchase & Service History' },
   { key: 'meta', label: 'Meta' },
   { key: 'custom', label: 'Custom' },
 ];
@@ -282,9 +377,26 @@ export interface FilterableCustomField {
  */
 export function getFilterableFields(
   customFields: FilterableCustomField[] | null | undefined,
+  lists?: Array<{ id: string; name: string }> | null,
+  segments?: Array<{ id: string; name: string }> | null,
 ): FieldDefinition[] {
-  if (!customFields || customFields.length === 0) return FILTERABLE_FIELDS;
-  const out: FieldDefinition[] = [...FILTERABLE_FIELDS];
+  if (
+    (!customFields || customFields.length === 0) &&
+    (!lists || lists.length === 0) &&
+    (!segments || segments.length === 0)
+  ) {
+    return FILTERABLE_FIELDS;
+  }
+  const out: FieldDefinition[] = FILTERABLE_FIELDS.map((f) => {
+    if (f.key === 'listIds' && lists?.length) {
+      return { ...f, options: lists.map((l) => ({ value: l.id, label: l.name })) };
+    }
+    if (f.key === 'segmentRef' && segments?.length) {
+      return { ...f, options: segments.map((sg) => ({ value: sg.id, label: sg.name })) };
+    }
+    return f;
+  });
+  if (!customFields || customFields.length === 0) return out;
   for (const cf of customFields) {
     if (!cf?.key) continue;
     out.push({
@@ -307,6 +419,8 @@ const FIELD_TYPE_SET: ReadonlySet<FieldType> = new Set<FieldType>([
   'boolean',
   'select',
   'multiselect',
+  'numeric_text',
+  'segment_ref',
 ]);
 
 function isValidFieldType(value: unknown): value is FieldType {

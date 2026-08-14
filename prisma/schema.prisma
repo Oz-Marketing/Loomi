@@ -215,6 +215,28 @@ model Account {
   // Google Ads API credentials (developer token + OAuth) are agency-wide in env.
   // Ported from Oz Dealer Tools' per-org google_ads_customer_id / google_ads_margin.
   googleAdsCustomerId       String?
+
+  // ── Audience sync consent ──
+  //
+  // Ad platforms require the uploader to attest that the customer data
+  // was collected first-party, with disclosure permitting its use for
+  // third-party advertising. That's a statement about how a rooftop
+  // gathered its CRM data, so it's recorded per sub-account.
+  //
+  // The eligibility gate refuses to produce an export for an account
+  // without it. Deliberately a hard block rather than a warning: it is
+  // the one control standing between "we have contact data" and "we
+  // uploaded contact data to Google", and a warning is something people
+  // learn to click past.
+  //
+  // Per-contact consent tracking would be finer-grained, but the CRM
+  // feeds carry no consent column today, so there is nothing truthful to
+  // populate it from. Recording that fact at the rooftop level, with who
+  // attested and when, is the honest version.
+  audienceSyncs             AudienceSync[]
+  audienceSyncConsentBasis  String? // e.g. 'first_party_disclosure'
+  audienceSyncConsentAt     DateTime?
+  audienceSyncConsentBy     String? // User id of whoever attested
   googleAdsMargin           Float?
   // GoHighLevel email reporting: a per-sub-account Private Integration Token
   // (AES-256-GCM encrypted at rest via src/lib/crypto/encryption.ts) + the GHL
@@ -419,8 +441,129 @@ model Audience {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
+  syncs AudienceSync[]
+
   @@unique([name, accountKey])
   @@index([accountKey])
+}
+
+// ─────────────────────────────────────────────────────
+// Audience sync — pushing a segment to an ad platform.
+//
+// Scoped PER SUB-ACCOUNT, not per segment. A segment is a filter, and an
+// org-wide filter resolves to different people in every rooftop; the ad
+// accounts are per-rooftop too (Account.googleAdsCustomerId). So the
+// thing being synced is really (this segment, resolved for this account,
+// to this provider).
+//
+// Org-level audiences that union several rooftops are a deliberate
+// follow-up rather than a missing feature — the de-duplication they need
+// already exists (resolveEligibleAcrossAccounts), but which shape the
+// agency wants is an open product decision. Adding it later means a new
+// row shape, not a migration of this one.
+// ─────────────────────────────────────────────────────
+
+model AudienceSync {
+  id         String   @id @default(cuid())
+  audienceId String
+  audience   Audience @relation(fields: [audienceId], references: [id], onDelete: Cascade)
+  accountKey String
+  account    Account  @relation(fields: [accountKey], references: [key], onDelete: Cascade)
+
+  provider String // google_ads | meta | stackadapt
+
+  /** Remote user-list id/resource name. Null until first created there. */
+  externalId String?
+
+  status   String @default("paused") // active | paused | error
+  schedule String @default("manual") // manual | daily
+  /** Which identifier the destination matches on: email | phone | any. */
+  channel  String @default("any")
+
+  /** Provider-specific settings (membership lifespan, list type, …). */
+  config String?
+
+  lastRunAt     DateTime?
+  lastSuccessAt DateTime?
+  lastError     String?
+
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  members AudienceSyncMember[]
+  runs    AudienceSyncRun[]
+
+  @@unique([audienceId, accountKey, provider])
+  @@index([accountKey])
+  @@index([status, schedule])
+}
+
+// Current membership as last pushed — the baseline each run diffs
+// against to produce add/remove operations.
+//
+// Only the CURRENT set is kept, not a tombstoned history: the platforms
+// want deltas, and the audit trail of what changed lives in
+// AudienceSyncRun. Retaining a row per member per run would grow without
+// bound for no extra answer.
+model AudienceSyncMember {
+  syncId    String
+  sync      AudienceSync @relation(fields: [syncId], references: [id], onDelete: Cascade)
+  contactId String
+
+  /** The hashed identity actually uploaded (see identityDedupeKey), so a
+   *  contact whose email changed is correctly seen as remove + add. */
+  dedupeKey String?
+
+  addedAt DateTime @default(now())
+
+  @@id([syncId, contactId])
+  @@index([syncId])
+}
+
+// One row per attempt. This is what makes a sync trustworthy rather than
+// magical: how big the segment was, how many survived the eligibility
+// gate and why the rest didn't, what was added and removed, and — once
+// the provider reports it — how many actually matched.
+//
+// Match rate is the number that tells a dealer whether their CRM data is
+// any good, and it's only knowable here.
+model AudienceSyncRun {
+  id     String       @id @default(cuid())
+  syncId String
+  sync   AudienceSync @relation(fields: [syncId], references: [id], onDelete: Cascade)
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  status     String    @default("running") // running | success | failed | skipped
+
+  /** Why a run did nothing, when status = skipped. */
+  skipReason String?
+
+  segmentSize Int @default(0)
+  eligible    Int @default(0)
+  added       Int @default(0)
+  removed     Int @default(0)
+  /** Membership size after this run. */
+  total       Int @default(0)
+
+  excludedOptedOut     Int @default(0)
+  excludedSuppressed   Int @default(0)
+  excludedNoIdentifier Int @default(0)
+  excludedDuplicate    Int @default(0)
+
+  /** Reported by the provider, often asynchronously — null until known. */
+  matched   Int?
+  matchRate Float?
+
+  /** True when the run computed a delta but deliberately didn't upload
+   *  (no provider adapter wired yet). Lets the pipeline be proven on real
+   *  data before anything leaves the building. */
+  dryRun Boolean @default(false)
+
+  error String?
+
+  @@index([syncId, startedAt])
 }
 
 // ─────────────────────────────────────────────────────
@@ -487,6 +630,72 @@ model Contact {
   // are the only channels Loomi sends on.
   dnd Json?
 
+  // ── Engagement rollups ──
+  //
+  // Denormalised from EmailEvent / SmsEvent. These used to be computed at
+  // read time by four aggregate joins through EmailBlastRecipient
+  // (getMessagingSummaryForContacts), which had two costs:
+  //
+  //   1. They existed only on the API's serialized Contact, never on the
+  //      row — so any server-side consumer that read contacts directly
+  //      saw them as undefined, and "has opened an email" silently
+  //      evaluated false. That divergence is why a segment could preview
+  //      as N and enroll zero through a flow.
+  //   2. Being join-derived, they couldn't be translated to SQL, so every
+  //      segment touching engagement forced a full-roster scan.
+  //
+  // As real columns they're exact, translatable, and indexable. Storing
+  // TIMESTAMPS rather than booleans is the point: "opened an email in the
+  // last 30 days" is the question people actually want to segment on,
+  // where "has ever opened" degrades to ~everyone over time. The legacy
+  // booleans are derived from these (`hasOpenedEmail = lastEmailOpenedAt
+  // != null`) so existing saved segments keep working unchanged.
+  //
+  // Written by the SendGrid + Twilio webhook handlers as events arrive;
+  // backfilled from existing event rows by
+  // scripts/backfill-contact-engagement.ts.
+  lastEmailDeliveredAt DateTime?
+  lastEmailOpenedAt    DateTime?
+  lastEmailClickedAt   DateTime?
+  lastSmsAt            DateTime?
+  /** Most recent delivered email OR sent/delivered SMS — the union that
+   *  backs the "Last Message Date" filter field. */
+  lastMessageAt        DateTime?
+
+  // ── Purchase / service history rollups ──
+  //
+  // Aggregated from ContactEvent, which holds one row per service visit
+  // or vehicle sale. That history was fully ingested but completely
+  // unreachable from the segment builder — "two or more service visits",
+  // "spent over $1,500", "bought but never serviced" were impossible to
+  // express, despite being the most valuable retargeting cohorts a
+  // dealer has.
+  //
+  // These are LIFETIME aggregates on purpose. A rolling-window counter
+  // ("visits in the last 12 months") cannot be maintained on write — it
+  // changes with the passage of time, not with the data — so it would
+  // need a nightly recompute and would sit silently stale in between.
+  // For an audience that feeds ad platforms, quietly-wrong is the worst
+  // property to have. Windowed questions are expressed instead by
+  // combining a lifetime count with a recency date
+  // (serviceVisitCount >= 2 AND lastServiceEventAt within the last 365
+  // days), which is exact at every moment.
+  //
+  // Distinct from lastServiceDate / purchaseDate above: those are the
+  // CRM's latest-value snapshot on the contact record, these are derived
+  // from the event history. They can legitimately disagree, which is why
+  // the filter labels name the source.
+  //
+  // RECOMPUTED, never incremented — ContactEvent ingest is an upsert, so
+  // a re-ingested batch would double-count anything additive.
+  serviceVisitCount   Int    @default(0)
+  saleCount           Int    @default(0)
+  lifetimeSpend       Float  @default(0)
+  firstServiceEventAt DateTime?
+  lastServiceEventAt  DateTime?
+  firstSaleEventAt    DateTime?
+  lastSaleEventAt     DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -504,6 +713,14 @@ model Contact {
   // Lets the birthday resolver's `dateOfBirth IS NOT NULL` prune instead
   // of scanning every contact in the account.
   @@index([accountKey, dateOfBirth])
+  // Engagement segments ("opened in the last 30 days", "never received a
+  // message") are among the most common, and now translate to indexed
+  // range scans rather than a full-roster walk.
+  @@index([accountKey, lastEmailOpenedAt])
+  @@index([accountKey, lastMessageAt])
+  // Lapsed-service and loyalty segments are the common automotive cut.
+  @@index([accountKey, lastServiceEventAt])
+  @@index([accountKey, serviceVisitCount])
   // GIN index on the customFields jsonb blob so filter queries against
   // declared custom field keys (e.g. `customFields @> '{"tier":"gold"}'`,
   // `customFields ? 'lifetime_value'`) don't fall back to a full table

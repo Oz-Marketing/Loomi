@@ -46,8 +46,30 @@ export const CONTACT_SELECT = {
   leaseEndDate: true,
   warrantyEndDate: true,
   purchaseDate: true,
+  // Selected because the filter builder offers Date of Birth as a
+  // filterable lifecycle field. Without it here, birthday segments
+  // evaluated in the browser read `undefined` and match nobody, while
+  // the same segment resolved server-side (full row) matches — the
+  // definition of a filter you can't trust.
+  dateOfBirth: true,
   customFields: true,
   dnd: true,
+  lastEmailDeliveredAt: true,
+  lastEmailOpenedAt: true,
+  lastEmailClickedAt: true,
+  lastSmsAt: true,
+  lastMessageAt: true,
+  serviceVisitCount: true,
+  saleCount: true,
+  lifetimeSpend: true,
+  firstServiceEventAt: true,
+  lastServiceEventAt: true,
+  firstSaleEventAt: true,
+  lastSaleEventAt: true,
+  // Static list membership, so "is on the do-not-target list" is
+  // expressible in a segment. One small join per contact read; contacts
+  // belong to few lists in practice.
+  listMemberships: { select: { listId: true } },
 } as const satisfies Prisma.ContactSelect;
 
 function tagsToStringArray(value: Prisma.JsonValue): string[] {
@@ -64,15 +86,17 @@ function stringOrEmpty(value: string | null | undefined): string {
 }
 
 /**
- * Map a Prisma Contact row to the API `Contact` shape consumers
- * already expect. Messaging fields default to false / empty; pass a
- * `summary` map (from `getMessagingSummaryForContacts`) to fill them
- * in.
+ * Map a Prisma Contact row to the API `Contact` shape consumers expect.
+ *
+ * The messaging fields are now read straight off the row's engagement
+ * rollup columns. They used to be materialised here from a `summary`
+ * argument produced by four aggregate queries through
+ * EmailBlastRecipient — which meant they existed ONLY when a caller
+ * remembered to pass one, and read as `false` everywhere else. That is
+ * the divergence that let a segment preview as N in the builder and
+ * match zero contacts in a flow.
  */
-export function serializeContact(
-  row: ContactRow,
-  summary?: MessagingSummary,
-): ApiContact {
+export function serializeContact(row: ContactRow): ApiContact {
   const firstName = stringOrEmpty(row.firstName);
   const lastName = stringOrEmpty(row.lastName);
   const fullName =
@@ -104,14 +128,42 @@ export function serializeContact(
     leaseEndDate: isoOrEmpty(row.leaseEndDate),
     warrantyEndDate: isoOrEmpty(row.warrantyEndDate),
     purchaseDate: isoOrEmpty(row.purchaseDate),
-    hasReceivedMessage: summary?.hasReceivedMessage ?? false,
-    hasReceivedEmail: summary?.hasReceivedEmail ?? false,
-    hasReceivedSms: summary?.hasReceivedSms ?? false,
-    hasOpenedEmail: summary?.hasOpenedEmail ?? false,
-    hasClickedEmail: summary?.hasClickedEmail ?? false,
-    lastMessageDate: summary?.lastMessageDate ?? '',
+    dateOfBirth: isoOrEmpty(row.dateOfBirth),
+    // Legacy booleans, kept so saved segments built against them still
+    // work. Each is just "the corresponding timestamp is set".
+    hasReceivedMessage: row.lastMessageAt != null,
+    hasReceivedEmail: row.lastEmailDeliveredAt != null,
+    hasReceivedSms: row.lastSmsAt != null,
+    hasOpenedEmail: row.lastEmailOpenedAt != null,
+    hasClickedEmail: row.lastEmailClickedAt != null,
+    lastMessageDate: isoOrEmpty(row.lastMessageAt),
+    lastEmailDeliveredAt: isoOrEmpty(row.lastEmailDeliveredAt),
+    lastEmailOpenedAt: isoOrEmpty(row.lastEmailOpenedAt),
+    lastEmailClickedAt: isoOrEmpty(row.lastEmailClickedAt),
+    lastSmsAt: isoOrEmpty(row.lastSmsAt),
+    // Purchase / service history rollups, derived from ContactEvent.
+    serviceVisitCount: row.serviceVisitCount,
+    saleCount: row.saleCount,
+    lifetimeSpend: row.lifetimeSpend,
+    firstServiceEventAt: isoOrEmpty(row.firstServiceEventAt),
+    lastServiceEventAt: isoOrEmpty(row.lastServiceEventAt),
+    firstSaleEventAt: isoOrEmpty(row.firstSaleEventAt),
+    lastSaleEventAt: isoOrEmpty(row.lastSaleEventAt),
+    listIds: row.listMemberships.map((m) => m.listId),
+    // Opt-out state, previously read from the DB but never surfaced —
+    // so a segment had no way to see who had opted out, and an audience
+    // export would have included them.
+    dndEmail: readDndFlag(row.dnd, 'email'),
+    dndSms: readDndFlag(row.dnd, 'sms'),
     customFields: customFieldsFromJson(row.customFields),
   };
+}
+
+/** Read one channel's opt-out flag from the `dnd` jsonb cell. */
+function readDndFlag(value: unknown, channel: 'email' | 'sms'): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const flag = (value as Record<string, unknown>)[channel];
+  return flag === true || flag === 'true';
 }
 
 /** Coerce the Prisma jsonb cell into the always-an-object shape the
@@ -156,7 +208,11 @@ export interface ListContactsOptions {
   limit?: number;
   /** When true, returns every match (capped to MAX_FETCH_ALL). */
   all?: boolean;
-  /** When true, runs the EmailEvent/SmsEvent aggregate join. */
+  /**
+   * Retained so existing callers (and the `includeMessaging` query
+   * param) keep type-checking. Now a no-op: the messaging fields are
+   * columns on the row, so they're always present at no extra cost.
+   */
   includeMessagingSummary?: boolean;
 }
 
@@ -190,19 +246,7 @@ export async function listContactsForAccount(
     prisma.contact.count({ where: { accountKey: opts.accountKey } }),
   ]);
 
-  let summaries: Map<string, MessagingSummary> | null = null;
-  if (opts.includeMessagingSummary && rows.length > 0) {
-    summaries = await getMessagingSummaryForContacts(
-      opts.accountKey,
-      rows.map((row) => row.id),
-    );
-  }
-
-  const contacts = rows.map((row) =>
-    serializeContact(row, summaries?.get(row.id)),
-  );
-
-  return { contacts, total };
+  return { contacts: rows.map(serializeContact), total };
 }
 
 // ── Single ──
@@ -223,141 +267,4 @@ export async function getContactById(
 
 export async function countContactsForAccount(accountKey: string): Promise<number> {
   return prisma.contact.count({ where: { accountKey } });
-}
-
-// ── Messaging summary materialiser ──
-
-export interface MessagingSummary {
-  hasReceivedMessage: boolean;
-  hasReceivedEmail: boolean;
-  hasReceivedSms: boolean;
-  /** True when ANY past email to this contact recorded an `open`
-   *  EmailEvent. Used by the flow builder's condition node to branch
-   *  on whether a recipient has opened a prior send. */
-  hasOpenedEmail: boolean;
-  /** True when ANY past email to this contact recorded a `click`
-   *  EmailEvent. The strongest engagement signal — especially when
-   *  emails drive clicks to off-platform content (e.g. blog posts). */
-  hasClickedEmail: boolean;
-  lastMessageDate: string;
-}
-
-/**
- * For a given list of contactIds, aggregate EmailEvent + SmsEvent
- * to populate the messaging summary the filter UI uses. Joins go
- * through EmailBlastRecipient / SmsBlastRecipient because
- * events store the recipientId (snapshot), not contactId directly.
- *
- * Returns a Map keyed by contactId. Missing contacts mean "no
- * delivered messages on record" (default to false / empty in the
- * caller).
- */
-export async function getMessagingSummaryForContacts(
-  accountKey: string,
-  contactIds: string[],
-): Promise<Map<string, MessagingSummary>> {
-  const out = new Map<string, MessagingSummary>();
-  if (contactIds.length === 0) return out;
-
-  // Look up email-delivered events for any recipient whose
-  // contactId/accountKey matches. "Delivered" wins over "processed"
-  // — we want a real signal that the contact actually got the
-  // message, not just that we queued it.
-  const emailRows = await prisma.emailBlastRecipient.findMany({
-    where: {
-      accountKey,
-      contactId: { in: contactIds },
-      events: { some: { eventType: 'delivered' } },
-    },
-    select: {
-      contactId: true,
-      events: {
-        where: { eventType: 'delivered' },
-        select: { timestamp: true },
-        orderBy: { timestamp: 'desc' },
-        take: 1,
-      },
-    },
-  });
-
-  const smsRows = await prisma.smsBlastRecipient.findMany({
-    where: {
-      accountKey,
-      contactId: { in: contactIds },
-      events: { some: { eventType: { in: ['sent', 'delivered'] } } },
-    },
-    select: {
-      contactId: true,
-      events: {
-        where: { eventType: { in: ['sent', 'delivered'] } },
-        select: { timestamp: true },
-        orderBy: { timestamp: 'desc' },
-        take: 1,
-      },
-    },
-  });
-
-  // Separate query for `open` events so we can flip `hasOpenedEmail`
-  // on the summary. Same EmailBlastRecipient join shape, just a
-  // different event type filter.
-  const openRows = await prisma.emailBlastRecipient.findMany({
-    where: {
-      accountKey,
-      contactId: { in: contactIds },
-      events: { some: { eventType: 'open' } },
-    },
-    select: { contactId: true },
-  });
-  const openedIds = new Set(openRows.map((r) => r.contactId));
-
-  // Same EmailBlastRecipient join shape for `click` events so we can
-  // flip `hasClickedEmail` — the engagement signal that survives Apple
-  // Mail Privacy Protection (which auto-opens but never auto-clicks).
-  const clickRows = await prisma.emailBlastRecipient.findMany({
-    where: {
-      accountKey,
-      contactId: { in: contactIds },
-      events: { some: { eventType: 'click' } },
-    },
-    select: { contactId: true },
-  });
-  const clickedIds = new Set(clickRows.map((r) => r.contactId));
-
-  for (const row of emailRows) {
-    const last = row.events[0]?.timestamp;
-    const current = out.get(row.contactId);
-    out.set(row.contactId, {
-      hasReceivedMessage: true,
-      hasReceivedEmail: true,
-      hasReceivedSms: current?.hasReceivedSms ?? false,
-      hasOpenedEmail: current?.hasOpenedEmail ?? openedIds.has(row.contactId),
-      hasClickedEmail: current?.hasClickedEmail ?? clickedIds.has(row.contactId),
-      lastMessageDate: pickLatest(current?.lastMessageDate, last),
-    });
-  }
-
-  for (const row of smsRows) {
-    const last = row.events[0]?.timestamp;
-    const current = out.get(row.contactId);
-    out.set(row.contactId, {
-      hasReceivedMessage: true,
-      hasReceivedEmail: current?.hasReceivedEmail ?? false,
-      hasReceivedSms: true,
-      hasOpenedEmail: current?.hasOpenedEmail ?? false,
-      hasClickedEmail: current?.hasClickedEmail ?? false,
-      lastMessageDate: pickLatest(current?.lastMessageDate, last),
-    });
-  }
-
-  return out;
-}
-
-function pickLatest(
-  a: string | undefined,
-  b: Date | null | undefined,
-): string {
-  const bIso = b ? b.toISOString() : '';
-  if (!a) return bIso;
-  if (!bIso) return a;
-  return a > bIso ? a : bIso;
 }

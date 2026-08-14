@@ -29,6 +29,21 @@ const fetcher = async (url: string): Promise<CustomFieldDto[]> => {
   return Array.isArray(data.fields) ? data.fields : [];
 };
 
+interface ListSummary {
+  id: string;
+  name: string;
+  accountKey?: string | null;
+}
+
+/** Static lists for the account, used as the option list on the
+ *  `listIds` field so the builder shows names instead of cuids. */
+const listsFetcher = async (url: string): Promise<ListSummary[]> => {
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const data = (await res.json().catch(() => ({}))) as { lists?: ListSummary[] };
+  return Array.isArray(data.lists) ? data.lists : [];
+};
+
 export interface UseFilterableFieldsResult {
   fields: FieldDefinition[];
   /** True until the first network request resolves (or skipped when no
@@ -59,6 +74,12 @@ export function useFilterableFields(
     },
   );
 
+  const { data: listData } = useSWR<ListSummary[]>(
+    accountKey ? '/api/contacts/lists' : null,
+    listsFetcher,
+    { revalidateOnFocus: false, dedupingInterval: 60_000 },
+  );
+
   if (!accountKey) {
     return {
       fields: FILTERABLE_FIELDS,
@@ -69,6 +90,13 @@ export function useFilterableFields(
   }
 
   const customFields = data ?? [];
+  // /api/contacts/lists returns everything the USER can see, which spans
+  // accounts — scope to the one being filtered so a segment can't
+  // reference another rooftop's list.
+  const lists = (listData ?? [])
+    .filter((l) => !l.accountKey || l.accountKey === accountKey)
+    .map((l) => ({ id: l.id, name: l.name }));
+
   const merged = getFilterableFields(
     customFields.map<FilterableCustomField>((cf) => ({
       key: cf.key,
@@ -77,6 +105,7 @@ export function useFilterableFields(
       category: cf.category,
       options: cf.options,
     })),
+    lists,
   );
 
   return {

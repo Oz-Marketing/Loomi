@@ -163,7 +163,66 @@ async function persistSingleEvent(ev: SendGridEvent): Promise<boolean> {
     await persistSuppression(accountKey, email, suppressionReason, ev);
   }
 
+  // 3) Roll the engagement timestamps forward on the contact so
+  //    "opened an email in the last 30 days" is an indexed column read
+  //    rather than an aggregate join at query time.
+  if (accountKey && email) {
+    await touchContactEngagement(accountKey, email, eventType, timestamp);
+  }
+
   return true;
+}
+
+/** Event types that move an engagement timestamp, and which one. */
+const ENGAGEMENT_COLUMNS: Record<string, 'lastEmailDeliveredAt' | 'lastEmailOpenedAt' | 'lastEmailClickedAt'> = {
+  delivered: 'lastEmailDeliveredAt',
+  open: 'lastEmailOpenedAt',
+  click: 'lastEmailClickedAt',
+};
+
+/**
+ * Advance a contact's engagement rollups. Only ever moves a timestamp
+ * FORWARD — SendGrid can deliver events out of order and replays are
+ * routine, so a late-arriving older event must not walk the value back.
+ *
+ * Matched on (accountKey, email) because the event carries the address,
+ * not a contactId; that pair is unique on Contact.
+ */
+async function touchContactEngagement(
+  accountKey: string,
+  email: string,
+  eventType: string,
+  timestamp: Date,
+): Promise<void> {
+  const column = ENGAGEMENT_COLUMNS[eventType];
+  if (!column) return;
+
+  const data: Record<string, Date> = { [column]: timestamp };
+  // A delivery is also "a message reached this contact", which is what
+  // lastMessageAt tracks across both channels. Opens and clicks aren't —
+  // they say the contact engaged, not that we sent something new.
+  const alsoMessage = eventType === 'delivered';
+
+  await prisma.contact.updateMany({
+    where: {
+      accountKey,
+      email: email.toLowerCase(),
+      // The forward-only guard: skip rows already at or past this event.
+      OR: [{ [column]: null }, { [column]: { lt: timestamp } }],
+    },
+    data,
+  });
+
+  if (alsoMessage) {
+    await prisma.contact.updateMany({
+      where: {
+        accountKey,
+        email: email.toLowerCase(),
+        OR: [{ lastMessageAt: null }, { lastMessageAt: { lt: timestamp } }],
+      },
+      data: { lastMessageAt: timestamp },
+    });
+  }
 }
 
 async function maybeUpdateRecipientStatus(

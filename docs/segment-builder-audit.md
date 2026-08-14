@@ -179,17 +179,27 @@ Second divergence: an empty `groups` array means *everyone* in `evaluateFilter`
    It gates per channel, so someone who unsubscribed from email but never opted out of
    SMS stays in the audience via phone rather than being dropped wholesale.
 
-2. **A per-sub-account consent basis** (`audienceSyncConsentBasis` / `…At` / `…By` on
-   `Account`, written through [audience-consent](../src/app/api/accounts/[key]/audience-consent/route.ts)).
-   Absent it, the gate throws — a **hard stop**, not an empty result, because an empty
-   result reads as "nobody qualified" rather than "you may not do this". Recorded per
-   sub-account because that's the level the statement is actually true at: one rooftop's
-   intake forms say nothing about another's. Restricted to developer/super_admin, and it
-   records who attested and when.
+2. **Per-contact provenance.** A contact is exportable only if something on record shows
+   they chose to deal with this dealer:
 
-   Per-contact consent would be finer-grained, but **the CRM feeds carry no consent
-   column today**, so there is nothing truthful to populate one from. See the open
-   decision in §6.
+   - a `ContactEvent` — a sale or a service visit, so consent was given as part of that
+     transaction, and
+   - a `FormSubmission` on one of the dealer's own forms. Where that form carried a
+     `field_consent` block, the box must actually have been ticked; where the form never
+     asked, the submission still counts (the author not asking isn't the contact
+     declining).
+
+   Everything else — third-party lead vendors, unlabelled CSV imports — fails closed, and
+   its `source` value is reported in `excludedSources` so the exclusions can be reviewed
+   and specific vendors allowed later on evidence.
+
+   **This replaced a per-sub-account attestation** (`audienceSyncConsentBasis` on
+   `Account`, since retained-but-unread). That design made each rooftop tick a box
+   affirming its data was collected with the right disclosure — but in production the
+   answer is "yes" 33 times out of 33, because 259,507 of 265,295 contacts have sale or
+   service history. An affirmation that is always true isn't a control, and asking for it
+   33 times teaches people to click through it. The distinction that actually varies is
+   per contact, and it covers the remaining ~2%.
 
 3. **Visibility.** `dndEmail` / `dndSms` are now filterable, and the builder shows the
    syncable count next to the segment size with a breakdown — *"12,431 syncable · 3,902
@@ -378,8 +388,9 @@ platform reports a smaller audience with no explanation. Specific decisions wort
 Org-level dedupe is `identityDedupeKey` + `resolveEligibleAcrossAccounts`: one customer
 across three Young rooftops is three `Contact` rows but uploads once, since inflating the
 audience burns match quota and defeats frequency capping. Each account is still gated
-independently, so one rooftop without a consent basis fails the whole union rather than
-being silently skipped.
+independently, and its provenance exclusions are aggregated into the union's breakdown —
+including a merged `excludedSources` histogram, since the same lead vendor typically feeds
+several rooftops and the combined figure is what says whether it's worth reviewing.
 
 ### 2.8 (original finding)
 
@@ -477,9 +488,9 @@ Endpoints: `POST /api/segments/preview` (definition → count + sample) and
 
 - `dnd.email` / `dnd.sms` serialised onto the API Contact and exposed as filter fields.
 - A **`syncEligible`** concept, computed not hand-maintained: has a usable identifier, not
-  on `EmailSuppression`, not DND, not a role address, plus a per-account
-  "consent basis" setting recorded once per sub-account (how the CRM data was collected).
-  Every export path filters through it; it is not an optional checkbox in the UI.
+  on `EmailSuppression`, not DND, not a role address, plus first-party provenance (a
+  transaction or a consented form submission). Every export path filters through it; it is
+  not an optional checkbox in the UI.
 - `src/lib/segments/identity.ts` — normalise → SHA-256 for email, phone, first/last name,
   zip, country. One module, unit-tested against the platforms' published test vectors,
   shared by every provider adapter.
@@ -526,7 +537,7 @@ refactor.
 | **0 — Correctness** ✅ **SHIPPED** | Fixed §2.4 fail-open, §2.5 permission hole, §2.2 engine divergence, dead `dateOfBirth`, `country`; added server-side filter validation | Small — do this first regardless of the Google decision |
 | **1 — SQL resolver** ✅ **SHIPPED** | Translator + resolver + preview/count endpoints + UI on real counts; send path server-resolved (§2.0); engagement rollup columns; `numeric_text` mileage & year. **Still open:** `ContactEvent` rollups (moved to Phase 2, where the event filters live) | Medium-large. **The load-bearing phase** |
 | **2 — Richer vocabulary** ✅ **SHIPPED** | `ContactEvent` rollups + filters, list membership, segment composition / exclusions | Medium |
-| **3 — Eligibility + identity** ✅ **SHIPPED** | Unconditional export gate, per-account consent basis, hashing module w/ fixed vectors, org-level dedupe, eligibility visible in the builder | Medium |
+| **3 — Eligibility + identity** ✅ **SHIPPED** | Unconditional export gate, per-contact provenance (transaction or consented form submission), hashing module w/ fixed vectors, org-level dedupe, eligibility visible in the builder | Medium |
 | **4 — Membership + sync state** ✅ **SHIPPED** (UI deferred) | Layer 3 — the three models, delta orchestration, pg-boss queue, sync + run APIs, dry-run destination. Sync history UI deferred until there's a real provider to show | Medium |
 | **5 — Google Customer Match** ✅ **SHIPPED (unproven against the live API)** | [google-ads.ts](../src/lib/segments/sync/google-ads.ts) — user list creation, offline user data job, batched hashed upload, consent signals, match-rate attribution, sub-1,000 servability warning. **Not yet run against a real Google Ads account** — see §7 | Medium |
 | **6 — Meta / StackAdapt** | Second + third adapter on the same core | Small each |
@@ -574,10 +585,11 @@ match rate is for, and why step 4 isn't optional.
    `Account.googleAdsCustomerId`) or org-level with dedupe? Rooftop is simpler and matches
    how the ad accounts are structured; org-level is better for frequency capping across
    Young stores. Recommend rooftop-first, org-level as a later opt-in.
-2. **Consent basis** — is a per-sub-account attestation ("this CRM data was collected with
-   disclosure permitting third-party ad use") sufficient, or is per-contact consent tracking
-   needed? Rooftop-level is the norm for dealer CRM data; per-contact is defensible but
-   needs the CRM feeds to carry a consent column, which today they don't.
+2. **Provenance exclusions** — RESOLVED, then refined. Consent is enforced per contact,
+   not per account (see §2.3). What's still open is narrower: whether any of the sources
+   currently excluded should be allowed through. The `excludedSources` histogram on each
+   sync run is the evidence for that call; nothing should be allow-listed before looking
+   at it.
 3. **Sync cadence** — nightly is almost certainly right (Customer Match processing isn't
    real-time anyway). Confirm before building a manual-trigger-only v1.
 4. **Google Ads write access** — needs verifying before phase 5 starts: does the existing

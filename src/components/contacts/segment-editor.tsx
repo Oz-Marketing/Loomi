@@ -108,9 +108,17 @@ interface SegmentPreviewState {
 
 /** What an ad-platform push would actually take from this segment. */
 interface EligibilityState {
-  status: 'idle' | 'loading' | 'ready' | 'blocked' | 'error';
+  status: 'idle' | 'loading' | 'ready' | 'error';
   eligible: number;
-  excluded: { noIdentifier: number; suppressed: number; optedOut: number; duplicate: number };
+  excluded: {
+    noIdentifier: number;
+    suppressed: number;
+    optedOut: number;
+    duplicate: number;
+    noProvenance: number;
+  };
+  /** Which lead sources the provenance rule dropped, commonest first. */
+  excludedSources: Array<{ source: string; count: number }>;
   message?: string;
 }
 
@@ -187,7 +195,8 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   const [eligibility, setEligibility] = useState<EligibilityState>({
     status: 'idle',
     eligible: 0,
-    excluded: { noIdentifier: 0, suppressed: 0, optedOut: 0, duplicate: 0 },
+    excluded: { noIdentifier: 0, suppressed: 0, optedOut: 0, duplicate: 0, noProvenance: 0 },
+    excludedSources: [],
   });
 
   // Serialised so the effect re-runs on a real change to the filter, not
@@ -277,8 +286,8 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
   }, [cleanedKey, isAccount, accountKey]);
 
   // How much of this segment could actually be pushed to an ad platform.
-  // A separate request from the preview so a missing consent basis
-  // reports itself without blanking the count beside it.
+  // A separate request from the preview so a slow eligibility pass never
+  // blanks the segment count beside it.
   useEffect(() => {
     if (!isAccount || !accountKey || cleaned.groups.length === 0) {
       setEligibility((prev) => ({ ...prev, status: 'idle' }));
@@ -296,15 +305,6 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
         .then(async (res) => {
           const data = await res.json().catch(() => ({}));
           if (cancelled) return;
-          if (res.status === 409) {
-            setEligibility({
-              status: 'blocked',
-              eligible: 0,
-              excluded: { noIdentifier: 0, suppressed: 0, optedOut: 0, duplicate: 0 },
-              message: 'No consent basis recorded for this account',
-            });
-            return;
-          }
           if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
           setEligibility({
             status: 'ready',
@@ -314,7 +314,11 @@ export function SegmentEditor({ initial, mode }: SegmentEditorProps) {
               suppressed: Number(data.breakdown?.excluded?.suppressed) || 0,
               optedOut: Number(data.breakdown?.excluded?.optedOut) || 0,
               duplicate: Number(data.breakdown?.excluded?.duplicate) || 0,
+              noProvenance: Number(data.breakdown?.excluded?.noProvenance) || 0,
             },
+            excludedSources: Array.isArray(data.breakdown?.excludedSources)
+              ? data.breakdown.excludedSources
+              : [],
           });
         })
         .catch(() => {
@@ -863,11 +867,15 @@ function ConditionRow({
 }
 
 function excludedTotal(e: EligibilityState): number {
+  // Every bucket the gate can drop a contact into. Miss one and the
+  // headline silently under-reports: the segment count and the syncable
+  // count disagree with nothing explaining the gap.
   return (
     e.excluded.optedOut +
     e.excluded.suppressed +
     e.excluded.noIdentifier +
-    e.excluded.duplicate
+    e.excluded.duplicate +
+    e.excluded.noProvenance
   );
 }
 
@@ -1222,15 +1230,7 @@ function PreviewPanel({ preview, eligibility }: PreviewPanelProps) {
           opt-outs, suppressions and missing identifiers come out. */}
       {eligibility.status !== 'idle' && (
         <div className="px-4 py-3 border-b border-[var(--border)]/70">
-          {eligibility.status === 'blocked' ? (
-            <p className="text-[11px] text-amber-500 flex items-start gap-1.5">
-              <ExclamationTriangleIcon className="w-3.5 h-3.5 flex-shrink-0 mt-px" />
-              <span>
-                {eligibility.message} — this segment can’t be synced to an ad
-                platform until one is recorded.
-              </span>
-            </p>
-          ) : eligibility.status === 'ready' ? (
+          {eligibility.status === 'ready' ? (
             <>
               <div className="flex items-baseline gap-2">
                 <span className="text-lg font-semibold tabular-nums">
@@ -1248,9 +1248,24 @@ function PreviewPanel({ preview, eligibility }: PreviewPanelProps) {
                     eligibility.excluded.suppressed && `${eligibility.excluded.suppressed} suppressed`,
                     eligibility.excluded.noIdentifier && `${eligibility.excluded.noIdentifier} no email or phone`,
                     eligibility.excluded.duplicate && `${eligibility.excluded.duplicate} duplicate`,
+                    eligibility.excluded.noProvenance &&
+                      `${eligibility.excluded.noProvenance} no purchase, service or form history`,
                   ]
                     .filter(Boolean)
                     .join(', ')}
+                </p>
+              )}
+              {/* Naming the sources turns "some contacts were dropped"
+                  into something actionable — these are the lead vendors
+                  to go and check the paperwork on. */}
+              {eligibility.excludedSources.length > 0 && (
+                <p className="text-[11px] text-[var(--muted-foreground)]/80 mt-1">
+                  Excluded sources:{' '}
+                  {eligibility.excludedSources
+                    .slice(0, 3)
+                    .map((s) => `${s.source} (${s.count.toLocaleString()})`)
+                    .join(', ')}
+                  {eligibility.excludedSources.length > 3 ? ', …' : ''}
                 </p>
               )}
             </>

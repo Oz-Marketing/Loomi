@@ -11,6 +11,7 @@
 import 'dotenv/config';
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import { prisma } from '@/lib/prisma';
+import { recomputeContactEventRollups } from '@/lib/contacts/event-rollups';
 import { runAudienceSync } from './run';
 import type { FilterDefinition } from '@/lib/smart-list-types';
 
@@ -41,23 +42,15 @@ async function reset() {
   });
   await prisma.audienceSync.deleteMany({ where: { accountKey: ACCOUNT } });
   await prisma.audience.deleteMany({ where: { accountKey: ACCOUNT } });
+  await prisma.contactEvent.deleteMany({ where: { accountKey: ACCOUNT } });
   await prisma.contact.deleteMany({ where: { accountKey: ACCOUNT } });
   await prisma.account.deleteMany({ where: { key: ACCOUNT } });
 }
 
-async function setup(opts: { consent?: boolean } = {}) {
+async function setup() {
   await reset();
   await prisma.account.create({
-    data: {
-      key: ACCOUNT,
-      dealer: 'Vitest Sync',
-      ...(opts.consent === false
-        ? {}
-        : {
-            audienceSyncConsentBasis: 'first_party_disclosure',
-            audienceSyncConsentAt: new Date(),
-          }),
-    },
+    data: { key: ACCOUNT, dealer: 'Vitest Sync' },
   });
   const audience = await prisma.audience.create({
     data: {
@@ -80,11 +73,36 @@ async function setup(opts: { consent?: boolean } = {}) {
   return { audienceId: audience.id, syncId: sync.id };
 }
 
-async function addContact(email: string, tags: string[]) {
-  return prisma.contact.create({
-    data: { accountKey: ACCOUNT, email, tags },
+/**
+ * Create a contact that clears the eligibility gate.
+ *
+ * The service event is not incidental: without first-party provenance
+ * the contact is excluded before any of the diffing behaviour under test
+ * here is reached. Pass `provenance: false` to exercise the exclusion.
+ */
+async function addContact(
+  email: string,
+  tags: string[],
+  opts: { provenance?: boolean; source?: string } = {},
+) {
+  const contact = await prisma.contact.create({
+    data: { accountKey: ACCOUNT, email, tags, source: opts.source ?? null },
     select: { id: true },
   });
+  if (opts.provenance !== false) {
+    await prisma.contactEvent.create({
+      data: {
+        accountKey: ACCOUNT,
+        contactId: contact.id,
+        type: 'service',
+        eventDate: new Date(),
+        amount: 100,
+        idempotencyKey: `__vitest:sync:${email}:${Date.now()}`,
+      },
+    });
+    await recomputeContactEventRollups(ACCOUNT, [contact.id]);
+  }
+  return contact;
 }
 
 describe.skipIf(!RUN)('audience sync run', () => {
@@ -165,13 +183,12 @@ describe.skipIf(!RUN)('audience sync run', () => {
 
   it('records the eligibility breakdown on the run', async () => {
     await addContact('good@example.com', ['target']);
-    await prisma.contact.create({
-      data: {
-        accountKey: ACCOUNT,
-        email: 'gone@example.com',
-        tags: ['target'],
-        dnd: { email: true },
-      },
+    // Needs provenance too, or it's excluded before the opt-out check is
+    // ever reached — and this test is about the opt-out count.
+    const optedOut = await addContact('gone@example.com', ['target']);
+    await prisma.contact.update({
+      where: { id: optedOut.id },
+      data: { dnd: { email: true } },
     });
 
     await runAudienceSync(syncId);
@@ -184,25 +201,26 @@ describe.skipIf(!RUN)('audience sync run', () => {
     expect(run?.excludedOptedOut).toBe(1);
   });
 
-  it('records a failed run instead of throwing when consent is missing', async () => {
-    await prisma.account.update({
-      where: { key: ACCOUNT },
-      data: { audienceSyncConsentBasis: null, audienceSyncConsentAt: null },
+  it('excludes contacts with no provenance and records why', async () => {
+    await addContact('customer@example.com', ['target']);
+    await addContact('bought-lead@example.com', ['target'], {
+      provenance: false,
+      source: 'AutoLeads Inc',
     });
-    await addContact('a@example.com', ['target']);
 
     const result = await runAudienceSync(syncId);
-    expect(result.status).toBe('failed');
-    expect(result.error).toMatch(/consent/i);
+    expect(result.added).toBe(1);
 
-    // Nothing was recorded as a member — a failed run must not leave the
-    // baseline believing those contacts are live, or the next run would
-    // never resend them.
-    expect(await prisma.audienceSyncMember.count({ where: { syncId } })).toBe(0);
-
-    const sync = await prisma.audienceSync.findUnique({ where: { id: syncId } });
-    expect(sync?.status).toBe('error');
-    expect(sync?.lastError).toMatch(/consent/i);
+    const run = await prisma.audienceSyncRun.findFirst({
+      where: { syncId },
+      orderBy: { startedAt: 'desc' },
+    });
+    expect(run?.excludedNoProvenance).toBe(1);
+    // The source travels with the count, so the exclusion can be
+    // reviewed rather than just observed.
+    expect(JSON.parse(run!.excludedSources!)).toEqual([
+      { source: 'AutoLeads Inc', count: 1 },
+    ]);
   });
 
   it('refuses a segment with no conditions rather than emptying the list', async () => {

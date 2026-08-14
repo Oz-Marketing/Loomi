@@ -10,8 +10,8 @@
 import 'dotenv/config';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { prisma } from '@/lib/prisma';
+import { recomputeContactEventRollups } from '@/lib/contacts/event-rollups';
 import {
-  ConsentNotRecordedError,
   resolveEligibleAcrossAccounts,
   resolveEligibleForSync,
 } from './eligibility';
@@ -27,21 +27,6 @@ const A = '__vitest_elig_a';
 const B = '__vitest_elig_b';
 const fields = getFilterableFields(null);
 
-/** Everyone in the account — the gate is what we're testing, not the filter. */
-const ALL: FilterDefinition = {
-  version: 1,
-  logic: 'AND',
-  groups: [
-    {
-      id: 'g',
-      logic: 'AND',
-      conditions: [
-        { id: 'c', field: 'email', operator: 'is_not_empty' as FilterOperator, value: '' },
-      ],
-    },
-  ],
-};
-
 /** Matches contacts with either identifier, so phone-only rows count. */
 const ANY_CONTACT: FilterDefinition = {
   version: 1,
@@ -54,11 +39,36 @@ const ANY_CONTACT: FilterDefinition = {
 
 async function reset() {
   for (const key of [A, B]) {
+    await prisma.formSubmission.deleteMany({ where: { form: { accountKey: key } } });
+    await prisma.form.deleteMany({ where: { accountKey: key } });
     await prisma.emailSuppression.deleteMany({ where: { accountKey: key } });
     await prisma.smsSuppression.deleteMany({ where: { accountKey: key } });
+    await prisma.contactEvent.deleteMany({ where: { accountKey: key } });
     await prisma.contact.deleteMany({ where: { accountKey: key } });
     await prisma.account.deleteMany({ where: { key } });
   }
+}
+
+/** Give a contact a service visit, so it clears the provenance gate.
+ *  Most cases here are testing the suppression/opt-out rules, not
+ *  provenance, and would otherwise be excluded before reaching them. */
+async function giveTransaction(accountKey: string, email: string) {
+  const c = await prisma.contact.findFirst({
+    where: { accountKey, email },
+    select: { id: true },
+  });
+  if (!c) throw new Error(`no contact ${email}`);
+  await prisma.contactEvent.create({
+    data: {
+      accountKey,
+      contactId: c.id,
+      type: 'service',
+      eventDate: new Date(),
+      amount: 100,
+      idempotencyKey: `__vitest:elig:${accountKey}:${email}`,
+    },
+  });
+  await recomputeContactEventRollups(accountKey, [c.id]);
 }
 
 describe.skipIf(!RUN)('audience export eligibility gate', () => {
@@ -66,12 +76,7 @@ describe.skipIf(!RUN)('audience export eligibility gate', () => {
     await reset();
 
     await prisma.account.create({
-      data: {
-        key: A,
-        dealer: 'Vitest Eligibility A',
-        audienceSyncConsentBasis: 'first_party_disclosure',
-        audienceSyncConsentAt: new Date(),
-      },
+      data: { key: A, dealer: 'Vitest Eligibility A' },
     });
 
     await prisma.contact.createMany({
@@ -86,7 +91,56 @@ describe.skipIf(!RUN)('audience export eligibility gate', () => {
         { accountKey: A, phone: '5550123' },
         // Reachable by phone only — email opted out, SMS fine.
         { accountKey: A, email: 'mixed@example.com', phone: '+12125550102', dnd: { email: true } },
+        // No transaction, no form submission — a bought lead list.
+        { accountKey: A, email: 'coldlead@example.com', source: 'AutoLeads Inc' },
+        // Same, so the source histogram has something to rank.
+        { accountKey: A, email: 'coldlead2@example.com', source: 'AutoLeads Inc' },
+        // Never transacted, but filled in one of OUR forms.
+        { accountKey: A, email: 'formfill@example.com' },
       ],
+    });
+
+    // Everything that should survive the gate needs provenance.
+    for (const email of [
+      'clean@example.com',
+      'optout@example.com',
+      'suppressed@example.com',
+      'mixed@example.com',
+    ]) {
+      await giveTransaction(A, email);
+    }
+    // …and the phone-only row, addressed by phone since it has no email.
+    const phoneOnly = await prisma.contact.findFirst({
+      where: { accountKey: A, phone: '5550123' },
+      select: { id: true },
+    });
+    await prisma.contactEvent.create({
+      data: {
+        accountKey: A,
+        contactId: phoneOnly!.id,
+        type: 'service',
+        eventDate: new Date(),
+        idempotencyKey: `__vitest:elig:${A}:phoneonly`,
+      },
+    });
+    await recomputeContactEventRollups(A, [phoneOnly!.id]);
+
+    // A form submission is the other first-party signal.
+    const form = await prisma.form.create({
+      data: {
+        accountKey: A,
+        name: 'Vitest Form',
+        slug: `__vitest-elig-${Date.now()}`,
+        schema: {},
+      },
+      select: { id: true },
+    });
+    const filler = await prisma.contact.findFirst({
+      where: { accountKey: A, email: 'formfill@example.com' },
+      select: { id: true },
+    });
+    await prisma.formSubmission.create({
+      data: { formId: form.id, contactId: filler!.id, data: {} },
     });
 
     await prisma.emailSuppression.create({
@@ -146,33 +200,56 @@ describe.skipIf(!RUN)('audience export eligibility gate', () => {
     }
   });
 
-  it('refuses outright when the account has no consent basis', async () => {
-    await prisma.account.create({
-      data: { key: B, dealer: 'Vitest Eligibility B' },
-    });
-    await prisma.contact.create({
-      data: { accountKey: B, email: 'someone@example.com' },
-    });
+  it('excludes contacts with no first-party provenance', async () => {
+    const { contacts, breakdown } = await resolveEligibleForSync(A, ANY_CONTACT, fields);
 
-    // Hard stop, not a warning and not an empty result — an empty result
-    // would read as "nobody qualified" rather than "you may not do this".
-    await expect(resolveEligibleForSync(B, ALL, fields)).rejects.toThrow(
-      ConsentNotRecordedError,
+    // The two bought leads never transacted and never filled in a form.
+    expect(breakdown.excluded.noProvenance).toBe(2);
+    const emails = contacts.map((c) => c.identifiers.hashedEmail);
+    expect(emails).not.toContain(sha256Hex('coldlead@example.com'));
+    expect(emails).not.toContain(sha256Hex('coldlead2@example.com'));
+  });
+
+  it('accepts a form submission as provenance, with no transaction', async () => {
+    // Someone who filled in the dealer's own form, under its own
+    // disclosure, is first-party even though they never bought anything.
+    const { contacts } = await resolveEligibleForSync(A, ANY_CONTACT, fields);
+    expect(contacts.map((c) => c.identifiers.hashedEmail)).toContain(
+      sha256Hex('formfill@example.com'),
     );
+  });
+
+  it('reports which sources were dropped, so they can be reviewed', async () => {
+    const { breakdown } = await resolveEligibleForSync(A, ANY_CONTACT, fields);
+
+    // The number alone isn't auditable — the point is being able to see
+    // WHICH vendor the excluded rows came from.
+    expect(breakdown.excludedSources[0]).toEqual({
+      source: 'AutoLeads Inc',
+      count: 2,
+    });
   });
 
   it('de-duplicates the same person across accounts', async () => {
     // Same human, two rooftops, two Contact rows.
-    await prisma.account.update({
-      where: { key: B },
+    await prisma.account.create({
+      data: { key: B, dealer: 'Vitest Eligibility B' },
+    });
+    const dup = await prisma.contact.create({
+      data: { accountKey: B, email: 'clean@example.com', firstName: 'Cleo' },
+      select: { id: true },
+    });
+    await prisma.contactEvent.create({
       data: {
-        audienceSyncConsentBasis: 'first_party_disclosure',
-        audienceSyncConsentAt: new Date(),
+        accountKey: B,
+        contactId: dup.id,
+        type: 'sale',
+        eventDate: new Date(),
+        amount: 20000,
+        idempotencyKey: `__vitest:elig:${B}:dup`,
       },
     });
-    await prisma.contact.create({
-      data: { accountKey: B, email: 'clean@example.com', firstName: 'Cleo' },
-    });
+    await recomputeContactEventRollups(B, [dup.id]);
 
     const fieldsByAccount = new Map([
       [A, fields],
@@ -192,17 +269,25 @@ describe.skipIf(!RUN)('audience export eligibility gate', () => {
     expect(union.breakdown.excluded.duplicate).toBeGreaterThan(0);
   });
 
-  it('fails the whole union when one account lacks consent', async () => {
-    await prisma.account.update({
-      where: { key: B },
-      data: { audienceSyncConsentBasis: null, audienceSyncConsentAt: null },
+  it('aggregates provenance exclusions across accounts', async () => {
+    const noProv = await prisma.contact.create({
+      data: { accountKey: B, email: 'coldB@example.com', source: 'AutoLeads Inc' },
+      select: { id: true },
     });
+    expect(noProv.id).toBeTruthy();
 
-    // Skipping the non-consenting account silently would produce a
-    // plausible-looking audience missing a rooftop, which is worse than
-    // an error.
-    await expect(
-      resolveEligibleAcrossAccounts([A, B], ANY_CONTACT, new Map([[A, fields], [B, fields]])),
-    ).rejects.toThrow(ConsentNotRecordedError);
+    const union = await resolveEligibleAcrossAccounts(
+      [A, B],
+      ANY_CONTACT,
+      new Map([[A, fields], [B, fields]]),
+    );
+
+    // Both rooftops buy from the same vendor; the merged histogram is
+    // what shows it's worth a conversation.
+    expect(union.breakdown.excluded.noProvenance).toBe(3);
+    expect(union.breakdown.excludedSources[0]).toEqual({
+      source: 'AutoLeads Inc',
+      count: 3,
+    });
   });
 });

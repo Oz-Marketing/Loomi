@@ -28,7 +28,6 @@ import { AdminOnly } from '@/components/route-guard';
 import { UsersTab } from '@/components/settings/users-tab';
 import { AppearanceTab } from '@/components/settings/appearance-tab';
 import { CustomFieldsTab } from '@/components/settings/custom-fields-tab';
-import { AudienceConsentCard } from '@/components/settings/audience-consent-card';
 import { AccountDomainsTab } from '@/components/account-domains-tab';
 import { CrmIntegrationCards } from '@/components/crm-integration-cards';
 import { ReportingIntegrationCards } from '@/components/reporting-integration-cards';
@@ -162,7 +161,7 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
   const searchParams = useSearchParams();
   const { confirm } = useLoomiDialog();
   const key = settingsMode ? (accountKeyProp || '') : (params.key as string);
-  const { accounts, refreshAccounts: refreshAccountList, userRole } = useAccount();
+  const { accounts, refreshAccounts: refreshAccountList } = useAccount();
   const { markClean } = useUnsavedChanges();
 
   const [activeTab, setActiveTab] = useState<DetailTab>('company');
@@ -1366,18 +1365,6 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
         {activeTab === 'domains' && key && <AccountDomainsTab accountKey={key} />}
 
         {activeTab === 'integrations' && (
-          <div className="space-y-4">
-            {/* Sits above the platform cards because it gates all of them:
-                without it, no segment from this account can be pushed
-                anywhere, however well-connected the ad accounts are.
-                Gated on userRole — NOT isAdmin, which only means the
-                switcher is in Agency View and would hide this inside a
-                sub-account. */}
-            <AudienceConsentCard
-              accountKey={key}
-              dealerName={account?.dealer}
-              canEdit={userRole === 'developer'}
-            />
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <button
               type="button"
@@ -1413,7 +1400,6 @@ export function SubAccountDetailPage({ basePath, settingsMode, accountKeyProp }:
 
             {key && <CrmIntegrationCards accountKey={key} />}
             {key && <ReportingIntegrationCards accountKey={key} />}
-            </div>
           </div>
         )}
 

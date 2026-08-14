@@ -14,11 +14,7 @@
 import { prisma } from '@/lib/prisma';
 import { resolveFilterFields } from '@/lib/services/audience-fields';
 import type { FilterDefinition } from '@/lib/smart-list-types';
-import {
-  ConsentNotRecordedError,
-  resolveEligibleForSync,
-  type SyncChannel,
-} from '../eligibility';
+import { resolveEligibleForSync, type SyncChannel } from '../eligibility';
 import { identityDedupeKey } from '../identity';
 import { getDestination, type PushOperations } from './destination';
 
@@ -178,6 +174,13 @@ export async function runAudienceSync(syncId: string): Promise<SyncRunResult> {
       excludedSuppressed: breakdown.excluded.suppressed,
       excludedNoIdentifier: breakdown.excluded.noIdentifier,
       excludedDuplicate: breakdown.excluded.duplicate,
+      excludedNoProvenance: breakdown.excluded.noProvenance,
+      // Stored as JSON so a reviewer can see WHICH sources were dropped,
+      // not just how many — that's the evidence for deciding whether a
+      // given lead vendor should be allowed through.
+      excludedSources: breakdown.excludedSources.length
+        ? JSON.stringify(breakdown.excludedSources)
+        : null,
     };
 
     if (ops.add.length === 0 && ops.remove.length === 0) {
@@ -275,12 +278,7 @@ export async function runAudienceSync(syncId: string): Promise<SyncRunResult> {
       dryRun: result.dryRun,
     };
   } catch (err) {
-    const message =
-      err instanceof ConsentNotRecordedError
-        ? err.message
-        : err instanceof Error
-          ? err.message
-          : 'Audience sync failed';
+    const message = err instanceof Error ? err.message : 'Audience sync failed';
     await finish({ status: 'failed', error: message });
     await prisma.audienceSync.update({
       where: { id: syncId },

@@ -18,9 +18,11 @@
 //   - contacts on the account's email/SMS suppression list
 //     (bounced, complained, or unsubscribed)
 //   - contacts who opted out via the `dnd` flags
+//   - contacts with no first-party provenance — no sale, no service
+//     visit, no form submission, so nothing showing they chose to deal
+//     with this dealer
 //
-// …and refuses entirely for an account that hasn't recorded a consent
-// basis. It also reports WHY each contact was dropped, because "your
+// It also reports WHY each contact was dropped, because "your
 // 40,000-person segment is a 12,000-person audience" is information the
 // person building the campaign needs before they build it, not after.
 
@@ -55,7 +57,22 @@ export interface EligibilityBreakdown {
     optedOut: number;
     /** Same person appearing more than once (see identityDedupeKey). */
     duplicate: number;
+    /**
+     * No evidence this contact ever transacted with, or opted in to, this
+     * dealer — see `hasFirstPartyProvenance`.
+     */
+    noProvenance: number;
   };
+  /**
+   * `source` values among the contacts dropped for lack of provenance,
+   * commonest first.
+   *
+   * Reported rather than acted on: the whole question of which lead
+   * vendors are arm's length is a business judgement, and this is the
+   * evidence needed to make it. Without it the exclusion is just a number
+   * nobody can audit.
+   */
+  excludedSources: Array<{ source: string; count: number }>;
 }
 
 export interface EligibilityResult {
@@ -63,23 +80,26 @@ export interface EligibilityResult {
   breakdown: EligibilityBreakdown;
 }
 
-export class ConsentNotRecordedError extends Error {
-  constructor(accountKey: string) {
-    super(
-      `Account ${accountKey} has not recorded a consent basis for audience sync. ` +
-        'Record one before exporting contacts to an ad platform.',
-    );
-    this.name = 'ConsentNotRecordedError';
-  }
-}
-
 const CHUNK = 1000;
 
 /**
  * Resolve a segment to the contacts that may actually be uploaded.
  *
- * @throws ConsentNotRecordedError when the account has no attestation —
- *   a hard stop, on purpose.
+ * Consent is enforced per CONTACT, by provenance, rather than by a
+ * per-account attestation.
+ *
+ * The earlier design made each rooftop tick a box affirming its data was
+ * collected with the right disclosure. In production that box would be
+ * ticked "yes" 33 times out of 33: 259,507 of 265,295 contacts have sale
+ * or service history, i.e. they are customers who consented at the point
+ * of transaction. An affirmation that is always true isn't a control, and
+ * asking for it 33 times teaches people to click through it.
+ *
+ * The distinction that actually varies is per contact, and it covers the
+ * remaining ~2%: someone who bought or serviced a vehicle consented as
+ * part of that transaction; someone whose row arrived from a third-party
+ * lead vendor or an unlabelled CSV did not necessarily consent to this
+ * dealer sharing their details with an ad platform.
  */
 export async function resolveEligibleForSync(
   accountKey: string,
@@ -87,15 +107,21 @@ export async function resolveEligibleForSync(
   fields: FieldDefinition[],
   opts: { channel?: SyncChannel } = {},
 ): Promise<EligibilityResult> {
-  await assertConsentRecorded(accountKey);
-
   const channel = opts.channel ?? 'any';
   const ids = await collectSegmentContactIds(accountKey, definition, fields);
 
+  const sourceCounts = new Map<string, number>();
   const breakdown: EligibilityBreakdown = {
     segmentSize: ids.length,
     eligible: 0,
-    excluded: { noIdentifier: 0, suppressed: 0, optedOut: 0, duplicate: 0 },
+    excluded: {
+      noIdentifier: 0,
+      suppressed: 0,
+      optedOut: 0,
+      duplicate: 0,
+      noProvenance: 0,
+    },
+    excludedSources: [],
   };
   if (ids.length === 0) return { contacts: [], breakdown };
 
@@ -110,8 +136,18 @@ export async function resolveEligibleForSync(
     });
     const batch = rows.map(serializeContact);
     const suppressed = await loadSuppressed(accountKey, batch);
+    const submitted = await loadFormSubmitters(slice);
 
     for (const contact of batch) {
+      // Provenance first: it's the cheapest check and the one that says
+      // whether we should be looking at this person at all.
+      if (!hasFirstPartyProvenance(contact, submitted)) {
+        breakdown.excluded.noProvenance += 1;
+        const label = contact.source.trim() || '(no source recorded)';
+        sourceCounts.set(label, (sourceCounts.get(label) ?? 0) + 1);
+        continue;
+      }
+
       const verdict = classify(contact, suppressed, channel);
       if (verdict.kind !== 'eligible') {
         breakdown.excluded[verdict.kind] += 1;
@@ -138,6 +174,10 @@ export async function resolveEligibleForSync(
   }
 
   breakdown.eligible = contacts.length;
+  breakdown.excludedSources = [...sourceCounts.entries()]
+    .map(([source, count]) => ({ source, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
   return { contacts, breakdown };
 }
 
@@ -146,6 +186,49 @@ type Verdict =
   | { kind: 'noIdentifier' }
   | { kind: 'suppressed' }
   | { kind: 'optedOut' };
+
+/**
+ * Whether we can point at something showing this contact chose to deal
+ * with this dealer.
+ *
+ * Both signals are STRUCTURAL — a row in another table — rather than a
+ * string match on `source`. That matters: `source` is free text set by
+ * whichever CRM export or CSV produced the row, so a rule built on it
+ * would be a guess about naming conventions that differ per rooftop and
+ * change without notice. These two don't:
+ *
+ *   - a ContactEvent means a sale or service visit actually happened, so
+ *     the customer consented as part of that transaction
+ *   - a FormSubmission means they filled in one of this dealer's own
+ *     forms, on this dealer's own site, under its disclosure
+ *
+ * Everything else — third-party lead vendors, unlabelled CSV imports,
+ * lists of unknown origin — fails closed and is reported, with its
+ * `source` value, so the exclusions can be reviewed and specific sources
+ * allowed later on evidence rather than assumption.
+ */
+export function hasFirstPartyProvenance(
+  contact: Pick<ApiContact, 'id' | 'serviceVisitCount' | 'saleCount'>,
+  formSubmitters: ReadonlySet<string>,
+): boolean {
+  if (contact.serviceVisitCount > 0 || contact.saleCount > 0) return true;
+  return formSubmitters.has(contact.id);
+}
+
+/** Contacts in this batch that have submitted one of our own forms. */
+async function loadFormSubmitters(
+  contactIds: string[],
+): Promise<ReadonlySet<string>> {
+  if (contactIds.length === 0) return new Set();
+  const rows = await prisma.formSubmission.findMany({
+    where: { contactId: { in: contactIds } },
+    select: { contactId: true },
+    distinct: ['contactId'],
+  });
+  return new Set(
+    rows.map((r) => r.contactId).filter((id): id is string => !!id),
+  );
+}
 
 function classify(
   contact: ApiContact,
@@ -234,15 +317,6 @@ async function loadSuppressed(
   };
 }
 
-async function assertConsentRecorded(accountKey: string): Promise<void> {
-  const account = await prisma.account.findUnique({
-    where: { key: accountKey },
-    select: { audienceSyncConsentBasis: true, audienceSyncConsentAt: true },
-  });
-  if (!account?.audienceSyncConsentBasis || !account.audienceSyncConsentAt) {
-    throw new ConsentNotRecordedError(accountKey);
-  }
-}
 
 /**
  * Union several accounts' eligible contacts into one audience,
@@ -266,10 +340,18 @@ export async function resolveEligibleAcrossAccounts(
 ): Promise<EligibilityResult> {
   const seen = new Set<string>();
   const contacts: EligibleContact[] = [];
+  const sourceCounts = new Map<string, number>();
   const breakdown: EligibilityBreakdown = {
     segmentSize: 0,
     eligible: 0,
-    excluded: { noIdentifier: 0, suppressed: 0, optedOut: 0, duplicate: 0 },
+    excluded: {
+      noIdentifier: 0,
+      suppressed: 0,
+      optedOut: 0,
+      duplicate: 0,
+      noProvenance: 0,
+    },
+    excludedSources: [],
   };
 
   for (const accountKey of accountKeys) {
@@ -282,6 +364,13 @@ export async function resolveEligibleAcrossAccounts(
     breakdown.excluded.suppressed += result.breakdown.excluded.suppressed;
     breakdown.excluded.optedOut += result.breakdown.excluded.optedOut;
     breakdown.excluded.duplicate += result.breakdown.excluded.duplicate;
+    breakdown.excluded.noProvenance += result.breakdown.excluded.noProvenance;
+    // Merge the per-account histograms; the same lead vendor typically
+    // feeds several rooftops, and the combined figure is what says
+    // whether it's worth reviewing.
+    for (const { source, count } of result.breakdown.excludedSources) {
+      sourceCounts.set(source, (sourceCounts.get(source) ?? 0) + count);
+    }
 
     for (const contact of result.contacts) {
       const key = identityDedupeKey(contact.identifiers);
@@ -295,5 +384,9 @@ export async function resolveEligibleAcrossAccounts(
   }
 
   breakdown.eligible = contacts.length;
+  breakdown.excludedSources = [...sourceCounts.entries()]
+    .map(([source, count]) => ({ source, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10);
   return { contacts, breakdown };
 }

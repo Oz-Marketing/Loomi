@@ -234,9 +234,18 @@ model Account {
   // populate it from. Recording that fact at the rooftop level, with who
   // attested and when, is the honest version.
   audienceSyncs             AudienceSync[]
-  audienceSyncConsentBasis  String? // e.g. 'first_party_disclosure'
+  // RETAINED, NOT READ. These backed a per-account consent attestation
+  // that was replaced by per-contact provenance (see
+  // segments/eligibility.ts). Production is ~98% transacted customers, so
+  // the account-level box was always going to be ticked "yes" on every
+  // rooftop — an affirmation that is always true is not a control.
+  //
+  // Kept rather than dropped because `prisma db push` runs unattended on
+  // deploy without --accept-data-loss, and a column drop would fail it.
+  // Safe to remove in a deliberate migration.
+  audienceSyncConsentBasis  String?
   audienceSyncConsentAt     DateTime?
-  audienceSyncConsentBy     String? // User id of whoever attested
+  audienceSyncConsentBy     String?
   googleAdsMargin           Float?
   // GoHighLevel email reporting: a per-sub-account Private Integration Token
   // (AES-256-GCM encrypted at rest via src/lib/crypto/encryption.ts) + the GHL
@@ -551,6 +560,14 @@ model AudienceSyncRun {
   excludedSuppressed   Int @default(0)
   excludedNoIdentifier Int @default(0)
   excludedDuplicate    Int @default(0)
+  /** Dropped for lack of first-party provenance — no sale, no service
+   *  visit, no form submission. */
+  excludedNoProvenance Int @default(0)
+  /** JSON array of {source, count} for the provenance exclusions, so a
+   *  reviewer can see WHICH lead sources were dropped rather than just
+   *  how many. That's the evidence for deciding whether a given vendor
+   *  should be allowed through. */
+  excludedSources      String?
 
   /** Reported by the provider, often asynchronously — null until known. */
   matched   Int?

@@ -296,9 +296,36 @@ per-MIME limits are in. Two things are not:
   avoid. `contentHash` is left null rather than filled with a client-supplied
   value that couldn't be verified.
 
-- **Bulk DOWNLOAD is still buffered.** JSZip builds the archive in memory, hence
-  the 300 MB cap. The fix is the mirror image — hand back pre-signed GET URLs and
-  let the browser fetch them — and it hasn't been built.
+- **Bulk DOWNLOAD now streams.** The archive used to be assembled in memory —
+  every object buffered, the zip built whole, then copied again into the response,
+  running about 3x the selection at peak — which is where the 300 MB cap came
+  from. That number described the app server's heap, not anything about the files,
+  and once a single direct upload could be 5 GB it was small enough to refuse one
+  asset.
+
+  Objects are now pulled from S3 one at a time as the zip writer reaches them and
+  the bytes pass straight through, so server memory is flat regardless of
+  selection size (measured: 600 MB of input moved with ~68 MB of heap growth).
+  Entries whose bytes are already compressed — JPEG, PNG, MP4, zip — are stored
+  rather than deflated, since compressing them spends real CPU per byte to save
+  almost nothing. A PSD is deliberately excluded from that rule and still
+  compressed: its MIME type is `image/vnd.adobe.photoshop`, so any "images are
+  already compressed" shortcut would catch it, which is the same trap that once
+  made a PSD unstorable.
+
+  Two consequences worth stating. Every object is HEADed before the response
+  starts, because once the first byte is sent the status is committed to 200 and a
+  failure can only truncate the archive — checking first is what preserves the
+  rule that one unreachable file doesn't cost you the other 199. And there is no
+  `Content-Length`, since the compressed size isn't known until the last byte is
+  written, so the browser shows an indeterminate progress bar.
+
+  The remaining ceiling is the BROWSER's: the client calls `res.blob()`, holding
+  the archive in the tab before writing it to disk. The cap is therefore 2 GB
+  rather than the server's old 300 MB. Going higher means a native download (form
+  POST, or a short-lived ticket over GET) that streams to disk without a blob.
+  This binds on zipping only — a single asset downloads through a plain anchor
+  pointed at its object URL, so a 5 GB master is still individually downloadable.
 
 **Phase 5 — Approval and compliance.** §5's `approved` transition, with
 pre-flight firing on submit. AI auto-tagging after this, never before — tagging

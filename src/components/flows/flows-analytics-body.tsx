@@ -40,6 +40,7 @@ interface FlowAnalyticsRow {
   updatedAt: string;
   nodeCount: number;
   active: number;
+  entered: number;
   completed: number;
   exited: number;
   failed: number;
@@ -79,24 +80,35 @@ export function FlowsAnalyticsBody({
   showAccountColumn,
   presetAccountKey,
   showPageHeader = true,
+  from,
+  to,
 }: {
   scopeKey: string;
   subtitle: string;
   showAccountColumn: boolean;
   presetAccountKey: string | null;
   /** When false, omit the "Flow Analytics" sticky page header — used
-   *  when this body is embedded inside another page (e.g. /reporting/engagement)
-   *  that provides its own chrome. */
+   *  when this body is embedded inside another page (e.g. the Email & Text
+   *  Blasts report) that provides its own chrome. */
   showPageHeader?: boolean;
+  /** YYYY-MM-DD window. Omit BOTH for lifetime figures — the Studio
+   *  analytics page has no date picker and wants everything. */
+  from?: string;
+  to?: string;
 }) {
   const { accounts } = useAccount();
-  const query = presetAccountKey
-    ? `?accountKey=${encodeURIComponent(presetAccountKey)}`
-    : '';
+  const params = new URLSearchParams();
+  if (presetAccountKey) params.set('accountKey', presetAccountKey);
+  if (from && to) {
+    params.set('start', from);
+    params.set('end', to);
+  }
+  const qs = params.toString();
   const { data, error, isLoading } = useSWR<{ flows: FlowAnalyticsRow[] }>(
-    `/api/flows/analytics${query}`,
+    `/api/flows/analytics${qs ? `?${qs}` : ''}`,
     fetcher,
   );
+  const windowed = Boolean(from && to);
 
   const accountMeta = useMemo(() => {
     const map: Record<
@@ -123,6 +135,7 @@ export function FlowsAnalyticsBody({
       draftFlows: 0,
       archivedFlows: 0,
       activeEnrollments: 0,
+      enteredEnrollments: 0,
       completedEnrollments: 0,
       exitedEnrollments: 0,
       failedEnrollments: 0,
@@ -136,6 +149,7 @@ export function FlowsAnalyticsBody({
       else if (f.status === 'draft') t.draftFlows += 1;
       else if (f.status === 'archived') t.archivedFlows += 1;
       t.activeEnrollments += f.active;
+      t.enteredEnrollments += f.entered ?? 0;
       t.completedEnrollments += f.completed;
       t.exitedEnrollments += f.exited;
       t.failedEnrollments += f.failed;
@@ -148,8 +162,15 @@ export function FlowsAnalyticsBody({
 
   const openRate = totals.sent > 0 ? totals.uniqueOpens / totals.sent : 0;
   const clickRate = totals.sent > 0 ? totals.uniqueClicks / totals.sent : 0;
-  const completionRate =
-    totals.activeEnrollments + totals.completedEnrollments > 0
+  // Windowed, `active` is a LIVE count while `completed` is the window's
+  // cohort — dividing one by the other would mix two different populations, so
+  // the cohort gets its own denominator. Unwindowed, both describe everyone
+  // who ever entered and the original ratio holds.
+  const completionRate = windowed
+    ? totals.enteredEnrollments > 0
+      ? totals.completedEnrollments / totals.enteredEnrollments
+      : 0
+    : totals.activeEnrollments + totals.completedEnrollments > 0
       ? totals.completedEnrollments /
         (totals.activeEnrollments + totals.completedEnrollments)
       : 0;
@@ -222,15 +243,21 @@ export function FlowsAnalyticsBody({
           <KpiCard
             icon={ClockIcon}
             label="In-flight"
+            // Never windowed — see getFlowAnalytics. Says "right now" when a
+            // window is active so it doesn't read as a figure for the period.
             primary={num(totals.activeEnrollments)}
-            secondary="enrollments"
+            secondary={windowed ? 'enrollments, right now' : 'enrollments'}
             tone="sky"
           />
           <KpiCard
             icon={CheckCircleIcon}
             label="Completed"
             primary={num(totals.completedEnrollments)}
-            secondary={pct(completionRate)}
+            secondary={
+              windowed
+                ? `${pct(completionRate)} of ${num(totals.enteredEnrollments)} entered`
+                : pct(completionRate)
+            }
             tone="emerald"
           />
           <KpiCard
@@ -254,6 +281,16 @@ export function FlowsAnalyticsBody({
             tone="zinc"
           />
         </div>
+
+        {windowed && (
+          <p className="text-[11px] leading-relaxed text-[var(--muted-foreground)]">
+            Sends, opens and clicks cover the selected dates. Completions count the people who{' '}
+            <em>entered</em> a flow during those dates, so the figure follows one group of contacts
+            through rather than mixing arrivals and departures. In-flight is a live count — a flow
+            doesn&rsquo;t record who was mid-series on a past date, so it can&rsquo;t be shown for
+            one.
+          </p>
+        )}
 
         {/* ── Per-flow table + status breakdown (two-column) ── */}
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_minmax(280px,360px)] gap-5 items-start">

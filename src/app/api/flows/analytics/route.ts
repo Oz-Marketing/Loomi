@@ -10,6 +10,12 @@ import { getFlowAnalytics, listFlows } from '@/lib/services/loomi-flows';
 // limits to one account; client / admin sessions get auto-filtered
 // to their assigned account keys; developer / super_admin see
 // everything.
+//
+// Optional `?start=&end=` (YYYY-MM-DD) windows the figures. What the window
+// applies to differs per measure — sends by when they ran, enrollment outcomes
+// by cohort, and `active` not at all. The reasoning is in getFlowAnalytics.
+// Omitting both keeps the previous lifetime behaviour, which is what the
+// Studio analytics page still asks for.
 
 export async function GET(req: NextRequest) {
   const { session, error } = await requireRole(
@@ -20,7 +26,22 @@ export async function GET(req: NextRequest) {
   );
   if (error) return error;
 
-  const accountKeyParam = req.nextUrl.searchParams.get('accountKey');
+  const sp = req.nextUrl.searchParams;
+  const accountKeyParam = sp.get('accountKey');
+
+  const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+  const startParam = sp.get('start');
+  const endParam = sp.get('end');
+  if ((startParam && !ISO_DATE.test(startParam)) || (endParam && !ISO_DATE.test(endParam))) {
+    return NextResponse.json({ error: 'start / end must be YYYY-MM-DD' }, { status: 400 });
+  }
+  const range =
+    startParam || endParam
+      ? {
+          start: startParam ? new Date(`${startParam}T00:00:00Z`) : null,
+          end: endParam ? new Date(`${endParam}T23:59:59.999Z`) : null,
+        }
+      : undefined;
   const scoped =
     session!.user.role === 'client' || session!.user.role === 'admin'
       ? (session!.user.accountKeys ?? [])
@@ -43,7 +64,7 @@ export async function GET(req: NextRequest) {
   //   { active, completed, exited, failed, totalSends, totalOpens, totalClicks }
   const perFlow = await Promise.all(
     flows.map(async (flow) => {
-      const a = await getFlowAnalytics(flow.id);
+      const a = await getFlowAnalytics(flow.id, range);
       return {
         id: flow.id,
         name: flow.name,
@@ -55,6 +76,7 @@ export async function GET(req: NextRequest) {
         updatedAt: flow.updatedAt,
         nodeCount: flow.nodeCount,
         active: a.active,
+        entered: a.entered,
         completed: a.completed,
         exited: a.exited,
         failed: a.failed,
@@ -65,5 +87,5 @@ export async function GET(req: NextRequest) {
     }),
   );
 
-  return NextResponse.json({ flows: perFlow });
+  return NextResponse.json({ flows: perFlow, windowed: Boolean(range) });
 }

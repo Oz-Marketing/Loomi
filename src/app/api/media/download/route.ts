@@ -1,8 +1,11 @@
+import { Readable } from 'stream';
 import JSZip from 'jszip';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/api-auth';
 import { prisma } from '@/lib/prisma';
-import { downloadFromS3 } from '@/lib/s3';
+import { getS3ObjectStream, headS3Object } from '@/lib/s3';
+import { formatBytes } from '@/lib/media-limits';
+import { archiveFilename, planZipEntries, type PlannedEntry } from '@/lib/media-zip';
 
 /**
  * POST /api/media/download
@@ -14,36 +17,64 @@ import { downloadFromS3 } from '@/lib/s3';
  *
  * Body: { ids: string[], includeRenditions?: boolean }
  *
- * ── Why there's a ceiling ──
+ * ── The archive is streamed ──
  *
- * JSZip builds the archive in memory, so the whole selection is resident at
- * once. The cap below is what the app server can survive, not what S3 can serve.
- * Lifting it means streaming the archive (or handing back presigned URLs and
- * letting the browser do the work), which is the same piece of infrastructure
- * that large uploads need — see lib/media-limits.ts. Refusing loudly beats an
- * out-of-memory crash that takes the process down for everyone.
+ * Objects are pulled from S3 one at a time as the zip writer reaches them and the
+ * bytes pass straight through to the client, so memory is flat no matter how
+ * large the selection. This replaced a version that buffered everything and
+ * therefore had to cap downloads at 300 MB — a limit that came from the app
+ * server's heap, not from anything about the files. Since a single direct upload
+ * can now be 5 GB, that cap had become small enough to refuse one asset.
+ *
+ * ── What streaming costs, and how it's paid ──
+ *
+ * Once the first byte is sent the status is committed to 200: a later failure
+ * can't be turned into a JSON error, it can only truncate the archive. So every
+ * check that can fail happens BEFORE the response starts — including a HEAD of
+ * every object, which is what preserves the rule that one unreachable file must
+ * not cost you the other 199. A genuine mid-stream failure yields a zip with no
+ * central directory, which unzip reports as corrupt rather than silently
+ * extracting a short archive.
  */
 
 const MAX_ITEMS = 200;
-const MAX_TOTAL_BYTES = 300 * 1024 * 1024;
 
-/** Keep names unique inside the zip — two rooftops' `logo.png` must both survive. */
-function uniqueName(used: Set<string>, name: string): string {
-  if (!used.has(name)) {
-    used.add(name);
-    return name;
-  }
-  const dot = name.lastIndexOf('.');
-  const stem = dot > 0 ? name.slice(0, dot) : name;
-  const ext = dot > 0 ? name.slice(dot) : '';
-  let n = 2;
-  let candidate = `${stem} (${n})${ext}`;
-  while (used.has(candidate)) {
-    n += 1;
-    candidate = `${stem} (${n})${ext}`;
-  }
-  used.add(candidate);
-  return candidate;
+/**
+ * The ceiling is now the BROWSER's memory, not the server's.
+ *
+ * The client fetches this endpoint and calls `res.blob()`, which holds the whole
+ * archive in the tab before writing it to disk — so streaming the server side
+ * moved the bottleneck rather than removing it. 2 GB is comfortably inside what
+ * a browser tab survives, and roughly 7x the old 300 MB limit.
+ *
+ * Raising it further means giving up `fetch`: a native download (a form POST, or
+ * a short-lived ticket fetched over GET) streams straight to disk with no blob at
+ * all. That's the next move if anyone actually assembles a 2 GB selection.
+ *
+ * This cap applies to ZIPPING ONLY. A single asset — including a 5 GB direct
+ * upload — downloads through a plain anchor pointed at its object URL, which
+ * streams to disk with no server and no blob involved. So an asset too big to
+ * include in a bulk zip is still individually downloadable.
+ */
+const MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
+
+/** How many HEAD probes to run at once when verifying the selection exists. */
+const HEAD_CONCURRENCY = 16;
+
+/**
+ * Open the object only when the zip writer actually asks for it.
+ *
+ * `Readable.from` over an async generator does not run the body until the first
+ * read, and JSZip pulls its inputs strictly in order — so this holds exactly one
+ * S3 connection open at a time rather than opening 200 up front.
+ */
+function lazyS3Stream(key: string): Readable {
+  return Readable.from(
+    (async function* () {
+      const source = await getS3ObjectStream(key);
+      for await (const chunk of source) yield chunk as Uint8Array;
+    })(),
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -93,64 +124,62 @@ export async function POST(req: NextRequest) {
   if (projected > MAX_TOTAL_BYTES) {
     return NextResponse.json(
       {
-        error: `Selection is ${Math.round(projected / (1024 * 1024))} MB — downloads are capped at ${
-          MAX_TOTAL_BYTES / (1024 * 1024)
-        } MB. Select fewer files.`,
+        error: `Selection is ${formatBytes(projected)} — downloads are capped at ${formatBytes(
+          MAX_TOTAL_BYTES,
+        )}. Select fewer files.`,
       },
       { status: 413 },
     );
   }
 
-  const zip = new JSZip();
-  const used = new Set<string>();
-  let added = 0;
-  const skipped: string[] = [];
+  const planned = planZipEntries(
+    readable.map((a) => ({
+      filename: a.filename,
+      s3Key: a.s3Key,
+      mimeType: a.mimeType,
+      renditions: 'renditions' in a ? (a.renditions as { name: string; s3Key: string }[]) : undefined,
+    })),
+    includeRenditions,
+  );
 
-  for (const asset of readable) {
-    try {
-      const buffer = await downloadFromS3(asset.s3Key);
-      zip.file(uniqueName(used, asset.filename), buffer);
-      added += 1;
-    } catch {
-      // One unreachable object must not lose the other 199 files.
-      skipped.push(asset.filename);
-      continue;
-    }
-
-    if (!includeRenditions || !('renditions' in asset)) continue;
-    const renditions = asset.renditions as { name: string; s3Key: string }[];
-    if (renditions.length === 0) continue;
-
-    // Renditions go in a folder named after the master, so a flat unzip doesn't
-    // scatter nine variants of the same image across the directory.
-    const dot = asset.filename.lastIndexOf('.');
-    const stem = dot > 0 ? asset.filename.slice(0, dot) : asset.filename;
-    for (const r of renditions) {
-      try {
-        const buf = await downloadFromS3(r.s3Key);
-        zip.file(`${stem} — sizes/${r.name}.jpg`, buf);
-      } catch {
-        skipped.push(`${asset.filename} → ${r.name}`);
-      }
-    }
+  // Verify every object exists BEFORE committing to a 200. This is the streaming
+  // equivalent of the old per-file try/catch: a missing object gets dropped from
+  // the plan here, where we can still report it, instead of corrupting an archive
+  // that is already half-sent.
+  const present: PlannedEntry[] = [];
+  let skipped = 0;
+  for (let i = 0; i < planned.length; i += HEAD_CONCURRENCY) {
+    const batch = planned.slice(i, i + HEAD_CONCURRENCY);
+    const heads = await Promise.all(batch.map((e) => headS3Object(e.s3Key)));
+    heads.forEach((head, n) => {
+      if (head) present.push(batch[n]);
+      else skipped += 1;
+    });
   }
 
-  if (added === 0) {
+  if (present.length === 0) {
     return NextResponse.json({ error: 'None of the selected files could be read' }, { status: 502 });
   }
 
-  const archive = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
-  const stamp = new Date().toISOString().slice(0, 10);
+  const zip = new JSZip();
+  for (const entry of present) {
+    zip.file(entry.name, lazyS3Stream(entry.s3Key), { compression: entry.compression });
+  }
 
-  return new NextResponse(new Uint8Array(archive), {
+  // streamFiles: true writes each entry's size in a trailing data descriptor,
+  // which is what lets the writer emit bytes before it knows how big the entry
+  // turned out to be. Without it JSZip would have to buffer each file whole.
+  const archive = zip.generateNodeStream({ streamFiles: true, compression: 'DEFLATE' });
+
+  return new NextResponse(Readable.toWeb(archive) as ReadableStream<Uint8Array>, {
     status: 200,
     headers: {
       'Content-Type': 'application/zip',
-      'Content-Disposition': `attachment; filename="loomi-media-${stamp}.zip"`,
-      'Content-Length': String(archive.length),
-      // Surfaced so the client can tell someone which files didn't make it,
-      // rather than handing over a quietly short archive.
-      ...(skipped.length > 0 ? { 'X-Skipped-Files': String(skipped.length) } : {}),
+      'Content-Disposition': `attachment; filename="${archiveFilename(new Date())}"`,
+      // No Content-Length: the compressed size isn't known until the last byte is
+      // written. The browser shows an indeterminate progress bar, which is the
+      // price of not holding gigabytes in memory to count them.
+      ...(skipped > 0 ? { 'X-Skipped-Files': String(skipped) } : {}),
     },
   });
 }

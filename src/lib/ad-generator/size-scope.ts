@@ -174,10 +174,89 @@ export function clearElementOverride(
 /**
  * Box fields that broadcast under `'all'`: the fractional geometry.
  *
- * Fractions of the canvas mean the same box reads as the same relative placement
- * on any aspect ratio, which is what makes broadcasting sensible at all.
+ * Fractions of the canvas mean the same box reads as the same relative PLACEMENT
+ * on any aspect ratio, which is what makes broadcasting sensible at all. Size is
+ * a different matter — see `rescaleBox`.
  */
 const BROADCAST_BOX_KEYS = ['x', 'y', 'w', 'h'] as const;
+
+/** How close to 1 a fraction has to be to count as running edge to edge. */
+const EDGE_EPS = 0.001;
+
+/**
+ * Whether a box deliberately runs edge to edge on either axis.
+ *
+ * Full-bleed backgrounds, scrims and full-width text frames are MEANT to stretch
+ * to whatever board they land on — re-deriving their height to preserve a shape
+ * they never had would pull a background off the canvas. They keep the old
+ * copy-the-fraction behaviour.
+ */
+function spansEdgeToEdge(box: DocLayoutBox): boolean {
+  return box.w >= 1 - EDGE_EPS || box.h >= 1 - EDGE_EPS;
+}
+
+/**
+ * Re-express one board's box on another board, preserving the element's SHAPE.
+ *
+ * THE BUG THIS FIXES. `w` is a fraction of the board's width and `h` a fraction
+ * of its height. Copying the pair verbatim between boards of different aspect
+ * ratios cannot preserve shape — it is arithmetically impossible. A 400×400
+ * square set on a 1080×1080 board arrived as 444×233 on a 1200×628 landscape and
+ * 400×711 on a 1080×1920 story: same fractions, three different shapes. Designers
+ * hit this as "the size I set doesn't carry across artboards".
+ *
+ * The rule: `w` stays a fraction of width, so an element scales with the board's
+ * width, and `h` is re-derived so the PIXEL aspect ratio matches the source. The
+ * square above becomes 444×444 on landscape and 400×400 on story.
+ *
+ * `h` is clamped to the board — an element taller than the target can't preserve
+ * its shape and not overflow, and overflowing is the worse failure. `y` follows
+ * so a re-derived height can't push the box off the bottom.
+ */
+export function rescaleBox(
+  box: DocLayoutBox,
+  from: { width: number; height: number },
+  to: { width: number; height: number },
+): DocLayoutBox {
+  const next = { ...box };
+  if (spansEdgeToEdge(box)) return next;
+  if (!(from.width > 0 && from.height > 0 && to.width > 0 && to.height > 0)) return next;
+  const h = box.h * ((from.height * to.width) / (to.height * from.width));
+  next.h = Math.min(1, h);
+  next.y = Math.min(box.y, Math.max(0, 1 - next.h));
+  return next;
+}
+
+/**
+ * Push every element's geometry from one board onto all the others, preserving
+ * shape — the repair action for templates laid out before `rescaleBox` existed,
+ * whose stored boxes are already distorted and stay that way until rewritten.
+ *
+ * Boards that don't carry an element are left without it: re-fitting is not an
+ * invitation to add elements to boards a designer deliberately left them off.
+ * Per-board properties (`z`, `hidden`, framing, `fontSize`) are untouched, matching
+ * what a normal broadcast leaves alone.
+ */
+export function refitAllSizes(doc: TemplateDoc, fromSizeId: string): TemplateDoc {
+  const from = doc.sizes.find((s) => s.id === fromSizeId);
+  if (!from) return doc;
+  const source = doc.layouts[fromSizeId] ?? {};
+  const layouts: TemplateDoc['layouts'] = { ...doc.layouts };
+  for (const size of doc.sizes) {
+    if (size.id === fromSizeId) continue;
+    const target = doc.layouts[size.id];
+    if (!target) continue;
+    const next = { ...target };
+    for (const [elId, box] of Object.entries(source)) {
+      const prior = target[elId];
+      if (!prior) continue;
+      const fitted = rescaleBox(box, from, size);
+      next[elId] = { ...prior, x: fitted.x, y: fitted.y, w: fitted.w, h: fitted.h };
+    }
+    layouts[size.id] = next;
+  }
+  return { ...doc, layouts };
+}
 
 /** Font size clamp, matching the builder's own stepper bounds. */
 const MIN_FONT = 4;
@@ -221,6 +300,10 @@ export function applyBox(
   const fontRatio =
     wasFont && nowFont && wasFont > 0 && nowFont !== wasFont ? nowFont / wasFont : null;
 
+  // Geometry is re-derived per board rather than copied, so the element keeps its
+  // shape on every aspect ratio (see rescaleBox).
+  const from = doc.sizes.find((s) => s.id === sizeId);
+
   const layouts: TemplateDoc['layouts'] = {};
   for (const [sid, byEl] of Object.entries(doc.layouts)) {
     const prior = byEl[elId];
@@ -232,8 +315,10 @@ export function applyBox(
       layouts[sid] = byEl;
       continue;
     }
+    const to = doc.sizes.find((s) => s.id === sid);
+    const fitted = from && to ? rescaleBox(box, from, to) : box;
     const next = { ...prior };
-    for (const k of BROADCAST_BOX_KEYS) next[k] = box[k];
+    for (const k of BROADCAST_BOX_KEYS) next[k] = fitted[k];
     if (fontRatio && prior.fontSize) {
       next.fontSize = Math.min(MAX_FONT, Math.max(MIN_FONT, Math.round(prior.fontSize * fontRatio)));
     }

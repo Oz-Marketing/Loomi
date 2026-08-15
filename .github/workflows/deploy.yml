@@ -10,6 +10,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # tsc + tests, as the gate on `deploy` below. Runs in parallel with `build`;
+  # see the same job in deploy-staging.yml for why.
+  #
+  # Main is already protected by a required `verify` check on PRs, so in the
+  # normal flow this re-runs something that passed. It is here for the case that
+  # protection does NOT cover: `enforce_admins` is false on this branch, so an
+  # admin `gh pr merge --admin` — or a direct push — reaches main having skipped
+  # the required check entirely, and would otherwise deploy straight to
+  # production unverified.
+  verify:
+    uses: ./.github/workflows/typecheck.yml
+
   # Compile the Next.js bundle on the GitHub runner (NOT the droplet). The
   # webpack build is the one CPU-heavy step in a deploy; running it here keeps
   # the 1-vCPU droplet from pegging at ~100% for minutes. The compiled `.next`
@@ -50,7 +62,9 @@ jobs:
           target: /var/www/loomi-studio/incoming/
 
   deploy:
-    needs: build
+    # BOTH, so a failing typecheck or test stops the production deploy instead
+    # of merely reporting next to it.
+    needs: [build, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

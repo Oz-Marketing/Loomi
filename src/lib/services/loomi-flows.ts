@@ -3089,8 +3089,46 @@ export async function processDueFlowEnrollments(options?: {
 // Analytics
 // ─────────────────────────────────────────────────────
 
-export async function getFlowAnalytics(flowId: string): Promise<{
+export interface FlowAnalyticsRange {
+  start: Date | null;
+  end: Date | null;
+}
+
+/**
+ * Per-flow analytics, optionally windowed to a date range.
+ *
+ * ── THE WINDOW MEANS TWO DIFFERENT THINGS, DELIBERATELY ─────────────────────
+ * A flow mixes period measures with live state, and applying one date rule to
+ * both would produce a number nobody can explain:
+ *
+ *   • SENDS / OPENS / CLICKS are windowed on when the step RAN
+ *     (`executedAt`). "Sent this month" means what it says.
+ *
+ *   • COMPLETED / EXITED / FAILED are windowed on when the enrollment STARTED
+ *     (`enrolledAt`) — a cohort. "Of the people who entered during this
+ *     period, here is where they ended up." Only `completed` carries its own
+ *     timestamp; exits and failures record none, so windowing them by outcome
+ *     date is not possible at all, and mixing an outcome-dated `completed`
+ *     with a start-dated `exited` would give a set of numbers that don't
+ *     describe the same people.
+ *
+ *   • ACTIVE IS NEVER WINDOWED. It is how many contacts are in the flow right
+ *     now. "Active during March" is not recorded — an enrollment has no
+ *     history of when it was in-flight — and reporting the March cohort's
+ *     still-active count under a label like "In-flight" would quietly answer a
+ *     question nobody asked.
+ *
+ * Opens and clicks are attributed to their SEND, not to the day they happened:
+ * a message that goes out on the last day of the window counts the opens that
+ * arrive after it. Otherwise the open rate would collapse at the window edge
+ * purely because the reader hadn't got round to it yet.
+ */
+export async function getFlowAnalytics(
+  flowId: string,
+  range?: FlowAnalyticsRange,
+): Promise<{
   active: number;
+  entered: number;
   completed: number;
   exited: number;
   failed: number;
@@ -3098,16 +3136,31 @@ export async function getFlowAnalytics(flowId: string): Promise<{
   totalOpens: number;
   totalClicks: number;
 }> {
+  const between = (from: Date | null, to: Date | null) =>
+    from || to ? { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } : undefined;
+
+  const enrolledRange = range ? between(range.start, range.end) : undefined;
+  const executedRange = range ? between(range.start, range.end) : undefined;
+
   const grouped = await prisma.loomiFlowEnrollment.groupBy({
     by: ['status'],
-    where: { flowId },
+    where: { flowId, ...(enrolledRange ? { enrolledAt: enrolledRange } : {}) },
     _count: { _all: true },
   });
   const counts: Record<string, number> = {};
   for (const g of grouped) counts[g.status] = g._count._all;
 
+  // Live in-flight count — deliberately outside the window. See the header.
+  const active = enrolledRange
+    ? await prisma.loomiFlowEnrollment.count({ where: { flowId, status: 'active' } })
+    : (counts.active ?? 0);
+
   const sentSteps = await prisma.loomiFlowEnrollmentStep.findMany({
-    where: { enrollment: { flowId }, status: 'sent' },
+    where: {
+      enrollment: { flowId },
+      status: 'sent',
+      ...(executedRange ? { executedAt: executedRange } : {}),
+    },
     select: { emailRecipientId: true },
   });
   const recipientIds = sentSteps
@@ -3133,7 +3186,9 @@ export async function getFlowAnalytics(flowId: string): Promise<{
   }
 
   return {
-    active: counts.active ?? 0,
+    active,
+    // Cohort size: enrollments that STARTED in the window (all statuses).
+    entered: Object.values(counts).reduce((a, b) => a + b, 0),
     completed: counts.completed ?? 0,
     exited: counts.exited ?? 0,
     failed: counts.failed ?? 0,

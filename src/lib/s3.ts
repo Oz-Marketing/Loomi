@@ -7,6 +7,7 @@ import {
   S3ServiceException,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import type { Readable } from 'stream';
 
 // Lazy-init: only created when first used (avoids errors when env vars aren't set)
 let _client: S3Client | null = null;
@@ -218,6 +219,27 @@ export async function headS3Object(
   } catch {
     return null;
   }
+}
+
+/**
+ * Open an object as a readable stream, without buffering it.
+ *
+ * The counterpart to downloadFromS3 for callers that pass the bytes straight
+ * through to something else — bulk download zips a hundred objects, and holding
+ * even one 2 GB master in memory to do it would take the process down. Returns a
+ * Node Readable because that's what the zip writer consumes.
+ *
+ * Callers MUST consume or destroy the stream. An abandoned one holds a socket
+ * from the SDK's connection pool until it times out.
+ */
+export async function getS3ObjectStream(key: string): Promise<Readable> {
+  const res = await getClient().send(
+    new GetObjectCommand({ Bucket: getBucket(), Key: key }),
+  );
+  if (!res.Body) throw new Error(`Empty body for S3 key: ${key}`);
+  // In Node the SDK always hands back a Readable; the union type only widens to
+  // web streams in browser builds.
+  return res.Body as Readable;
 }
 
 /** Download an object from S3 as a Buffer. Used for push-to-ESP. */
